@@ -68,6 +68,8 @@ disallowed-methods = [
     { path = "f64::max", reason = "the sign of a zero result is unspecified and differs between platforms, compare explicitly" },
     { path = "std::thread::spawn", reason = "thread scheduling is not deterministic, keep the simulation on one thread" },
     { path = "std::thread::scope", reason = "thread scheduling is not deterministic, keep the simulation on one thread" },
+    { path = "std::thread::Builder::spawn", reason = "thread scheduling is not deterministic, keep the simulation on one thread" },
+    { path = "std::thread::Builder::spawn_scoped", reason = "thread scheduling is not deterministic, keep the simulation on one thread" },
 ]
 
 disallowed-types = [
