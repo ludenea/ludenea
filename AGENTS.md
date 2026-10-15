@@ -67,7 +67,9 @@ lint only with `#[expect(lint, reason = "...")]`, never with `#[allow]`.
   `clippy.toml` forbids hash maps with random seeds, the wall clock,
   threads, platform floating-point functions and fused multiply-add; each
   entry names the allowed alternative. The three `clippy.toml` copies must
-  stay identical, a test in `xtask` fails otherwise.
+  stay identical, a test in `xtask` fails otherwise. A new crate under
+  `crates/` goes in `SIMULATION_CRATES`, with its copy of `clippy.toml`, or in
+  `NON_SIMULATION_CRATES` in `xtask/src/determinism_lints.rs`.
 - **Golden hash.** CI computes a fixed floating point computation on every
   target, build profile and thread count and compares the hashes with
   `crates/test/golden-hash.txt`. A change to that reference changes the
