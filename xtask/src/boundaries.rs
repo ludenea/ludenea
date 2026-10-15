@@ -16,6 +16,10 @@ const ADAPTER_CRATES: &[&str] = &[
 /// Crates performing I/O or providing an async runtime.
 const IO_CRATES: &[&str] = &["async-std", "hyper", "mio", "reqwest", "smol", "tokio"];
 
+/// Crates reading randomness from the operating system, which differs on
+/// every run.
+const OS_RANDOMNESS_CRATES: &[&str] = &["getrandom"];
+
 /// Each rule forbids core crates from reaching any of its crates.
 const RULES: &[(&[&str], &str)] = &[
     (
@@ -25,6 +29,10 @@ const RULES: &[(&[&str], &str)] = &[
     (
         IO_CRATES,
         "core crates must not perform I/O or depend on an async runtime",
+    ),
+    (
+        OS_RANDOMNESS_CRATES,
+        "core crates must not read OS randomness, seed a deterministic generator instead",
     ),
 ];
 
@@ -178,6 +186,20 @@ mod tests {
             found.iter().map(ToString::to_string).collect::<Vec<_>>(),
             [
                 "ludenea_sim depends on mio through helper: core crates must not perform I/O or depend on an async runtime"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_core_crate_reaching_os_randomness_is_reported() {
+        let graph = graph(&[("ludenea_sim", &["rand"]), ("rand", &["getrandom"])]);
+
+        let found = violations(&graph, &members(&["ludenea_sim"]));
+
+        assert_eq!(
+            found.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            [
+                "ludenea_sim depends on getrandom through rand: core crates must not read OS randomness, seed a deterministic generator instead"
             ]
         );
     }
