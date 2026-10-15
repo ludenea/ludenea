@@ -10,6 +10,7 @@ pub fn lerp(start: f32, end: f32, t: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn lerp_halfway_returns_the_midpoint() {
@@ -26,5 +27,13 @@ mod tests {
             .collect();
 
         insta::assert_debug_snapshot!(samples);
+    }
+
+    proptest! {
+        #[test]
+        #[expect(clippy::float_cmp, reason = "the property is exact equality")]
+        fn lerp_at_zero_returns_the_start_exactly(start in -1e6f32..1e6, end in -1e6f32..1e6) {
+            prop_assert_eq!(lerp(start, end, 0.0), start);
+        }
     }
 }
