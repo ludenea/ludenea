@@ -13,7 +13,7 @@ use std::io::{self, BufRead};
 use std::path::Path;
 use std::process::{Command, ExitCode};
 
-const USAGE: &str = "usage: cargo xtask <ci|boundaries|commit-format|doc|golden-hash [cargo run arguments]|golden-compare <directory>>";
+const USAGE: &str = "usage: cargo xtask <ci|boundaries|commit-format|doc|golden-hash [cargo run arguments]|golden-compare <directory> <target>...>";
 
 /// The golden hash every target must produce, relative to the workspace root.
 const GOLDEN_REFERENCE: &str = "crates/test/golden-hash.txt";
@@ -137,19 +137,24 @@ fn golden_hash() -> bool {
     cargo(&arguments)
 }
 
-/// Fails when a hash in the directory given as argument, one `<target>.txt`
-/// file per target, differs from the committed reference.
+/// Fails when a report in the directory given as argument, one `<target>.txt`
+/// file per target, holds a hash differing from the committed reference, or
+/// when a target given after the directory has no report.
 fn golden_compare() -> bool {
-    let Some(directory) = env::args().nth(2) else {
+    let arguments: Vec<String> = env::args().skip(2).collect();
+    let Some((directory, expected)) = arguments
+        .split_first()
+        .filter(|(_, expected)| !expected.is_empty())
+    else {
         eprintln!("{USAGE}");
         return false;
     };
-    let directory = Path::new(&directory);
+    let directory = Path::new(directory);
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("xtask lives inside the workspace");
     let read = |path: &Path| match fs::read_to_string(path) {
-        Ok(content) => Some(content.trim().to_owned()),
+        Ok(content) => Some(content),
         Err(error) => {
             eprintln!("error: cannot read {}: {error}", path.display());
             None
@@ -165,11 +170,17 @@ fn golden_compare() -> bool {
             return false;
         }
     };
-    let mut hashes = BTreeMap::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
+    let mut reports = BTreeMap::new();
+    for entry in entries {
+        let path = match entry {
+            Ok(entry) => entry.path(),
+            Err(error) => {
+                eprintln!("error: cannot read {}: {error}", directory.display());
+                return false;
+            }
+        };
         if path.extension().is_some_and(|extension| extension == "txt") {
-            let Some(hash) = read(&path) else {
+            let Some(report) = read(&path) else {
                 return false;
             };
             let target = path
@@ -177,11 +188,14 @@ fn golden_compare() -> bool {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .into_owned();
-            eprintln!("{target}: {hash}");
-            hashes.insert(target, hash);
+            eprintln!(
+                "{target}: {}",
+                report.split_whitespace().collect::<Vec<_>>().join(" ")
+            );
+            reports.insert(target, report);
         }
     }
-    let problems = golden_compare::problems(&reference, &hashes);
+    let problems = golden_compare::problems(reference.trim(), expected, &reports);
     for problem in &problems {
         eprintln!("error: {problem}");
     }
