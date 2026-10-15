@@ -1,6 +1,8 @@
 //! Repository automation, run with `cargo xtask <command>`.
 
 mod boundaries;
+#[cfg(test)]
+mod determinism_lints;
 
 use std::env;
 use std::process::{Command, ExitCode};
