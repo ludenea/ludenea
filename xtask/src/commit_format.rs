@@ -16,11 +16,9 @@ pub fn problem(subject: &str) -> Option<&'static str> {
     if subject.chars().count() > MAX_LENGTH {
         return Some("the subject must not exceed 72 characters");
     }
-    // ponytail: any non-ASCII token counts as a gitmoji; check against the
-    // gitmoji list if other symbols start slipping through.
     let Some((_, rest)) = subject
         .split_once(' ')
-        .filter(|(gitmoji, _)| !gitmoji.is_empty() && !gitmoji.chars().any(|c| c.is_ascii()))
+        .filter(|(gitmoji, _)| is_gitmoji(gitmoji))
     else {
         return Some("the subject must start with a gitmoji followed by a space");
     };
@@ -42,11 +40,26 @@ pub fn problem(subject: &str) -> Option<&'static str> {
         return Some(TYPE_PROBLEM);
     }
     match summary.strip_prefix(' ') {
-        Some(summary) if !summary.trim().is_empty() => summary
-            .ends_with('.')
-            .then_some("the summary must not end with a period"),
+        Some(summary) if !summary.trim().is_empty() => {
+            if summary.starts_with(char::is_uppercase) {
+                Some("the summary must start with a lower case word")
+            } else {
+                summary
+                    .ends_with('.')
+                    .then_some("the summary must not end with a period")
+            }
+        }
         _ => Some("the type must be followed by \": \" and a summary"),
     }
+}
+
+/// Whether `token` is made of emoji characters only, as every gitmoji is.
+// ponytail: emoji blocks rather than the gitmoji list, which changes over
+// time; check against the list if other symbols start slipping through.
+fn is_gitmoji(token: &str) -> bool {
+    let is_symbol = |c: char| matches!(c, '\u{2190}'..='\u{2BFF}' | '\u{1F000}'..='\u{1FAFF}');
+    let is_modifier = |c: char| matches!(c, '\u{FE0F}' | '\u{200D}' | '\u{20E3}');
+    token.starts_with(is_symbol) && token.chars().all(|c| is_symbol(c) || is_modifier(c))
 }
 
 #[cfg(test)]
@@ -86,6 +99,27 @@ mod tests {
         assert_eq!(
             problem(":sparkles: feat: add the boundaries command"),
             Some("the subject must start with a gitmoji followed by a space")
+        );
+    }
+
+    #[test]
+    fn a_letter_in_place_of_the_gitmoji_is_reported() {
+        assert_eq!(
+            problem("é feat: add the boundaries command"),
+            Some("the subject must start with a gitmoji followed by a space")
+        );
+    }
+
+    #[test]
+    fn a_zero_width_joiner_gitmoji_passes() {
+        assert_eq!(problem("🧑‍💻 chore: improve the developer experience"), None);
+    }
+
+    #[test]
+    fn an_upper_case_summary_is_reported() {
+        assert_eq!(
+            problem("✨ feat: Add the boundaries command"),
+            Some("the summary must start with a lower case word")
         );
     }
 
@@ -131,6 +165,14 @@ mod tests {
             problem("✨ feat: add the boundaries command."),
             Some("the summary must not end with a period")
         );
+    }
+
+    #[test]
+    fn a_subject_of_exactly_72_characters_passes() {
+        let subject = format!("✨ feat: {}", "a".repeat(64));
+        assert_eq!(subject.chars().count(), 72);
+
+        assert_eq!(problem(&subject), None);
     }
 
     #[test]

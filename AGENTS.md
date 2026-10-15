@@ -92,7 +92,7 @@ Every commit subject and pull request title follows
 - Scope names the subject of the change, such as `math`, `sim`, `ecs`,
   `test`, `xtask` or `github`; omit it for repository-wide changes.
 - Summary in the imperative mood, lower case first word, no trailing
-  period. The whole subject stays under 72 characters.
+  period. The whole subject is at most 72 characters long.
 - One change per commit. A message describes the change itself, never an
   internal plan, task or step.
 
