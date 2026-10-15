@@ -1,6 +1,12 @@
 //! Golden hash: a fixed floating point computation from `ludenea_math`,
-//! hashed canonically. Every target and every thread count must produce the
-//! committed reference hash, so a platform that rounds differently fails CI.
+//! hashed canonically. Every target, build profile and thread count must
+//! produce the committed reference hash.
+//!
+//! The computation only uses correctly rounded IEEE 754 operations, which
+//! every target must reproduce bit for bit, so today the hash catches a
+//! compiler or target breaking that guarantee, such as a contraction into a
+//! fused multiply-add. It catches platform rounding differences once
+//! `ludenea_math` provides the transcendental functions and they join it.
 
 use std::thread;
 

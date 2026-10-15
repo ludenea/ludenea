@@ -44,10 +44,11 @@ jobs:
           tool: cargo-nextest,cargo-deny
       # The hash is uploaded before the checks run, so the comparison job
       # still names this target when a check fails.
-      - name: Compute the golden hash
+      - name: Compute the golden hash of the debug and release builds
         run: |
           mkdir -p hashes
           cargo xtask golden-hash > "hashes/${{ matrix.target }}.txt"
+          cargo xtask golden-hash --release >> "hashes/${{ matrix.target }}.txt"
       - uses: actions/upload-artifact@v7
         with:
           name: golden-hash-${{ matrix.target }}
@@ -68,10 +69,11 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: wasmtime
-      - name: Compute the golden hash
+      - name: Compute the golden hash of the debug and release builds
         run: |
           mkdir -p hashes
           cargo xtask golden-hash --target wasm32-wasip1 > hashes/wasm32-wasip1.txt
+          cargo xtask golden-hash --target wasm32-wasip1 --release >> hashes/wasm32-wasip1.txt
       - uses: actions/upload-artifact@v7
         with:
           name: golden-hash-wasm32-wasip1
