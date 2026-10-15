@@ -33,6 +33,7 @@ instead of declaring its own.
 | `cargo xtask golden-hash`   | Prints the golden hash; add `--target wasm32-wasip1` for WebAssembly |
 | `cargo xtask golden-compare <directory>` | Compares `<target>.txt` hashes with the reference       |
 | `cargo nextest run`         | Runs the tests                                                       |
+| `cargo test --workspace --exclude xtask --target wasm32-wasip1` | Runs the core tests under `wasmtime` |
 | `cargo insta review`        | Reviews changed snapshots                                            |
 
 Run `cargo xtask ci` before considering a change done: CI runs the same
