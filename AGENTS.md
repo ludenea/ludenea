@@ -39,12 +39,14 @@ instead of declaring its own.
 
 Run `cargo xtask ci` before considering a change done: CI runs the same
 command and must be green before merge. It needs `cargo-nextest` and
-`cargo-deny` installed.
+`cargo-deny` installed; the WebAssembly tests also need `wasmtime`.
 
 On Linux, builds link with [mold](https://github.com/rui314/mold), set in
-`.cargo/config.toml`; install it from your distribution or its releases.
-Without it, run cargo with `RUSTFLAGS=` set to an empty value to fall back to
-the default linker.
+`.cargo/config.toml`; install it from your distribution or its releases, with
+GCC 12.1 or later for `-fuse-ld=mold`. Without it, run cargo with `RUSTFLAGS=`
+set to an empty value to fall back to the default linker. That setting
+replaces any `build.rustflags` of your own cargo configuration; repeat yours
+in `target.'cfg(all(target_os = "linux", target_env = "gnu"))'.rustflags`.
 
 ## Development loop
 
