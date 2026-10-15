@@ -21,6 +21,9 @@ jobs:
       - name: Install the pinned toolchain
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+      - uses: rui314/setup-mold@v1
+        with:
+          make-default: false
       - run: cargo xtask doc
       # Stable rustdoc has no workspace index page; the simulation crate is
       # the entry point and its sidebar lists every other crate.

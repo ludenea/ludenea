@@ -22,6 +22,9 @@ jobs:
       - name: Install the pinned toolchain
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+      - uses: rui314/setup-mold@v1
+        with:
+          make-default: false
       - name: Check the pull request title
         # Passed through the environment, never interpolated into the script.
         env:

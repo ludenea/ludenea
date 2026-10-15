@@ -36,6 +36,9 @@ jobs:
       - name: Install the pinned toolchain
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+      - uses: rui314/setup-mold@v1
+        with:
+          make-default: false
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest,cargo-deny
@@ -59,6 +62,9 @@ jobs:
       - name: Install the pinned toolchain
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+      - uses: rui314/setup-mold@v1
+        with:
+          make-default: false
       - uses: taiki-e/install-action@v2
         with:
           tool: wasmtime
@@ -84,6 +90,9 @@ jobs:
       - name: Install the pinned toolchain
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+      - uses: rui314/setup-mold@v1
+        with:
+          make-default: false
       - uses: actions/download-artifact@v8
         with:
           pattern: golden-hash-*
