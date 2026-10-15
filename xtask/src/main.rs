@@ -20,7 +20,7 @@ fn main() -> ExitCode {
 
 /// Runs the same checks as the continuous integration workflow.
 fn ci() -> ExitCode {
-    let steps: [&[&str]; 3] = [
+    let steps: [&[&str]; 4] = [
         &["fmt", "--all", "--check"],
         &[
             "clippy",
@@ -31,6 +31,7 @@ fn ci() -> ExitCode {
             "warnings",
         ],
         &["nextest", "run", "--workspace"],
+        &["deny", "check"],
     ];
     if !check_boundaries() {
         return ExitCode::FAILURE;
