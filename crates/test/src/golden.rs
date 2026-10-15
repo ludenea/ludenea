@@ -115,7 +115,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(target_os = "wasi", ignore = "WASI has no threads")]
     fn every_thread_count_gives_the_same_hash() {
         for &threads in THREAD_COUNTS {
             assert_eq!(hash(threads), hash(1), "with {threads} threads");
