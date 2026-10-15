@@ -1,6 +1,8 @@
 name: Commit format
 
 on:
+  push:
+    branches: [main]
   pull_request:
     types: [opened, edited, synchronize, reopened]
 
@@ -26,6 +28,7 @@ jobs:
         with:
           make-default: false
       - name: Check the pull request title
+        if: github.event_name == 'pull_request'
         # Passed through the environment, never interpolated into the script.
         env:
           TITLE: ${{ github.event.pull_request.title }}
@@ -34,6 +37,6 @@ jobs:
       # creates: Git writes their subject, not the author.
       - name: Check the commit subjects
         env:
-          BASE: ${{ github.event.pull_request.base.sha }}
-          HEAD: ${{ github.event.pull_request.head.sha }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: git log --no-merges --format=%s "$BASE..$HEAD" | cargo xtask commit-format
