@@ -1,16 +1,20 @@
 //! Repository automation, run with `cargo xtask <command>`.
 
+mod boundaries;
+
 use std::env;
 use std::process::{Command, ExitCode};
 
-const USAGE: &str = "usage: cargo xtask ci";
+const USAGE: &str = "usage: cargo xtask <ci|boundaries>";
 
 fn main() -> ExitCode {
-    if env::args().nth(1).as_deref() == Some("ci") {
-        ci()
-    } else {
-        eprintln!("{USAGE}");
-        ExitCode::FAILURE
+    match env::args().nth(1).as_deref() {
+        Some("ci") => ci(),
+        Some("boundaries") => to_exit_code(check_boundaries()),
+        _ => {
+            eprintln!("{USAGE}");
+            ExitCode::FAILURE
+        }
     }
 }
 
@@ -43,4 +47,29 @@ fn cargo(arguments: &[&str]) -> bool {
         .args(arguments)
         .status()
         .is_ok_and(|status| status.success())
+}
+
+/// Fails when a core crate reaches a crate the hexagonal boundary forbids.
+fn check_boundaries() -> bool {
+    eprintln!("$ cargo xtask boundaries");
+    let (graph, members) = match boundaries::load() {
+        Ok(loaded) => loaded,
+        Err(error) => {
+            eprintln!("error: cannot read the workspace metadata: {error}");
+            return false;
+        }
+    };
+    let violations = boundaries::violations(&graph, &members);
+    for violation in &violations {
+        eprintln!("error: {violation}");
+    }
+    violations.is_empty()
+}
+
+fn to_exit_code(success: bool) -> ExitCode {
+    if success {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
 }
