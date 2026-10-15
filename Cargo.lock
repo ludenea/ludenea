@@ -250,6 +250,9 @@ version = "0.0.0"
 [[package]]
 name = "ludenea_test"
 version = "0.0.0"
+dependencies = [
+ "ludenea_math",
+]
 
 [[package]]
 name = "memchr"
