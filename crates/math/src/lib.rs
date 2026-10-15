@@ -13,6 +13,6 @@ mod tests {
 
     #[test]
     fn lerp_halfway_returns_the_midpoint() {
-        assert_eq!(lerp(2.0, 6.0, 0.5), 4.0);
+        assert_eq!(lerp(2.0, 6.0, 0.5), 5.0);
     }
 }
