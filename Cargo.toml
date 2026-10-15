@@ -19,3 +19,7 @@ unsafe_code = "deny"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
+# Silencing a lint goes through `#[expect(..., reason = "...")]`, so a
+# silenced lint is justified and flagged again once it no longer fires.
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
