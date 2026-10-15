@@ -61,7 +61,8 @@ lint only with `#[expect(lint, reason = "...")]`, never with `#[allow]`.
 ## Architecture rules
 
 - **Hexagonal boundary.** Core crates (every workspace member except
-  `xtask`) never depend on adapter crates, I/O, an async runtime or OS
+  `xtask` and the adapter crates listed in `xtask/src/boundaries.rs`) never
+  depend on adapter crates, I/O, an async runtime or OS
   randomness, directly or transitively. `cargo xtask boundaries` enforces
   it; the rules live in `xtask/src/boundaries.rs`.
 - **Determinism.** The same inputs produce the same simulation on every run
