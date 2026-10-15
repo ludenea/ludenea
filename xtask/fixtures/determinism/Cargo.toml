@@ -1,0 +1,10 @@
+[package]
+name = "determinism_fixture"
+description = "Code using every item the determinism lints forbid"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Standalone on purpose: the fixture must never build as part of the
+# workspace, where its forbidden items would fail the lint check.
+[workspace]
