@@ -69,7 +69,7 @@ lint only with `#[expect(lint, reason = "...")]`, never with `#[allow]`.
   entry names the allowed alternative. The three `clippy.toml` copies must
   stay identical, a test in `xtask` fails otherwise.
 - **Golden hash.** CI computes a fixed floating point computation on every
-  target and thread count and compares the hashes with
+  target, build profile and thread count and compares the hashes with
   `crates/test/golden-hash.txt`. A change to that reference changes the
   numeric results of the engine: it needs its own reviewed commit
   explaining why.
