@@ -15,5 +15,9 @@ name = "ludenea_sim"
 version = "0.0.0"
 
 [[package]]
+name = "ludenea_test"
+version = "0.0.0"
+
+[[package]]
 name = "xtask"
 version = "0.0.0"
