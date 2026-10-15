@@ -1,2 +1,13 @@
 [alias]
 xtask = "run --package xtask --"
+
+[env]
+# Lets insta find the snapshot files without running `cargo metadata`, which
+# a WebAssembly test cannot do.
+INSTA_WORKSPACE_ROOT = { value = "", relative = true }
+
+# WebAssembly binaries and tests run under wasmtime. The host file system is
+# mounted at the same paths so snapshot tests read their files where native
+# tests do.
+[target.wasm32-wasip1]
+runner = "wasmtime run --dir=/::/"
