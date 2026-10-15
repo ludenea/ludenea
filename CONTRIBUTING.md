@@ -11,6 +11,10 @@ under a commercial license. Until it exists, a pull request may be read and
 discussed but will be closed without merging. This file will be updated when
 the agreement is ready.
 
+Commit subjects and pull request titles follow the
+[commit format](AGENTS.md#commits-and-pull-requests); CI rejects a pull
+request that breaks it.
+
 ## Issues
 
 Bug reports, questions about the design and feature ideas are welcome as
