@@ -1,18 +1,21 @@
 //! Repository automation, run with `cargo xtask <command>`.
 
 mod boundaries;
+mod commit_format;
 #[cfg(test)]
 mod determinism_lints;
 
 use std::env;
+use std::io::{self, BufRead};
 use std::process::{Command, ExitCode};
 
-const USAGE: &str = "usage: cargo xtask <ci|boundaries>";
+const USAGE: &str = "usage: cargo xtask <ci|boundaries|commit-format>";
 
 fn main() -> ExitCode {
     match env::args().nth(1).as_deref() {
         Some("ci") => ci(),
         Some("boundaries") => to_exit_code(check_boundaries()),
+        Some("commit-format") => to_exit_code(check_commit_format()),
         _ => {
             eprintln!("{USAGE}");
             ExitCode::FAILURE
@@ -70,6 +73,29 @@ fn check_boundaries() -> bool {
         eprintln!("error: {violation}");
     }
     violations.is_empty()
+}
+
+/// Fails when a subject read from standard input, one per line, breaks the
+/// commit format. Used on commit subjects and pull request titles.
+fn check_commit_format() -> bool {
+    let mut success = true;
+    for line in io::stdin().lock().lines() {
+        let subject = match line {
+            Ok(subject) => subject,
+            Err(error) => {
+                eprintln!("error: cannot read standard input: {error}");
+                return false;
+            }
+        };
+        if subject.is_empty() {
+            continue;
+        }
+        if let Some(problem) = commit_format::problem(&subject) {
+            eprintln!("error: \"{subject}\": {problem}");
+            success = false;
+        }
+    }
+    success
 }
 
 fn to_exit_code(success: bool) -> ExitCode {
