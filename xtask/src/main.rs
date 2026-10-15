@@ -32,6 +32,9 @@ fn ci() -> ExitCode {
         ],
         &["nextest", "run", "--workspace"],
     ];
+    if !check_boundaries() {
+        return ExitCode::FAILURE;
+    }
     for arguments in steps {
         if !cargo(arguments) {
             return ExitCode::FAILURE;
