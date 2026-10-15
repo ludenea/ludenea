@@ -11,3 +11,9 @@ INSTA_WORKSPACE_ROOT = { value = "", relative = true }
 # tests do.
 [target.wasm32-wasip1]
 runner = "wasmtime run --dir=/::/"
+
+# Links Linux builds with mold, about three times faster than the default
+# linker on an incremental rebuild. Without mold installed, building with
+# `RUSTFLAGS=` set to an empty value falls back to the default linker.
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))']
+rustflags = ["-Clink-arg=-fuse-ld=mold"]
