@@ -26,3 +26,8 @@ pedantic = { level = "warn", priority = -1 }
 # silenced lint is justified and flagged again once it no longer fires.
 allow_attributes = "warn"
 allow_attributes_without_reason = "warn"
+
+# Line tables keep dependency frames readable in backtraces while shrinking
+# the target directory; full debug information stays on workspace crates.
+[profile.dev.package."*"]
+debug = "line-tables-only"
