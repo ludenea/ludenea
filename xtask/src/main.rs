@@ -13,7 +13,7 @@ use std::io::{self, BufRead};
 use std::path::Path;
 use std::process::{Command, ExitCode};
 
-const USAGE: &str = "usage: cargo xtask <ci|boundaries|commit-format|golden-hash [cargo run arguments]|golden-compare <directory>>";
+const USAGE: &str = "usage: cargo xtask <ci|boundaries|commit-format|doc|golden-hash [cargo run arguments]|golden-compare <directory>>";
 
 /// The golden hash every target must produce, relative to the workspace root.
 const GOLDEN_REFERENCE: &str = "crates/test/golden-hash.txt";
@@ -23,6 +23,7 @@ fn main() -> ExitCode {
         Some("ci") => ci(),
         Some("boundaries") => to_exit_code(check_boundaries()),
         Some("commit-format") => to_exit_code(check_commit_format()),
+        Some("doc") => to_exit_code(cargo(&DOC)),
         Some("golden-hash") => to_exit_code(golden_hash()),
         Some("golden-compare") => to_exit_code(golden_compare()),
         _ => {
@@ -34,7 +35,7 @@ fn main() -> ExitCode {
 
 /// Runs the same checks as the continuous integration workflow.
 fn ci() -> ExitCode {
-    let steps: [&[&str]; 4] = [
+    let steps: [&[&str]; 5] = [
         &["fmt", "--all", "--check"],
         &[
             "clippy",
@@ -45,6 +46,7 @@ fn ci() -> ExitCode {
             "warnings",
         ],
         &["nextest", "run", "--workspace"],
+        &DOC,
         &["deny", "check"],
     ];
     if !check_boundaries() {
@@ -57,6 +59,18 @@ fn ci() -> ExitCode {
     }
     ExitCode::SUCCESS
 }
+
+/// Builds the API documentation of the library crates, failing on any
+/// rustdoc warning such as a broken intra-documentation link.
+const DOC: [&str; 7] = [
+    "doc",
+    "--workspace",
+    "--exclude",
+    "xtask",
+    "--lib",
+    "--no-deps",
+    "--config=build.rustdocflags=[\"-D\", \"warnings\"]",
+];
 
 fn cargo(arguments: &[&str]) -> bool {
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());

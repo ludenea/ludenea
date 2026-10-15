@@ -27,8 +27,9 @@ instead of declaring its own.
 
 | Command                     | What it does                                                         |
 | --------------------------- | -------------------------------------------------------------------- |
-| `cargo xtask ci`            | Everything CI runs: boundaries, format, clippy, nextest, cargo deny |
+| `cargo xtask ci`            | Everything CI runs: boundaries, format, clippy, nextest, doc, cargo deny |
 | `cargo xtask boundaries`    | Checks the hexagonal boundary of the core crates                     |
+| `cargo xtask doc`           | Builds the API documentation into `target/doc`, warnings denied      |
 | `cargo xtask commit-format` | Checks subjects read from standard input, one per line               |
 | `cargo xtask golden-hash`   | Prints the golden hash; add `--target wasm32-wasip1` for WebAssembly |
 | `cargo xtask golden-compare <directory>` | Compares `<target>.txt` hashes with the reference       |
