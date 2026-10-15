@@ -97,5 +97,5 @@ Every commit subject and pull request title follows
   internal plan, task or step.
 
 CI rejects a pull request whose title or any commit subject breaks the
-format. Check locally with
-`git log --format=%s origin/main..HEAD | cargo xtask commit-format`.
+format, merge commits aside. Check locally with
+`git log --no-merges --format=%s origin/main..HEAD | cargo xtask commit-format`.
