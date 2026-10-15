@@ -44,6 +44,9 @@ jobs:
       - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
         with:
           tool: cargo-nextest,cargo-deny
+      # Before any other cargo command, which would silently update it.
+      - name: Check that Cargo.lock is up to date
+        run: cargo fetch --locked
       # The hash is uploaded before the checks run, so the comparison job
       # still names this target when a check fails.
       - name: Compute the golden hash of the debug and release builds
