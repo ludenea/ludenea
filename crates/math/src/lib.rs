@@ -4,7 +4,14 @@
 /// `start` and `t = 1` gives `end`.
 #[must_use]
 pub fn lerp(start: f32, end: f32, t: f32) -> f32 {
-    start + (end - start) * t
+    #[cfg(target_arch = "aarch64")]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "deliberate divergence to prove the golden hash comparison fails"
+    )]
+    return (end - start).mul_add(t, start);
+    #[cfg(not(target_arch = "aarch64"))]
+    return start + (end - start) * t;
 }
 
 #[cfg(test)]
