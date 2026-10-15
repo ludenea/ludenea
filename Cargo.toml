@@ -11,6 +11,7 @@ repository = "https://github.com/ludenea/ludenea"
 
 [workspace.dependencies]
 cargo_metadata = "0.23.1"
+insta = "1.49.0"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
