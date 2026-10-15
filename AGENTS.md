@@ -41,6 +41,11 @@ Run `cargo xtask ci` before considering a change done: CI runs the same
 command and must be green before merge. It needs `cargo-nextest` and
 `cargo-deny` installed.
 
+On Linux, builds link with [mold](https://github.com/rui314/mold), set in
+`.cargo/config.toml`; install it from your distribution or its releases.
+Without it, run cargo with `RUSTFLAGS=` set to an empty value to fall back to
+the default linker.
+
 ## Development loop
 
 Work test-first: write a failing test, make it pass with the simplest code,
