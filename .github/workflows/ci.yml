@@ -32,14 +32,14 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install the pinned toolchain
         run: rustup show active-toolchain || rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-      - uses: rui314/setup-mold@v1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
         with:
           make-default: false
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
         with:
           tool: cargo-nextest,cargo-deny
       # The hash is uploaded before the checks run, so the comparison job
@@ -49,7 +49,7 @@ jobs:
           mkdir -p hashes
           cargo xtask golden-hash > "hashes/${{ matrix.target }}.txt"
           cargo xtask golden-hash --release >> "hashes/${{ matrix.target }}.txt"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: golden-hash-${{ matrix.target }}
           path: hashes/
@@ -59,14 +59,14 @@ jobs:
     name: CI (wasm32-wasip1)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install the pinned toolchain
         run: rustup show active-toolchain || rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-      - uses: rui314/setup-mold@v1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
         with:
           make-default: false
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
         with:
           tool: wasmtime
       - name: Compute the golden hash of the debug and release builds
@@ -74,7 +74,7 @@ jobs:
           mkdir -p hashes
           cargo xtask golden-hash --target wasm32-wasip1 > hashes/wasm32-wasip1.txt
           cargo xtask golden-hash --target wasm32-wasip1 --release >> hashes/wasm32-wasip1.txt
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: golden-hash-wasm32-wasip1
           path: hashes/
@@ -88,14 +88,14 @@ jobs:
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install the pinned toolchain
         run: rustup show active-toolchain || rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-      - uses: rui314/setup-mold@v1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
         with:
           make-default: false
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: golden-hash-*
           path: hashes
