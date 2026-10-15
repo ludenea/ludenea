@@ -1,0 +1,10 @@
+# Rust build output
+/target/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+
+# Local AI agent working state
+.superpowers/
