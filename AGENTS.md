@@ -32,7 +32,7 @@ instead of declaring its own.
 | `cargo xtask doc`           | Builds the API documentation into `target/doc`, warnings denied      |
 | `cargo xtask commit-format` | Checks subjects read from standard input, one per line               |
 | `cargo xtask golden-hash`   | Prints the golden hash; add `--target wasm32-wasip1` for WebAssembly |
-| `cargo xtask golden-compare <directory>` | Compares `<target>.txt` hashes with the reference       |
+| `cargo xtask golden-compare <directory> <target>...` | Compares each `<target>.txt` with the reference, failing on a missing target |
 | `cargo nextest run`         | Runs the tests                                                       |
 | `cargo test --workspace --exclude xtask --target wasm32-wasip1` | Runs the core tests under `wasmtime` |
 | `cargo insta review`        | Reviews changed snapshots                                            |

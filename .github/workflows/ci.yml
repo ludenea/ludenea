@@ -98,4 +98,12 @@ jobs:
           pattern: golden-hash-*
           path: hashes
           merge-multiple: true
-      - run: cargo xtask golden-compare hashes
+      # Lists every target of the ci and wasm jobs: a target whose build
+      # failed before uploading its hash fails the comparison.
+      - run: >-
+          cargo xtask golden-compare hashes
+          x86_64-unknown-linux-gnu
+          aarch64-unknown-linux-gnu
+          x86_64-pc-windows-msvc
+          aarch64-apple-darwin
+          wasm32-wasip1
