@@ -94,6 +94,11 @@ fn every_forbidden_item_is_reported_with_its_alternative() {
     let configuration = configuration_of(SIMULATION_CRATES[0]);
     let forbidden = forbidden_items(&configuration);
     assert!(!forbidden.is_empty(), "no forbidden item found");
+    assert_eq!(
+        forbidden.len(),
+        configuration.matches("path = ").count(),
+        "every entry must stay on one line to be checked"
+    );
 
     let diagnostics = fixture_diagnostics(SIMULATION_CRATES[0]);
 
