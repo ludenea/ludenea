@@ -1,0 +1,3 @@
+# Check out every text file with LF endings, on Windows too, so formatting,
+# snapshots and the golden reference read the same on every platform.
+* text=auto eol=lf
