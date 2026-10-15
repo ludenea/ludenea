@@ -26,13 +26,13 @@ jobs:
           - target: x86_64-pc-windows-msvc
             runner: windows-2025
           - target: aarch64-apple-darwin
-            runner: macos-15
+            runner: macos-26
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install the pinned toolchain
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
@@ -45,7 +45,7 @@ jobs:
         run: |
           mkdir -p hashes
           cargo xtask golden-hash > "hashes/${{ matrix.target }}.txt"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: golden-hash-${{ matrix.target }}
           path: hashes/
@@ -55,7 +55,7 @@ jobs:
     name: CI (wasm32-wasip1)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install the pinned toolchain
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
@@ -66,7 +66,7 @@ jobs:
         run: |
           mkdir -p hashes
           cargo xtask golden-hash --target wasm32-wasip1 > hashes/wasm32-wasip1.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: golden-hash-wasm32-wasip1
           path: hashes/
@@ -80,11 +80,11 @@ jobs:
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install the pinned toolchain
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: golden-hash-*
           path: hashes
