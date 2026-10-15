@@ -30,6 +30,8 @@ instead of declaring its own.
 | `cargo xtask ci`            | Everything CI runs: boundaries, format, clippy, nextest, cargo deny |
 | `cargo xtask boundaries`    | Checks the hexagonal boundary of the core crates                     |
 | `cargo xtask commit-format` | Checks subjects read from standard input, one per line               |
+| `cargo xtask golden-hash`   | Prints the golden hash; add `--target wasm32-wasip1` for WebAssembly |
+| `cargo xtask golden-compare <directory>` | Compares `<target>.txt` hashes with the reference       |
 | `cargo nextest run`         | Runs the tests                                                       |
 | `cargo insta review`        | Reviews changed snapshots                                            |
 
@@ -59,6 +61,11 @@ lint only with `#[expect(lint, reason = "...")]`, never with `#[allow]`.
   threads, platform floating-point functions and fused multiply-add; each
   entry names the allowed alternative. The three `clippy.toml` copies must
   stay identical, a test in `xtask` fails otherwise.
+- **Golden hash.** CI computes a fixed floating point computation on every
+  target and thread count and compares the hashes with
+  `crates/test/golden-hash.txt`. A change to that reference changes the
+  numeric results of the engine: it needs its own reviewed commit
+  explaining why.
 - **Dependencies.** Add a dependency to `[workspace.dependencies]` first.
   `cargo deny check` rejects non-permissive licenses, duplicate versions and
   unmaintained crates.
