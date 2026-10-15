@@ -68,6 +68,7 @@ pub fn f64_methods(x: f64) {
     let _ = x.max(x);
     let _ = x.powi(2);
 }
+
 pub fn types(
     _: HashMap<u8, u8>,
     _: HashSet<u8>,
@@ -80,5 +81,8 @@ pub fn types(
 
 pub fn threads() {
     std::thread::spawn(|| {});
-    std::thread::scope(|_| {});
+    std::thread::scope(|scope| {
+        let _ = std::thread::Builder::new().spawn_scoped(scope, || {});
+    });
+    let _ = std::thread::Builder::new().spawn(|| {});
 }
