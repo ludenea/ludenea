@@ -1,0 +1,36 @@
+name: Bug report
+description: Report something that does not work as expected.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: The smallest sequence of steps, code or input recording that triggers the problem.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: e.g. 0.1.0 or a commit hash
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: e.g. Linux x86_64, macOS ARM64, WebAssembly in Firefox
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant output, pasted as text.
+      render: text
