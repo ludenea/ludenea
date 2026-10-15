@@ -14,8 +14,23 @@ concurrency:
 
 jobs:
   ci:
-    name: CI (x86_64 Linux)
-    runs-on: ubuntu-24.04
+    name: CI (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2025
+          - target: aarch64-apple-darwin
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - name: Install the pinned toolchain
@@ -24,4 +39,54 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest,cargo-deny
+      # The hash is uploaded before the checks run, so the comparison job
+      # still names this target when a check fails.
+      - name: Compute the golden hash
+        run: |
+          mkdir -p hashes
+          cargo xtask golden-hash > "hashes/${{ matrix.target }}.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: golden-hash-${{ matrix.target }}
+          path: hashes/
       - run: cargo xtask ci
+
+  wasm:
+    name: CI (wasm32-wasip1)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasmtime
+      - name: Compute the golden hash
+        run: |
+          mkdir -p hashes
+          cargo xtask golden-hash --target wasm32-wasip1 > hashes/wasm32-wasip1.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: golden-hash-wasm32-wasip1
+          path: hashes/
+      - name: Run the core crate tests under wasmtime
+        run: cargo test --workspace --exclude xtask --target wasm32-wasip1
+
+  golden-hash:
+    name: Golden hash comparison
+    needs: [ci, wasm]
+    # Runs when a target failed too, to report every diverging hash at once.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: golden-hash-*
+          path: hashes
+          merge-multiple: true
+      - run: cargo xtask golden-compare hashes
