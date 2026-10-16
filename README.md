@@ -14,6 +14,11 @@ the editor.
 - **Test-native.** A game simulation runs inside `cargo test` in milliseconds,
   with no window, GPU or audio device.
 
+## Architecture decisions
+
+The reasons behind the engine's design are recorded in the
+[architecture decision records](docs/adr/README.md).
+
 ## Contributing
 
 Issues are welcome. External pull requests cannot be merged yet; see
