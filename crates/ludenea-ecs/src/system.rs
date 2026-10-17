@@ -190,11 +190,10 @@ pub struct Res<'w, T>(Ref<'w, T>);
 /// Reads and writes the resource `T`.
 pub struct ResMut<'w, T>(RefMut<'w, T>);
 
-/// Reads the runtime resource `T`, which is never hashed or snapshotted.
+/// Reads the runtime resource `T`, which is never hashed or snapshotted. Systems cannot
+/// write runtime resources: a write would change future behaviour without changing the
+/// state hash.
 pub struct Runtime<'w, T>(Ref<'w, T>);
-
-/// Reads and writes the runtime resource `T`.
-pub struct RuntimeMut<'w, T>(RefMut<'w, T>);
 
 impl<T: Resource> SystemParam for Res<'_, T> {
     type Item<'w> = Res<'w, T>;
@@ -243,20 +242,6 @@ impl<T: Send + 'static> SystemParam for Runtime<'_, T> {
     }
 }
 
-impl<T: Send + 'static> SystemParam for RuntimeMut<'_, T> {
-    type Item<'w> = RuntimeMut<'w, T>;
-
-    fn declare(world: &World, accesses: &mut Accesses) -> Result<(), Missing> {
-        let access = Access::Write(type_name::<T>());
-        declare_cell(world.runtime_cell::<T>(), RUNTIME, access, accesses)
-    }
-
-    fn fetch(world: &World) -> Self::Item<'_> {
-        let cell = registered(world.runtime_cell::<T>(), RUNTIME, type_name::<T>());
-        RuntimeMut(cell.borrow_mut())
-    }
-}
-
 macro_rules! deref {
     ($($wrapper:ident),*) => {$(
         impl<T> Deref for $wrapper<'_, T> {
@@ -279,5 +264,5 @@ macro_rules! deref_mut {
     )*};
 }
 
-deref!(Res, ResMut, Runtime, RuntimeMut);
-deref_mut!(ResMut, RuntimeMut);
+deref!(Res, ResMut, Runtime);
+deref_mut!(ResMut);

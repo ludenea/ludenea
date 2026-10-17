@@ -12,7 +12,7 @@ pub mod prelude {
     pub use crate::app::{App, Input, InputLog, Inputs, Plugin, Rng, Sim, Simulation, Time};
     pub use crate::ecs::{
         Commands, Component, Entity, EventWriter, Events, IntoSystemConfig, Query, Res, ResMut,
-        Resource, Runtime, RuntimeMut, SystemLabel, With, Without, World,
+        Resource, Runtime, SystemLabel, With, Without, World,
     };
     pub use crate::math::{Aabb, Rot, Transform, Vec2};
     pub use crate::physics::{

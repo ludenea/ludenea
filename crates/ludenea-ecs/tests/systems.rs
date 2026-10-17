@@ -1,6 +1,6 @@
 use ludenea_ecs::{
     BuildError, Commands, Component, Entity, EventWriter, Events, IntoSystemConfig, Query, Res,
-    ResMut, Resource, Runtime, RuntimeMut, ScheduleBuilder, SystemLabel, World,
+    ResMut, Resource, Runtime, ScheduleBuilder, SystemLabel, World,
 };
 use serde::{Deserialize, Serialize};
 
@@ -185,21 +185,18 @@ struct Fighter<'w> {
     health: &'w mut Health,
 }
 
-fn heal(mut fighters: Query<Fighter>, speed: Runtime<Speed>, mut ticks: RuntimeMut<u32>) {
+fn heal(mut fighters: Query<Fighter>, speed: Runtime<Speed>) {
     for fighter in fighters.iter_mut() {
         fighter.health.0 += speed.0;
     }
-    *ticks += 1;
 }
 
 #[test]
 fn runtime_resources_and_derived_queries_are_parameters() {
     let mut world = world();
     world.insert_runtime(Speed(3));
-    world.insert_runtime(0u32);
     let entity = world.spawn();
     world.insert(entity, Health(1)).unwrap();
     run(&mut world, |builder| builder.add(heal));
     assert_eq!(*world.get::<Health>(entity).unwrap(), Health(4));
-    assert_eq!(*world.runtime::<u32>().unwrap(), 1);
 }

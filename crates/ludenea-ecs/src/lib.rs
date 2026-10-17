@@ -32,5 +32,5 @@ pub use schedule::{
     BuildError, IntoSystemConfig, Schedule, ScheduleBuilder, SystemConfig, SystemLabel,
 };
 pub use snapshot::{ComponentValues, SNAPSHOT_VERSION, Snapshot, SnapshotError};
-pub use system::{IntoSystem, Res, ResMut, Runtime, RuntimeMut, System, SystemParam};
+pub use system::{IntoSystem, Res, ResMut, Runtime, System, SystemParam};
 pub use world::World;
