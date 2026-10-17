@@ -40,8 +40,13 @@ impl Pacer {
 
     /// The ticks due after `elapsed_seconds` more time, at most `MAX_TICKS_PER_FRAME` times
     /// the speed (rounded up). Debt beyond the cap is dropped: play slows down but never
-    /// skips ticks.
+    /// skips ticks. A negative, infinite, or NaN time counts as none.
     pub fn advance(&mut self, elapsed_seconds: f64) -> u32 {
+        let elapsed_seconds = if elapsed_seconds.is_finite() && elapsed_seconds > 0.0 {
+            elapsed_seconds
+        } else {
+            0.0
+        };
         self.owed += elapsed_seconds * f64::from(self.speed) * f64::from(self.tick_rate);
         let due = (self.owed + EPSILON).floor();
         let cap = (f64::from(MAX_TICKS_PER_FRAME) * f64::from(self.speed)).ceil();
@@ -52,8 +57,27 @@ impl Pacer {
             self.owed -= due;
             due as u32
         };
-        self.record(elapsed_seconds, ticks);
+        if elapsed_seconds > 0.0 {
+            self.record(elapsed_seconds, ticks);
+        }
         ticks
+    }
+
+    /// Gives back `ticks` of the last `advance` that did not run: they stay owed and do not
+    /// count in the effective rate.
+    pub fn not_run(&mut self, ticks: u32) {
+        if let Some((_, ran)) = self.history.back_mut() {
+            let ticks = ticks.min(*ran);
+            *ran -= ticks;
+            self.owed += f64::from(ticks);
+        }
+    }
+
+    /// Forgets the debt and the rate history, when play stops.
+    pub fn stop(&mut self) {
+        self.owed = 0.0;
+        self.history.clear();
+        self.window = 0.0;
     }
 
     /// Ticks per second of passed time over about the last second.
@@ -83,6 +107,49 @@ mod tests {
     use super::*;
 
     #[test]
+    fn negative_or_not_a_number_elapsed_time_counts_as_none() {
+        let mut pacer = Pacer::new(60);
+        for elapsed in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(pacer.advance(elapsed), 0, "{elapsed}");
+        }
+        let ticks: u32 = (0..60).map(|_| pacer.advance(1.0 / 60.0)).sum();
+        assert_eq!(ticks, 60);
+        assert_eq!(pacer.effective_rate(), 60.0);
+    }
+
+    #[test]
+    fn frames_without_elapsed_time_are_not_kept() {
+        let mut pacer = Pacer::new(60);
+        for _ in 0..1_000 {
+            pacer.advance(0.0);
+        }
+        assert!(pacer.history.is_empty());
+    }
+
+    #[test]
+    fn stopping_resets_the_rate_and_the_debt() {
+        let mut pacer = Pacer::new(60);
+        assert_eq!(pacer.advance(2.0 / 60.0), 2);
+        assert_eq!(pacer.advance(0.5 / 60.0), 0);
+        pacer.stop();
+        assert_eq!(pacer.effective_rate(), 0.0);
+        assert_eq!(
+            pacer.advance(0.75 / 60.0),
+            0,
+            "the half tick owed was dropped"
+        );
+    }
+
+    #[test]
+    fn ticks_not_run_stay_owed_and_do_not_count() {
+        let mut pacer = Pacer::new(60);
+        assert_eq!(pacer.advance(2.0 / 60.0), 2);
+        pacer.not_run(2);
+        assert_eq!(pacer.effective_rate(), 0.0);
+        assert_eq!(pacer.advance(1.0 / 60.0), 3);
+    }
+
+    #[test]
     fn pacer_runs_one_tick_per_sixtieth_second() {
         let mut pacer = Pacer::new(60);
         let ticks: u32 = (0..60).map(|_| pacer.advance(1.0 / 60.0)).sum();
@@ -95,7 +162,7 @@ mod tests {
         let mut pacer = Pacer::new(60);
         assert_eq!(pacer.advance(1.0), MAX_TICKS_PER_FRAME);
         assert_eq!(pacer.advance(0.0), 0);
-        assert!(pacer.effective_rate() <= 60.0);
+        assert_eq!(pacer.effective_rate(), MAX_TICKS_PER_FRAME as f32);
     }
 
     #[test]
@@ -119,5 +186,13 @@ mod tests {
         let mut slow = Pacer::new(60);
         slow.set_speed(0.1);
         assert_eq!(slow.advance(1.0), 1, "the cap never drops below one tick");
+    }
+
+    #[test]
+    fn speed_is_clamped_to_one_tenth_from_below() {
+        let mut pacer = Pacer::new(60);
+        pacer.set_speed(0.01);
+        let ticks: u32 = (0..60).map(|_| pacer.advance(1.0 / 60.0)).sum();
+        assert_eq!(ticks, 6);
     }
 }
