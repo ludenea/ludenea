@@ -1,7 +1,7 @@
 # Ludenea milestone 2a: the usable editor
 
 Date: 2026-10-17
-Status: draft, awaiting approval
+Status: approved
 Parent design: `2026-10-17-ludenea-engine-design.md` (milestone 2, split into
 2a and 2b)
 
