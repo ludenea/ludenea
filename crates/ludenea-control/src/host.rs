@@ -20,8 +20,6 @@ pub struct Host {
     playing: bool,
     /// The mapped live input, or `None` while every player is idle.
     live: Option<Vec<u8>>,
-    /// Set when resimulation failed; it resumes after the next scene, log, or session load.
-    resimulation_halted: bool,
     /// The timeline last reported, to emit `TimelineChanged` only on change.
     timeline: Timeline,
     /// Events produced by commands, returned by the next `advance`.
@@ -42,7 +40,6 @@ impl Host {
             session,
             playing: false,
             live: None,
-            resimulation_halted: false,
             events: Vec::new(),
         })
     }
@@ -81,7 +78,7 @@ impl Host {
     /// Runs the ticks due after `elapsed_seconds` while playing, and a resimulation budget
     /// while the recorded future is stale. Returns the events since the last call.
     pub fn advance(&mut self, elapsed_seconds: f64) -> Vec<Event> {
-        if self.session.timeline().resimulating && !self.resimulation_halted {
+        if self.session.timeline().resimulating {
             self.resimulate();
         }
         if self.playing {
@@ -122,7 +119,6 @@ impl Host {
             Command::LoadInputs { log } => {
                 let log = InputLog::decode(&log.0)
                     .map_err(|e| ProtocolError::new(ErrorCode::InvalidInputs, e))?;
-                self.resimulation_halted = false;
                 self.session
                     .load_inputs(sim, log)
                     .map_err(|e| self.fail(e))?;
@@ -130,7 +126,6 @@ impl Host {
             }
             Command::LoadEdits { log } => {
                 let log = decode_edits(&log)?;
-                self.resimulation_halted = false;
                 self.session
                     .load_edits(sim, log)
                     .map_err(|e| self.fail(e))?;
@@ -159,7 +154,6 @@ impl Host {
             }),
             Command::Restore { snapshot } => {
                 let snapshot = decode_snapshot(&snapshot)?;
-                self.resimulation_halted = false;
                 self.session
                     .restore(sim, &snapshot)
                     .map_err(|e| self.fail(e))?;
@@ -234,7 +228,6 @@ impl Host {
                 })
             }
             Command::ReplaceScene { ron } => {
-                self.resimulation_halted = false;
                 self.session
                     .replace_scene(sim, ron)
                     .map_err(|e| self.fail(e))?;
@@ -261,7 +254,6 @@ impl Host {
     /// Takes over a new session, paused.
     fn load(&mut self, session: Session) -> Result<Reply, ProtocolError> {
         self.session = session;
-        self.resimulation_halted = false;
         if self.playing {
             self.pause(PauseReason::User);
         }
@@ -328,7 +320,6 @@ impl Host {
                     self.events.push(Event::EditDropped { tick, reason });
                 }
                 Err(error) => {
-                    self.resimulation_halted = true;
                     self.fail_unattended(error);
                     return;
                 }

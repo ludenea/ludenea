@@ -336,10 +336,11 @@ impl Session {
         Ok(())
     }
 
-    /// Replaces the state at the snapshot's tick: the hashes and checkpoints after it are
-    /// dropped, and the recorded inputs and edits after it stay as the future that replays
-    /// on top of it. A snapshot past the simulated ticks (taken elsewhere) is restored as is;
-    /// the ticks run from it add no hashes.
+    /// Moves to the snapshot's tick, simulating the recorded future up to it when needed,
+    /// and drops the hashes and checkpoints after it; the recorded inputs and edits after it
+    /// stay as the future. A snapshot of another state (another session or build) becomes
+    /// the whole state of its tick: the edits recorded at that tick are dropped, and its hash
+    /// and checkpoint replace the recorded ones, so seeking back to it returns to it.
     pub fn restore(
         &mut self,
         sim: &mut Simulation,
@@ -347,17 +348,50 @@ impl Session {
     ) -> Result<(), SessionError> {
         self.ensure_resimulated()?;
         sim.restore(snapshot)?;
-        let tick = sim.tick();
+        let (tick, restored) = (sim.tick(), sim.hash());
+        self.replay_to(sim, tick)?;
         let kept = usize::try_from(tick + 1).expect("tick fits in memory");
         self.hashes.truncate(kept);
         self.checkpoints.truncate_after(tick);
         self.current = tick;
+        if sim.hash() != restored {
+            sim.restore(snapshot)
+                .expect("the snapshot restored into this world before");
+            let first = self.edits.edits.partition_point(|edit| edit.tick < tick);
+            let end = self.edits.edits.partition_point(|edit| edit.tick <= tick);
+            let dropped: Vec<TimedEdit> = self.edits.edits.drain(first..end).collect();
+            for edit in &dropped {
+                self.history.forget(edit);
+            }
+            self.update_head();
+            self.hashes[kept - 1] = restored;
+            self.checkpoints.pin(tick, snapshot.clone());
+        }
         Ok(())
     }
 
     /// Replays at most `budget` stale recorded ticks on the new state, then restores the
-    /// current tick. Returns one report per call.
+    /// current tick. Returns one report per call. A tick that fails (a panic) ends
+    /// resimulation there: the stale hashes after it are dropped and the recorded inputs and
+    /// edits stay as the future.
     pub fn resimulate(
+        &mut self,
+        sim: &mut Simulation,
+        budget: u32,
+    ) -> Result<Resimulation, SessionError> {
+        let result = self.resimulate_within(sim, budget);
+        if result.is_err()
+            && let Some(failed) = self.resimulating.take()
+        {
+            let kept = usize::try_from(failed + 1).expect("tick fits in memory");
+            self.hashes.truncate(kept);
+            self.checkpoints.truncate_after(failed);
+            self.replay_to(sim, self.current)?;
+        }
+        result
+    }
+
+    fn resimulate_within(
         &mut self,
         sim: &mut Simulation,
         budget: u32,

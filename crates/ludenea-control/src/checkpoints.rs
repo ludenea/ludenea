@@ -1,7 +1,7 @@
 //! Snapshots of a session's past, dense near the head and sparse far behind it, so seeking
 //! back costs about as many replayed ticks as the distance sought.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ludenea_ecs::Snapshot;
 
@@ -17,6 +17,8 @@ pub const CHECKPOINTS_PER_LEVEL: usize = 2;
 /// would never have been kept later.
 pub struct Checkpoints {
     snapshots: BTreeMap<u64, Snapshot>,
+    /// Ticks never thinned out: their state cannot be recomputed from the recorded logs.
+    pinned: BTreeSet<u64>,
 }
 
 impl Checkpoints {
@@ -24,6 +26,7 @@ impl Checkpoints {
     pub fn new(initial: Snapshot) -> Self {
         Self {
             snapshots: BTreeMap::from([(0, initial)]),
+            pinned: BTreeSet::new(),
         }
     }
 
@@ -36,8 +39,17 @@ impl Checkpoints {
         self.snapshots.insert(tick, snapshot);
         let head = *self.snapshots.keys().next_back().expect("tick 0 is kept");
         self.snapshots.retain(|&kept, _| {
-            kept == 0 || kept == head || kept.is_multiple_of(spacing(head - kept))
+            kept == 0
+                || kept == head
+                || kept.is_multiple_of(spacing(head - kept))
+                || self.pinned.contains(&kept)
         });
+    }
+
+    /// Stores `snapshot` at `tick` and keeps it until `truncate_after` drops it.
+    pub fn pin(&mut self, tick: u64, snapshot: Snapshot) {
+        self.pinned.insert(tick);
+        self.insert(tick, snapshot);
     }
 
     pub fn nearest_at_or_before(&self, tick: u64) -> (u64, &Snapshot) {
@@ -52,6 +64,7 @@ impl Checkpoints {
     /// Drops every checkpoint after `tick`.
     pub fn truncate_after(&mut self, tick: u64) {
         self.snapshots.split_off(&(tick + 1));
+        self.pinned.split_off(&(tick + 1));
     }
 
     pub fn ticks(&self) -> Vec<u64> {

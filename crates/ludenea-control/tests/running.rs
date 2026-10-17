@@ -406,3 +406,81 @@ fn seek_while_resimulating_is_resimulating() {
         ErrorCode::Resimulating
     );
 }
+
+#[test]
+fn panic_during_resimulation_ends_it_and_keeps_undo_and_export() {
+    let mut app = boxes::app();
+    app.system(Sim, panic_at_50);
+    let inputs = recorded(100);
+    let mut host = loaded_with(app, scene_a(), inputs.clone());
+    step(&mut host, 40);
+    ok(&mut host, Command::ReplaceScene { ron: scene_b() });
+
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let events = host.advance(0.0);
+    std::panic::set_hook(hook);
+
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            Event::Paused {
+                reason: PauseReason::Panicked { tick: 50, .. }
+            }
+        )),
+        "{events:?}"
+    );
+    let after = timeline(&mut host);
+    assert!(!after.resimulating);
+    assert_eq!((after.simulated, after.head), (50, 99));
+    let exported = export(&mut host);
+    assert_eq!(exported.inputs, inputs);
+    assert_eq!(exported.hashes.len(), 51);
+    ok(&mut host, Command::Undo);
+    assert_eq!(timeline(&mut host).current, 0);
+}
+
+fn snapshot_at(scene: String, tick: u32) -> (Bytes, Hash64) {
+    let mut host = loaded_with(boxes::app(), scene, recorded(100));
+    step(&mut host, tick);
+    let Reply::Snapshot { snapshot, .. } = ok(&mut host, Command::TakeSnapshot) else {
+        panic!()
+    };
+    (snapshot, hash(&mut host))
+}
+
+#[test]
+fn restore_foreign_snapshot_becomes_the_state_of_its_tick() {
+    let (foreign, foreign_hash) = snapshot_at(scene_b(), 20);
+    let mut host = loaded(100);
+    step(&mut host, 50);
+    ok(&mut host, Command::Restore { snapshot: foreign });
+    assert_eq!(hash(&mut host), foreign_hash);
+    let restored = timeline(&mut host);
+    assert_eq!((restored.current, restored.simulated), (20, 20));
+
+    let continued = step(&mut host, 60);
+    ok(&mut host, Command::Seek { tick: 5 });
+    ok(&mut host, Command::Seek { tick: 20 });
+    assert_eq!(hash(&mut host), foreign_hash, "the checkpoint is kept");
+    assert_eq!(step(&mut host, 60), continued);
+    assert_eq!(export(&mut host).hashes[20], foreign_hash);
+}
+
+#[test]
+fn restore_past_the_simulated_ticks_extends_them() {
+    let (own, own_hash) = snapshot_at(scene_a(), 40);
+    let mut host = loaded(100);
+    ok(&mut host, Command::Restore { snapshot: own });
+    let restored = timeline(&mut host);
+    assert_eq!((restored.current, restored.simulated), (40, 40));
+    assert_eq!(export(&mut host).hashes[40], own_hash);
+
+    let (foreign, foreign_hash) = snapshot_at(scene_b(), 30);
+    let mut host = loaded(100);
+    ok(&mut host, Command::Restore { snapshot: foreign });
+    assert_eq!(timeline(&mut host).simulated, 30);
+    ok(&mut host, Command::Seek { tick: 0 });
+    ok(&mut host, Command::Seek { tick: 30 });
+    assert_eq!(hash(&mut host), foreign_hash);
+}
