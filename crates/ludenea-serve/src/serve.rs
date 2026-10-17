@@ -78,6 +78,9 @@ pub async fn run(options: Options) -> Result<(), String> {
         })?;
     let address: SocketAddr = listener.local_addr().map_err(|error| error.to_string())?;
     println!("listening on http://{address}");
+    if let Some(warning) = remote_warning(&address) {
+        eprintln!("{warning}");
+    }
     axum::serve(listener, router)
         .await
         .map_err(|error| error.to_string())
@@ -93,6 +96,18 @@ async fn project_socket(
         return StatusCode::FORBIDDEN.into_response();
     }
     upgrade.on_upgrade(move |socket| session(app, socket))
+}
+
+/// Listening beyond this machine lets anyone on the network edit and build the project, which
+/// runs its code: there is no authentication.
+fn remote_warning(address: &SocketAddr) -> Option<String> {
+    (!address.ip().is_loopback()).then(|| {
+        format!(
+            "warning: listening on {address}, beyond this machine: anyone who can reach it can \
+             change and build the project, which runs its code. There is no authentication; \
+             use this only on a network you trust."
+        )
+    })
 }
 
 /// The names a request's `Host` may carry, lowercase, IPv6 addresses in brackets.
@@ -285,4 +300,20 @@ fn lock(service: &Mutex<ProjectService>) -> MutexGuard<'_, ProjectService> {
     service
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_addresses_beyond_this_machine_are_warned_about() {
+        let address = |text: &str| text.parse::<SocketAddr>().unwrap();
+        assert_eq!(remote_warning(&address("127.0.0.1:7878")), None);
+        assert_eq!(remote_warning(&address("[::1]:7878")), None);
+        for remote in ["0.0.0.0:7878", "192.168.1.20:7878", "[::]:7878"] {
+            let warning = remote_warning(&address(remote)).expect(remote);
+            assert!(warning.contains("no authentication"), "{warning}");
+        }
+    }
 }

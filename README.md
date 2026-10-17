@@ -91,6 +91,11 @@ pnpm -C editor build
 cargo run --locked -p ludenea-serve -- serve ~/games/my_game --editor-dir editor/apps/web/dist
 ```
 
+`ludenea serve` listens on `127.0.0.1` by default. Remote mode (`--host 0.0.0.0` with
+`--allow-host <name>`) is for trusted networks only: there is no authentication, and anyone
+who can reach the port can change and build the project, which runs its code. The tool
+prints a warning when it listens beyond this machine.
+
 Built with `--features embed-editor`, the `ludenea` binary carries the editor and needs no
 `--editor-dir`. The desktop application (Tauri) runs the same editor with the game as a
 native process:
