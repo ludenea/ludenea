@@ -35,6 +35,8 @@ pub struct ProjectService {
     engine_path: Option<PathBuf>,
     events: broadcast::Sender<ProjectEvent>,
     opened: Option<Opened>,
+    /// Set once an editor said hello: from then on a desktop rebuild waits for `RestartGame`.
+    editor_connected: Arc<AtomicBool>,
 }
 
 /// The open project and what its background threads share.
@@ -55,6 +57,8 @@ struct Game {
     control: Option<ControlChannel>,
     /// Browser: the directory of the last good WebAssembly build.
     wasm: Option<PathBuf>,
+    /// Desktop: a rebuilt game waiting for `RestartGame`.
+    rebuilt: Option<PathBuf>,
 }
 
 impl Drop for Opened {
@@ -74,6 +78,7 @@ impl ProjectService {
             engine_path,
             events: broadcast::channel(EVENT_CAPACITY).0,
             opened: None,
+            editor_connected: Arc::default(),
         }
     }
 
@@ -94,6 +99,24 @@ impl ProjectService {
         lock(&self.opened.as_ref()?.game).control.take()
     }
 
+    /// Desktop: what an editor connecting now (a reloaded window) missed and needs to catch
+    /// up with the games: `GameReady` when one runs, then `GameRebuilt` when a rebuilt one
+    /// waits for `RestartGame`.
+    pub fn announcements(&self) -> Vec<ProjectEvent> {
+        let Some(opened) = &self.opened else {
+            return Vec::new();
+        };
+        let game = lock(&opened.game);
+        let mut events = Vec::new();
+        if game.process.is_some() {
+            events.push(ProjectEvent::GameReady);
+        }
+        if game.rebuilt.is_some() {
+            events.push(ProjectEvent::GameRebuilt);
+        }
+        events
+    }
+
     pub fn handle(&mut self, request: ProjectRequest) -> Result<ProjectReply, ProjectFailure> {
         let reply = self.dispatch(request);
         if let Some(opened) = &self.opened {
@@ -112,6 +135,9 @@ impl ProjectService {
             Ok(ProjectClientMessage::Hello { protocol_version }) => {
                 let reply = handshake(protocol_version);
                 *connected = matches!(reply, ProjectServerMessage::Welcome { .. });
+                if *connected {
+                    self.editor_connected.store(true, Ordering::SeqCst);
+                }
                 reply
             }
             Ok(ProjectClientMessage::Request { id, request }) if *connected => {
@@ -196,6 +222,16 @@ impl ProjectService {
             ProjectRequest::GameEndpoint => self.game_endpoint(),
             ProjectRequest::WriteGameTypes { info } => {
                 self.project()?.write_game_types(&info)?;
+                Ok(ProjectReply::Done)
+            }
+            ProjectRequest::RestartGame => {
+                let mut game = lock(&self.opened()?.game);
+                let binary = game.rebuilt.take().ok_or_else(|| {
+                    ProjectFailure::new(FailureCode::NoGame, "no rebuilt game waits to start")
+                })?;
+                start_game(&mut game, &binary, &self.events)
+                    .map_err(|message| ProjectFailure::new(FailureCode::Io, message))?;
+                let _ = self.events.send(ProjectEvent::GameReady);
                 Ok(ProjectReply::Done)
             }
         }
@@ -288,6 +324,7 @@ impl ProjectService {
         let game = Arc::clone(&opened.game);
         let builds = Arc::clone(&opened.builds);
         let alive = Arc::clone(&opened.alive);
+        let editor_connected = Arc::clone(&self.editor_connected);
         let events = self.events.clone();
         let target = match self.mode {
             ServiceMode::Desktop => BuildTarget::Native,
@@ -315,28 +352,54 @@ impl ProjectService {
             if !alive.load(Ordering::SeqCst) {
                 return;
             }
-            match artifact {
-                BuildArtifact::Wasm { dir } => game.wasm = Some(dir),
-                BuildArtifact::Native { binary } => {
-                    if let Some(previous) = game.process.take() {
-                        lock(&previous).take();
-                    }
-                    game.control = None;
-                    match GameProcess::start(&binary) {
-                        Ok(process) => {
-                            let (slot, control) = relay(process, &events);
-                            game.process = Some(slot);
-                            game.control = Some(control);
-                        }
-                        Err(error) => {
-                            return warn(&events, format!("cannot start the game: {error}"));
-                        }
-                    }
-                }
-            }
-            let _ = events.send(ProjectEvent::GameReady);
+            let hold = editor_connected.load(Ordering::SeqCst);
+            finish_build(&mut game, artifact, hold, &events);
         });
     }
+}
+
+/// Puts a successful build in place and announces it. On desktop with an editor connected
+/// (`hold`), a running game keeps running until `RestartGame`, so the editor can export its
+/// session first.
+fn finish_build(
+    game: &mut Game,
+    artifact: BuildArtifact,
+    hold: bool,
+    events: &broadcast::Sender<ProjectEvent>,
+) {
+    match artifact {
+        BuildArtifact::Wasm { dir } => game.wasm = Some(dir),
+        BuildArtifact::Native { binary } if hold && game.process.is_some() => {
+            game.rebuilt = Some(binary);
+            let _ = events.send(ProjectEvent::GameRebuilt);
+            return;
+        }
+        BuildArtifact::Native { binary } => {
+            if let Err(message) = start_game(game, &binary, events) {
+                return warn(events, message);
+            }
+        }
+    }
+    let _ = events.send(ProjectEvent::GameReady);
+}
+
+/// Stops the running game, if any, and starts `binary` in its place.
+fn start_game(
+    game: &mut Game,
+    binary: &Path,
+    events: &broadcast::Sender<ProjectEvent>,
+) -> Result<(), String> {
+    if let Some(previous) = game.process.take() {
+        lock(&previous).take();
+    }
+    game.control = None;
+    game.rebuilt = None;
+    let process =
+        GameProcess::start(binary).map_err(|error| format!("cannot start the game: {error}"))?;
+    let (slot, control) = relay(process, events);
+    game.process = Some(slot);
+    game.control = Some(control);
+    Ok(())
 }
 
 /// Relays a started game: its protocol lines to the returned channel, its other output and its
@@ -417,4 +480,119 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::Duration;
+
+    use tempfile::TempDir;
+
+    use super::*;
+
+    /// A stand-in game binary answering each line with `{"type":"<name>"}`.
+    fn fake_game(dir: &Path, name: &str) -> PathBuf {
+        let path = dir.join(name);
+        let script = format!(
+            "#!/bin/sh\nwhile IFS= read -r line; do echo '{{\"type\":\"{name}\"}}'; done\n"
+        );
+        fs::write(&path, script).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    /// A desktop service with a project open (its own build fails fast: no engine).
+    fn desktop_service(dir: &TempDir) -> ProjectService {
+        let root = dir.path().join("demo");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(
+            root.join("ludenea.toml"),
+            "name = \"demo\"\nengine = \"0.1.0\"\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n",
+        )
+        .unwrap();
+        fs::write(root.join("src/lib.rs"), "").unwrap();
+        let mut service = ProjectService::new(ServiceMode::Desktop, None);
+        let path = root.to_string_lossy().into_owned();
+        service.handle(ProjectRequest::Open { path }).unwrap();
+        service
+    }
+
+    /// Asks the running game over its control channel and returns who answered.
+    fn ask(service: &mut ProjectService) -> String {
+        let (to_game, from_game) = service.take_control_channel().expect("a game runs");
+        to_game.send("{}".to_string()).unwrap();
+        from_game.recv_timeout(Duration::from_secs(10)).unwrap()
+    }
+
+    fn finish(service: &ProjectService, binary: PathBuf, hold: bool) {
+        let opened = service.opened.as_ref().unwrap();
+        finish_build(
+            &mut lock(&opened.game),
+            BuildArtifact::Native { binary },
+            hold,
+            &service.events,
+        );
+    }
+
+    fn received(events: &mut broadcast::Receiver<ProjectEvent>) -> Vec<ProjectEvent> {
+        std::iter::from_fn(|| events.try_recv().ok())
+            .filter(|event| matches!(event, ProjectEvent::GameReady | ProjectEvent::GameRebuilt))
+            .collect()
+    }
+
+    #[test]
+    fn hello_makes_desktop_rebuilds_wait() {
+        let mut service = ProjectService::new(ServiceMode::Desktop, None);
+        assert!(!service.editor_connected.load(Ordering::SeqCst));
+        service.answer(&mut false, r#"{"type":"hello","protocol_version":1}"#);
+        assert!(service.editor_connected.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn rebuild_keeps_old_game_until_restart_game() {
+        let dir = TempDir::new().unwrap();
+        let mut service = desktop_service(&dir);
+        let mut events = service.subscribe();
+        finish(&service, fake_game(dir.path(), "first"), true);
+        assert_eq!(received(&mut events), [ProjectEvent::GameReady]);
+        assert_eq!(ask(&mut service), r#"{"type":"first"}"#);
+        finish(&service, fake_game(dir.path(), "second"), true);
+        assert_eq!(received(&mut events), [ProjectEvent::GameRebuilt]);
+        // A reloaded editor learns both.
+        assert_eq!(
+            service.announcements(),
+            [ProjectEvent::GameReady, ProjectEvent::GameRebuilt]
+        );
+
+        assert_eq!(
+            service.handle(ProjectRequest::RestartGame),
+            Ok(ProjectReply::Done)
+        );
+        assert_eq!(received(&mut events), [ProjectEvent::GameReady]);
+        assert_eq!(ask(&mut service), r#"{"type":"second"}"#);
+        assert_eq!(service.announcements(), [ProjectEvent::GameReady]);
+        let again = service.handle(ProjectRequest::RestartGame).unwrap_err();
+        assert_eq!(again.code, FailureCode::NoGame);
+    }
+
+    #[test]
+    fn rebuild_without_editor_swaps_at_once() {
+        let dir = TempDir::new().unwrap();
+        let mut service = desktop_service(&dir);
+        let mut events = service.subscribe();
+        finish(&service, fake_game(dir.path(), "first"), false);
+        finish(&service, fake_game(dir.path(), "second"), false);
+        assert_eq!(
+            received(&mut events),
+            [ProjectEvent::GameReady, ProjectEvent::GameReady]
+        );
+        assert_eq!(ask(&mut service), r#"{"type":"second"}"#);
+    }
 }

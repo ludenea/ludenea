@@ -115,6 +115,9 @@ pub enum ProjectRequest {
     WriteGameTypes {
         info: GameInfo,
     },
+    /// Desktop: replaces the running game with the one `GameRebuilt` announced, once the
+    /// editor has exported its session. `GameReady` follows.
+    RestartGame,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -174,6 +177,9 @@ pub enum ProjectEvent {
     },
     /// A new game is running (desktop) or its WebAssembly is ready (browser).
     GameReady,
+    /// Desktop, with an editor connected: a rebuilt game waits for `RestartGame`, so the
+    /// editor can export the session from the game still running.
+    GameRebuilt,
     /// `code` is `None` when a signal ended the game.
     GameExited {
         code: Option<i32>,
