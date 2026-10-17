@@ -60,5 +60,11 @@ ludenea-project = { path = "crates/ludenea-project" }
 # requests the `arbitrary_precision` feature. Cargo unifies features, so that feature reached
 # every serde_json in builds that include ludenea-project and broke deserializing numbers inside
 # internally tagged protocol enums. Drop the patch once upstream makes the feature optional.
+#
+# ron 0.12.2 from crates.io with one change: when it parses a number without knowing its type
+# (`RawValue`, which scenes use), it no longer searches the whole rest of the document for
+# "..". That search made loading a scene quadratic in its size (minutes for 100,000 entities).
+# The project template carries the same patch. Drop it once upstream bounds the search.
 [patch.crates-io]
 rolldown_common = { path = "vendor/rolldown_common" }
+ron = { path = "vendor/ron" }

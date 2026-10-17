@@ -14,3 +14,7 @@ serde = { version = "1", features = ["derive"] }
 
 # A standalone workspace: the project never attaches to an enclosing one.
 [workspace]
+
+# The engine's fix for loading large scenes quickly (see the engine's Cargo.toml).
+[patch.crates-io]
+ron = { path = "{{engine_path}}/vendor/ron" }
