@@ -220,6 +220,7 @@ dependencies = [
  "ludenea-app",
  "ludenea-cli",
  "ludenea-control",
+ "ludenea-debug-draw",
  "ludenea-ecs",
  "ludenea-math",
  "ludenea-physics",
@@ -231,6 +232,7 @@ dependencies = [
 name = "ludenea-app"
 version = "0.1.0"
 dependencies = [
+ "ludenea-debug-draw",
  "ludenea-ecs",
  "ludenea-math",
  "ludenea-physics",
@@ -271,6 +273,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ludenea-debug-draw"
+version = "0.1.0"
+dependencies = [
+ "ludenea-ecs",
+ "ludenea-math",
+ "serde",
+]
+
+[[package]]
 name = "ludenea-ecs"
 version = "0.1.0"
 dependencies = [
@@ -307,6 +318,7 @@ name = "ludenea-physics"
 version = "0.1.0"
 dependencies = [
  "ludenea-app",
+ "ludenea-debug-draw",
  "ludenea-ecs",
  "ludenea-math",
  "postcard",

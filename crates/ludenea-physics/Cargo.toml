@@ -7,6 +7,7 @@ edition.workspace = true
 ludenea-math.workspace = true
 ludenea-ecs.workspace = true
 ludenea-app.workspace = true
+ludenea-debug-draw.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 

@@ -5,6 +5,8 @@ edition.workspace = true
 
 [dependencies]
 ludenea-ecs.workspace = true
+ludenea-math.workspace = true
+ludenea-debug-draw.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 postcard.workspace = true
@@ -16,4 +18,3 @@ rayon.workspace = true
 
 [dev-dependencies]
 ludenea-physics.workspace = true
-ludenea-math.workspace = true

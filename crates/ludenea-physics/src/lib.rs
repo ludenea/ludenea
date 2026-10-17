@@ -2,6 +2,7 @@ pub mod broad_phase;
 pub mod coloring;
 pub mod components;
 pub mod contacts;
+mod editor;
 pub mod events;
 pub mod manifold;
 pub mod mass;

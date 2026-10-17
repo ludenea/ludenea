@@ -1,8 +1,14 @@
 use std::any::TypeId;
+use std::collections::BTreeSet;
+
+use ludenea_debug_draw::DebugDrawFrame;
+use ludenea_ecs::Entity;
+use ludenea_math::Vec2;
 
 use ludenea_ecs::schema::TypeSchema;
 use ludenea_ecs::{HashTree, Schedule, Snapshot, SnapshotError, World};
 
+use crate::app::EditorHooks;
 use crate::input::{self, Input, InputType};
 use crate::{Parallel, Time};
 
@@ -36,18 +42,25 @@ pub struct Simulation {
     schedule: Schedule,
     input: Option<InputType>,
     players: usize,
+    hooks: EditorHooks,
     /// The world as built, before any step.
     pub(crate) initial: Snapshot,
 }
 
 impl Simulation {
-    pub(crate) fn new(world: World, schedule: Schedule, input: Option<InputType>) -> Self {
+    pub(crate) fn new(
+        world: World,
+        schedule: Schedule,
+        input: Option<InputType>,
+        hooks: EditorHooks,
+    ) -> Self {
         Self {
             initial: world.snapshot(),
             world,
             schedule,
             input,
             players: 1,
+            hooks,
         }
     }
 
@@ -111,6 +124,31 @@ impl Simulation {
     /// The schema of the app's input type, or `None` when it has none.
     pub fn input_schema(&self) -> Option<TypeSchema> {
         self.input.as_ref().map(|input| (input.schema)())
+    }
+
+    /// The debug draw layers the app registered, sorted.
+    pub fn debug_layers(&self) -> Vec<&'static str> {
+        self.hooks.layers.iter().copied().collect()
+    }
+
+    /// What every registered drawer draws for the requested layers.
+    pub fn debug_draw(&self, layers: &BTreeSet<String>) -> DebugDrawFrame {
+        let mut frame = DebugDrawFrame::default();
+        for draw in &self.hooks.drawers {
+            draw(&self.world, layers, &mut frame);
+        }
+        frame
+    }
+
+    /// The entities under `point` according to every registered picker, ascending.
+    pub fn pick(&self, point: Vec2) -> Vec<Entity> {
+        let found: BTreeSet<Entity> = self
+            .hooks
+            .pickers
+            .iter()
+            .flat_map(|pick| pick(&self.world, point))
+            .collect();
+        found.into_iter().collect()
     }
 
     pub fn world(&self) -> &World {

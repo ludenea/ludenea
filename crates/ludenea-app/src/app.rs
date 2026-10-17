@@ -1,9 +1,28 @@
+use std::collections::BTreeSet;
+
+use ludenea_debug_draw::DebugDrawFrame;
 use ludenea_ecs::{
     BuildError, Component, EcsError, IntoSystemConfig, Resource, ScheduleBuilder, World,
 };
 
+use ludenea_ecs::Entity;
+use ludenea_math::Vec2;
+
 use crate::input::{Input, InputType, Inputs};
 use crate::{Parallel, Rng, Simulation, Time};
+
+/// Draws the requested layers of a world into a frame; skips layers not in the set.
+pub type DebugDrawFn = fn(&World, &BTreeSet<String>, &mut DebugDrawFrame);
+/// The entities under a world point.
+pub type PickFn = fn(&World, Vec2) -> Vec<Entity>;
+
+/// The editor hooks an app registered, handed to its `Simulation`.
+#[derive(Default)]
+pub(crate) struct EditorHooks {
+    pub(crate) layers: BTreeSet<&'static str>,
+    pub(crate) drawers: Vec<DebugDrawFn>,
+    pub(crate) pickers: Vec<PickFn>,
+}
 
 /// A group of registrations and systems added to an app in one call.
 pub trait Plugin {
@@ -27,6 +46,7 @@ pub struct App {
     schedule: ScheduleBuilder,
     input: Option<InputType>,
     tick_rate: u32,
+    hooks: EditorHooks,
     /// Registration errors, reported by `build` so registration calls can chain.
     errors: Vec<EcsError>,
 }
@@ -45,6 +65,7 @@ impl App {
             schedule: ScheduleBuilder::default(),
             input: None,
             tick_rate: 60,
+            hooks: EditorHooks::default(),
             errors: Vec::new(),
         };
         app.resource(Time { tick: 0, dt: 0.0 })
@@ -91,6 +112,19 @@ impl App {
         self
     }
 
+    /// Registers a debug drawer for `layers`, shown by the editor viewport.
+    pub fn debug_draw(&mut self, layers: &[&'static str], draw: DebugDrawFn) -> &mut Self {
+        self.hooks.layers.extend(layers);
+        self.hooks.drawers.push(draw);
+        self
+    }
+
+    /// Registers a picker that finds the entities under a world point.
+    pub fn picker(&mut self, pick: PickFn) -> &mut Self {
+        self.hooks.pickers.push(pick);
+        self
+    }
+
     /// Ticks per simulated second; `Time.dt` is its inverse.
     ///
     /// # Panics
@@ -111,6 +145,8 @@ impl App {
         }
         self.world.insert_runtime(Parallel::new(1));
         let schedule = self.schedule.build(&self.world)?;
-        Ok(Simulation::new(self.world, schedule, self.input))
+        Ok(Simulation::new(
+            self.world, schedule, self.input, self.hooks,
+        ))
     }
 }

@@ -3,6 +3,7 @@ use ludenea_ecs::{IntoSystemConfig, SystemLabel};
 
 use crate::components::{Body, Collider, PhysicsSettings, Pose};
 use crate::contacts::ContactCache;
+use crate::editor::{DEBUG_LAYERS, draw, pick};
 use crate::events::Collision;
 use crate::step::physics_step;
 
@@ -27,6 +28,8 @@ impl Plugin for PhysicsPlugin {
             .resource(PhysicsSettings::default())
             .resource(ContactCache::default())
             .event::<Collision>()
-            .system(Sim, physics_step.in_set(Step));
+            .system(Sim, physics_step.in_set(Step))
+            .debug_draw(&DEBUG_LAYERS, draw)
+            .picker(pick);
     }
 }

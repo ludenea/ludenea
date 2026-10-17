@@ -187,6 +187,11 @@ pub fn raycast(
     best
 }
 
+/// Whether the world point `p` is inside `shape` posed at `xf`.
+pub(crate) fn shape_contains(shape: &Shape, xf: Transform, p: Vec2) -> bool {
+    Core::new(shape).contains(xf.inv_apply(p))
+}
+
 /// Entities, ascending, whose collider bounding box overlaps `aabb`.
 // ponytail: brute force over all colliders; reuse the broad phase when queries get hot
 pub fn overlap_aabb(colliders: &Query<(Entity, &Pose, &Collider)>, aabb: Aabb) -> Vec<Entity> {
