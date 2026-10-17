@@ -196,6 +196,52 @@ fn game_types_declare_template_components() {
     }
 }
 
+/// Type-checks against the template's own types, so `@ts-expect-error` fails the check if an
+/// unknown component name is ever accepted.
+const TYPE_PROBE: &str = r#"import type { Editor, Pose } from "@ludenea/editor-shell";
+import type { Entity } from "@ludenea/control-client";
+
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+
+export async function probe(editor: Editor, entity: Entity): Promise<number | undefined> {
+  const pose = await editor.entities.get(entity, "ludenea::Pose");
+  const exact: Same<typeof pose, Pose | undefined> = true;
+  // @ts-expect-error: not a component of this game
+  await editor.entities.get(entity, "ludenea::Nothing");
+  return exact ? pose?.position.x : undefined;
+}
+"#;
+
+/// Needs the editor's `node_modules` (`pnpm -C editor install`).
+#[test]
+#[ignore]
+fn generated_game_types_type_check_project_plugins() {
+    let mut game = GameProcess::start(game_binary()).unwrap();
+    let messages = game.take_messages();
+    let info = handshake(&mut game, &messages);
+    game.stop();
+    let dir = TempDir::new().unwrap();
+    let mut project = new_project(&dir);
+    project.write_game_types(&info).unwrap();
+    let editor = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../editor");
+    // The end-to-end test plugin, which reads `ludenea::Body` through the typed API.
+    let fixture =
+        std::fs::read_to_string(editor.join("e2e/fixtures/test-plugin/index.tsx")).unwrap();
+    project.write_text("editor/index.tsx", &fixture).unwrap();
+    project.write_text("editor/probe.ts", TYPE_PROBE).unwrap();
+    let output = std::process::Command::new(editor.join("node_modules/.bin/tsc"))
+        .args(["--noEmit", "-p"])
+        .arg(dir.path().join("demo/editor"))
+        .output()
+        .expect("tsc runs (pnpm -C editor install)");
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 #[ignore]
 fn wait_is_none_while_running_and_has_the_code_after_exit() {

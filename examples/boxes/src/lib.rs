@@ -8,7 +8,7 @@ use ludenea::physics::{self, apply_impulse, mass_data};
 use ludenea::prelude::*;
 use serde::{Deserialize, Serialize};
 
-pub use scene::generate_scene;
+pub use scene::{generate_scene, spawn_container};
 
 ludenea::worker_entry!(app);
 

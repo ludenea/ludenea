@@ -44,3 +44,84 @@ jobs:
       - uses: bytecodealliance/actions/wasmtime/setup@v1
       - run: cargo build --locked --release --target wasm32-wasip1 -p boxes --bin boxes
       - run: wasmtime run --dir=. target/wasm32-wasip1/release/boxes.wasm verify examples/boxes/assets/boxes.scene.ron --inputs examples/boxes/assets/boxes.inputs --golden golden/boxes.trace
+
+  editor:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+      # The pnpm version comes from `packageManager` in editor/package.json.
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: editor/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: editor/pnpm-lock.yaml
+      - run: pnpm -C editor install --frozen-lockfile
+      - run: pnpm -C editor exec playwright install --with-deps chromium
+      - run: pnpm -C editor build:wasm
+      - run: pnpm -C editor typecheck
+      - run: pnpm -C editor test
+      # Regenerated from scratch, so a removed or renamed type leaves a stale file behind
+      # as a difference too.
+      - name: Check the generated files are current
+        shell: bash
+        run: |
+          rm -rf editor/packages/control-client/src/generated
+          cargo test --locked -p ludenea-control --test typescript
+          cargo test --locked -p ludenea-project --test typescript
+          rm crates/ludenea-project/types/*.d.ts
+          node editor/scripts/bundle-dts.mjs
+          git diff --exit-code
+          test -z "$(git status --porcelain)" || { git status --porcelain; exit 1; }
+      - run: cargo test --locked -p ludenea-project -- --ignored
+      - run: cargo xtask wasm-game boxes editor/e2e/golden/pkg
+      - run: cargo run --locked -p boxes --bin editor-bench
+      - run: pnpm -C editor build
+      - run: cargo build --locked -p ludenea-serve --features embed-editor
+      - run: cargo build --locked -p ludenea-serve
+      # The performance test only reports its numbers here: it asserts on the reference
+      # machine (PERF_STRICT=1).
+      - run: pnpm -C editor e2e
+      - name: Upload the end-to-end results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: editor-e2e
+          path: editor/test-results/
+          if-no-files-found: ignore
+
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      # The whole repository: src-tauri patches a crate from vendor/.
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+      - name: Install the WebView libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup-3.0-dev librsvg2-dev
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: editor/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: editor/pnpm-lock.yaml
+      - run: pnpm -C editor install --frozen-lockfile
+      # The desktop front end bundles the viewport renderer and the shared modules.
+      - run: pnpm -C editor build:wasm
+      - run: pnpm -C editor/shared build
+      - run: pnpm -C editor/apps/desktop build
+      - run: cargo clippy --manifest-path editor/apps/desktop/src-tauri/Cargo.toml --locked -- -D warnings
+      - run: cargo build --manifest-path editor/apps/desktop/src-tauri/Cargo.toml --locked
