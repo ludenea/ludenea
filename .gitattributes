@@ -1,0 +1,4 @@
+*.ron text eol=lf
+*.inputs binary
+*.trace binary
+*.snap binary
