@@ -53,7 +53,9 @@ in `target.'cfg(all(target_os = "linux", target_env = "gnu"))'.rustflags`.
 Work test-first: write a failing test, make it pass with the simplest code,
 then refactor while the tests stay green. A bug fix starts with a test that
 reproduces it. Use snapshot tests (`insta`) for structured output and
-property tests (`proptest`) for invariants.
+property tests (`proptest`) for invariants. Commit the
+`*.proptest-regressions` files proptest writes next to a failing property:
+every counterexample found once is replayed on every run.
 
 Clippy runs with warnings denied and the pedantic group enabled. Silence a
 lint only with `#[expect(lint, reason = "...")]`, never with `#[allow]`.
