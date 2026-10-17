@@ -33,6 +33,16 @@ impl Parallel {
         self.threads
     }
 
+    /// Runs `f` inside the pool, so the `map` and `for_each_mut` calls it makes skip the
+    /// cost of entering the pool each time. Without a pool, runs `f` on the calling thread.
+    pub fn install<R: Send>(&self, f: impl FnOnce() -> R + Send) -> R {
+        #[cfg(not(target_family = "wasm"))]
+        if let Some(pool) = &self.pool {
+            return pool.install(f);
+        }
+        f()
+    }
+
     /// Applies `f` to every item, `chunk` items per task, and returns the results in item
     /// order. Work that fits in one chunk runs on the calling thread.
     ///

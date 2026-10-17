@@ -180,7 +180,9 @@ pub(crate) fn physics_step(
         settings.contact_push_max_velocity,
         settings.restitution_threshold,
     );
-    solve(&mut solver_bodies, &mut constraints, &context, &parallel);
+    // One pool entry for the whole solve instead of one per color and per stage.
+    let parallel: &Parallel = &parallel;
+    parallel.install(|| solve(&mut solver_bodies, &mut constraints, &context, parallel));
 
     for (key, constraint) in keys.into_iter().zip(&constraints) {
         let points = constraint
