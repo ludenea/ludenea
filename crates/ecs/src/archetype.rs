@@ -35,6 +35,10 @@ impl Archetype {
         }
     }
 
+    pub(crate) fn key(&self) -> &[ComponentId] {
+        &self.key
+    }
+
     pub(crate) fn entities(&self) -> &[Entity] {
         &self.entities
     }
@@ -61,6 +65,21 @@ impl Archetype {
         self.entities.swap_remove(row);
         for column in &mut self.columns {
             column.swap_remove(row);
+        }
+        self.entities.get(row).copied()
+    }
+
+    /// Moves `row` to the end of `destination`, carrying the values of the
+    /// components both archetypes share and dropping the others. Returns the
+    /// entity moved into `row`, if any.
+    pub(crate) fn move_row(&mut self, row: usize, destination: &mut Self) -> Option<Entity> {
+        let entity = self.entities.swap_remove(row);
+        destination.entities.push(entity);
+        for (id, column) in self.key.iter().zip(&mut self.columns) {
+            match destination.key.binary_search(id) {
+                Ok(position) => column.move_row(row, destination.columns[position].as_mut()),
+                Err(_) => column.swap_remove(row),
+            }
         }
         self.entities.get(row).copied()
     }

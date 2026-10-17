@@ -1,0 +1,127 @@
+---
+source: crates/ecs/src/world.rs
+expression: world.state
+---
+State {
+    allocator: Allocator {
+        generations: [
+            1,
+            0,
+            0,
+        ],
+        free: [],
+    },
+    locations: [
+        Some(
+            Location {
+                archetype: ArchetypeId(
+                    0,
+                ),
+                row: 0,
+            },
+        ),
+        Some(
+            Location {
+                archetype: ArchetypeId(
+                    3,
+                ),
+                row: 0,
+            },
+        ),
+        Some(
+            Location {
+                archetype: ArchetypeId(
+                    2,
+                ),
+                row: 0,
+            },
+        ),
+    ],
+    archetypes: [
+        Archetype {
+            key: [],
+            entities: [
+                Entity {
+                    index: 0,
+                    generation: 1,
+                },
+            ],
+            ..
+        },
+        Archetype {
+            key: [
+                ComponentId(
+                    0,
+                ),
+                ComponentId(
+                    1,
+                ),
+            ],
+            entities: [],
+            ..
+        },
+        Archetype {
+            key: [
+                ComponentId(
+                    0,
+                ),
+            ],
+            entities: [
+                Entity {
+                    index: 2,
+                    generation: 0,
+                },
+            ],
+            ..
+        },
+        Archetype {
+            key: [
+                ComponentId(
+                    0,
+                ),
+                ComponentId(
+                    2,
+                ),
+            ],
+            entities: [
+                Entity {
+                    index: 1,
+                    generation: 0,
+                },
+            ],
+            ..
+        },
+    ],
+    archetype_ids: {
+        []: ArchetypeId(
+            0,
+        ),
+        [
+            ComponentId(
+                0,
+            ),
+        ]: ArchetypeId(
+            2,
+        ),
+        [
+            ComponentId(
+                0,
+            ),
+            ComponentId(
+                1,
+            ),
+        ]: ArchetypeId(
+            1,
+        ),
+        [
+            ComponentId(
+                0,
+            ),
+            ComponentId(
+                2,
+            ),
+        ]: ArchetypeId(
+            3,
+        ),
+    },
+}

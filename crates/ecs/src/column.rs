@@ -8,11 +8,20 @@ use crate::Component;
 pub trait Column: Any {
     /// Removes `row`, moving the last value into its place.
     fn swap_remove(&mut self, row: usize);
+
+    /// Removes `row` like [`Column::swap_remove`] and pushes its value at
+    /// the end of `destination`, a column of the same type.
+    fn move_row(&mut self, row: usize, destination: &mut dyn Column);
 }
 
 impl<T: Component> Column for Vec<T> {
     fn swap_remove(&mut self, row: usize) {
         Vec::swap_remove(self, row);
+    }
+
+    fn move_row(&mut self, row: usize, destination: &mut dyn Column) {
+        let value = Vec::swap_remove(self, row);
+        downcast_mut::<T>(destination).push(value);
     }
 }
 
@@ -51,5 +60,16 @@ mod tests {
         column.swap_remove(0);
 
         assert_eq!(downcast_ref::<u8>(column.as_ref()), &[3, 2]);
+    }
+
+    #[test]
+    fn move_row_pushes_the_value_at_the_end_of_the_destination() {
+        let mut source: Box<dyn Column> = Box::new(vec![1u8, 2, 3]);
+        let mut destination: Box<dyn Column> = Box::new(vec![9u8]);
+
+        source.move_row(0, destination.as_mut());
+
+        assert_eq!(downcast_ref::<u8>(source.as_ref()), &[3, 2]);
+        assert_eq!(downcast_ref::<u8>(destination.as_ref()), &[9, 1]);
     }
 }

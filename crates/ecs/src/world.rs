@@ -108,6 +108,60 @@ impl World {
         Ok(())
     }
 
+    /// Adds the components of `bundle` to `entity`, overwriting those it
+    /// already has. The entity changes archetype at most once.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EcsError::StaleEntity`] when `entity` is not alive.
+    ///
+    /// # Panics
+    ///
+    /// Panics when a component is not registered or appears twice.
+    pub fn insert<B: Bundle>(&mut self, entity: Entity, bundle: B) -> Result<(), EcsError> {
+        let mut ids = Vec::new();
+        B::component_ids(&self.registry, &mut ids);
+        let ids = self.sorted_key(ids);
+        let location = self.locate(entity).ok_or(EcsError::StaleEntity(entity))?;
+        let source_key = self.state.archetypes[location.archetype.0].key();
+        let mut key: Vec<ComponentId> = source_key.iter().chain(&ids).copied().collect();
+        key.sort_unstable();
+        key.dedup();
+        let target = self.archetype_for(key);
+        let row = self.move_entity(entity, location, target);
+        bundle.write(&self.registry, &mut self.state.archetypes[target.0], row);
+        Ok(())
+    }
+
+    /// Removes the `T` component of `entity` and returns it, or `None` when
+    /// the entity has no `T`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EcsError::StaleEntity`] when `entity` is not alive.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `T` is not registered.
+    pub fn remove<T: Component>(&mut self, entity: Entity) -> Result<Option<T>, EcsError> {
+        let id = self.registry.id::<T>();
+        let location = self.locate(entity).ok_or(EcsError::StaleEntity(entity))?;
+        let source = &self.state.archetypes[location.archetype.0];
+        let Some(column) = source.column::<T>(id) else {
+            return Ok(None);
+        };
+        let value = column[location.row];
+        let key = source
+            .key()
+            .iter()
+            .copied()
+            .filter(|&other| other != id)
+            .collect();
+        let target = self.archetype_for(key);
+        self.move_entity(entity, location, target);
+        Ok(Some(value))
+    }
+
     /// Returns the `T` component of `entity`, or `None` when the entity is
     /// not alive or has no `T`.
     ///
@@ -182,6 +236,28 @@ impl World {
             .push(Archetype::new(key.clone(), &self.registry));
         self.state.archetype_ids.insert(key, id);
         id
+    }
+
+    /// Moves `entity` from `location` to the end of `target` and returns its
+    /// new row; returns its current row when `target` is its archetype.
+    fn move_entity(&mut self, entity: Entity, location: Location, target: ArchetypeId) -> usize {
+        if target == location.archetype {
+            return location.row;
+        }
+        let [source, destination] = self
+            .state
+            .archetypes
+            .get_disjoint_mut([location.archetype.0, target.0])
+            .expect("source and target archetypes are distinct and exist");
+        if let Some(moved) = source.move_row(location.row, destination) {
+            self.state.locations[moved.index()] = Some(location);
+        }
+        let row = destination.entities().len() - 1;
+        self.state.locations[entity.index()] = Some(Location {
+            archetype: target,
+            row,
+        });
+        row
     }
 }
 
@@ -313,5 +389,94 @@ mod tests {
 
         assert!(!smaller.contains(entities[2]));
         assert_eq!(smaller.get::<Position>(entities[2]), None);
+    }
+
+    #[test]
+    fn insert_adds_components_and_overwrites_existing_ones() {
+        let mut world = world();
+        let entity = world.spawn(Position(1));
+
+        world
+            .insert(entity, (Position(3), Velocity(4)))
+            .expect("the entity is alive");
+
+        assert_eq!(world.get::<Position>(entity), Some(&Position(3)));
+        assert_eq!(world.get::<Velocity>(entity), Some(&Velocity(4)));
+    }
+
+    #[test]
+    fn insert_keeps_the_entity_moved_into_the_hole_reachable() {
+        let mut world = world();
+        let moved = world.spawn(Position(1));
+        let last = world.spawn(Position(2));
+
+        world
+            .insert(moved, Velocity(3))
+            .expect("the entity is alive");
+
+        assert_eq!(world.get::<Position>(last), Some(&Position(2)));
+        assert_eq!(world.get::<Position>(moved), Some(&Position(1)));
+    }
+
+    #[test]
+    fn insert_on_a_stale_entity_fails() {
+        let mut world = world();
+        let entity = world.spawn(());
+        world.despawn(entity).expect("the entity is alive");
+
+        assert_eq!(
+            world.insert(entity, Position(1)),
+            Err(EcsError::StaleEntity(entity))
+        );
+    }
+
+    #[test]
+    fn remove_returns_the_component_and_keeps_the_others() {
+        let mut world = world();
+        let entity = world.spawn((Position(1), Velocity(2)));
+
+        assert_eq!(world.remove::<Velocity>(entity), Ok(Some(Velocity(2))));
+        assert_eq!(world.remove::<Velocity>(entity), Ok(None));
+        assert_eq!(world.get::<Position>(entity), Some(&Position(1)));
+    }
+
+    #[test]
+    fn remove_on_a_stale_entity_fails() {
+        let mut world = world();
+        let entity = world.spawn(Position(1));
+        world.despawn(entity).expect("the entity is alive");
+
+        assert_eq!(
+            world.remove::<Position>(entity),
+            Err(EcsError::StaleEntity(entity))
+        );
+    }
+
+    #[test]
+    fn layout_after_a_scripted_scenario() {
+        let mut world = world();
+        let first = world.spawn((Position(1), Velocity(1)));
+        let second = world.spawn(Position(2));
+        let third = world.spawn((Position(3), Velocity(3)));
+        world.insert(second, Frozen).expect("the entity is alive");
+        world.despawn(first).expect("the entity is alive");
+        world
+            .remove::<Velocity>(third)
+            .expect("the entity is alive");
+        world.spawn(());
+
+        insta::assert_debug_snapshot!(world.state);
+    }
+
+    #[test]
+    fn inserting_the_empty_bundle_changes_nothing() {
+        let mut world = world();
+        let entity = world.spawn(Position(1));
+
+        world.insert(entity, ()).expect("the entity is alive");
+
+        assert_eq!(world.get::<Position>(entity), Some(&Position(1)));
+        world.despawn(entity).expect("the entity is alive");
+        assert_eq!(world.insert(entity, ()), Err(EcsError::StaleEntity(entity)));
     }
 }
