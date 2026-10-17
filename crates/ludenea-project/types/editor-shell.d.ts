@@ -86,6 +86,8 @@ class Collection<T> {
     get(id: string): T | undefined;
     /** Every value in registration order; the same array until the next change. */
     values: () => T[];
+    /** Every `[id, value]` pair in registration order. */
+    entries(): [string, T][];
     subscribe: (listener: () => void) => (() => void);
     private changed;
 }
@@ -244,7 +246,7 @@ function createEditor(options: {
 
 /**
  * The editor window: registered panels in a dockview layout, the command palette, and global
- * shortcuts. The application imports `dockview-react/dist/styles/dockview.css`.
+ * shortcuts. The application imports `dockview-react/dist/styles/dockview.css` and the shell's `src/theme.css`.
  */
 function Shell({ host }: {
     host: EditorHost;
@@ -257,8 +259,9 @@ function Shell({ host }: {
 function mountShell(element: Element, host: EditorHost): () => void;
 
 /** Every registered command, opened with `Ctrl+K` or `Cmd+K` (also from text fields). */
-function CommandPalette({ editor }: {
+function CommandPalette({ editor, registry }: {
     editor: Editor;
+    registry?: Registry;
 }): react.JSX.Element | null;
 
 /** `shift+ctrl+z`, `Ctrl+Shift+Z`, and `Control+Shift+z` all become `Ctrl+Shift+Z`; `Mod+S` becomes `Cmd+S` on macOS. */

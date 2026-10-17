@@ -46,6 +46,11 @@ export class Collection<T> {
   /** Every value in registration order; the same array until the next change. */
   values = (): T[] => this.snapshot;
 
+  /** Every `[id, value]` pair in registration order. */
+  entries(): [string, T][] {
+    return [...this.items].map(([id, item]) => [id, item.value]);
+  }
+
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);

@@ -81,8 +81,8 @@ describe("loader", () => {
     await act(async () => host.loader.activate(panelPlugin("outline", "outline content", "left")));
     expect(screen.queryByText("tools content")).toBeNull();
     expect(host.editor.commands.list().map((command) => [command.id, command.title])).toEqual([
-      ["panels.open.tools.panel", "Open tools"],
-      ["panels.open.outline.panel", "Open outline"],
+      ["panels.open.tools.panel", "Show tools panel"],
+      ["panels.open.outline.panel", "Show outline panel"],
     ]);
 
     await act(() => host.editor.commands.run("panels.open.tools.panel"));

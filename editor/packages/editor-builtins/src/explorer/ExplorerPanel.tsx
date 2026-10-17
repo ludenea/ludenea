@@ -16,7 +16,7 @@ export function ExplorerPanel({ editor, state }: { editor: Editor; state: Explor
   const setTab = (tab: Tab) => state.set({ tab });
   if (!control) return <p className="ludenea-muted">No game is running.</p>;
   return (
-    <div className="ludenea-explorer" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+    <div className="ludenea-explorer">
       <div role="tablist" aria-label="Explorer">
         {TABS.map((name) => (
           <button key={name} role="tab" aria-selected={name === tab} onClick={() => setTab(name)}>
@@ -24,7 +24,7 @@ export function ExplorerPanel({ editor, state }: { editor: Editor; state: Explor
           </button>
         ))}
       </div>
-      <div role="tabpanel" aria-label={tab} style={{ flex: 1, minHeight: 0 }}>
+      <div role="tabpanel" aria-label={tab}>
         {tab === "Entities" ? <Entities editor={editor} control={control} state={state} /> : <Introspection editor={editor} control={control} tab={tab as IntrospectionTab} />}
       </div>
     </div>
@@ -36,7 +36,7 @@ function Entities({ editor, control, state }: { editor: Editor; control: Control
   const { text, filter } = useStore(state);
   const [error, setError] = useState<string | null>(null);
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+    <div className="ludenea-entities">
       <form
         onSubmit={(event) => {
           event.preventDefault();
@@ -50,7 +50,7 @@ function Entities({ editor, control, state }: { editor: Editor; control: Control
           {error}
         </p>
       )}
-      <div style={{ flex: 1, minHeight: 0 }}>
+      <div className="ludenea-entities-list">
         <EntityList
           editor={editor}
           control={control}
@@ -59,7 +59,7 @@ function Entities({ editor, control, state }: { editor: Editor; control: Control
           onError={setError}
           row={(row) => (
             <>
-              <span>{entityKey(row.entity)}</span> <code className="ludenea-muted">{row.hash}</code>
+              <span className="ludenea-mono">{entityKey(row.entity)}</span> <code className="ludenea-muted">{row.hash}</code>
             </>
           )}
         />

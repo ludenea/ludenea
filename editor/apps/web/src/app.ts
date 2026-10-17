@@ -1,4 +1,6 @@
 import "dockview-react/dist/styles/dockview.css";
+import "../../../packages/editor-shell/src/theme.css";
+import "../../../packages/editor-builtins/src/panels.css";
 import type { ControlClient, PluginBundle, ProjectClient } from "@ludenea/control-client";
 import { builtinPlugins } from "@ludenea/editor-builtins";
 import { createEditor, mountShell, type EditorHost } from "@ludenea/editor-shell";

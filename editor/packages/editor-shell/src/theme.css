@@ -1,0 +1,169 @@
+/* The editor theme: design tokens, page base, dockview alignment, and the command palette.
+   Dark only. The built-in panels style themselves from these tokens (editor-builtins/src/panels.css). */
+:root {
+  color-scheme: dark;
+
+  --color-background: #16181d;
+  --color-surface: #1d2027;
+  --color-raised: #272b34;
+  --color-border: #343944;
+  --color-text: #d8dbe2;
+  --color-muted: #8b919e;
+  --color-accent: #4c8dff;
+  --color-accent-text: #ffffff;
+  --color-danger: #ff6b6b;
+  --color-warning: #e5a93d;
+  --color-success: #4fc38a;
+  --color-focus: #6aa2ff;
+  --color-hover: rgba(255, 255, 255, 0.06);
+  --color-selected: rgba(76, 141, 255, 0.28);
+  --color-backdrop: rgba(8, 10, 14, 0.6);
+
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --font-size: 13px;
+  --font-size-small: 11px;
+
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 8px;
+  --space-4: 12px;
+  --space-5: 16px;
+  --radius: 4px;
+  --row-height: 24px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--color-background);
+  color: var(--color-text);
+  font: var(--font-size) / 1.4 var(--font-sans);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -1px;
+}
+
+/* Dockview, on the same tokens. */
+.dockview-theme-abyss.ludenea-dock {
+  --dv-group-view-background-color: var(--color-surface);
+  --dv-tabs-and-actions-container-background-color: var(--color-background);
+  --dv-tabs-and-actions-container-font-size: var(--font-size);
+  --dv-tabs-and-actions-container-height: 30px;
+  --dv-activegroup-visiblepanel-tab-background-color: var(--color-surface);
+  --dv-activegroup-hiddenpanel-tab-background-color: var(--color-background);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--color-surface);
+  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--color-background);
+  --dv-activegroup-visiblepanel-tab-color: var(--color-text);
+  --dv-activegroup-hiddenpanel-tab-color: var(--color-muted);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--color-muted);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--color-muted);
+  --dv-tab-divider-color: var(--color-border);
+  --dv-separator-border: var(--color-border);
+  --dv-paneview-header-border-color: var(--color-border);
+  --dv-paneview-active-outline-color: var(--color-accent);
+  --dv-icon-hover-background-color: var(--color-hover);
+  --dv-drag-over-background-color: var(--color-selected);
+  --dv-sash-color: var(--color-border);
+  --dv-active-sash-color: var(--color-accent);
+  --dv-tabs-container-scrollbar-color: var(--color-border);
+  font-family: var(--font-sans);
+  height: 100%;
+}
+
+.ludenea-dock .dv-groupview {
+  color: var(--color-text);
+}
+
+/* A panel scrolls inside its own box. */
+.ludenea-dock .dv-content-container {
+  overflow: auto;
+  background: var(--color-surface);
+}
+
+/* The command palette: a modal over the dock. */
+.ludenea-palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 12vh;
+  background: var(--color-backdrop);
+}
+
+.ludenea-palette {
+  display: flex;
+  flex-direction: column;
+  width: 560px;
+  max-width: calc(100vw - 2 * var(--space-5));
+  max-height: 70vh;
+  background: var(--color-raised);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.ludenea-palette input {
+  flex: none;
+  padding: var(--space-4);
+  border: 0;
+  border-bottom: 1px solid var(--color-border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 15px;
+}
+
+.ludenea-palette input:focus-visible {
+  outline: none;
+}
+
+.ludenea-palette ul {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: var(--space-2);
+  overflow-y: auto;
+  list-style: none;
+}
+
+.ludenea-palette li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.ludenea-palette li[aria-selected="true"] {
+  background: var(--color-accent);
+  color: var(--color-accent-text);
+}
+
+.ludenea-palette kbd {
+  flex: none;
+  color: var(--color-muted);
+  font: var(--font-size-small) var(--font-mono);
+}
+
+.ludenea-palette li[aria-selected="true"] kbd {
+  color: inherit;
+  opacity: 0.8;
+}

@@ -58,7 +58,7 @@ function syncPanels(api: DockviewApi, registry: Registry, closed: ReadonlySet<st
 
 /**
  * The editor window: registered panels in a dockview layout, the command palette, and global
- * shortcuts. The application imports `dockview-react/dist/styles/dockview.css`.
+ * shortcuts. The application imports `dockview-react/dist/styles/dockview.css` and the shell's `src/theme.css`.
  */
 export function Shell({ host }: { host: EditorHost }) {
   const stop = useRef<() => void>(undefined);
@@ -88,7 +88,7 @@ export function Shell({ host }: { host: EditorHost }) {
           sync();
           api.getPanel(id)?.api.setActive();
         };
-        openCommands.set(id, { title, command: editor.commands.register({ id: `panels.open.${id}`, title: `Open ${title}`, run }) });
+        openCommands.set(id, { title, command: editor.commands.register({ id: `panels.open.${id}`, title: `Show ${title} panel`, run }) });
       }
     };
     // A reload disposes and re-registers in one synchronous step; syncing after it keeps the layout.
@@ -116,8 +116,8 @@ export function Shell({ host }: { host: EditorHost }) {
 
   return (
     <HostContext.Provider value={host}>
-      <DockviewReact components={COMPONENTS} onReady={onReady} className="dockview-theme-abyss" />
-      <CommandPalette editor={host.editor} />
+      <DockviewReact components={COMPONENTS} onReady={onReady} className="dockview-theme-abyss ludenea-dock" />
+      <CommandPalette editor={host.editor} registry={host.registry} />
     </HostContext.Provider>
   );
 }

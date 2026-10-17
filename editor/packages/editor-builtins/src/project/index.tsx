@@ -86,7 +86,7 @@ function ProjectPanel({ editor, ui, actions }: { editor: Editor; ui: Ui; actions
   return (
     <div className="ludenea-project">
       <h2>{info ? info.name : "No project open"}</h2>
-      {info && <p className="ludenea-muted">{info.root}</p>}
+      {info && <p className="ludenea-muted ludenea-mono">{info.root}</p>}
       <BuildStatus build={build} />
       <div className="ludenea-toolbar">
         <button onClick={run("project.new")}>New project</button>

@@ -1,9 +1,11 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CommandPalette, installShortcuts, normalizeShortcut } from "../src";
 import { testHost } from "./support";
 
 describe("command palette and shortcuts", () => {
+  afterEach(cleanup);
+
   it("palette_lists_and_runs_registered_commands", async () => {
     const { editor } = await testHost();
     const heal = vi.fn();
@@ -22,6 +24,58 @@ describe("command palette and shortcuts", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     fireEvent.keyDown(window, { key: "k", metaKey: true });
     expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
+  it("palette_closes_on_escape_and_on_a_click_outside_the_panel", async () => {
+    const { editor } = await testHost();
+    editor.commands.register({ id: "scene.save", title: "Save scene", run: () => {} });
+    render(<CommandPalette editor={editor} />);
+
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    fireEvent.click(screen.getByRole("option"));
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    fireEvent.click(screen.getByRole("combobox"));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("palette-backdrop"));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("palette_points_at_the_highlighted_option_and_keeps_it_in_view", async () => {
+    const { editor } = await testHost();
+    for (const title of ["Alpha", "Beta", "Gamma"]) editor.commands.register({ id: title, title, run: () => {} });
+    const scrolled: string[] = [];
+    const scrollIntoView = vi.fn(function (this: Element) {
+      scrolled.push(this.textContent ?? "");
+    });
+    Element.prototype.scrollIntoView = scrollIntoView;
+    render(<CommandPalette editor={editor} />);
+
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    const input = screen.getByRole("combobox");
+    const options = screen.getAllByRole("option");
+    expect(input.getAttribute("aria-activedescendant")).toBe(options[0]!.id);
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(input.getAttribute("aria-activedescendant")).toBe(options[1]!.id);
+    expect(options[0]!.id).not.toBe(options[1]!.id);
+    expect(scrolled.at(-1)).toBe("Beta");
+    expect(scrollIntoView).toHaveBeenLastCalledWith({ block: "nearest" });
+  });
+
+  it("palette_shows_the_shortcut_of_each_command", async () => {
+    const { editor, registry } = await testHost();
+    editor.commands.register({ id: "scene.save", title: "Save scene", run: () => {} });
+    editor.commands.register({ id: "scene.close", title: "Close scene", run: () => {} });
+    editor.shortcuts.register({ key: "Ctrl+S", command: "scene.save" });
+    render(<CommandPalette editor={editor} registry={registry} />);
+
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["Close scene", "Save sceneCtrl+S"]);
   });
 
   it("shortcut_ignored_inside_text_input", async () => {

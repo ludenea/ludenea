@@ -256,7 +256,7 @@ export function ViewportPanel({ editor, state }: { editor: Editor; state: Viewpo
       <canvas ref={gpu} style={fill} />
       <canvas ref={overlay} style={{ ...fill, pointerEvents: "none" }} />
       {(failure || !game) && (
-        <p style={{ position: "absolute", margin: 8, opacity: 0.7 }}>{failure ?? "No game is running."}</p>
+        <p className="ludenea-muted" style={{ position: "absolute", margin: 8 }}>{failure ?? "No game is running."}</p>
       )}
       <div style={{ position: "absolute", bottom: 0, margin: 8 }}>
         <ResimulatingNotice editor={editor} />

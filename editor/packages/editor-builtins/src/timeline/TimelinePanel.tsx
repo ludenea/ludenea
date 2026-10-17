@@ -25,8 +25,7 @@ function createScrubber(editor: Editor, onError: (error: unknown) => void) {
 }
 
 const at = (tick: number, head: number) => `${head > 0 ? (tick / head) * 100 : 0}%`;
-const mark = (left: string, color: string, height: string) =>
-  ({ position: "absolute", left, top: 0, width: 2, height, background: color, pointerEvents: "none" }) as const;
+const mark = (left: string) => ({ left }) as const;
 
 export function TimelinePanel({ editor, speed }: { editor: Editor; speed: SpeedState }) {
   const control = useGame(editor);
@@ -68,7 +67,7 @@ export function TimelinePanel({ editor, speed }: { editor: Editor; speed: SpeedS
           Redo
         </button>
       </div>
-      <p>
+      <p className="ludenea-mono">
         Tick {timeline.current} of {head}, hash <code aria-label="Hash">{hash}{pending && " (pending)"}</code>
         {/* The measured rate wavers around the target: only a clear shortfall is shown. */}
         {playing && effectiveRate < target * 0.95 && (
@@ -83,16 +82,16 @@ export function TimelinePanel({ editor, speed }: { editor: Editor; speed: SpeedS
           {timeline.simulated} of {head}
         </progress>
       )}
-      <div style={{ position: "relative" }}>
-        <div style={{ position: "relative", height: 12 }}>
+      <div className="ludenea-scrubber">
+        <div className="ludenea-marks">
           {timeline.checkpoints.map((tick) => (
-            <span key={`checkpoint ${tick}`} title={`Checkpoint at tick ${tick}`} style={{ ...mark(at(tick, head), "currentColor", "50%"), opacity: 0.25 }} />
+            <span key={`checkpoint ${tick}`} title={`Checkpoint at tick ${tick}`} className="ludenea-mark-checkpoint" style={mark(at(tick, head))} />
           ))}
           {timeline.edit_ticks.map((tick) => (
-            <span key={`edit ${tick}`} aria-label={`Edit at tick ${tick}`} title={`Edit at tick ${tick}`} style={mark(at(tick, head), "#e0a030", "100%")} />
+            <span key={`edit ${tick}`} aria-label={`Edit at tick ${tick}`} title={`Edit at tick ${tick}`} className="ludenea-mark-edit" style={mark(at(tick, head))} />
           ))}
           {divergence && (
-            <span aria-label={`Divergence at tick ${divergence.tick}`} title={`Divergence at tick ${divergence.tick}`} style={mark(at(divergence.tick, head), "#e04040", "100%")} />
+            <span aria-label={`Divergence at tick ${divergence.tick}`} title={`Divergence at tick ${divergence.tick}`} className="ludenea-mark-divergence" style={mark(at(divergence.tick, head))} />
           )}
         </div>
         <input
@@ -102,7 +101,6 @@ export function TimelinePanel({ editor, speed }: { editor: Editor; speed: SpeedS
           max={head}
           value={dragged ?? timeline.current}
           disabled={timeline.resimulating}
-          style={{ width: "100%", margin: 0 }}
           onChange={(event) => {
             const tick = Number(event.target.value);
             setDragged(tick);

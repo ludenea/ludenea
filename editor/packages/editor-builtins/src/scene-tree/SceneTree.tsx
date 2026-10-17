@@ -23,7 +23,7 @@ function Entities({ editor, control }: { editor: Editor; control: ControlClient 
   const labels = useMemo(() => new Map<string, string>(), [control]);
   const [error, setError] = useState<string | null>(null);
   return (
-    <div className="ludenea-scene-tree" style={{ height: "100%" }}>
+    <div className="ludenea-scene-tree">
       <ResimulatingNotice editor={editor} />
       {error && <p className="ludenea-error">{error}</p>}
       <EntityList
@@ -34,7 +34,7 @@ function Entities({ editor, control }: { editor: Editor; control: ControlClient 
         onError={setError}
         row={(row) => (
           <>
-            <Label control={control} entity={row.entity} labels={labels} /> <span className="ludenea-muted">{entityKey(row.entity)}</span>
+            <Label control={control} entity={row.entity} labels={labels} /> <span className="ludenea-muted ludenea-mono">{entityKey(row.entity)}</span>
           </>
         )}
       />
