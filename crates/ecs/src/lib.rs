@@ -7,12 +7,14 @@ mod bundle;
 mod column;
 mod entity;
 mod error;
+mod query;
 mod registry;
 mod world;
 
 pub use bundle::Bundle;
 pub use entity::Entity;
 pub use error::EcsError;
+pub use query::{Query, QueryData, ReadOnlyQuery};
 pub use world::{World, WorldBuilder};
 
 /// Marker for the types a [`World`] stores as components.

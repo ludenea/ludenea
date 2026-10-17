@@ -81,7 +81,7 @@ impl World {
     pub fn spawn<B: Bundle>(&mut self, bundle: B) -> Entity {
         let mut ids = Vec::new();
         B::component_ids(&self.registry, &mut ids);
-        let archetype = self.archetype_for(self.sorted_key(ids));
+        let archetype = self.archetype_for(self.registry.sorted_without_duplicates(ids, "bundle"));
         let entity = self.state.allocator.allocate();
         let row = self.state.archetypes[archetype.0].push_entity(entity);
         bundle.write(&self.registry, &mut self.state.archetypes[archetype.0], row);
@@ -121,7 +121,7 @@ impl World {
     pub fn insert<B: Bundle>(&mut self, entity: Entity, bundle: B) -> Result<(), EcsError> {
         let mut ids = Vec::new();
         B::component_ids(&self.registry, &mut ids);
-        let ids = self.sorted_key(ids);
+        let ids = self.registry.sorted_without_duplicates(ids, "bundle");
         let location = self.locate(entity).ok_or(EcsError::StaleEntity(entity))?;
         let source_key = self.state.archetypes[location.archetype.0].key();
         let mut key: Vec<ComponentId> = source_key.iter().chain(&ids).copied().collect();
@@ -205,22 +205,6 @@ impl World {
         let location = (*self.state.locations.get(entity.index())?)?;
         let stored = self.state.archetypes[location.archetype.0].entities()[location.row];
         (stored == entity).then_some(location)
-    }
-
-    /// Sorts the component identifiers of a bundle into an archetype key.
-    ///
-    /// # Panics
-    ///
-    /// Panics when a component appears twice.
-    fn sorted_key(&self, mut ids: Vec<ComponentId>) -> Vec<ComponentId> {
-        ids.sort_unstable();
-        if let Some(pair) = ids.windows(2).find(|pair| pair[0] == pair[1]) {
-            panic!(
-                "component {} appears twice in the bundle",
-                self.registry.name(pair[0])
-            );
-        }
-        ids
     }
 
     /// Returns the archetype of `key`, creating it when needed.
