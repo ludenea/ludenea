@@ -112,6 +112,9 @@ pub struct Session {
     history: UndoHistory,
     /// The last resimulated tick, while the recorded future is stale.
     resimulating: Option<u64>,
+    /// The tick the session was at when its scene changed: resimulation seeks back to it
+    /// once it gets there, unless the session moves first.
+    return_to: Option<u64>,
     diverged: bool,
     reports: VecDeque<Resimulation>,
 }
@@ -132,6 +135,7 @@ impl Session {
             current: 0,
             history: UndoHistory::default(),
             resimulating: None,
+            return_to: None,
             diverged: false,
             reports: VecDeque::new(),
         })
@@ -202,6 +206,7 @@ impl Session {
         {
             return Err(SessionError::Resimulating { up_to });
         }
+        self.return_to = None;
         let recorded = self.inputs.tick(tick).map(<[u8]>::to_vec);
         let take_over = live.filter(|live| recorded.as_deref() != Some(*live));
         self.run_tick(sim, take_over.or(recorded.as_deref()))?;
@@ -288,8 +293,8 @@ impl Session {
     }
 
     /// Copies the current value of `component` on `entity` into the scene. Like every scene
-    /// edit, it moves the session to tick 0 and marks the recorded future stale. The entity
-    /// must exist at tick 0.
+    /// edit, it marks the recorded future stale; resimulation brings the session back to
+    /// the current tick. The entity must exist at tick 0.
     pub fn apply_to_scene(
         &mut self,
         sim: &mut Simulation,
@@ -349,6 +354,7 @@ impl Session {
         }
         self.replay_to(sim, tick)?;
         self.current = tick;
+        self.return_to = None;
         Ok(())
     }
 
@@ -430,6 +436,9 @@ impl Session {
             let kept = usize::try_from(failed + 1).expect("tick fits in memory");
             self.hashes.truncate(kept);
             self.checkpoints.truncate_after(failed);
+            if let Some(tick) = self.return_to.take() {
+                self.current = tick.min(failed);
+            }
             self.replay_to(sim, self.current)?;
         }
         result
@@ -477,6 +486,12 @@ impl Session {
         if up_to >= self.end() {
             self.resimulating = None;
             self.reports.push_back(Resimulation::Done);
+        }
+        if let Some(tick) = self.return_to
+            && (tick <= up_to || self.resimulating.is_none())
+        {
+            self.current = tick.min(up_to);
+            self.return_to = None;
         }
         self.replay_to(sim, self.current)?;
         Ok(self
@@ -666,6 +681,7 @@ impl Session {
     fn reset_future(&mut self, sim: &mut Simulation) -> Result<(), SessionError> {
         self.hashes.truncate(1);
         self.update_head();
+        self.current = 0;
         let (_, scene_state) = self.checkpoints.nearest_at_or_before(0);
         sim.restore(scene_state)
             .expect("a checkpoint restores into the world it was taken from");
@@ -718,10 +734,13 @@ impl Session {
     /// is kept but its checkpoints are dropped, and it is resimulated from tick 0 when it has
     /// hashes to replace or edits past tick 0 to check (a recorded edit that fails on the new
     /// state is dropped and reported; inputs alone always replay). The new tick 0 hash is not
-    /// compared, since the state changed on purpose.
+    /// compared, since the state changed on purpose. The session shows tick 0 while it
+    /// resimulates, then returns to the tick it was at (or to the last resimulated tick when
+    /// the recorded future ends before it).
     fn start_resimulation(&mut self, sim: &mut Simulation) {
         self.checkpoints = Checkpoints::new(sim.snapshot());
         self.hashes[0] = sim.hash();
+        self.return_to = (self.current > 0).then_some(self.current);
         self.current = 0;
         self.diverged = false;
         self.reports.clear();

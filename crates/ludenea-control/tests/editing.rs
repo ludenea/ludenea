@@ -338,13 +338,39 @@ fn apply_to_scene_copies_value_and_marks_dirty() {
             component: "ludenea::Pose".to_string(),
         },
     );
+    // The scene, shown at tick 0 while the recorded future resimulates.
     let after = timeline(&mut host);
-    assert!(after.scene_dirty && after.can_undo, "{after:?}");
+    assert!(
+        after.scene_dirty && after.can_undo && after.resimulating,
+        "{after:?}"
+    );
     assert_eq!(after.current, 0);
     assert_eq!(json_of(&mut host, entity, "ludenea::Pose"), fallen);
 
-    save_scene(&mut host);
+    resimulate(&mut host);
+    assert_eq!(timeline(&mut host).current, 20);
+    let applied = save_scene(&mut host);
     assert!(!timeline(&mut host).scene_dirty);
+    let mut fresh = loaded(30);
+    ok(&mut fresh, Command::ReplaceScene { ron: applied });
+    resimulate(&mut fresh);
+    step(&mut fresh, 20);
+    assert_eq!(hash(&mut host), hash(&mut fresh));
+
+    ok(&mut host, Command::Undo);
+    resimulate(&mut host);
+    assert_eq!(timeline(&mut host).current, 20);
+}
+
+/// Advances while paused until resimulation is done.
+fn resimulate(host: &mut Host) {
+    for _ in 0..1_000 {
+        host.advance(0.0);
+        if !timeline(host).resimulating {
+            return;
+        }
+    }
+    panic!("resimulation did not finish");
 }
 
 #[test]

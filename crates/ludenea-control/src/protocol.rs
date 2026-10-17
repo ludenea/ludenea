@@ -196,7 +196,8 @@ pub enum Command {
     /// The session's scene, whatever the current tick, marked as saved.
     SaveScene,
     /// Copies the current value of a component into the scene, as a tick 0 edit: the
-    /// session moves to tick 0 and resimulates. The entity must exist at tick 0.
+    /// session resimulates, then returns to the current tick. The entity must exist at
+    /// tick 0.
     ApplyToScene {
         entity: Entity,
         component: String,

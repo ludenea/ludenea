@@ -288,6 +288,29 @@ fn panicking_system_pauses_with_panicked_and_keeps_session() {
 }
 
 #[test]
+fn replace_scene_at_a_later_tick_returns_there_after_resimulation() {
+    let mut host = loaded(100);
+    step(&mut host, 40);
+    ok(&mut host, Command::ReplaceScene { ron: scene_b() });
+    let during = timeline(&mut host);
+    assert!(during.resimulating && during.current == 0, "{during:?}");
+    resimulate(&mut host);
+    assert_eq!(timeline(&mut host).current, 40);
+
+    let mut fresh = loaded_with(boxes::app(), scene_b(), recorded(100));
+    step(&mut fresh, 40);
+    assert_eq!(hash(&mut host), hash(&mut fresh));
+
+    ok(&mut host, Command::Undo);
+    resimulate(&mut host);
+    assert_eq!(timeline(&mut host).current, 40);
+    ok(&mut host, Command::Redo);
+    resimulate(&mut host);
+    assert_eq!(timeline(&mut host).current, 40);
+    assert_eq!(hash(&mut host), hash(&mut fresh));
+}
+
+#[test]
 fn undo_and_redo_through_protocol() {
     let mut host = loaded(60);
     step(&mut host, 60);
