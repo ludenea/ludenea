@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use ludenea_app::{App, InputLog, Inputs, Rng, Sim};
 use ludenea_control::*;
-use ludenea_ecs::{Component, Entity, HashTree, Query, ResMut, Runtime};
+use ludenea_ecs::{Component, Entity, EntityHash, HashTree, NamedHash, Query, ResMut, Runtime};
 use serde::{Deserialize, Serialize};
 
 #[derive(Component, Serialize, Deserialize)]
@@ -21,8 +21,7 @@ fn app() -> App {
     app
 }
 
-const SCENE: &str =
-    r#"Scene(version: 1, resources: {}, entities: [{ "host::Score": (5) }])"#;
+const SCENE: &str = r#"Scene(version: 1, resources: {}, entities: [{ "host::Score": (5) }])"#;
 
 fn client() -> InProcess {
     let mut client = InProcess::connect(Host::new(app()).unwrap(), PROTOCOL_VERSION).unwrap();
@@ -289,4 +288,137 @@ fn host_is_send() {
     fn assert_send<T: Send>() {}
     assert_send::<Host>();
     assert_send::<InProcess>();
+}
+
+#[test]
+fn failing_step_names_the_tick_and_keeps_earlier_ticks() {
+    let mut bad = InputLog::new(1);
+    bad.record(&[1u8]);
+    bad.ticks.push(vec![0xff, 0xff, 0xff]);
+    let mut client = client();
+    client
+        .request(Command::LoadInputs {
+            log: Bytes(bad.encode()),
+        })
+        .unwrap();
+    let error = client
+        .request(Command::Step {
+            ticks: 3,
+            record_hashes: false,
+        })
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidInputs);
+    assert!(error.message.starts_with("tick 1: "), "{}", error.message);
+    let Ok(Reply::Hash { tick, .. }) = client.request(Command::GetHash) else {
+        panic!()
+    };
+    assert_eq!(tick, 1);
+}
+
+#[test]
+fn hash64_rejects_uppercase_and_plus_sign() {
+    for bad in ["\"00000000000000AB\"", "\"+00000000000000a\"", "\"ab\""] {
+        assert!(serde_json::from_str::<Hash64>(bad).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn wire_format_matches_golden_json() {
+    use serde_json::{Value, json};
+    let to = |value: &dyn erased::Ser| value.to_value();
+    let entity: Entity = serde_json::from_str(r#"{"index":1,"generation":2}"#).unwrap();
+
+    assert_eq!(
+        to(&ClientMessage::Request {
+            id: 3,
+            command: Command::Step {
+                ticks: 5,
+                record_hashes: true
+            }
+        }),
+        json!({"type":"request","id":3,"command":{"type":"step","ticks":5,"record_hashes":true}})
+    );
+    assert_eq!(
+        to(&Command::GetEntity { entity }),
+        json!({"type":"get_entity","entity":{"index":1,"generation":2}})
+    );
+    assert_eq!(
+        to(&Command::LoadInputs {
+            log: Bytes(vec![0, 1, 254, 255])
+        }),
+        json!({"type":"load_inputs","log":"AAH+/w=="})
+    );
+    assert_eq!(
+        to(&Reply::Entity {
+            entity,
+            components: BTreeMap::from([("n".to_string(), "(1)".to_string())])
+        }),
+        json!({"type":"entity","entity":{"index":1,"generation":2},"components":{"n":"(1)"}})
+    );
+    let error = ProtocolError {
+        code: ErrorCode::NoSuchEntity,
+        message: "m".into(),
+    };
+    assert_eq!(to(&error), json!({"code":"no_such_entity","message":"m"}));
+    assert_eq!(
+        to(&ServerMessage::Response {
+            id: 1,
+            result: Ok(Reply::Done)
+        }),
+        json!({"type":"response","id":1,"result":{"ok":{"type":"done"}}})
+    );
+    assert_eq!(
+        to(&ServerMessage::Response {
+            id: 2,
+            result: Err(error.clone())
+        }),
+        json!({"type":"response","id":2,"result":{"error":{"code":"no_such_entity","message":"m"}}})
+    );
+    assert_eq!(
+        to(&ServerMessage::Welcome {
+            protocol_version: 1,
+            engine_version: "0.1.0".into()
+        }),
+        json!({"type":"welcome","protocol_version":1,"engine_version":"0.1.0"})
+    );
+    assert_eq!(
+        to(&ServerMessage::Refused { error }),
+        json!({"type":"refused","error":{"code":"no_such_entity","message":"m"}})
+    );
+    let big = u64::MAX - 1;
+    let tree = HashTree {
+        root: big,
+        resources: vec![NamedHash {
+            name: "r".into(),
+            hash: 1,
+        }],
+        entities: vec![EntityHash {
+            entity,
+            hash: big,
+            components: vec![NamedHash {
+                name: "c".into(),
+                hash: big,
+            }],
+        }],
+    };
+    let value: Value = to(&Reply::HashTree { tick: 0, tree });
+    assert_eq!(
+        value,
+        json!({"type":"hash_tree","tick":0,"tree":{
+            "root":"fffffffffffffffe",
+            "resources":[{"name":"r","hash":"0000000000000001"}],
+            "entities":[{"entity":{"index":1,"generation":2},"hash":"fffffffffffffffe",
+                "components":[{"name":"c","hash":"fffffffffffffffe"}]}]}})
+    );
+}
+
+mod erased {
+    pub trait Ser {
+        fn to_value(&self) -> serde_json::Value;
+    }
+    impl<T: serde::Serialize> Ser for T {
+        fn to_value(&self) -> serde_json::Value {
+            serde_json::to_value(self).unwrap()
+        }
+    }
 }

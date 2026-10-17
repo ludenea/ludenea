@@ -92,13 +92,14 @@ impl Host {
     fn step(&mut self, ticks: u32, record_hashes: bool) -> Result<Reply, ProtocolError> {
         let mut hashes = Vec::new();
         for _ in 0..ticks {
-            let inputs = self
-                .inputs
-                .as_ref()
-                .and_then(|log| log.tick(self.simulation.tick()));
-            self.simulation
-                .step_encoded(inputs)
-                .map_err(|e| ProtocolError::new(ErrorCode::InvalidInputs, e))?;
+            let tick = self.simulation.tick();
+            let inputs = self.inputs.as_ref().and_then(|log| log.tick(tick));
+            self.simulation.step_encoded(inputs).map_err(|e| {
+                ProtocolError::new(
+                    ErrorCode::InvalidInputs,
+                    format!("tick {tick}: {e}; earlier ticks stay applied"),
+                )
+            })?;
             if record_hashes {
                 hashes.push(Hash64(self.simulation.hash()));
             }

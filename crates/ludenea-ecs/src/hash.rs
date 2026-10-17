@@ -29,15 +29,37 @@ pub fn hash_value<T: Serialize + ?Sized>(value: &T) -> u64 {
     hasher.0.digest()
 }
 
+/// Serde helper: a `u64` as exactly 16 lowercase hexadecimal digits, because JavaScript
+/// numbers lose `u64` precision above 2^53.
+pub mod hex_u64 {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(value: &u64, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(&format_args!("{value:016x}"))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        if text.len() != 16 || !text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+            return Err(serde::de::Error::custom(
+                "expected exactly 16 lowercase hexadecimal digits",
+            ));
+        }
+        u64::from_str_radix(&text, 16).map_err(serde::de::Error::custom)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct NamedHash {
     pub name: String,
+    #[serde(with = "hex_u64")]
     pub hash: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EntityHash {
     pub entity: Entity,
+    #[serde(with = "hex_u64")]
     pub hash: u64,
     /// Sorted by name.
     pub components: Vec<NamedHash>,
@@ -47,6 +69,7 @@ pub struct EntityHash {
 /// worlds can be compared leaf by leaf.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HashTree {
+    #[serde(with = "hex_u64")]
     pub root: u64,
     /// Registered resources sorted by name, then the `ludenea::Entities` leaf.
     pub resources: Vec<NamedHash>,
