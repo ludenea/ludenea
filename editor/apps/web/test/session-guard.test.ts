@@ -144,7 +144,8 @@ describe("guardSession", () => {
 
   it("a_crash_while_restoring_reloads_only_the_restored_scene", async () => {
     const seed = {
-      load: { type: "load_session" as const, scene: "edited", saved_scene: "saved", inputs: "AA==", edits: "AQ==", undo: "Ag==", expected: hashes },
+      // Version 1, two players, one tick.
+      load: { type: "load_session" as const, scene: "edited", saved_scene: "saved", inputs: "AQIBAQc=", edits: "AQ==", undo: "Ag==", expected: hashes },
       tick: 4,
     };
     // Still resimulating the restored session: every export fails.
@@ -160,7 +161,8 @@ describe("guardSession", () => {
 
     worker.crash({ tick: 4, message: "boom" });
     await settle();
-    const sceneOnly = { type: "load_session", scene: "edited", saved_scene: "saved", inputs: "", edits: "", undo: "", expected: [] };
+    // The input log keeps its version and two players, without ticks.
+    const sceneOnly = { type: "load_session", scene: "edited", saved_scene: "saved", inputs: "AQIA", edits: "", undo: "", expected: [] };
     expect(restart).toHaveBeenCalledWith({ load: sceneOnly, tick: 0 });
     expect(second.sent).toEqual([sceneOnly, { type: "get_timeline" }, { type: "seek", tick: 0 }]);
     expect(logged[0]).toBe("error: The game crashed at tick 4: boom");

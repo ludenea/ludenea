@@ -29,7 +29,22 @@ export async function exportSession(control: ControlClient): Promise<SavedSessio
 
 /** `saved` without its recorded future: its scene (unsaved edits included) at tick 0. */
 function sceneOf(saved: SavedSession): SavedSession {
-  return { load: { ...saved.load, inputs: "", edits: "", undo: "", expected: [] }, tick: 0 };
+  return { load: { ...saved.load, inputs: withoutTicks(saved.load.inputs), edits: "", undo: "", expected: [] }, tick: 0 };
+}
+
+/**
+ * An input log (base64 postcard bytes: version, player count, ticks) without its ticks, so
+ * a fresh game keeps the session's player count. An empty log stays empty.
+ */
+function withoutTicks(inputs: string): string {
+  if (inputs === "") return "";
+  const bytes = Uint8Array.from(atob(inputs), (char) => char.charCodeAt(0));
+  let end = 0;
+  // Two varints: the version, then the player count.
+  for (let varint = 0; varint < 2; varint++) {
+    while ((bytes[end++] ?? 0) & 0x80);
+  }
+  return btoa(String.fromCharCode(...bytes.subarray(0, end), 0));
 }
 
 /** How long a restore may wait for resimulation before it gives up. */
