@@ -1018,6 +1018,7 @@ function webSocketTransport(url: string): Promise<MessageTransport>;
 
 function postMessageTransport(port: MessagePort | Worker): MessageTransport;
 
+/** The desktop backend's channels. It streams batches: protocol messages one per line. */
 function tauriTransport(channel: "control" | "project"): Promise<MessageTransport>;
 
 /** In-memory transport for tests: `handler` maps each sent message to the messages the peer answers with. */

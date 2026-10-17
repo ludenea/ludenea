@@ -1,6 +1,7 @@
 export { createEditor, type Editor, type EditorHost } from "./editor";
 export type { ComponentTypes, EntityAccess } from "./entities";
 export { Shell } from "./layout/Shell";
+export { mountShell } from "./layout/mount";
 export { PluginLoader } from "./loader";
 export { CommandPalette } from "./palette/CommandPalette";
 export {

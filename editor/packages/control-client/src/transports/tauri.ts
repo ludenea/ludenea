@@ -1,11 +1,14 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { Listeners, type MessageTransport } from "./transport";
 
+/** The desktop backend's channels. It streams batches: protocol messages one per line. */
 export async function tauriTransport(channel: "control" | "project"): Promise<MessageTransport> {
   const messages = new Listeners<string>();
   const closes = new Listeners<string>();
   const onMessage = new Channel<string>();
-  onMessage.onmessage = (message) => messages.emit(message);
+  onMessage.onmessage = (batch) => {
+    for (const message of batch.split("\n")) messages.emit(message);
+  };
   await invoke("subscribe", { channel, onMessage });
   return {
     send: (message) => {

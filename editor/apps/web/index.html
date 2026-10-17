@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ludenea</title>
+    <!-- The modules plugins share with the editor: one instance of each (see editor/shared). -->
+    <script type="importmap">
+      {
+        "imports": {
+          "react": "/shared/react.js",
+          "react/jsx-runtime": "/shared/react-jsx-runtime.js",
+          "@ludenea/editor-shell": "/shared/editor-shell.js",
+          "@ludenea/control-client": "/shared/control-client.js"
+        }
+      }
+    </script>
+    <style>
+      html,
+      body,
+      #root {
+        height: 100%;
+        margin: 0;
+      }
+    </style>
+    <script type="module" src="/src/main.tsx"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

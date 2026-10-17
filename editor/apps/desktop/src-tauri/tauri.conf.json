@@ -1,0 +1,19 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Ludenea",
+  "version": "0.1.0",
+  "identifier": "dev.ludenea.editor",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build"
+  },
+  "app": {
+    "windows": [{ "title": "Ludenea", "width": 1440, "height": 900 }],
+    "security": {
+      "csp": "script-src 'self' ludenea-plugin: http://ludenea-plugin.localhost 'wasm-unsafe-eval'"
+    }
+  },
+  "bundle": { "active": false }
+}

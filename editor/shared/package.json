@@ -1,0 +1,14 @@
+{
+  "name": "@ludenea/shared",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/export-lists.mjs && vite build"
+  },
+  "dependencies": {
+    "@ludenea/control-client": "workspace:*",
+    "@ludenea/editor-shell": "workspace:*",
+    "react": "19.3.1"
+  }
+}

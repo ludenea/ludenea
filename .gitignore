@@ -10,3 +10,5 @@ editor/test-results/
 editor/playwright-report/
 *.tsbuildinfo
 editor/packages/debug-draw-wasm/
+editor/apps/desktop/src-tauri/target/
+editor/apps/desktop/src-tauri/gen/

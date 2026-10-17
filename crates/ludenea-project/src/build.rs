@@ -114,7 +114,12 @@ fn run(
         .and_then(|text| text.trim().parse().ok());
 
     let mut command = Command::new("cargo");
-    command.current_dir(root).args(["build", "--release"]);
+    // Plain lines for the console, whatever the environment asks for (`tauri dev` asks for
+    // colors and progress bars).
+    command
+        .current_dir(root)
+        .args(["build", "--release", "--color", "never"])
+        .env("CARGO_TERM_PROGRESS_WHEN", "never");
     match target {
         BuildTarget::Native => command.args(["--bin", package]),
         BuildTarget::Wasm => command.args(["--lib", "--target", WASM_TARGET]),

@@ -1,0 +1,6 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "noEmit": true, "composite": false, "declaration": false, "jsx": "react-jsx", "types": ["node", "vite/client"], "allowImportingTsExtensions": true },
+  "include": ["src", "test", "vite.config.ts"],
+  "references": [{ "path": "../../packages/control-client" }, { "path": "../../packages/editor-shell" }, { "path": "../../packages/editor-builtins" }]
+}

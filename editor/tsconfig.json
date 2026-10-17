@@ -1,4 +1,12 @@
 {
   "files": [],
-  "references": [{ "path": "packages/control-client" }, { "path": "packages/editor-shell" }, { "path": "packages/editor-builtins" }, { "path": "e2e" }]
+  "references": [
+    { "path": "packages/control-client" },
+    { "path": "packages/editor-shell" },
+    { "path": "packages/editor-builtins" },
+    { "path": "shared" },
+    { "path": "apps/web" },
+    { "path": "apps/desktop" },
+    { "path": "e2e" }
+  ]
 }

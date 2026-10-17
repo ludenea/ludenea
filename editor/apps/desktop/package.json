@@ -1,0 +1,22 @@
+{
+  "name": "@ludenea/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@ludenea/control-client": "workspace:*",
+    "@ludenea/editor-builtins": "workspace:*",
+    "@ludenea/editor-shell": "workspace:*",
+    "@ludenea/shared": "workspace:*",
+    "@ludenea/web": "workspace:*",
+    "react": "19.3.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.3"
+  }
+}

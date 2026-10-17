@@ -250,6 +250,12 @@ function Shell({ host }: {
     host: EditorHost;
 }): react.JSX.Element;
 
+/**
+ * Renders the shell into `element`; returns the unmount. The applications mount through this so
+ * the one `react-dom` lives in the shared shell module, next to the dock's own portals.
+ */
+function mountShell(element: Element, host: EditorHost): () => void;
+
 /** Every registered command, opened with `Ctrl+K` or `Cmd+K` (also from text fields). */
 function CommandPalette({ editor }: {
     editor: Editor;
@@ -264,6 +270,6 @@ function isTextField(target: EventTarget | null): boolean;
  */
 function installShortcuts(editor: Editor, registry: Registry, target?: Window): () => void;
 
-export { CommandPalette, DuplicateRegistration, PluginLoader, Registry, Shell, createEditor, definePlugin, installShortcuts, isTextField, normalizeShortcut };
+export { CommandPalette, DuplicateRegistration, PluginLoader, Registry, Shell, createEditor, definePlugin, installShortcuts, isTextField, mountShell, normalizeShortcut };
 export type { CommandDefinition, ComponentTypes, Disposable, Editor, EditorHost, EntityAccess, InspectorComponent, OverlayContext, PanelDefinition, PluginDefinition, SelectionState, SelectionStore, SettingDefinition, TimelineState, TimelineStore, ViewportOverlay };
 }
