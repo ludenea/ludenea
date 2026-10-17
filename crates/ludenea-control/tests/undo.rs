@@ -248,3 +248,38 @@ fn edit_dropped_by_resimulation_leaves_undo_history() {
         Err(SessionError::NothingToUndo)
     ));
 }
+
+#[test]
+fn replace_scene_is_undoable() {
+    let (mut sim, mut session) = started(100);
+    play(&mut session, &mut sim, 50);
+    let original = session.scene().to_string();
+    let disk = boxes::generate_scene(31, 8);
+    session.replace_scene(&mut sim, disk.clone()).unwrap();
+    resimulate_all(&mut session, &mut sim);
+    assert!(session.timeline().can_undo && !session.timeline().scene_dirty);
+    session.undo(&mut sim).unwrap();
+    assert_eq!(session.scene(), original);
+    assert!(session.timeline().scene_dirty);
+    resimulate_all(&mut session, &mut sim);
+    session.redo(&mut sim).unwrap();
+    assert_eq!(session.scene(), disk);
+    assert!(!session.timeline().can_redo);
+}
+
+#[test]
+fn resume_with_empty_undo_bytes_has_empty_history() {
+    let (mut sim, mut session) = started(100);
+    play(&mut session, &mut sim, 50);
+    let export = session.export().unwrap();
+    let session = Session::resume(
+        &mut sim,
+        export.scene,
+        InputLog::decode(&export.inputs).unwrap(),
+        EditLog::decode(&export.edits).unwrap(),
+        &[],
+        export.hashes,
+    )
+    .unwrap();
+    assert!(!session.timeline().can_undo && !session.timeline().can_redo);
+}

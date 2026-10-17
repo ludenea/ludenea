@@ -15,8 +15,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use ludenea_app::{
     Edit, EditError, EditLog, InputLog, SceneError, SimError, Simulation, TimedEdit,
 };
-use ludenea_ecs::Entity;
-use serde::Serialize;
+use ludenea_ecs::{Entity, Snapshot, SnapshotError};
+use serde::{Deserialize, Serialize};
 
 use crate::checkpoints::Checkpoints;
 use crate::undo::{UndoEntry, UndoHistory};
@@ -41,10 +41,12 @@ pub enum SessionError {
     Sim(#[from] SimError),
     #[error(transparent)]
     Scene(#[from] SceneError),
+    #[error(transparent)]
+    Snapshot(#[from] SnapshotError),
 }
 
 /// What the timeline shows.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Timeline {
     pub head: u64,
     pub simulated: u64,
@@ -130,7 +132,8 @@ impl Session {
     }
 
     /// Restarts a recorded session on a new build: the new hashes are compared with
-    /// `expected` while it resimulates. `undo` is the exported undo history.
+    /// `expected` while it resimulates. `undo` is the exported undo history; empty bytes
+    /// mean an empty one.
     pub fn resume(
         sim: &mut Simulation,
         scene: String,
@@ -139,7 +142,11 @@ impl Session {
         undo: &[u8],
         expected: Vec<u64>,
     ) -> Result<Session, SessionError> {
-        let history = UndoHistory::decode(undo)?;
+        let history = if undo.is_empty() {
+            UndoHistory::default()
+        } else {
+            UndoHistory::decode(undo)?
+        };
         sim.set_players(usize::from(inputs.players));
         let mut session = Session::start(sim, scene)?;
         session.inputs = inputs;
@@ -311,7 +318,8 @@ impl Session {
         &self.scene
     }
 
-    /// Loads a new version of the scene at tick 0 and marks the recorded future stale.
+    /// Loads a new version of the scene at tick 0, as saved, and marks the recorded future
+    /// stale. Undo brings the previous version back.
     pub fn replace_scene(
         &mut self,
         sim: &mut Simulation,
@@ -319,8 +327,31 @@ impl Session {
     ) -> Result<(), SessionError> {
         sim.load_scene(&scene)?;
         self.saved_scene = scene.clone();
-        self.scene = scene;
+        let before = std::mem::replace(&mut self.scene, scene.clone());
+        self.history.record(UndoEntry::Scene {
+            before,
+            after: scene,
+        });
         self.start_resimulation(sim);
+        Ok(())
+    }
+
+    /// Replaces the state at the snapshot's tick: the hashes and checkpoints after it are
+    /// dropped, and the recorded inputs and edits after it stay as the future that replays
+    /// on top of it. A snapshot past the simulated ticks (taken elsewhere) is restored as is;
+    /// the ticks run from it add no hashes.
+    pub fn restore(
+        &mut self,
+        sim: &mut Simulation,
+        snapshot: &Snapshot,
+    ) -> Result<(), SessionError> {
+        self.ensure_resimulated()?;
+        sim.restore(snapshot)?;
+        let tick = sim.tick();
+        let kept = usize::try_from(tick + 1).expect("tick fits in memory");
+        self.hashes.truncate(kept);
+        self.checkpoints.truncate_after(tick);
+        self.current = tick;
         Ok(())
     }
 

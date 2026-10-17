@@ -12,7 +12,7 @@ mod undo;
 pub use host::Host;
 pub use in_process::{InProcess, Transport};
 pub use protocol::{
-    Bytes, ClientMessage, Command, ErrorCode, Hash64, PROTOCOL_VERSION, ProtocolError, Reply,
-    ServerMessage,
+    Bytes, ClientMessage, Command, ConsoleLevel, ErrorCode, Event, GameInfo, Hash64, NamedSchema,
+    PROTOCOL_VERSION, PauseReason, ProtocolError, Reply, ServerMessage,
 };
 pub use session::{Resimulation, Session, SessionError, SessionExport, Timeline};

@@ -194,7 +194,11 @@ impl App {
         self.world.insert_runtime(Parallel::new(1));
         let schedule = self.schedule.build(&self.world)?;
         Ok(Simulation::new(
-            self.world, schedule, self.input, self.hooks,
+            self.world,
+            schedule,
+            self.input,
+            self.tick_rate,
+            self.hooks,
         ))
     }
 }

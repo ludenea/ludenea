@@ -44,6 +44,7 @@ pub struct Simulation {
     schedule: Schedule,
     input: Option<InputType>,
     players: usize,
+    tick_rate: u32,
     hooks: EditorHooks,
     /// The world as built, before any step.
     pub(crate) initial: Snapshot,
@@ -54,6 +55,7 @@ impl Simulation {
         world: World,
         schedule: Schedule,
         input: Option<InputType>,
+        tick_rate: u32,
         hooks: EditorHooks,
     ) -> Self {
         Self {
@@ -62,6 +64,7 @@ impl Simulation {
             schedule,
             input,
             players: 1,
+            tick_rate,
             hooks,
         }
     }
@@ -69,6 +72,11 @@ impl Simulation {
     /// Completed steps, from `Time.tick`.
     pub fn tick(&self) -> u64 {
         self.time().tick
+    }
+
+    /// Ticks per simulated second, as set by `App::tick_rate`.
+    pub fn tick_rate(&self) -> u32 {
+        self.tick_rate
     }
 
     pub fn players(&self) -> usize {

@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 
-use ludenea_app::{App, InputLog, Inputs, Rng, Sim};
+use ludenea_app::{App, InputLog, Inputs, RawGamepad, RawInput, Rng, Sim};
 use ludenea_control::*;
+use ludenea_ecs::schema::{Schema, TypeSchema};
 use ludenea_ecs::{Component, Entity, EntityHash, HashTree, NamedHash, Query, ResMut, Runtime};
 use serde::{Deserialize, Serialize};
 
@@ -57,12 +58,49 @@ fn log(ticks: &[u8]) -> Bytes {
 }
 
 #[test]
-fn handshake_with_wrong_version_is_refused() {
-    let error = InProcess::connect(Host::new(app()).unwrap(), 99)
+fn handshake_with_version_1_is_refused() {
+    let error = InProcess::connect(Host::new(app()).unwrap(), 1)
         .err()
         .unwrap();
     assert_eq!(error.code, ErrorCode::VersionMismatch);
-    assert_eq!(error.message, "client speaks protocol 99, engine speaks 1");
+    assert_eq!(error.message, "client speaks protocol 1, engine speaks 2");
+}
+
+#[test]
+fn welcome_carries_game_schemas() {
+    let client = InProcess::connect(Host::new(app()).unwrap(), PROTOCOL_VERSION).unwrap();
+    let game = client.game();
+    let score = game
+        .components
+        .iter()
+        .find(|named| named.name == "host::Score")
+        .unwrap();
+    assert_eq!(score.schema, Score::schema());
+    let resources: Vec<&str> = game.resources.iter().map(|r| r.name.as_str()).collect();
+    assert!(resources.contains(&"ludenea::Time"), "{resources:?}");
+    assert_eq!(game.input, Some(TypeSchema::U8));
+    assert_eq!(game.tick_rate, 60);
+    assert!(game.debug_layers.is_empty());
+}
+
+#[test]
+fn live_input_without_mapping_is_refused() {
+    let error = client()
+        .request(Command::SetLiveInput {
+            players: vec![RawInput::default()],
+        })
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::NoInputMapping);
+}
+
+#[test]
+fn hash_reports_pending_edits_and_tick() {
+    let mut client = client();
+    step(&mut client, 2);
+    let Ok(Reply::Hash { tick, pending, .. }) = client.request(Command::GetHash) else {
+        panic!()
+    };
+    assert_eq!((tick, pending), (2, false));
 }
 
 #[test]
@@ -70,7 +108,7 @@ fn step_with_record_hashes_returns_one_hash_per_tick() {
     let mut client = client();
     let hashes = step(&mut client, 5);
     assert_eq!(hashes.len(), 5);
-    let Ok(Reply::Hash { tick, hash }) = client.request(Command::GetHash) else {
+    let Ok(Reply::Hash { tick, hash, .. }) = client.request(Command::GetHash) else {
         panic!()
     };
     assert_eq!((tick, hash), (5, hashes[4]));
@@ -198,6 +236,32 @@ fn every_command_and_reply_round_trips_through_json() {
         },
         Command::ListEntities,
         Command::GetEntity { entity },
+        Command::LoadEdits { log: bytes.clone() },
+        Command::Play,
+        Command::Pause,
+        Command::Seek { tick: 9 },
+        Command::SetSpeed { speed: 1.5 },
+        Command::SetLiveInput {
+            players: vec![RawInput {
+                keys: ["KeyA".to_string()].into(),
+                gamepads: vec![RawGamepad {
+                    buttons: vec![0.25],
+                    axes: vec![-0.5],
+                }],
+            }],
+        },
+        Command::Undo,
+        Command::Redo,
+        Command::GetTimeline,
+        Command::ExportSession,
+        Command::ReplaceScene { ron: "y".into() },
+        Command::LoadSession {
+            scene: "z".into(),
+            inputs: bytes.clone(),
+            edits: bytes.clone(),
+            undo: bytes.clone(),
+            expected: vec![Hash64(1)],
+        },
     ];
     for command in commands {
         let message = ClientMessage::Request { id: 7, command };
@@ -208,10 +272,10 @@ fn every_command_and_reply_round_trips_through_json() {
         );
     }
     let hello = ClientMessage::Hello {
-        protocol_version: 1,
+        protocol_version: 2,
     };
     let json = serde_json::to_string(&hello).unwrap();
-    assert_eq!(json, r#"{"type":"hello","protocol_version":1}"#);
+    assert_eq!(json, r#"{"type":"hello","protocol_version":2}"#);
 
     let tree = Host::new(app())
         .map(|mut host| host.handle(Command::GetHashTree))
@@ -220,6 +284,17 @@ fn every_command_and_reply_round_trips_through_json() {
         panic!()
     };
     let _: &HashTree = &tree;
+    let timeline = Timeline {
+        head: 9,
+        simulated: 8,
+        current: 3,
+        checkpoints: vec![0],
+        edit_ticks: vec![2],
+        can_undo: true,
+        can_redo: false,
+        scene_dirty: true,
+        resimulating: false,
+    };
     let replies = vec![
         Reply::Done,
         Reply::Stepped {
@@ -229,11 +304,12 @@ fn every_command_and_reply_round_trips_through_json() {
         Reply::Hash {
             tick: 1,
             hash: Hash64(u64::MAX),
+            pending: true,
         },
         Reply::HashTree { tick: 0, tree },
         Reply::Snapshot {
             tick: 2,
-            snapshot: bytes,
+            snapshot: bytes.clone(),
         },
         Reply::Differences {
             lines: vec!["a".into()],
@@ -244,6 +320,14 @@ fn every_command_and_reply_round_trips_through_json() {
         Reply::Entity {
             entity,
             components: BTreeMap::from([("n".to_string(), "(1)".to_string())]),
+        },
+        Reply::Timeline(timeline.clone()),
+        Reply::Session {
+            scene: "s".into(),
+            inputs: bytes.clone(),
+            edits: bytes.clone(),
+            undo: bytes.clone(),
+            hashes: vec![Hash64(3)],
         },
     ];
     for reply in replies {
@@ -260,8 +344,9 @@ fn every_command_and_reply_round_trips_through_json() {
                 }),
             },
             ServerMessage::Welcome {
-                protocol_version: 1,
+                protocol_version: 2,
                 engine_version: "0.1.0".into(),
+                game: game(),
             },
         ];
         for message in messages {
@@ -272,15 +357,69 @@ fn every_command_and_reply_round_trips_through_json() {
             );
         }
     }
+    let events = vec![
+        Event::Ticked {
+            tick: 4,
+            hash: Hash64(5),
+            playing: true,
+            effective_rate: 59.5,
+        },
+        Event::Paused {
+            reason: PauseReason::User,
+        },
+        Event::Paused {
+            reason: PauseReason::Panicked {
+                tick: 50,
+                message: "boom".into(),
+            },
+        },
+        Event::TimelineChanged { timeline },
+        Event::Resimulated { up_to: 7 },
+        Event::Diverged {
+            tick: 30,
+            expected: Hash64(1),
+            got: Hash64(2),
+        },
+        Event::EditDropped {
+            tick: 3,
+            reason: "r".into(),
+        },
+        Event::Console {
+            level: ConsoleLevel::Warning,
+            text: "t".into(),
+        },
+    ];
+    for event in events {
+        let message = ServerMessage::Event { event };
+        let json = serde_json::to_string(&message).unwrap();
+        assert_eq!(
+            serde_json::from_str::<ServerMessage>(&json).unwrap(),
+            message
+        );
+    }
     let json = serde_json::to_string(&Reply::Hash {
         tick: 1,
         hash: Hash64(0xab),
+        pending: false,
     })
     .unwrap();
     assert_eq!(
         json,
-        r#"{"type":"hash","tick":1,"hash":"00000000000000ab"}"#
+        r#"{"type":"hash","tick":1,"hash":"00000000000000ab","pending":false}"#
     );
+}
+
+fn game() -> GameInfo {
+    GameInfo {
+        components: vec![NamedSchema {
+            name: "host::Score".into(),
+            schema: Score::schema(),
+        }],
+        resources: Vec::new(),
+        input: Some(TypeSchema::U8),
+        tick_rate: 60,
+        debug_layers: vec!["physics.colliders".into()],
+    }
 }
 
 #[test]
@@ -376,10 +515,29 @@ fn wire_format_matches_golden_json() {
     );
     assert_eq!(
         to(&ServerMessage::Welcome {
-            protocol_version: 1,
-            engine_version: "0.1.0".into()
+            protocol_version: 2,
+            engine_version: "0.1.0".into(),
+            game: game()
         }),
-        json!({"type":"welcome","protocol_version":1,"engine_version":"0.1.0"})
+        json!({"type":"welcome","protocol_version":2,"engine_version":"0.1.0","game":{
+            "components":[{"name":"host::Score","schema":to(&Score::schema())}],
+            "resources":[],"input":{"kind":"u8"},"tick_rate":60,
+            "debug_layers":["physics.colliders"]}})
+    );
+    assert_eq!(
+        to(&ServerMessage::Event {
+            event: Event::Paused {
+                reason: PauseReason::Panicked {
+                    tick: 50,
+                    message: "m".into()
+                }
+            }
+        }),
+        json!({"type":"event","event":{"type":"paused","reason":{"type":"panicked","tick":50,"message":"m"}}})
+    );
+    assert_eq!(
+        to(&Command::SetSpeed { speed: 2.0 }),
+        json!({"type":"set_speed","speed":2.0})
     );
     assert_eq!(
         to(&ServerMessage::Refused { error }),
