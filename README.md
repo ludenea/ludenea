@@ -9,10 +9,11 @@ recorded, replayed, and verified bit for bit.
 
 The same scene, the same input log, and the same engine version produce the
 same state hash at every tick, on macOS, Linux, Windows, and WebAssembly, and
-for any thread count. The guarantee is enforced by:
+for any thread count. The guarantee rests on:
 
-- a golden trace of 10,001 state hashes, checked in continuous integration on
-  every platform at 1, 2, and 8 threads and under `wasmtime`;
+- a golden trace of 10,001 state hashes, which the `determinism` workflow
+  verifies on macOS, Linux, and Windows at 1, 2, and 8 threads, and on
+  WebAssembly under `wasmtime`;
 - lints that forbid platform-dependent floating point functions, wall-clock
   time, and unordered collections in simulation code;
 - a pinned toolchain and a committed `Cargo.lock`.
@@ -21,10 +22,10 @@ for any thread count. The guarantee is enforced by:
 
 | Path                     | Purpose                                         |
 | ------------------------ | ----------------------------------------------- |
-| `crates/ludenea-math`    | Deterministic vectors, matrices, and functions  |
-| `crates/ludenea-ecs`     | World, components, queries, and state hashing   |
+| `crates/ludenea-math`    | Deterministic vectors, rotations, and functions |
+| `crates/ludenea-ecs`     | World, queries, snapshots, and state hashing    |
 | `crates/ludenea-macros`  | Derive macros                                   |
-| `crates/ludenea-app`     | Simulation loop, scenes, snapshots, input logs  |
+| `crates/ludenea-app`     | Simulation loop, scenes, and input logs         |
 | `crates/ludenea-physics` | Rigid body physics                              |
 | `crates/ludenea-control` | Versioned control protocol and host             |
 | `crates/ludenea-cli`     | `run`, `verify`, and `diff` commands            |
