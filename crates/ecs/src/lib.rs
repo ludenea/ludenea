@@ -45,14 +45,17 @@ mod query_state;
 mod registry;
 mod resource;
 mod snapshot;
+mod system;
 mod world;
 
 pub use bundle::Bundle;
 pub use entity::Entity;
 pub use error::EcsError;
 pub use query::{QueryData, QueryFilter, ReadOnlyQuery, With, Without, WorldQuery};
-pub use resource::Resource;
+pub use query_state::Query;
+pub use resource::{Res, ResMut, Resource};
 pub use snapshot::Snapshot;
+pub use system::{IntoSystem, SystemParam};
 pub use world::{World, WorldBuilder};
 
 /// Marker for the types a [`World`] stores as components.

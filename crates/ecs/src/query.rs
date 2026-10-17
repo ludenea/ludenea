@@ -16,6 +16,24 @@ pub enum ColumnBorrow<'w> {
     Exclusive(&'w mut dyn Column),
 }
 
+impl ColumnBorrow<'_> {
+    /// Lends the column again for a shorter time, keeping its kind.
+    pub(crate) fn reborrow(&mut self) -> ColumnBorrow<'_> {
+        match self {
+            Self::Shared(column) => ColumnBorrow::Shared(*column),
+            Self::Exclusive(column) => ColumnBorrow::Exclusive(&mut **column),
+        }
+    }
+
+    /// Lends the column again for reading only.
+    pub(crate) fn share(&self) -> ColumnBorrow<'_> {
+        match self {
+            Self::Shared(column) => ColumnBorrow::Shared(*column),
+            Self::Exclusive(column) => ColumnBorrow::Shared(&**column),
+        }
+    }
+}
+
 /// One component a query element accesses, and whether it writes it.
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -181,7 +199,7 @@ impl_query_data_for_tuple!(A 0, B 1, C 2, D 3, E 4, F 5);
 impl_query_data_for_tuple!(A 0, B 1, C 2, D 3, E 4, F 5, G 6);
 impl_query_data_for_tuple!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7);
 
-/// Typed filters of a system `Query`: `()`, [`With`], [`Without`], or a
+/// Typed filters of a system [`Query`](crate::Query): `()`, [`With`], [`Without`], or a
 /// tuple of up to eight of them.
 pub trait QueryFilter {
     /// Pushes the components a matched archetype must have and must not
@@ -301,7 +319,7 @@ enum Archetypes<'w> {
 
 /// An ad hoc query over a world, refined with [`WorldQuery::with`] and
 /// [`WorldQuery::without`], then consumed by [`WorldQuery::iter`]. Systems
-/// use a `Query` parameter instead.
+/// use a [`Query`](crate::Query) parameter instead.
 ///
 /// A mutable query needs an exclusive world, so a shared world rejects it at
 /// compile time:
