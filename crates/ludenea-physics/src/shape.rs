@@ -163,7 +163,6 @@ impl Polygon {
     }
 
     /// Two-vertex rounded polygon used to collide capsules.
-    #[expect(dead_code)] // consumed by the contact manifolds
     pub(crate) fn from_segment(c1: Vec2, c2: Vec2, radius: f32) -> Polygon {
         finish(&[c1, c2], radius)
     }
