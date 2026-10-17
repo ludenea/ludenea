@@ -62,3 +62,13 @@ Run the benchmark:
 ```sh
 cargo run --locked --release -p boxes --bin bench
 ```
+
+## Editor
+
+The front end lives in `editor/` (pnpm workspace, Node 22 or newer):
+
+```sh
+pnpm -C editor install
+pnpm -C editor test
+pnpm -C editor typecheck
+```
