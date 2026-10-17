@@ -18,7 +18,7 @@ the design and challenge it with full knowledge of why it was chosen.
 | [0008](0008-hexagonal-core-crates.md)           | Enforce hexagonal dependency rules on the core crates          | Accepted |
 | [0009](0009-pinned-stable-toolchain.md)         | Pin a stable Rust toolchain                                    | Accepted |
 | [0010](0010-cargo-xtask.md)                     | Use `cargo xtask` as the task runner                           | Accepted |
-| [0011](0011-systems-without-unsafe.md)          | Lend world data to systems by column slot, without unsafe code | Proposed |
+| [0011](0011-systems-without-unsafe.md)          | Lend world data to systems by column slot, without unsafe code | Accepted |
 
 ## Writing a record
 

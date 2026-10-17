@@ -1,6 +1,6 @@
 # 0011. Lend world data to systems by column slot, without unsafe code
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-10-17
 
 ## Context
