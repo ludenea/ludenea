@@ -4,8 +4,10 @@
 /// Colors tried before a constraint goes to the overflow group.
 pub const GRAPH_COLOR_COUNT: usize = 12;
 
-/// Constraints or bodies per parallel task.
-pub const SOLVER_CHUNK: usize = 256;
+/// Constraints or bodies per parallel task. Each color is a fork-join whose sync cost
+/// outweighs a few hundred constraints of work, so colors that fit in one chunk run inline.
+// ponytail: colors of a 1,000 body scene solve inline; a persistent worker region with spin barriers (Box2D v3) if larger scenes need the cores
+pub const SOLVER_CHUNK: usize = 512;
 
 /// Greedy coloring of touching contacts given in pair order as body index pairs: each
 /// constraint takes the lowest color holding neither of its dynamic bodies. Static and
