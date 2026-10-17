@@ -1,7 +1,8 @@
 use crate::{Rot, Vec2};
+use ludenea_schema::Schema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Copy, Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Default, Serialize, Deserialize, Schema)]
 pub struct Transform {
     pub position: Vec2,
     pub rotation: Rot,

@@ -1,8 +1,9 @@
 use crate::{Vec2, atan2, sin_cos};
+use ludenea_schema::Schema;
 use serde::{Deserialize, Serialize};
 
 /// Rotation stored as cosine and sine of the angle.
-#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize, Schema)]
 pub struct Rot {
     pub cos: f32,
     pub sin: f32,

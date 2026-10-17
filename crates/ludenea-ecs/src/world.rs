@@ -2,6 +2,8 @@ use std::any::{Any, TypeId, type_name};
 use std::cell::{Ref, RefCell};
 use std::collections::BTreeMap;
 
+use ludenea_schema::TypeSchema;
+
 use crate::commands::CommandQueue;
 use crate::event::EventQueue;
 use crate::{Codec, Component, EcsError, EntitiesState, Entity, Resource};
@@ -164,6 +166,22 @@ impl World {
             },
         );
         Ok(())
+    }
+
+    /// The schema of every registered component type, by stable name.
+    pub fn component_schemas(&self) -> Vec<(&'static str, TypeSchema)> {
+        self.components
+            .iter()
+            .map(|(&name, entry)| (name, (entry.codec.schema)()))
+            .collect()
+    }
+
+    /// The schema of every registered resource type, by stable name.
+    pub fn resource_schemas(&self) -> Vec<(&'static str, TypeSchema)> {
+        self.resources
+            .iter()
+            .map(|(&name, entry)| (name, (entry.codec.schema)()))
+            .collect()
     }
 
     /// Stores a value outside the simulation state: it is never hashed or snapshotted.

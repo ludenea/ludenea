@@ -1,10 +1,11 @@
 use ludenea_app::{App, Inputs, Rng, Sim, SimError, Simulation, Time};
+use ludenea_ecs::schema::Schema;
 use ludenea_ecs::{
     Commands, Component, IntoSystemConfig, Query, Res, ResMut, Resource, Runtime, SystemLabel,
 };
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Schema, Default, Clone, Debug, PartialEq)]
 struct Pad {
     jump: bool,
     steer: i8,

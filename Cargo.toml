@@ -28,6 +28,7 @@ clap = { version = "4.6.7", features = ["derive"] }
 ludenea-math = { path = "crates/ludenea-math" }
 ludenea-app = { path = "crates/ludenea-app" }
 ludenea-ecs = { path = "crates/ludenea-ecs" }
+ludenea-schema = { path = "crates/ludenea-schema" }
 ludenea-macros = { path = "crates/ludenea-macros" }
 ludenea-physics = { path = "crates/ludenea-physics" }
 ludenea-control = { path = "crates/ludenea-control" }

@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use ludenea_ecs::schema::Schema;
 use ludenea_ecs::{Entity, Resource};
 use serde::{Deserialize, Serialize};
 
@@ -13,14 +14,14 @@ pub struct ContactCache {
     pub(crate) pairs: BTreeMap<(Entity, Entity), CachedContact>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Schema, Clone, Debug, PartialEq)]
 pub struct CachedContact {
     /// The manifold had at least one point.
     pub touching: bool,
     pub points: Vec<CachedPoint>,
 }
 
-#[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Schema, Copy, Clone, Debug, PartialEq)]
 pub struct CachedPoint {
     /// Manifold feature id.
     pub id: u16,

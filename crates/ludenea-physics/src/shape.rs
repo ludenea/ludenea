@@ -1,3 +1,4 @@
+use ludenea_ecs::schema::Schema;
 use ludenea_math::{Aabb, Transform, Vec2};
 use serde::{Deserialize, Serialize};
 
@@ -21,20 +22,20 @@ pub enum ShapeError {
     InvalidPolygon(String),
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Schema)]
 pub enum Shape {
     Circle(Circle),
     Capsule(Capsule),
     Polygon(Polygon),
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize, Schema)]
 pub struct Circle {
     pub center: Vec2,
     pub radius: f32,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize, Schema)]
 pub struct Capsule {
     pub center1: Vec2,
     pub center2: Vec2,
@@ -44,7 +45,7 @@ pub struct Capsule {
 /// Convex polygon with an optional rounding radius. Every field is stored and
 /// serialized, and loading validates without recomputing, so a restored or
 /// loaded polygon is bit-identical to the one that was saved.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Schema)]
 #[serde(try_from = "PolygonData", into = "PolygonData")]
 pub struct Polygon {
     vertices: [Vec2; MAX_POLYGON_VERTICES],

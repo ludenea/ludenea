@@ -1,0 +1,11 @@
+[package]
+name = "ludenea-schema"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+ludenea-macros.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

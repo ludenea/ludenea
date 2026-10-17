@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 ludenea-macros.workspace = true
+ludenea-schema.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 postcard.workspace = true

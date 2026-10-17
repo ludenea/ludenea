@@ -13,7 +13,7 @@ pub use scene::generate_scene;
 /// Height at which `BoxesInput::spawn` drops a new crate.
 const SPAWN_HEIGHT: f32 = 26.0;
 
-#[derive(Serialize, Deserialize, Default, Clone)]
+#[derive(Serialize, Deserialize, Schema, Default, Clone)]
 pub struct BoxesInput {
     /// Velocity change applied to one randomly chosen crate.
     pub velocity_change: Option<Vec2>,

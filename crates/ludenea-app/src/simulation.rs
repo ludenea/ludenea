@@ -1,5 +1,6 @@
 use std::any::TypeId;
 
+use ludenea_ecs::schema::TypeSchema;
 use ludenea_ecs::{HashTree, Schedule, Snapshot, SnapshotError, World};
 
 use crate::input::{self, Input, InputType};
@@ -91,6 +92,11 @@ impl Simulation {
         (input.write_encoded)(&mut self.world, bytes, self.players)?;
         self.advance();
         Ok(())
+    }
+
+    /// The schema of the app's input type, or `None` when it has none.
+    pub fn input_schema(&self) -> Option<TypeSchema> {
+        self.input.as_ref().map(|input| (input.schema)())
     }
 
     pub fn world(&self) -> &World {

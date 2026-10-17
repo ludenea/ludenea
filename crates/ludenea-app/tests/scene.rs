@@ -1,4 +1,5 @@
 use ludenea_app::{App, SceneError, Simulation};
+use ludenea_ecs::schema::Schema;
 use ludenea_ecs::{Component, Resource};
 use serde::{Deserialize, Serialize};
 
@@ -11,7 +12,7 @@ struct Bulk {
     noise: Vec<f32>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Schema, Clone, Debug, PartialEq)]
 enum Mood {
     Calm,
     Angry(u8, f32),

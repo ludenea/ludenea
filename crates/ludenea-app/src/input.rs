@@ -1,15 +1,16 @@
 use std::any::{TypeId, type_name};
 
 use ludenea_ecs::World;
+use ludenea_ecs::schema::{Schema, TypeSchema};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::SimError;
 
 /// Per-player input of one tick, recorded and replayed with postcard.
-pub trait Input: Serialize + DeserializeOwned + Default + Clone + Send + 'static {}
+pub trait Input: Schema + Serialize + DeserializeOwned + Default + Clone + Send + 'static {}
 
-impl<T: Serialize + DeserializeOwned + Default + Clone + Send + 'static> Input for T {}
+impl<T: Schema + Serialize + DeserializeOwned + Default + Clone + Send + 'static> Input for T {}
 
 /// The inputs of the current tick, one per player. A runtime resource: systems read it
 /// with `Runtime<Inputs<I>>`.
@@ -42,6 +43,7 @@ pub(crate) struct InputType {
     /// Decodes a postcard `Vec<I>`, rejecting leftover bytes, then writes it.
     /// Also rejects a `Vec` that does not hold exactly the given number of players.
     pub(crate) write_encoded: fn(&mut World, &[u8], usize) -> Result<(), SimError>,
+    pub(crate) schema: fn() -> TypeSchema,
 }
 
 impl InputType {
@@ -56,6 +58,7 @@ impl InputType {
                 write(world, players);
                 Ok(())
             },
+            schema: I::schema,
         }
     }
 }

@@ -1,8 +1,9 @@
 use crate::{max, min};
+use ludenea_schema::Schema;
 use serde::{Deserialize, Serialize};
 use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-#[derive(Copy, Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Default, Serialize, Deserialize, Schema)]
 pub struct Vec2 {
     pub x: f32,
     pub y: f32,

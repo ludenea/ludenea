@@ -10,4 +10,5 @@ ludenea-control.workspace = true
 ludenea-ecs.workspace = true
 ludenea-math.workspace = true
 ludenea-physics.workspace = true
+ludenea-schema.workspace = true
 serde.workspace = true

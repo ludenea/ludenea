@@ -1,5 +1,6 @@
 use std::any::{Any, type_name};
 
+use ludenea_schema::{Schema, TypeSchema};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -8,7 +9,7 @@ use serde::de::DeserializeOwned;
 ///
 /// Snapshots encode components with postcard, which cannot decode `#[serde(flatten)]` or
 /// `#[serde(skip_serializing_if = "...")]`: component types must not use them.
-pub trait Component: Serialize + DeserializeOwned + Send + 'static {
+pub trait Component: Schema + Serialize + DeserializeOwned + Send + 'static {
     const NAME: &'static str;
 }
 
@@ -17,7 +18,7 @@ pub trait Component: Serialize + DeserializeOwned + Send + 'static {
 ///
 /// Snapshots encode resources with postcard, which cannot decode `#[serde(flatten)]` or
 /// `#[serde(skip_serializing_if = "...")]`: resource types must not use them.
-pub trait Resource: Serialize + DeserializeOwned + Send + 'static {
+pub trait Resource: Schema + Serialize + DeserializeOwned + Send + 'static {
     const NAME: &'static str;
 }
 
@@ -39,10 +40,12 @@ pub struct Codec {
     /// Decodes a RON string into a boxed value, through the concrete type so enum
     /// variants and `f32` values survive exactly.
     pub decode_ron: fn(&str) -> DecodeResult,
+    /// Describes the serde shape of the type.
+    pub schema: fn() -> TypeSchema,
 }
 
 impl Codec {
-    pub(crate) fn of<T: Serialize + DeserializeOwned + Send + 'static>() -> Self {
+    pub(crate) fn of<T: Schema + Serialize + DeserializeOwned + Send + 'static>() -> Self {
         Self {
             encode: |value| {
                 postcard::to_allocvec(typed::<T>(value))
@@ -58,6 +61,7 @@ impl Codec {
                 let value: T = ron::from_str(text).map_err(|error| error.to_string())?;
                 Ok(Box::new(value))
             },
+            schema: T::schema,
         }
     }
 }

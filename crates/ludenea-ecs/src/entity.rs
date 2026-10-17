@@ -1,5 +1,6 @@
 use std::fmt;
 
+use ludenea_schema::{Schema, TypeSchema};
 use serde::{Deserialize, Serialize};
 
 /// A generational handle: the index of a slot plus the generation of that slot when the
@@ -17,6 +18,12 @@ impl Entity {
 
     pub fn generation(self) -> u32 {
         self.generation
+    }
+}
+
+impl Schema for Entity {
+    fn schema() -> TypeSchema {
+        TypeSchema::Entity
     }
 }
 

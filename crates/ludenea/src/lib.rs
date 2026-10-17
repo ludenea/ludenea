@@ -6,6 +6,7 @@ pub use ludenea_control as control;
 pub use ludenea_ecs as ecs;
 pub use ludenea_math as math;
 pub use ludenea_physics as physics;
+pub use ludenea_schema as schema;
 pub use serde;
 
 pub mod prelude {
@@ -19,4 +20,5 @@ pub mod prelude {
         Body, BodyKind, Capsule, Circle, Collider, Collision, CollisionKind, PhysicsPlugin,
         PhysicsSettings, Polygon, Pose, RayHit, Shape, overlap_aabb, raycast,
     };
+    pub use crate::schema::Schema;
 }

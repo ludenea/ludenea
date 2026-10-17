@@ -1,7 +1,8 @@
 use crate::Vec2;
+use ludenea_schema::Schema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Copy, Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Default, Serialize, Deserialize, Schema)]
 pub struct Aabb {
     pub min: Vec2,
     pub max: Vec2,

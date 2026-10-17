@@ -1,3 +1,4 @@
+use ludenea_ecs::schema::Schema;
 use ludenea_ecs::{
     Component, EcsError, Entity, Resource, SNAPSHOT_VERSION, Snapshot, SnapshotError, World,
     hash_value,
@@ -12,7 +13,7 @@ struct Health {
 #[derive(Component, Serialize, Deserialize, Debug, PartialEq, Clone)]
 struct Speed(f32);
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Schema, Debug, PartialEq, Clone)]
 enum BodyKind {
     Static,
     Dynamic,

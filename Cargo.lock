@@ -223,6 +223,7 @@ dependencies = [
  "ludenea-ecs",
  "ludenea-math",
  "ludenea-physics",
+ "ludenea-schema",
  "serde",
 ]
 
@@ -267,6 +268,7 @@ name = "ludenea-ecs"
 version = "0.1.0"
 dependencies = [
  "ludenea-macros",
+ "ludenea-schema",
  "postcard",
  "ron",
  "serde",
@@ -288,6 +290,7 @@ dependencies = [
 name = "ludenea-math"
 version = "0.1.0"
 dependencies = [
+ "ludenea-schema",
  "serde",
 ]
 
@@ -302,6 +305,15 @@ dependencies = [
  "ron",
  "serde",
  "thiserror",
+]
+
+[[package]]
+name = "ludenea-schema"
+version = "0.1.0"
+dependencies = [
+ "ludenea-macros",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

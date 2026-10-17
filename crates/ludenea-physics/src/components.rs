@@ -1,4 +1,5 @@
 use crate::shape::Shape;
+use ludenea_ecs::schema::Schema;
 use ludenea_ecs::{Component, Resource};
 use ludenea_math::{Rot, Vec2};
 use serde::{Deserialize, Serialize};
@@ -52,7 +53,7 @@ impl TryFrom<PoseData> for Pose {
     }
 }
 
-#[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Schema, Copy, Clone, Debug, PartialEq, Eq)]
 pub enum BodyKind {
     Static,
     Kinematic,
