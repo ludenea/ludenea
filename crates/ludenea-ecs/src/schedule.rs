@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::World;
 use crate::commands;
-use crate::system::{IntoSystem, System};
+use crate::system::{EVENT, IntoSystem, RESOURCE, System};
 
 /// Names a set of systems, for ordering constraints.
 pub trait SystemLabel: 'static {
@@ -62,14 +62,28 @@ impl IntoSystemConfig<()> for SystemConfig {
     }
 }
 
+/// How to resolve an access conflict of one kind.
+fn conflict_hint(kind: &str) -> &'static str {
+    match kind {
+        RESOURCE => "Use a single ResMut parameter instead of both Res and ResMut.",
+        EVENT => {
+            "Use either Events or EventWriter for this event in one system, or split the system in two."
+        }
+        _ => "Merge them into one query, or split the system in two.",
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum BuildError {
     #[error(
-        "system `{system}` accesses `{component}` in parameters {first} and {second}, and at least one is mutable. Merge them into one query, or split the system in two."
+        "system `{system}` accesses `{name}` in parameters {first} and {second}, and at least one is mutable. {}",
+        conflict_hint(kind)
     )]
     AccessConflict {
         system: &'static str,
-        component: &'static str,
+        /// `"component"`, `"resource"`, `"event"`, or `"runtime resource"`.
+        kind: &'static str,
+        name: &'static str,
         /// Parameter positions, counted from 1; equal when one query conflicts with itself.
         first: usize,
         second: usize,

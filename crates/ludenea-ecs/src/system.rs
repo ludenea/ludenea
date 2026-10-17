@@ -84,10 +84,11 @@ fn check(system: &'static str, world: &World, declares: &[Declare]) -> Result<()
             .filter(|&&(_, other, _)| other == kind)
             .map(|&(param, _, access)| (param, access))
             .unzip();
-        if let Err((component, first, second)) = check_accesses(&accesses) {
+        if let Err((name, first, second)) = check_accesses(&accesses) {
             return Err(BuildError::AccessConflict {
                 system,
-                component,
+                kind,
+                name,
                 first: params[first],
                 second: params[second],
             });

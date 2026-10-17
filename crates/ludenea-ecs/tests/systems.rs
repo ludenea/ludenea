@@ -142,6 +142,20 @@ fn conflicting_parameters_fail_at_build_with_named_message() {
     assert!(message.contains("bad"), "{message}");
 }
 
+fn bad_resource(_: Res<Counter>, _: ResMut<Counter>) {}
+
+#[test]
+fn resource_conflict_message_suggests_a_single_res_mut() {
+    let mut world = world();
+    world.register_resource(Counter(0)).unwrap();
+    let message = build_error(&world, |builder| builder.add(bad_resource)).to_string();
+    assert!(message.contains("bad_resource"), "{message}");
+    assert!(
+        message.contains("Use a single ResMut parameter instead of both Res and ResMut."),
+        "{message}"
+    );
+}
+
 fn needs_counter(_: Res<Counter>) {}
 
 #[test]
