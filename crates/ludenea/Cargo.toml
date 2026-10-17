@@ -7,4 +7,5 @@ edition.workspace = true
 ludenea-app.workspace = true
 ludenea-ecs.workspace = true
 ludenea-math.workspace = true
+ludenea-physics.workspace = true
 serde.workspace = true

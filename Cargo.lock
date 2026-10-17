@@ -92,6 +92,7 @@ dependencies = [
  "ludenea-app",
  "ludenea-ecs",
  "ludenea-math",
+ "ludenea-physics",
  "serde",
 ]
 
@@ -140,6 +141,7 @@ dependencies = [
 name = "ludenea-physics"
 version = "0.1.0"
 dependencies = [
+ "ludenea-app",
  "ludenea-ecs",
  "ludenea-math",
  "postcard",

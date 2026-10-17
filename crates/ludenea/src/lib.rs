@@ -3,6 +3,7 @@
 pub use ludenea_app as app;
 pub use ludenea_ecs as ecs;
 pub use ludenea_math as math;
+pub use ludenea_physics as physics;
 pub use serde;
 
 pub mod prelude {
@@ -12,4 +13,8 @@ pub mod prelude {
         Resource, Runtime, RuntimeMut, SystemLabel, With, Without, World,
     };
     pub use crate::math::{Aabb, Rot, Transform, Vec2};
+    pub use crate::physics::{
+        Body, BodyKind, Capsule, Circle, Collider, PhysicsPlugin, PhysicsSettings, Polygon, Pose,
+        Shape,
+    };
 }
