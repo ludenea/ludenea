@@ -25,6 +25,11 @@ proc-macro2 = "1.0.107"
 proc-macro-crate = "3.5.0"
 ts-rs = { version = "12.0.1", features = ["serde-json-impl"] }
 rayon = "1.12.0"
+uuid = { version = "1.28.0", features = ["v4"] }
+toml = "1.1.8"
+notify = "8.2.0"
+notify-debouncer-full = "0.7.0"
+tempfile = "3.27.0"
 clap = { version = "4.6.7", features = ["derive"] }
 wasm-bindgen = "=0.2.129"
 wasm-bindgen-cli-support = "=0.2.129"
@@ -38,3 +43,4 @@ ludenea-debug-draw = { path = "crates/ludenea-debug-draw" }
 ludenea-control = { path = "crates/ludenea-control" }
 ludenea-cli = { path = "crates/ludenea-cli" }
 ludenea = { path = "crates/ludenea" }
+ludenea-project = { path = "crates/ludenea-project" }

@@ -1,0 +1,16 @@
+[package]
+name = "{{name}}"
+version = "0.1.0"
+edition = "2024"
+publish = false
+default-run = "{{name}}"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ludenea = { path = "{{engine_path}}/crates/ludenea" }
+serde = { version = "1", features = ["derive"] }
+
+# A standalone workspace: the project never attaches to an enclosing one.
+[workspace]

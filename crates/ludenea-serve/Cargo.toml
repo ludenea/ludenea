@@ -1,0 +1,12 @@
+[package]
+name = "ludenea-serve"
+version = "0.1.0"
+edition.workspace = true
+
+[[bin]]
+name = "ludenea"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+ludenea-project.workspace = true

@@ -1,0 +1,3 @@
+name = "{{name}}"
+engine = "{{engine_version}}"
+default_scene = "scenes/main.scene.ron"
