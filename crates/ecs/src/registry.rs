@@ -60,6 +60,27 @@ impl Registry {
         self.components[id.index()].name
     }
 
+    /// Sorts the component identifiers accessed by a `context` (a bundle or
+    /// a query).
+    ///
+    /// # Panics
+    ///
+    /// Panics when a component appears twice.
+    pub(crate) fn sorted_without_duplicates(
+        &self,
+        mut ids: Vec<ComponentId>,
+        context: &str,
+    ) -> Vec<ComponentId> {
+        ids.sort_unstable();
+        if let Some(pair) = ids.windows(2).find(|pair| pair[0] == pair[1]) {
+            panic!(
+                "component {} appears twice in the {context}",
+                self.name(pair[0])
+            );
+        }
+        ids
+    }
+
     pub(crate) fn new_column(&self, id: ComponentId) -> Box<dyn Column> {
         (self.components[id.index()].new_column)()
     }

@@ -53,6 +53,16 @@ impl Archetype {
         Some(downcast_mut(self.columns[position].as_mut()))
     }
 
+    /// Splits the archetype for a query: key, entities and columns.
+    pub(crate) fn parts(&self) -> (&[ComponentId], &[Entity], &[Box<dyn Column>]) {
+        (&self.key, &self.entities, &self.columns)
+    }
+
+    /// Splits the archetype for a query, with mutable columns.
+    pub(crate) fn parts_mut(&mut self) -> (&[ComponentId], &[Entity], &mut [Box<dyn Column>]) {
+        (&self.key, &self.entities, &mut self.columns)
+    }
+
     /// Adds `entity` in a new row and returns the row. The caller then
     /// writes one value in every column.
     pub(crate) fn push_entity(&mut self, entity: Entity) -> usize {
