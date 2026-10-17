@@ -382,6 +382,16 @@ from the previous build. (builder's call)
   linear timeline. (builder's call)
 - Undo history is per session and not persisted. (builder's call)
 
+### 9.6 Game panics (builder's call)
+
+- Desktop: a panic in a game system is caught by the game host, which
+  restores the last good state, pauses, and reports the panic in the
+  console. The session is kept intact.
+- Browser: a panic aborts the WebAssembly instance, which cannot be caught.
+  The editor recreates the worker from the last exported session (exported
+  on every pause, every edit, and every second while playing) and reports
+  the panic. Up to one second of live play can be lost.
+
 ## 10. Viewport
 
 - Rendered by `ludenea-debug-draw`: wgpu compiled to WebAssembly in the
