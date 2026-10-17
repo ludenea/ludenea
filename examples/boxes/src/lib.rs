@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 
 pub use scene::generate_scene;
 
+ludenea::worker_entry!(app);
+
 /// Height at which `BoxesInput::spawn` drops a new crate.
 const SPAWN_HEIGHT: f32 = 26.0;
 

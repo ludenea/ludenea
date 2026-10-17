@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use ludenea_app::App;
 
 use crate::host::Host;
-use crate::in_process::handshake;
-use crate::protocol::{ClientMessage, ErrorCode, ProtocolError, ServerMessage};
+use crate::in_process::answer;
+use crate::protocol::ServerMessage;
 
 /// How long the loop waits for a message before it advances the host anyway.
 const FRAME: Duration = Duration::from_nanos(1_000_000_000 / 60);
@@ -65,45 +65,6 @@ pub fn serve_stdio(
 #[allow(clippy::disallowed_methods)]
 fn now() -> Instant {
     Instant::now()
-}
-
-fn answer(host: &mut Host, connected: &mut bool, line: &str) -> ServerMessage {
-    match serde_json::from_str::<ClientMessage>(line) {
-        Ok(ClientMessage::Request { id, command }) if *connected => ServerMessage::Response {
-            id,
-            result: host.handle(command),
-        },
-        Ok(message) => {
-            let reply = handshake(host, message);
-            *connected = matches!(reply, ServerMessage::Welcome { .. });
-            reply
-        }
-        Err(error) => malformed(*connected, line, &error),
-    }
-}
-
-fn malformed(connected: bool, line: &str, error: &serde_json::Error) -> ServerMessage {
-    let id = serde_json::from_str::<serde_json::Value>(line)
-        .ok()
-        .and_then(|value| value.get("id")?.as_u64());
-    match (connected, id) {
-        (false, _) => ServerMessage::Refused {
-            error: ProtocolError::new(ErrorCode::NotConnected, "send Hello before any request"),
-        },
-        (true, Some(id)) => ServerMessage::Response {
-            id,
-            result: Err(ProtocolError::new(
-                ErrorCode::InvalidCommand,
-                format!("cannot read this request: {error}"),
-            )),
-        },
-        (true, None) => ServerMessage::Refused {
-            error: ProtocolError::new(
-                ErrorCode::InvalidCommand,
-                format!("cannot read this message: {error}"),
-            ),
-        },
-    }
 }
 
 fn write_message(output: &mut impl Write, message: &ServerMessage) -> io::Result<()> {

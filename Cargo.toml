@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/*", "examples/*"]
+members = ["crates/*", "examples/*", "xtask"]
 resolver = "3"
 
 [workspace.package]
@@ -26,6 +26,8 @@ proc-macro-crate = "3.5.0"
 ts-rs = { version = "12.0.1", features = ["serde-json-impl"] }
 rayon = "1.12.0"
 clap = { version = "4.6.7", features = ["derive"] }
+wasm-bindgen = "=0.2.129"
+wasm-bindgen-cli-support = "=0.2.129"
 ludenea-math = { path = "crates/ludenea-math" }
 ludenea-app = { path = "crates/ludenea-app" }
 ludenea-ecs = { path = "crates/ludenea-ecs" }

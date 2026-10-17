@@ -19,6 +19,9 @@ postcard.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+wasm-bindgen.workspace = true
+
 [dev-dependencies]
 boxes = { path = "../../examples/boxes" }
 ludenea.workspace = true

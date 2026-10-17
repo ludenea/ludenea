@@ -5,6 +5,9 @@ edition.workspace = true
 publish = false
 default-run = "boxes"
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 ludenea.workspace = true
 serde.workspace = true

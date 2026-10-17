@@ -6,3 +6,4 @@ export { webSocketTransport } from "./transports/websocket";
 export { postMessageTransport } from "./transports/post-message";
 export { tauriTransport } from "./transports/tauri";
 export { fakeTransport } from "./transports/fake";
+export { startWorkerGame, type WorkerCrash, type WorkerGame } from "./worker/supervisor";

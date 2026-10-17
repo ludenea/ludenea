@@ -13,6 +13,8 @@ pub mod session;
 pub mod stdio;
 mod subscriptions;
 mod undo;
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub mod worker;
 
 pub use host::Host;
 pub use in_process::{InProcess, Transport};

@@ -1,4 +1,4 @@
 {
   "files": [],
-  "references": [{ "path": "packages/control-client" }]
+  "references": [{ "path": "packages/control-client" }, { "path": "e2e" }]
 }

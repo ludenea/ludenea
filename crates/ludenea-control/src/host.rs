@@ -80,6 +80,11 @@ impl Host {
         }
     }
 
+    /// The tick of the current state.
+    pub fn tick(&self) -> u64 {
+        self.simulation.tick()
+    }
+
     pub fn handle(&mut self, command: Command) -> Result<Reply, ProtocolError> {
         let changes_state = changes_state(&command);
         let result = self.execute(command);

@@ -1,0 +1,54 @@
+import { Listeners, type MessageTransport } from "../transports/transport";
+
+export interface WorkerCrash {
+  /** The tick the host was at when the failing call began, when the panic hook reported it. */
+  tick?: number;
+  message: string;
+}
+
+export interface WorkerGame {
+  transport: MessageTransport;
+  onCrashed(listener: (crash: WorkerCrash) => void): () => void;
+  terminate(): void;
+}
+
+/** Starts a game's WebAssembly build in `host-worker.ts`. Protocol text travels as strings;
+ * a crash (posted as an object, or an uncaught worker error) is reported once and closes
+ * the transport. Recovering is up to the caller. */
+export function startWorkerGame(options: { workerUrl: URL; glueUrl: string }): WorkerGame {
+  const worker = new Worker(options.workerUrl, { type: "module" });
+  const messages = new Listeners<string>();
+  const closes = new Listeners<string>();
+  const crashes = new Listeners<WorkerCrash>();
+  let crashed = false;
+  const crash = (report: WorkerCrash) => {
+    if (crashed) return;
+    crashed = true;
+    crashes.emit(report);
+    closes.emit(`the game crashed: ${report.message}`);
+  };
+  worker.addEventListener("message", (event) => {
+    const data: unknown = event.data;
+    if (typeof data === "string") messages.emit(data);
+    else if ((data as { type?: unknown } | null)?.type === "crashed") {
+      const { tick, message } = data as Partial<WorkerCrash>;
+      crash({ ...(tick === undefined ? {} : { tick }), message: message ?? "the game crashed" });
+    }
+  });
+  worker.addEventListener("error", (event) => crash({ message: event.message || "the game worker failed" }));
+  worker.postMessage({ type: "init", glueUrl: options.glueUrl });
+  const terminate = () => {
+    worker.terminate();
+    closes.emit("terminated");
+  };
+  return {
+    transport: {
+      send: (message) => worker.postMessage(message),
+      onMessage: (listener) => messages.add(listener),
+      onClose: (listener) => closes.add(listener),
+      close: terminate,
+    },
+    onCrashed: (listener) => crashes.add(listener),
+    terminate,
+  };
+}
