@@ -111,6 +111,9 @@ pub struct Session {
     current: u64,
     /// The scene text as last loaded or saved; the scene is dirty while it differs.
     saved_scene: String,
+    /// Whether `scene` differs from `saved_scene`, kept by `set_scene`: comparing large
+    /// scenes on every timeline report would cost more than the tick.
+    scene_dirty: bool,
     history: UndoHistory,
     /// The last resimulated tick, while the recorded future is stale.
     resimulating: Option<u64>,
@@ -131,6 +134,7 @@ impl Session {
         Ok(Session {
             saved_scene: scene.clone(),
             scene,
+            scene_dirty: false,
             inputs: InputLog::new(players),
             edits: EditLog::new(),
             hashes: vec![sim.hash()],
@@ -342,6 +346,7 @@ impl Session {
     /// Marks the current scene text as saved.
     pub fn mark_scene_saved(&mut self) {
         self.saved_scene = self.scene.clone();
+        self.scene_dirty = false;
     }
 
     /// Moves to `tick`, simulating the recorded future on the way when needed.
@@ -388,6 +393,7 @@ impl Session {
         sim.load_scene(&scene)?;
         self.saved_scene = scene.clone();
         let before = std::mem::replace(&mut self.scene, scene.clone());
+        self.scene_dirty = false;
         self.history.record(UndoEntry::Scene {
             before,
             after: scene,
@@ -532,7 +538,7 @@ impl Session {
             edit_ticks,
             can_undo: !self.history.undo.is_empty(),
             can_redo: !self.history.redo.is_empty(),
-            scene_dirty: self.scene != self.saved_scene,
+            scene_dirty: self.scene_dirty,
             resimulating: self.resimulating.is_some(),
         }
     }
@@ -687,7 +693,7 @@ impl Session {
         scene: String,
     ) -> Result<(), SessionError> {
         sim.load_scene(&scene)?;
-        self.scene = scene;
+        self.set_scene(scene);
         self.start_resimulation(sim);
         Ok(())
     }
@@ -703,6 +709,11 @@ impl Session {
             .expect("a checkpoint restores into the world it was taken from");
         self.start_resimulation(sim);
         Ok(())
+    }
+
+    fn set_scene(&mut self, scene: String) {
+        self.scene_dirty = scene != self.saved_scene;
+        self.scene = scene;
     }
 
     /// Applies `edit` to the scene and records it in the undo history.
@@ -740,7 +751,7 @@ impl Session {
             spawned.map(|entity| sim.world().entities().take_while(|&e| e != entity).count());
         let scene = sim.save_scene();
         sim.load_scene(&scene)?;
-        self.scene = scene;
+        self.set_scene(scene);
         let spawned = rank.map(|rank| sim.world().entities().nth(rank).expect("saved entity"));
         self.start_resimulation(sim);
         Ok(spawned)

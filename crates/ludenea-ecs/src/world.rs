@@ -19,6 +19,8 @@ pub(crate) trait Storage {
     fn clear(&mut self, index: u32);
     /// Visits every stored component in ascending index order.
     fn for_each(&self, visit: &mut dyn FnMut(u32, &dyn Any));
+    /// Visits the component held by the slot `index`, if any.
+    fn visit(&self, index: u32, visit: &mut dyn FnMut(&dyn Any));
     /// Inserts or replaces the component of slot `index` with `value`, a boxed `T` from
     /// this type's codec.
     fn insert_boxed(&mut self, index: u32, value: Box<dyn Any + Send>);
@@ -54,6 +56,12 @@ impl<T: Component> Storage for ComponentStorage<T> {
             if let Some(value) = slot {
                 visit(index, value);
             }
+        }
+    }
+
+    fn visit(&self, index: u32, visit: &mut dyn FnMut(&dyn Any)) {
+        if let Some(Some(value)) = self.0.borrow().get(index as usize) {
+            visit(value);
         }
     }
 
@@ -353,10 +361,8 @@ impl World {
         }
         let mut out = BTreeMap::new();
         for (name, entry) in &self.components {
-            entry.storage.for_each(&mut |index, value| {
-                if index == entity.index() {
-                    out.insert(name.to_string(), (entry.codec.encode_ron)(value));
-                }
+            entry.storage.visit(entity.index(), &mut |value| {
+                out.insert(name.to_string(), (entry.codec.encode_ron)(value));
             });
         }
         Some(out)
@@ -375,10 +381,8 @@ impl World {
         }
         let entry = self.components.get(name)?;
         let mut out = None;
-        entry.storage.for_each(&mut |index, value| {
-            if index == entity.index() {
-                out = Some((entry.codec.to_json)(value));
-            }
+        entry.storage.visit(entity.index(), &mut |value| {
+            out = Some((entry.codec.to_json)(value));
         });
         out
     }
@@ -394,10 +398,8 @@ impl World {
         }
         let mut out = BTreeMap::new();
         for (name, entry) in &self.components {
-            entry.storage.for_each(&mut |index, value| {
-                if index == entity.index() {
-                    out.insert(name.to_string(), (entry.codec.to_json)(value));
-                }
+            entry.storage.visit(entity.index(), &mut |value| {
+                out.insert(name.to_string(), (entry.codec.to_json)(value));
             });
         }
         Some(out)
