@@ -8,6 +8,7 @@ pub mod diff;
 pub mod entity;
 pub mod error;
 pub mod hash;
+pub mod query;
 pub mod snapshot;
 pub mod world;
 
@@ -16,6 +17,10 @@ pub use diff::Difference;
 pub use entity::{EntitiesState, Entity};
 pub use error::EcsError;
 pub use hash::{EntityHash, HashTree, NamedHash, hash_value};
-pub use ludenea_macros::{Component, Resource};
+pub use ludenea_macros::{Component, Query, Resource};
+pub use query::{
+    Access, Query, QueryData, QueryError, QueryFilter, ReadOnlyQueryData, With, Without, accesses,
+    check_accesses,
+};
 pub use snapshot::{ComponentValues, SNAPSHOT_VERSION, Snapshot, SnapshotError};
 pub use world::World;

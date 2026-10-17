@@ -9,6 +9,10 @@ pub enum EcsError {
     #[error("resource `{0}` is not registered; call `World::register_resource` first")]
     UnregisteredResource(String),
     #[error(
+        "component `{0}` is already borrowed by another query, or twice by one query with at least one `&mut`; drop the other query first or merge the accesses"
+    )]
+    ComponentBorrowed(&'static str),
+    #[error(
         "name `{name}` is used by both `{first}` and `{second}`; give one of them another name with `#[component(name = \"...\")]` or `#[resource(name = \"...\")]`"
     )]
     DuplicateName {

@@ -316,6 +316,24 @@ impl World {
         Some(value.get_mut())
     }
 
+    /// The storage cell of `T`, for queries that borrow it for their whole lifetime.
+    pub(crate) fn component_cell<T: Component>(
+        &self,
+    ) -> Result<&RefCell<Vec<Option<T>>>, EcsError> {
+        let entry = self
+            .components
+            .get(T::NAME)
+            .ok_or_else(|| EcsError::UnregisteredComponent(T::NAME.to_string()))?;
+        match entry.storage.as_any().downcast_ref::<ComponentStorage<T>>() {
+            Some(storage) => Ok(&storage.0),
+            None => Err(EcsError::DuplicateName {
+                name: T::NAME,
+                first: entry.type_name,
+                second: type_name::<T>(),
+            }),
+        }
+    }
+
     fn ensure_alive(&self, entity: Entity) -> Result<(), EcsError> {
         if self.is_alive(entity) {
             Ok(())
