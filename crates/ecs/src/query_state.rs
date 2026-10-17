@@ -1,4 +1,8 @@
 //! Query states: the archetypes a system query matches, cached between runs.
+#![cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the system query parameter uses it")
+)]
 
 use std::marker::PhantomData;
 
@@ -11,10 +15,6 @@ use crate::registry::ComponentId;
 
 /// What a system query accesses and the archetypes it matches. Matching
 /// only runs on archetypes created since the last update.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the system query parameter builds it")
-)]
 pub struct QueryState<D: QueryData, F: QueryFilter = ()> {
     accesses: Vec<ComponentAccess>,
     /// Sorted components a matched archetype has: the accessed ones and the
@@ -37,10 +37,6 @@ pub struct QueryState<D: QueryData, F: QueryFilter = ()> {
     marker: PhantomData<fn() -> (D, F)>,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the system query parameter reads it")
-)]
 impl<D: QueryData, F: QueryFilter> QueryState<D, F> {
     /// # Panics
     ///

@@ -34,6 +34,7 @@
 //! assert_eq!(world.get::<Position>(player), Some(&Position(2)));
 //! ```
 
+mod access;
 mod archetype;
 mod bundle;
 mod column;

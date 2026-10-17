@@ -101,6 +101,10 @@ impl Registry {
             })
     }
 
+    pub(crate) fn resource_name(&self, id: ResourceId) -> &'static str {
+        self.resources[id.index()].name
+    }
+
     /// # Panics
     ///
     /// Panics when the resource `T` is not inserted.
