@@ -99,7 +99,9 @@ fn scenario_exercises_spawn_despawn_and_contacts() {
     assert!(stats.begins > 0 && stats.ends > 0);
     let crates = Query::<&Pose, With<Crate>>::new(world).unwrap();
     let positions: Vec<Vec2> = crates.iter().map(|pose| pose.position).collect();
-    assert_ne!(positions.len(), 300);
+    // 300 scene crates, plus 20 spawns (every 500 ticks from tick 0), minus 15 despawns
+    // (every 700 ticks from tick 0), over ticks 0 to 9,999.
+    assert_eq!(positions.len(), 305);
     for position in positions {
         let inside = position.x > -20.0 && position.x < 20.0;
         assert!(
