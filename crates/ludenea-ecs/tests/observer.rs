@@ -125,3 +125,59 @@ fn observer_sees_this_tick_events_before_they_clear() {
             .all(|(_, events)| events.is_empty())
     );
 }
+
+#[derive(Resource, Serialize, Deserialize, Default)]
+struct Target(Option<ludenea_ecs::Entity>);
+
+fn kill_twice(mut commands: Commands, target: Res<Target>) {
+    let entity = target.0.expect("a target");
+    commands.despawn(entity);
+    commands.insert(entity, Marker);
+    commands.remove::<Marker>(entity);
+    commands.despawn(entity);
+}
+
+#[test]
+fn observer_sees_only_the_commands_that_applied() {
+    let mut world = world();
+    let entity = world.spawn();
+    world.register_resource(Target(Some(entity))).unwrap();
+    let mut builder = ScheduleBuilder::default();
+    builder.add(kill_twice);
+    let mut schedule = builder.build(&world).unwrap();
+
+    let mut recorder = Recorder::default();
+    schedule.run_observed(&mut world, &mut recorder);
+    let despawn = [(CommandKind::Despawn, true, None::<&str>)];
+    assert_eq!(recorder.steps[1], format!("after 0 {despawn:?}"));
+}
+
+struct Unrepresentable;
+
+impl Serialize for Unrepresentable {
+    fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+        Err(serde::ser::Error::custom("no JSON form"))
+    }
+}
+
+fn send_unrepresentable(mut events: EventWriter<Unrepresentable>) {
+    events.send(Unrepresentable);
+}
+
+#[test]
+fn event_without_json_form_shows_as_an_error_object() {
+    let mut world = world();
+    world.register_event::<Unrepresentable>();
+    let mut builder = ScheduleBuilder::default();
+    builder.add(send_unrepresentable);
+    let mut schedule = builder.build(&world).unwrap();
+
+    let mut recorder = Recorder::default();
+    schedule.run_observed(&mut world, &mut recorder);
+    let (_, events) = recorder
+        .events
+        .iter()
+        .find(|(name, _)| name.ends_with("Unrepresentable"))
+        .unwrap();
+    assert_eq!(events, &[serde_json::json!({ "error": "no JSON form" })]);
+}

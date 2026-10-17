@@ -1,5 +1,5 @@
 //! Structural changes deferred until the issuing system returns, then applied in issue
-//! order. Commands on a dead entity are ignored.
+//! order. Commands on a dead entity are ignored, and observers do not see them.
 
 use std::cell::RefCell;
 
@@ -7,9 +7,9 @@ use crate::observer::{CommandKind, CommandRecord};
 use crate::system::{Accesses, Missing, SystemParam};
 use crate::{Component, EcsError, Entity, World};
 
-/// Applies itself to the world and says what it did; the second argument holds the
-/// entities spawned so far by this queue, in spawn order.
-type Command = Box<dyn FnOnce(&mut World, &mut Vec<Entity>) -> CommandRecord + Send>;
+/// Applies itself to the world and says what it did, or `None` when it was ignored; the
+/// second argument holds the entities spawned so far by this queue, in spawn order.
+type Command = Box<dyn FnOnce(&mut World, &mut Vec<Entity>) -> Option<CommandRecord> + Send>;
 
 #[derive(Default)]
 pub(crate) struct CommandQueue {
@@ -23,18 +23,24 @@ pub(crate) fn apply(world: &mut World, mut records: Option<&mut Vec<CommandRecor
     let mut spawned = Vec::with_capacity(queue.spawns);
     for command in queue.commands {
         let record = command(world, &mut spawned);
-        if let Some(records) = records.as_deref_mut() {
+        if let (Some(records), Some(record)) = (records.as_deref_mut(), record) {
             records.push(record);
         }
     }
 }
 
-fn record(kind: CommandKind, entity: Entity, component: Option<&'static str>) -> CommandRecord {
-    CommandRecord {
+/// The record of a command, or `None` when `applied` is false.
+fn record(
+    applied: bool,
+    kind: CommandKind,
+    entity: Entity,
+    component: Option<&'static str>,
+) -> Option<CommandRecord> {
+    applied.then_some(CommandRecord {
         kind,
         entity: Some(entity),
         component,
-    }
+    })
 }
 
 /// Queues structural changes. Every call borrows the queue only while it pushes, so a
@@ -52,7 +58,7 @@ impl<'w> Commands<'w> {
         queue.commands.push(Box::new(|world, spawned| {
             let entity = world.spawn();
             spawned.push(entity);
-            record(CommandKind::Spawn, entity, None)
+            record(true, CommandKind::Spawn, entity, None)
         }));
         SpawnCommands {
             queue: self.queue,
@@ -63,8 +69,8 @@ impl<'w> Commands<'w> {
     pub fn despawn(&mut self, entity: Entity) {
         // Despawn fails only on a dead entity, which is ignored.
         self.push(move |world| {
-            drop(world.despawn(entity));
-            record(CommandKind::Despawn, entity, None)
+            let applied = world.despawn(entity).is_ok();
+            record(applied, CommandKind::Despawn, entity, None)
         });
     }
 
@@ -72,8 +78,8 @@ impl<'w> Commands<'w> {
     /// When applied, if `T` is not registered.
     pub fn insert<T: Component>(&mut self, entity: Entity, component: T) {
         self.push(move |world| {
-            ignore_dead(world.insert(entity, component));
-            record(CommandKind::Insert, entity, Some(T::NAME))
+            let applied = ignore_dead(world.insert(entity, component));
+            record(applied, CommandKind::Insert, entity, Some(T::NAME))
         });
     }
 
@@ -81,12 +87,12 @@ impl<'w> Commands<'w> {
     /// When applied, if `T` is not registered.
     pub fn remove<T: Component>(&mut self, entity: Entity) {
         self.push(move |world| {
-            ignore_dead(world.remove::<T>(entity).map(drop));
-            record(CommandKind::Remove, entity, Some(T::NAME))
+            let applied = ignore_dead(world.remove::<T>(entity).map(drop));
+            record(applied, CommandKind::Remove, entity, Some(T::NAME))
         });
     }
 
-    fn push(&mut self, command: impl FnOnce(&mut World) -> CommandRecord + Send + 'static) {
+    fn push(&mut self, command: impl FnOnce(&mut World) -> Option<CommandRecord> + Send + 'static) {
         self.queue
             .borrow_mut()
             .commands
@@ -111,17 +117,19 @@ impl SpawnCommands<'_> {
             .commands
             .push(Box::new(move |world, spawned| {
                 let entity = spawned[spawn];
-                ignore_dead(world.insert(entity, component));
-                record(CommandKind::Insert, entity, Some(T::NAME))
+                let applied = ignore_dead(world.insert(entity, component));
+                record(applied, CommandKind::Insert, entity, Some(T::NAME))
             }));
         self
     }
 }
 
-/// An unregistered component is a programming error, so it panics with its name.
-fn ignore_dead(result: Result<(), EcsError>) {
+/// Whether the command applied: a dead entity is ignored. An unregistered component is a
+/// programming error, so it panics with its name.
+fn ignore_dead(result: Result<(), EcsError>) -> bool {
     match result {
-        Ok(()) | Err(EcsError::NoSuchEntity(_)) => {}
+        Ok(()) => true,
+        Err(EcsError::NoSuchEntity(_)) => false,
         Err(error) => panic!("{error}"),
     }
 }

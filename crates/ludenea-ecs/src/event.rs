@@ -29,7 +29,8 @@ impl<T: Serialize + Send + 'static> EventQueue for RefCell<Vec<T>> {
         self.borrow()
             .iter()
             .map(|event| {
-                serde_json::to_value(event).unwrap_or_else(|error| error.to_string().into())
+                serde_json::to_value(event)
+                    .unwrap_or_else(|error| serde_json::json!({ "error": error.to_string() }))
             })
             .collect()
     }

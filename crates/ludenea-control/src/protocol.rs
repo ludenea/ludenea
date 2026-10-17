@@ -384,7 +384,9 @@ pub struct SystemRow {
     pub name: String,
     pub reads: Vec<String>,
     pub writes: Vec<String>,
-    /// `None` until a tick ran while `Introspection` is subscribed, and in the browser.
+    /// `None` until a tick ran while `Introspection` is subscribed, and on every WebAssembly
+    /// target (the browser and `wasm32-wasip1`), where time is not measured. The time
+    /// includes applying the commands the system issued.
     pub micros: Option<f32>,
 }
 

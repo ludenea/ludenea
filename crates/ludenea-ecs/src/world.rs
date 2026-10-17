@@ -214,7 +214,8 @@ impl World {
 
     /// The events sent so far this tick as JSON, per registered event type name (name order,
     /// empty types included), each in send order. An event without a JSON form shows as
-    /// its error message.
+    /// `{"error": "<message>"}`. The names are `std::any::type_name` paths, which may change
+    /// between compiler versions: they are for display only.
     pub fn events_json(&self) -> Vec<(&'static str, Vec<serde_json::Value>)> {
         self.events
             .iter()

@@ -6,6 +6,8 @@
  */
 export type SystemRow = { name: string, reads: Array<string>, writes: Array<string>, 
 /**
- * `None` until a tick ran while `Introspection` is subscribed, and in the browser.
+ * `None` until a tick ran while `Introspection` is subscribed, and on every WebAssembly
+ * target (the browser and `wasm32-wasip1`), where time is not measured. The time
+ * includes applying the commands the system issued.
  */
 micros: number | null, };
