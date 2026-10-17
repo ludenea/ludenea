@@ -11,3 +11,4 @@ thiserror.workspace = true
 postcard.workspace = true
 xxhash-rust.workspace = true
 ron.workspace = true
+serde_json.workspace = true

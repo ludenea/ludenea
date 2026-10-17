@@ -20,6 +20,12 @@ pub enum SimError {
         "input log version {found} is not supported (expected {expected}); record it again with this build"
     )]
     InputLogVersion { found: u32, expected: u32 },
+    #[error(
+        "edit log version {found} is not supported (expected {expected}); record it again with this build"
+    )]
+    EditLogVersion { found: u32, expected: u32 },
+    #[error("cannot decode the edit log: {0}; was it written by this build?")]
+    EditLogDecode(String),
     #[error("the input log has no players; record it with at least one player")]
     NoPlayers,
 }

@@ -345,6 +345,65 @@ impl World {
         Some(out)
     }
 
+    /// The `name` component of `entity` as JSON, or `None` when `entity` is not alive, the
+    /// name is not registered, or the entity has no such component. The inner error says
+    /// why the value has no exact JSON form.
+    pub fn component_json(
+        &self,
+        entity: Entity,
+        name: &str,
+    ) -> Option<Result<serde_json::Value, String>> {
+        if !self.is_alive(entity) {
+            return None;
+        }
+        let entry = self.components.get(name)?;
+        let mut out = None;
+        entry.storage.for_each(&mut |index, value| {
+            if index == entity.index() {
+                out = Some((entry.codec.to_json)(value));
+            }
+        });
+        out
+    }
+
+    /// Every component of `entity` as JSON keyed by stable name, or `None` when `entity` is
+    /// not alive.
+    pub fn entity_components_json(
+        &self,
+        entity: Entity,
+    ) -> Option<BTreeMap<String, Result<serde_json::Value, String>>> {
+        if !self.is_alive(entity) {
+            return None;
+        }
+        let mut out = BTreeMap::new();
+        for (name, entry) in &self.components {
+            entry.storage.for_each(&mut |index, value| {
+                if index == entity.index() {
+                    out.insert(name.to_string(), (entry.codec.to_json)(value));
+                }
+            });
+        }
+        Some(out)
+    }
+
+    /// The resource registered under `name` as JSON, or `None` when it is not registered.
+    pub fn resource_json(&self, name: &str) -> Option<Result<serde_json::Value, String>> {
+        let entry = self.resources.get(name)?;
+        let value = entry.value.value();
+        Some((entry.codec.to_json)(&*value))
+    }
+
+    /// Removes the component registered under `name` from `entity`, if it has one.
+    pub fn remove_by_name(&mut self, entity: Entity, name: &str) -> Result<(), EcsError> {
+        self.ensure_alive(entity)?;
+        let entry = self
+            .components
+            .get_mut(name)
+            .ok_or_else(|| EcsError::UnregisteredComponent(name.to_string()))?;
+        entry.storage.clear(entity.index());
+        Ok(())
+    }
+
     /// Serialization functions of the resource registered under `name`.
     pub fn resource_codec(&self, name: &str) -> Option<Codec> {
         self.resources.get(name).map(|entry| entry.codec)

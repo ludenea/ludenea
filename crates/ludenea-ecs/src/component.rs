@@ -40,6 +40,12 @@ pub struct Codec {
     /// Decodes a RON string into a boxed value, through the concrete type so enum
     /// variants and `f32` values survive exactly.
     pub decode_ron: fn(&str) -> DecodeResult,
+    /// Encodes a value to JSON. Fails unless decoding the JSON back gives the same postcard
+    /// bytes, which rejects non-finite floats and non-string map keys.
+    pub to_json: fn(&dyn Any) -> Result<serde_json::Value, String>,
+    /// Decodes JSON into a boxed value, through the concrete type so validation such as
+    /// `try_from` runs.
+    pub from_json: fn(serde_json::Value) -> DecodeResult,
     /// Describes the serde shape of the type.
     pub schema: fn() -> TypeSchema,
 }
@@ -59,6 +65,21 @@ impl Codec {
             },
             decode_ron: |text| {
                 let value: T = ron::from_str(text).map_err(|error| error.to_string())?;
+                Ok(Box::new(value))
+            },
+            to_json: |value| {
+                let json = serde_json::to_value(typed::<T>(value)).map_err(|e| e.to_string())?;
+                let back: T = serde_json::from_value(json.clone()).map_err(|e| e.to_string())?;
+                if postcard::to_allocvec(&back).ok()
+                    == postcard::to_allocvec(typed::<T>(value)).ok()
+                {
+                    Ok(json)
+                } else {
+                    Err("the value has no exact JSON form".to_string())
+                }
+            },
+            from_json: |json| {
+                let value: T = serde_json::from_value(json).map_err(|error| error.to_string())?;
                 Ok(Box::new(value))
             },
             schema: T::schema,

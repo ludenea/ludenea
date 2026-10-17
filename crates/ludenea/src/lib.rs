@@ -10,7 +10,9 @@ pub use ludenea_schema as schema;
 pub use serde;
 
 pub mod prelude {
-    pub use crate::app::{App, Input, InputLog, Inputs, Plugin, Rng, Sim, Simulation, Time};
+    pub use crate::app::{
+        App, Edit, EditLog, Input, InputLog, Inputs, Plugin, Rng, Sim, Simulation, Time, TimedEdit,
+    };
     pub use crate::ecs::{
         Commands, Component, Entity, EventWriter, Events, IntoSystemConfig, Query, Res, ResMut,
         Resource, Runtime, SystemLabel, With, Without, World,

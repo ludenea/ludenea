@@ -9,6 +9,11 @@ serde.workspace = true
 thiserror.workspace = true
 postcard.workspace = true
 ron.workspace = true
+serde_json.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 rayon.workspace = true
+
+[dev-dependencies]
+ludenea-physics.workspace = true
+ludenea-math.workspace = true

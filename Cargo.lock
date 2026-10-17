@@ -232,10 +232,13 @@ name = "ludenea-app"
 version = "0.1.0"
 dependencies = [
  "ludenea-ecs",
+ "ludenea-math",
+ "ludenea-physics",
  "postcard",
  "rayon",
  "ron",
  "serde",
+ "serde_json",
  "thiserror",
 ]
 
@@ -272,6 +275,7 @@ dependencies = [
  "postcard",
  "ron",
  "serde",
+ "serde_json",
  "thiserror",
  "xxhash-rust",
 ]
