@@ -7,7 +7,7 @@ use crate::Entity;
 /// An operation on a [`World`](crate::World) that could not be applied.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EcsError {
-    /// The entity was despawned, or does not belong to this world.
+    /// The entity was despawned or was never alive here.
     StaleEntity(Entity),
     /// The snapshot was taken from a world with a different component
     /// registry.
