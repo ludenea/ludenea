@@ -38,10 +38,11 @@ pub enum SessionError {
     UndoDecode(#[from] postcard::Error),
     #[error(transparent)]
     Edit(#[from] EditError),
-    #[error("entity {entity} has no `{component}`; insert the component first")]
+    /// The message leaves the entity out: callers name it in their context.
+    #[error("the entity has no `{component}`; insert the component first")]
     MissingComponent { entity: Entity, component: String },
     #[error(
-        "entity {0} was spawned after tick 0, so the scene does not have it; only entities of the scene can be applied to it"
+        "the entity was spawned after tick 0, so the scene does not have it; only entities of the scene can be applied to it"
     )]
     NotInScene(Entity),
     #[error(transparent)]
@@ -239,6 +240,10 @@ impl Session {
             self.record_input(sim, tick, defaults);
         }
         self.record_tick(sim);
+        if take_over.is_some() {
+            // No edits are recorded at the new tick: the take-over discarded them.
+            self.keep_checkpoint_if_sparse(sim);
+        }
         self.current = tick + 1;
         self.apply_edits(sim, self.current)?;
         Ok(self.current)
@@ -270,44 +275,51 @@ impl Session {
     /// tick is discarded, and the session moves to its tick.
     pub fn undo(&mut self, sim: &mut Simulation) -> Result<(), SessionError> {
         self.ensure_resimulated()?;
-        let entry = self.history.undo.pop().ok_or(SessionError::NothingToUndo)?;
-        match entry.clone() {
+        let entry = self
+            .history
+            .take_undo()
+            .ok_or(SessionError::NothingToUndo)?;
+        match &entry {
             UndoEntry::Scene { before, .. } => {
-                if let Err(error) = self.load_scene_version(sim, before) {
-                    self.history.undo.push(entry);
-                    return Err(error);
-                }
-                self.history.redo.push(entry);
-                Ok(())
+                let result = self.load_scene_version(sim, before.clone());
+                self.history.undone(entry, result.is_ok());
+                result
             }
             UndoEntry::Run { edit } => {
-                if let Some(index) = self.edits.edits.iter().rposition(|e| *e == edit) {
+                let tick = edit.tick;
+                if let Some(index) = self.edits.edits.iter().rposition(|e| e == edit) {
                     self.edits.edits.remove(index);
                 }
-                self.discard_after(edit.tick);
-                self.history.redo.push(entry);
+                self.discard_after(tick);
+                self.history.undone(entry, true);
                 // The ticks up to the edit ran before with these same inputs and edits.
-                self.current = edit.tick;
-                self.replay_to(sim, edit.tick)
+                self.current = tick;
+                self.replay_to(sim, tick)?;
+                if self.edits.at(tick).is_empty() {
+                    self.keep_checkpoint_if_sparse(sim);
+                }
+                Ok(())
             }
         }
     }
 
     /// Applies the last undone edit again: a scene edit reloads the scene after it, a
-    /// recorded edit is applied and recorded again at its tick.
+    /// recorded edit is applied and recorded again at its tick. Redoing a recorded edit
+    /// discards the future after its tick, so play recorded since the undo is replaced
+    /// without warning.
     pub fn redo(&mut self, sim: &mut Simulation) -> Result<(), SessionError> {
         self.ensure_resimulated()?;
-        let entry = self.history.redo.pop().ok_or(SessionError::NothingToRedo)?;
+        let entry = self
+            .history
+            .take_redo()
+            .ok_or(SessionError::NothingToRedo)?;
         let result = match &entry {
             UndoEntry::Scene { after, .. } => self.load_scene_version(sim, after.clone()),
             UndoEntry::Run { edit } => self
                 .seek(sim, edit.tick)
                 .and_then(|()| self.record_edit(sim, edit.clone()).map(drop)),
         };
-        match result {
-            Ok(()) => self.history.undo.push(entry),
-            Err(_) => self.history.redo.push(entry),
-        }
+        self.history.redone(entry, result.is_ok());
         result
     }
 
@@ -321,29 +333,35 @@ impl Session {
         component: &str,
     ) -> Result<(), SessionError> {
         self.ensure_resimulated()?;
-        if !sim.world().is_alive(entity) {
+        let world = sim.world();
+        if !world.is_alive(entity) {
             return Err(EditError::NoSuchEntity(entity).into());
         }
-        let snapshot = sim.snapshot();
-        let (_, values) = snapshot
-            .components
-            .iter()
-            .find(|(name, _)| name == component)
-            .ok_or_else(|| EditError::UnknownComponent(component.to_string()))?;
-        let value = values
-            .iter()
-            .find(|(owner, _)| *owner == entity)
-            .map(|(_, bytes)| bytes.clone())
-            .ok_or_else(|| SessionError::MissingComponent {
+        if world.component_codec(component).is_none() {
+            return Err(EditError::UnknownComponent(component.to_string()).into());
+        }
+        let value = world.component_bytes(entity, component).ok_or_else(|| {
+            SessionError::MissingComponent {
                 entity,
                 component: component.to_string(),
-            })?;
+            }
+        })?;
         let (_, scene_state) = self.checkpoints.nearest_at_or_before(0);
         let index = entity.index() as usize;
         let in_scene = scene_state.entities.alive.get(index) == Some(&true)
             && scene_state.entities.generations[index] == entity.generation();
         if !in_scene {
             return Err(SessionError::NotInScene(entity));
+        }
+        let in_scene_value = scene_state
+            .components
+            .iter()
+            .find(|(name, _)| name == component)
+            .and_then(|(_, values)| values.iter().find(|(owner, _)| *owner == entity))
+            .map(|(_, bytes)| bytes);
+        if in_scene_value == Some(&value) {
+            // The scene already holds this value: nothing to change or undo.
+            return Ok(());
         }
         let edit = Edit::Insert {
             entity,
@@ -425,7 +443,14 @@ impl Session {
         self.ensure_resimulated()?;
         sim.restore(snapshot)?;
         let (tick, restored) = (sim.tick(), sim.hash());
-        self.replay_to(sim, tick)?;
+        if let Err(error) = self.replay_to(sim, tick) {
+            // The ticks up to the failing one were recorded on the way: stay there.
+            if let SessionError::Panicked { tick: failed, .. } = &error {
+                self.current = *failed;
+                self.replay_to(sim, *failed)?;
+            }
+            return Err(error);
+        }
         let kept = usize::try_from(tick + 1).expect("tick fits in memory");
         self.hashes.truncate(kept);
         self.checkpoints.truncate_after(tick);
@@ -481,6 +506,7 @@ impl Session {
         let Some(mut up_to) = self.resimulating else {
             return Ok(Resimulation::Idle);
         };
+        let at_current = sim.snapshot();
         self.replay_to(sim, up_to)?;
         for _ in 0..budget {
             if up_to >= self.end() {
@@ -490,6 +516,9 @@ impl Session {
             up_to += 1;
             self.resimulating = Some(up_to);
             let got = sim.hash();
+            if let Some(introspection) = &mut self.introspection {
+                introspection.hashed(up_to, got);
+            }
             match self.hashes.get_mut(up_to as usize) {
                 Some(expected) => {
                     if *expected != got && !self.diverged {
@@ -513,13 +542,18 @@ impl Session {
             self.resimulating = None;
             self.reports.push_back(Resimulation::Done);
         }
-        if let Some(tick) = self.return_to
-            && (tick <= up_to || self.resimulating.is_none())
-        {
+        let returned = self
+            .return_to
+            .filter(|&tick| tick <= up_to || self.resimulating.is_none());
+        if let Some(tick) = returned {
             self.current = tick.min(up_to);
             self.return_to = None;
+            self.replay_to(sim, self.current)?;
+        } else {
+            // The ticks resimulated here are all past the current one, whose state stays.
+            sim.restore(&at_current)
+                .expect("a snapshot restores into the world it was taken from");
         }
-        self.replay_to(sim, self.current)?;
         Ok(self
             .reports
             .pop_front()
@@ -547,8 +581,8 @@ impl Session {
             current: self.current,
             checkpoints: self.checkpoints.ticks(),
             edit_ticks,
-            can_undo: !self.history.undo.is_empty(),
-            can_redo: !self.history.redo.is_empty(),
+            can_undo: self.history.can_undo(),
+            can_redo: self.history.can_redo(),
             scene_dirty: self.scene_dirty,
             resimulating: self.resimulating.is_some(),
         }
@@ -616,14 +650,33 @@ impl Session {
         Ok(())
     }
 
-    /// Records the hash and checkpoint of a tick just simulated for the first time.
+    /// Records the hash and checkpoint of a tick just simulated for the first time, and
+    /// passes the hash of the tick to introspection.
     fn record_tick(&mut self, sim: &Simulation) {
         let tick = sim.tick();
-        if tick == self.hashes.len() as u64 {
-            self.hashes.push(sim.hash());
+        let hash = if tick == self.hashes.len() as u64 {
+            let hash = sim.hash();
+            self.hashes.push(hash);
             if self.checkpoints.wants(tick) {
                 self.checkpoints.insert(tick, sim.snapshot());
             }
+            hash
+        } else {
+            // Ticks replayed here are never stale: seeking past resimulation is refused.
+            self.hashes[tick as usize]
+        };
+        if let Some(introspection) = &mut self.introspection {
+            introspection.hashed(tick, hash);
+        }
+    }
+
+    /// Keeps the world as a checkpoint when the nearest one is far behind, as after the
+    /// future of a tick far behind the head was discarded. The world must be at a tick
+    /// without applied edits.
+    fn keep_checkpoint_if_sparse(&mut self, sim: &Simulation) {
+        let tick = sim.tick();
+        if self.checkpoints.is_sparse_at(tick) {
+            self.checkpoints.pin(tick, sim.snapshot());
         }
     }
 
@@ -682,6 +735,10 @@ impl Session {
         self.checkpoints.truncate_after(tick);
         self.history.discard_after(tick);
         self.update_head();
+        // A live take-over below the resimulated point discards the whole stale future.
+        if self.resimulating.is_some_and(|up_to| up_to > tick) {
+            self.resimulating = None;
+        }
     }
 
     /// Applies `edit` at the current tick, discards the future after it, and records it.
@@ -690,8 +747,14 @@ impl Session {
         sim: &mut Simulation,
         edit: TimedEdit,
     ) -> Result<Option<Entity>, SessionError> {
+        let checkpoint = (self.edits.at(edit.tick).is_empty()
+            && self.checkpoints.is_sparse_at(edit.tick))
+        .then(|| sim.snapshot());
         let spawned = sim.apply_edit(&edit.edit)?;
         self.discard_after(edit.tick);
+        if let Some(checkpoint) = checkpoint {
+            self.checkpoints.pin(edit.tick, checkpoint);
+        }
         self.edits.edits.push(edit);
         self.update_head();
         Ok(spawned)
@@ -778,12 +841,14 @@ impl Session {
     fn start_resimulation(&mut self, sim: &mut Simulation) {
         self.checkpoints = Checkpoints::new(sim.snapshot());
         self.hashes[0] = sim.hash();
-        self.return_to = (self.current > 0).then_some(self.current);
+        let was_at = self.current;
         self.current = 0;
         self.diverged = false;
         self.reports.clear();
         self.apply_edits_or_drop(sim, 0);
         let stale = self.simulated() > 0 || self.edits.last_tick().is_some_and(|tick| tick > 0);
         self.resimulating = stale.then_some(0);
+        // Without a stale future there is nothing to return through.
+        self.return_to = (stale && was_at > 0).then_some(was_at);
     }
 }

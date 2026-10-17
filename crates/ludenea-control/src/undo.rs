@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) enum UndoEntry {
     /// A tick 0 edit: the scene text before and after it.
+    // ponytail: each entry holds two full scene texts (the next entry's `before` repeats
+    // this `after`); store only `before` and derive `after` if large scenes make the
+    // history too big.
     Scene { before: String, after: String },
     /// An edit recorded past tick 0.
     Run { edit: TimedEdit },
@@ -17,10 +20,12 @@ impl UndoEntry {
     }
 }
 
+/// An entry moves from `undo` to `redo` when undone, and back when redone; an entry whose
+/// undo or redo fails goes back where it came from.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(crate) struct UndoHistory {
-    pub undo: Vec<UndoEntry>,
-    pub redo: Vec<UndoEntry>,
+    undo: Vec<UndoEntry>,
+    redo: Vec<UndoEntry>,
 }
 
 impl UndoHistory {
@@ -28,6 +33,42 @@ impl UndoHistory {
     pub fn record(&mut self, entry: UndoEntry) {
         self.undo.push(entry);
         self.redo.clear();
+    }
+
+    pub fn can_undo(&self) -> bool {
+        !self.undo.is_empty()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
+    }
+
+    /// Takes the entry to undo; `undone` puts it back.
+    pub fn take_undo(&mut self) -> Option<UndoEntry> {
+        self.undo.pop()
+    }
+
+    /// Ends the undo of `entry`: redoable when `succeeded`, otherwise still undoable.
+    pub fn undone(&mut self, entry: UndoEntry, succeeded: bool) {
+        if succeeded {
+            self.redo.push(entry);
+        } else {
+            self.undo.push(entry);
+        }
+    }
+
+    /// Takes the entry to redo; `redone` puts it back.
+    pub fn take_redo(&mut self) -> Option<UndoEntry> {
+        self.redo.pop()
+    }
+
+    /// Ends the redo of `entry`: undoable when `succeeded`, otherwise still redoable.
+    pub fn redone(&mut self, entry: UndoEntry, succeeded: bool) {
+        if succeeded {
+            self.undo.push(entry);
+        } else {
+            self.redo.push(entry);
+        }
     }
 
     /// Drops the entries of edits recorded after `tick`, whose future was discarded.

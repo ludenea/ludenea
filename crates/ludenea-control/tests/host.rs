@@ -753,3 +753,57 @@ mod erased {
         }
     }
 }
+
+#[test]
+fn step_hashes_exclude_the_edits_get_hash_includes() {
+    let mut client = client();
+    let entity = match client.request(Command::QueryEntities {
+        filter: String::new(),
+        offset: 0,
+        limit: 1,
+    }) {
+        Ok(Reply::Entities { rows, .. }) => rows[0].entity,
+        other => panic!("{other:?}"),
+    };
+    let insert = |tick, score: u32| ludenea_app::TimedEdit {
+        tick,
+        edit: ludenea_app::Edit::Insert {
+            entity,
+            component: "host::Score".to_string(),
+            value: postcard::to_allocvec(&Score(score)).unwrap(),
+        },
+    };
+    let mut edits = ludenea_app::EditLog::new();
+    edits.edits = vec![insert(0, 100), insert(2, 7)];
+    client
+        .request(Command::LoadEdits {
+            log: Bytes(edits.encode()),
+        })
+        .unwrap();
+    while client
+        .request(Command::GetTimeline)
+        .map(|reply| match reply {
+            Reply::Timeline(timeline) => timeline.resimulating,
+            other => panic!("{other:?}"),
+        })
+        == Ok(true)
+    {
+        client.advance(0.0);
+    }
+    let get_hash = |client: &mut InProcess| match client.request(Command::GetHash) {
+        Ok(Reply::Hash { hash, pending, .. }) => (hash, pending),
+        other => panic!("{other:?}"),
+    };
+    let recorded = match client.request(Command::ExportSession) {
+        Ok(Reply::Session { hashes, .. }) => hashes,
+        other => panic!("{other:?}"),
+    };
+    let (at_zero, pending) = get_hash(&mut client);
+    assert!(pending);
+    assert_ne!(at_zero, recorded[0]);
+    let stepped = step(&mut client, 2);
+    assert_eq!(stepped, recorded[1..=2]);
+    let (at_two, pending) = get_hash(&mut client);
+    assert!(pending);
+    assert_ne!(at_two, stepped[1]);
+}

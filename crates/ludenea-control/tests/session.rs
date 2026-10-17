@@ -495,3 +495,171 @@ fn load_edits_drops_recorded_edits_that_fail() {
     assert_eq!(edits.edits.last(), Some(&at(80, good)));
     assert_fresh_replay_matches(&export);
 }
+
+#[test]
+fn live_take_over_during_resimulation_ends_it() {
+    let (mut sim, mut session) = started(recorded(200, None));
+    play(&mut session, &mut sim, 120);
+    session
+        .replace_scene(&mut sim, boxes::generate_scene(31, 8))
+        .unwrap();
+    loop {
+        match session.resimulate(&mut sim, 30).unwrap() {
+            Resimulation::Progress { up_to } if up_to >= 30 => break,
+            Resimulation::Done | Resimulation::Idle => panic!("resimulation ended early"),
+            _ => {}
+        }
+    }
+    session.seek(&mut sim, 20).unwrap();
+    session.step(&mut sim, Some(&spawn_input(1.0))).unwrap();
+    let timeline = session.timeline();
+    assert!(!timeline.resimulating, "{timeline:?}");
+    assert_eq!((timeline.head, timeline.simulated), (20, 21));
+    play(&mut session, &mut sim, 5);
+    assert_eq!(
+        session.resimulate(&mut sim, 30).unwrap(),
+        Resimulation::Idle
+    );
+    assert_fresh_replay_matches(&session.export().unwrap());
+}
+
+#[test]
+fn take_over_far_behind_the_head_keeps_a_checkpoint_there() {
+    let (mut sim, mut session) = started(recorded(2_000, None));
+    play(&mut session, &mut sim, 2_000);
+    session.seek(&mut sim, 1_000).unwrap();
+    session.step(&mut sim, Some(&spawn_input(1.0))).unwrap();
+    assert!(session.timeline().checkpoints.contains(&1_001));
+    play(&mut session, &mut sim, 40);
+    session.seek(&mut sim, 1_010).unwrap();
+    assert_eq!(sim.hash(), hashes(&session)[1_010]);
+    assert!(session.timeline().checkpoints.contains(&1_001));
+}
+
+/// Silences the panic message of `run` and returns its result.
+fn quietly<T>(run: impl FnOnce() -> T) -> T {
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let result = run();
+    std::panic::set_hook(hook);
+    result
+}
+
+static SEEK_TRAP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn seek_trap(time: Res<Time>) {
+    if time.tick == 50 && SEEK_TRAP.load(std::sync::atomic::Ordering::Relaxed) {
+        panic!("seek trap");
+    }
+}
+
+#[test]
+fn panic_during_seek_keeps_the_current_tick() {
+    let mut app = boxes::app();
+    app.system(Sim, seek_trap);
+    let mut sim = app.build().unwrap();
+    let mut session = Session::start(&mut sim, small_scene()).unwrap();
+    session.load_inputs(&mut sim, recorded(100, None)).unwrap();
+    play(&mut session, &mut sim, 80);
+    session.seek(&mut sim, 10).unwrap();
+    let before = session.export().unwrap();
+
+    SEEK_TRAP.store(true, std::sync::atomic::Ordering::Relaxed);
+    let result = quietly(|| session.seek(&mut sim, 55));
+    SEEK_TRAP.store(false, std::sync::atomic::Ordering::Relaxed);
+
+    assert!(matches!(
+        result,
+        Err(SessionError::Panicked { tick: 50, .. })
+    ));
+    assert_eq!(session.timeline().current, 10);
+    assert_eq!(sim.hash(), before.hashes[10]);
+    assert_eq!(session.export().unwrap(), before);
+    session.seek(&mut sim, 55).unwrap();
+    assert_eq!(sim.hash(), before.hashes[55]);
+}
+
+static RESIMULATION_TRAP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn resimulation_trap(time: Res<Time>) {
+    if time.tick == 50 && RESIMULATION_TRAP.load(std::sync::atomic::Ordering::Relaxed) {
+        panic!("resimulation trap");
+    }
+}
+
+#[test]
+fn panic_during_resimulation_ends_it_at_the_failing_tick() {
+    let mut app = boxes::app();
+    app.system(Sim, resimulation_trap);
+    let mut sim = app.build().unwrap();
+    let mut session = Session::start(&mut sim, small_scene()).unwrap();
+    let inputs = recorded(100, None);
+    session.load_inputs(&mut sim, inputs.clone()).unwrap();
+    play(&mut session, &mut sim, 80);
+    session
+        .replace_scene(&mut sim, boxes::generate_scene(31, 8))
+        .unwrap();
+
+    RESIMULATION_TRAP.store(true, std::sync::atomic::Ordering::Relaxed);
+    let result = quietly(|| session.resimulate(&mut sim, 240));
+    RESIMULATION_TRAP.store(false, std::sync::atomic::Ordering::Relaxed);
+
+    assert!(matches!(
+        result,
+        Err(SessionError::Panicked { tick: 50, .. })
+    ));
+    let timeline = session.timeline();
+    assert!(!timeline.resimulating, "{timeline:?}");
+    assert_eq!((timeline.current, timeline.simulated), (50, 50));
+    assert_eq!(sim.tick(), 50);
+    let export = session.export().unwrap();
+    assert_eq!(InputLog::decode(&export.inputs).unwrap(), inputs);
+    assert_fresh_replay_matches(&export);
+}
+
+static RESTORE_TRAP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn restore_trap(time: Res<Time>) {
+    if time.tick == 50 && RESTORE_TRAP.load(std::sync::atomic::Ordering::Relaxed) {
+        panic!("restore trap");
+    }
+}
+
+#[test]
+fn panic_while_restoring_past_the_simulated_ticks_moves_to_the_failing_tick() {
+    let mut app = boxes::app();
+    app.system(Sim, restore_trap);
+    let mut sim = app.build().unwrap();
+    let mut session = Session::start(&mut sim, small_scene()).unwrap();
+    session.load_inputs(&mut sim, recorded(100, None)).unwrap();
+    play(&mut session, &mut sim, 60);
+    let snapshot = sim.snapshot();
+    session.load_inputs(&mut sim, recorded(100, None)).unwrap();
+    play(&mut session, &mut sim, 10);
+
+    RESTORE_TRAP.store(true, std::sync::atomic::Ordering::Relaxed);
+    let result = quietly(|| session.restore(&mut sim, &snapshot));
+    RESTORE_TRAP.store(false, std::sync::atomic::Ordering::Relaxed);
+
+    assert!(matches!(
+        result,
+        Err(SessionError::Panicked { tick: 50, .. })
+    ));
+    assert_eq!(session.timeline().current, 50);
+    assert_eq!(sim.tick(), 50);
+    assert_eq!(sim.hash(), hashes(&session)[50]);
+}
+
+#[test]
+fn hashes_of_a_tick_with_an_edit_are_taken_before_it() {
+    let (mut sim, mut session) = started(recorded(20, None));
+    let mut log = EditLog::new();
+    log.edits = vec![TimedEdit {
+        tick: 0,
+        edit: stats_edit(&sim, 1_000),
+    }];
+    session.load_edits(&mut sim, log).unwrap();
+    assert!(!session.timeline().resimulating);
+    assert!(session.is_pending());
+    assert_ne!(sim.hash(), hashes(&session)[0]);
+}

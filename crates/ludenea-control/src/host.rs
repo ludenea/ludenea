@@ -1,9 +1,8 @@
 use ludenea_app::{
     App, AppError, Edit, EditError, EditLog, InputLog, RawInput, SimError, Simulation, ValueKind,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
-use ludenea_ecs::schema::TypeSchema;
 use ludenea_ecs::{Entity, EntityFilter, FilterError, Snapshot};
 use serde_json::Value as JsonValue;
 
@@ -11,11 +10,12 @@ use crate::json::{from_wire, to_wire};
 use crate::pacer::Pacer;
 use crate::path::{Path, PathSegment, set_at_path};
 use crate::protocol::{
-    Bytes, Command, ComponentValue, ConsoleLevel, EntityRow, ErrorCode, Event, FieldTarget,
-    GameInfo, Hash64, NamedSchema, PauseReason, ProtocolError, Reply, SyncPoint, SystemRow, Topic,
+    Bytes, Command, ConsoleLevel, EntityRow, ErrorCode, Event, FieldTarget, GameInfo, Hash64,
+    NamedSchema, PauseReason, ProtocolError, Reply, SyncPoint, SystemRow, Topic,
 };
 use crate::session::{Resimulation, Session, SessionError, Timeline};
-use crate::subscriptions::{INTROSPECTION_TICKS, Subscriptions, TickRecord, entity_leaf};
+use crate::subscriptions::{INTROSPECTION_TICKS, Subscriptions, TickRecord};
+use crate::values::{entity_values, resource_values, value_schema};
 
 /// Most ticks one `advance` resimulates while the recorded future is stale.
 pub const RESIMULATION_BUDGET: u32 = 240;
@@ -202,16 +202,13 @@ impl Host {
                 let world = sim.world();
                 let filter = EntityFilter::parse(&filter, world).map_err(|e| filter_error(&e))?;
                 let entities = world.filter_entities(&filter);
-                // ponytail: hashes the whole world for one page; hash only the page's entities
-                // if large worlds make this slow.
-                let tree = world.hash_tree();
                 let rows = entities
                     .iter()
                     .skip(offset as usize)
                     .take(limit as usize)
                     .map(|&entity| EntityRow {
                         entity,
-                        hash: Hash64(entity_leaf(&tree, entity).expect("alive").hash),
+                        hash: Hash64(world.entity_hash(entity).expect("alive").hash),
                     })
                     .collect();
                 Ok(Reply::Entities {
@@ -245,6 +242,13 @@ impl Host {
                 value,
             } => {
                 let context = format!("entity {entity}, component `{component}`");
+                if sim.world().component_json(entity, &component).is_some() {
+                    let error = ProtocolError::new(
+                        ErrorCode::InvalidEdit,
+                        "the entity already has this component; use SetField to change it",
+                    );
+                    return Err(in_context(error, &context));
+                }
                 let value = encode_value(sim, ValueKind::Component, &component, value)
                     .map_err(|e| in_context(edit_error(&e), &context))?;
                 let edit = Edit::Insert {
@@ -487,10 +491,10 @@ impl Host {
                     if world.component_codec(component).is_none() {
                         edit_error(&EditError::UnknownComponent(component.clone()))
                     } else {
-                        ProtocolError::new(
-                            ErrorCode::InvalidEdit,
-                            format!("the entity has no `{component}`; insert it first"),
-                        )
+                        session_error(&SessionError::MissingComponent {
+                            entity: *entity,
+                            component: component.clone(),
+                        })
                     }
                 })?;
                 (ValueKind::Component, component, current)
@@ -714,57 +718,6 @@ fn changes_state(command: &Command) -> bool {
     )
 }
 
-/// The component values of `entity` keyed by stable name, if it is alive.
-pub(crate) fn entity_values(
-    sim: &Simulation,
-    entity: Entity,
-) -> Option<BTreeMap<String, ComponentValue>> {
-    let world = sim.world();
-    let json = world.entity_components_json(entity)?;
-    let mut ron = world
-        .entity_components_ron(entity)
-        .expect("the entity is alive");
-    let components = json
-        .into_iter()
-        .map(|(name, json)| {
-            let value = match json {
-                Ok(value) => {
-                    let schema = value_schema(sim, ValueKind::Component, &name)
-                        .expect("a component of the world is registered");
-                    ComponentValue::Json {
-                        value: to_wire(value, &schema),
-                    }
-                }
-                Err(_) => ComponentValue::Ron {
-                    text: ron.remove(&name).expect("the same components"),
-                },
-            };
-            (name, value)
-        })
-        .collect();
-    Some(components)
-}
-
-/// Every resource value keyed by stable name.
-pub(crate) fn resource_values(sim: &Simulation) -> BTreeMap<String, ComponentValue> {
-    let world = sim.world();
-    world
-        .resource_schemas()
-        .into_iter()
-        .map(|(name, schema)| {
-            let value = match world.resource_json(name).expect("a registered resource") {
-                Ok(value) => ComponentValue::Json {
-                    value: to_wire(value, &schema),
-                },
-                Err(_) => ComponentValue::Ron {
-                    text: world.resource_ron(name).expect("a registered resource"),
-                },
-            };
-            (name.to_string(), value)
-        })
-        .collect()
-}
-
 fn filter_error(error: &FilterError) -> ProtocolError {
     ProtocolError::new(ErrorCode::InvalidFilter, error)
 }
@@ -800,19 +753,6 @@ fn edit_error(error: &EditError) -> ProtocolError {
 fn in_context(mut error: ProtocolError, context: &str) -> ProtocolError {
     error.message = format!("{context}: {}", error.message);
     error
-}
-
-fn value_schema(sim: &Simulation, kind: ValueKind, name: &str) -> Result<TypeSchema, EditError> {
-    let world = sim.world();
-    match kind {
-        ValueKind::Component => world
-            .component_codec(name)
-            .ok_or_else(|| EditError::UnknownComponent(name.to_string())),
-        ValueKind::Resource => world
-            .resource_codec(name)
-            .ok_or_else(|| EditError::UnknownResource(name.to_string())),
-    }
-    .map(|codec| (codec.schema)())
 }
 
 /// Converts a wire value into the canonical bytes an edit carries.

@@ -195,7 +195,8 @@ pub enum Command {
     Despawn {
         entity: Entity,
     },
-    /// Adds a component; changing one goes through `SetField`.
+    /// Adds a component the entity lacks; one it has fails with `InvalidEdit`, since
+    /// changing it goes through `SetField`.
     InsertComponent {
         entity: Entity,
         component: String,

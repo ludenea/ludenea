@@ -319,3 +319,42 @@ fn unsaved_scene_edits_stay_unsaved_across_export_and_resume() {
     assert_eq!(export.saved_scene, None, "a saved scene travels once");
     assert!(!resume(&mut sim, export).timeline().scene_dirty);
 }
+
+fn live_spawn() -> Vec<u8> {
+    let mut log = InputLog::new(1);
+    log.record(&[boxes::BoxesInput {
+        spawn: Some(2.0),
+        ..boxes::BoxesInput::default()
+    }]);
+    log.ticks.remove(0)
+}
+
+#[test]
+fn take_over_drops_the_undo_entries_of_its_discarded_future() {
+    let (mut sim, mut session, _, _) = edited_at_300();
+    session.seek(&mut sim, 200).unwrap();
+    session.step(&mut sim, Some(&live_spawn())).unwrap();
+    assert!(!session.timeline().can_undo);
+    assert!(edits(&session).is_empty());
+}
+
+#[test]
+fn take_over_drops_the_redo_entries_of_its_discarded_future() {
+    let (mut sim, mut session, _, _) = edited_at_300();
+    session.undo(&mut sim).unwrap();
+    assert!(session.timeline().can_redo);
+    session.seek(&mut sim, 100).unwrap();
+    session.step(&mut sim, Some(&live_spawn())).unwrap();
+    assert!(!session.timeline().can_redo);
+}
+
+#[test]
+fn replace_scene_clears_redo() {
+    let (mut sim, mut session, _, _) = edited_at_300();
+    session.undo(&mut sim).unwrap();
+    assert!(session.timeline().can_redo);
+    session
+        .replace_scene(&mut sim, boxes::generate_scene(31, 8))
+        .unwrap();
+    assert!(!session.timeline().can_redo);
+}

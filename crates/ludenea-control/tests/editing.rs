@@ -359,14 +359,101 @@ fn apply_to_scene_copies_value_and_marks_dirty() {
     let applied = save_scene(&mut host);
     assert!(!timeline(&mut host).scene_dirty);
     let mut fresh = loaded(30);
-    ok(&mut fresh, Command::ReplaceScene { ron: applied });
+    ok(
+        &mut fresh,
+        Command::ReplaceScene {
+            ron: applied.clone(),
+        },
+    );
     resimulate(&mut fresh);
     step(&mut fresh, 20);
     assert_eq!(hash(&mut host), hash(&mut fresh));
 
     ok(&mut host, Command::Undo);
+    assert_eq!(save_scene(&mut host), scene());
     resimulate(&mut host);
     assert_eq!(timeline(&mut host).current, 20);
+    assert_eq!(json_of(&mut host, entity, "ludenea::Pose"), fallen);
+    ok(&mut host, Command::Redo);
+    assert_eq!(save_scene(&mut host), applied);
+}
+
+#[test]
+fn apply_to_scene_of_an_unchanged_value_records_nothing() {
+    let mut host = loaded(30);
+    let entity = first_crate(&mut host);
+    let apply = Command::ApplyToScene {
+        entity,
+        component: "ludenea::Pose".to_string(),
+    };
+    ok(&mut host, apply.clone());
+    let at_zero = timeline(&mut host);
+    assert!(!at_zero.can_undo && !at_zero.scene_dirty, "{at_zero:?}");
+    step(&mut host, 1);
+    // A static body has not moved after one tick.
+    let ground = entities(&mut host)[0];
+    ok(
+        &mut host,
+        Command::ApplyToScene {
+            entity: ground,
+            component: "ludenea::Pose".to_string(),
+        },
+    );
+    let later = timeline(&mut host);
+    assert!(!later.can_undo && !later.resimulating, "{later:?}");
+    assert_eq!(later.current, 1);
+}
+
+#[test]
+fn errors_name_the_entity_once() {
+    let mut host = loaded(30);
+    step(&mut host, 5);
+    let ground = entities(&mut host)[0];
+    let named = |message: &str| message.matches(&ground.to_string()).count();
+    let missing = host
+        .handle(Command::ApplyToScene {
+            entity: ground,
+            component: "boxes::Crate".to_string(),
+        })
+        .unwrap_err();
+    assert_eq!(missing.code, ErrorCode::InvalidEdit);
+    assert_eq!(named(&missing.message), 1, "{}", missing.message);
+    let pose = json!({"position": {"x": 0.0, "y": 5.0}, "rotation": {"cos": 1.0, "sin": 0.0}});
+    let Reply::Spawned { entity: spawned } = ok(
+        &mut host,
+        Command::Spawn {
+            components: BTreeMap::from([("ludenea::Pose".to_string(), pose)]),
+        },
+    ) else {
+        panic!()
+    };
+    let not_in_scene = host
+        .handle(Command::ApplyToScene {
+            entity: spawned,
+            component: "ludenea::Pose".to_string(),
+        })
+        .unwrap_err();
+    let count = not_in_scene.message.matches(&spawned.to_string()).count();
+    assert_eq!(count, 1, "{}", not_in_scene.message);
+}
+
+#[test]
+fn insert_component_refuses_to_replace_an_existing_one() {
+    let mut host = loaded(30);
+    step(&mut host, 5);
+    let entity = first_crate(&mut host);
+    let pose = json_of(&mut host, entity, "ludenea::Pose");
+    let before = recorded_edits(&mut host);
+    let error = host
+        .handle(Command::InsertComponent {
+            entity,
+            component: "ludenea::Pose".to_string(),
+            value: pose,
+        })
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidEdit);
+    assert!(error.message.contains("SetField"), "{}", error.message);
+    assert_eq!(recorded_edits(&mut host), before);
 }
 
 /// Advances while paused until resimulation is done.

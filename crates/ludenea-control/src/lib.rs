@@ -13,6 +13,7 @@ pub mod session;
 pub mod stdio;
 mod subscriptions;
 mod undo;
+mod values;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 pub mod worker;
 

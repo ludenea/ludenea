@@ -30,6 +30,12 @@ impl Checkpoints {
         }
     }
 
+    /// Whether the nearest checkpoint at or before `tick` is a whole interval or more behind
+    /// it, as after a truncation far behind the head, where older levels are sparse.
+    pub fn is_sparse_at(&self, tick: u64) -> bool {
+        tick - self.nearest_at_or_before(tick).0 >= CHECKPOINT_INTERVAL
+    }
+
     pub fn wants(&self, tick: u64) -> bool {
         tick.is_multiple_of(CHECKPOINT_INTERVAL) && !self.snapshots.contains_key(&tick)
     }
@@ -47,6 +53,8 @@ impl Checkpoints {
     }
 
     /// Stores `snapshot` at `tick` and keeps it until `truncate_after` drops it.
+    // ponytail: pins taken after truncations add up, one snapshot each; drop a pin once the
+    // levels around it are dense again if repeated take-overs make checkpoints heavy.
     pub fn pin(&mut self, tick: u64, snapshot: Snapshot) {
         self.pinned.insert(tick);
         self.insert(tick, snapshot);
@@ -112,6 +120,29 @@ mod tests {
         let bound = CHECKPOINTS_PER_LEVEL * levels + 2;
         let count = filled(head).ticks().len();
         assert!(count <= bound, "{count} checkpoints, bound {bound}");
+    }
+
+    #[test]
+    fn seek_cost_near_the_new_head_is_bounded_after_a_truncation() {
+        let snapshot = World::new().snapshot();
+        let mut checkpoints = filled(100_000);
+        let cut = 50_001;
+        checkpoints.truncate_after(cut);
+        assert!(checkpoints.is_sparse_at(cut));
+        checkpoints.pin(cut, snapshot.clone());
+        for head in cut + 1..cut + 200 {
+            if checkpoints.wants(head) {
+                checkpoints.insert(head, snapshot.clone());
+            }
+            for target in cut..=head {
+                let (tick, _) = checkpoints.nearest_at_or_before(target);
+                let cost = target - tick;
+                assert!(
+                    cost <= CHECKPOINT_INTERVAL.max(head - target),
+                    "head {head}, target {target}: nearest checkpoint {tick}"
+                );
+            }
+        }
     }
 
     #[test]

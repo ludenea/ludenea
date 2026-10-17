@@ -5,15 +5,14 @@
 use std::collections::{BTreeMap, VecDeque};
 
 use ludenea_app::{SimError, Simulation};
-use ludenea_ecs::hash::ENTITIES_LEAF;
 use ludenea_ecs::{
-    CommandKind, CommandRecord, Entity, EntityFilter, EntityHash, FilterError, HashTree,
-    ScheduleObserver, World, hash_value,
+    CommandKind, CommandRecord, Entity, EntityFilter, FilterError, ScheduleObserver, World,
+    hash_value,
 };
 
-use crate::host::{entity_values, resource_values};
 use crate::json::untyped_to_wire;
 use crate::protocol::{Event, RecordedEvent, Topic};
+use crate::values::{component_value, resource_value};
 
 /// How many of the ticks run while `Introspection` is subscribed stay recorded.
 pub const INTROSPECTION_TICKS: usize = 600;
@@ -50,12 +49,12 @@ impl Subscriptions {
     /// Starts watching `topic` from the current state, which is not pushed. Subscribing
     /// again to a watched topic changes nothing.
     pub(crate) fn subscribe(&mut self, topic: &Topic, sim: &Simulation) -> Result<(), FilterError> {
-        let tree = sim.world().hash_tree();
+        let world = sim.world();
         match topic {
             Topic::Entities { filter: text } => {
                 if !self.entities.iter().any(|watch| watch.text == *text) {
-                    let filter = EntityFilter::parse(text, sim.world())?;
-                    let (digest, _) = matching(&filter, sim.world(), &tree);
+                    let filter = EntityFilter::parse(text, world)?;
+                    let (digest, _) = matching(&filter, world);
                     self.entities.push(EntitiesWatch {
                         text: text.clone(),
                         filter,
@@ -67,12 +66,12 @@ impl Subscriptions {
                 if !self.entity.iter().any(|watch| watch.entity == *entity) {
                     self.entity.push(EntityWatch {
                         entity: *entity,
-                        hashes: component_hashes(&tree, *entity),
+                        hashes: component_hashes(world, *entity),
                     });
                 }
             }
             Topic::Resources => {
-                self.resources.get_or_insert_with(|| resource_hashes(&tree));
+                self.resources.get_or_insert_with(|| resource_hashes(world));
             }
             Topic::Introspection => {}
         }
@@ -89,15 +88,12 @@ impl Subscriptions {
     }
 
     /// The events describing what changed since the last call, for every watched topic.
+    /// Only the values whose hash changed are converted.
     pub(crate) fn deltas(&mut self, sim: &Simulation) -> Vec<Event> {
         let mut events = Vec::new();
-        if self.entities.is_empty() && self.entity.is_empty() && self.resources.is_none() {
-            return events;
-        }
         let world = sim.world();
-        let tree = world.hash_tree();
         for watch in &mut self.entities {
-            let (digest, total) = matching(&watch.filter, world, &tree);
+            let (digest, total) = matching(&watch.filter, world);
             if digest != watch.digest {
                 watch.digest = digest;
                 events.push(Event::EntitiesChanged {
@@ -108,7 +104,7 @@ impl Subscriptions {
         }
         for watch in &mut self.entity {
             let entity = watch.entity;
-            let now = component_hashes(&tree, entity);
+            let now = component_hashes(world, entity);
             match (watch.hashes.take(), &now) {
                 (Some(_), None) => events.push(Event::EntityDespawned { entity }),
                 (None, None) => {}
@@ -119,8 +115,14 @@ impl Subscriptions {
                         .filter(|name| !now.contains_key(*name))
                         .cloned()
                         .collect();
-                    let mut components = entity_values(sim, entity).expect("the entity is alive");
-                    components.retain(|name, _| before.get(name) != now.get(name));
+                    let components: BTreeMap<_, _> = now
+                        .iter()
+                        .filter(|(name, hash)| before.get(*name) != Some(hash))
+                        .map(|(name, _)| {
+                            let value = component_value(sim, entity, name).expect("a component");
+                            (name.clone(), value)
+                        })
+                        .collect();
                     if !components.is_empty() || !removed.is_empty() {
                         events.push(Event::EntityChanged {
                             entity,
@@ -133,9 +135,12 @@ impl Subscriptions {
             watch.hashes = now;
         }
         if let Some(before) = &mut self.resources {
-            let now = resource_hashes(&tree);
-            let mut resources = resource_values(sim);
-            resources.retain(|name, _| before.get(name) != now.get(name));
+            let now = resource_hashes(world);
+            let resources: BTreeMap<_, _> = now
+                .iter()
+                .filter(|(name, hash)| before.get(*name) != Some(hash))
+                .map(|(name, _)| (name.clone(), resource_value(sim, name)))
+                .collect();
             if !resources.is_empty() {
                 events.push(Event::ResourcesChanged { resources });
             }
@@ -145,55 +150,45 @@ impl Subscriptions {
     }
 }
 
-/// The hash leaf of `entity`, if it is alive.
-pub(crate) fn entity_leaf(tree: &HashTree, entity: Entity) -> Option<&EntityHash> {
-    // The tree lists alive entities in ascending index order.
-    let at = tree
-        .entities
-        .binary_search_by_key(&entity.index(), |leaf| leaf.entity.index())
-        .ok()?;
-    Some(&tree.entities[at]).filter(|leaf| leaf.entity == entity)
-}
-
 /// A digest of the entities matching `filter` with their hashes, and their count.
-fn matching(filter: &EntityFilter, world: &World, tree: &HashTree) -> (u64, u32) {
+// ponytail: hashes every matching entity on each pass; keep per-entity hashes up to date as
+// systems write if wide filters on large worlds get slow.
+fn matching(filter: &EntityFilter, world: &World) -> (u64, u32) {
     let rows: Vec<(Entity, u64)> = world
         .filter_entities(filter)
         .into_iter()
         .map(|entity| {
-            (
-                entity,
-                entity_leaf(tree, entity).map_or(0, |leaf| leaf.hash),
-            )
+            let hash = world.entity_hash(entity).map_or(0, |leaf| leaf.hash);
+            (entity, hash)
         })
         .collect();
     let total = u32::try_from(rows.len()).expect("fewer than 2^32 entities");
     (hash_value(&rows), total)
 }
 
-fn component_hashes(tree: &HashTree, entity: Entity) -> Option<Hashes> {
-    entity_leaf(tree, entity).map(|leaf| {
+fn component_hashes(world: &World, entity: Entity) -> Option<Hashes> {
+    world.entity_hash(entity).map(|leaf| {
         leaf.components
-            .iter()
-            .map(|component| (component.name.clone(), component.hash))
+            .into_iter()
+            .map(|component| (component.name, component.hash))
             .collect()
     })
 }
 
-fn resource_hashes(tree: &HashTree) -> Hashes {
-    tree.resources
-        .iter()
-        .filter(|resource| resource.name != ENTITIES_LEAF)
-        .map(|resource| (resource.name.clone(), resource.hash))
+fn resource_hashes(world: &World) -> Hashes {
+    world
+        .resource_hashes()
+        .into_iter()
+        .map(|resource| (resource.name, resource.hash))
         .collect()
 }
 
 /// One tick run while `Introspection` is subscribed.
 #[derive(Default)]
 pub(crate) struct TickRecord {
-    /// The tick it ended at, and the hash it produced.
+    /// The tick it ended at, and the hash it produced once the session has passed it.
     tick: u64,
-    hash: u64,
+    hash: Option<u64>,
     pub(crate) events: Vec<RecordedEvent>,
     /// For each system that issued commands, its index in run order and the commands.
     pub(crate) commands: Vec<(usize, Vec<String>)>,
@@ -209,7 +204,8 @@ pub(crate) struct Introspection {
 }
 
 impl Introspection {
-    /// Steps like `Simulation::step_encoded`, recording the tick.
+    /// Steps like `Simulation::step_encoded`, recording the tick. The session passes the
+    /// hash the tick produced to `hashed` next, so the world is hashed once per tick.
     pub(crate) fn step(
         &mut self,
         sim: &mut Simulation,
@@ -224,18 +220,29 @@ impl Introspection {
         }
         self.ticks.push_back(TickRecord {
             tick,
-            hash: sim.hash(),
             ..recorder.record
         });
         Ok(())
     }
 
+    /// Sets the hash produced by the tick that ended at `tick`, the last one recorded.
+    pub(crate) fn hashed(&mut self, tick: u64, hash: u64) {
+        if let Some(record) = self.ticks.back_mut()
+            && record.tick == tick
+        {
+            record.hash = Some(hash);
+        }
+    }
+
     /// The record of the tick that ended at `tick`, if it is the one that produced `hash`,
     /// the hash the session now holds for it: a replaced future makes older records stale.
     pub(crate) fn tick(&self, tick: u64, hash: Option<u64>) -> Option<&TickRecord> {
+        // Keyed on the post-tick hash alone: a replaced future that reaches the very same
+        // state at `tick` by other means keeps the old record, whose events and commands
+        // may differ. Telling them apart would need the hash of every earlier tick too.
         self.ticks
             .iter()
-            .find(|record| record.tick == tick && Some(record.hash) == hash)
+            .find(|record| record.tick == tick && record.hash.is_some() && record.hash == hash)
     }
 
     /// The mean time of each of `systems` systems over the last `TIMED_TICKS` records.
