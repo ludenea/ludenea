@@ -3,8 +3,16 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-// Built-ins get no more than project plugins: the shared runtime modules, plus the list library.
-const ALLOWED = new Set(["react", "react/jsx-runtime", "@ludenea/editor-shell", "@ludenea/control-client", "@tanstack/react-virtual"]);
+// Built-ins get no more than project plugins: the shared runtime modules, plus the list library
+// and the viewport's renderer.
+const ALLOWED = new Set([
+  "react",
+  "react/jsx-runtime",
+  "@ludenea/editor-shell",
+  "@ludenea/control-client",
+  "@tanstack/react-virtual",
+  "@ludenea/debug-draw-wasm",
+]);
 const SPECIFIER = /\b(?:import|export)\b[^"'`;]*?\bfrom\s*["']([^"']+)["']|\bimport\s*\(?\s*["']([^"']+)["']/g;
 
 function sources(directory: string): string[] {

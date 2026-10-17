@@ -1,5 +1,6 @@
 //! Debug draw primitives: what simulation code asks to be drawn over the world, grouped
-//! in named layers. Rendering lives elsewhere; `mesh` turns a frame into triangles.
+//! in named layers. `mesh` turns a frame into triangles; `render` (feature `render`, browser
+//! only) draws them for the editor's viewport.
 
 use std::collections::BTreeMap;
 
@@ -8,6 +9,8 @@ use ludenea_math::Vec2;
 use serde::{Deserialize, Serialize};
 
 pub mod mesh;
+#[cfg(all(feature = "render", target_arch = "wasm32", target_os = "unknown"))]
+pub mod render;
 
 /// `0xRRGGBBAA`.
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]

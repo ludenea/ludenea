@@ -9,3 +9,4 @@ editor/e2e/golden/pkg/
 editor/test-results/
 editor/playwright-report/
 *.tsbuildinfo
+editor/packages/debug-draw-wasm/

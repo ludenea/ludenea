@@ -7,6 +7,7 @@
     "node": ">=22"
   },
   "scripts": {
+    "build:wasm": "cargo xtask wasm-renderer packages/debug-draw-wasm",
     "test": "vitest run",
     "typecheck": "tsc -b",
     "build": "pnpm -r build",

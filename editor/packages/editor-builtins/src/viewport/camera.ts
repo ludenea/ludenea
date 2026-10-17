@@ -1,0 +1,73 @@
+import type { DebugDrawFrame, Entity, Vec2 } from "@ludenea/control-client";
+
+/** What the viewport looks at: `center` in meters, the scale in CSS pixels per meter. */
+export type Camera = { center: Vec2; pixelsPerMeter: number };
+/** The viewport's size in CSS pixels. */
+export type Size = { width: number; height: number };
+type Point = { x: number; y: number };
+
+export const MIN_PIXELS_PER_METER = 2;
+export const MAX_PIXELS_PER_METER = 2000;
+
+/** World y points up, screen y points down. */
+export const worldToScreen = ({ center, pixelsPerMeter }: Camera, size: Size, point: Vec2): Point => ({
+  x: size.width / 2 + (point.x - center.x) * pixelsPerMeter,
+  y: size.height / 2 - (point.y - center.y) * pixelsPerMeter,
+});
+
+export const screenToWorld = ({ center, pixelsPerMeter }: Camera, size: Size, point: Point): Vec2 => ({
+  x: center.x + (point.x - size.width / 2) / pixelsPerMeter,
+  y: center.y - (point.y - size.height / 2) / pixelsPerMeter,
+});
+
+/** Scales by `factor` (clamped) keeping the world point under `anchor` in place. */
+export function zoomAt(camera: Camera, size: Size, anchor: Point, factor: number): Camera {
+  const fixed = screenToWorld(camera, size, anchor);
+  const pixelsPerMeter = Math.min(MAX_PIXELS_PER_METER, Math.max(MIN_PIXELS_PER_METER, camera.pixelsPerMeter * factor));
+  return {
+    pixelsPerMeter,
+    center: { x: fixed.x - (anchor.x - size.width / 2) / pixelsPerMeter, y: fixed.y + (anchor.y - size.height / 2) / pixelsPerMeter },
+  };
+}
+
+/** Moves the view so the content follows a drag of `dx`, `dy` screen pixels. */
+export const panBy = (camera: Camera, dx: number, dy: number): Camera => ({
+  ...camera,
+  center: { x: camera.center.x - dx / camera.pixelsPerMeter, y: camera.center.y + dy / camera.pixelsPerMeter },
+});
+
+const sameEntity = (a: Entity | null, b: Entity) => a !== null && a.index === b.index && a.generation === b.generation;
+
+/** The bounds of what `entities` draw in `layers`, or null when they draw nothing there. */
+export function bounds(frame: DebugDrawFrame, layers: readonly string[], entities: readonly Entity[]): { min: Vec2; max: Vec2 } | null {
+  let box: { min: Vec2; max: Vec2 } | null = null;
+  const grow = (point: Vec2, margin = 0) => {
+    const min = { x: point.x - margin, y: point.y - margin };
+    const max = { x: point.x + margin, y: point.y + margin };
+    box = box
+      ? { min: { x: Math.min(box.min.x, min.x), y: Math.min(box.min.y, min.y) }, max: { x: Math.max(box.max.x, max.x), y: Math.max(box.max.y, max.y) } }
+      : { min, max };
+  };
+  for (const layer of layers) {
+    for (const { entity, primitive } of frame.layers[layer] ?? []) {
+      if (!entities.some((selected) => sameEntity(entity, selected))) continue;
+      switch (primitive.type) {
+        case "line":
+          [primitive.a, primitive.b].forEach((point) => grow(point));
+          break;
+        case "capsule":
+          [primitive.a, primitive.b].forEach((point) => grow(point, primitive.radius));
+          break;
+        case "circle":
+          grow(primitive.center, primitive.radius);
+          break;
+        case "polygon":
+          primitive.points.forEach((point) => grow(point));
+          break;
+        case "label":
+          grow(primitive.at);
+      }
+    }
+  }
+  return box;
+}
