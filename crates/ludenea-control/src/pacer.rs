@@ -3,8 +3,8 @@
 
 use std::collections::VecDeque;
 
-/// Most ticks one `advance` call returns, so a slow simulation falls behind real time
-/// instead of spiralling.
+/// Most ticks one `advance` call returns at speed 1 (scaled by the speed), so a slow
+/// simulation falls behind real time instead of spiralling.
 pub const MAX_TICKS_PER_FRAME: u32 = 4;
 
 /// Tolerance for float rounding in the tick accumulator (60 steps of 1/60 s must give 60 ticks).
@@ -38,14 +38,16 @@ impl Pacer {
         self.speed = speed.clamp(0.1, 8.0);
     }
 
-    /// The ticks due after `elapsed_seconds` more time, at most `MAX_TICKS_PER_FRAME`.
-    /// Debt beyond the cap is dropped: play slows down but never skips ticks.
+    /// The ticks due after `elapsed_seconds` more time, at most `MAX_TICKS_PER_FRAME` times
+    /// the speed (rounded up). Debt beyond the cap is dropped: play slows down but never
+    /// skips ticks.
     pub fn advance(&mut self, elapsed_seconds: f64) -> u32 {
         self.owed += elapsed_seconds * f64::from(self.speed) * f64::from(self.tick_rate);
         let due = (self.owed + EPSILON).floor();
-        let ticks = if due >= f64::from(MAX_TICKS_PER_FRAME) {
+        let cap = (f64::from(MAX_TICKS_PER_FRAME) * f64::from(self.speed)).ceil();
+        let ticks = if due >= cap {
             self.owed = 0.0;
-            MAX_TICKS_PER_FRAME
+            cap as u32
         } else {
             self.owed -= due;
             due as u32
@@ -103,6 +105,19 @@ mod tests {
         let ticks: u32 = (0..60).map(|_| pacer.advance(1.0 / 60.0)).sum();
         assert_eq!(ticks, 120);
         pacer.set_speed(100.0);
-        assert_eq!(pacer.advance(1.0), MAX_TICKS_PER_FRAME);
+        assert_eq!(pacer.advance(1.0), 8 * MAX_TICKS_PER_FRAME);
+    }
+
+    #[test]
+    fn every_speed_up_to_eight_runs_in_real_time() {
+        for speed in [4.0, 6.0, 8.0] {
+            let mut pacer = Pacer::new(60);
+            pacer.set_speed(speed);
+            let ticks: u32 = (0..60).map(|_| pacer.advance(1.0 / 60.0)).sum();
+            assert_eq!(ticks, (60.0 * speed) as u32, "at {speed}x");
+        }
+        let mut slow = Pacer::new(60);
+        slow.set_speed(0.1);
+        assert_eq!(slow.advance(1.0), 1, "the cap never drops below one tick");
     }
 }
