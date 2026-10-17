@@ -12,9 +12,9 @@ import type { MessageTransport } from "./transports/transport";
 
 export const PROTOCOL_VERSION = 2;
 
-export class ProtocolFailure extends Error {
+export class ProtocolFailure<C extends string = ErrorCode> extends Error {
   constructor(
-    readonly code: ErrorCode,
+    readonly code: C,
     message: string,
   ) {
     super(message);
@@ -59,16 +59,16 @@ export type ReplyFor<C extends Command> = C extends { type: "get_hash" }
                                   ? Extract<Reply, { type: "picked" }>
                                   : Extract<Reply, { type: "done" }>;
 
-type Pending = { resolve: (result: Outcome) => void; reject: (error: Error) => void };
+type Pending<O> = { resolve: (result: O) => void; reject: (error: Error) => void };
 
 /** Matches responses to requests by increasing id; shared by the control and project clients. */
-export class RequestTracker {
+export class RequestTracker<O = Outcome> {
   private nextId = 1;
-  private readonly pending = new Map<number, Pending>();
+  private readonly pending = new Map<number, Pending<O>>();
 
   constructor(private readonly transport: MessageTransport) {}
 
-  send(build: (id: number) => unknown): Promise<Outcome> {
+  send(build: (id: number) => unknown): Promise<O> {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
@@ -76,7 +76,7 @@ export class RequestTracker {
     });
   }
 
-  resolve(id: number, result: Outcome): void {
+  resolve(id: number, result: O): void {
     const entry = this.pending.get(id);
     if (!entry) return;
     this.pending.delete(id);
@@ -89,7 +89,7 @@ export class RequestTracker {
   }
 }
 
-export function unwrap(result: Outcome): Reply {
+export function unwrap<R, C extends string>(result: { ok: R } | { error: { code: C; message: string } }): R {
   if ("error" in result) throw new ProtocolFailure(result.error.code, result.error.message);
   return result.ok;
 }

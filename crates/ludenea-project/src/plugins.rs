@@ -31,7 +31,7 @@ const SHARED_MODULES: [&str; 4] = [
 const ENTRY_FILES: [&str; 2] = ["index.ts", "index.tsx"];
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export_to = "project/"))]
 pub struct PluginBundle {
     pub name: String,
     /// `plugins/<name>.<hash>.js`, relative to `.ludenea/`.
@@ -40,7 +40,7 @@ pub struct PluginBundle {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export_to = "project/"))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PluginSource {
     Project,

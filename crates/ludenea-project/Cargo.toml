@@ -5,7 +5,7 @@ edition.workspace = true
 
 [features]
 # TypeScript bindings of the project protocol; off by default.
-ts = ["dep:ts-rs", "ludenea-ecs/ts"]
+ts = ["dep:ts-rs", "ludenea-control/ts", "ludenea-ecs/ts"]
 
 [dependencies]
 cargo_metadata.workspace = true
@@ -22,7 +22,7 @@ rolldown_plugin.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["sync"] }
 toml.workspace = true
 ts-rs = { workspace = true, optional = true }
 uuid.workspace = true
@@ -31,3 +31,5 @@ xxhash-rust.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+ludenea-project = { path = ".", features = ["ts"] }
+ts-rs.workspace = true

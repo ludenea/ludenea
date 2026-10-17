@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /// What an asset is, as far as the editor cares.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export_to = "project/"))]
 pub enum AssetKind {
     Scene,
     Other,

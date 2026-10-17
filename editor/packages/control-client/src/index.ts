@@ -1,4 +1,5 @@
 export * from "./generated";
+export * from "./generated/project";
 export * from "./client";
 export * from "./project";
 export { type MessageTransport } from "./transports/transport";

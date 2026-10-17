@@ -17,7 +17,7 @@ pub(crate) const WATCH_DEBOUNCE: Duration = Duration::from_millis(100);
 const ASSET_DIRECTORIES: [&str; 2] = ["scenes", "assets"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export_to = "project/"))]
 pub struct FileEntry {
     /// Relative to the project root, with forward slashes.
     pub path: String,
@@ -28,7 +28,7 @@ pub struct FileEntry {
 
 /// A change on disk, with the path relative to the project root.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export_to = "project/"))]
 pub enum FileChange {
     Changed(String),
     Created(String),

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::{ProjectError, io_error};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export_to = "project/"))]
 pub enum OutputStream {
     Stdout,
     Stderr,
@@ -17,7 +17,7 @@ pub enum OutputStream {
 
 /// A line the game wrote that is not a protocol message.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export_to = "project/"))]
 pub struct GameOutput {
     pub stream: OutputStream,
     pub line: String,

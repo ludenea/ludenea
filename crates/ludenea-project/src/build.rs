@@ -30,7 +30,7 @@ impl BuildTarget {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export_to = "project/"))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BuildEvent {
     /// A line of cargo's own output (`Compiling ...`, rendered diagnostics).
@@ -49,7 +49,7 @@ pub enum BuildEvent {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export_to = "project/"))]
 pub struct Diagnostic {
     pub level: String,
     pub message: String,

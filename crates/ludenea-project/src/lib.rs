@@ -8,6 +8,8 @@ mod game;
 mod manifest;
 mod meta;
 mod plugins;
+pub mod protocol;
+pub mod service;
 mod template;
 mod types;
 
@@ -39,6 +41,10 @@ pub enum ProjectError {
     Manifest { path: PathBuf, message: String },
     #[error("cannot watch the project: {0}")]
     Watch(String),
+    #[error(
+        "no engine path to create the project with: set the editor setting ludenea.engine-path"
+    )]
+    NoEnginePath,
 }
 
 /// Something worth telling the user that is not an error.

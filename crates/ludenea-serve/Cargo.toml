@@ -7,6 +7,21 @@ edition.workspace = true
 name = "ludenea"
 path = "src/main.rs"
 
+[features]
+# Embeds the editor build (`editor/apps/web/dist`, which must exist) instead of serving
+# `--editor-dir`.
+embed-editor = ["dep:include_dir"]
+
 [dependencies]
+axum = { version = "0.8.9", features = ["ws"] }
 clap.workspace = true
+include_dir = { version = "0.7.4", optional = true }
 ludenea-project.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync"] }
+
+[dev-dependencies]
+ludenea-project.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tungstenite = "0.30.0"

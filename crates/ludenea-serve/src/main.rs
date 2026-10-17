@@ -4,6 +4,8 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use ludenea_project::Project;
 
+mod serve;
+
 #[derive(Parser)]
 #[command(about = "Create and edit Ludenea games")]
 struct Cli {
@@ -20,17 +22,50 @@ enum Command {
         #[arg(long)]
         engine_path: PathBuf,
     },
+    /// Serve the project and the editor to a browser.
+    Serve {
+        project: PathBuf,
+        #[arg(long, default_value_t = 7878)]
+        port: u16,
+        /// The address to listen on; the default keeps the project private to this machine.
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        /// The editor build to serve (`editor/apps/web/dist`), unless the editor is embedded.
+        #[arg(long)]
+        editor_dir: Option<PathBuf>,
+        /// The engine repository new projects depend on.
+        #[arg(long)]
+        engine_path: Option<PathBuf>,
+    },
 }
 
 fn main() -> ExitCode {
-    match Cli::parse().command {
-        Command::New { dir, engine_path } => match create(&dir, &engine_path) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(message) => {
-                eprintln!("error: {message}");
-                ExitCode::FAILURE
-            }
-        },
+    let result = match Cli::parse().command {
+        Command::New { dir, engine_path } => create(&dir, &engine_path),
+        Command::Serve {
+            project,
+            port,
+            host,
+            editor_dir,
+            engine_path,
+        } => tokio::runtime::Runtime::new()
+            .map_err(|error| error.to_string())
+            .and_then(|runtime| {
+                runtime.block_on(serve::run(serve::Options {
+                    project,
+                    host,
+                    port,
+                    editor_dir,
+                    engine_path,
+                }))
+            }),
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            eprintln!("error: {message}");
+            ExitCode::FAILURE
+        }
     }
 }
 
