@@ -64,26 +64,30 @@ struct Entry {
 }
 
 impl Project {
-    /// Bundles the plugin of the project and those of its dependencies into `.ludenea/plugins/`.
-    /// Every plugin is attempted; the diagnostics of all failing ones are returned together.
+    /// Bundles the plugin of the project and those of its dependencies into `.ludenea/plugins/`:
+    /// one `Rebuilt` or `Failed` per plugin, so one failing plugin never keeps the others from
+    /// loading. If the plugins cannot be listed, the only event is a failure of the project's.
     /// An entry is `editor/index.ts` or `editor/index.tsx`; `index.ts` wins when both exist.
-    pub fn bundle_plugins(&self) -> Result<Vec<PluginBundle>, Vec<Diagnostic>> {
-        let entries = self
-            .plugin_entries()
-            .map_err(|diagnostic| vec![diagnostic])?;
-        let mut bundles = Vec::new();
-        let mut diagnostics = Vec::new();
-        for entry in &entries {
-            match bundle(&self.root, entry) {
-                Ok(bundle) => bundles.push(bundle),
-                Err(mut failed) => diagnostics.append(&mut failed),
+    pub fn bundle_plugins(&self) -> Vec<PluginEvent> {
+        let entries = match self.plugin_entries() {
+            Ok(entries) => entries,
+            Err(diagnostic) => {
+                return vec![PluginEvent::Failed {
+                    name: self.manifest.name.clone(),
+                    diagnostics: vec![diagnostic],
+                }];
             }
-        }
-        if diagnostics.is_empty() {
-            Ok(bundles)
-        } else {
-            Err(diagnostics)
-        }
+        };
+        entries
+            .iter()
+            .map(|entry| match bundle(&self.root, entry) {
+                Ok(bundle) => PluginEvent::Rebuilt(bundle),
+                Err(diagnostics) => PluginEvent::Failed {
+                    name: entry.name.clone(),
+                    diagnostics,
+                },
+            })
+            .collect()
     }
 
     /// Rebundles a plugin whenever a file of its `editor/` directory changes. Watching stops when

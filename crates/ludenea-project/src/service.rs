@@ -15,8 +15,8 @@ use crate::protocol::{
     ProjectRequest, ProjectServerMessage, ServiceMode, handshake,
 };
 use crate::{
-    BuildArtifact, BuildError, BuildTarget, GameProcess, PluginEvent, Project, ProjectError,
-    ProjectWarning,
+    BuildArtifact, BuildError, BuildEvent, BuildTarget, GameProcess, PluginEvent, Project,
+    ProjectError, ProjectWarning,
 };
 
 /// Events a slow client may fall behind by before it misses some.
@@ -47,7 +47,12 @@ struct Opened {
     builds: Arc<Mutex<()>>,
     /// Cleared when the project is closed; background threads then stop.
     alive: Arc<AtomicBool>,
+    /// The events of the current or last build, for editors connecting later.
+    last_build: BuildLog,
 }
+
+/// The events of one build, with only its latest progress.
+type BuildLog = Arc<Mutex<Vec<ProjectEvent>>>;
 
 #[derive(Default)]
 struct Game {
@@ -99,22 +104,30 @@ impl ProjectService {
         lock(&self.opened.as_ref()?.game).control.take()
     }
 
-    /// Desktop: what an editor connecting now (a reloaded window) missed and needs to catch
-    /// up with the games: `GameReady` when one runs, then `GameRebuilt` when a rebuilt one
-    /// waits for `RestartGame`.
+    /// What an editor connecting now (a reloaded window, a build started before it) missed:
+    /// the events of the current or last build, then, on desktop, `GameReady` when a game
+    /// runs and `GameRebuilt` when a rebuilt one waits for `RestartGame`.
     pub fn announcements(&self) -> Vec<ProjectEvent> {
+        self.subscribe_caught_up().0
+    }
+
+    /// `announcements` and a subscription to the events after them, taken together so no
+    /// event is missed or repeated.
+    pub fn subscribe_caught_up(&self) -> (Vec<ProjectEvent>, broadcast::Receiver<ProjectEvent>) {
         let Some(opened) = &self.opened else {
-            return Vec::new();
+            return (Vec::new(), self.subscribe());
         };
+        // Game events are sent under the game lock and build events under the log lock.
         let game = lock(&opened.game);
-        let mut events = Vec::new();
+        let mut events = lock(&opened.last_build).clone();
+        let subscription = self.subscribe();
         if game.process.is_some() {
             events.push(ProjectEvent::GameReady);
         }
         if game.rebuilt.is_some() {
             events.push(ProjectEvent::GameRebuilt);
         }
-        events
+        (events, subscription)
     }
 
     pub fn handle(&mut self, request: ProjectRequest) -> Result<ProjectReply, ProjectFailure> {
@@ -212,11 +225,19 @@ impl ProjectService {
                 self.build(self.opened()?);
                 Ok(ProjectReply::Done)
             }
+            // The plugins that bundled; each failing one is reported as `PluginFailed`.
             ProjectRequest::ListPlugins => {
-                let plugins = self.project()?.bundle_plugins().map_err(|diagnostics| {
-                    let messages: Vec<_> = diagnostics.into_iter().map(|d| d.message).collect();
-                    ProjectFailure::new(FailureCode::PluginFailed, messages.join("\n"))
-                })?;
+                let mut plugins = Vec::new();
+                for event in self.project()?.bundle_plugins() {
+                    match event {
+                        PluginEvent::Rebuilt(bundle) => plugins.push(bundle),
+                        PluginEvent::Failed { name, diagnostics } => {
+                            let _ = self
+                                .events
+                                .send(ProjectEvent::PluginFailed { name, diagnostics });
+                        }
+                    }
+                }
                 Ok(ProjectReply::Plugins { plugins })
             }
             ProjectRequest::GameEndpoint => self.game_endpoint(),
@@ -286,6 +307,7 @@ impl ProjectService {
             game: Arc::default(),
             builds: Arc::default(),
             alive: Arc::new(AtomicBool::new(true)),
+            last_build: Arc::default(),
         };
         let (alive, events) = (Arc::clone(&opened.alive), self.events.clone());
         thread::spawn(move || {
@@ -314,6 +336,9 @@ impl ProjectService {
         });
         self.build(&opened);
         self.opened = Some(opened);
+        let _ = self
+            .events
+            .send(ProjectEvent::ProjectOpened { info: info.clone() });
         Ok(ProjectReply::Info(info))
     }
 
@@ -324,6 +349,7 @@ impl ProjectService {
         let game = Arc::clone(&opened.game);
         let builds = Arc::clone(&opened.builds);
         let alive = Arc::clone(&opened.alive);
+        let last_build = Arc::clone(&opened.last_build);
         let editor_connected = Arc::clone(&self.editor_connected);
         let events = self.events.clone();
         let target = match self.mode {
@@ -335,27 +361,53 @@ impl ProjectService {
             if !alive.load(Ordering::SeqCst) {
                 return;
             }
+            lock(&last_build).clear();
             let (sender, receiver) = mpsc::channel();
             let handle = lock(&project).build(target, sender);
             for event in receiver {
-                let _ = events.send(ProjectEvent::Build { event });
+                record(&last_build, &events, ProjectEvent::Build { event });
             }
-            let artifact = match handle.join() {
-                Ok(Ok(artifact)) => artifact,
+            let failure = match handle.join() {
+                Ok(Ok(artifact)) => {
+                    let mut game = lock(&game);
+                    // Checked under the lock: closing the project clears the flag before taking it.
+                    if !alive.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    let hold = editor_connected.load(Ordering::SeqCst);
+                    return finish_build(&mut game, artifact, hold, &events);
+                }
                 // The diagnostics already tell why.
                 Ok(Err(BuildError::Failed)) => return,
-                Ok(Err(error)) => return warn(&events, format!("the build failed: {error}")),
-                Err(_) => return warn(&events, "the build thread panicked".to_string()),
+                Ok(Err(error)) => format!("the build failed: {error}"),
+                Err(_) => "the build thread panicked".to_string(),
             };
-            let mut game = lock(&game);
-            // Checked under the lock: closing the project clears the flag before taking it.
-            if !alive.load(Ordering::SeqCst) {
-                return;
-            }
-            let hold = editor_connected.load(Ordering::SeqCst);
-            finish_build(&mut game, artifact, hold, &events);
+            record(
+                &last_build,
+                &events,
+                ProjectEvent::Warning { message: failure },
+            );
         });
     }
+}
+
+/// Sends a build's event and keeps it for `announcements`, a progress replacing the last one.
+fn record(log: &BuildLog, events: &broadcast::Sender<ProjectEvent>, event: ProjectEvent) {
+    let mut log = lock(log);
+    let progress = |event: &ProjectEvent| {
+        matches!(
+            event,
+            ProjectEvent::Build {
+                event: BuildEvent::Progress { .. }
+            }
+        )
+    };
+    if progress(&event) {
+        log.retain(|kept| !progress(kept));
+    }
+    log.push(event.clone());
+    // Sent under the lock, so `subscribe_caught_up` sees each event exactly once.
+    let _ = events.send(event);
 }
 
 /// Puts a successful build in place and announces it. On desktop with an editor connected
@@ -541,6 +593,18 @@ mod tests {
         );
     }
 
+    /// The announcements about games, without those of the project's own (failing) build.
+    fn game_announcements(service: &ProjectService) -> Vec<ProjectEvent> {
+        let mut events = service.announcements();
+        events.retain(|event| {
+            !matches!(
+                event,
+                ProjectEvent::Build { .. } | ProjectEvent::Warning { .. }
+            )
+        });
+        events
+    }
+
     fn received(events: &mut broadcast::Receiver<ProjectEvent>) -> Vec<ProjectEvent> {
         std::iter::from_fn(|| events.try_recv().ok())
             .filter(|event| matches!(event, ProjectEvent::GameReady | ProjectEvent::GameRebuilt))
@@ -567,7 +631,7 @@ mod tests {
         assert_eq!(received(&mut events), [ProjectEvent::GameRebuilt]);
         // A reloaded editor learns both.
         assert_eq!(
-            service.announcements(),
+            game_announcements(&service),
             [ProjectEvent::GameReady, ProjectEvent::GameRebuilt]
         );
 
@@ -577,7 +641,7 @@ mod tests {
         );
         assert_eq!(received(&mut events), [ProjectEvent::GameReady]);
         assert_eq!(ask(&mut service), r#"{"type":"second"}"#);
-        assert_eq!(service.announcements(), [ProjectEvent::GameReady]);
+        assert_eq!(game_announcements(&service), [ProjectEvent::GameReady]);
         let again = service.handle(ProjectRequest::RestartGame).unwrap_err();
         assert_eq!(again.code, FailureCode::NoGame);
     }
@@ -594,5 +658,30 @@ mod tests {
             [ProjectEvent::GameReady, ProjectEvent::GameReady]
         );
         assert_eq!(ask(&mut service), r#"{"type":"second"}"#);
+    }
+
+    #[test]
+    fn a_build_finished_before_the_editor_connected_is_announced() {
+        let dir = TempDir::new().unwrap();
+        // Its build fails fast: the project has no binary.
+        let service = desktop_service(&dir);
+        let failed = ProjectEvent::Build {
+            event: BuildEvent::Finished { ok: false },
+        };
+        let mut announced = Vec::new();
+        for _ in 0..3_000 {
+            announced = service.announcements();
+            if announced.contains(&failed) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(announced.contains(&failed), "{announced:?}");
+        let error = announced.iter().any(|event| {
+            matches!(event, ProjectEvent::Build { event: BuildEvent::Line { text } } if text.starts_with("error"))
+        });
+        assert!(error, "the reason is announced too: {announced:?}");
+        let (caught_up, _events) = service.subscribe_caught_up();
+        assert_eq!(caught_up, announced);
     }
 }

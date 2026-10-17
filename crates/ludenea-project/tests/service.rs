@@ -154,6 +154,40 @@ fn requests_outside_project_are_rejected() {
 }
 
 #[test]
+fn opening_another_project_is_announced() {
+    let dir = TempDir::new().unwrap();
+    let root = minimal_project(&dir);
+    let mut service = ProjectService::new(ServiceMode::Browser, None);
+    let mut events = service.subscribe();
+    let ProjectReply::Info(info) = open(&mut service, &root) else {
+        panic!("Open answers Info");
+    };
+    wait_for(
+        &mut events,
+        |event| matches!(event, ProjectEvent::ProjectOpened { info: opened } if *opened == info),
+    );
+}
+
+#[test]
+fn list_plugins_reports_a_failing_plugin_as_an_event() {
+    let dir = TempDir::new().unwrap();
+    let root = minimal_project(&dir);
+    fs::create_dir_all(root.join("editor")).unwrap();
+    fs::write(root.join("editor/index.ts"), "export const b = (;\n").unwrap();
+    let mut service = ProjectService::new(ServiceMode::Browser, None);
+    open(&mut service, &root);
+    let mut events = service.subscribe();
+    assert_eq!(
+        service.handle(ProjectRequest::ListPlugins).unwrap(),
+        ProjectReply::Plugins { plugins: vec![] }
+    );
+    wait_for(
+        &mut events,
+        |event| matches!(event, ProjectEvent::PluginFailed { name, diagnostics } if name == "demo" && !diagnostics.is_empty()),
+    );
+}
+
+#[test]
 fn create_without_engine_path_names_the_setting() {
     let dir = TempDir::new().unwrap();
     let mut service = ProjectService::new(ServiceMode::Desktop, None);

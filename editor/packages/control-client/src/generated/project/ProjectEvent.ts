@@ -4,5 +4,6 @@ import type { Diagnostic } from "./Diagnostic";
 import type { FileChange } from "./FileChange";
 import type { GameOutput } from "./GameOutput";
 import type { PluginBundle } from "./PluginBundle";
+import type { ProjectInfo } from "./ProjectInfo";
 
-export type ProjectEvent = { "type": "files_changed", changes: Array<FileChange>, } | { "type": "build", event: BuildEvent, } | { "type": "game_ready" } | { "type": "game_rebuilt" } | { "type": "game_exited", code: number | null, } | { "type": "game_output" } & GameOutput | { "type": "plugin_rebuilt" } & PluginBundle | { "type": "plugin_failed", name: string, diagnostics: Array<Diagnostic>, } | { "type": "warning", message: string, };
+export type ProjectEvent = { "type": "project_opened", info: ProjectInfo, } | { "type": "files_changed", changes: Array<FileChange>, } | { "type": "build", event: BuildEvent, } | { "type": "game_ready" } | { "type": "game_rebuilt" } | { "type": "game_exited", code: number | null, } | { "type": "game_output" } & GameOutput | { "type": "plugin_rebuilt" } & PluginBundle | { "type": "plugin_failed", name: string, diagnostics: Array<Diagnostic>, } | { "type": "warning", message: string, };

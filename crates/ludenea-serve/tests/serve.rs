@@ -305,3 +305,30 @@ fn two_clients_both_receive_file_events() {
         }
     }
 }
+
+/// Reads events until a build of the project finishes, returning whether it succeeded.
+fn build_finished(socket: &mut Socket) -> bool {
+    loop {
+        if let ProjectServerMessage::Event {
+            event:
+                ProjectEvent::Build {
+                    event: ludenea_project::BuildEvent::Finished { ok },
+                },
+        } = receive(socket)
+        {
+            return ok;
+        }
+    }
+}
+
+#[test]
+fn an_editor_connecting_after_the_build_learns_how_it_ended() {
+    let server = serve();
+    // The first editor follows the build (or catches up on it).
+    let mut first = connect(&server, None).unwrap();
+    handshake(&mut first);
+    let ok = build_finished(&mut first);
+    let mut late = connect(&server, None).unwrap();
+    handshake(&mut late);
+    assert_eq!(build_finished(&mut late), ok);
+}

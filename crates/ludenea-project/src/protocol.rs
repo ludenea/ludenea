@@ -168,6 +168,10 @@ pub enum ServiceMode {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export_to = "project/"))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProjectEvent {
+    /// Another project is open (`Open` or `Create`): the editor switches to its plugins.
+    ProjectOpened {
+        info: ProjectInfo,
+    },
     FilesChanged {
         changes: Vec<FileChange>,
     },

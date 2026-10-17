@@ -145,11 +145,13 @@ fn same_origin(headers: &HeaderMap) -> bool {
     origin_host.is_some() && origin_host == host
 }
 
-/// One editor: requests answered in order, and the project's events once it said hello.
+/// One editor: requests answered in order, and the project's events once it said hello,
+/// starting with what it missed (a build started before it connected).
 async fn session(app: App, mut socket: WebSocket) {
     let mut events = lock(&app.service).subscribe();
     let mut connected = false;
     loop {
+        let mut missed = Vec::new();
         let reply = tokio::select! {
             frame = socket.recv() => {
                 let text = match frame {
@@ -160,12 +162,19 @@ async fn session(app: App, mut socket: WebSocket) {
                 let service = Arc::clone(&app.service);
                 let answered = tokio::task::spawn_blocking(move || {
                     let mut now_connected = connected;
-                    let reply = lock(&service).answer(&mut now_connected, text.as_str());
-                    (reply, now_connected)
+                    let mut service = lock(&service);
+                    let reply = service.answer(&mut now_connected, text.as_str());
+                    let caught_up = matches!(reply, ProjectServerMessage::Welcome { .. })
+                        .then(|| service.subscribe_caught_up());
+                    (reply, now_connected, caught_up)
                 })
                 .await;
-                let Ok((reply, now_connected)) = answered else { return };
+                let Ok((reply, now_connected, caught_up)) = answered else { return };
                 connected = now_connected;
+                if let Some((announcements, subscription)) = caught_up {
+                    missed = announcements;
+                    events = subscription;
+                }
                 reply
             }
             event = events.recv(), if connected => match event {
@@ -180,9 +189,16 @@ async fn session(app: App, mut socket: WebSocket) {
                 Err(RecvError::Closed) => return,
             },
         };
-        let text = serde_json::to_string(&reply).expect("protocol messages serialize");
-        if socket.send(Message::Text(text.into())).await.is_err() {
-            return;
+        let messages = std::iter::once(reply).chain(
+            missed
+                .into_iter()
+                .map(|event| ProjectServerMessage::Event { event }),
+        );
+        for message in messages {
+            let text = serde_json::to_string(&message).expect("protocol messages serialize");
+            if socket.send(Message::Text(text.into())).await.is_err() {
+                return;
+            }
         }
     }
 }

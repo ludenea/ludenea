@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use ludenea_project::{PluginBundle, PluginEvent, PluginSource, Project};
+use ludenea_project::{Diagnostic, PluginBundle, PluginEvent, PluginSource, Project};
 use tempfile::TempDir;
 
 fn fixture() -> PathBuf {
@@ -27,6 +27,30 @@ fn project(dir: &TempDir, dependencies: &str, files: &[(&str, &str)]) -> Project
         fs::write(file, text).unwrap();
     }
     Project::open(&root).unwrap()
+}
+
+/// The bundles of a listing in which every plugin bundled.
+fn bundles(project: &Project) -> Vec<PluginBundle> {
+    project
+        .bundle_plugins()
+        .into_iter()
+        .map(|event| match event {
+            PluginEvent::Rebuilt(bundle) => bundle,
+            failed => panic!("{failed:?}"),
+        })
+        .collect()
+}
+
+/// The diagnostics of the plugins that failed to bundle.
+fn failures(project: &Project) -> Vec<Diagnostic> {
+    project
+        .bundle_plugins()
+        .into_iter()
+        .flat_map(|event| match event {
+            PluginEvent::Failed { diagnostics, .. } => diagnostics,
+            PluginEvent::Rebuilt(_) => Vec::new(),
+        })
+        .collect()
 }
 
 fn code(project: &Project, bundle: &PluginBundle) -> String {
@@ -71,7 +95,7 @@ fn bundles_tsx_plugin_with_shared_imports_external() {
             ),
         ],
     );
-    let bundles = project.bundle_plugins().unwrap();
+    let bundles = bundles(&project);
     assert_eq!(bundles.len(), 1);
     let bundle = &bundles[0];
     assert_eq!(bundle.name, "demo");
@@ -106,7 +130,7 @@ fn index_ts_and_index_tsx_are_both_entries() {
             "",
             &[(entry, "export const which: string = 'entry';")],
         );
-        let bundles = project.bundle_plugins().unwrap();
+        let bundles = bundles(&project);
         assert_eq!(bundles.len(), 1, "{entry}");
         assert!(code(&project, &bundles[0]).contains("entry"), "{entry}");
     }
@@ -126,7 +150,7 @@ fn third_party_import_is_rejected_with_rule() {
             ("editor/node_modules/left-pad/index.js", "export default 1;"),
         ],
     );
-    let diagnostics = project.bundle_plugins().unwrap_err();
+    let diagnostics = failures(&project);
     assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
     let diagnostic = &diagnostics[0];
     assert_eq!(diagnostic.level, "error");
@@ -152,7 +176,7 @@ fn stale_bundle_that_cannot_be_removed_does_not_fail_the_bundle() {
         .root()
         .join(".ludenea/plugins/demo.0000000000000000.js");
     fs::create_dir_all(&stale).unwrap();
-    let bundles = project.bundle_plugins().unwrap();
+    let bundles = bundles(&project);
     assert!(code(&project, &bundles[0]).contains("export"));
 }
 
@@ -167,7 +191,7 @@ fn syntax_error_reports_file_and_line() {
             "export const a = 1;\nexport const b = (;\n",
         )],
     );
-    let diagnostics = project.bundle_plugins().unwrap_err();
+    let diagnostics = failures(&project);
     let diagnostic = &diagnostics[0];
     assert_eq!(diagnostic.level, "error");
     assert_eq!(diagnostic.file.as_deref(), Some("editor/index.ts"));
@@ -187,7 +211,7 @@ fn engine_plugin_of_dependency_is_discovered() {
         &dependency,
         &[("editor/index.ts", "export default 'project';")],
     );
-    let bundles = project.bundle_plugins().unwrap();
+    let bundles = bundles(&project);
     let sources: Vec<_> = bundles
         .iter()
         .map(|bundle| (bundle.name.as_str(), bundle.source.clone()))
@@ -218,7 +242,7 @@ fn editing_plugin_source_emits_rebuilt_with_new_hash() {
             ("editor/greeting.ts", "export const greeting = 'before';"),
         ],
     );
-    let before = project.bundle_plugins().unwrap().remove(0);
+    let before = bundles(&project).remove(0);
     let events = project.watch_plugins();
     fs::write(
         project.root().join("editor/greeting.ts"),
@@ -237,4 +261,41 @@ fn editing_plugin_source_emits_rebuilt_with_new_hash() {
         seen.push(event);
     }
     panic!("never saw a rebuild with a new hash; saw {seen:?}");
+}
+
+#[test]
+fn a_failing_plugin_does_not_keep_the_others_from_loading() {
+    let dir = TempDir::new().unwrap();
+    let broken = dir.path().join("broken");
+    for (path, text) in [
+        (
+            "Cargo.toml",
+            "[package]\nname = \"broken\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        ),
+        ("src/lib.rs", ""),
+        ("editor/index.ts", "export const b = (;\n"),
+    ] {
+        let file = broken.join(path);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(file, text).unwrap();
+    }
+    let dependency = format!(
+        "broken = {{ path = {:?} }}",
+        broken.to_string_lossy().replace('\\', "/")
+    );
+    let project = project(
+        &dir,
+        &dependency,
+        &[("editor/index.ts", "export default 'project';")],
+    );
+    let listed = project.bundle_plugins();
+    assert_eq!(listed.len(), 2, "{listed:?}");
+    assert!(
+        matches!(&listed[0], PluginEvent::Rebuilt(bundle) if bundle.name == "demo"),
+        "{listed:?}"
+    );
+    assert!(
+        matches!(&listed[1], PluginEvent::Failed { name, diagnostics } if name == "broken" && diagnostics[0].line == Some(1)),
+        "{listed:?}"
+    );
 }
