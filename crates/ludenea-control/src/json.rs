@@ -40,6 +40,23 @@ pub fn from_wire(mut value: JsonValue, schema: &TypeSchema) -> Result<JsonValue,
     Ok(value)
 }
 
+/// Like `to_wire` for a value without a schema (an event): every integer JavaScript cannot
+/// hold exactly becomes a decimal string.
+pub fn untyped_to_wire(mut value: JsonValue) -> JsonValue {
+    fn convert(value: &mut JsonValue) {
+        match value {
+            JsonValue::Number(number) if !is_safe(number) => {
+                *value = JsonValue::String(number.to_string());
+            }
+            JsonValue::Array(values) => values.iter_mut().for_each(convert),
+            JsonValue::Object(map) => map.values_mut().for_each(convert),
+            _ => {}
+        }
+    }
+    convert(&mut value);
+    value
+}
+
 fn is_safe(number: &Number) -> bool {
     match (number.as_u64(), number.as_i64()) {
         (Some(unsigned), _) => unsigned <= MAX_SAFE_INTEGER,
@@ -177,6 +194,16 @@ mod tests {
             })
         );
         assert_eq!(from_wire(wire, &schema()).unwrap(), native);
+    }
+
+    #[test]
+    fn untyped_large_integers_become_strings() {
+        let wire =
+            untyped_to_wire(json!({"a": [MAX_SAFE_INTEGER, u64::MAX], "b": i64::MIN, "c": 1.5}));
+        assert_eq!(
+            wire,
+            json!({"a": [MAX_SAFE_INTEGER, u64::MAX.to_string()], "b": i64::MIN.to_string(), "c": 1.5})
+        );
     }
 
     #[test]

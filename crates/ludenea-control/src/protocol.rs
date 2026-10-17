@@ -3,9 +3,11 @@ use std::collections::BTreeMap;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use ludenea_app::RawInput;
+use ludenea_debug_draw::DebugDrawFrame;
 use ludenea_ecs::hash::hex_u64;
 use ludenea_ecs::schema::TypeSchema;
 use ludenea_ecs::{Entity, HashTree};
+use ludenea_math::Vec2;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value as JsonValue;
 
@@ -164,7 +166,13 @@ pub enum Command {
         a: Bytes,
         b: Bytes,
     },
-    ListEntities,
+    /// A page of the entities matching `filter` (see `EntityFilter::parse`), in ascending
+    /// index order.
+    QueryEntities {
+        filter: String,
+        offset: u32,
+        limit: u32,
+    },
     GetEntity {
         entity: Entity,
     },
@@ -231,6 +239,45 @@ pub enum Command {
         undo: Bytes,
         expected: Vec<Hash64>,
     },
+    GetSchedule,
+    /// The events sent during the tick that ended at `tick`, recorded while `Introspection`
+    /// is subscribed.
+    GetTickEvents {
+        tick: u64,
+    },
+    /// The commands applied during the tick that ended at `tick`, recorded while
+    /// `Introspection` is subscribed.
+    GetTickCommands {
+        tick: u64,
+    },
+    /// The debug drawing of the current tick, for these layers.
+    GetDebugDraw {
+        layers: Vec<String>,
+    },
+    /// The entities under a world point.
+    Pick {
+        point: Vec2,
+    },
+    Subscribe {
+        topic: Topic,
+    },
+    Unsubscribe {
+        topic: Topic,
+    },
+}
+
+/// What a client can subscribe to. Changes are pushed as events from `Host::advance`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Topic {
+    /// `EntitiesChanged` when the matching entities or their hashes change.
+    Entities { filter: String },
+    /// `EntityChanged` with the components that changed, `EntityDespawned` when it dies.
+    Entity { entity: Entity },
+    /// `ResourcesChanged` with the resources that changed.
+    Resources,
+    /// Records the events, commands, and system timings of the ticks run while subscribed.
+    Introspection,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -259,7 +306,8 @@ pub enum Reply {
         lines: Vec<String>,
     },
     Entities {
-        entities: Vec<Entity>,
+        total: u32,
+        rows: Vec<EntityRow>,
     },
     /// Component values keyed by stable name.
     Entity {
@@ -284,6 +332,54 @@ pub enum Reply {
         undo: Bytes,
         hashes: Vec<Hash64>,
     },
+    Schedule {
+        systems: Vec<SystemRow>,
+    },
+    TickEvents {
+        events: Vec<RecordedEvent>,
+    },
+    TickCommands {
+        sync_points: Vec<SyncPoint>,
+    },
+    DebugDraw {
+        tick: u64,
+        frame: DebugDrawFrame,
+    },
+    Picked {
+        entities: Vec<Entity>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EntityRow {
+    pub entity: Entity,
+    pub hash: Hash64,
+}
+
+/// A system in run order, its accesses as `"kind name"` (for example
+/// `"component ludenea::Body"`), and its mean time over the last observed ticks.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SystemRow {
+    pub name: String,
+    pub reads: Vec<String>,
+    pub writes: Vec<String>,
+    /// `None` until a tick ran while `Introspection` is subscribed, and in the browser.
+    pub micros: Option<f32>,
+}
+
+/// An event by its Rust type name (for display only) and its JSON value.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RecordedEvent {
+    pub event_type: String,
+    pub value: JsonValue,
+}
+
+/// The commands a system issued, applied right after it, such as
+/// `"insert ludenea::Body on 12v0"`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SyncPoint {
+    pub after_system: String,
+    pub commands: Vec<String>,
 }
 
 /// What `SetField` changes.
@@ -336,6 +432,23 @@ pub enum Event {
         level: ConsoleLevel,
         text: String,
     },
+    EntitiesChanged {
+        filter: String,
+        total: u32,
+    },
+    /// The components whose value changed since the last push, and those removed.
+    EntityChanged {
+        entity: Entity,
+        components: BTreeMap<String, ComponentValue>,
+        removed: Vec<String>,
+    },
+    EntityDespawned {
+        entity: Entity,
+    },
+    /// The resources whose value changed since the last push.
+    ResourcesChanged {
+        resources: BTreeMap<String, ComponentValue>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -386,6 +499,7 @@ pub enum ErrorCode {
     NothingToRedo,
     NoInputMapping,
     SystemPanicked,
+    InvalidFilter,
 }
 
 impl ProtocolError {

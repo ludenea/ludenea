@@ -189,6 +189,26 @@ fn play_then_advance_runs_ticks_and_emits_ticked() {
 }
 
 #[test]
+fn replaying_simulated_ticks_does_not_report_the_timeline() {
+    let mut host = loaded(100);
+    step(&mut host, 20);
+    ok(&mut host, Command::Seek { tick: 0 });
+    host.advance(0.0);
+    ok(&mut host, Command::Play);
+    let mut events = Vec::new();
+    for _ in 0..10 {
+        events.extend(host.advance(1.0 / 60.0));
+    }
+    assert_eq!(timeline(&mut host).current, 10);
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Event::TimelineChanged { .. })),
+        "{events:?}"
+    );
+}
+
+#[test]
 fn speed_changes_ticks_per_second_and_rejects_non_finite() {
     let mut host = loaded(100);
     ok(&mut host, Command::SetSpeed { speed: 2.0 });

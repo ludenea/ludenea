@@ -19,6 +19,7 @@ use ludenea_ecs::{Entity, Snapshot, SnapshotError};
 use serde::{Deserialize, Serialize};
 
 use crate::checkpoints::Checkpoints;
+use crate::subscriptions::Introspection;
 use crate::undo::{UndoEntry, UndoHistory};
 
 #[derive(Debug, thiserror::Error)]
@@ -117,6 +118,8 @@ pub struct Session {
     return_to: Option<u64>,
     diverged: bool,
     reports: VecDeque<Resimulation>,
+    /// Records every tick run while the `Introspection` topic is subscribed.
+    pub(crate) introspection: Option<Introspection>,
 }
 
 impl Session {
@@ -138,6 +141,7 @@ impl Session {
             return_to: None,
             diverged: false,
             reports: VecDeque::new(),
+            introspection: None,
         })
     }
 
@@ -358,6 +362,11 @@ impl Session {
         Ok(())
     }
 
+    /// The hash recorded after `tick` ticks, before the edits of `tick`.
+    pub(crate) fn recorded_hash(&self, tick: u64) -> Option<u64> {
+        self.hashes.get(usize::try_from(tick).ok()?).copied()
+    }
+
     /// Whether edits recorded at the current tick are applied but not yet simulated.
     pub fn is_pending(&self) -> bool {
         !self.edits.at(self.current).is_empty()
@@ -548,11 +557,17 @@ impl Session {
         self.head = inputs.max(self.edits.last_tick().unwrap_or(0));
     }
 
-    /// Steps once, catching a panic before the session touches its logs: on a panic the
-    /// state of the current tick is restored and `Panicked` names the tick that failed.
+    /// Steps once, recorded while introspection is on, catching a panic before the session
+    /// touches its logs: on a panic the state of the current tick is restored and
+    /// `Panicked` names the tick that failed.
     fn run_tick(&mut self, sim: &mut Simulation, input: Option<&[u8]>) -> Result<(), SessionError> {
         let tick = sim.tick();
-        match catch_unwind(AssertUnwindSafe(|| sim.step_encoded(input))) {
+        let introspection = &mut self.introspection;
+        let step = || match introspection {
+            Some(introspection) => introspection.step(sim, input),
+            None => sim.step_encoded(input),
+        };
+        match catch_unwind(AssertUnwindSafe(step)) {
             Ok(result) => Ok(result?),
             Err(payload) => {
                 let message = payload

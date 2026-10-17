@@ -180,12 +180,16 @@ fn invalid_scene_returns_invalid_scene_error() {
 #[test]
 fn list_and_get_entity_return_components_and_reject_dead_ones() {
     let mut client = client();
-    let Ok(Reply::Entities { entities }) = client.request(Command::ListEntities) else {
+    let Ok(Reply::Entities { total, rows }) = client.request(Command::QueryEntities {
+        filter: String::new(),
+        offset: 0,
+        limit: 10,
+    }) else {
         panic!()
     };
-    assert_eq!(entities.len(), 1);
+    assert_eq!((total, rows.len()), (1, 1));
     let Ok(Reply::Entity { components, .. }) = client.request(Command::GetEntity {
-        entity: entities[0],
+        entity: rows[0].entity,
     }) else {
         panic!()
     };
@@ -239,7 +243,11 @@ fn every_command_and_reply_round_trips_through_json() {
             a: bytes.clone(),
             b: bytes.clone(),
         },
-        Command::ListEntities,
+        Command::QueryEntities {
+            filter: "With<Score>".into(),
+            offset: 2,
+            limit: 3,
+        },
         Command::GetEntity { entity },
         Command::GetResources,
         Command::Spawn {
@@ -304,6 +312,29 @@ fn every_command_and_reply_round_trips_through_json() {
             undo: bytes.clone(),
             expected: vec![Hash64(1)],
         },
+        Command::GetSchedule,
+        Command::GetTickEvents { tick: 3 },
+        Command::GetTickCommands { tick: 4 },
+        Command::GetDebugDraw {
+            layers: vec!["physics.colliders".into()],
+        },
+        Command::Pick {
+            point: serde_json::from_str(r#"{"x":1.5,"y":-2.0}"#).unwrap(),
+        },
+        Command::Subscribe {
+            topic: Topic::Entities {
+                filter: "With<Score>".into(),
+            },
+        },
+        Command::Subscribe {
+            topic: Topic::Entity { entity },
+        },
+        Command::Subscribe {
+            topic: Topic::Resources,
+        },
+        Command::Unsubscribe {
+            topic: Topic::Introspection,
+        },
     ];
     for command in commands {
         let message = ClientMessage::Request { id: 7, command };
@@ -357,6 +388,37 @@ fn every_command_and_reply_round_trips_through_json() {
             lines: vec!["a".into()],
         },
         Reply::Entities {
+            total: 4,
+            rows: vec![EntityRow {
+                entity,
+                hash: Hash64(9),
+            }],
+        },
+        Reply::Schedule {
+            systems: vec![SystemRow {
+                name: "s".into(),
+                reads: vec!["component n".into()],
+                writes: vec![],
+                micros: Some(1.5),
+            }],
+        },
+        Reply::TickEvents {
+            events: vec![RecordedEvent {
+                event_type: "e".into(),
+                value: serde_json::json!({"k": "Begin"}),
+            }],
+        },
+        Reply::TickCommands {
+            sync_points: vec![SyncPoint {
+                after_system: "s".into(),
+                commands: vec!["spawn 1v2".into()],
+            }],
+        },
+        Reply::DebugDraw {
+            tick: 3,
+            frame: Default::default(),
+        },
+        Reply::Picked {
             entities: vec![entity],
         },
         Reply::Entity {
@@ -447,6 +509,24 @@ fn every_command_and_reply_round_trips_through_json() {
         Event::Console {
             level: ConsoleLevel::Warning,
             text: "t".into(),
+        },
+        Event::EntitiesChanged {
+            filter: "f".into(),
+            total: 3,
+        },
+        Event::EntityChanged {
+            entity,
+            components: BTreeMap::from([(
+                "n".to_string(),
+                ComponentValue::Json {
+                    value: serde_json::json!(1),
+                },
+            )]),
+            removed: vec!["r".into()],
+        },
+        Event::EntityDespawned { entity },
+        Event::ResourcesChanged {
+            resources: BTreeMap::new(),
         },
     ];
     for event in events {

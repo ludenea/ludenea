@@ -1,18 +1,21 @@
 use ludenea_app::{
     App, AppError, Edit, EditError, EditLog, InputLog, RawInput, SimError, Simulation, ValueKind,
 };
+use std::collections::{BTreeMap, BTreeSet};
+
 use ludenea_ecs::schema::TypeSchema;
-use ludenea_ecs::{Entity, Snapshot};
+use ludenea_ecs::{Entity, EntityFilter, FilterError, Snapshot};
 use serde_json::Value as JsonValue;
 
 use crate::json::{from_wire, to_wire};
 use crate::pacer::Pacer;
 use crate::path::{Path, PathSegment, set_at_path};
 use crate::protocol::{
-    Bytes, Command, ComponentValue, ConsoleLevel, ErrorCode, Event, FieldTarget, GameInfo, Hash64,
-    NamedSchema, PauseReason, ProtocolError, Reply,
+    Bytes, Command, ComponentValue, ConsoleLevel, EntityRow, ErrorCode, Event, FieldTarget,
+    GameInfo, Hash64, NamedSchema, PauseReason, ProtocolError, Reply, SyncPoint, SystemRow, Topic,
 };
 use crate::session::{Resimulation, Session, SessionError, Timeline};
+use crate::subscriptions::{INTROSPECTION_TICKS, Subscriptions, TickRecord, entity_leaf};
 
 /// Most ticks one `advance` resimulates while the recorded future is stale.
 pub const RESIMULATION_BUDGET: u32 = 240;
@@ -28,6 +31,7 @@ pub struct Host {
     live: Option<Vec<u8>>,
     /// The timeline last reported, to emit `TimelineChanged` only on change.
     timeline: Timeline,
+    subscriptions: Subscriptions,
     /// Events produced by commands, returned by the next `advance`.
     events: Vec<Event>,
 }
@@ -46,6 +50,7 @@ impl Host {
             session,
             playing: false,
             live: None,
+            subscriptions: Subscriptions::default(),
             events: Vec::new(),
         })
     }
@@ -76,7 +81,11 @@ impl Host {
     }
 
     pub fn handle(&mut self, command: Command) -> Result<Reply, ProtocolError> {
+        let changes_state = changes_state(&command);
         let result = self.execute(command);
+        if changes_state {
+            self.report_changes();
+        }
         self.report_timeline();
         result
     }
@@ -111,6 +120,7 @@ impl Host {
                 }
             }
         }
+        self.report_changes();
         self.report_timeline();
         std::mem::take(&mut self.events)
     }
@@ -175,9 +185,31 @@ impl Host {
                     lines: differences.iter().map(ToString::to_string).collect(),
                 })
             }
-            Command::ListEntities => Ok(Reply::Entities {
-                entities: sim.world().entities().collect(),
-            }),
+            Command::QueryEntities {
+                filter,
+                offset,
+                limit,
+            } => {
+                let world = sim.world();
+                let filter = EntityFilter::parse(&filter, world).map_err(|e| filter_error(&e))?;
+                let entities = world.filter_entities(&filter);
+                // ponytail: hashes the whole world for one page; hash only the page's entities
+                // if large worlds make this slow.
+                let tree = world.hash_tree();
+                let rows = entities
+                    .iter()
+                    .skip(offset as usize)
+                    .take(limit as usize)
+                    .map(|&entity| EntityRow {
+                        entity,
+                        hash: Hash64(entity_leaf(&tree, entity).expect("alive").hash),
+                    })
+                    .collect();
+                Ok(Reply::Entities {
+                    total: u32::try_from(entities.len()).expect("fewer than 2^32 entities"),
+                    rows,
+                })
+            }
             Command::GetEntity { entity } => self.get_entity(entity),
             Command::GetResources => Ok(self.get_resources()),
             Command::Spawn { components } => {
@@ -314,59 +346,105 @@ impl Host {
                     .map_err(|e| self.fail(e))?;
                 self.load(session)
             }
+            Command::GetSchedule => {
+                let systems = sim.systems();
+                let micros = match &self.session.introspection {
+                    Some(introspection) => introspection.mean_micros(systems.len()),
+                    None => vec![None; systems.len()],
+                };
+                let accesses = |accesses: Vec<(&str, &str)>| {
+                    accesses
+                        .into_iter()
+                        .map(|(kind, name)| format!("{kind} {name}"))
+                        .collect()
+                };
+                let systems = systems
+                    .into_iter()
+                    .zip(micros)
+                    .map(|(system, micros)| SystemRow {
+                        name: system.name.to_string(),
+                        reads: accesses(system.reads),
+                        writes: accesses(system.writes),
+                        micros,
+                    })
+                    .collect();
+                Ok(Reply::Schedule { systems })
+            }
+            Command::GetTickEvents { tick } => Ok(Reply::TickEvents {
+                events: self.tick_record(tick)?.events.clone(),
+            }),
+            Command::GetTickCommands { tick } => {
+                let systems = sim.systems();
+                let sync_points = self
+                    .tick_record(tick)?
+                    .commands
+                    .iter()
+                    .map(|(index, commands)| SyncPoint {
+                        after_system: systems[*index].name.to_string(),
+                        commands: commands.clone(),
+                    })
+                    .collect();
+                Ok(Reply::TickCommands { sync_points })
+            }
+            Command::GetDebugDraw { layers } => Ok(Reply::DebugDraw {
+                tick: sim.tick(),
+                frame: sim.debug_draw(&layers.into_iter().collect::<BTreeSet<_>>()),
+            }),
+            Command::Pick { point } => Ok(Reply::Picked {
+                entities: sim.pick(point),
+            }),
+            Command::Subscribe { topic } => {
+                if topic == Topic::Introspection {
+                    self.session
+                        .introspection
+                        .get_or_insert_with(Default::default);
+                }
+                self.subscriptions
+                    .subscribe(&topic, &self.simulation)
+                    .map_err(|e| filter_error(&e))?;
+                Ok(Reply::Done)
+            }
+            Command::Unsubscribe { topic } => {
+                if topic == Topic::Introspection {
+                    self.session.introspection = None;
+                }
+                self.subscriptions.unsubscribe(&topic);
+                Ok(Reply::Done)
+            }
         }
     }
 
     fn get_entity(&self, entity: Entity) -> Result<Reply, ProtocolError> {
-        let world = self.simulation.world();
-        let json = world.entity_components_json(entity).ok_or_else(|| {
+        let components = entity_values(&self.simulation, entity).ok_or_else(|| {
             ProtocolError::new(
                 ErrorCode::NoSuchEntity,
-                format!("entity {entity} is not alive; list the entities first"),
+                format!("entity {entity} is not alive; query the entities first"),
             )
         })?;
-        let mut ron = world
-            .entity_components_ron(entity)
-            .expect("the entity is alive");
-        let components = json
-            .into_iter()
-            .map(|(name, json)| {
-                let value = match json {
-                    Ok(value) => {
-                        let schema = value_schema(&self.simulation, ValueKind::Component, &name)
-                            .expect("a component of the world is registered");
-                        ComponentValue::Json {
-                            value: to_wire(value, &schema),
-                        }
-                    }
-                    Err(_) => ComponentValue::Ron {
-                        text: ron.remove(&name).expect("the same components"),
-                    },
-                };
-                (name, value)
-            })
-            .collect();
         Ok(Reply::Entity { entity, components })
     }
 
     fn get_resources(&self) -> Reply {
-        let world = self.simulation.world();
-        let resources = world
-            .resource_schemas()
-            .into_iter()
-            .map(|(name, schema)| {
-                let value = match world.resource_json(name).expect("a registered resource") {
-                    Ok(value) => ComponentValue::Json {
-                        value: to_wire(value, &schema),
-                    },
-                    Err(_) => ComponentValue::Ron {
-                        text: world.resource_ron(name).expect("a registered resource"),
-                    },
-                };
-                (name.to_string(), value)
+        Reply::Resources {
+            resources: resource_values(&self.simulation),
+        }
+    }
+
+    /// The introspection record of the tick that ended at `tick`.
+    fn tick_record(&self, tick: u64) -> Result<&TickRecord, ProtocolError> {
+        self.session
+            .introspection
+            .as_ref()
+            .and_then(|introspection| introspection.tick(tick, self.session.recorded_hash(tick)))
+            .ok_or_else(|| {
+                ProtocolError::new(
+                    ErrorCode::InvalidTick,
+                    format!(
+                        "tick {tick} is not among the last {INTROSPECTION_TICKS} ticks run \
+                         while introspection is subscribed; subscribe and run it again"
+                    ),
+                )
             })
-            .collect();
-        Reply::Resources { resources }
     }
 
     /// Reads the exact current value of `target`, replaces the value at `path`, and records
@@ -436,7 +514,9 @@ impl Host {
     }
 
     /// Takes over a new session, paused.
-    fn load(&mut self, session: Session) -> Result<Reply, ProtocolError> {
+    fn load(&mut self, mut session: Session) -> Result<Reply, ProtocolError> {
+        // Records of the old session never match the new one's hashes, unless it is the same.
+        session.introspection = self.session.introspection.take();
         self.session = session;
         if self.playing {
             self.pause(PauseReason::User);
@@ -540,13 +620,108 @@ impl Host {
         self.events.push(Event::Console { level, text });
     }
 
+    /// Reports the timeline when it changes beyond its current tick, which `Ticked`
+    /// reports.
     fn report_timeline(&mut self) {
         let timeline = self.session.timeline();
-        if timeline != self.timeline {
+        let moved_only = Timeline {
+            current: timeline.current,
+            ..self.timeline.clone()
+        };
+        if timeline != moved_only {
             self.timeline = timeline.clone();
             self.events.push(Event::TimelineChanged { timeline });
         }
     }
+
+    fn report_changes(&mut self) {
+        let changes = self.subscriptions.deltas(&self.simulation);
+        self.events.extend(changes);
+    }
+}
+
+/// Whether `command` may change the simulated state, so subscriptions are checked after it.
+fn changes_state(command: &Command) -> bool {
+    !matches!(
+        command,
+        Command::SetThreads { .. }
+            | Command::GetHash
+            | Command::GetHashTree
+            | Command::TakeSnapshot
+            | Command::DiffSnapshots { .. }
+            | Command::QueryEntities { .. }
+            | Command::GetEntity { .. }
+            | Command::GetResources
+            | Command::SaveScene
+            | Command::Play
+            | Command::Pause
+            | Command::SetSpeed { .. }
+            | Command::SetLiveInput { .. }
+            | Command::GetTimeline
+            | Command::ExportSession
+            | Command::GetSchedule
+            | Command::GetTickEvents { .. }
+            | Command::GetTickCommands { .. }
+            | Command::GetDebugDraw { .. }
+            | Command::Pick { .. }
+            | Command::Subscribe { .. }
+            | Command::Unsubscribe { .. }
+    )
+}
+
+/// The component values of `entity` keyed by stable name, if it is alive.
+pub(crate) fn entity_values(
+    sim: &Simulation,
+    entity: Entity,
+) -> Option<BTreeMap<String, ComponentValue>> {
+    let world = sim.world();
+    let json = world.entity_components_json(entity)?;
+    let mut ron = world
+        .entity_components_ron(entity)
+        .expect("the entity is alive");
+    let components = json
+        .into_iter()
+        .map(|(name, json)| {
+            let value = match json {
+                Ok(value) => {
+                    let schema = value_schema(sim, ValueKind::Component, &name)
+                        .expect("a component of the world is registered");
+                    ComponentValue::Json {
+                        value: to_wire(value, &schema),
+                    }
+                }
+                Err(_) => ComponentValue::Ron {
+                    text: ron.remove(&name).expect("the same components"),
+                },
+            };
+            (name, value)
+        })
+        .collect();
+    Some(components)
+}
+
+/// Every resource value keyed by stable name.
+pub(crate) fn resource_values(sim: &Simulation) -> BTreeMap<String, ComponentValue> {
+    let world = sim.world();
+    world
+        .resource_schemas()
+        .into_iter()
+        .map(|(name, schema)| {
+            let value = match world.resource_json(name).expect("a registered resource") {
+                Ok(value) => ComponentValue::Json {
+                    value: to_wire(value, &schema),
+                },
+                Err(_) => ComponentValue::Ron {
+                    text: world.resource_ron(name).expect("a registered resource"),
+                },
+            };
+            (name.to_string(), value)
+        })
+        .collect()
+}
+
+fn filter_error(error: &FilterError) -> ProtocolError {
+    ProtocolError::new(ErrorCode::InvalidFilter, error)
 }
 
 fn session_error(error: &SessionError) -> ProtocolError {

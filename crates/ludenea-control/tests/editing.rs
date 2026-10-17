@@ -55,8 +55,15 @@ fn hash(host: &mut Host) -> Hash64 {
 }
 
 fn entities(host: &mut Host) -> Vec<Entity> {
-    match ok(host, Command::ListEntities) {
-        Reply::Entities { entities } => entities,
+    match ok(
+        host,
+        Command::QueryEntities {
+            filter: String::new(),
+            offset: 0,
+            limit: u32::MAX,
+        },
+    ) {
+        Reply::Entities { rows, .. } => rows.into_iter().map(|row| row.entity).collect(),
         other => panic!("{other:?}"),
     }
 }
