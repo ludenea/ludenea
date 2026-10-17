@@ -2,10 +2,16 @@ use crate::{Vec2, atan2, sin_cos};
 use serde::{Deserialize, Serialize};
 
 /// Rotation stored as cosine and sine of the angle.
-#[derive(Copy, Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Rot {
     pub cos: f32,
     pub sin: f32,
+}
+
+impl Default for Rot {
+    fn default() -> Self {
+        Rot::IDENTITY
+    }
 }
 
 impl Rot {
@@ -72,6 +78,12 @@ impl Rot {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn defaults_are_identity() {
+        assert_eq!(super::Rot::default(), super::Rot::IDENTITY);
+        assert_eq!(crate::Transform::default(), crate::Transform::IDENTITY);
+    }
+
     use super::*;
 
     #[test]

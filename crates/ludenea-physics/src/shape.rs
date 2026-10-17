@@ -163,7 +163,7 @@ impl Polygon {
     }
 
     /// Two-vertex rounded polygon used to collide capsules.
-    #[allow(dead_code)] // consumed by the contact manifolds
+    #[expect(dead_code)] // consumed by the contact manifolds
     pub(crate) fn from_segment(c1: Vec2, c2: Vec2, radius: f32) -> Polygon {
         finish(&[c1, c2], radius)
     }
@@ -413,9 +413,15 @@ mod tests {
             0.1,
         )
         .unwrap();
-        assert_eq!(Polygon::new(p.vertices(), p.radius()).unwrap(), p);
+        assert_eq!(
+            postcard::to_allocvec(&Polygon::new(p.vertices(), p.radius()).unwrap()).unwrap(),
+            postcard::to_allocvec(&p).unwrap()
+        );
         let b = Polygon::make_box(1.5, 0.5);
-        assert_eq!(Polygon::new(b.vertices(), b.radius()).unwrap(), b);
+        assert_eq!(
+            postcard::to_allocvec(&Polygon::new(b.vertices(), b.radius()).unwrap()).unwrap(),
+            postcard::to_allocvec(&b).unwrap()
+        );
     }
 
     #[test]
@@ -473,25 +479,34 @@ mod tests {
         ));
     }
 
+    /// Well-formed data (unit edge normals, zero padding, finite centroid)
+    /// whose only flaw is the vertex layout, so rejection comes from geometry.
+    fn well_formed_data(raw: &[(f32, f32)]) -> String {
+        let mut polygon = finish(&pts(raw), 0.0);
+        polygon.centroid = polygon.vertices[0];
+        ron::to_string(&PolygonData::from(polygon)).unwrap()
+    }
+
+    fn geometry_error(raw: &[(f32, f32)]) -> String {
+        ron::from_str::<Polygon>(&well_formed_data(raw))
+            .unwrap_err()
+            .to_string()
+    }
+
     #[test]
     fn polygon_deserialization_validates() {
-        let p = Polygon::make_box(1.0, 1.0);
-        let good = ron::to_string(&p).unwrap();
+        let good = ron::to_string(&Polygon::make_box(1.0, 1.0)).unwrap();
         assert!(ron::from_str::<Polygon>(&good).is_ok());
-        // Replace the middle vertices so three of them become collinear.
-        let bad = ron::to_string(&PolygonData {
-            vertices: {
-                let mut v = [Vec2::ZERO; MAX_POLYGON_VERTICES];
-                v[..3].copy_from_slice(&pts(&[(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)]));
-                v
-            },
-            normals: [Vec2::new(0.0, -1.0); MAX_POLYGON_VERTICES],
-            count: 3,
-            centroid: Vec2::new(1.0, 0.0),
-            radius: 0.0,
-        })
-        .unwrap();
-        assert!(ron::from_str::<Polygon>(&bad).is_err());
+        // Control: the helper produces loadable data for a valid triangle.
+        let triangle = well_formed_data(&[(0.0, 0.0), (2.0, 0.0), (0.0, 2.0)]);
+        assert!(ron::from_str::<Polygon>(&triangle).is_ok());
+
+        let collinear = geometry_error(&[(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)]);
+        assert!(collinear.contains("strictly convex"), "{collinear}");
+        let clockwise = geometry_error(&[(0.0, 0.0), (0.0, 2.0), (2.0, 0.0)]);
+        assert!(clockwise.contains("strictly convex"), "{clockwise}");
+        let concave = geometry_error(&[(0.0, 0.0), (2.0, 0.0), (1.0, 0.5), (2.0, 2.0)]);
+        assert!(concave.contains("strictly convex"), "{concave}");
     }
 
     #[test]
