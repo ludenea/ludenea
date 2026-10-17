@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::meta::{AssetKind, Meta};
 use crate::{Project, ProjectError, ProjectWarning, io_error};
 
-const WATCH_DEBOUNCE: Duration = Duration::from_millis(100);
+pub(crate) const WATCH_DEBOUNCE: Duration = Duration::from_millis(100);
 /// The directories whose files get identifiers.
 const ASSET_DIRECTORIES: [&str; 2] = ["scenes", "assets"];
 

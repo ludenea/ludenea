@@ -15,9 +15,14 @@ ludenea-schema.workspace = true
 notify.workspace = true
 notify-debouncer-full.workspace = true
 ron.workspace = true
+rolldown.workspace = true
+rolldown_common.workspace = true
+rolldown_error.workspace = true
+rolldown_plugin.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 toml.workspace = true
 ts-rs = { workspace = true, optional = true }
 uuid.workspace = true

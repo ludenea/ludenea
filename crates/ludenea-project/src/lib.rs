@@ -1,11 +1,13 @@
-//! Ludenea projects on disk: the manifest, the template, stable asset identifiers, and file
-//! watching. It is the base of the project service; nothing here is part of the simulation.
+//! Ludenea projects on disk: the manifest, the template, stable asset identifiers, file
+//! watching, and editor plugin bundles. It is the base of the project service; nothing here is
+//! part of the simulation.
 
 mod build;
 mod files;
 mod game;
 mod manifest;
 mod meta;
+mod plugins;
 mod template;
 mod types;
 
@@ -21,6 +23,7 @@ pub use files::{FileChange, FileEntry};
 pub use game::{GameOutput, GameProcess, OutputStream};
 pub use manifest::Manifest;
 pub use meta::AssetKind;
+pub use plugins::{PluginBundle, PluginEvent, PluginSource};
 
 #[derive(thiserror::Error, Debug)]
 pub enum ProjectError {

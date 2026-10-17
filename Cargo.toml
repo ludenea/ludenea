@@ -1,5 +1,6 @@
 [workspace]
 members = ["crates/*", "examples/*", "xtask"]
+exclude = ["vendor"]
 resolver = "3"
 
 [workspace.package]
@@ -34,6 +35,12 @@ clap = { version = "4.6.7", features = ["derive"] }
 wasm-bindgen = "=0.2.129"
 wasm-bindgen-cli-support = "=0.2.129"
 cargo_metadata = "0.23.1"
+# Every rolldown crate on the same exact version: they are released together.
+rolldown = "=1.2.14"
+rolldown_common = "=1.2.14"
+rolldown_error = "=1.2.14"
+rolldown_plugin = "=1.2.14"
+tokio = { version = "1.53.3", features = ["rt"] }
 ludenea-math = { path = "crates/ludenea-math" }
 ludenea-app = { path = "crates/ludenea-app" }
 ludenea-ecs = { path = "crates/ludenea-ecs" }
@@ -45,3 +52,10 @@ ludenea-control = { path = "crates/ludenea-control" }
 ludenea-cli = { path = "crates/ludenea-cli" }
 ludenea = { path = "crates/ludenea" }
 ludenea-project = { path = "crates/ludenea-project" }
+
+# rolldown_common 1.2.14 from crates.io with one change: its serde_json dependency no longer
+# requests the `arbitrary_precision` feature. Cargo unifies features, so that feature reached
+# every serde_json in builds that include ludenea-project and broke deserializing numbers inside
+# internally tagged protocol enums. Drop the patch once upstream makes the feature optional.
+[patch.crates-io]
+rolldown_common = { path = "vendor/rolldown_common" }

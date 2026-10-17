@@ -1,0 +1,9 @@
+# A crate that ships an editor plugin, as engine crates do. It is a path dependency of test
+# projects, never a member of the engine workspace.
+[package]
+name = "engine-plugin"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
