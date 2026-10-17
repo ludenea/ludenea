@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 ludenea-app.workspace = true
+ludenea-cli.workspace = true
 ludenea-control.workspace = true
 ludenea-ecs.workspace = true
 ludenea-math.workspace = true

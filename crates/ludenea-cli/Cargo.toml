@@ -1,0 +1,15 @@
+[package]
+name = "ludenea-cli"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+clap.workspace = true
+ludenea-app.workspace = true
+ludenea-control.workspace = true
+postcard.workspace = true
+serde.workspace = true
+xxhash-rust.workspace = true
+
+[dev-dependencies]
+ludenea-ecs.workspace = true
