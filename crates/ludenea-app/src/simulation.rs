@@ -19,6 +19,8 @@ pub enum SimError {
         "input log version {found} is not supported (expected {expected}); record it again with this build"
     )]
     InputLogVersion { found: u32, expected: u32 },
+    #[error("the input log has no players; record it with at least one player")]
+    NoPlayers,
 }
 
 /// A built app: the world and its schedule, stepped one fixed tick at a time.

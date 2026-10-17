@@ -48,6 +48,12 @@ fn input_log_with_another_version_is_rejected() {
 }
 
 #[test]
+fn input_log_without_players_is_rejected() {
+    let error = InputLog::decode(&InputLog::new(0).encode()).unwrap_err();
+    assert!(matches!(error, SimError::NoPlayers), "{error:?}");
+}
+
+#[test]
 fn input_log_shorter_than_run_uses_defaults() {
     let mut log = InputLog::new(1);
     for value in [7u8, 8, 9] {

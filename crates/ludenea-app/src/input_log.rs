@@ -42,6 +42,9 @@ impl InputLog {
                 expected: INPUT_LOG_VERSION,
             });
         }
+        if log.players == 0 {
+            return Err(SimError::NoPlayers);
+        }
         Ok(log)
     }
 
