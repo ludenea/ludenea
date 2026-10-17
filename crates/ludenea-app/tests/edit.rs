@@ -326,3 +326,53 @@ fn contact_cache_has_no_json_form_but_ron_works() {
     let restored = (codec.decode_ron)(&(codec.encode_ron)(&cache)).unwrap();
     assert_eq!(restored.downcast_ref::<ContactCache>(), Some(&cache));
 }
+
+#[test]
+fn edit_log_decode_rejects_out_of_order_ticks() {
+    let edit = |tick: u64| TimedEdit {
+        tick,
+        edit: Edit::Spawn {
+            components: vec![("edit::Tag".to_string(), tag(1))],
+        },
+    };
+    let mut log = EditLog::new();
+    log.edits = vec![edit(4), edit(2)];
+    assert!(matches!(
+        EditLog::decode(&log.encode()),
+        Err(SimError::EditLogDecode(_))
+    ));
+}
+
+#[test]
+fn insert_and_remove_on_dead_entity_are_no_such_entity() {
+    let mut simulation = simulation();
+    let entity = spawn_tagged(&mut simulation, 1);
+    simulation.apply_edit(&Edit::Despawn { entity }).unwrap();
+    let insert = Edit::Insert {
+        entity,
+        component: "edit::Tag".to_string(),
+        value: tag(2),
+    };
+    let remove = Edit::Remove {
+        entity,
+        component: "edit::Tag".to_string(),
+    };
+    for edit in [insert, remove] {
+        let error = simulation.apply_edit(&edit).unwrap_err();
+        assert!(matches!(error, EditError::NoSuchEntity(dead) if dead == entity));
+    }
+}
+
+#[test]
+fn spawn_with_duplicate_component_is_rejected_and_world_unchanged() {
+    let mut simulation = simulation();
+    let edit = Edit::Spawn {
+        components: vec![
+            ("edit::Tag".to_string(), tag(1)),
+            ("edit::Tag".to_string(), tag(2)),
+        ],
+    };
+    let error = simulation.apply_edit(&edit).unwrap_err();
+    assert!(matches!(error, EditError::InvalidValue { ref name, .. } if name == "edit::Tag"));
+    assert_eq!(simulation.world().entities().count(), 0);
+}

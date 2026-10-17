@@ -86,6 +86,11 @@ impl EditLog {
                 expected: EDIT_LOG_VERSION,
             });
         }
+        if log.edits.windows(2).any(|pair| pair[0].tick > pair[1].tick) {
+            return Err(SimError::EditLogDecode(
+                "edits are not ordered by tick".to_string(),
+            ));
+        }
         Ok(log)
     }
 
@@ -130,6 +135,11 @@ impl Simulation {
     pub fn apply_edit(&mut self, edit: &Edit) -> Result<Option<Entity>, EditError> {
         match edit {
             Edit::Spawn { components } => {
+                for (index, (name, _)) in components.iter().enumerate() {
+                    if components[..index].iter().any(|(other, _)| other == name) {
+                        return Err(invalid(name, "the component appears twice".to_string()));
+                    }
+                }
                 let decoded = components
                     .iter()
                     .map(|(name, bytes)| Ok((name, self.decode_component(name, bytes)?)))
