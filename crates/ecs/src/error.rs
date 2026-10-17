@@ -92,7 +92,7 @@ impl fmt::Display for ScheduleError {
                 formatter,
                 "the ordering constraints form a cycle: {} -> {}",
                 names.join(" -> "),
-                names[0]
+                names.first().copied().unwrap_or_default()
             ),
             Self::Ambiguous(ambiguities) => {
                 formatter.write_str("the schedule is ambiguous:")?;
