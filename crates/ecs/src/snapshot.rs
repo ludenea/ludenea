@@ -1,7 +1,7 @@
 //! Snapshots: the whole state of a world, restored with memory copies.
 
 use crate::registry::RegistryFingerprint;
-use crate::world::State;
+use crate::world::{State, next_archetype_epoch};
 use crate::{EcsError, World};
 
 /// The whole state of a [`World`]: entities, allocator, components and
@@ -38,6 +38,7 @@ impl World {
             return Err(EcsError::IncompatibleSnapshot);
         }
         self.state.clone_from(&snapshot.state);
+        self.archetype_epoch = next_archetype_epoch();
         Ok(())
     }
 }

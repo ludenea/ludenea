@@ -1,12 +1,21 @@
 //! The world: every entity, its components, and the operations on them.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::archetype::{Archetype, ArchetypeId};
 use crate::entity::Allocator;
 use crate::registry::{ComponentId, Registry};
 use crate::resource::Resources;
 use crate::{Bundle, Component, EcsError, Entity, Resource};
+
+/// Hands out archetype epochs, unique across every world of the process.
+static NEXT_ARCHETYPE_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+/// A fresh archetype epoch, never handed out before.
+pub(crate) fn next_archetype_epoch() -> u64 {
+    NEXT_ARCHETYPE_EPOCH.fetch_add(1, Ordering::Relaxed)
+}
 
 /// Registers the components and inserts the resources of a [`World`] before
 /// building it.
@@ -40,6 +49,7 @@ impl WorldBuilder {
         let empty = Archetype::new(Vec::new(), &self.registry);
         World {
             registry: self.registry,
+            archetype_epoch: next_archetype_epoch(),
             state: State {
                 allocator: Allocator::default(),
                 locations: Vec::new(),
@@ -97,6 +107,11 @@ impl Clone for State {
 /// same iteration order.
 pub struct World {
     pub(crate) registry: Registry,
+    /// Changes whenever an archetype identifier may name another archetype:
+    /// in a new world and after a restore. Only caches read it, never the
+    /// simulation, so its value being process-wide does not break
+    /// determinism.
+    pub(crate) archetype_epoch: u64,
     pub(crate) state: State,
 }
 

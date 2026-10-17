@@ -40,6 +40,7 @@ mod column;
 mod entity;
 mod error;
 mod query;
+mod query_state;
 mod registry;
 mod resource;
 mod snapshot;
