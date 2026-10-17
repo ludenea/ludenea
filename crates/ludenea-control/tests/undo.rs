@@ -168,6 +168,7 @@ fn undo_survives_export_and_resume() {
     let mut session = Session::resume(
         &mut sim,
         export.scene,
+        export.saved_scene,
         InputLog::decode(&export.inputs).unwrap(),
         EditLog::decode(&export.edits).unwrap(),
         &export.undo,
@@ -275,6 +276,7 @@ fn resume_with_empty_undo_bytes_has_empty_history() {
     let session = Session::resume(
         &mut sim,
         export.scene,
+        export.saved_scene,
         InputLog::decode(&export.inputs).unwrap(),
         EditLog::decode(&export.edits).unwrap(),
         &[],
@@ -282,4 +284,38 @@ fn resume_with_empty_undo_bytes_has_empty_history() {
     )
     .unwrap();
     assert!(!session.timeline().can_undo && !session.timeline().can_redo);
+}
+
+#[test]
+fn unsaved_scene_edits_stay_unsaved_across_export_and_resume() {
+    let mut sim = simulation();
+    let mut session = Session::start(&mut sim, small_scene()).unwrap();
+    let saved = session.scene().to_string();
+    let victim = sim.world().entities().nth(5).unwrap();
+    session
+        .edit(&mut sim, Edit::Despawn { entity: victim })
+        .unwrap();
+    let export = session.export().unwrap();
+    assert_eq!(export.saved_scene.as_deref(), Some(saved.as_str()));
+    let resume = |sim: &mut Simulation, export: ludenea::control::SessionExport| {
+        Session::resume(
+            sim,
+            export.scene,
+            export.saved_scene,
+            InputLog::decode(&export.inputs).unwrap(),
+            EditLog::decode(&export.edits).unwrap(),
+            &export.undo,
+            export.hashes,
+        )
+        .unwrap()
+    };
+    let mut resumed = resume(&mut sim, export);
+    assert!(resumed.timeline().scene_dirty);
+    resumed.undo(&mut sim).unwrap();
+    assert!(!resumed.timeline().scene_dirty, "back to the saved text");
+
+    resumed.mark_scene_saved();
+    let export = resumed.export().unwrap();
+    assert_eq!(export.saved_scene, None, "a saved scene travels once");
+    assert!(!resume(&mut sim, export).timeline().scene_dirty);
 }

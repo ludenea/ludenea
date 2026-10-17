@@ -242,9 +242,13 @@ pub enum Command {
     ReplaceScene {
         ron: String,
     },
-    /// Restarts an exported session, comparing the new hashes with `expected`.
+    /// Restarts an exported session, comparing the new hashes with `expected`. Empty
+    /// `inputs`, `edits`, or `undo` bytes stand for empty logs: with all three empty, only
+    /// the scene loads.
     LoadSession {
         scene: String,
+        /// The scene as last saved, when `scene` holds unsaved edits.
+        saved_scene: Option<String>,
         inputs: Bytes,
         edits: Bytes,
         undo: Bytes,
@@ -340,6 +344,8 @@ pub enum Reply {
     Timeline(Timeline),
     Session {
         scene: String,
+        /// The scene as last saved, when `scene` holds unsaved edits.
+        saved_scene: Option<String>,
         inputs: Bytes,
         edits: Bytes,
         undo: Bytes,
@@ -426,6 +432,8 @@ pub enum Event {
     Ticked {
         tick: u64,
         hash: Hash64,
+        /// True when edits recorded at `tick` are applied but not yet simulated.
+        pending: bool,
         playing: bool,
         effective_rate: f32,
     },

@@ -409,3 +409,37 @@ fn json_of_scene(entity: Entity) -> Value {
     let mut host = loaded(0);
     json_of(&mut host, entity, "ludenea::Pose")
 }
+
+#[test]
+fn ticked_after_an_edit_says_the_edit_is_pending() {
+    let mut host = loaded(20);
+    step(&mut host, 10);
+    host.advance(0.0);
+    let entity = first_crate(&mut host);
+    ok(&mut host, set_pose(entity, &["position", "x"], json!(0.1)));
+    let events = host.advance(0.0);
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            Event::Ticked {
+                tick: 10,
+                pending: true,
+                ..
+            }
+        )),
+        "{events:?}"
+    );
+    step(&mut host, 1);
+    let events = host.advance(0.0);
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            Event::Ticked {
+                tick: 11,
+                pending: false,
+                ..
+            }
+        )),
+        "{events:?}"
+    );
+}

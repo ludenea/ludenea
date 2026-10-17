@@ -307,6 +307,7 @@ fn every_command_and_reply_round_trips_through_json() {
         Command::ReplaceScene { ron: "y".into() },
         Command::LoadSession {
             scene: "z".into(),
+            saved_scene: Some("w".into()),
             inputs: bytes.clone(),
             edits: bytes.clone(),
             undo: bytes.clone(),
@@ -446,6 +447,7 @@ fn every_command_and_reply_round_trips_through_json() {
         Reply::Timeline(timeline.clone()),
         Reply::Session {
             scene: "s".into(),
+            saved_scene: None,
             inputs: bytes.clone(),
             edits: bytes.clone(),
             undo: bytes.clone(),
@@ -483,6 +485,7 @@ fn every_command_and_reply_round_trips_through_json() {
         Event::Ticked {
             tick: 4,
             hash: Hash64(5),
+            pending: false,
             playing: true,
             effective_rate: 59.5,
         },

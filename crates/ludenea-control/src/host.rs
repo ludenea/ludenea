@@ -113,6 +113,7 @@ impl Host {
                     Ok(tick) => self.events.push(Event::Ticked {
                         tick,
                         hash: Hash64(self.simulation.hash()),
+                        pending: self.session.is_pending(),
                         playing: self.playing,
                         effective_rate: self.pacer.effective_rate(),
                     }),
@@ -327,6 +328,7 @@ impl Host {
                 let export = self.session.export().map_err(|e| self.fail(e))?;
                 Ok(Reply::Session {
                     scene: export.scene,
+                    saved_scene: export.saved_scene,
                     inputs: Bytes(export.inputs),
                     edits: Bytes(export.edits),
                     undo: Bytes(export.undo),
@@ -341,17 +343,29 @@ impl Host {
             }
             Command::LoadSession {
                 scene,
+                saved_scene,
                 inputs,
                 edits,
                 undo,
                 expected,
             } => {
-                let inputs = InputLog::decode(&inputs.0)
-                    .map_err(|e| ProtocolError::new(ErrorCode::InvalidInputs, e))?;
-                let edits = decode_edits(&edits)?;
+                // Empty logs load the scene alone.
+                let inputs = if inputs.0.is_empty() {
+                    let players = u16::try_from(sim.players()).expect("fewer than 2^16 players");
+                    InputLog::new(players)
+                } else {
+                    InputLog::decode(&inputs.0)
+                        .map_err(|e| ProtocolError::new(ErrorCode::InvalidInputs, e))?
+                };
+                let edits = if edits.0.is_empty() {
+                    EditLog::new()
+                } else {
+                    decode_edits(&edits)?
+                };
                 let expected = expected.into_iter().map(|hash| hash.0).collect();
-                let session = Session::resume(sim, scene, inputs, edits, &undo.0, expected)
-                    .map_err(|e| self.fail(e))?;
+                let session =
+                    Session::resume(sim, scene, saved_scene, inputs, edits, &undo.0, expected)
+                        .map_err(|e| self.fail(e))?;
                 self.load(session)
             }
             Command::GetSchedule => {
@@ -657,6 +671,7 @@ impl Host {
             self.events.push(Event::Ticked {
                 tick,
                 hash: Hash64(hash),
+                pending: self.session.is_pending(),
                 playing: self.playing,
                 effective_rate: self.pacer.effective_rate(),
             });

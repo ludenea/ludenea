@@ -9,4 +9,8 @@ import type { Timeline } from "./Timeline";
 /**
  * What the host reports on its own, from `Host::advance`.
  */
-export type Event = { "type": "ticked", tick: number, hash: Hash64, playing: boolean, effective_rate: number, } | { "type": "paused", reason: PauseReason, } | { "type": "timeline_changed", timeline: Timeline, } | { "type": "resimulated", up_to: number, } | { "type": "diverged", tick: number, expected: Hash64, got: Hash64, } | { "type": "edit_dropped", tick: number, reason: string, } | { "type": "console", level: ConsoleLevel, text: string, } | { "type": "entities_changed", filter: string, total: number, } | { "type": "entity_changed", entity: Entity, components: { [key in string]: ComponentValue }, removed: Array<string>, } | { "type": "entity_despawned", entity: Entity, } | { "type": "resources_changed", resources: { [key in string]: ComponentValue }, };
+export type Event = { "type": "ticked", tick: number, hash: Hash64, 
+/**
+ * True when edits recorded at `tick` are applied but not yet simulated.
+ */
+pending: boolean, playing: boolean, effective_rate: number, } | { "type": "paused", reason: PauseReason, } | { "type": "timeline_changed", timeline: Timeline, } | { "type": "resimulated", up_to: number, } | { "type": "diverged", tick: number, expected: Hash64, got: Hash64, } | { "type": "edit_dropped", tick: number, reason: string, } | { "type": "console", level: ConsoleLevel, text: string, } | { "type": "entities_changed", filter: string, total: number, } | { "type": "entity_changed", entity: Entity, components: { [key in string]: ComponentValue }, removed: Array<string>, } | { "type": "entity_despawned", entity: Entity, } | { "type": "resources_changed", resources: { [key in string]: ComponentValue }, };

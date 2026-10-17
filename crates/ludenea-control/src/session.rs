@@ -93,6 +93,9 @@ pub enum Resimulation {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionExport {
     pub scene: String,
+    /// The scene text as last loaded or saved, when it differs from `scene`: the unsaved
+    /// edits stay unsaved after a resume.
+    pub saved_scene: Option<String>,
     pub inputs: Vec<u8>,
     pub edits: Vec<u8>,
     /// The undo and redo stacks, so a rebuild keeps the history.
@@ -152,10 +155,13 @@ impl Session {
 
     /// Restarts a recorded session on a new build: the new hashes are compared with
     /// `expected` while it resimulates. `undo` is the exported undo history; empty bytes
-    /// mean an empty one.
+    /// mean an empty one. `saved_scene` is the scene as last saved when it differs from
+    /// `scene`.
+    #[allow(clippy::too_many_arguments)]
     pub fn resume(
         sim: &mut Simulation,
         scene: String,
+        saved_scene: Option<String>,
         inputs: InputLog,
         edits: EditLog,
         undo: &[u8],
@@ -168,6 +174,10 @@ impl Session {
         };
         sim.set_players(usize::from(inputs.players));
         let mut session = Session::start(sim, scene)?;
+        if let Some(saved) = saved_scene {
+            session.scene_dirty = saved != session.scene;
+            session.saved_scene = saved;
+        }
         session.inputs = inputs;
         session.edits = edits;
         session.history = history;
@@ -520,6 +530,7 @@ impl Session {
         self.ensure_resimulated()?;
         Ok(SessionExport {
             scene: self.scene.clone(),
+            saved_scene: self.scene_dirty.then(|| self.saved_scene.clone()),
             inputs: self.inputs.encode(),
             edits: self.edits.encode(),
             undo: self.history.encode(),

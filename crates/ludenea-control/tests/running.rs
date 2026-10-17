@@ -84,6 +84,7 @@ fn hash(host: &mut Host) -> Hash64 {
 
 struct Export {
     scene: String,
+    saved_scene: Option<String>,
     inputs: Bytes,
     edits: Bytes,
     undo: Bytes,
@@ -94,12 +95,14 @@ fn export(host: &mut Host) -> Export {
     match ok(host, Command::ExportSession) {
         Reply::Session {
             scene,
+            saved_scene,
             inputs,
             edits,
             undo,
             hashes,
         } => Export {
             scene,
+            saved_scene,
             inputs,
             edits,
             undo,
@@ -112,6 +115,7 @@ fn export(host: &mut Host) -> Export {
 fn load_session(export: Export, expected: Vec<Hash64>) -> Command {
     Command::LoadSession {
         scene: export.scene,
+        saved_scene: export.saved_scene,
         inputs: export.inputs,
         edits: export.edits,
         undo: export.undo,
@@ -565,4 +569,25 @@ fn reads_announce_nothing() {
     ok(&mut host, Command::GetTimeline);
     ok(&mut host, Command::TakeSnapshot);
     assert!(ticked(&host.advance(0.0)).is_empty());
+}
+
+#[test]
+fn load_session_with_empty_logs_loads_only_its_scene() {
+    let mut host = Host::new(boxes::app()).unwrap();
+    let load = Command::LoadSession {
+        scene: scene_a(),
+        saved_scene: Some(scene_b()),
+        inputs: Bytes(Vec::new()),
+        edits: Bytes(Vec::new()),
+        undo: Bytes(Vec::new()),
+        expected: Vec::new(),
+    };
+    ok(&mut host, load);
+    let timeline = timeline(&mut host);
+    assert_eq!(
+        (timeline.head, timeline.simulated, timeline.current),
+        (0, 0, 0)
+    );
+    assert!(timeline.scene_dirty && !timeline.resimulating);
+    assert_eq!(export(&mut host).scene, scene_a());
 }
