@@ -27,7 +27,7 @@ instead of declaring its own.
 
 | Command                     | What it does                                                         |
 | --------------------------- | -------------------------------------------------------------------- |
-| `cargo xtask ci`            | Everything CI runs: boundaries, format, clippy, nextest, doc, cargo deny |
+| `cargo xtask ci`            | Everything CI runs: boundaries, format, clippy, nextest, doc tests, doc, cargo deny |
 | `cargo xtask boundaries`    | Checks the hexagonal boundary of the core crates                     |
 | `cargo xtask doc`           | Builds the API documentation into `target/doc`, warnings denied      |
 | `cargo xtask commit-format` | Checks subjects read from standard input, one per line               |
