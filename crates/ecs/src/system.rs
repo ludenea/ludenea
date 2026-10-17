@@ -305,6 +305,10 @@ pub struct ExclusiveMarker;
 /// A function the schedule can run as a system: every parameter is a
 /// [`SystemParam`], or the only parameter is `&mut World`.
 ///
+/// A system must not keep state that matters between runs in captured
+/// closure state: such state is not part of a world snapshot, so a rollback
+/// would not restore it. Persistent state lives in a resource.
+///
 /// A parameter that is not a system parameter is rejected at compile time:
 ///
 /// ```compile_fail,E0277
