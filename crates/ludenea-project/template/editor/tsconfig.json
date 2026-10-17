@@ -4,10 +4,10 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "jsx": "react-jsx",
     "noEmit": true,
     "skipLibCheck": true,
-    "baseUrl": ".",
-    "paths": { "@ludenea/*": ["../.ludenea/types/*"] }
+    "types": []
   },
-  "include": ["./**/*.ts", "../.ludenea/types/**/*.d.ts"]
+  "include": ["./**/*.ts", "./**/*.tsx", "../.ludenea/types/**/*.d.ts"]
 }
