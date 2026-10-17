@@ -3,6 +3,7 @@ use ludenea_ecs::{IntoSystemConfig, SystemLabel};
 
 use crate::components::{Body, Collider, PhysicsSettings, Pose};
 use crate::contacts::ContactCache;
+use crate::events::Collision;
 use crate::step::physics_step;
 
 /// Rigid body physics: registers the physics components and resources and runs one
@@ -25,6 +26,7 @@ impl Plugin for PhysicsPlugin {
             .component::<Collider>()
             .resource(PhysicsSettings::default())
             .resource(ContactCache::default())
+            .event::<Collision>()
             .system(Sim, physics_step.in_set(Step));
     }
 }

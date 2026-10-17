@@ -3,12 +3,13 @@
 use std::collections::BTreeMap;
 
 use ludenea_app::{Parallel, Time};
-use ludenea_ecs::{Entity, Query, Res, ResMut, Runtime};
+use ludenea_ecs::{Entity, EventWriter, Query, Res, ResMut, Runtime};
 use ludenea_math::{Rot, Transform, Vec2, max};
 
 use crate::broad_phase::{Proxy, find_pairs};
 use crate::components::{Body, BodyKind, Collider, PhysicsSettings, Pose};
 use crate::contacts::{CachedContact, CachedPoint, ContactCache};
+use crate::events::{Collision, diff};
 use crate::manifold::collide;
 use crate::mass::mass_data;
 use crate::shape::LINEAR_SLOP;
@@ -64,6 +65,7 @@ pub(crate) fn physics_step(
     time: Res<Time>,
     settings: Res<PhysicsSettings>,
     mut cache: ResMut<ContactCache>,
+    mut collisions: EventWriter<Collision>,
     parallel: Runtime<Parallel>,
     mut bodies: Query<(Entity, &mut Pose, &mut Body)>,
     colliders: Query<&Collider>,
@@ -197,6 +199,9 @@ pub(crate) fn physics_step(
                 points,
             },
         );
+    }
+    for event in diff(&cache.pairs, &next) {
+        collisions.send(event);
     }
     cache.pairs = next;
 

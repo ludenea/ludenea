@@ -14,7 +14,7 @@ pub mod prelude {
     };
     pub use crate::math::{Aabb, Rot, Transform, Vec2};
     pub use crate::physics::{
-        Body, BodyKind, Capsule, Circle, Collider, PhysicsPlugin, PhysicsSettings, Polygon, Pose,
-        Shape,
+        Body, BodyKind, Capsule, Circle, Collider, Collision, CollisionKind, PhysicsPlugin,
+        PhysicsSettings, Polygon, Pose, RayHit, Shape, overlap_aabb, raycast,
     };
 }
