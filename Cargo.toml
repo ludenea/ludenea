@@ -10,3 +10,6 @@ overflow-checks = true
 
 [profile.dev]
 opt-level = 1
+
+[workspace.dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
