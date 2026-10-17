@@ -47,26 +47,37 @@ impl Project {
         }
         let present: BTreeSet<&str> = all.iter().map(String::as_str).collect();
         let mut entries = Vec::new();
+        let mut invalid = Vec::new();
         for path in all.iter().filter(|path| !path.ends_with(".meta")) {
             let kind = AssetKind::of(path);
             let meta_file = meta_path(&self.root.join(path));
-            // ponytail: an unreadable meta is replaced, which changes the id; ask the user if it matters.
-            let meta = Meta::read(&meta_file).or_else(|| Meta::create(&meta_file, kind).ok());
-            if let Some(meta) = meta {
-                entries.push(FileEntry {
-                    path: path.clone(),
-                    id: meta.id,
-                    kind,
-                });
-            }
+            let id = match Meta::load_or_create(&meta_file, kind) {
+                Ok(meta) => meta.id,
+                Err(reason) => {
+                    invalid.push((format!("{path}.meta"), reason));
+                    AssetId(0)
+                }
+            };
+            entries.push(FileEntry {
+                path: path.clone(),
+                id,
+                kind,
+            });
         }
         entries.sort_by(|a, b| a.path.cmp(&b.path));
         let mut warnings = self.warnings.lock().expect("warnings are not poisoned");
+        for (path, reason) in invalid {
+            if warnings.invalid_reported.insert(path.clone()) {
+                warnings
+                    .pending
+                    .push(ProjectWarning::InvalidMeta { path, reason });
+            }
+        }
         for meta in all.iter().filter_map(|path| path.strip_suffix(".meta")) {
             if present.contains(meta) {
                 continue;
             }
-            let Some(found) = Meta::read(&meta_path(&self.root.join(meta))) else {
+            let Ok(found) = Meta::read(&meta_path(&self.root.join(meta))) else {
                 continue;
             };
             if warnings.reported.insert(found.id) {
@@ -90,6 +101,12 @@ impl Project {
         let (source, target) = (self.resolve(from)?, self.resolve(to)?);
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent).map_err(|error| io_error(parent, error))?;
+        }
+        let target_meta = meta_path(&target);
+        for existing in [&target, &target_meta] {
+            if existing.symlink_metadata().is_ok() {
+                return Err(ProjectError::AlreadyExists(existing.clone()));
+            }
         }
         // Give the file an identifier first so it keeps it across the move.
         self.files();

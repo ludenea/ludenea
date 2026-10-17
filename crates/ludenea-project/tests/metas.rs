@@ -88,3 +88,44 @@ fn file_moved_outside_editor_gets_new_id_and_orphan_warning_once() {
         "never deleted"
     );
 }
+
+#[test]
+fn rename_refuses_to_overwrite_an_existing_file() {
+    let dir = TempDir::new().unwrap();
+    let mut project = new_project(&dir);
+    project
+        .write_text("scenes/other.scene.ron", "other")
+        .unwrap();
+    let before = project.files();
+    let error = project
+        .rename("scenes/main.scene.ron", "scenes/other.scene.ron")
+        .unwrap_err();
+    assert!(matches!(error, ProjectError::AlreadyExists(_)));
+    assert_eq!(project.files(), before);
+    assert_eq!(
+        project.read_text("scenes/other.scene.ron").unwrap(),
+        "other"
+    );
+}
+
+#[test]
+fn malformed_meta_is_kept_and_reported_once() {
+    let dir = TempDir::new().unwrap();
+    let project = new_project(&dir);
+    let meta = dir.path().join("demo/scenes/main.scene.ron.meta");
+    project.files();
+    fs::write(&meta, "not a meta").unwrap();
+
+    let entries = project.files();
+    assert_eq!(entries.len(), 1, "the file stays listed");
+    assert_eq!(entries[0].id, ludenea_ecs::AssetId(0));
+    assert_eq!(fs::read_to_string(&meta).unwrap(), "not a meta");
+    let warnings = project.take_warnings();
+    assert!(matches!(
+        warnings.as_slice(),
+        [ProjectWarning::InvalidMeta { path, .. }] if path == "scenes/main.scene.ron.meta"
+    ));
+
+    project.files();
+    assert!(project.take_warnings().is_empty(), "reported once");
+}

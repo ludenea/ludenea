@@ -152,3 +152,30 @@ fn template_builds_and_runs() {
     ]);
     assert!(!output.trim().is_empty(), "the run prints a hash");
 }
+
+#[cfg(unix)]
+#[test]
+fn symlinks_leading_outside_the_project_are_rejected() {
+    let dir = TempDir::new().unwrap();
+    let outside = TempDir::new().unwrap();
+    fs::write(outside.path().join("secret.txt"), "secret").unwrap();
+    let mut project = new_project(&dir);
+    std::os::unix::fs::symlink(outside.path(), project.root().join("assets")).unwrap();
+
+    let is_outside = |result: Result<(), ProjectError>| {
+        assert!(
+            matches!(result, Err(ProjectError::OutsideProject(_))),
+            "{result:?}"
+        );
+    };
+    assert!(matches!(
+        project.read_text("assets/secret.txt"),
+        Err(ProjectError::OutsideProject(_))
+    ));
+    is_outside(project.write_text("assets/new.txt", "x"));
+    is_outside(project.delete("assets/secret.txt"));
+    is_outside(project.rename("scenes/main.scene.ron", "assets/moved.ron"));
+    is_outside(project.rename("assets/secret.txt", "scenes/secret.txt"));
+    assert!(outside.path().join("secret.txt").is_file());
+    assert!(!outside.path().join("new.txt").exists());
+}

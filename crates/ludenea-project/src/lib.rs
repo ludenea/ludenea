@@ -39,11 +39,15 @@ pub enum ProjectWarning {
     /// A `.meta` whose file is gone, usually because the file was moved outside the editor.
     /// `path` is where the file used to be.
     OrphanMeta { id: AssetId, path: String },
+    /// A `.meta` that cannot be read, parsed, or created. It is left untouched and its file is
+    /// listed with the identifier `AssetId(0)` until the meta is repaired.
+    InvalidMeta { path: String, reason: String },
 }
 
 #[derive(Default, Debug)]
 struct Warnings {
     reported: BTreeSet<AssetId>,
+    invalid_reported: BTreeSet<String>,
     pending: Vec<ProjectWarning>,
 }
 
@@ -108,7 +112,16 @@ impl Project {
         if path.is_empty() || !inside {
             return Err(ProjectError::OutsideProject(path.to_string()));
         }
-        Ok(self.root.join(relative))
+        let joined = self.root.join(relative);
+        // Symlinks can lead out of the project: check where the deepest existing part really is.
+        let mut existing = joined.as_path();
+        while existing.symlink_metadata().is_err() {
+            existing = existing.parent().unwrap_or(&self.root);
+        }
+        match existing.canonicalize() {
+            Ok(real) if real.starts_with(&self.root) => Ok(joined),
+            _ => Err(ProjectError::OutsideProject(path.to_string())),
+        }
     }
 }
 
