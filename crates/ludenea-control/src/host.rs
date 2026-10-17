@@ -86,9 +86,10 @@ impl Host {
     }
 
     pub fn handle(&mut self, command: Command) -> Result<Reply, ProtocolError> {
-        let changes_state = changes_state(&command);
+        let before = changes_state(&command).then(|| self.state());
         let result = self.execute(command);
-        if changes_state {
+        if let Some(before) = before {
+            self.report_state(before);
             self.report_changes();
         }
         self.report_timeline();
@@ -99,7 +100,9 @@ impl Host {
     /// while the recorded future is stale. Returns the events since the last call.
     pub fn advance(&mut self, elapsed_seconds: f64) -> Vec<Event> {
         if self.session.timeline().resimulating {
+            let before = self.state();
             self.resimulate();
+            self.report_state(before);
         }
         if self.playing {
             for _ in 0..self.pacer.advance(elapsed_seconds) {
@@ -641,13 +644,33 @@ impl Host {
         }
     }
 
+    /// The current tick and the world's hash, edits at that tick included.
+    fn state(&self) -> (u64, u64) {
+        (self.simulation.tick(), self.simulation.hash())
+    }
+
+    /// Announces the current state with `Ticked` when it differs from `before`, so clients
+    /// refresh after a change that play did not report.
+    fn report_state(&mut self, before: (u64, u64)) {
+        let (tick, hash) = self.state();
+        if (tick, hash) != before {
+            self.events.push(Event::Ticked {
+                tick,
+                hash: Hash64(hash),
+                playing: self.playing,
+                effective_rate: self.pacer.effective_rate(),
+            });
+        }
+    }
+
     fn report_changes(&mut self) {
         let changes = self.subscriptions.deltas(&self.simulation);
         self.events.extend(changes);
     }
 }
 
-/// Whether `command` may change the simulated state, so subscriptions are checked after it.
+/// Whether `command` may change the simulated state, so the state and the subscriptions are
+/// checked after it.
 fn changes_state(command: &Command) -> bool {
     !matches!(
         command,

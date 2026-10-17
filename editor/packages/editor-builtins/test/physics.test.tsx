@@ -1,6 +1,6 @@
 import type { PluginDefinition } from "@ludenea/editor-shell";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { builtinPlugins } from "../src";
 import { renderPanel, setSceneDirty, settle, testEditor, testGame } from "./support";
 
@@ -14,7 +14,58 @@ const kinds = ["Dynamic", "Static", "Dynamic", "Kinematic", "Dynamic"];
 const physicsPlugin = async () => ((await import(/* @vite-ignore */ PHYSICS_PLUGIN)) as { default: PluginDefinition }).default;
 
 describe("physics plugin", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it("opening_a_scene_refreshes_the_viewport_and_the_bodies_without_a_tick", async () => {
+    // jsdom has no 2D context: the viewport then draws through the renderer only.
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+    const scene = "scenes/main.scene.ron";
+    const host = await testEditor([...builtinPlugins, await physicsPlugin()], (request) => {
+      if (request.type === "list_files") return { type: "files", entries: [{ path: scene, id: "0000000000000000000000000000000a", kind: "Scene" }] };
+      if (request.type === "read_text") return { type: "text", text: "(scene)" };
+      if (request.type === "info") return undefined;
+      return { type: "done" };
+    });
+    let loaded = false;
+    const game = await testGame((command) => {
+      if (command.type === "query_entities") {
+        const rows = loaded ? kinds.map((_, index) => ({ entity: entity(index), hash: "0000000000000000" })) : [];
+        return { type: "entities", total: rows.length, rows };
+      }
+      if (command.type === "get_entity") {
+        const { index } = command.entity as { index: number };
+        return { type: "entity", entity: command.entity, components: { "ludenea::Body": { type: "json", value: { kind: kinds[index] } } } };
+      }
+      if (command.type === "get_debug_draw") return { type: "debug_draw", tick: 0, frame: { layers: {} } };
+      if (command.type === "get_tick_events") return { type: "tick_events", events: [] };
+      if (command.type === "load_scene") {
+        loaded = true;
+        // The host announces the new state at the same tick on its next advance.
+        setTimeout(() => game.push({ type: "ticked", tick: 0, hash: "00000000000000aa", playing: false, effective_rate: 0 }));
+      }
+      return { type: "done" };
+    });
+    act(() => host.setControl(game.client));
+    setSceneDirty(host, false);
+    renderPanel(host, "ludenea.assets");
+    renderPanel(host, "ludenea.viewport");
+    renderPanel(host, "ludenea_physics.panel");
+    await waitFor(() => expect(screen.getByRole("table", { name: "Bodies" }).textContent).toContain("Dynamic0"));
+    await waitFor(() => expect(game.sent.filter((command) => command.type === "get_debug_draw").length).toBeGreaterThan(0));
+    const drawsBefore = game.sent.filter((command) => command.type === "get_debug_draw").length;
+
+    fireEvent.doubleClick(screen.getByText("main.scene.ron"));
+    await waitFor(() => expect(screen.getByRole("table", { name: "Bodies" }).textContent).toContain("Dynamic3"));
+    await waitFor(() => expect(game.sent.filter((command) => command.type === "get_debug_draw").length).toBeGreaterThan(drawsBefore));
+    const counts = screen.getByRole("table", { name: "Bodies" }).textContent;
+    expect(counts).toContain("Static1");
+    expect(counts).toContain("Kinematic1");
+    expect(game.sent.filter((command) => command.type === "load_scene")).toHaveLength(1);
+    expect(game.sent.filter((command) => command.type === "step")).toEqual([]);
+  });
 
   it("closing_the_physics_panel_keeps_the_explorer_recording", async () => {
     const host = await testEditor([...builtinPlugins, await physicsPlugin()]);

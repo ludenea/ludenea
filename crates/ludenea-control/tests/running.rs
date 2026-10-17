@@ -163,6 +163,8 @@ fn restore_then_step_reproduces_hashes() {
 #[test]
 fn play_then_advance_runs_ticks_and_emits_ticked() {
     let mut host = loaded(100);
+    // Announces the loaded state, before play.
+    host.advance(0.0);
     ok(&mut host, Command::Play);
     let mut ticked = Vec::new();
     for _ in 0..10 {
@@ -526,4 +528,41 @@ fn restore_past_the_simulated_ticks_extends_them() {
     ok(&mut host, Command::Seek { tick: 0 });
     ok(&mut host, Command::Seek { tick: 30 });
     assert_eq!(hash(&mut host), foreign_hash);
+}
+
+fn ticked(events: &[Event]) -> Vec<(u64, Hash64)> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Ticked { tick, hash, .. } => Some((*tick, *hash)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_command_that_changes_the_state_announces_it_once() {
+    let mut host = Host::new(boxes::app()).unwrap();
+    host.advance(0.0);
+    ok(&mut host, Command::LoadScene { ron: scene_a() });
+    let loaded = hash(&mut host);
+    assert_eq!(ticked(&host.advance(0.0)), vec![(0, loaded)]);
+    assert!(ticked(&host.advance(0.0)).is_empty());
+
+    ok(&mut host, Command::LoadInputs { log: recorded(100) });
+    step(&mut host, 5);
+    host.advance(0.0);
+    ok(&mut host, Command::Seek { tick: 2 });
+    let seeked = hash(&mut host);
+    assert_eq!(ticked(&host.advance(0.0)), vec![(2, seeked)]);
+}
+
+#[test]
+fn reads_announce_nothing() {
+    let mut host = loaded(100);
+    host.advance(0.0);
+    ok(&mut host, Command::GetHash);
+    ok(&mut host, Command::GetTimeline);
+    ok(&mut host, Command::TakeSnapshot);
+    assert!(ticked(&host.advance(0.0)).is_empty());
 }
