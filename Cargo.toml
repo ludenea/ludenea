@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/*"]
+members = ["crates/*", "examples/*"]
 resolver = "3"
 
 [workspace.package]
@@ -32,3 +32,4 @@ ludenea-macros = { path = "crates/ludenea-macros" }
 ludenea-physics = { path = "crates/ludenea-physics" }
 ludenea-control = { path = "crates/ludenea-control" }
 ludenea-cli = { path = "crates/ludenea-cli" }
+ludenea = { path = "crates/ludenea" }

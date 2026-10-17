@@ -260,20 +260,22 @@ tick).
 ### 7.3 Target API
 
 ```rust
-#[derive(Component)]
+#[derive(Component, Serialize, Deserialize)]
 struct Health(u32);
 
 #[derive(Query)]
+#[query(filter = Without<Dead>)]
 struct Fighter<'w> {
     health: &'w mut Health,
     team: &'w Team,
-    #[filter(Without<Dead>)]
 }
 
 fn damage_on_hit(hits: Events<Collision>, mut fighters: Query<Fighter>) {
     for hit in hits.iter() {
-        if let Ok(mut fighter) = fighters.get_mut(hit.target) {
-            fighter.health.0 = fighter.health.0.saturating_sub(10);
+        for entity in [hit.a, hit.b] {
+            if let Ok(fighter) = fighters.get_mut(entity) {
+                fighter.health.0 = fighter.health.0.saturating_sub(10);
+            }
         }
     }
 }
@@ -372,8 +374,8 @@ compared through the canonical decoded values).
 ### 10.2 Trace and diff
 
 - A **trace** stores the scene identifier, a hash of the input log, and the
-  world hash for every tick. It stays small (8 bytes per tick), so the golden
-  trace is cheap to commit. (Builder's call.)
+  world hash for every tick. It stays small (about 10 bytes per tick, hashes
+  are postcard varints), so the golden trace is cheap to commit. (Builder's call.)
 - On mismatch, `verify` writes a full snapshot at the first divergent tick
   and at the tick before. In CI this becomes a build artifact.
 - `diff` compares two snapshots taken at the same tick (for example the CI

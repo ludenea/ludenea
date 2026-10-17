@@ -1,0 +1,10 @@
+[package]
+name = "boxes"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+default-run = "boxes"
+
+[dependencies]
+ludenea.workspace = true
+serde.workspace = true
