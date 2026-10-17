@@ -2,6 +2,7 @@ import type { ControlClient, DebugDrawFrame, Entity, Vec2 } from "@ludenea/contr
 import type { Editor } from "@ludenea/editor-shell";
 import { onEntity } from "../inspector";
 import type { Store } from "../shared";
+import { assertEditable, edit } from "../timeline/editing";
 import type { Camera, Size } from "./camera";
 
 /** What the viewport's commands and panel share; kept while the panel is hidden. */
@@ -23,13 +24,14 @@ export const visibleLayers = (control: ControlClient | null, state: ViewportStat
 
 /** Moves `entity`'s `Pose` by `offset` meters with one `SetField`; entities without a `Pose` stay put. */
 export async function moveBy(editor: Editor, control: ControlClient, entity: Entity, offset: Vec2, state: ViewportState): Promise<void> {
+  assertEditable(editor);
   const { components } = await onEntity(editor, control.request({ type: "get_entity", entity }));
   const pose = components[POSE];
   if (pose?.type !== "json") return;
   const { position } = pose.value as { position: Vec2 };
   await onEntity(
     editor,
-    control.request({
+    edit(editor, control, {
       type: "set_field",
       target: { type: "component", entity, component: POSE },
       path: [{ type: "field", name: "position" }],

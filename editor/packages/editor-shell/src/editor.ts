@@ -31,7 +31,11 @@ export interface Editor {
     list(): CommandDefinition[];
   };
   /** `key` such as `Mod+S` (Cmd on macOS, Ctrl elsewhere), `Ctrl+Shift+Z`, `F5`, `Delete`, or `.`; runs `command` unless a text field has focus. */
-  shortcuts: { register(shortcut: { key: string; command: string }): Disposable };
+  shortcuts: {
+    register(shortcut: { key: string; command: string }): Disposable;
+    /** Set while the game captures live input: then only `F5` and `Mod` combinations run shortcuts. */
+    captured: boolean;
+  };
   overlays: { register(overlay: ViewportOverlay): Disposable; list(): ViewportOverlay[] };
   settings: {
     register<T>(setting: SettingDefinition<T>): Disposable;
@@ -110,7 +114,7 @@ export function createEditor(options: {
       },
       list: () => commands.values(),
     },
-    shortcuts: { register: ({ key, command }) => registry.shortcuts.register(normalizeShortcut(key), command) },
+    shortcuts: { register: ({ key, command }) => registry.shortcuts.register(normalizeShortcut(key), command), captured: false },
     overlays: { register: (overlay) => overlays.register(overlay.id, overlay), list: () => overlays.values() },
     settings: {
       register: (definition) => settings.register(definition.id, definition),
@@ -130,7 +134,7 @@ export function createEditor(options: {
       },
     },
     selection: createSelectionStore(),
-    timeline: createTimelineStore(),
+    timeline: createTimelineStore(() => control),
     onGameChanged(listener) {
       // A fresh entry per call, so registering one function twice needs two disposals.
       const entry = (control: ControlClient | null) => listener(control);
@@ -139,11 +143,11 @@ export function createEditor(options: {
     },
   };
 
-  let stopTimeline = control ? feedTimeline(control, editor.timeline) : undefined;
+  let stopTimeline = feedTimeline(control, editor.timeline);
   const setControl = (next: ControlClient | null) => {
-    stopTimeline?.();
+    stopTimeline();
     control = next;
-    stopTimeline = next ? feedTimeline(next, editor.timeline) : undefined;
+    stopTimeline = feedTimeline(next, editor.timeline);
     for (const listener of [...gameListeners]) listener(next);
   };
 

@@ -83,11 +83,16 @@ export function isTextField(target: EventTarget | null): boolean {
   return target instanceof HTMLInputElement && !NON_TEXT_INPUTS.has(target.type);
 }
 
-/** Runs registered shortcuts on key presses in `target`, except while a text field has focus. */
+/**
+ * Runs registered shortcuts on key presses in `target`, except while a text field has focus.
+ * While `editor.shortcuts.captured`, every key but `F5` and `Mod` combinations is the game's.
+ */
 export function installShortcuts(editor: Editor, registry: Registry, target: Window = window): () => void {
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.defaultPrevented || isTextField(event.target)) return;
-    const command = registry.shortcuts.get(shortcutOf(event));
+    const shortcut = shortcutOf(event);
+    if (editor.shortcuts.captured && shortcut !== "F5" && !(isMac() ? event.metaKey : event.ctrlKey)) return;
+    const command = registry.shortcuts.get(shortcut);
     if (!command) return;
     event.preventDefault();
     editor.commands.run(command).catch((error) => console.error(`command "${command}" failed:`, error));

@@ -3,6 +3,7 @@ import type { Editor } from "@ludenea/editor-shell";
 import { useEffect, useMemo, useState } from "react";
 import { EntityList, entityKey } from "../explorer/EntityList";
 import { shared, useGame, useStore } from "../shared";
+import { ResimulatingNotice } from "../timeline/editing";
 
 const LABEL_COMPONENTS = 3;
 
@@ -23,6 +24,7 @@ function Entities({ editor, control }: { editor: Editor; control: ControlClient 
   const [error, setError] = useState<string | null>(null);
   return (
     <div className="ludenea-scene-tree" style={{ height: "100%" }}>
+      <ResimulatingNotice editor={editor} />
       {error && <p className="ludenea-error">{error}</p>}
       <EntityList
         editor={editor}

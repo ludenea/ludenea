@@ -1,6 +1,7 @@
 import { ProtocolFailure } from "@ludenea/control-client";
 import { definePlugin, type Editor } from "@ludenea/editor-shell";
 import { createStore, showPanel, type Store } from "../shared";
+import { assertEditable, edit } from "../timeline/editing";
 import { InspectorPanel } from "./InspectorPanel";
 
 /** What the inspector's commands and panel share. */
@@ -38,6 +39,7 @@ export const inspectorPlugin = definePlugin({
       title: "Add component to the selected entity",
       run() {
         target();
+        assertEditable(editor);
         state.set({ adding: true });
         showPanel(editor, "ludenea.inspector");
       },
@@ -47,7 +49,7 @@ export const inspectorPlugin = definePlugin({
       title: "Remove the focused component",
       async run() {
         const { control, entity, component } = focused();
-        await onEntity(editor, control.request({ type: "remove_component", entity, component }));
+        await onEntity(editor, edit(editor, control, { type: "remove_component", entity, component }));
         state.set({ focused: null });
       },
     });
@@ -56,7 +58,7 @@ export const inspectorPlugin = definePlugin({
       title: "Apply the focused component to the scene",
       async run() {
         const { control, entity, component } = focused();
-        await onEntity(editor, control.request({ type: "apply_to_scene", entity, component }));
+        await onEntity(editor, edit(editor, control, { type: "apply_to_scene", entity, component }));
       },
     });
     editor.panels.register({

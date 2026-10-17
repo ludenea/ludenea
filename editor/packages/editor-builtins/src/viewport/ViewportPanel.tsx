@@ -2,7 +2,9 @@ import init, { ViewportRenderer } from "@ludenea/debug-draw-wasm";
 import type { Entity, Vec2 } from "@ludenea/control-client";
 import type { Editor } from "@ludenea/editor-shell";
 import { useEffect, useRef, useState } from "react";
+import { captureInput } from "../input/capture";
 import { errorText, useGame } from "../shared";
+import { ResimulatingNotice } from "../timeline/editing";
 import { panBy, screenToWorld, zoomAt, type Size } from "./camera";
 import { moveBy, visibleLayers, type ViewportState } from "./state";
 import { drawOverlay } from "./overlay";
@@ -234,10 +236,12 @@ export function ViewportPanel({ editor, state }: { editor: Editor; state: Viewpo
     ];
     for (const [type, listener] of listeners) element.addEventListener(type, listener);
     element.addEventListener("wheel", onWheel, { passive: false });
+    const stopCapture = captureInput(editor, element);
 
     return () => {
       disposed = true;
       cancelAnimationFrame(animation);
+      stopCapture();
       resizes?.disconnect();
       stops.forEach((stop) => stop());
       for (const [type, listener] of listeners) element.removeEventListener(type, listener);
@@ -254,6 +258,9 @@ export function ViewportPanel({ editor, state }: { editor: Editor; state: Viewpo
       {(failure || !game) && (
         <p style={{ position: "absolute", margin: 8, opacity: 0.7 }}>{failure ?? "No game is running."}</p>
       )}
+      <div style={{ position: "absolute", bottom: 0, margin: 8 }}>
+        <ResimulatingNotice editor={editor} />
+      </div>
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { ProtocolFailure, type ComponentValue, type ControlClient, type Entity, 
 import type { Editor } from "@ludenea/editor-shell";
 import { useEffect, useMemo, useState } from "react";
 import { errorText, useGame, useStore } from "../shared";
+import { edit, ResimulatingNotice, useResimulating } from "../timeline/editing";
 import { defaultValue } from "./default-value";
 import { Field } from "./fields/Field";
 import type { Edit } from "./fields/inputs";
@@ -28,19 +29,21 @@ function Inspector({ editor, control, state }: { editor: Editor; control: Contro
   const resourceSchemas = useMemo(() => schemaMap(control.game.resources), [control]);
   const values = useEntity(editor, control, entity);
   const resources = useResources(control);
+  const resimulating = useResimulating(editor);
 
   const setField = (target: FieldTarget, refresh: () => void): Edit => async (path, value) => {
-    await onEntity(editor, control.request({ type: "set_field", target, path, value }));
+    await onEntity(editor, edit(editor, control, { type: "set_field", target, path, value }));
     refresh();
   };
 
   return (
     <div className="ludenea-inspector">
+      <ResimulatingNotice editor={editor} />
       {entity && (
         <>
           <h2>
             Entity {entity.index}v{entity.generation}{" "}
-            <button onClick={() => void editor.commands.run("inspector.add-component").catch((error) => values.setError(errorText(error)))}>Add component</button>
+            <button disabled={resimulating} onClick={() => void editor.commands.run("inspector.add-component").catch((error) => values.setError(errorText(error)))}>Add component</button>
           </h2>
           {values.error && <p className="ludenea-error">{values.error}</p>}
           {adding && <AddComponent editor={editor} control={control} entity={entity} schemas={components} present={values.components ?? {}} state={state} onAdded={values.refresh} />}
@@ -55,6 +58,7 @@ function Inspector({ editor, control, state }: { editor: Editor; control: Contro
               edit={setField({ type: "component", entity, component: name }, values.refresh)}
               state={state}
               focused={focused === name}
+              readOnly={resimulating}
             />
           ))}
         </>
@@ -69,7 +73,7 @@ function Inspector({ editor, control, state }: { editor: Editor; control: Contro
           value={value}
           schema={resourceSchemas.get(name)}
           edit={setField({ type: "resource", resource: name }, resources.refresh)}
-          readOnly={READ_ONLY_RESOURCES.has(name)}
+          readOnly={resimulating || READ_ONLY_RESOURCES.has(name)}
         />
       ))}
     </div>
@@ -183,8 +187,8 @@ function Section({ editor, name, value, schema, edit, entity, state, focused = f
         {state && (
           <>
             {" "}
-            <button onClick={() => run("inspector.remove-component")}>Remove</button>
-            <button onClick={() => run("inspector.apply-to-scene")}>Apply to scene</button>
+            <button disabled={readOnly} onClick={() => run("inspector.remove-component")}>Remove</button>
+            <button disabled={readOnly} onClick={() => run("inspector.apply-to-scene")}>Apply to scene</button>
           </>
         )}
       </h3>
@@ -215,7 +219,7 @@ function AddComponent(props: {
     if (!schema) return;
     const value = draft ?? defaultValue(schema);
     try {
-      await onEntity(editor, control.request({ type: "insert_component", entity, component: chosen, value }));
+      await onEntity(editor, edit(editor, control, { type: "insert_component", entity, component: chosen, value }));
       state.set({ adding: false, focused: chosen });
       onAdded();
     } catch (failure) {

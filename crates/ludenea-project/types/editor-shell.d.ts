@@ -170,13 +170,19 @@ type SelectionStore = UseBoundStore<StoreApi<SelectionState>>;
 interface TimelineState {
     timeline: Timeline | null;
     hash: string | null;
-    /** The hash shown includes edits not yet stepped into a recorded tick. */
+    /** The hash shown includes edits not yet stepped into a recorded tick (only `GetHash` replies say). */
     pending: boolean;
     playing: boolean;
     effectiveRate: number;
+    /** The last `Diverged` report; kept until another replaces it or the game changes. */
     divergence: {
         tick: number;
     } | null;
+    /**
+     * Fetches the timeline and the hash with its pending flag, which no event carries: run after
+     * an edit, a seek, a step, or an undo. Failures are logged, never thrown.
+     */
+    refresh(): Promise<void>;
 }
 /** A Zustand store fed by the shell from the game's events. */
 type TimelineStore = UseBoundStore<StoreApi<TimelineState>>;
@@ -205,6 +211,8 @@ interface Editor {
             key: string;
             command: string;
         }): Disposable;
+        /** Set while the game captures live input: then only `F5` and `Mod` combinations run shortcuts. */
+        captured: boolean;
     };
     overlays: {
         register(overlay: ViewportOverlay): Disposable;
@@ -250,7 +258,10 @@ function CommandPalette({ editor }: {
 /** `shift+ctrl+z`, `Ctrl+Shift+Z`, and `Control+Shift+z` all become `Ctrl+Shift+Z`; `Mod+S` becomes `Cmd+S` on macOS. */
 function normalizeShortcut(shortcut: string, mac?: boolean): string;
 function isTextField(target: EventTarget | null): boolean;
-/** Runs registered shortcuts on key presses in `target`, except while a text field has focus. */
+/**
+ * Runs registered shortcuts on key presses in `target`, except while a text field has focus.
+ * While `editor.shortcuts.captured`, every key but `F5` and `Mod` combinations is the game's.
+ */
 function installShortcuts(editor: Editor, registry: Registry, target?: Window): () => void;
 
 export { CommandPalette, DuplicateRegistration, PluginLoader, Registry, Shell, createEditor, definePlugin, installShortcuts, isTextField, normalizeShortcut };

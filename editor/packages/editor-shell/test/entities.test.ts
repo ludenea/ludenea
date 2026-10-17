@@ -11,6 +11,8 @@ declare module "../src/entities" {
 
 const entity = { index: 4, generation: 2 };
 const pose: Pose = { position: { x: 1, y: 2 }, rotation: { cos: 1, sin: 0 } };
+/** What was sent besides the timeline refresh every new game gets. */
+const own = (sent: { type: string }[]) => sent.filter((command) => command.type !== "get_timeline" && command.type !== "get_hash");
 
 describe("entities", () => {
   it("entities_get_returns_typed_value_from_get_entity", async () => {
@@ -26,7 +28,7 @@ describe("entities", () => {
 
     expectTypeOf(value).toEqualTypeOf<Pose | undefined>();
     expect(value).toEqual(pose);
-    expect(sent).toEqual([{ type: "get_entity", entity }]);
+    expect(own(sent)).toEqual([{ type: "get_entity", entity }]);
   });
 
   it("entities_set_sends_set_field_with_path", async () => {
@@ -36,7 +38,7 @@ describe("entities", () => {
 
     await editor.entities.set(entity, "ludenea::Pose", [{ type: "field", name: "position" }, { type: "field", name: "x" }], 5);
 
-    expect(sent).toEqual([
+    expect(own(sent)).toEqual([
       {
         type: "set_field",
         target: { type: "component", entity, component: "ludenea::Pose" },
@@ -65,8 +67,8 @@ describe("entities", () => {
     setControl(second.control);
     watch.dispose();
 
-    expect(first.sent).toEqual([{ type: "subscribe", topic: { type: "entity", entity } }]);
-    expect(second.sent).toEqual([
+    expect(own(first.sent)).toEqual([{ type: "subscribe", topic: { type: "entity", entity } }]);
+    expect(own(second.sent)).toEqual([
       { type: "subscribe", topic: { type: "entity", entity } },
       { type: "unsubscribe", topic: { type: "entity", entity } },
     ]);

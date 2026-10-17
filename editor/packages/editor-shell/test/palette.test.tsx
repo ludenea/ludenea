@@ -62,4 +62,32 @@ describe("command palette and shortcuts", () => {
     expect(normalizeShortcut("Mod+S", true)).toBe("Cmd+S");
     expect(normalizeShortcut("mod+shift+z", false)).toBe("Ctrl+Shift+Z");
   });
+
+  it("captured_input_leaves_only_f5_and_mod_shortcuts_to_the_editor", async () => {
+    const { editor, registry } = await testHost();
+    const ran: string[] = [];
+    for (const [key, id] of [["F5", "play"], ["Mod+Z", "undo"], ["F", "frame"], [".", "step"], ["Shift+ArrowLeft", "pan"]]) {
+      editor.commands.register({ id: id!, title: id!, run: () => void ran.push(id!) });
+      editor.shortcuts.register({ key: key!, command: id! });
+    }
+    const uninstall = installShortcuts(editor, registry, window);
+    const mod = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? { metaKey: true } : { ctrlKey: true };
+    const press = () => {
+      fireEvent.keyDown(document.body, { key: "F5" });
+      fireEvent.keyDown(document.body, { key: "z", ...mod });
+      fireEvent.keyDown(document.body, { key: "f" });
+      fireEvent.keyDown(document.body, { key: "." });
+      fireEvent.keyDown(document.body, { key: "ArrowLeft", shiftKey: true });
+    };
+
+    editor.shortcuts.captured = true;
+    press();
+    expect(ran).toEqual(["play", "undo"]);
+
+    editor.shortcuts.captured = false;
+    ran.length = 0;
+    press();
+    expect(ran).toEqual(["play", "undo", "frame", "step", "pan"]);
+    uninstall();
+  });
 });
