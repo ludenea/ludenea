@@ -26,6 +26,17 @@ describe("project", () => {
     expect(screen.getByRole("heading").textContent).toBe("demo");
   });
 
+  it("failed_build_request_leaves_building_state", async () => {
+    const failure = { error: { code: "no_project", message: "no project is open" } };
+    const host = await testEditor(builtinPlugins, (request) => (request.type === "build" ? failure : undefined));
+    renderPanel(host, "ludenea.project");
+
+    await act(() => expect(host.editor.commands.run("project.build")).rejects.toThrow("no project is open"));
+
+    expect(screen.queryByRole("progressbar")).toBeNull();
+    expect(screen.getByText(/Build failed/)).toBeTruthy();
+  });
+
   it("build_progress_shows_building_state", async () => {
     const host = await testEditor(builtinPlugins, (request) => (request.type === "build" ? { type: "done" } : undefined));
     renderPanel(host, "ludenea.project");

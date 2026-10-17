@@ -55,8 +55,14 @@ export const projectPlugin = definePlugin({
       id: "project.build",
       title: "Build project",
       async run() {
+        const { build } = project.get();
         project.set({ build: { status: "building", done: 0, total: null } });
-        await editor.project.request({ type: "build" });
+        try {
+          await editor.project.request({ type: "build" });
+        } catch (error) {
+          project.set({ build: { ...build, status: "failed" } });
+          throw error;
+        }
       },
     });
     editor.panels.register({

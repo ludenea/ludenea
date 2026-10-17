@@ -51,6 +51,21 @@ describe("scene tree", () => {
     expect(screen.getByText("Collider").closest("[aria-selected]")?.getAttribute("aria-selected")).toBe("true");
   });
 
+  it("keyboard_selects_and_extends_selection", async () => {
+    const { host } = await sceneTree();
+    const row = (text: string) => screen.getByText(text).closest("[role=option]")!;
+    expect(row("Collider").getAttribute("tabindex")).toBe("0");
+
+    fireEvent.keyDown(row("Collider"), { key: "Enter" });
+    expect(host.editor.selection.getState().entities).toEqual([entity(1)]);
+    fireEvent.keyDown(row("Pose, Body, Player"), { key: "Enter", metaKey: true });
+    expect(host.editor.selection.getState().entities).toEqual([entity(1), entity(0)]);
+
+    await host.editor.commands.run("scene.despawn-selection");
+    await settle();
+    expect(host.editor.selection.getState().entities).toEqual([]);
+  });
+
   it("despawn_selection_sends_despawn_and_clears_selection", async () => {
     const { host, game } = await sceneTree();
     host.editor.selection.getState().select([entity(1)]);

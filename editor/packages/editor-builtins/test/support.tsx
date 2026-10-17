@@ -20,7 +20,9 @@ async function fake<C>(
     if (message.type === "hello") return [JSON.stringify(welcome)];
     sent.push(message[field]);
     const reply = answer(message[field]);
-    return reply ? [JSON.stringify({ type: "response", id: message.id, result: { ok: reply } })] : [];
+    // `{ error: { code, message } }` answers with a failure.
+    const result = reply && "error" in reply ? reply : { ok: reply };
+    return reply ? [JSON.stringify({ type: "response", id: message.id, result })] : [];
   });
   const client = await connect(transport);
   return { client, sent, push: (event: object) => transport.push(JSON.stringify({ type: "event", event })) };

@@ -1,7 +1,7 @@
 import type { ControlClient, Entity, EntityRow } from "@ludenea/control-client";
 import type { Editor } from "@ludenea/editor-shell";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { shared, useGame, useStore } from "../shared";
 
 const PAGE = 200;
@@ -89,7 +89,8 @@ function EntityList({ editor, control }: { editor: Editor; control: ControlClien
   });
 
   const selected = new Set(selection.map(key));
-  const onClick = (entity: Entity) => (event: MouseEvent) => {
+  // Click or Enter selects; with Shift, Ctrl, or Cmd it adds to the selection.
+  const choose = (entity: Entity, event: MouseEvent | KeyboardEvent) => {
     const store = editor.selection.getState();
     if (event.shiftKey || event.ctrlKey || event.metaKey) store.add(entity);
     else store.select([entity]);
@@ -105,7 +106,11 @@ function EntityList({ editor, control }: { editor: Editor; control: ControlClien
               key={item.key}
               role="option"
               aria-selected={row ? selected.has(key(row.entity)) : false}
-              onClick={row && onClick(row.entity)}
+              tabIndex={row ? 0 : -1}
+              onClick={(event) => row && choose(row.entity, event)}
+              onKeyDown={(event) => {
+                if (row && event.key === "Enter") choose(row.entity, event);
+              }}
               style={{ position: "absolute", top: 0, left: 0, right: 0, height: item.size, transform: `translateY(${item.start}px)`, listStyle: "none" }}
             >
               {row ? (

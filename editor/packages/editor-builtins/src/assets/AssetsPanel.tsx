@@ -71,9 +71,17 @@ export function AssetsPanel({ editor, assets }: { editor: Editor; assets: Assets
                   tabIndex={0}
                   draggable
                   onClick={() => set({ selected: file.path, menu: null })}
+                  onFocus={() => set({ selected: file.path })}
                   onDoubleClick={() => attempt(assets.open(file.path))}
                   onKeyDown={(event) => {
-                    if (event.key === "Enter") attempt(assets.open(file.path));
+                    if (event.target !== event.currentTarget) return;
+                    if (event.key === " ") {
+                      event.preventDefault();
+                      set({ selected: file.path });
+                    } else if (event.key === "Enter") {
+                      set({ selected: file.path });
+                      attempt(assets.open(file.path));
+                    }
                   }}
                   onContextMenu={(event) => {
                     event.preventDefault();

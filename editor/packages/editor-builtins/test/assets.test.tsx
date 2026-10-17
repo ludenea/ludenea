@@ -10,7 +10,7 @@ const entries = [
 ];
 
 /** The editor with every built-in plugin, a game, and the asset browser showing two files. */
-async function browser(disk: { text: string } = { text: "(on disk)" }) {
+async function browser(disk: { text: string } = { text: "(on disk)" }, withGame = true) {
   const host = await testEditor(builtinPlugins, (request) => {
     if (request.type === "list_files") return { type: "files", entries };
     if (request.type === "read_text") return { type: "text", text: disk.text };
@@ -18,7 +18,7 @@ async function browser(disk: { text: string } = { text: "(on disk)" }) {
     return { type: "done" };
   });
   const game = await testGame();
-  act(() => host.setControl(game.client));
+  if (withGame) act(() => host.setControl(game.client));
   renderPanel(host, "ludenea.assets");
   await settle();
   return { host, game, disk };
@@ -101,6 +101,50 @@ describe("assets", () => {
 
     expect(host.project.sent).toContainEqual({ type: "rename", from: SCENE, to: "scenes/intro.scene.ron" });
     expect(host.project.sent.filter((request) => request.type === "list_files")).toHaveLength(2);
+  });
+
+  it("rename_by_keyboard_only", async () => {
+    const { host } = await browser();
+    fireEvent.focus(screen.getByText("main.scene.ron").closest("[role=treeitem]")!);
+
+    await act(() => host.editor.commands.run("assets.rename"));
+    const input = screen.getByRole("textbox", { name: "New name" });
+    fireEvent.change(input, { target: { value: "intro.scene.ron" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await settle();
+
+    expect(host.project.sent).toContainEqual({ type: "rename", from: SCENE, to: "scenes/intro.scene.ron" });
+  });
+
+  it("scene_opened_before_the_build_loads_into_each_game", async () => {
+    const { host, game, disk } = await browser({ text: "(scene)" }, false);
+    await openScene();
+    expect(screen.queryByText(/no game/)).toBeNull();
+
+    act(() => host.setControl(game.client));
+    await settle();
+    expect(game.sent.filter((command) => command.type === "load_scene")).toEqual([{ type: "load_scene", ron: "(scene)" }]);
+
+    disk.text = "(edited without a game)";
+    act(() => host.setControl(null));
+    act(() => host.project.push({ type: "files_changed", changes: [{ Changed: SCENE }] }));
+    await settle();
+    const restarted = await testGame();
+    act(() => host.setControl(restarted.client));
+    await settle();
+    expect(restarted.sent.filter((command) => command.type === "load_scene")).toEqual([{ type: "load_scene", ron: "(edited without a game)" }]);
+  });
+
+  it("removing_the_open_scene_on_disk_closes_it", async () => {
+    const { host } = await browser();
+    await openScene();
+    setSceneDirty(host, true);
+
+    act(() => host.project.push({ type: "files_changed", changes: [{ Removed: SCENE }, { Created: "scenes/moved.scene.ron" }] }));
+    await settle();
+
+    expect(screen.queryByLabelText("unsaved changes")).toBeNull();
+    await expect(host.editor.commands.run("scene.save")).rejects.toThrow("no scene is open");
   });
 
   it("delete_asks_for_confirmation_inside_the_panel", async () => {
