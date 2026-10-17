@@ -34,8 +34,12 @@ impl Drop for Server {
     }
 }
 
-/// A minimal project named `demo`, served on a port the system picks.
 fn serve() -> Server {
+    serve_with(&[])
+}
+
+/// A minimal project named `demo`, served on a port the system picks, with more options.
+fn serve_with(options: &[&str]) -> Server {
     let dir = TempDir::new().unwrap();
     let root = dir.path().join("demo");
     let files = [
@@ -54,6 +58,7 @@ fn serve() -> Server {
     }
     let mut child = Command::new(env!("CARGO_BIN_EXE_ludenea"))
         .args(["serve", root.to_str().unwrap(), "--port", "0"])
+        .args(options)
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
@@ -75,9 +80,20 @@ fn serve() -> Server {
 }
 
 fn connect(server: &Server, origin: Option<&str>) -> Result<Socket, tungstenite::Error> {
+    connect_as(server, &server.address, origin)
+}
+
+/// Connects to the server naming `host` in the `Host` header, as a page reaching it by that
+/// name would.
+fn connect_as(
+    server: &Server,
+    host: &str,
+    origin: Option<&str>,
+) -> Result<Socket, tungstenite::Error> {
     let mut request = format!("ws://{}/ws/project", server.address)
         .into_client_request()
         .unwrap();
+    request.headers_mut().insert("Host", host.parse().unwrap());
     if let Some(origin) = origin {
         request
             .headers_mut()
@@ -135,12 +151,15 @@ fn request(socket: &mut Socket, id: u64, request: ProjectRequest) -> ProjectRepl
 
 /// Status line, `Content-Type`, and body of `GET path`.
 fn get(server: &Server, path: &str) -> (String, Option<String>, String) {
+    get_as(server, &server.address, path)
+}
+
+fn get_as(server: &Server, host: &str, path: &str) -> (String, Option<String>, String) {
     let mut stream = TcpStream::connect(&server.address).unwrap();
     stream.set_read_timeout(Some(TIMEOUT)).unwrap();
     write!(
         stream,
-        "GET {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-        server.address
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
     )
     .unwrap();
     let mut response = String::new();
@@ -184,6 +203,35 @@ fn ws_from_another_origin_is_refused() {
     let own = format!("http://{}", server.address);
     let mut socket = connect(&server, Some(&own)).unwrap();
     handshake(&mut socket);
+}
+
+/// DNS rebinding: a foreign page whose name now resolves to this machine sends a matching
+/// `Origin` and `Host`, both naming its own host.
+#[test]
+fn foreign_hosts_are_refused_even_with_a_matching_origin() {
+    let server = serve();
+    let port = server.address.rsplit(':').next().unwrap();
+    let foreign = format!("evil.example:{port}");
+    let origin = format!("http://{foreign}");
+    assert!(connect_as(&server, &foreign, Some(&origin)).is_err());
+    let (status, _, _) = get_as(&server, &foreign, "/plugins/missing.js");
+    assert!(status.contains("421"), "{status}");
+    for local in [format!("localhost:{port}"), format!("127.0.0.1:{port}")] {
+        let (status, _, _) = get_as(&server, &local, "/plugins/missing.js");
+        assert!(status.contains("404"), "{local}: {status}");
+    }
+}
+
+#[test]
+fn allow_host_lets_a_named_host_through() {
+    let server = serve_with(&["--allow-host", "studio.example"]);
+    let port = server.address.rsplit(':').next().unwrap();
+    let named = format!("studio.example:{port}");
+    let origin = format!("http://{named}");
+    let mut socket = connect_as(&server, &named, Some(&origin)).unwrap();
+    handshake(&mut socket);
+    let (status, _, _) = get_as(&server, &format!("other.example:{port}"), "/");
+    assert!(status.contains("421"), "{status}");
 }
 
 #[test]

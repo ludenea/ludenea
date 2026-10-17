@@ -7,8 +7,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use axum::Router;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path as UrlPath, State};
+use axum::extract::{Path as UrlPath, Request, State};
 use axum::http::{HeaderMap, StatusCode, Uri, header};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use ludenea_project::protocol::{ProjectEvent, ProjectRequest, ProjectServerMessage, ServiceMode};
@@ -25,6 +26,8 @@ pub struct Options {
     pub port: u16,
     pub editor_dir: Option<PathBuf>,
     pub engine_path: Option<PathBuf>,
+    /// Host names accepted in `Host` besides the local ones and `host`.
+    pub allowed_hosts: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -53,6 +56,18 @@ pub async fn run(options: Options) -> Result<(), String> {
         .route("/game/{hash}/{file}", get(game_file))
         .fallback(editor_file)
         .with_state(app);
+    let allowed = Arc::new(allowed_hosts(&options.host, options.allowed_hosts));
+    let router = router.layer(middleware::from_fn(move |request: Request, next: Next| {
+        let allowed = Arc::clone(&allowed);
+        async move {
+            // DNS rebinding gives a foreign page a matching `Origin` and `Host`, but not one
+            // of our names.
+            if !host_allowed(request.headers(), &allowed) {
+                return StatusCode::MISDIRECTED_REQUEST.into_response();
+            }
+            next.run(request).await
+        }
+    }));
     let listener = tokio::net::TcpListener::bind((options.host.as_str(), options.port))
         .await
         .map_err(|error| {
@@ -78,6 +93,40 @@ async fn project_socket(
         return StatusCode::FORBIDDEN.into_response();
     }
     upgrade.on_upgrade(move |socket| session(app, socket))
+}
+
+/// The names a request's `Host` may carry, lowercase, IPv6 addresses in brackets.
+fn allowed_hosts(host: &str, extra: Vec<String>) -> Vec<String> {
+    let bracketed = |name: String| {
+        if name.contains(':') && !name.starts_with('[') {
+            format!("[{name}]")
+        } else {
+            name
+        }
+    };
+    ["localhost", "127.0.0.1", "[::1]", host]
+        .into_iter()
+        .map(str::to_string)
+        .chain(extra)
+        .map(|name| bracketed(name.to_ascii_lowercase()))
+        .collect()
+}
+
+/// Whether the host part of `Host` (any port) is one of `allowed`.
+fn host_allowed(headers: &HeaderMap, allowed: &[String]) -> bool {
+    let Some(host) = headers
+        .get(header::HOST)
+        .and_then(|host| host.to_str().ok())
+    else {
+        return false;
+    };
+    let name = match host.strip_prefix('[') {
+        Some(rest) => rest
+            .split_once(']')
+            .map(|(address, _)| format!("[{address}]")),
+        None => host.split(':').next().map(str::to_string),
+    };
+    name.is_some_and(|name| allowed.contains(&name.to_ascii_lowercase()))
 }
 
 /// A connection without `Origin` is not from a browser; one with it must match `Host`.
