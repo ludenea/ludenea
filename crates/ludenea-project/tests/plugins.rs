@@ -144,6 +144,19 @@ fn third_party_import_is_rejected_with_rule() {
 }
 
 #[test]
+fn stale_bundle_that_cannot_be_removed_does_not_fail_the_bundle() {
+    let dir = TempDir::new().unwrap();
+    let project = project(&dir, "", &[("editor/index.ts", "export default 1;")]);
+    // Named like an older bundle of the plugin, but a directory: removing it as a file fails.
+    let stale = project
+        .root()
+        .join(".ludenea/plugins/demo.0000000000000000.js");
+    fs::create_dir_all(&stale).unwrap();
+    let bundles = project.bundle_plugins().unwrap();
+    assert!(code(&project, &bundles[0]).contains("export"));
+}
+
+#[test]
 fn syntax_error_reports_file_and_line() {
     let dir = TempDir::new().unwrap();
     let project = project(

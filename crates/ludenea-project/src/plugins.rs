@@ -1,11 +1,12 @@
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::{fs, io, thread};
 
 use cargo_metadata::MetadataCommand;
-use notify::RecursiveMode;
+use notify::{Event, EventKind, RecursiveMode};
 use notify_debouncer_full::new_debouncer;
 use rolldown::{
     Bundler, BundlerOptions, BundlerTransformOptions, CodeSplittingMode, Either, JsxOptions,
@@ -116,19 +117,27 @@ impl Project {
         // The thread owns the debouncer, which stops watching when it is dropped.
         thread::spawn(move || {
             let _debouncer = debouncer;
+            // The last bundle announced per plugin, so an unchanged rebuild stays silent.
+            let mut announced: BTreeMap<String, String> = BTreeMap::new();
             for batch in raw_receiver {
                 let Ok(events) = batch else { continue };
-                let paths: Vec<&PathBuf> = events.iter().flat_map(|event| &event.paths).collect();
-                let changed = entries
-                    .iter()
-                    .filter(|entry| paths.iter().any(|path| path.starts_with(&entry.directory)));
-                for entry in changed {
+                for entry in changed_entries(&entries, events.iter().map(|event| &event.event)) {
                     let event = match bundle(&root, entry) {
-                        Ok(bundle) => PluginEvent::Rebuilt(bundle),
-                        Err(diagnostics) => PluginEvent::Failed {
-                            name: entry.name.clone(),
-                            diagnostics,
-                        },
+                        Ok(bundle) => {
+                            if announced.get(&bundle.name) == Some(&bundle.url_path) {
+                                continue;
+                            }
+                            announced.insert(bundle.name.clone(), bundle.url_path.clone());
+                            PluginEvent::Rebuilt(bundle)
+                        }
+                        Err(diagnostics) => {
+                            // After a failure, the next good bundle is news even if unchanged.
+                            announced.remove(&entry.name);
+                            PluginEvent::Failed {
+                                name: entry.name.clone(),
+                                diagnostics,
+                            }
+                        }
                     };
                     if sender.send(event).is_err() {
                         return;
@@ -180,6 +189,22 @@ impl Project {
             })
             .collect())
     }
+}
+
+/// The plugins whose `editor/` directory saw a change. Accesses are not changes: bundling opens
+/// the sources, and on Linux those openings are events too.
+fn changed_entries<'a>(
+    entries: &'a [Entry],
+    events: impl IntoIterator<Item = &'a Event>,
+) -> impl Iterator<Item = &'a Entry> {
+    let paths: Vec<&PathBuf> = events
+        .into_iter()
+        .filter(|event| !matches!(event.kind, EventKind::Access(_)))
+        .flat_map(|event| &event.paths)
+        .collect();
+    entries
+        .iter()
+        .filter(move |entry| paths.iter().any(|path| path.starts_with(&entry.directory)))
 }
 
 /// `index.ts` wins when both entries exist.
@@ -278,6 +303,12 @@ fn bundle_file_name(name: &str, code: &str) -> String {
 }
 
 fn write_bundle(root: &Path, name: &str, code: &str) -> io::Result<()> {
+    // ponytail: one lock for every plugin of the process, so two bundles of the same plugin never
+    // delete each other's file; a lock per plugin name if writing ever becomes a bottleneck.
+    static WRITING: Mutex<()> = Mutex::new(());
+    let _writing = WRITING
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let directory = root.join(".ludenea/plugins");
     fs::create_dir_all(&directory)?;
     let file_name = bundle_file_name(name, code);
@@ -288,7 +319,8 @@ fn write_bundle(root: &Path, name: &str, code: &str) -> io::Result<()> {
             .strip_prefix(&format!("{name}."))
             .and_then(|rest| rest.strip_suffix(".js"));
         if hash.is_some_and(|hash| !hash.contains('.')) && old_name != file_name {
-            fs::remove_file(old.path())?;
+            // Best effort: a stale bundle left behind is harmless, a failed build is not.
+            let _ = fs::remove_file(old.path());
         }
     }
     Ok(())
@@ -375,5 +407,30 @@ impl Plugin for OnlyOwnFiles {
 
     fn register_hook_usage(&self) -> HookUsage {
         HookUsage::ResolveId
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use notify::event::{AccessKind, AccessMode, ModifyKind};
+
+    use super::*;
+
+    #[test]
+    fn opening_plugin_sources_is_not_a_change() {
+        let entries = [Entry {
+            name: "demo".to_string(),
+            source: PluginSource::Project,
+            directory: PathBuf::from("/project/editor"),
+        }];
+        let source = PathBuf::from("/project/editor/index.ts");
+        let opened = Event::new(EventKind::Access(AccessKind::Open(AccessMode::Read)))
+            .add_path(source.clone());
+        assert_eq!(changed_entries(&entries, [&opened]).count(), 0);
+        let modified = Event::new(EventKind::Modify(ModifyKind::Any)).add_path(source);
+        let changed: Vec<_> = changed_entries(&entries, [&opened, &modified])
+            .map(|entry| entry.name.as_str())
+            .collect();
+        assert_eq!(changed, ["demo"]);
     }
 }
