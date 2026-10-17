@@ -4,6 +4,8 @@
 use std::any::{Any, type_name};
 use std::cell::{Ref, RefCell, RefMut};
 
+use serde::Serialize;
+
 use crate::system::{Accesses, EVENT, Missing, SystemParam, declare_cell, registered};
 use crate::{Access, World};
 
@@ -11,15 +13,25 @@ use crate::{Access, World};
 pub(crate) trait EventQueue {
     fn as_any(&self) -> &dyn Any;
     fn clear(&mut self);
+    fn to_json(&self) -> Vec<serde_json::Value>;
 }
 
-impl<T: Send + 'static> EventQueue for RefCell<Vec<T>> {
+impl<T: Serialize + Send + 'static> EventQueue for RefCell<Vec<T>> {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn clear(&mut self) {
         self.get_mut().clear();
+    }
+
+    fn to_json(&self) -> Vec<serde_json::Value> {
+        self.borrow()
+            .iter()
+            .map(|event| {
+                serde_json::to_value(event).unwrap_or_else(|error| error.to_string().into())
+            })
+            .collect()
     }
 }
 

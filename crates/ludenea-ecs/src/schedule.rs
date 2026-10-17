@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::World;
 use crate::commands;
+use crate::observer::ScheduleObserver;
 use crate::system::{EVENT, IntoSystem, RESOURCE, System};
 
 /// Names a set of systems, for ordering constraints.
@@ -198,6 +199,15 @@ fn sort(successors: &[BTreeSet<usize>]) -> Result<Vec<usize>, Vec<usize>> {
     Err(stuck.into_iter().collect())
 }
 
+/// A system's name and what its parameters read and write, each as (kind, name) where
+/// kind is `"component"`, `"resource"`, `"event"`, or `"runtime resource"`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SystemInfo {
+    pub name: &'static str,
+    pub reads: Vec<(&'static str, &'static str)>,
+    pub writes: Vec<(&'static str, &'static str)>,
+}
+
 /// Systems in run order.
 pub struct Schedule {
     systems: Vec<Box<dyn System>>,
@@ -208,7 +218,29 @@ impl Schedule {
     pub fn run(&mut self, world: &mut World) {
         for system in &mut self.systems {
             system.run(world);
-            commands::apply(world);
+            commands::apply(world, None);
         }
+    }
+
+    /// Like `run`, reporting each system and its commands to `observer`, then the end of the
+    /// tick. The simulation behaves exactly as in `run`.
+    pub fn run_observed(&mut self, world: &mut World, observer: &mut dyn ScheduleObserver) {
+        let mut records = Vec::new();
+        for (index, system) in self.systems.iter_mut().enumerate() {
+            observer.before_system(index);
+            system.run(world);
+            records.clear();
+            commands::apply(world, Some(&mut records));
+            observer.after_system(index, &records);
+        }
+        observer.tick_end(world);
+    }
+
+    /// What each system reads and writes, in run order.
+    pub fn systems(&self, world: &World) -> Vec<SystemInfo> {
+        self.systems
+            .iter()
+            .map(|system| system.info(world))
+            .collect()
     }
 }

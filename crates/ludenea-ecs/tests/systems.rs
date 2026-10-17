@@ -22,6 +22,7 @@ struct Counter(u32);
 #[derive(Resource, Serialize, Deserialize)]
 struct Target(Entity);
 
+#[derive(Serialize)]
 struct Hit(u32);
 
 struct Spawner;

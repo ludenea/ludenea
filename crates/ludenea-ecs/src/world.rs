@@ -3,6 +3,7 @@ use std::cell::{Ref, RefCell};
 use std::collections::BTreeMap;
 
 use ludenea_schema::TypeSchema;
+use serde::Serialize;
 
 use crate::commands::CommandQueue;
 use crate::event::EventQueue;
@@ -12,6 +13,8 @@ use crate::{Codec, Component, EcsError, EntitiesState, Entity, Resource};
 pub(crate) trait Storage {
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
+    /// Whether the slot `index` holds a component.
+    fn has(&self, index: u32) -> bool;
     /// Drops the component held by the slot `index`, if any.
     fn clear(&mut self, index: u32);
     /// Visits every stored component in ascending index order.
@@ -34,6 +37,10 @@ impl<T: Component> Storage for ComponentStorage<T> {
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+
+    fn has(&self, index: u32) -> bool {
+        matches!(self.0.borrow().get(index as usize), Some(Some(_)))
     }
 
     fn clear(&mut self, index: u32) {
@@ -191,10 +198,20 @@ impl World {
     }
 
     /// Registers the event type `T`; registering it again is a no-op.
-    pub fn register_event<T: Send + 'static>(&mut self) {
+    pub fn register_event<T: Serialize + Send + 'static>(&mut self) {
         self.events
             .entry(type_name::<T>())
             .or_insert_with(|| Box::new(RefCell::new(Vec::<T>::new())));
+    }
+
+    /// The events sent so far this tick as JSON, per registered event type name (name order,
+    /// empty types included), each in send order. An event without a JSON form shows as
+    /// its error message.
+    pub fn events_json(&self) -> Vec<(&'static str, Vec<serde_json::Value>)> {
+        self.events
+            .iter()
+            .map(|(&name, queue)| (name, queue.to_json()))
+            .collect()
     }
 
     /// Drops every event sent this tick.

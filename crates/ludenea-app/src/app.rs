@@ -8,6 +8,7 @@ use ludenea_ecs::{
 
 use ludenea_ecs::Entity;
 use ludenea_math::Vec2;
+use serde::Serialize;
 
 use crate::input::{Input, InputType, Inputs};
 use crate::{Parallel, RawInput, Rng, Simulation, Time};
@@ -112,7 +113,7 @@ impl App {
         self
     }
 
-    pub fn event<T: Send + 'static>(&mut self) -> &mut Self {
+    pub fn event<T: Serialize + Send + 'static>(&mut self) -> &mut Self {
         self.world.register_event::<T>();
         self
     }

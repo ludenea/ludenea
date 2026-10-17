@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
-use crate::schedule::BuildError;
+use crate::schedule::{BuildError, SystemInfo};
 use crate::{Access, Query, QueryData, QueryFilter, Resource, World, accesses, check_accesses};
 
 pub(crate) const COMPONENT: &str = "component";
@@ -43,6 +43,9 @@ pub trait System: Send {
 
     /// Rejects missing registrations and conflicting accesses between parameters.
     fn check(&self, world: &World) -> Result<(), BuildError>;
+
+    /// The accesses its parameters declare, for display.
+    fn info(&self, world: &World) -> SystemInfo;
 
     fn run(&mut self, world: &World);
 }
@@ -97,6 +100,29 @@ fn check(system: &'static str, world: &World, declares: &[Declare]) -> Result<()
     Ok(())
 }
 
+/// What the parameters declare, split into reads and writes; a parameter whose
+/// registration is missing contributes nothing.
+fn info(name: &'static str, world: &World, declares: &[Declare]) -> SystemInfo {
+    let mut info = SystemInfo {
+        name,
+        reads: Vec::new(),
+        writes: Vec::new(),
+    };
+    for declare in declares {
+        let mut accesses = Vec::new();
+        if declare(world, &mut accesses).is_err() {
+            continue;
+        }
+        for (kind, access) in accesses {
+            match access {
+                Access::Read(name) => info.reads.push((kind, name)),
+                Access::Write(name) => info.writes.push((kind, name)),
+            }
+        }
+    }
+    info
+}
+
 macro_rules! function_system {
     ($($param:ident),*) => {
         impl<F, $($param: SystemParam + 'static),*> IntoSystem<fn($($param,)*)> for F
@@ -123,6 +149,10 @@ macro_rules! function_system {
 
             fn check(&self, world: &World) -> Result<(), BuildError> {
                 check(self.name(), world, &[$($param::declare as Declare),*])
+            }
+
+            fn info(&self, world: &World) -> SystemInfo {
+                info(self.name(), world, &[$($param::declare as Declare),*])
             }
 
             #[allow(non_snake_case, unused_variables)]

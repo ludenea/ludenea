@@ -3,17 +3,18 @@
 use std::collections::BTreeMap;
 
 use ludenea_ecs::Entity;
+use serde::Serialize;
 
 use crate::contacts::CachedContact;
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum CollisionKind {
     Begin,
     End,
 }
 
 /// A pair of colliders that started or stopped touching. `a < b`.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Collision {
     pub kind: CollisionKind,
     pub a: Entity,

@@ -307,6 +307,7 @@ fn insert_resource_boxed_replaces_a_resource_by_name() {
     assert!(matches!(&error, EcsError::UnregisteredResource(name) if name == "game::Unknown"));
 }
 
+#[derive(Serialize)]
 struct Ping;
 
 #[derive(Resource, Serialize, Deserialize, Debug, PartialEq, Clone)]

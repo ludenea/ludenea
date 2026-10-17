@@ -6,7 +6,9 @@ use ludenea_ecs::Entity;
 use ludenea_math::Vec2;
 
 use ludenea_ecs::schema::TypeSchema;
-use ludenea_ecs::{HashTree, Schedule, Snapshot, SnapshotError, World};
+use ludenea_ecs::{
+    HashTree, Schedule, ScheduleObserver, Snapshot, SnapshotError, SystemInfo, World,
+};
 
 use crate::app::EditorHooks;
 use crate::input::{self, Input, InputType};
@@ -90,10 +92,8 @@ impl Simulation {
 
     /// Steps with default inputs for every player.
     pub fn step(&mut self) {
-        if let Some(input) = &self.input {
-            (input.write_defaults)(&mut self.world, self.players);
-        }
-        self.advance();
+        self.write_defaults();
+        self.advance(None);
     }
 
     /// Steps with `inputs`, exactly one per player. On error nothing changes.
@@ -106,21 +106,33 @@ impl Simulation {
         }
         input::check_player_count(self.players, inputs.len())?;
         input::write(&mut self.world, inputs.to_vec());
-        self.advance();
+        self.advance(None);
         Ok(())
     }
 
     /// Steps with a postcard `Vec` of the app's input type (one per player), or default inputs for `None`.
     /// On error nothing changes.
     pub fn step_encoded(&mut self, inputs: Option<&[u8]>) -> Result<(), SimError> {
-        let Some(bytes) = inputs else {
-            self.step();
-            return Ok(());
-        };
-        let input = self.input.as_ref().ok_or(SimError::NoInputType)?;
-        (input.write_encoded)(&mut self.world, bytes, self.players)?;
-        self.advance();
+        self.write_inputs(inputs)?;
+        self.advance(None);
         Ok(())
+    }
+
+    /// Like `step_encoded`, reporting each system, its commands, and the events of the tick
+    /// to `observer`. Observing never changes the result: hashes equal those of `step_encoded`.
+    pub fn step_observed(
+        &mut self,
+        inputs: Option<&[u8]>,
+        observer: &mut dyn ScheduleObserver,
+    ) -> Result<(), SimError> {
+        self.write_inputs(inputs)?;
+        self.advance(Some(observer));
+        Ok(())
+    }
+
+    /// What each system reads and writes, in run order.
+    pub fn systems(&self) -> Vec<SystemInfo> {
+        self.schedule.systems(&self.world)
     }
 
     /// What `step_encoded(None)` replays as: default inputs for every player, encoded, or
@@ -213,9 +225,28 @@ impl Simulation {
             .threads()
     }
 
+    fn write_defaults(&mut self) {
+        if let Some(input) = &self.input {
+            (input.write_defaults)(&mut self.world, self.players);
+        }
+    }
+
+    /// Writes `inputs` (postcard bytes) or the defaults for `None`. On error nothing changes.
+    fn write_inputs(&mut self, inputs: Option<&[u8]>) -> Result<(), SimError> {
+        let Some(bytes) = inputs else {
+            self.write_defaults();
+            return Ok(());
+        };
+        let input = self.input.as_ref().ok_or(SimError::NoInputType)?;
+        (input.write_encoded)(&mut self.world, bytes, self.players)
+    }
+
     /// Runs the schedule on the inputs already written, then ends the tick.
-    fn advance(&mut self) {
-        self.schedule.run(&mut self.world);
+    fn advance(&mut self, observer: Option<&mut dyn ScheduleObserver>) {
+        match observer {
+            Some(observer) => self.schedule.run_observed(&mut self.world, observer),
+            None => self.schedule.run(&mut self.world),
+        }
         self.world.clear_events();
         self.time_mut().tick += 1;
     }

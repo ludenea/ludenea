@@ -3,12 +3,13 @@
 
 use std::cell::RefCell;
 
+use crate::observer::{CommandKind, CommandRecord};
 use crate::system::{Accesses, Missing, SystemParam};
 use crate::{Component, EcsError, Entity, World};
 
-/// Applies itself to the world; the second argument holds the entities spawned so far by
-/// this queue, in spawn order.
-type Command = Box<dyn FnOnce(&mut World, &mut Vec<Entity>) + Send>;
+/// Applies itself to the world and says what it did; the second argument holds the
+/// entities spawned so far by this queue, in spawn order.
+type Command = Box<dyn FnOnce(&mut World, &mut Vec<Entity>) -> CommandRecord + Send>;
 
 #[derive(Default)]
 pub(crate) struct CommandQueue {
@@ -16,12 +17,23 @@ pub(crate) struct CommandQueue {
     spawns: usize,
 }
 
-/// Applies and drops every queued command.
-pub(crate) fn apply(world: &mut World) {
+/// Applies and drops every queued command, pushing what each did to `records` if given.
+pub(crate) fn apply(world: &mut World, mut records: Option<&mut Vec<CommandRecord>>) {
     let queue = std::mem::take(world.commands.get_mut());
     let mut spawned = Vec::with_capacity(queue.spawns);
     for command in queue.commands {
-        command(world, &mut spawned);
+        let record = command(world, &mut spawned);
+        if let Some(records) = records.as_deref_mut() {
+            records.push(record);
+        }
+    }
+}
+
+fn record(kind: CommandKind, entity: Entity, component: Option<&'static str>) -> CommandRecord {
+    CommandRecord {
+        kind,
+        entity: Some(entity),
+        component,
     }
 }
 
@@ -37,9 +49,11 @@ impl<'w> Commands<'w> {
         let mut queue = self.queue.borrow_mut();
         let spawn = queue.spawns;
         queue.spawns += 1;
-        queue
-            .commands
-            .push(Box::new(|world, spawned| spawned.push(world.spawn())));
+        queue.commands.push(Box::new(|world, spawned| {
+            let entity = world.spawn();
+            spawned.push(entity);
+            record(CommandKind::Spawn, entity, None)
+        }));
         SpawnCommands {
             queue: self.queue,
             spawn,
@@ -48,22 +62,31 @@ impl<'w> Commands<'w> {
 
     pub fn despawn(&mut self, entity: Entity) {
         // Despawn fails only on a dead entity, which is ignored.
-        self.push(move |world| drop(world.despawn(entity)));
+        self.push(move |world| {
+            drop(world.despawn(entity));
+            record(CommandKind::Despawn, entity, None)
+        });
     }
 
     /// # Panics
     /// When applied, if `T` is not registered.
     pub fn insert<T: Component>(&mut self, entity: Entity, component: T) {
-        self.push(move |world| ignore_dead(world.insert(entity, component)));
+        self.push(move |world| {
+            ignore_dead(world.insert(entity, component));
+            record(CommandKind::Insert, entity, Some(T::NAME))
+        });
     }
 
     /// # Panics
     /// When applied, if `T` is not registered.
     pub fn remove<T: Component>(&mut self, entity: Entity) {
-        self.push(move |world| ignore_dead(world.remove::<T>(entity).map(drop)));
+        self.push(move |world| {
+            ignore_dead(world.remove::<T>(entity).map(drop));
+            record(CommandKind::Remove, entity, Some(T::NAME))
+        });
     }
 
-    fn push(&mut self, command: impl FnOnce(&mut World) + Send + 'static) {
+    fn push(&mut self, command: impl FnOnce(&mut World) -> CommandRecord + Send + 'static) {
         self.queue
             .borrow_mut()
             .commands
@@ -87,7 +110,9 @@ impl SpawnCommands<'_> {
             .borrow_mut()
             .commands
             .push(Box::new(move |world, spawned| {
-                ignore_dead(world.insert(spawned[spawn], component));
+                let entity = spawned[spawn];
+                ignore_dead(world.insert(entity, component));
+                record(CommandKind::Insert, entity, Some(T::NAME))
             }));
         self
     }
