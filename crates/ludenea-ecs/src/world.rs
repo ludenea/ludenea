@@ -377,13 +377,38 @@ impl World {
         entity: Entity,
         name: &str,
     ) -> Option<Result<serde_json::Value, String>> {
+        self.with_component(entity, name, |codec, value| (codec.to_json)(value))
+    }
+
+    /// The `name` component of `entity` as a RON string, or `None` when `entity` is not
+    /// alive, the name is not registered, or the entity has no such component.
+    pub fn component_ron(&self, entity: Entity, name: &str) -> Option<String> {
+        self.with_component(entity, name, |codec, value| (codec.encode_ron)(value))
+    }
+
+    /// The `name` component of `entity` as canonical postcard bytes (`Codec::encode`), or
+    /// `None` when `entity` is not alive, the name is not registered, or the entity has no
+    /// such component.
+    pub fn component_bytes(&self, entity: Entity, name: &str) -> Option<Vec<u8>> {
+        self.with_component(entity, name, |codec, value| (codec.encode)(value))
+    }
+
+    fn with_component<R>(
+        &self,
+        entity: Entity,
+        name: &str,
+        read: impl FnOnce(&Codec, &dyn Any) -> R,
+    ) -> Option<R> {
         if !self.is_alive(entity) {
             return None;
         }
         let entry = self.components.get(name)?;
+        let mut read = Some(read);
         let mut out = None;
         entry.storage.visit(entity.index(), &mut |value| {
-            out = Some((entry.codec.to_json)(value));
+            if let Some(read) = read.take() {
+                out = Some(read(&entry.codec, value));
+            }
         });
         out
     }

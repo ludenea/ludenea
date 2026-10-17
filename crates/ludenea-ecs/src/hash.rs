@@ -89,14 +89,7 @@ impl World {
     }
 
     pub fn hash_tree(&self) -> HashTree {
-        let mut resources: Vec<NamedHash> = self
-            .resources
-            .iter()
-            .map(|(name, entry)| NamedHash {
-                name: name.to_string(),
-                hash: (entry.codec.hash)(&*entry.value.value()),
-            })
-            .collect();
+        let mut resources = self.resource_hashes();
         resources.push(NamedHash {
             name: ENTITIES_LEAF.to_string(),
             hash: hash_value(&self.entities),
@@ -116,16 +109,10 @@ impl World {
         let entities: Vec<EntityHash> = self
             .entities()
             .map(|entity| {
-                let components = components.remove(&entity.index()).unwrap_or_default();
-                let mut hasher = Xxh3::new();
-                for leaf in &components {
-                    write_named(&mut hasher, leaf);
-                }
-                EntityHash {
+                entity_leaf(
                     entity,
-                    hash: hasher.digest(),
-                    components,
-                }
+                    components.remove(&entity.index()).unwrap_or_default(),
+                )
             })
             .collect();
 
@@ -143,6 +130,50 @@ impl World {
             resources,
             entities,
         }
+    }
+}
+
+impl World {
+    /// The leaf of `entity` in `hash_tree`, computed alone; `None` when it is not alive.
+    pub fn entity_hash(&self, entity: Entity) -> Option<EntityHash> {
+        if !self.is_alive(entity) {
+            return None;
+        }
+        let mut components = Vec::new();
+        for (name, entry) in &self.components {
+            entry.storage.visit(entity.index(), &mut |value| {
+                components.push(NamedHash {
+                    name: name.to_string(),
+                    hash: (entry.codec.hash)(value),
+                });
+            });
+        }
+        Some(entity_leaf(entity, components))
+    }
+
+    /// The hashes of the registered resources in name order, as in `hash_tree` (without
+    /// the `ludenea::Entities` leaf).
+    pub fn resource_hashes(&self) -> Vec<NamedHash> {
+        self.resources
+            .iter()
+            .map(|(name, entry)| NamedHash {
+                name: name.to_string(),
+                hash: (entry.codec.hash)(&*entry.value.value()),
+            })
+            .collect()
+    }
+}
+
+/// The leaf of an entity from its component hashes, sorted by name.
+fn entity_leaf(entity: Entity, components: Vec<NamedHash>) -> EntityHash {
+    let mut hasher = Xxh3::new();
+    for leaf in &components {
+        write_named(&mut hasher, leaf);
+    }
+    EntityHash {
+        entity,
+        hash: hasher.digest(),
+        components,
     }
 }
 

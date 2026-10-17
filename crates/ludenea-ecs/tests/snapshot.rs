@@ -83,6 +83,35 @@ fn hash_is_independent_of_insertion_order() {
 }
 
 #[test]
+fn single_entity_and_resource_hashes_match_the_tree() {
+    let (mut world, entities) = populated_world();
+    let dead = world.spawn();
+    world.despawn(dead).unwrap();
+    let tree = world.hash_tree();
+    for (entity, leaf) in entities.iter().zip(&tree.entities) {
+        assert_eq!(world.entity_hash(*entity).as_ref(), Some(leaf));
+    }
+    assert!(world.entity_hash(dead).is_none());
+    assert_eq!(world.resource_hashes()[..], tree.resources[..2]);
+}
+
+#[test]
+fn single_component_accessors_read_one_value() {
+    let (world, entities) = populated_world();
+    let health = Health::NAME;
+    assert_eq!(
+        world.component_bytes(entities[0], health),
+        Some(postcard::to_allocvec(&Health { hp: 10 }).unwrap())
+    );
+    assert_eq!(
+        world.component_ron(entities[0], health).as_deref(),
+        Some("(hp:10)")
+    );
+    assert_eq!(world.component_bytes(entities[1], health), None);
+    assert_eq!(world.component_ron(entities[0], "unknown"), None);
+}
+
+#[test]
 fn hash_changes_when_a_field_changes() {
     let (mut world, entities) = populated_world();
     let before = world.hash_tree();
