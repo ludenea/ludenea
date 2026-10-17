@@ -50,3 +50,41 @@ pub(crate) fn diff(previous: &Pairs, next: &Pairs) -> Vec<Collision> {
     events.sort_unstable_by_key(|event| (event.a, event.b));
     events
 }
+
+#[cfg(test)]
+mod tests {
+    use ludenea_ecs::World;
+
+    use super::*;
+
+    fn contact(touching: bool) -> CachedContact {
+        CachedContact {
+            touching,
+            points: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn diff_sorts_ends_and_begins_together() {
+        let mut world = World::new();
+        let [e0, e1, e2, e3] = [(); 4].map(|()| world.spawn());
+        // (e1, e2) ends, (e0, e3) begins, and the ending pair sorts after the beginning one.
+        let previous = Pairs::from([((e1, e2), contact(true)), ((e0, e3), contact(false))]);
+        let next = Pairs::from([((e0, e3), contact(true))]);
+        assert_eq!(
+            diff(&previous, &next),
+            [
+                Collision {
+                    kind: CollisionKind::Begin,
+                    a: e0,
+                    b: e3
+                },
+                Collision {
+                    kind: CollisionKind::End,
+                    a: e1,
+                    b: e2
+                },
+            ]
+        );
+    }
+}
