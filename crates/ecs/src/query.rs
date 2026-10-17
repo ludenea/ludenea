@@ -16,6 +16,14 @@ pub enum ColumnBorrow<'w> {
     Exclusive(&'w mut dyn Column),
 }
 
+/// One component a query element accesses, and whether it writes it.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ComponentAccess {
+    pub(crate) id: ComponentId,
+    pub(crate) write: bool,
+}
+
 /// What a query yields for each entity: [`Entity`], `&T`, `&mut T`, or a
 /// tuple of up to eight of them.
 pub trait QueryData {
@@ -25,18 +33,17 @@ pub trait QueryData {
     #[doc(hidden)]
     type Fetch<'w>: Iterator<Item = Self::Item<'w>>;
 
-    /// Pushes the identifier of every component accessed, in query order.
+    /// Pushes every component accessed, in query order.
     #[doc(hidden)]
-    fn component_ids(registry: &Registry, ids: &mut Vec<ComponentId>);
+    fn accesses(registry: &Registry, accesses: &mut Vec<ComponentAccess>);
 
-    /// Takes the columns this query reads from `columns`, indexed like
-    /// `key`, and iterates over the rows of one archetype.
+    /// Iterates over the rows of one archetype. `columns` yields one column
+    /// per access, in the order of [`QueryData::accesses`]; a written column
+    /// is always lent exclusively.
     #[doc(hidden)]
     fn fetch<'w>(
-        registry: &Registry,
-        key: &[ComponentId],
         entities: &'w [Entity],
-        columns: &mut [Option<ColumnBorrow<'w>>],
+        columns: &mut impl Iterator<Item = ColumnBorrow<'w>>,
     ) -> Self::Fetch<'w>;
 }
 
@@ -50,31 +57,21 @@ mod sealed {
     pub trait Sealed {}
 }
 
-/// Takes the column of `T` out of `columns` for one query element.
-fn take_column<'w, T: Component>(
-    registry: &Registry,
-    key: &[ComponentId],
-    columns: &mut [Option<ColumnBorrow<'w>>],
-) -> ColumnBorrow<'w> {
-    let position = key
-        .binary_search(&registry.id::<T>())
-        .expect("a matched archetype has every component of the query");
-    columns[position]
-        .take()
-        .expect("a query accesses each component once")
+fn next_column<'w>(columns: &mut impl Iterator<Item = ColumnBorrow<'w>>) -> ColumnBorrow<'w> {
+    columns
+        .next()
+        .expect("a query receives one column per accessed component")
 }
 
 impl QueryData for Entity {
     type Item<'w> = Entity;
     type Fetch<'w> = Copied<slice::Iter<'w, Entity>>;
 
-    fn component_ids(_: &Registry, _: &mut Vec<ComponentId>) {}
+    fn accesses(_: &Registry, _: &mut Vec<ComponentAccess>) {}
 
     fn fetch<'w>(
-        _: &Registry,
-        _: &[ComponentId],
         entities: &'w [Entity],
-        _: &mut [Option<ColumnBorrow<'w>>],
+        _: &mut impl Iterator<Item = ColumnBorrow<'w>>,
     ) -> Self::Fetch<'w> {
         entities.iter().copied()
     }
@@ -87,17 +84,18 @@ impl<T: Component> QueryData for &T {
     type Item<'w> = &'w T;
     type Fetch<'w> = slice::Iter<'w, T>;
 
-    fn component_ids(registry: &Registry, ids: &mut Vec<ComponentId>) {
-        ids.push(registry.id::<T>());
+    fn accesses(registry: &Registry, accesses: &mut Vec<ComponentAccess>) {
+        accesses.push(ComponentAccess {
+            id: registry.id::<T>(),
+            write: false,
+        });
     }
 
     fn fetch<'w>(
-        registry: &Registry,
-        key: &[ComponentId],
         _: &'w [Entity],
-        columns: &mut [Option<ColumnBorrow<'w>>],
+        columns: &mut impl Iterator<Item = ColumnBorrow<'w>>,
     ) -> Self::Fetch<'w> {
-        let column: &'w dyn Column = match take_column::<T>(registry, key, columns) {
+        let column: &'w dyn Column = match next_column(columns) {
             ColumnBorrow::Shared(column) => column,
             ColumnBorrow::Exclusive(column) => column,
         };
@@ -112,20 +110,21 @@ impl<T: Component> QueryData for &mut T {
     type Item<'w> = &'w mut T;
     type Fetch<'w> = slice::IterMut<'w, T>;
 
-    fn component_ids(registry: &Registry, ids: &mut Vec<ComponentId>) {
-        ids.push(registry.id::<T>());
+    fn accesses(registry: &Registry, accesses: &mut Vec<ComponentAccess>) {
+        accesses.push(ComponentAccess {
+            id: registry.id::<T>(),
+            write: true,
+        });
     }
 
     fn fetch<'w>(
-        registry: &Registry,
-        key: &[ComponentId],
         _: &'w [Entity],
-        columns: &mut [Option<ColumnBorrow<'w>>],
+        columns: &mut impl Iterator<Item = ColumnBorrow<'w>>,
     ) -> Self::Fetch<'w> {
-        match take_column::<T>(registry, key, columns) {
+        match next_column(columns) {
             ColumnBorrow::Exclusive(column) => downcast_mut::<T>(column).iter_mut(),
             ColumnBorrow::Shared(_) => {
-                unreachable!("a mutable query element only runs on an exclusive world")
+                unreachable!("a written column is always lent exclusively")
             }
         }
     }
@@ -142,17 +141,15 @@ macro_rules! impl_query_data_for_tuple {
             type Item<'w> = ($($element::Item<'w>,)+);
             type Fetch<'w> = Zip<($($element::Fetch<'w>,)+)>;
 
-            fn component_ids(registry: &Registry, ids: &mut Vec<ComponentId>) {
-                $($element::component_ids(registry, ids);)+
+            fn accesses(registry: &Registry, accesses: &mut Vec<ComponentAccess>) {
+                $($element::accesses(registry, accesses);)+
             }
 
             fn fetch<'w>(
-                registry: &Registry,
-                key: &[ComponentId],
                 entities: &'w [Entity],
-                columns: &mut [Option<ColumnBorrow<'w>>],
+                columns: &mut impl Iterator<Item = ColumnBorrow<'w>>,
             ) -> Self::Fetch<'w> {
-                Zip(($($element::fetch(registry, key, entities, columns),)+))
+                Zip(($($element::fetch(entities, columns),)+))
             }
         }
 
@@ -164,6 +161,12 @@ macro_rules! impl_query_data_for_tuple {
 
             fn next(&mut self) -> Option<Self::Item> {
                 Some(($(self.0.$index.next()?,)+))
+            }
+
+            /// Skips in every fetch at once: slice iterators skip in
+            /// constant time, so a random access stays cheap.
+            fn nth(&mut self, n: usize) -> Option<Self::Item> {
+                Some(($(self.0.$index.nth(n)?,)+))
             }
         }
     };
@@ -178,13 +181,127 @@ impl_query_data_for_tuple!(A 0, B 1, C 2, D 3, E 4, F 5);
 impl_query_data_for_tuple!(A 0, B 1, C 2, D 3, E 4, F 5, G 6);
 impl_query_data_for_tuple!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7);
 
+/// Typed filters of a system `Query`: `()`, [`With`], [`Without`], or a
+/// tuple of up to eight of them.
+pub trait QueryFilter {
+    /// Pushes the components a matched archetype must have and must not
+    /// have.
+    #[doc(hidden)]
+    fn filter_ids(
+        registry: &Registry,
+        required: &mut Vec<ComponentId>,
+        excluded: &mut Vec<ComponentId>,
+    );
+}
+
+/// Only matches entities that also have a `T`.
+pub struct With<T>(PhantomData<T>);
+
+/// Only matches entities without a `T`.
+pub struct Without<T>(PhantomData<T>);
+
+impl QueryFilter for () {
+    fn filter_ids(_: &Registry, _: &mut Vec<ComponentId>, _: &mut Vec<ComponentId>) {}
+}
+
+impl<T: Component> QueryFilter for With<T> {
+    fn filter_ids(registry: &Registry, required: &mut Vec<ComponentId>, _: &mut Vec<ComponentId>) {
+        required.push(registry.id::<T>());
+    }
+}
+
+impl<T: Component> QueryFilter for Without<T> {
+    fn filter_ids(registry: &Registry, _: &mut Vec<ComponentId>, excluded: &mut Vec<ComponentId>) {
+        excluded.push(registry.id::<T>());
+    }
+}
+
+macro_rules! impl_query_filter_for_tuple {
+    ($($filter:ident),+) => {
+        impl<$($filter: QueryFilter),+> QueryFilter for ($($filter,)+) {
+            fn filter_ids(
+                registry: &Registry,
+                required: &mut Vec<ComponentId>,
+                excluded: &mut Vec<ComponentId>,
+            ) {
+                $($filter::filter_ids(registry, required, excluded);)+
+            }
+        }
+    };
+}
+
+impl_query_filter_for_tuple!(A);
+impl_query_filter_for_tuple!(A, B);
+impl_query_filter_for_tuple!(A, B, C);
+impl_query_filter_for_tuple!(A, B, C, D);
+impl_query_filter_for_tuple!(A, B, C, D, E);
+impl_query_filter_for_tuple!(A, B, C, D, E, F);
+impl_query_filter_for_tuple!(A, B, C, D, E, F, G);
+impl_query_filter_for_tuple!(A, B, C, D, E, F, G, H);
+
+/// Whether an archetype with the sorted `key` has every `required`
+/// component and none of the `excluded` ones.
+pub(crate) fn matches(
+    key: &[ComponentId],
+    required: &[ComponentId],
+    excluded: &[ComponentId],
+) -> bool {
+    required.iter().all(|id| key.binary_search(id).is_ok())
+        && excluded.iter().all(|id| key.binary_search(id).is_err())
+}
+
+/// Position in the sorted `key` of the column of every access.
+pub(crate) fn column_positions(key: &[ComponentId], accesses: &[ComponentAccess]) -> Vec<usize> {
+    accesses
+        .iter()
+        .map(|access| {
+            key.binary_search(&access.id)
+                .expect("a matched archetype has every component of the query")
+        })
+        .collect()
+}
+
+/// Lends the columns at `positions`, all distinct, exclusively and in order.
+fn lend_exclusive<'w>(
+    columns: &'w mut [Box<dyn Column>],
+    positions: &[usize],
+) -> Vec<ColumnBorrow<'w>> {
+    let mut slots: Vec<Option<&'w mut dyn Column>> = columns
+        .iter_mut()
+        .map(|column| Some(column.as_mut()))
+        .collect();
+    positions
+        .iter()
+        .map(|&position| {
+            ColumnBorrow::Exclusive(
+                slots[position]
+                    .take()
+                    .expect("a query accesses each component once"),
+            )
+        })
+        .collect()
+}
+
+/// Collects the accesses of `D`, checking that no component appears twice.
+///
+/// # Panics
+///
+/// Panics when a component is not registered or appears twice in `D`.
+pub(crate) fn accesses_of<D: QueryData>(registry: &Registry) -> Vec<ComponentAccess> {
+    let mut accesses = Vec::new();
+    D::accesses(registry, &mut accesses);
+    registry.sorted_without_duplicates(accesses.iter().map(|access| access.id).collect(), "query");
+    accesses
+}
+
 enum Archetypes<'w> {
     Shared(&'w [Archetype]),
     Exclusive(&'w mut [Archetype]),
 }
 
-/// A query over a world, refined with [`Query::with`] and
-/// [`Query::without`], then consumed by [`Query::iter`].
+/// An ad hoc query over a world, refined with [`WorldQuery::with`] and
+/// [`WorldQuery::without`], then consumed by [`WorldQuery::iter`]. Systems
+/// use a `Query` parameter instead.
 ///
 /// A mutable query needs an exclusive world, so a shared world rejects it at
 /// compile time:
@@ -201,25 +318,26 @@ enum Archetypes<'w> {
 /// let world = builder.build();
 /// world.query::<&mut Position>();
 /// ```
-pub struct Query<'w, D: QueryData> {
+pub struct WorldQuery<'w, D: QueryData> {
     registry: &'w Registry,
     archetypes: Archetypes<'w>,
+    accesses: Vec<ComponentAccess>,
     required: Vec<ComponentId>,
     without: Vec<ComponentId>,
     data: PhantomData<D>,
 }
 
-impl<'w, D: QueryData> Query<'w, D> {
+impl<'w, D: QueryData> WorldQuery<'w, D> {
     /// # Panics
     ///
     /// Panics when a component is not registered or appears twice in `D`.
     fn new(registry: &'w Registry, archetypes: Archetypes<'w>) -> Self {
-        let mut required = Vec::new();
-        D::component_ids(registry, &mut required);
-        let required = registry.sorted_without_duplicates(required, "query");
+        let accesses = accesses_of::<D>(registry);
+        let required = accesses.iter().map(|access| access.id).collect();
         Self {
             registry,
             archetypes,
+            accesses,
             required,
             without: Vec::new(),
             data: PhantomData,
@@ -250,43 +368,36 @@ impl<'w, D: QueryData> Query<'w, D> {
 
     /// Iterates over the matching entities: archetypes in creation order,
     /// then rows in storage order.
-    // ponytail: matches every archetype on each call, cache the matches in a
-    // query state when the scheduler needs to know the access of systems.
+    // ponytail: matches every archetype on each call; systems use a cached
+    // `QueryState`, cache here too if an ad hoc query becomes hot.
     pub fn iter(self) -> impl Iterator<Item = D::Item<'w>> + use<'w, D> {
         let Self {
-            registry,
             archetypes,
+            accesses,
             required,
             without,
             ..
         } = self;
-        let matches = |key: &[ComponentId]| {
-            required.iter().all(|id| key.binary_search(id).is_ok())
-                && without.iter().all(|id| key.binary_search(id).is_err())
-        };
         let fetches: Vec<D::Fetch<'w>> = match archetypes {
             Archetypes::Shared(archetypes) => archetypes
                 .iter()
                 .map(Archetype::parts)
-                .filter(|(key, _, _)| matches(key))
+                .filter(|(key, _, _)| matches(key, &required, &without))
                 .map(|(key, entities, columns)| {
-                    let mut columns: Vec<_> = columns
-                        .iter()
-                        .map(|column| Some(ColumnBorrow::Shared(column.as_ref())))
-                        .collect();
-                    D::fetch(registry, key, entities, &mut columns)
+                    let mut borrows = column_positions(key, &accesses)
+                        .into_iter()
+                        .map(|position| ColumnBorrow::Shared(columns[position].as_ref()));
+                    D::fetch(entities, &mut borrows)
                 })
                 .collect(),
             Archetypes::Exclusive(archetypes) => archetypes
                 .iter_mut()
                 .map(Archetype::parts_mut)
-                .filter(|(key, _, _)| matches(key))
+                .filter(|(key, _, _)| matches(key, &required, &without))
                 .map(|(key, entities, columns)| {
-                    let mut columns: Vec<_> = columns
-                        .iter_mut()
-                        .map(|column| Some(ColumnBorrow::Exclusive(column.as_mut())))
-                        .collect();
-                    D::fetch(registry, key, entities, &mut columns)
+                    let mut borrows =
+                        lend_exclusive(columns, &column_positions(key, &accesses)).into_iter();
+                    D::fetch(entities, &mut borrows)
                 })
                 .collect(),
         };
@@ -301,8 +412,8 @@ impl World {
     ///
     /// Panics when a component is not registered or appears twice in `D`.
     #[must_use]
-    pub fn query<D: ReadOnlyQuery>(&self) -> Query<'_, D> {
-        Query::new(&self.registry, Archetypes::Shared(&self.state.archetypes))
+    pub fn query<D: ReadOnlyQuery>(&self) -> WorldQuery<'_, D> {
+        WorldQuery::new(&self.registry, Archetypes::Shared(&self.state.archetypes))
     }
 
     /// Starts a query that may write components.
@@ -311,8 +422,8 @@ impl World {
     ///
     /// Panics when a component is not registered or appears twice in `D`.
     #[must_use]
-    pub fn query_mut<D: QueryData>(&mut self) -> Query<'_, D> {
-        Query::new(
+    pub fn query_mut<D: QueryData>(&mut self) -> WorldQuery<'_, D> {
+        WorldQuery::new(
             &self.registry,
             Archetypes::Exclusive(&mut self.state.archetypes),
         )
@@ -321,6 +432,7 @@ impl World {
 
 #[cfg(test)]
 mod tests {
+    use super::{QueryFilter, With, Without};
     use crate::{Component, Entity, World};
 
     #[derive(Clone, Copy, Debug, PartialEq)]
@@ -458,5 +570,21 @@ mod tests {
             .collect();
 
         assert_eq!(entities, [entity]);
+    }
+
+    #[test]
+    fn typed_filters_push_required_and_excluded_components() {
+        let world = world();
+        let mut required = Vec::new();
+        let mut excluded = Vec::new();
+
+        <(With<Velocity>, Without<Frozen>)>::filter_ids(
+            &world.registry,
+            &mut required,
+            &mut excluded,
+        );
+
+        assert_eq!(required, [world.registry.id::<Velocity>()]);
+        assert_eq!(excluded, [world.registry.id::<Frozen>()]);
     }
 }
