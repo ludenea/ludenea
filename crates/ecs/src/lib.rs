@@ -48,7 +48,7 @@ mod world;
 pub use bundle::Bundle;
 pub use entity::Entity;
 pub use error::EcsError;
-pub use query::{Query, QueryData, ReadOnlyQuery};
+pub use query::{QueryData, QueryFilter, ReadOnlyQuery, With, Without, WorldQuery};
 pub use resource::Resource;
 pub use snapshot::Snapshot;
 pub use world::{World, WorldBuilder};
