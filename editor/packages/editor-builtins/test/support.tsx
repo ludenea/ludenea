@@ -1,4 +1,4 @@
-import { ControlClient, ProjectClient, fakeTransport, type GameInfo } from "@ludenea/control-client";
+import { ControlClient, ProjectClient, fakeTransport, type GameInfo, type TypeSchema } from "@ludenea/control-client";
 import { createEditor, type EditorHost, type PluginDefinition } from "@ludenea/editor-shell";
 import { act, render } from "@testing-library/react";
 
@@ -31,8 +31,8 @@ async function fake<C>(
 export const testProject = (answer: Answer = () => undefined) =>
   fake({ type: "welcome", protocol_version: 1 }, "request", answer, ProjectClient.connect);
 
-export const testGame = (answer: Answer = () => ({ type: "done" })) =>
-  fake({ type: "welcome", protocol_version: 2, engine_version: "0", game }, "command", answer, ControlClient.connect);
+export const testGame = (answer: Answer = () => ({ type: "done" }), info: Partial<GameInfo> = {}) =>
+  fake({ type: "welcome", protocol_version: 2, engine_version: "0", game: { ...game, ...info } }, "command", answer, ControlClient.connect);
 
 /** An editor on a fake project service with `plugins` active. */
 export async function testEditor(plugins: PluginDefinition[], answer?: Answer) {
@@ -55,3 +55,42 @@ export function setSceneDirty(host: EditorHost, sceneDirty: boolean) {
   const timeline = { head: 0, simulated: 0, current: 0, checkpoints: [], edit_ticks: [], can_undo: false, can_redo: false, resimulating: false };
   act(() => host.editor.timeline.setState({ timeline: { ...timeline, scene_dirty: sceneDirty } }));
 }
+
+const f32 = { kind: "f32" } as const;
+const vec2: TypeSchema = { kind: "struct", name: "ludenea_math::Vec2", fields: [{ name: "x", schema: f32 }, { name: "y", schema: f32 }] };
+const circle: TypeSchema = { kind: "struct", name: "ludenea_physics::shape::Circle", fields: [{ name: "center", schema: vec2 }, { name: "radius", schema: f32 }] };
+
+/** Engine-like schemas, as `GameInfo` carries them. */
+export const schemas = {
+  body: {
+    kind: "struct",
+    name: "ludenea_physics::components::Body",
+    fields: [
+      { name: "kind", schema: { kind: "enum", name: "ludenea_physics::components::BodyKind", variants: ["Static", "Kinematic", "Dynamic"].map((name) => ({ name, fields: { kind: "unit" } })) } },
+      { name: "linear_velocity", schema: vec2 },
+      { name: "angular_velocity", schema: f32 },
+      { name: "linear_damping", schema: f32 },
+      { name: "angular_damping", schema: f32 },
+      { name: "gravity_scale", schema: f32 },
+    ],
+  },
+  collider: {
+    kind: "struct",
+    name: "ludenea_physics::components::Collider",
+    fields: [
+      {
+        name: "shape",
+        schema: {
+          kind: "enum",
+          name: "ludenea_physics::shape::Shape",
+          variants: [
+            { name: "Circle", fields: { kind: "newtype", item: circle } },
+            { name: "Capsule", fields: { kind: "newtype", item: { kind: "struct", name: "ludenea_physics::shape::Capsule", fields: [{ name: "radius", schema: f32 }] } } },
+          ],
+        },
+      },
+      { name: "density", schema: f32 },
+    ],
+  },
+  score: { kind: "struct", name: "my_game::Score", fields: [{ name: "points", schema: { kind: "u64" } }] },
+} satisfies Record<string, TypeSchema>;

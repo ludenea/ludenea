@@ -1,0 +1,270 @@
+import { ProtocolFailure, type ComponentValue, type ControlClient, type Entity, type FieldTarget, type JsonValue, type PathSegment, type TypeSchema } from "@ludenea/control-client";
+import type { Editor } from "@ludenea/editor-shell";
+import { useEffect, useMemo, useState } from "react";
+import { errorText, useGame, useStore } from "../shared";
+import { defaultValue } from "./default-value";
+import { Field } from "./fields/Field";
+import type { Edit } from "./fields/inputs";
+import { onEntity, type InspectorState } from "./index";
+
+type Values = { [name: string]: ComponentValue };
+
+// The timeline drives the time; editing it would fight the timeline.
+const READ_ONLY_RESOURCES = new Set(["ludenea::Time"]);
+
+const shortName = (name: string) => name.split("::").at(-1)!;
+const schemaMap = (named: { name: string; schema: TypeSchema }[]) => new Map(named.map(({ name, schema }) => [name, schema]));
+
+export function InspectorPanel({ editor, state }: { editor: Editor; state: InspectorState }) {
+  const control = useGame(editor);
+  if (!control) return <p className="ludenea-muted">No game is running.</p>;
+  return <Inspector editor={editor} control={control} state={state} />;
+}
+
+function Inspector({ editor, control, state }: { editor: Editor; control: ControlClient; state: InspectorState }) {
+  const entity = editor.selection((selection) => selection.entities[0]);
+  const { adding, focused } = useStore(state);
+  const components = useMemo(() => schemaMap(control.game.components), [control]);
+  const resourceSchemas = useMemo(() => schemaMap(control.game.resources), [control]);
+  const values = useEntity(editor, control, entity);
+  const resources = useResources(control);
+
+  const setField = (target: FieldTarget, refresh: () => void): Edit => async (path, value) => {
+    await onEntity(editor, control.request({ type: "set_field", target, path, value }));
+    refresh();
+  };
+
+  return (
+    <div className="ludenea-inspector">
+      {entity && (
+        <>
+          <h2>
+            Entity {entity.index}v{entity.generation}{" "}
+            <button onClick={() => void editor.commands.run("inspector.add-component").catch((error) => values.setError(errorText(error)))}>Add component</button>
+          </h2>
+          {values.error && <p className="ludenea-error">{values.error}</p>}
+          {adding && <AddComponent editor={editor} control={control} entity={entity} schemas={components} present={values.components ?? {}} state={state} onAdded={values.refresh} />}
+          {Object.entries(values.components ?? {}).map(([name, value]) => (
+            <Section
+              key={name}
+              editor={editor}
+              name={name}
+              value={value}
+              schema={components.get(name)}
+              entity={entity}
+              edit={setField({ type: "component", entity, component: name }, values.refresh)}
+              state={state}
+              focused={focused === name}
+            />
+          ))}
+        </>
+      )}
+      <h2>Resources</h2>
+      {resources.error && <p className="ludenea-error">{resources.error}</p>}
+      {Object.entries(resources.values).map(([name, value]) => (
+        <Section
+          key={name}
+          editor={editor}
+          name={name}
+          value={value}
+          schema={resourceSchemas.get(name)}
+          edit={setField({ type: "resource", resource: name }, resources.refresh)}
+          readOnly={READ_ONLY_RESOURCES.has(name)}
+        />
+      ))}
+    </div>
+  );
+}
+
+/** The selected entity's components, reloaded when the host reports a change. */
+function useEntity(editor: Editor, control: ControlClient, entity: Entity | undefined) {
+  const [components, setComponents] = useState<Values | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [version, setVersion] = useState(0);
+  const index = entity?.index;
+  const generation = entity?.generation;
+
+  useEffect(() => {
+    setComponents(null);
+    setError(null);
+  }, [index, generation]);
+  // Reloading keeps the shown values (and the focused field) until the new ones arrive.
+  useEffect(() => {
+    if (index === undefined || generation === undefined) return;
+    const entity = { index, generation };
+    let current = true;
+    const load = () =>
+      onEntity(editor, control.request({ type: "get_entity", entity })).then(
+        (reply) => current && setComponents(reply.components),
+        (failure) => current && setError(errorText(failure)),
+      );
+    load();
+    const watch = editor.entities.watch(entity, load);
+    return () => {
+      current = false;
+      watch.dispose();
+    };
+  }, [editor, control, index, generation, version]);
+
+  return { components, error, setError, refresh: () => setVersion((version) => version + 1) };
+}
+
+/** Every resource, kept current through the `Resources` topic. */
+function useResources(control: ControlClient) {
+  const [values, setValues] = useState<Values>({});
+  const [error, setError] = useState<string | null>(null);
+  const [version, setVersion] = useState(0);
+
+  useEffect(() => {
+    let current = true;
+    control.request({ type: "get_resources" }).then(
+      (reply) => current && setValues(reply.resources),
+      (failure) => current && setError(errorText(failure)),
+    );
+    return () => {
+      current = false;
+    };
+  }, [control, version]);
+
+  useEffect(() => {
+    const topic = { type: "resources" } as const;
+    control.request({ type: "subscribe", topic }).catch((failure) => setError(errorText(failure)));
+    const stop = control.on("resources_changed", (event) => setValues((values) => ({ ...values, ...event.resources })));
+    return () => {
+      stop();
+      control.request({ type: "unsubscribe", topic }).catch(() => {});
+    };
+  }, [control]);
+
+  return { values, error, refresh: () => setVersion((version) => version + 1) };
+}
+
+interface SectionProps {
+  editor: Editor;
+  name: string;
+  value: ComponentValue;
+  schema: TypeSchema | undefined;
+  edit: Edit;
+  /** Set for a component; a resource has none. */
+  entity?: Entity;
+  state?: InspectorState;
+  focused?: boolean;
+  readOnly?: boolean;
+}
+
+/** One component or resource: its custom inspector, its schema-driven fields, or read-only text. */
+function Section({ editor, name, value, schema, edit, entity, state, focused = false, readOnly = false }: SectionProps) {
+  const [error, setError] = useState<string | null>(null);
+  const Custom = entity ? editor.inspectors.get(name) : undefined;
+  const run = (command: string) => {
+    state?.set({ focused: name });
+    editor.commands.run(command).then(
+      () => setError(null),
+      (failure) => setError(errorText(failure)),
+    );
+  };
+
+  let body;
+  if (value.type === "ron") body = <pre aria-label={`${name} as RON`}>{value.text}</pre>;
+  else if (Custom && entity) {
+    const onChange = (path: PathSegment[], next: unknown) =>
+      void edit(path, next as JsonValue).then(
+        () => setError(null),
+        (failure) => setError(errorText(failure)),
+      );
+    body = <Custom value={value.value} entity={entity} onChange={onChange} />;
+  } else if (schema) body = <Field schema={schema} value={value.value} path={[]} edit={edit} readOnly={readOnly} editor={editor} />;
+  else body = <pre>{JSON.stringify(value.value, null, 2)}</pre>;
+
+  return (
+    <section aria-label={name} aria-current={focused || undefined} className="ludenea-component" onFocus={() => state?.set({ focused: name })}>
+      <h3 tabIndex={0} title={name}>
+        {shortName(name)}
+        {state && (
+          <>
+            {" "}
+            <button onClick={() => run("inspector.remove-component")}>Remove</button>
+            <button onClick={() => run("inspector.apply-to-scene")}>Apply to scene</button>
+          </>
+        )}
+      </h3>
+      {body}
+      {error && <p className="ludenea-error">{error}</p>}
+    </section>
+  );
+}
+
+/** Picks a component the entity lacks and inserts its default value; a rejected value opens a form to fix it. */
+function AddComponent(props: {
+  editor: Editor;
+  control: ControlClient;
+  entity: Entity;
+  schemas: Map<string, TypeSchema>;
+  present: Values;
+  state: InspectorState;
+  onAdded(): void;
+}) {
+  const { editor, control, entity, schemas, present, state, onAdded } = props;
+  const candidates = [...schemas.keys()].filter((name) => !(name in present));
+  const [chosen, setChosen] = useState(candidates[0] ?? "");
+  const [draft, setDraft] = useState<JsonValue | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const schema = schemas.get(chosen);
+
+  const insert = async () => {
+    if (!schema) return;
+    const value = draft ?? defaultValue(schema);
+    try {
+      await onEntity(editor, control.request({ type: "insert_component", entity, component: chosen, value }));
+      state.set({ adding: false, focused: chosen });
+      onAdded();
+    } catch (failure) {
+      setError(errorText(failure));
+      if (failure instanceof ProtocolFailure && failure.code === "invalid_edit") setDraft(value);
+    }
+  };
+
+  return (
+    <div className="ludenea-add-component">
+      <select
+        aria-label="Component"
+        value={chosen}
+        onChange={(event) => {
+          setChosen(event.target.value);
+          setDraft(null);
+          setError(null);
+        }}
+      >
+        {candidates.map((name) => (
+          <option key={name} value={name}>
+            {name}
+          </option>
+        ))}
+      </select>
+      {schema && draft !== null && (
+        <form aria-label={`New ${chosen}`} onSubmit={(event) => event.preventDefault()}>
+          <Field schema={schema} value={draft} path={[]} readOnly={false} editor={editor} edit={async (path, value) => setDraft((draft) => setAt(draft, path, value))} />
+          {error && <p className="ludenea-error">{error}</p>}
+        </form>
+      )}
+      {error && draft === null && <p className="ludenea-error">{error}</p>}
+      <button disabled={!schema} onClick={() => void insert()}>
+        Insert
+      </button>
+      <button onClick={() => state.set({ adding: false })}>Cancel</button>
+    </div>
+  );
+}
+
+/** `root` with the value at `path` replaced, in the host's path semantics. */
+function setAt(root: JsonValue, path: PathSegment[], value: JsonValue): JsonValue {
+  const [first, ...rest] = path;
+  if (!first) return value;
+  if (first.type === "index") {
+    const items = [...(root as JsonValue[])];
+    items[first.index] = setAt(items[first.index] ?? null, rest, value);
+    return items;
+  }
+  const object = root as { [name: string]: JsonValue };
+  return { ...object, [first.name]: setAt(object[first.name] ?? null, rest, value) };
+}

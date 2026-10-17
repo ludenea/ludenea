@@ -1,0 +1,82 @@
+import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { builtinPlugins } from "../src";
+import { renderPanel, settle, testEditor, testGame } from "./support";
+
+const UNKNOWN = 'no component is named `Bdy`; registered components: ["ludenea::Body", "ludenea::Pose"]';
+const INTROSPECTION = { type: "introspection" };
+
+// jsdom has no layout: give the list a height so the virtualizer shows rows.
+beforeAll(() => {
+  Object.defineProperty(HTMLElement.prototype, "offsetHeight", { configurable: true, get: () => 400 });
+  Object.defineProperty(HTMLElement.prototype, "offsetWidth", { configurable: true, get: () => 300 });
+});
+
+async function explorer(total = 3) {
+  const host = await testEditor(builtinPlugins);
+  const game = await testGame((command) => {
+    const filter = (command.filter ?? (command.topic as { filter?: string } | undefined)?.filter) as string | undefined;
+    if (filter === "With<Bdy>") return { error: { code: "invalid_filter", message: UNKNOWN } };
+    if (command.type === "query_entities") {
+      const offset = command.offset as number;
+      const count = Math.max(0, Math.min(command.limit as number, total - offset));
+      const rows = Array.from({ length: count }, (_, row) => ({ entity: { index: offset + row, generation: 0 }, hash: (offset + row).toString(16).padStart(16, "0") }));
+      return { type: "entities", total, rows };
+    }
+    if (command.type === "get_schedule") {
+      return { type: "schedule", systems: [{ name: "physics_step", reads: ["component ludenea::Collider"], writes: ["component ludenea::Pose"], micros: null }] };
+    }
+    if (command.type === "get_tick_events") return { type: "tick_events", events: [] };
+    if (command.type === "get_tick_commands") return { type: "tick_commands", sync_points: [] };
+    return { type: "done" };
+  });
+  act(() => host.setControl(game.client));
+  renderPanel(host, "ludenea.explorer");
+  await settle();
+  return { host, game };
+}
+
+describe("explorer", () => {
+  afterEach(cleanup);
+
+  it("filter_error_shows_candidates", async () => {
+    const { game } = await explorer();
+    const query = screen.getByRole("searchbox", { name: "Entity query" });
+    fireEvent.change(query, { target: { value: "With<Bdy>" } });
+    fireEvent.submit(query);
+    await settle();
+
+    expect(game.sent).toContainEqual({ type: "query_entities", filter: "With<Bdy>", offset: 0, limit: 200 });
+    expect(screen.getByRole("alert").textContent).toContain('"ludenea::Body", "ludenea::Pose"');
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+  });
+
+  it("list_renders_only_visible_rows_for_100000_entities", async () => {
+    await explorer(100_000);
+    const rows = screen.getAllByRole("option");
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.length).toBeLessThan(100);
+    expect(rows[0]!.textContent).toContain("0v0");
+    expect(rows[0]!.textContent).toContain("0000000000000000");
+  });
+
+  it("introspection_subscribed_only_while_tab_visible", async () => {
+    const { game } = await explorer();
+    const sent = () => game.sent.filter((message) => JSON.stringify(message.topic) === JSON.stringify(INTROSPECTION)).map((message) => message.type);
+    expect(sent()).toEqual([]);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Schedule" }));
+    await settle();
+    expect(sent()).toEqual(["subscribe"]);
+    expect(screen.getByText("physics_step")).toBeTruthy();
+    expect(screen.getByText("not measured in the browser")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Events" }));
+    await settle();
+    expect(sent()).toEqual(["subscribe"]);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Entities" }));
+    await settle();
+    expect(sent()).toEqual(["subscribe", "unsubscribe"]);
+  });
+});

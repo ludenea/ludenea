@@ -1,0 +1,149 @@
+import type { Entity, FileEntry, JsonValue, PathSegment } from "@ludenea/control-client";
+import type { Editor } from "@ludenea/editor-shell";
+import { useEffect, useState, type ReactNode } from "react";
+import { errorText } from "../../shared";
+
+/** Sends one field's new value; rejects with the host's error. */
+export type Edit = (path: PathSegment[], value: JsonValue) => Promise<void>;
+
+export interface LeafProps {
+  value: JsonValue;
+  path: PathSegment[];
+  edit: Edit;
+  readOnly: boolean;
+}
+
+export const pathText = (path: PathSegment[]) => path.map((segment) => (segment.type === "field" ? segment.name : segment.index)).join(".");
+
+const lastName = (path: PathSegment[]) => {
+  const last = path.at(-1);
+  return last ? (last.type === "field" ? last.name : `[${last.index}]`) : "value";
+};
+
+/** The edit of one field, keeping its last error to show under it. */
+export function useCommit(edit: Edit, path: PathSegment[]) {
+  const [error, setError] = useState<string | null>(null);
+  const commit = (value: JsonValue) =>
+    void edit(path, value).then(
+      () => setError(null),
+      (failure) => setError(errorText(failure)),
+    );
+  return { error, setError, commit };
+}
+
+/** A labelled field with its error underneath. */
+export function FieldRow({ path, error, children }: { path: PathSegment[]; error?: string | null; children: ReactNode }) {
+  return (
+    <div className="ludenea-field">
+      <label>
+        <span>{lastName(path)}</span> {children}
+      </label>
+      {error && <p className="ludenea-error">{error}</p>}
+    </div>
+  );
+}
+
+/** An input committing its text on blur or Enter, and only when the text changed. */
+function TextInput(props: { text: string; path: PathSegment[]; readOnly: boolean; type?: "text" | "number"; step?: number | "any"; onCommit(text: string): void }) {
+  const { text, path, readOnly, type = "text", step, onCommit } = props;
+  const commit = (next: string) => {
+    if (next !== text) onCommit(next);
+  };
+  return (
+    <input
+      key={text}
+      type={type}
+      step={step}
+      aria-label={pathText(path)}
+      defaultValue={text}
+      readOnly={readOnly}
+      onBlur={(event) => commit(event.currentTarget.value)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") commit(event.currentTarget.value);
+      }}
+    />
+  );
+}
+
+export function NumberField({ value, path, edit, readOnly, integer }: LeafProps & { integer: boolean }) {
+  const { error, setError, commit } = useCommit(edit, path);
+  const onCommit = (next: string) => {
+    const number = Number(next);
+    if (next.trim() === "" || !Number.isFinite(number)) setError("enter a number");
+    else commit(number);
+  };
+  return (
+    <FieldRow path={path} error={error}>
+      <TextInput type="number" step={integer ? 1 : "any"} text={String(value)} path={path} readOnly={readOnly} onCommit={onCommit} />
+    </FieldRow>
+  );
+}
+
+/** `u64` and `i64`: past 2^53 a JSON number loses digits, so they are edited and sent as text. */
+export function LargeIntegerField({ value, path, edit, readOnly }: LeafProps) {
+  const { error, commit } = useCommit(edit, path);
+  return (
+    <FieldRow path={path} error={error}>
+      <TextInput text={String(value)} path={path} readOnly={readOnly} onCommit={(next) => commit(next.trim())} />
+    </FieldRow>
+  );
+}
+
+export function StringField({ value, path, edit, readOnly }: LeafProps) {
+  const { error, commit } = useCommit(edit, path);
+  return (
+    <FieldRow path={path} error={error}>
+      <TextInput text={String(value)} path={path} readOnly={readOnly} onCommit={commit} />
+    </FieldRow>
+  );
+}
+
+export function BoolField({ value, path, edit, readOnly }: LeafProps) {
+  const { error, commit } = useCommit(edit, path);
+  return (
+    <FieldRow path={path} error={error}>
+      <input type="checkbox" aria-label={pathText(path)} checked={value === true} disabled={readOnly} onChange={(event) => commit(event.target.checked)} />
+    </FieldRow>
+  );
+}
+
+/** An entity reference, as a link selecting it. */
+export function EntityField({ value, path, editor }: LeafProps & { editor: Editor }) {
+  const entity = value as Entity;
+  return (
+    <FieldRow path={path}>
+      <button className="ludenea-link" aria-label={pathText(path)} onClick={() => editor.selection.getState().select([entity])}>
+        {entity.index}v{entity.generation}
+      </button>
+    </FieldRow>
+  );
+}
+
+/** An asset identifier, picked among the project's files. */
+export function AssetField({ value, path, edit, readOnly, editor }: LeafProps & { editor: Editor }) {
+  const { error, setError, commit } = useCommit(edit, path);
+  const [files, setFiles] = useState<FileEntry[]>([]);
+  useEffect(() => {
+    let current = true;
+    editor.project.request({ type: "list_files" }).then(
+      (reply) => current && setFiles(reply.entries),
+      (failure) => current && setError(errorText(failure)),
+    );
+    return () => {
+      current = false;
+    };
+  }, [editor, setError]);
+  const known = files.some((file) => file.id === value);
+  return (
+    <FieldRow path={path} error={error}>
+      <select aria-label={pathText(path)} value={String(value)} disabled={readOnly} onChange={(event) => commit(event.target.value)}>
+        {!known && <option value={String(value)}>{String(value)}</option>}
+        {files.map((file) => (
+          <option key={file.id} value={file.id}>
+            {file.path}
+          </option>
+        ))}
+      </select>
+    </FieldRow>
+  );
+}
