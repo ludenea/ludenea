@@ -16,9 +16,6 @@ const message = (error: unknown) => (error instanceof Error ? error.message : St
 
 /** Body counts by kind at the current tick, and the contacts that began or ended at `tick`. */
 async function read(editor: Editor, control: ControlClient, tick: number | null): Promise<Physics> {
-  // The host records tick events only while `Introspection` is subscribed; subscribing again
-  // changes nothing, and takes the recording back if another panel unsubscribed.
-  await control.request({ type: "subscribe", topic: INTROSPECTION });
   const counts = new Map(KINDS.map((kind) => [kind, 0]));
   // ponytail: reads every body on each refresh (each tick while playing); count on the host
   // if large scenes make this slow.
@@ -51,8 +48,10 @@ function PhysicsPanel({ editor }: { editor: Editor }) {
     const subscription = editor.onGameChanged(setControl);
     return () => subscription.dispose();
   }, [editor]);
+  // The host records tick events only while `Introspection` is subscribed.
   useEffect(() => {
     if (!control) return;
+    control.request({ type: "subscribe", topic: INTROSPECTION }).catch((failure) => setError(message(failure)));
     return () => void control.request({ type: "unsubscribe", topic: INTROSPECTION }).catch(() => {});
   }, [control]);
   useEffect(() => {

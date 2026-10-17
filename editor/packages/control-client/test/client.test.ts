@@ -89,6 +89,53 @@ describe("ControlClient", () => {
     warn.mockRestore();
   });
 
+  it("topic_subscriptions_are_counted_so_only_the_last_unsubscribe_is_sent", async () => {
+    const { transport, sent, client: connecting } = connected();
+    const client = await connecting;
+    const commands = () => sent.map((request) => request.command);
+    const answer = () => transport.push(ok(sent.at(-1)!.id, { type: "done" }));
+    const introspection = { type: "introspection" } as const;
+
+    const first = client.request({ type: "subscribe", topic: introspection });
+    answer();
+    await first;
+    await client.request({ type: "subscribe", topic: introspection });
+    // Key order does not make another topic.
+    const entity = client.request({ type: "subscribe", topic: { entity: { generation: 0, index: 1 }, type: "entity" } });
+    answer();
+    await entity;
+    expect(commands()).toEqual([
+      { type: "subscribe", topic: introspection },
+      { type: "subscribe", topic: { entity: { generation: 0, index: 1 }, type: "entity" } },
+    ]);
+    await client.request({ type: "subscribe", topic: { type: "entity", entity: { index: 1, generation: 0 } } });
+    expect(commands()).toHaveLength(2);
+
+    expect(await client.request({ type: "unsubscribe", topic: introspection })).toEqual({ type: "done" });
+    expect(commands()).toHaveLength(2);
+    const last = client.request({ type: "unsubscribe", topic: introspection });
+    answer();
+    await last;
+    expect(commands().at(-1)).toEqual({ type: "unsubscribe", topic: introspection });
+    expect(commands()).toHaveLength(3);
+  });
+
+  it("refused_subscription_is_not_counted", async () => {
+    const { transport, sent, client: connecting } = connected();
+    const client = await connecting;
+    const topic = { type: "entities", filter: "With<Nope>" } as const;
+    const refuse = () =>
+      transport.push(JSON.stringify({ type: "response", id: sent.at(-1)!.id, result: { error: { code: "invalid_filter", message: "no component" } } }));
+
+    const first = client.request({ type: "subscribe", topic });
+    refuse();
+    await expect(first).rejects.toThrow("no component");
+    const again = client.request({ type: "subscribe", topic });
+    refuse();
+    await expect(again).rejects.toThrow("no component");
+    expect(sent).toHaveLength(2);
+  });
+
   it("close_rejects_pending_requests", async () => {
     const { client: connecting } = connected();
     const client = await connecting;

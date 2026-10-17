@@ -39,7 +39,7 @@ export function createEntityAccess(
     if (!current) throw new Error("no game is connected");
     return current;
   };
-  // The host keeps one subscription per entity, so it follows the first and last watch.
+  // Each watch subscribes; the client counts them, so the host hears the first and the last.
   const subscription = (type: "subscribe" | "unsubscribe", entity: Entity) =>
     void control()
       ?.request({ type, topic: { type: "entity", entity } })
@@ -58,8 +58,7 @@ export function createEntityAccess(
   listen(control());
   onGameChanged((current) => {
     listen(current);
-    const entities = new Map([...watches].map((watch) => [key(watch.entity), watch.entity]));
-    for (const entity of entities.values()) subscription("subscribe", entity);
+    for (const watch of watches) subscription("subscribe", watch.entity);
   });
 
   return {
@@ -73,12 +72,12 @@ export function createEntityAccess(
       await game().request({ type: "set_field", target, path, value: value as JsonValue });
     },
     watch(entity, listener) {
-      if (watched(entity).length === 0) subscription("subscribe", entity);
+      subscription("subscribe", entity);
       const watch = { entity, listener };
       watches.add(watch);
       return own(() => {
         watches.delete(watch);
-        if (watched(entity).length === 0) subscription("unsubscribe", entity);
+        subscription("unsubscribe", entity);
       });
     },
   };

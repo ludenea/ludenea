@@ -7,6 +7,7 @@ import type {
   Outcome,
   Reply,
   ServerMessage,
+  Topic,
 } from "./generated";
 import type { MessageTransport } from "./transports/transport";
 
@@ -106,8 +107,16 @@ export function parseFrame<T>(raw: string): T | undefined {
 
 type Listener = (event: never) => void;
 
+/** A topic's identity whatever its key order. */
+const topicKey = (topic: Topic): string =>
+  JSON.stringify(topic, (_, value) =>
+    value && typeof value === "object" && !Array.isArray(value) ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))) : value,
+  );
+
 export class ControlClient {
   private readonly listeners = new Map<string, Set<Listener>>();
+  /** Subscribers per topic: the host keeps one flag per client, so only the first and last reach it. */
+  private readonly subscriptions = new Map<string, { count: number; subscribed: Promise<unknown> }>();
   private closed = false;
 
   private constructor(
@@ -146,7 +155,42 @@ export class ControlClient {
     });
   }
 
+  /**
+   * Sends `command` and resolves with its reply. `Subscribe` and `Unsubscribe` are counted per
+   * topic: only the first subscription and the last unsubscription are sent, so panels sharing a
+   * topic do not cancel each other.
+   */
   async request<C extends Command>(command: C): Promise<ReplyFor<C>> {
+    if (command.type === "subscribe" || command.type === "unsubscribe") {
+      return (await this.counted(command.type, command.topic)) as ReplyFor<C>;
+    }
+    return this.send(command);
+  }
+
+  private async counted(type: "subscribe" | "unsubscribe", topic: Topic): Promise<Reply> {
+    const key = topicKey(topic);
+    const entry = this.subscriptions.get(key);
+    if (type === "subscribe") {
+      if (entry) {
+        entry.count++;
+        await entry.subscribed;
+        return { type: "done" };
+      }
+      const subscribed = this.send({ type, topic });
+      this.subscriptions.set(key, { count: 1, subscribed });
+      // A refused subscription (an invalid filter) counts for nothing.
+      return subscribed.catch((error) => {
+        this.subscriptions.delete(key);
+        throw error;
+      });
+    }
+    if (!entry) return { type: "done" };
+    if (--entry.count > 0) return { type: "done" };
+    this.subscriptions.delete(key);
+    return this.send({ type, topic });
+  }
+
+  private async send<C extends Command>(command: C): Promise<ReplyFor<C>> {
     if (this.closed) throw new Error("connection closed");
     const result = await this.requests.send(
       (id): ClientMessage => ({ type: "request", id, command }),

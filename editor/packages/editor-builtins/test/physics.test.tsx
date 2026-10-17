@@ -1,7 +1,8 @@
 import type { PluginDefinition } from "@ludenea/editor-shell";
-import { act, cleanup, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { renderPanel, setSceneDirty, testEditor, testGame } from "./support";
+import { builtinPlugins } from "../src";
+import { renderPanel, setSceneDirty, settle, testEditor, testGame } from "./support";
 
 // The physics crate's engine plugin lives outside this package: the project service bundles it
 // at runtime. A computed specifier keeps it out of this package's type checking.
@@ -10,11 +11,40 @@ const PHYSICS_PLUGIN: string = new URL("../../../../crates/ludenea-physics/edito
 const entity = (index: number) => ({ index, generation: 0 });
 const kinds = ["Dynamic", "Static", "Dynamic", "Kinematic", "Dynamic"];
 
+const physicsPlugin = async () => ((await import(/* @vite-ignore */ PHYSICS_PLUGIN)) as { default: PluginDefinition }).default;
+
 describe("physics plugin", () => {
   afterEach(cleanup);
 
+  it("closing_the_physics_panel_keeps_the_explorer_recording", async () => {
+    const host = await testEditor([...builtinPlugins, await physicsPlugin()]);
+    const game = await testGame((command) => {
+      if (command.type === "query_entities") return { type: "entities", total: 0, rows: [] };
+      if (command.type === "get_schedule") return { type: "schedule", systems: [] };
+      if (command.type === "get_tick_events") return { type: "tick_events", events: [] };
+      return { type: "done" };
+    });
+    act(() => host.setControl(game.client));
+    setSceneDirty(host, false);
+    const introspection = () => game.sent.filter((command) => (command.topic as { type?: string } | undefined)?.type === "introspection").map((command) => command.type);
+    renderPanel(host, "ludenea.explorer");
+    const Physics = host.registry.panels.get("ludenea_physics.panel")!.component;
+    const physics = render(<Physics editor={host.editor} />);
+    fireEvent.click(screen.getByRole("tab", { name: "Schedule" }));
+    await settle();
+    expect(introspection()).toEqual(["subscribe"]);
+
+    physics.unmount();
+    await settle();
+    expect(introspection()).toEqual(["subscribe"]);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Entities" }));
+    await settle();
+    expect(introspection()).toEqual(["subscribe", "unsubscribe"]);
+  });
+
   it("physics_panel_counts_bodies_by_kind", async () => {
-    const plugin = ((await import(/* @vite-ignore */ PHYSICS_PLUGIN)) as { default: PluginDefinition }).default;
+    const plugin = await physicsPlugin();
     expect(plugin.name).toBe("ludenea_physics");
     const host = await testEditor([plugin]);
     const game = await testGame((command) => {

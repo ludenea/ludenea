@@ -8,11 +8,22 @@ import { installShortcuts } from "../shortcuts";
 
 const HostContext = createContext<EditorHost | null>(null);
 
-function PluginPanel({ params }: IDockviewPanelProps<{ id: string }>) {
+/**
+ * Dockview keeps a hidden tab's component mounted; a plugin panel is unmounted instead, so its
+ * subscriptions (and the host's recording behind them) last only while it shows.
+ */
+function PluginPanel({ params, api }: IDockviewPanelProps<{ id: string }>) {
   const host = useContext(HostContext)!;
   const panels = host.registry.panels;
   const panel = useSyncExternalStore(panels.subscribe, () => panels.get(params.id));
-  return panel ? <panel.component editor={host.editor} /> : null;
+  const visible = useSyncExternalStore(
+    (listener) => {
+      const subscription = api.onDidVisibilityChange(listener);
+      return () => subscription.dispose();
+    },
+    () => api.isVisible,
+  );
+  return panel && visible ? <panel.component editor={host.editor} /> : null;
 }
 
 const COMPONENTS = { plugin: PluginPanel };

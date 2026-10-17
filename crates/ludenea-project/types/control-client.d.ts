@@ -953,10 +953,19 @@ class ControlClient {
     private readonly requests;
     readonly game: GameInfo;
     private readonly listeners;
+    /** Subscribers per topic: the host keeps one flag per client, so only the first and last reach it. */
+    private readonly subscriptions;
     private closed;
     private constructor();
     static connect(transport: MessageTransport): Promise<ControlClient>;
+    /**
+     * Sends `command` and resolves with its reply. `Subscribe` and `Unsubscribe` are counted per
+     * topic: only the first subscription and the last unsubscription are sent, so panels sharing a
+     * topic do not cancel each other.
+     */
     request<C extends Command>(command: C): Promise<ReplyFor<C>>;
+    private counted;
+    private send;
     on<T extends Event["type"]>(type: T, listener: (event: Extract<Event, {
         type: T;
     }>) => void): () => void;

@@ -1,9 +1,17 @@
 import { definePlugin } from "@ludenea/editor-shell";
-import { ExplorerPanel } from "./ExplorerPanel";
+import { createStore } from "../shared";
+import { ExplorerPanel, type ExplorerState, type Tab } from "./ExplorerPanel";
 
 export const explorerPlugin = definePlugin({
   name: "ludenea.explorer",
   activate(editor) {
-    editor.panels.register({ id: "ludenea.explorer", title: "Explorer", defaultPosition: "bottom", component: ExplorerPanel });
+    // Kept here, not in the panel: the shell unmounts a panel while its tab is hidden.
+    const state: ExplorerState = createStore({ tab: "Entities" as Tab, text: "", filter: "" });
+    editor.panels.register({
+      id: "ludenea.explorer",
+      title: "Explorer",
+      defaultPosition: "bottom",
+      component: ({ editor }) => <ExplorerPanel editor={editor} state={state} />,
+    });
   },
 });
