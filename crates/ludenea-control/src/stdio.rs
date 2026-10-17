@@ -10,7 +10,7 @@ use ludenea_app::App;
 
 use crate::host::Host;
 use crate::in_process::answer;
-use crate::protocol::{Command, ServerMessage};
+use crate::protocol::{Command, ErrorCode, ProtocolError, ServerMessage};
 
 /// How long the loop waits for a message before it advances the host anyway.
 const FRAME: Duration = Duration::from_nanos(1_000_000_000 / 60);
@@ -32,7 +32,8 @@ pub fn serve_stdio(
     .expect("SetThreads always succeeds");
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        for line in input.lines() {
+        // Bytes, not text: a line that is not UTF-8 gets an error instead of ending input.
+        for line in input.split(b'\n') {
             let Ok(line) = line else { break };
             if sender.send(line).is_err() {
                 break;
@@ -51,8 +52,17 @@ pub fn serve_stdio(
         }
         lines.extend(receiver.try_iter());
         let mut batch = Vec::new();
-        for line in lines.iter().filter(|line| !line.trim().is_empty()) {
-            let reply = answer(&mut host, &mut connected, line);
+        for line in &lines {
+            let reply = match std::str::from_utf8(line) {
+                Ok(line) if line.trim().is_empty() => continue,
+                Ok(line) => answer(&mut host, &mut connected, line),
+                Err(_) => ServerMessage::Refused {
+                    error: ProtocolError::new(
+                        ErrorCode::InvalidCommand,
+                        "this line is not UTF-8 text; send each message as one line of JSON",
+                    ),
+                },
+            };
             write_message(&mut batch, &reply)?;
         }
         let elapsed = now();

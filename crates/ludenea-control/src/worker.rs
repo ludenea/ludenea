@@ -2,7 +2,13 @@
 //! posts the JSON it gets back. There is no clock here; the worker passes the elapsed time.
 //!
 //! A panic aborts the WebAssembly instance, so instead of recovering the panic hook posts
-//! `{"type":"crashed","tick":<tick>,"message":"..."}` to the worker scope before it dies.
+//! `{"type":"crashed","tick":<tick>,"message":"... at <file>:<line>"}` to the worker scope
+//! before it dies.
+//!
+//! No automated test covers the hook: it runs only inside a browser worker, and a test
+//! would need a game built to WebAssembly that panics on demand, plus the browser end to
+//! end harness to observe the dying worker. The supervisor's handling of the posted message
+//! is tested in the control client with a fake worker.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -38,6 +44,10 @@ impl WorkerHost {
     pub fn new(app: fn() -> App) -> WorkerHost {
         std::panic::set_hook(Box::new(|info| {
             let message = info.payload_as_str().unwrap_or("a panic without a message");
+            let message = match info.location() {
+                Some(location) => format!("{message} at {}:{}", location.file(), location.line()),
+                None => message.to_string(),
+            };
             let crash = serde_json::json!({
                 "type": "crashed",
                 "tick": TICK.load(Ordering::Relaxed),

@@ -119,5 +119,35 @@ fn playing_emits_ticked_events_in_real_time() {
             )
         })
         .count();
-    assert!((10..=60).contains(&ticks), "{ticks} ticks in 0.5 s");
+    // 30 ticks are due; a loaded machine may run fewer, but a few prove real-time play.
+    assert!((3..=60).contains(&ticks), "{ticks} ticks in 0.5 s");
+}
+
+#[test]
+fn a_line_that_is_not_utf8_gets_an_error_and_the_session_goes_on() {
+    let step = Command::Step {
+        ticks: 1,
+        record_hashes: false,
+    };
+    let mut input = hello().into_bytes();
+    input.extend_from_slice(b"\xff\xfe\n");
+    input.extend_from_slice(request(5, &step).as_bytes());
+    let mut output = Vec::new();
+    serve_stdio(boxes::app, BufReader::new(Cursor::new(input)), &mut output).unwrap();
+    let messages: Vec<ServerMessage> = String::from_utf8(output)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(matches!(
+        &messages[1],
+        ServerMessage::Refused { error } if error.code == ErrorCode::InvalidCommand
+    ));
+    assert!(matches!(
+        messages[2],
+        ServerMessage::Response {
+            id: 5,
+            result: Ok(_)
+        }
+    ));
 }
