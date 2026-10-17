@@ -393,6 +393,14 @@ impl World {
         Some((entry.codec.to_json)(&*value))
     }
 
+    /// The resource registered under `name` as a RON string, or `None` when it is not
+    /// registered.
+    pub fn resource_ron(&self, name: &str) -> Option<String> {
+        let entry = self.resources.get(name)?;
+        let value = entry.value.value();
+        Some((entry.codec.encode_ron)(&*value))
+    }
+
     /// Removes the component registered under `name` from `entity`, if it has one.
     pub fn remove_by_name(&mut self, entity: Entity, name: &str) -> Result<(), EcsError> {
         self.ensure_alive(entity)?;

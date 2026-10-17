@@ -189,7 +189,12 @@ fn list_and_get_entity_return_components_and_reject_dead_ones() {
     }) else {
         panic!()
     };
-    assert_eq!(components["host::Score"], "(5)");
+    assert_eq!(
+        components["host::Score"],
+        ComponentValue::Json {
+            value: serde_json::json!(5)
+        }
+    );
     let dead: Entity = serde_json::from_str(r#"{"index":9,"generation":0}"#).unwrap();
     let error = client
         .request(Command::GetEntity { entity: dead })
@@ -236,6 +241,43 @@ fn every_command_and_reply_round_trips_through_json() {
         },
         Command::ListEntities,
         Command::GetEntity { entity },
+        Command::GetResources,
+        Command::Spawn {
+            components: BTreeMap::from([("n".to_string(), serde_json::json!(1))]),
+        },
+        Command::Despawn { entity },
+        Command::InsertComponent {
+            entity,
+            component: "n".into(),
+            value: serde_json::json!({"x": 0.1}),
+        },
+        Command::RemoveComponent {
+            entity,
+            component: "n".into(),
+        },
+        Command::SetField {
+            target: FieldTarget::Component {
+                entity,
+                component: "n".into(),
+            },
+            path: vec![
+                PathSegment::Field { name: "a".into() },
+                PathSegment::Index { index: 2 },
+            ],
+            value: serde_json::json!(null),
+        },
+        Command::SetField {
+            target: FieldTarget::Resource {
+                resource: "r".into(),
+            },
+            path: vec![],
+            value: serde_json::json!("1"),
+        },
+        Command::SaveScene,
+        Command::ApplyToScene {
+            entity,
+            component: "n".into(),
+        },
         Command::LoadEdits { log: bytes.clone() },
         Command::Play,
         Command::Pause,
@@ -319,8 +361,26 @@ fn every_command_and_reply_round_trips_through_json() {
         },
         Reply::Entity {
             entity,
-            components: BTreeMap::from([("n".to_string(), "(1)".to_string())]),
+            components: BTreeMap::from([
+                (
+                    "n".to_string(),
+                    ComponentValue::Json {
+                        value: serde_json::json!({"a": [1.5, "18446744073709551615"]}),
+                    },
+                ),
+                (
+                    "r".to_string(),
+                    ComponentValue::Ron {
+                        text: "(1)".to_string(),
+                    },
+                ),
+            ]),
         },
+        Reply::Resources {
+            resources: BTreeMap::new(),
+        },
+        Reply::Spawned { entity },
+        Reply::Scene { ron: "s".into() },
         Reply::Timeline(timeline.clone()),
         Reply::Session {
             scene: "s".into(),
@@ -490,9 +550,39 @@ fn wire_format_matches_golden_json() {
     assert_eq!(
         to(&Reply::Entity {
             entity,
-            components: BTreeMap::from([("n".to_string(), "(1)".to_string())])
+            components: BTreeMap::from([
+                ("n".to_string(), ComponentValue::Json { value: json!(1) }),
+                (
+                    "r".to_string(),
+                    ComponentValue::Ron {
+                        text: "(1)".to_string()
+                    }
+                ),
+            ])
         }),
-        json!({"type":"entity","entity":{"index":1,"generation":2},"components":{"n":"(1)"}})
+        json!({"type":"entity","entity":{"index":1,"generation":2},"components":{
+            "n":{"type":"json","value":1},
+            "r":{"type":"ron","text":"(1)"},
+        }})
+    );
+    assert_eq!(
+        to(&Command::SetField {
+            target: FieldTarget::Component {
+                entity,
+                component: "ludenea::Collider".into()
+            },
+            path: vec![
+                PathSegment::Field {
+                    name: "shape".into()
+                },
+                PathSegment::Index { index: 0 }
+            ],
+            value: json!(0.5),
+        }),
+        json!({"type":"set_field",
+            "target":{"type":"component","entity":{"index":1,"generation":2},"component":"ludenea::Collider"},
+            "path":[{"type":"field","name":"shape"},{"type":"index","index":0}],
+            "value":0.5})
     );
     let error = ProtocolError {
         code: ErrorCode::NoSuchEntity,

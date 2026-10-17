@@ -1,10 +1,16 @@
-use ludenea_app::{App, AppError, EditLog, InputLog, RawInput, SimError, Simulation};
-use ludenea_ecs::Snapshot;
+use ludenea_app::{
+    App, AppError, Edit, EditError, EditLog, InputLog, RawInput, SimError, Simulation, ValueKind,
+};
+use ludenea_ecs::schema::TypeSchema;
+use ludenea_ecs::{Entity, Snapshot};
+use serde_json::Value as JsonValue;
 
+use crate::json::{from_wire, to_wire};
 use crate::pacer::Pacer;
+use crate::path::{Path, PathSegment, set_at_path};
 use crate::protocol::{
-    Bytes, Command, ConsoleLevel, ErrorCode, Event, GameInfo, Hash64, NamedSchema, PauseReason,
-    ProtocolError, Reply,
+    Bytes, Command, ComponentValue, ConsoleLevel, ErrorCode, Event, FieldTarget, GameInfo, Hash64,
+    NamedSchema, PauseReason, ProtocolError, Reply,
 };
 use crate::session::{Resimulation, Session, SessionError, Timeline};
 
@@ -172,14 +178,74 @@ impl Host {
             Command::ListEntities => Ok(Reply::Entities {
                 entities: sim.world().entities().collect(),
             }),
-            Command::GetEntity { entity } => {
-                let components = sim.world().entity_components_ron(entity).ok_or_else(|| {
-                    ProtocolError::new(
-                        ErrorCode::NoSuchEntity,
-                        format!("entity {entity} is not alive; list the entities first"),
-                    )
-                })?;
-                Ok(Reply::Entity { entity, components })
+            Command::GetEntity { entity } => self.get_entity(entity),
+            Command::GetResources => Ok(self.get_resources()),
+            Command::Spawn { components } => {
+                let components = components
+                    .into_iter()
+                    .map(|(name, value)| {
+                        encode_value(sim, ValueKind::Component, &name, value)
+                            .map(|bytes| (name.clone(), bytes))
+                            .map_err(|e| in_context(edit_error(&e), &format!("component `{name}`")))
+                    })
+                    .collect::<Result<_, _>>()?;
+                let spawned = self.edit(Edit::Spawn { components }, "spawn")?;
+                Ok(Reply::Spawned {
+                    entity: spawned.expect("a spawn returns its entity"),
+                })
+            }
+            Command::Despawn { entity } => {
+                self.edit(Edit::Despawn { entity }, &format!("entity {entity}"))?;
+                Ok(Reply::Done)
+            }
+            Command::InsertComponent {
+                entity,
+                component,
+                value,
+            } => {
+                let context = format!("entity {entity}, component `{component}`");
+                let value = encode_value(sim, ValueKind::Component, &component, value)
+                    .map_err(|e| in_context(edit_error(&e), &context))?;
+                let edit = Edit::Insert {
+                    entity,
+                    component,
+                    value,
+                };
+                self.edit(edit, &context)?;
+                Ok(Reply::Done)
+            }
+            Command::RemoveComponent { entity, component } => {
+                let context = format!("entity {entity}, component `{component}`");
+                self.edit(Edit::Remove { entity, component }, &context)?;
+                Ok(Reply::Done)
+            }
+            Command::SetField {
+                target,
+                path,
+                value,
+            } => {
+                let context = match &target {
+                    FieldTarget::Component { entity, component } => {
+                        format!("entity {entity}, component `{component}`")
+                    }
+                    FieldTarget::Resource { resource } => format!("resource `{resource}`"),
+                };
+                let context = format!("{context}, path `{}`", Path(&path));
+                self.set_field(target, &path, value)
+                    .map_err(|error| in_context(error, &context))?;
+                Ok(Reply::Done)
+            }
+            Command::SaveScene => {
+                let ron = self.session.scene().to_string();
+                self.session.mark_scene_saved();
+                Ok(Reply::Scene { ron })
+            }
+            Command::ApplyToScene { entity, component } => {
+                let context = format!("entity {entity}, component `{component}`");
+                self.session
+                    .apply_to_scene(sim, entity, &component)
+                    .map_err(|e| in_context(self.fail(e), &context))?;
+                Ok(Reply::Done)
             }
             Command::Play => {
                 self.playing = true;
@@ -249,6 +315,124 @@ impl Host {
                 self.load(session)
             }
         }
+    }
+
+    fn get_entity(&self, entity: Entity) -> Result<Reply, ProtocolError> {
+        let world = self.simulation.world();
+        let json = world.entity_components_json(entity).ok_or_else(|| {
+            ProtocolError::new(
+                ErrorCode::NoSuchEntity,
+                format!("entity {entity} is not alive; list the entities first"),
+            )
+        })?;
+        let mut ron = world
+            .entity_components_ron(entity)
+            .expect("the entity is alive");
+        let components = json
+            .into_iter()
+            .map(|(name, json)| {
+                let value = match json {
+                    Ok(value) => {
+                        let schema = value_schema(&self.simulation, ValueKind::Component, &name)
+                            .expect("a component of the world is registered");
+                        ComponentValue::Json {
+                            value: to_wire(value, &schema),
+                        }
+                    }
+                    Err(_) => ComponentValue::Ron {
+                        text: ron.remove(&name).expect("the same components"),
+                    },
+                };
+                (name, value)
+            })
+            .collect();
+        Ok(Reply::Entity { entity, components })
+    }
+
+    fn get_resources(&self) -> Reply {
+        let world = self.simulation.world();
+        let resources = world
+            .resource_schemas()
+            .into_iter()
+            .map(|(name, schema)| {
+                let value = match world.resource_json(name).expect("a registered resource") {
+                    Ok(value) => ComponentValue::Json {
+                        value: to_wire(value, &schema),
+                    },
+                    Err(_) => ComponentValue::Ron {
+                        text: world.resource_ron(name).expect("a registered resource"),
+                    },
+                };
+                (name.to_string(), value)
+            })
+            .collect();
+        Reply::Resources { resources }
+    }
+
+    /// Reads the exact current value of `target`, replaces the value at `path`, and records
+    /// the whole new value as an edit.
+    fn set_field(
+        &mut self,
+        target: FieldTarget,
+        path: &[PathSegment],
+        value: JsonValue,
+    ) -> Result<(), ProtocolError> {
+        let world = self.simulation.world();
+        let (kind, name, current) = match &target {
+            FieldTarget::Component { entity, component } => {
+                if !world.is_alive(*entity) {
+                    return Err(edit_error(&EditError::NoSuchEntity(*entity)));
+                }
+                let current = world.component_json(*entity, component).ok_or_else(|| {
+                    if world.component_codec(component).is_none() {
+                        edit_error(&EditError::UnknownComponent(component.clone()))
+                    } else {
+                        ProtocolError::new(
+                            ErrorCode::InvalidEdit,
+                            format!("the entity has no `{component}`; insert it first"),
+                        )
+                    }
+                })?;
+                (ValueKind::Component, component, current)
+            }
+            FieldTarget::Resource { resource } => {
+                let current = world
+                    .resource_json(resource)
+                    .ok_or_else(|| edit_error(&EditError::UnknownResource(resource.clone())))?;
+                (ValueKind::Resource, resource, current)
+            }
+        };
+        let current = current.map_err(|reason| {
+            ProtocolError::new(
+                ErrorCode::InvalidEdit,
+                format!("`{name}` is read-only in the editor: {reason}"),
+            )
+        })?;
+        let schema = value_schema(&self.simulation, kind, name).map_err(|e| edit_error(&e))?;
+        let mut whole = to_wire(current, &schema);
+        set_at_path(&mut whole, path, value)
+            .map_err(|reason| ProtocolError::new(ErrorCode::InvalidPath, reason))?;
+        let value =
+            encode_value(&self.simulation, kind, name, whole).map_err(|e| edit_error(&e))?;
+        let edit = match target {
+            FieldTarget::Component { entity, component } => Edit::Insert {
+                entity,
+                component,
+                value,
+            },
+            FieldTarget::Resource { resource } => Edit::SetResource { resource, value },
+        };
+        self.session
+            .edit(&mut self.simulation, edit)
+            .map_err(|e| self.fail(e))?;
+        Ok(())
+    }
+
+    /// Applies `edit` through the session, naming `context` in its error.
+    fn edit(&mut self, edit: Edit, context: &str) -> Result<Option<Entity>, ProtocolError> {
+        self.session
+            .edit(&mut self.simulation, edit)
+            .map_err(|e| in_context(self.fail(e), context))
     }
 
     /// Takes over a new session, paused.
@@ -372,12 +556,59 @@ fn session_error(error: &SessionError) -> ProtocolError {
         SessionError::Panicked { .. } => ErrorCode::SystemPanicked,
         SessionError::NothingToUndo => ErrorCode::NothingToUndo,
         SessionError::NothingToRedo => ErrorCode::NothingToRedo,
-        SessionError::UndoDecode(_) | SessionError::Edit(_) => ErrorCode::InvalidCommand,
+        SessionError::UndoDecode(_) => ErrorCode::InvalidCommand,
+        SessionError::Edit(error) => return edit_error(error),
+        SessionError::MissingComponent { .. } => ErrorCode::InvalidEdit,
+        SessionError::NotInScene(_) => ErrorCode::NoSuchEntity,
         SessionError::Sim(error) => return sim_error(error),
         SessionError::Scene(_) => ErrorCode::InvalidScene,
         SessionError::Snapshot(_) => ErrorCode::InvalidSnapshot,
     };
     ProtocolError::new(code, error)
+}
+
+fn edit_error(error: &EditError) -> ProtocolError {
+    let code = match error {
+        EditError::NoSuchEntity(_) => ErrorCode::NoSuchEntity,
+        EditError::UnknownComponent(_) => ErrorCode::UnknownComponent,
+        EditError::UnknownResource(_) => ErrorCode::UnknownResource,
+        EditError::ReadOnly(_) | EditError::InvalidValue { .. } => ErrorCode::InvalidEdit,
+    };
+    ProtocolError::new(code, error)
+}
+
+fn in_context(mut error: ProtocolError, context: &str) -> ProtocolError {
+    error.message = format!("{context}: {}", error.message);
+    error
+}
+
+fn value_schema(sim: &Simulation, kind: ValueKind, name: &str) -> Result<TypeSchema, EditError> {
+    let world = sim.world();
+    match kind {
+        ValueKind::Component => world
+            .component_codec(name)
+            .ok_or_else(|| EditError::UnknownComponent(name.to_string())),
+        ValueKind::Resource => world
+            .resource_codec(name)
+            .ok_or_else(|| EditError::UnknownResource(name.to_string())),
+    }
+    .map(|codec| (codec.schema)())
+}
+
+/// Converts a wire value into the canonical bytes an edit carries.
+fn encode_value(
+    sim: &Simulation,
+    kind: ValueKind,
+    name: &str,
+    value: JsonValue,
+) -> Result<Vec<u8>, EditError> {
+    let value = from_wire(value, &value_schema(sim, kind, name)?).map_err(|reason| {
+        EditError::InvalidValue {
+            name: name.to_string(),
+            reason,
+        }
+    })?;
+    sim.encode_json_value(kind, name, value)
 }
 
 fn sim_error(error: &SimError) -> ProtocolError {

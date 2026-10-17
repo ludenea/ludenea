@@ -4,15 +4,20 @@
 pub mod checkpoints;
 pub mod host;
 pub mod in_process;
+pub mod json;
 pub mod pacer;
+pub mod path;
 pub mod protocol;
 pub mod session;
 mod undo;
 
 pub use host::Host;
 pub use in_process::{InProcess, Transport};
+pub use json::{from_wire, to_wire};
+pub use path::{PathSegment, set_at_path};
 pub use protocol::{
-    Bytes, ClientMessage, Command, ConsoleLevel, ErrorCode, Event, GameInfo, Hash64, NamedSchema,
-    PROTOCOL_VERSION, PauseReason, ProtocolError, Reply, ServerMessage,
+    Bytes, ClientMessage, Command, ComponentValue, ConsoleLevel, ErrorCode, Event, FieldTarget,
+    GameInfo, Hash64, NamedSchema, PROTOCOL_VERSION, PauseReason, ProtocolError, Reply,
+    ServerMessage,
 };
 pub use session::{Resimulation, Session, SessionError, SessionExport, Timeline};

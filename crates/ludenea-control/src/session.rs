@@ -37,6 +37,12 @@ pub enum SessionError {
     UndoDecode(#[from] postcard::Error),
     #[error(transparent)]
     Edit(#[from] EditError),
+    #[error("entity {entity} has no `{component}`; insert the component first")]
+    MissingComponent { entity: Entity, component: String },
+    #[error(
+        "entity {0} was spawned after tick 0, so the scene does not have it; only entities of the scene can be applied to it"
+    )]
+    NotInScene(Entity),
     #[error(transparent)]
     Sim(#[from] SimError),
     #[error(transparent)]
@@ -224,11 +230,7 @@ impl Session {
     ) -> Result<Option<Entity>, SessionError> {
         self.ensure_resimulated()?;
         if self.current == 0 {
-            let before = self.scene.clone();
-            let spawned = self.edit_scene(sim, &edit)?;
-            let after = self.scene.clone();
-            self.history.record(UndoEntry::Scene { before, after });
-            return Ok(spawned);
+            return self.record_scene_edit(sim, &edit);
         }
         let edit = TimedEdit {
             tick: self.current,
@@ -283,6 +285,48 @@ impl Session {
             Err(_) => self.history.redo.push(entry),
         }
         result
+    }
+
+    /// Copies the current value of `component` on `entity` into the scene. Like every scene
+    /// edit, it moves the session to tick 0 and marks the recorded future stale. The entity
+    /// must exist at tick 0.
+    pub fn apply_to_scene(
+        &mut self,
+        sim: &mut Simulation,
+        entity: Entity,
+        component: &str,
+    ) -> Result<(), SessionError> {
+        self.ensure_resimulated()?;
+        if !sim.world().is_alive(entity) {
+            return Err(EditError::NoSuchEntity(entity).into());
+        }
+        let snapshot = sim.snapshot();
+        let (_, values) = snapshot
+            .components
+            .iter()
+            .find(|(name, _)| name == component)
+            .ok_or_else(|| EditError::UnknownComponent(component.to_string()))?;
+        let value = values
+            .iter()
+            .find(|(owner, _)| *owner == entity)
+            .map(|(_, bytes)| bytes.clone())
+            .ok_or_else(|| SessionError::MissingComponent {
+                entity,
+                component: component.to_string(),
+            })?;
+        let (_, scene_state) = self.checkpoints.nearest_at_or_before(0);
+        let index = entity.index() as usize;
+        let in_scene = scene_state.entities.alive.get(index) == Some(&true)
+            && scene_state.entities.generations[index] == entity.generation();
+        if !in_scene {
+            return Err(SessionError::NotInScene(entity));
+        }
+        let edit = Edit::Insert {
+            entity,
+            component: component.to_string(),
+            value,
+        };
+        self.record_scene_edit(sim, &edit).map(drop)
     }
 
     /// Marks the current scene text as saved.
@@ -629,6 +673,19 @@ impl Session {
         Ok(())
     }
 
+    /// Applies `edit` to the scene and records it in the undo history.
+    fn record_scene_edit(
+        &mut self,
+        sim: &mut Simulation,
+        edit: &Edit,
+    ) -> Result<Option<Entity>, SessionError> {
+        let before = self.scene.clone();
+        let spawned = self.edit_scene(sim, edit)?;
+        let after = self.scene.clone();
+        self.history.record(UndoEntry::Scene { before, after });
+        Ok(spawned)
+    }
+
     /// Applies `edit` to the scene: the scene is saved and reloaded so entity indices and
     /// generations match any later load of it.
     fn edit_scene(
@@ -642,7 +699,7 @@ impl Session {
         let spawned = match sim.apply_edit(edit) {
             Ok(spawned) => spawned,
             Err(error) => {
-                self.apply_edits(sim, 0)?;
+                self.replay_to(sim, self.current)?;
                 return Err(error.into());
             }
         };

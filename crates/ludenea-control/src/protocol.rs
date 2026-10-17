@@ -7,7 +7,9 @@ use ludenea_ecs::hash::hex_u64;
 use ludenea_ecs::schema::TypeSchema;
 use ludenea_ecs::{Entity, HashTree};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::Value as JsonValue;
 
+use crate::path::PathSegment;
 use crate::session::Timeline;
 
 pub const PROTOCOL_VERSION: u32 = 2;
@@ -166,6 +168,39 @@ pub enum Command {
     GetEntity {
         entity: Entity,
     },
+    GetResources,
+    /// Spawns an entity with these component values.
+    Spawn {
+        components: BTreeMap<String, JsonValue>,
+    },
+    Despawn {
+        entity: Entity,
+    },
+    /// Adds a component; changing one goes through `SetField`.
+    InsertComponent {
+        entity: Entity,
+        component: String,
+        value: JsonValue,
+    },
+    RemoveComponent {
+        entity: Entity,
+        component: String,
+    },
+    /// Replaces the value at `path` in a component or resource; recorded as the whole new
+    /// value.
+    SetField {
+        target: FieldTarget,
+        path: Vec<PathSegment>,
+        value: JsonValue,
+    },
+    /// The session's scene, whatever the current tick, marked as saved.
+    SaveScene,
+    /// Copies the current value of a component into the scene, as a tick 0 edit: the
+    /// session moves to tick 0 and resimulates. The entity must exist at tick 0.
+    ApplyToScene {
+        entity: Entity,
+        component: String,
+    },
     Play,
     Pause,
     Seek {
@@ -225,10 +260,20 @@ pub enum Reply {
     Entities {
         entities: Vec<Entity>,
     },
-    /// Component values are RON strings keyed by stable name.
+    /// Component values keyed by stable name.
     Entity {
         entity: Entity,
-        components: BTreeMap<String, String>,
+        components: BTreeMap<String, ComponentValue>,
+    },
+    /// Resource values keyed by stable name.
+    Resources {
+        resources: BTreeMap<String, ComponentValue>,
+    },
+    Spawned {
+        entity: Entity,
+    },
+    Scene {
+        ron: String,
     },
     Timeline(Timeline),
     Session {
@@ -238,6 +283,23 @@ pub enum Reply {
         undo: Bytes,
         hashes: Vec<Hash64>,
     },
+}
+
+/// What `SetField` changes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum FieldTarget {
+    Component { entity: Entity, component: String },
+    Resource { resource: String },
+}
+
+/// A component or resource value: JSON in its wire form, or RON text when the value has
+/// no exact JSON form (maps with non-string keys, non-finite floats), which is read-only.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ComponentValue {
+    Json { value: JsonValue },
+    Ron { text: String },
 }
 
 /// What the host reports on its own, from `Host::advance`.
@@ -309,6 +371,12 @@ pub enum ErrorCode {
     InvalidInputs,
     InvalidSnapshot,
     NoSuchEntity,
+    /// An edit the target type rejects, or one on a read-only value.
+    InvalidEdit,
+    UnknownComponent,
+    UnknownResource,
+    /// A field path the value does not have.
+    InvalidPath,
     /// A command argument the host cannot use, such as a non-finite speed.
     InvalidCommand,
     InvalidTick,
