@@ -1,14 +1,55 @@
-use crate::shape::{Shape, ShapeError};
+use crate::shape::Shape;
 use ludenea_ecs::{Component, Resource};
 use ludenea_math::{Rot, Vec2};
 use serde::{Deserialize, Serialize};
 
-/// Body origin in world space.
+/// Tolerance on `cos² + sin² = 1` when loading a rotation.
+const UNIT_ROTATION_TOLERANCE: f32 = 1e-4;
+
+/// Body origin in world space. Deserialization rejects non-finite values and
+/// a rotation that is not unit length.
 #[derive(Component, Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Default)]
 #[component(name = "ludenea::Pose")]
+#[serde(try_from = "PoseData", into = "PoseData")]
 pub struct Pose {
     pub position: Vec2,
     pub rotation: Rot,
+}
+
+/// Serialization mirror of `Pose` so loading can validate.
+#[derive(Serialize, Deserialize)]
+struct PoseData {
+    position: Vec2,
+    rotation: Rot,
+}
+
+impl From<Pose> for PoseData {
+    fn from(p: Pose) -> Self {
+        PoseData {
+            position: p.position,
+            rotation: p.rotation,
+        }
+    }
+}
+
+impl TryFrom<PoseData> for Pose {
+    type Error = String;
+
+    fn try_from(data: PoseData) -> Result<Self, String> {
+        let Rot { cos, sin } = data.rotation;
+        if !(data.position.x.is_finite() && data.position.y.is_finite()) {
+            return Err("position must be finite".to_string());
+        }
+        if !(cos.is_finite() && sin.is_finite())
+            || (cos * cos + sin * sin - 1.0).abs() > UNIT_ROTATION_TOLERANCE
+        {
+            return Err("rotation must be finite with cos² + sin² = 1".to_string());
+        }
+        Ok(Pose {
+            position: data.position,
+            rotation: data.rotation,
+        })
+    }
 }
 
 #[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq)]
@@ -18,8 +59,10 @@ pub enum BodyKind {
     Dynamic,
 }
 
+/// Deserialization rejects non-finite values and negative damping.
 #[derive(Component, Serialize, Deserialize, Copy, Clone, Debug, PartialEq)]
 #[component(name = "ludenea::Body")]
+#[serde(try_from = "BodyData", into = "BodyData")]
 pub struct Body {
     pub kind: BodyKind,
     pub linear_velocity: Vec2,
@@ -27,6 +70,61 @@ pub struct Body {
     pub linear_damping: f32,
     pub angular_damping: f32,
     pub gravity_scale: f32,
+}
+
+/// Serialization mirror of `Body` so loading can validate.
+#[derive(Serialize, Deserialize)]
+struct BodyData {
+    kind: BodyKind,
+    linear_velocity: Vec2,
+    angular_velocity: f32,
+    linear_damping: f32,
+    angular_damping: f32,
+    gravity_scale: f32,
+}
+
+impl From<Body> for BodyData {
+    fn from(b: Body) -> Self {
+        BodyData {
+            kind: b.kind,
+            linear_velocity: b.linear_velocity,
+            angular_velocity: b.angular_velocity,
+            linear_damping: b.linear_damping,
+            angular_damping: b.angular_damping,
+            gravity_scale: b.gravity_scale,
+        }
+    }
+}
+
+impl TryFrom<BodyData> for Body {
+    type Error = String;
+
+    fn try_from(data: BodyData) -> Result<Self, String> {
+        let velocity = data.linear_velocity;
+        if !(velocity.x.is_finite() && velocity.y.is_finite() && data.angular_velocity.is_finite())
+        {
+            return Err("velocities must be finite".to_string());
+        }
+        if !(non_negative(data.linear_damping) && non_negative(data.angular_damping)) {
+            return Err("damping must be finite and zero or more".to_string());
+        }
+        if !data.gravity_scale.is_finite() {
+            return Err("gravity_scale must be finite".to_string());
+        }
+        Ok(Body {
+            kind: data.kind,
+            linear_velocity: data.linear_velocity,
+            angular_velocity: data.angular_velocity,
+            linear_damping: data.linear_damping,
+            angular_damping: data.angular_damping,
+            gravity_scale: data.gravity_scale,
+        })
+    }
+}
+
+/// Finite and `>= 0` (NaN fails both).
+fn non_negative(value: f32) -> bool {
+    value.is_finite() && value >= 0.0
 }
 
 impl Body {
@@ -54,7 +152,8 @@ impl Body {
     }
 }
 
-/// One collider per entity. Deserialization validates the shape.
+/// One collider per entity. Deserialization validates the shape and rejects
+/// non-finite or negative density, friction, and restitution.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[component(name = "ludenea::Collider")]
 #[serde(try_from = "ColliderData", into = "ColliderData")]
@@ -97,10 +196,18 @@ impl From<Collider> for ColliderData {
 }
 
 impl TryFrom<ColliderData> for Collider {
-    type Error = ShapeError;
+    type Error = String;
 
-    fn try_from(data: ColliderData) -> Result<Self, ShapeError> {
-        data.shape.validate()?;
+    fn try_from(data: ColliderData) -> Result<Self, String> {
+        data.shape.validate().map_err(|error| error.to_string())?;
+        if !(non_negative(data.density)
+            && non_negative(data.friction)
+            && non_negative(data.restitution))
+        {
+            return Err(
+                "density, friction, and restitution must be finite and zero or more".to_string(),
+            );
+        }
         Ok(Collider {
             shape: data.shape,
             density: data.density,

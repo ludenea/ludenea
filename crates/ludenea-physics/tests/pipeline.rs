@@ -1,4 +1,4 @@
-use ludenea_app::{App, Simulation};
+use ludenea_app::{App, SceneError, Simulation};
 use ludenea_ecs::Entity;
 use ludenea_math::{Aabb, Rot, Vec2};
 use ludenea_physics::{
@@ -312,4 +312,53 @@ fn two_runs_give_identical_hash_sequences() {
             .collect::<Vec<u64>>()
     };
     assert_eq!(run(), run());
+}
+
+/// One dynamic circle; each placeholder is replaced to inject one bad value.
+const ONE_BODY_SCENE: &str = r#"Scene(version: 1, resources: {}, entities: [{
+    "ludenea::Pose": (position: (x: 0.0, y: 1.0), rotation: (cos: COS, sin: 0.0)),
+    "ludenea::Body": (kind: Dynamic, linear_velocity: (x: VX, y: 0.0), angular_velocity: 0.0,
+        linear_damping: 0.0, angular_damping: 0.0, gravity_scale: 1.0),
+    "ludenea::Collider": (shape: Circle((center: (x: 0.0, y: 0.0), radius: 0.5)),
+        density: 1.0, friction: FRICTION, restitution: 0.0),
+}])"#;
+
+fn one_body_scene(cos: &str, vx: &str, friction: &str) -> String {
+    ONE_BODY_SCENE
+        .replace("COS", cos)
+        .replace("VX", vx)
+        .replace("FRICTION", friction)
+}
+
+fn assert_rejected(scene: &str, component: &str) {
+    let mut simulation = simulation();
+    let before = simulation.hash();
+    let error = simulation.load_scene(scene).unwrap_err();
+    assert!(
+        matches!(&error, SceneError::InvalidValue { entity: Some(0), name, .. } if name == component),
+        "{error:?}"
+    );
+    assert_eq!(simulation.hash(), before);
+}
+
+#[test]
+fn valid_one_body_scene_loads() {
+    simulation()
+        .load_scene(&one_body_scene("1.0", "0.0", "0.6"))
+        .unwrap();
+}
+
+#[test]
+fn scene_with_negative_friction_is_rejected() {
+    assert_rejected(&one_body_scene("1.0", "0.0", "-0.1"), "ludenea::Collider");
+}
+
+#[test]
+fn scene_with_nan_velocity_is_rejected() {
+    assert_rejected(&one_body_scene("1.0", "NaN", "0.6"), "ludenea::Body");
+}
+
+#[test]
+fn scene_with_non_unit_rotation_is_rejected() {
+    assert_rejected(&one_body_scene("2.0", "0.0", "0.6"), "ludenea::Pose");
 }
