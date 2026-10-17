@@ -45,17 +45,22 @@ mod query;
 mod query_state;
 mod registry;
 mod resource;
+mod schedule;
 mod snapshot;
 mod system;
 mod world;
 
+pub use access::Conflict;
 pub use bundle::Bundle;
 pub use commands::Commands;
 pub use entity::Entity;
-pub use error::EcsError;
+pub use error::{Ambiguity, EcsError, ScheduleError};
 pub use query::{QueryData, QueryFilter, ReadOnlyQuery, With, Without, WorldQuery};
 pub use query_state::Query;
 pub use resource::{Res, ResMut, Resource};
+pub use schedule::{
+    IntoSystemConfig, Schedule, ScheduleBuilder, SetOrder, SystemConfig, SystemSet,
+};
 pub use snapshot::Snapshot;
 pub use system::{IntoSystem, SystemParam};
 pub use world::{World, WorldBuilder};

@@ -49,7 +49,6 @@ pub struct Access {
     pub(crate) resource_reads: BTreeSet<ResourceId>,
     pub(crate) resource_writes: BTreeSet<ResourceId>,
     /// The system takes the whole world.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the schedule uses it"))]
     pub(crate) exclusive: bool,
     /// The system records commands. Commands never create a conflict
     /// between systems: they are recorded, then applied later at a
@@ -58,7 +57,6 @@ pub struct Access {
 }
 
 /// Why two systems cannot run in an arbitrary order.
-#[cfg_attr(not(test), expect(dead_code, reason = "the schedule uses it"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Conflict {
     /// One of the systems takes the whole world.
@@ -130,7 +128,6 @@ impl Access {
     /// Why `self` and `other` cannot run in an arbitrary order, or `None`
     /// when they can. Commands never create a conflict: they are recorded,
     /// then applied later at a deterministic point.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the schedule uses it"))]
     pub(crate) fn conflict(&self, other: &Self, registry: &Registry) -> Option<Conflict> {
         if self.exclusive || other.exclusive {
             return Some(Conflict::Exclusive);

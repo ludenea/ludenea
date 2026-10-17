@@ -19,7 +19,6 @@ pub struct CommandBuffer {
 }
 
 impl CommandBuffer {
-    #[cfg_attr(not(test), expect(dead_code, reason = "the schedule applies commands"))]
     /// Applies every command in recording order, keeping the capacity of
     /// the buffer.
     pub(crate) fn apply(&mut self, world: &mut World) {
