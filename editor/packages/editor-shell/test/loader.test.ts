@@ -1,6 +1,6 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createElement } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Shell, definePlugin, type Editor } from "../src";
 import { testHost } from "./support";
 
@@ -26,6 +26,8 @@ function panelPlugin(name: string, text: string, defaultPosition: "left" | "cent
 }
 
 describe("loader", () => {
+  afterEach(cleanup);
+
   it("reload_keeps_selection_and_layout", async () => {
     const modules: Record<string, unknown> = {
       "/plugins/tools.1.js": { default: panelPlugin("tools", "tools one", "center") },
@@ -66,5 +68,27 @@ describe("loader", () => {
   it("load_rejects_a_module_without_a_plugin_definition", async () => {
     const host = await testHost(async () => ({ default: 42 }));
     await expect(host.loader.load("/plugins/broken.js")).rejects.toThrow("/plugins/broken.js");
+  });
+
+  it("closed_panel_stays_closed_until_its_open_command", async () => {
+    const host = await testHost();
+    host.loader.activate(panelPlugin("tools", "tools content", "center"));
+    render(createElement(Shell, { host }));
+    await act(async () => {});
+
+    await act(async () => fireEvent.click(screen.getByText("tools").parentElement!.querySelector(".dv-default-tab-action")!));
+    expect(screen.queryByText("tools content")).toBeNull();
+    await act(async () => host.loader.activate(panelPlugin("outline", "outline content", "left")));
+    expect(screen.queryByText("tools content")).toBeNull();
+    expect(host.editor.commands.list().map((command) => [command.id, command.title])).toEqual([
+      ["panels.open.tools.panel", "Open tools"],
+      ["panels.open.outline.panel", "Open outline"],
+    ]);
+
+    await act(() => host.editor.commands.run("panels.open.tools.panel"));
+    expect(screen.getByText("tools content")).toBeTruthy();
+    host.loader.deactivate("outline");
+    await act(async () => {});
+    expect(host.editor.commands.list().map((command) => command.id)).toEqual(["panels.open.tools.panel"]);
   });
 });

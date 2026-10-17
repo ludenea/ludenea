@@ -2,7 +2,7 @@ import { DockviewReact, type DockviewApi, type IDockviewPanelProps } from "dockv
 import { createContext, useContext, useEffect, useRef, useSyncExternalStore } from "react";
 import type { EditorHost } from "../editor";
 import { CommandPalette } from "../palette/CommandPalette";
-import type { PanelDefinition } from "../plugin";
+import type { Disposable, PanelDefinition } from "../plugin";
 import type { Registry } from "../registry";
 import { installShortcuts } from "../shortcuts";
 
@@ -19,15 +19,18 @@ const COMPONENTS = { plugin: PluginPanel };
 const ORDER = ["center", "left", "right", "bottom"] as const;
 const DIRECTIONS = { left: "left", right: "right", bottom: "below" } as const;
 
-/** Makes the dock match the registered panels: removed ones close, new ones open at their default position. */
-function syncPanels(api: DockviewApi, registry: Registry): void {
+/**
+ * Makes the dock match the registered panels: removed ones close, new ones open at their
+ * default position, except those the user closed (reopened through their `panels.open.<id>` command).
+ */
+function syncPanels(api: DockviewApi, registry: Registry, closed: ReadonlySet<string>): void {
   const position = (panel: PanelDefinition) => panel.defaultPosition ?? "center";
   for (const open of [...api.panels]) {
     const panel = registry.panels.get(open.id);
     if (!panel) open.api.close();
     else if (open.title !== panel.title) open.api.setTitle(panel.title);
   }
-  const added = registry.panels.values().filter((panel) => !api.getPanel(panel.id));
+  const added = registry.panels.values().filter((panel) => !api.getPanel(panel.id) && !closed.has(panel.id));
   added.sort((a, b) => ORDER.indexOf(position(a)) - ORDER.indexOf(position(b)));
   for (const panel of added) {
     const where = position(panel);
@@ -52,6 +55,31 @@ export function Shell({ host }: { host: EditorHost }) {
   useEffect(() => () => stop.current?.(), []);
 
   const onReady = ({ api }: { api: DockviewApi }) => {
+    const { editor, registry } = host;
+    const closed = new Set<string>();
+    const openCommands = new Map<string, { title: string; command: Disposable }>();
+    const sync = () => {
+      // A panel unregistered while closed opens again if a plugin registers it later.
+      for (const id of closed) if (!registry.panels.get(id)) closed.delete(id);
+      syncPanels(api, registry, closed);
+      // One palette command per panel, so a closed panel has a keyboard path back.
+      for (const [id, { command }] of openCommands) {
+        if (registry.panels.get(id)) continue;
+        command.dispose();
+        openCommands.delete(id);
+      }
+      for (const { id, title } of registry.panels.values()) {
+        const existing = openCommands.get(id);
+        if (existing?.title === title) continue;
+        existing?.command.dispose();
+        const run = () => {
+          closed.delete(id);
+          sync();
+          api.getPanel(id)?.api.setActive();
+        };
+        openCommands.set(id, { title, command: editor.commands.register({ id: `panels.open.${id}`, title: `Open ${title}`, run }) });
+      }
+    };
     // A reload disposes and re-registers in one synchronous step; syncing after it keeps the layout.
     let scheduled = false;
     const schedule = () => {
@@ -59,12 +87,20 @@ export function Shell({ host }: { host: EditorHost }) {
       scheduled = true;
       queueMicrotask(() => {
         scheduled = false;
-        syncPanels(api, host.registry);
+        sync();
       });
     };
     stop.current?.();
-    stop.current = host.registry.panels.subscribe(schedule);
-    syncPanels(api, host.registry);
+    const removed = api.onDidRemovePanel((panel) => {
+      if (registry.panels.get(panel.id)) closed.add(panel.id);
+    });
+    const unsubscribe = registry.panels.subscribe(schedule);
+    stop.current = () => {
+      unsubscribe();
+      removed.dispose();
+      for (const { command } of openCommands.values()) command.dispose();
+    };
+    sync();
   };
 
   return (

@@ -1,0 +1,84 @@
+import type { ConsoleLevel, ControlClient, Diagnostic } from "@ludenea/control-client";
+import { definePlugin } from "@ludenea/editor-shell";
+import { createStore, shared, showPanel } from "../shared";
+import { ConsolePanel, type Entry, type Levels } from "./ConsolePanel";
+
+// ponytail: keeps the last lines only; page older ones to disk if long sessions need them.
+const LIMIT = 5000;
+
+const levelOf = (text: string): ConsoleLevel =>
+  /^error\b/.test(text) ? "error" : /^warning\b/.test(text) ? "warning" : "info";
+
+/**
+ * Cargo reports each compiler message twice: a `line` with the rendered text, then a
+ * `diagnostic` with its location. The console shows it once: the diagnostic turns the latest
+ * matching rendered line (first line starting with its level and holding its message) into a
+ * located entry, and stands alone when no such line exists.
+ */
+function located(entries: Entry[], diagnostic: Diagnostic, next: () => number): Entry[] {
+  const location = diagnostic.file ? { file: diagnostic.file, line: diagnostic.line, column: diagnostic.column } : undefined;
+  const level = levelOf(diagnostic.level);
+  const matches = (entry: Entry) => {
+    const first = entry.text.split("\n", 1)[0]!;
+    return entry.source === "cargo" && first.startsWith(diagnostic.level) && first.includes(diagnostic.message);
+  };
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index]!;
+    if (!matches(entry)) continue;
+    return [...entries.slice(0, index), { ...entry, level, source: "build", location }, ...entries.slice(index + 1)];
+  }
+  return [...entries, { id: next(), level, source: "build", text: `${diagnostic.level}: ${diagnostic.message}`, location }];
+}
+
+export const consolePlugin = definePlugin({
+  name: "ludenea.console",
+  activate(editor) {
+    let lastId = 0;
+    const next = () => ++lastId;
+    const state = createStore({ entries: [] as Entry[], levels: { error: true, warning: true, info: true } as Levels });
+    const update = (change: (entries: Entry[]) => Entry[]) => state.set({ entries: change(state.get().entries).slice(-LIMIT) });
+    const add = (level: ConsoleLevel, text: string, source: Entry["source"] = "editor") =>
+      update((entries) => [...entries, { id: next(), level, source, text }]);
+
+    const project = editor.project;
+    const stops = [
+      project.on("build", ({ event }) => {
+        if (event.type === "line") add(levelOf(event.text), event.text, "cargo");
+        else if (event.type === "diagnostic") update((entries) => located(entries, event, next));
+        else if (event.type === "finished") add(event.ok ? "info" : "error", event.ok ? "Build finished." : "Build failed.");
+      }),
+      project.on("game_output", ({ stream, line }) => add(stream === "Stderr" ? "warning" : "info", line, "game")),
+      project.on("warning", ({ message }) => add("warning", message)),
+      project.on("game_ready", () => add("info", "Game started.")),
+      project.on("game_exited", ({ code }) => add(code === 0 ? "info" : "warning", `Game exited${code === null ? "" : ` with code ${code}`}.`)),
+      project.on("plugin_rebuilt", ({ name }) => add("info", `Plugin ${name} rebuilt.`)),
+      project.on("plugin_failed", ({ name, diagnostics }) => {
+        add("error", `Plugin ${name} failed to build.`);
+        for (const diagnostic of diagnostics) update((entries) => located(entries, diagnostic, next));
+      }),
+    ];
+    // Panics, dropped edits, and divergences all reach the host console.
+    let stopHost: (() => void) | undefined;
+    const listen = (control: ControlClient | null) => {
+      stopHost?.();
+      stopHost = control?.on("console", ({ level, text }) => add(level, text, "game"));
+    };
+    listen(editor.control);
+    editor.onGameChanged(listen);
+
+    const reveal = (file: string) => {
+      shared(editor).reveal.set({ path: file });
+      showPanel(editor, "ludenea.assets");
+    };
+    editor.panels.register({
+      id: "ludenea.console",
+      title: "Console",
+      defaultPosition: "bottom",
+      component: () => <ConsolePanel state={state} onReveal={reveal} />,
+    });
+    return () => {
+      stops.forEach((stop) => stop());
+      stopHost?.();
+    };
+  },
+});

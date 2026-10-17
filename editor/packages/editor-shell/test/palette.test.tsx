@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { CommandPalette, installShortcuts } from "../src";
+import { CommandPalette, installShortcuts, normalizeShortcut } from "../src";
 import { testHost } from "./support";
 
 describe("command palette and shortcuts", () => {
@@ -39,5 +39,27 @@ describe("command palette and shortcuts", () => {
 
     uninstall();
     input.remove();
+  });
+
+  it("named_keys_match_keyboard_event_values", async () => {
+    expect(normalizeShortcut("shift+arrowup")).toBe("Shift+ArrowUp");
+    expect(normalizeShortcut("delete")).toBe("Delete");
+    expect(normalizeShortcut("Ctrl+PAGEDOWN")).toBe("Ctrl+PageDown");
+    expect(normalizeShortcut("f5")).toBe("F5");
+    expect(() => normalizeShortcut("Ctrl+Arrowup2")).toThrow("Arrowup2");
+
+    const { editor, registry } = await testHost();
+    const up = vi.fn();
+    editor.commands.register({ id: "viewport.pan-up", title: "Pan up", run: up });
+    editor.shortcuts.register({ key: "shift+arrowup", command: "viewport.pan-up" });
+    const uninstall = installShortcuts(editor, registry, window);
+    fireEvent.keyDown(document.body, { key: "ArrowUp", shiftKey: true });
+    expect(up).toHaveBeenCalledOnce();
+    uninstall();
+  });
+
+  it("mod_is_cmd_on_macos_and_ctrl_elsewhere", () => {
+    expect(normalizeShortcut("Mod+S", true)).toBe("Cmd+S");
+    expect(normalizeShortcut("mod+shift+z", false)).toBe("Ctrl+Shift+Z");
   });
 });

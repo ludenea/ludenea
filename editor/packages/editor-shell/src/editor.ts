@@ -30,7 +30,7 @@ export interface Editor {
     run(id: string): Promise<void>;
     list(): CommandDefinition[];
   };
-  /** `key` such as `Ctrl+S`, `Cmd+Shift+Z`, `F5`, or `.`; runs `command` unless a text field has focus. */
+  /** `key` such as `Mod+S` (Cmd on macOS, Ctrl elsewhere), `Ctrl+Shift+Z`, `F5`, `Delete`, or `.`; runs `command` unless a text field has focus. */
   shortcuts: { register(shortcut: { key: string; command: string }): Disposable };
   overlays: { register(overlay: ViewportOverlay): Disposable; list(): ViewportOverlay[] };
   settings: {

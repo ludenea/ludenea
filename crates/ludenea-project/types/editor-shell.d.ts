@@ -199,7 +199,7 @@ interface Editor {
         run(id: string): Promise<void>;
         list(): CommandDefinition[];
     };
-    /** `key` such as `Ctrl+S`, `Cmd+Shift+Z`, `F5`, or `.`; runs `command` unless a text field has focus. */
+    /** `key` such as `Mod+S` (Cmd on macOS, Ctrl elsewhere), `Ctrl+Shift+Z`, `F5`, `Delete`, or `.`; runs `command` unless a text field has focus. */
     shortcuts: {
         register(shortcut: {
             key: string;
@@ -247,8 +247,8 @@ function CommandPalette({ editor }: {
     editor: Editor;
 }): react.JSX.Element | null;
 
-/** `shift+ctrl+z`, `Ctrl+Shift+Z`, and `Control+Shift+z` all become `Ctrl+Shift+Z`. */
-function normalizeShortcut(shortcut: string): string;
+/** `shift+ctrl+z`, `Ctrl+Shift+Z`, and `Control+Shift+z` all become `Ctrl+Shift+Z`; `Mod+S` becomes `Cmd+S` on macOS. */
+function normalizeShortcut(shortcut: string, mac?: boolean): string;
 function isTextField(target: EventTarget | null): boolean;
 /** Runs registered shortcuts on key presses in `target`, except while a text field has focus. */
 function installShortcuts(editor: Editor, registry: Registry, target?: Window): () => void;
