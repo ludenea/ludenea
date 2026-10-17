@@ -1,0 +1,42 @@
+name: determinism
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: rustup show
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo test --locked --workspace
+      - name: Verify the golden trace
+        shell: bash
+        run: |
+          for threads in 1 2 8; do
+            cargo run --locked --release -p boxes -- verify examples/boxes/assets/boxes.scene.ron --inputs examples/boxes/assets/boxes.inputs --golden golden/boxes.trace --threads $threads
+          done
+      - name: Upload the divergence dump
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dump-${{ matrix.os }}
+          path: dump/
+          if-no-files-found: ignore
+
+  wasm:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: rustup show
+      - uses: bytecodealliance/actions/wasmtime/setup@v1
+      - run: cargo build --locked --release --target wasm32-wasip1 -p boxes --bin boxes
+      - run: wasmtime run --dir=. target/wasm32-wasip1/release/boxes.wasm verify examples/boxes/assets/boxes.scene.ron --inputs examples/boxes/assets/boxes.inputs --golden golden/boxes.trace
