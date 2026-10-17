@@ -9,9 +9,12 @@ use ludenea_math::{Aabb, Transform, Vec2};
 use crate::components::{Body, BodyKind, Collider, Pose};
 use crate::contacts::ContactCache;
 use crate::queries::{overlap_aabb, shape_contains};
-use crate::shape::{LINEAR_SLOP, Shape};
+use crate::shape::Shape;
+use crate::step::SPECULATIVE_DISTANCE;
 
 const COLLIDERS: &str = "physics.colliders";
+/// Contacts of the pairs the last step found touching, at the current poses: after an edit
+/// moves a body, the points follow the new poses until the next step updates the pairs.
 const CONTACTS: &str = "physics.contacts";
 const AABBS: &str = "physics.aabbs";
 pub(crate) const DEBUG_LAYERS: [&str; 3] = [COLLIDERS, CONTACTS, AABBS];
@@ -22,7 +25,6 @@ const PICK_RADIUS: f32 = 0.25;
 const PICK_BOX: f32 = 0.01;
 const CONTACT_POINT_RADIUS: f32 = 0.03;
 const CONTACT_NORMAL_LENGTH: f32 = 0.2;
-const SPECULATIVE_DISTANCE: f32 = 4.0 * LINEAR_SLOP;
 
 const STATIC_COLOR: Color = Color(0x8C8C8CFF);
 const KINEMATIC_COLOR: Color = Color(0x4D8CFFFF);

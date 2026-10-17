@@ -32,47 +32,37 @@ pub fn triangulate(
             let mut out = Painter {
                 vertices: &mut vertices,
                 width: line_width,
-                color: 0,
             };
             let paint = |color: Color| if highlighted { HIGHLIGHT.0 } else { color.0 };
             match &item.primitive {
-                Primitive::Line { a, b, color } => {
-                    out.color = paint(*color);
-                    out.segment(*a, *b);
-                }
+                Primitive::Line { a, b, color } => out.segment(*a, *b, paint(*color)),
                 Primitive::Circle {
                     center,
                     radius,
                     color,
                     fill,
                 } => {
-                    out.color = paint(*color);
+                    let color = paint(*color);
                     let ring = arc(*center, *radius, Vec2::new(1.0, 0.0), CIRCLE_SEGMENTS, true);
                     if *fill {
                         for (i, &from) in ring.iter().enumerate() {
-                            out.triangle([*center, from, ring[(i + 1) % ring.len()]]);
+                            out.triangle([*center, from, ring[(i + 1) % ring.len()]], color);
                         }
                     } else {
-                        out.shape(&ring, false);
+                        out.shape(&ring, false, color);
                     }
                 }
                 Primitive::Polygon {
                     points,
                     color,
                     fill,
-                } => {
-                    out.color = paint(*color);
-                    out.shape(points, *fill);
-                }
+                } => out.shape(points, *fill, paint(*color)),
                 Primitive::Capsule {
                     a,
                     b,
                     radius,
                     color,
-                } => {
-                    out.color = paint(*color);
-                    out.shape(&capsule_outline(*a, *b, *radius), false);
-                }
+                } => out.shape(&capsule_outline(*a, *b, *radius), false, paint(*color)),
                 Primitive::Label { .. } => {}
             }
         }
@@ -83,36 +73,35 @@ pub fn triangulate(
 struct Painter<'a> {
     vertices: &'a mut Vec<Vertex>,
     width: f32,
-    color: u32,
 }
 
 impl Painter<'_> {
-    fn triangle(&mut self, corners: [Vec2; 3]) {
+    fn triangle(&mut self, corners: [Vec2; 3], color: u32) {
         for corner in corners {
             self.vertices.push(Vertex {
                 position: [corner.x, corner.y],
-                color: self.color,
+                color,
             });
         }
     }
 
-    /// A quad of `width` centered on the segment; the first and third vertices are the
-    /// segment start and end only when the width is zero.
-    fn segment(&mut self, a: Vec2, b: Vec2) {
+    /// A quad of `width` centered on the segment from `a` to `b`, as two triangles with
+    /// `h` the half-width offset to the left: `[a - h, a + h, b + h]`, `[a - h, b + h, b - h]`.
+    fn segment(&mut self, a: Vec2, b: Vec2, color: u32) {
         let half = (b - a).normalize().left_perp() * (self.width * 0.5);
-        self.triangle([a - half, a + half, b + half]);
-        self.triangle([a - half, b + half, b - half]);
+        self.triangle([a - half, a + half, b + half], color);
+        self.triangle([a - half, b + half, b - half], color);
     }
 
     /// A closed outline, or a triangle fan from the first point (convex shapes only).
-    fn shape(&mut self, points: &[Vec2], fill: bool) {
+    fn shape(&mut self, points: &[Vec2], fill: bool, color: u32) {
         if fill {
             for i in 1..points.len().saturating_sub(1) {
-                self.triangle([points[0], points[i], points[i + 1]]);
+                self.triangle([points[0], points[i], points[i + 1]], color);
             }
         } else {
             for (i, &from) in points.iter().enumerate() {
-                self.segment(from, points[(i + 1) % points.len()]);
+                self.segment(from, points[(i + 1) % points.len()], color);
             }
         }
     }
@@ -153,10 +142,6 @@ mod tests {
 
     fn all(layer: &str) -> BTreeSet<String> {
         BTreeSet::from([layer.to_string()])
-    }
-
-    fn entity(frame_world: &mut ludenea_ecs::World) -> Entity {
-        frame_world.spawn()
     }
 
     #[test]
@@ -209,8 +194,8 @@ mod tests {
     #[test]
     fn selected_entity_uses_highlight_color() {
         let mut world = ludenea_ecs::World::new();
-        let picked = entity(&mut world);
-        let other = entity(&mut world);
+        let picked = world.spawn();
+        let other = world.spawn();
         let mut frame = DebugDrawFrame::default();
         for e in [picked, other] {
             frame.push(

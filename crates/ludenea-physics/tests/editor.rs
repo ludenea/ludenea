@@ -133,3 +133,51 @@ fn debug_draw_and_pick_do_not_change_world_hash() {
     simulation.pick(Vec2::new(0.0, 0.0));
     assert_eq!(simulation.hash(), before);
 }
+
+#[test]
+fn colliders_are_colored_by_body_kind() {
+    let mut simulation = simulation();
+    let kinds = [Body::fixed(), Body::kinematic(), Body::dynamic()];
+    for (i, body) in kinds.into_iter().enumerate() {
+        let entity = spawn_box(&mut simulation, 5.0 * i as f32, 0.0);
+        simulation.world_mut().insert(entity, body).unwrap();
+    }
+    let frame = simulation.debug_draw(&layers(&["physics.colliders"]));
+    let colors: Vec<u32> = frame.layers["physics.colliders"]
+        .iter()
+        .map(|item| match &item.primitive {
+            Primitive::Polygon { color, .. } => color.0,
+            other => panic!("a box is drawn as a polygon, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(colors, [0x8C8C8CFF, 0x4D8CFFFF, 0x4DCC66FF]);
+}
+
+#[test]
+fn contacts_layer_draws_a_point_and_a_normal_per_manifold_point() {
+    let mut simulation = simulation();
+    spawn_box(&mut simulation, 0.0, 0.0);
+    let resting = spawn_box(&mut simulation, 0.0, 2.0);
+    simulation
+        .world_mut()
+        .insert(resting, Body::dynamic())
+        .unwrap();
+    simulation.step();
+    let frame = simulation.debug_draw(&layers(&["physics.contacts"]));
+    let items = &frame.layers["physics.contacts"];
+    // Two face-to-face boxes touch at two points, each drawn as a dot then a normal.
+    assert_eq!(items.len(), 4);
+    for pair in items.chunks(2) {
+        let Primitive::Circle { center, fill, .. } = &pair[0].primitive else {
+            panic!("a contact point is drawn as a circle");
+        };
+        assert!(*fill);
+        assert!((center.y - 1.0).abs() < 0.1, "{center:?}");
+        let Primitive::Line { a, b, .. } = &pair[1].primitive else {
+            panic!("a contact normal is drawn as a line");
+        };
+        assert_eq!(a, center);
+        assert!((b.x - a.x).abs() < 1e-5);
+        assert!(((b.y - a.y).abs() - 0.2).abs() < 1e-5);
+    }
+}

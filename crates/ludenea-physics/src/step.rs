@@ -15,7 +15,7 @@ use crate::mass::mass_data;
 use crate::shape::LINEAR_SLOP;
 use crate::solver::{ConstraintPoint, ContactConstraint, RIGID, SolverBody, StepContext, solve};
 
-const SPECULATIVE_DISTANCE: f32 = 4.0 * LINEAR_SLOP;
+pub(crate) const SPECULATIVE_DISTANCE: f32 = 4.0 * LINEAR_SLOP;
 
 /// Inverse mass, inverse rotational inertia, and local center of mass. Non-dynamic bodies
 /// are immovable about their origin; a dynamic body without mass gets mass 1 and locked
