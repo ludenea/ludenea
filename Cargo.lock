@@ -264,6 +264,7 @@ dependencies = [
  "ludenea",
  "ludenea-app",
  "ludenea-ecs",
+ "postcard",
  "serde",
  "serde_json",
  "thiserror",

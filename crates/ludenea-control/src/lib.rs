@@ -6,6 +6,7 @@ pub mod host;
 pub mod in_process;
 pub mod protocol;
 pub mod session;
+mod undo;
 
 pub use host::Host;
 pub use in_process::{InProcess, Transport};

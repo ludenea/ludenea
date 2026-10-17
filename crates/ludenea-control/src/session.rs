@@ -19,6 +19,7 @@ use ludenea_ecs::Entity;
 use serde::Serialize;
 
 use crate::checkpoints::Checkpoints;
+use crate::undo::{UndoEntry, UndoHistory};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
@@ -32,6 +33,8 @@ pub enum SessionError {
     NothingToUndo,
     #[error("there is nothing to redo")]
     NothingToRedo,
+    #[error("the undo history cannot be decoded: {0}")]
+    UndoDecode(#[from] postcard::Error),
     #[error(transparent)]
     Edit(#[from] EditError),
     #[error(transparent)]
@@ -82,6 +85,8 @@ pub struct SessionExport {
     pub scene: String,
     pub inputs: Vec<u8>,
     pub edits: Vec<u8>,
+    /// The undo and redo stacks, so a rebuild keeps the history.
+    pub undo: Vec<u8>,
     pub hashes: Vec<u64>,
 }
 
@@ -94,7 +99,9 @@ pub struct Session {
     /// The last tick with a recorded input or edit.
     head: u64,
     current: u64,
-    scene_dirty: bool,
+    /// The scene text as last loaded or saved; the scene is dirty while it differs.
+    saved_scene: String,
+    history: UndoHistory,
     /// The last resimulated tick, while the recorded future is stale.
     resimulating: Option<u64>,
     diverged: bool,
@@ -107,6 +114,7 @@ impl Session {
         sim.load_scene(&scene)?;
         let players = u16::try_from(sim.players()).expect("fewer than 2^16 players");
         Ok(Session {
+            saved_scene: scene.clone(),
             scene,
             inputs: InputLog::new(players),
             edits: EditLog::new(),
@@ -114,7 +122,7 @@ impl Session {
             checkpoints: Checkpoints::new(sim.snapshot()),
             head: 0,
             current: 0,
-            scene_dirty: false,
+            history: UndoHistory::default(),
             resimulating: None,
             diverged: false,
             reports: VecDeque::new(),
@@ -122,18 +130,21 @@ impl Session {
     }
 
     /// Restarts a recorded session on a new build: the new hashes are compared with
-    /// `expected` while it resimulates.
+    /// `expected` while it resimulates. `undo` is the exported undo history.
     pub fn resume(
         sim: &mut Simulation,
         scene: String,
         inputs: InputLog,
         edits: EditLog,
+        undo: &[u8],
         expected: Vec<u64>,
     ) -> Result<Session, SessionError> {
+        let history = UndoHistory::decode(undo)?;
         sim.set_players(usize::from(inputs.players));
         let mut session = Session::start(sim, scene)?;
         session.inputs = inputs;
         session.edits = edits;
+        session.history = history;
         if !expected.is_empty() {
             session.hashes = expected;
         }
@@ -162,6 +173,8 @@ impl Session {
     /// resimulation: those that fail are dropped and reported by `resimulate`.
     pub fn load_edits(&mut self, sim: &mut Simulation, log: EditLog) -> Result<(), SessionError> {
         self.edits = log;
+        // Undo entries past tick 0 name edits of the replaced log.
+        self.history.discard_after(0);
         self.reset_future(sim)
     }
 
@@ -204,16 +217,70 @@ impl Session {
     ) -> Result<Option<Entity>, SessionError> {
         self.ensure_resimulated()?;
         if self.current == 0 {
-            return self.edit_scene(sim, &edit);
+            let before = self.scene.clone();
+            let spawned = self.edit_scene(sim, &edit)?;
+            let after = self.scene.clone();
+            self.history.record(UndoEntry::Scene { before, after });
+            return Ok(spawned);
         }
-        let spawned = sim.apply_edit(&edit)?;
-        self.discard_after(self.current);
-        self.edits.edits.push(TimedEdit {
+        let edit = TimedEdit {
             tick: self.current,
             edit,
-        });
-        self.update_head();
+        };
+        let spawned = self.record_edit(sim, edit.clone())?;
+        self.history.record(UndoEntry::Run { edit });
         Ok(spawned)
+    }
+
+    /// Takes back the last edit. A scene edit reloads the scene before it and marks the
+    /// recorded future stale; a recorded edit is removed from the log, the future after its
+    /// tick is discarded, and the session moves to its tick.
+    pub fn undo(&mut self, sim: &mut Simulation) -> Result<(), SessionError> {
+        self.ensure_resimulated()?;
+        let entry = self.history.undo.pop().ok_or(SessionError::NothingToUndo)?;
+        match entry.clone() {
+            UndoEntry::Scene { before, .. } => {
+                if let Err(error) = self.load_scene_version(sim, before) {
+                    self.history.undo.push(entry);
+                    return Err(error);
+                }
+                self.history.redo.push(entry);
+                Ok(())
+            }
+            UndoEntry::Run { edit } => {
+                if let Some(index) = self.edits.edits.iter().rposition(|e| *e == edit) {
+                    self.edits.edits.remove(index);
+                }
+                self.discard_after(edit.tick);
+                self.history.redo.push(entry);
+                // The ticks up to the edit ran before with these same inputs and edits.
+                self.current = edit.tick;
+                self.replay_to(sim, edit.tick)
+            }
+        }
+    }
+
+    /// Applies the last undone edit again: a scene edit reloads the scene after it, a
+    /// recorded edit is applied and recorded again at its tick.
+    pub fn redo(&mut self, sim: &mut Simulation) -> Result<(), SessionError> {
+        self.ensure_resimulated()?;
+        let entry = self.history.redo.pop().ok_or(SessionError::NothingToRedo)?;
+        let result = match &entry {
+            UndoEntry::Scene { after, .. } => self.load_scene_version(sim, after.clone()),
+            UndoEntry::Run { edit } => self
+                .seek(sim, edit.tick)
+                .and_then(|()| self.record_edit(sim, edit.clone()).map(drop)),
+        };
+        match result {
+            Ok(()) => self.history.undo.push(entry),
+            Err(_) => self.history.redo.push(entry),
+        }
+        result
+    }
+
+    /// Marks the current scene text as saved.
+    pub fn mark_scene_saved(&mut self) {
+        self.saved_scene = self.scene.clone();
     }
 
     /// Moves to `tick`, simulating the recorded future on the way when needed.
@@ -251,8 +318,8 @@ impl Session {
         scene: String,
     ) -> Result<(), SessionError> {
         sim.load_scene(&scene)?;
+        self.saved_scene = scene.clone();
         self.scene = scene;
-        self.scene_dirty = false;
         self.start_resimulation(sim);
         Ok(())
     }
@@ -315,6 +382,7 @@ impl Session {
             scene: self.scene.clone(),
             inputs: self.inputs.encode(),
             edits: self.edits.encode(),
+            undo: self.history.encode(),
             hashes: self.hashes.clone(),
         })
     }
@@ -328,9 +396,9 @@ impl Session {
             current: self.current,
             checkpoints: self.checkpoints.ticks(),
             edit_ticks,
-            can_undo: false,
-            can_redo: false,
-            scene_dirty: self.scene_dirty,
+            can_undo: !self.history.undo.is_empty(),
+            can_redo: !self.history.redo.is_empty(),
+            scene_dirty: self.scene != self.saved_scene,
             resimulating: self.resimulating.is_some(),
         }
     }
@@ -421,7 +489,8 @@ impl Session {
             match sim.apply_edit(&self.edits.edits[index].edit) {
                 Ok(_) => index += 1,
                 Err(error) => {
-                    self.edits.edits.remove(index);
+                    let dropped = self.edits.edits.remove(index);
+                    self.history.forget(&dropped);
                     self.reports.push_back(Resimulation::EditDropped {
                         tick,
                         reason: error.to_string(),
@@ -454,7 +523,33 @@ impl Session {
         self.edits.edits.retain(|edit| edit.tick <= tick);
         self.hashes.truncate(kept);
         self.checkpoints.truncate_after(tick);
+        self.history.discard_after(tick);
         self.update_head();
+    }
+
+    /// Applies `edit` at the current tick, discards the future after it, and records it.
+    fn record_edit(
+        &mut self,
+        sim: &mut Simulation,
+        edit: TimedEdit,
+    ) -> Result<Option<Entity>, SessionError> {
+        let spawned = sim.apply_edit(&edit.edit)?;
+        self.discard_after(edit.tick);
+        self.edits.edits.push(edit);
+        self.update_head();
+        Ok(spawned)
+    }
+
+    /// Loads a scene version from the undo history, like a tick 0 edit.
+    fn load_scene_version(
+        &mut self,
+        sim: &mut Simulation,
+        scene: String,
+    ) -> Result<(), SessionError> {
+        sim.load_scene(&scene)?;
+        self.scene = scene;
+        self.start_resimulation(sim);
+        Ok(())
     }
 
     /// After new logs: only tick 0 stays simulated, the session is at tick 0, and recorded
@@ -492,7 +587,6 @@ impl Session {
         let scene = sim.save_scene();
         sim.load_scene(&scene)?;
         self.scene = scene;
-        self.scene_dirty = true;
         let spawned = rank.map(|rank| sim.world().entities().nth(rank).expect("saved entity"));
         self.start_resimulation(sim);
         Ok(spawned)
