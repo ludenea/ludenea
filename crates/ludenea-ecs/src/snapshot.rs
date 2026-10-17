@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
+use crate::commands::CommandQueue;
 use crate::hash::ENTITIES_LEAF;
 use crate::{EntitiesState, Entity, World};
 
@@ -94,8 +95,9 @@ impl World {
         }
     }
 
-    /// Replaces the entities, components, and resources with those of `snapshot`. On error
-    /// the world is unchanged. Runtime resources are kept as they are.
+    /// Replaces the entities, components, and resources with those of `snapshot`, and drops
+    /// any queued command and event (left behind by a tick that panicked). On error the
+    /// world is unchanged. Runtime resources are kept as they are.
     pub fn restore(&mut self, snapshot: &Snapshot) -> Result<(), SnapshotError> {
         self.check_compatible(snapshot)?;
         check_entities(&snapshot.entities)?;
@@ -140,6 +142,8 @@ impl World {
             let entry = self.components.get_mut(name).expect("checked");
             entry.storage.replace_all(values);
         }
+        *self.commands.get_mut() = CommandQueue::default();
+        self.clear_events();
         Ok(())
     }
 

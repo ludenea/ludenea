@@ -40,6 +40,8 @@ pub(crate) struct InputType {
     pub(crate) name: &'static str,
     /// Writes `players` default inputs.
     pub(crate) write_defaults: fn(&mut World, usize),
+    /// The postcard bytes of `players` default inputs.
+    pub(crate) encode_defaults: fn(usize) -> Vec<u8>,
     /// Decodes a postcard `Vec<I>`, rejecting leftover bytes, then writes it.
     /// Also rejects a `Vec` that does not hold exactly the given number of players.
     pub(crate) write_encoded: fn(&mut World, &[u8], usize) -> Result<(), SimError>,
@@ -52,6 +54,9 @@ impl InputType {
             id: TypeId::of::<I>(),
             name: type_name::<I>(),
             write_defaults: |world, players| write(world, vec![I::default(); players]),
+            encode_defaults: |players| {
+                postcard::to_allocvec(&vec![I::default(); players]).expect("inputs always encode")
+            },
             write_encoded: |world, bytes, expected| {
                 let players = decode_exact::<Vec<I>>(bytes)?;
                 check_player_count(expected, players.len())?;

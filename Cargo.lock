@@ -260,10 +260,13 @@ name = "ludenea-control"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "boxes",
+ "ludenea",
  "ludenea-app",
  "ludenea-ecs",
  "serde",
  "serde_json",
+ "thiserror",
 ]
 
 [[package]]

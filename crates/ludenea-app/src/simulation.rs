@@ -100,6 +100,14 @@ impl Simulation {
         Ok(())
     }
 
+    /// What `step_encoded(None)` replays as: default inputs for every player, encoded, or
+    /// `None` when the app has no input type.
+    pub fn encoded_default_inputs(&self) -> Option<Vec<u8>> {
+        self.input
+            .as_ref()
+            .map(|input| (input.encode_defaults)(self.players))
+    }
+
     /// The schema of the app's input type, or `None` when it has none.
     pub fn input_schema(&self) -> Option<TypeSchema> {
         self.input.as_ref().map(|input| (input.schema)())

@@ -1,7 +1,9 @@
+use std::panic::AssertUnwindSafe;
+
 use ludenea_ecs::schema::Schema;
 use ludenea_ecs::{
-    Component, EcsError, Entity, Resource, SNAPSHOT_VERSION, Snapshot, SnapshotError, World,
-    hash_value,
+    Commands, Component, EcsError, Entity, EventWriter, Events, ResMut, Resource, SNAPSHOT_VERSION,
+    ScheduleBuilder, Snapshot, SnapshotError, World, hash_value,
 };
 use serde::{Deserialize, Serialize};
 
@@ -303,4 +305,51 @@ fn insert_resource_boxed_replaces_a_resource_by_name() {
         .insert_resource_boxed("game::Unknown", value)
         .unwrap_err();
     assert!(matches!(&error, EcsError::UnregisteredResource(name) if name == "game::Unknown"));
+}
+
+struct Ping;
+
+#[derive(Resource, Serialize, Deserialize, Debug, PartialEq, Clone)]
+struct Seen(usize);
+
+fn queue_then_panic(mut commands: Commands, mut pings: EventWriter<Ping>) {
+    commands.spawn().insert(Health { hp: 1 });
+    pings.send(Ping);
+    panic!("aborted tick");
+}
+
+fn count_pings(pings: Events<Ping>, mut seen: ResMut<Seen>) {
+    seen.0 = pings.iter().count();
+}
+
+#[test]
+fn restore_clears_queued_commands_and_events() {
+    let (mut world, _) = populated_world();
+    world.register_event::<Ping>();
+    world.register_resource(Seen(usize::MAX)).unwrap();
+    let before = world.snapshot();
+
+    let mut builder = ScheduleBuilder::default();
+    builder.add(queue_then_panic);
+    let mut aborting = builder.build(&world).unwrap();
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| aborting.run(&mut world)));
+    std::panic::set_hook(hook);
+    assert!(outcome.is_err());
+
+    world.restore(&before).unwrap();
+    let mut builder = ScheduleBuilder::default();
+    builder.add(count_pings);
+    builder.build(&world).unwrap().run(&mut world);
+    assert_eq!(
+        world.resource::<Seen>().unwrap().0,
+        0,
+        "a stale event survived"
+    );
+    assert_eq!(
+        world.snapshot().entities,
+        before.entities,
+        "a stale command was applied"
+    );
 }
