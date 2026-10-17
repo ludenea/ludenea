@@ -1,0 +1,14 @@
+[package]
+name = "ludenea-physics"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+ludenea-math.workspace = true
+ludenea-ecs.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+postcard.workspace = true
+ron.workspace = true

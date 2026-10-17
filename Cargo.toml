@@ -26,3 +26,4 @@ ludenea-math = { path = "crates/ludenea-math" }
 ludenea-app = { path = "crates/ludenea-app" }
 ludenea-ecs = { path = "crates/ludenea-ecs" }
 ludenea-macros = { path = "crates/ludenea-macros" }
+ludenea-physics = { path = "crates/ludenea-physics" }
