@@ -216,6 +216,14 @@ impl Plan {
     }
 }
 
+/// Asserts that `order` runs every inserted system exactly once.
+fn is_permutation_of(order: &[usize], inserted: &[usize]) -> bool {
+    let (mut order, mut inserted) = (order.to_vec(), inserted.to_vec());
+    order.sort_unstable();
+    inserted.sort_unstable();
+    order == inserted
+}
+
 /// Position of every pool system in an execution order.
 fn positions(order: &[usize]) -> Vec<Option<usize>> {
     let mut positions = vec![None; ACCESSES.len()];
@@ -234,6 +242,7 @@ proptest! {
             Err(error) => prop_assert!(false, "unexpected error: {error}"),
             Ok(order) => {
                 prop_assert_eq!(expected, Vec::new());
+                prop_assert!(is_permutation_of(&order, &plan.inserted), "every system runs once");
                 let positions = positions(&order);
                 for &(first, then) in &plan.before {
                     prop_assert!(positions[first] < positions[then], "{first} runs before {then}");
@@ -252,6 +261,8 @@ proptest! {
         let order = plan.run().expect("every conflicting pair is ordered");
         let reinserted = Plan { inserted: shuffled, ..plan.clone() };
         let other = reinserted.run().expect("only the insertion order changed");
+        prop_assert!(is_permutation_of(&order, &plan.inserted), "every system runs once");
+        prop_assert!(is_permutation_of(&other, &plan.inserted), "every system runs once");
         let (positions, other_positions) = (positions(&order), positions(&other));
         for &first in &plan.inserted {
             for &second in &plan.inserted {
