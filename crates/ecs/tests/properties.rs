@@ -1,10 +1,13 @@
 //! Property tests of the world: random operation sequences checked against
-//! a naive model, and the rollback guarantee.
+//! a naive model, applied directly or through commands, and the rollback
+//! guarantee.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
+use std::rc::Rc;
 
-use ludenea_ecs::{Bundle, Component, EcsError, Entity, World};
+use ludenea_ecs::{Bundle, Commands, Component, EcsError, Entity, Schedule, World};
 use proptest::prelude::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -76,6 +79,16 @@ struct Model {
 }
 
 impl Model {
+    /// Records a newly spawned `entity`.
+    fn add(&mut self, entity: Entity, components: Components) {
+        assert!(
+            !self.alive.contains_key(&entity),
+            "{entity} is already alive"
+        );
+        self.spawned.push(entity);
+        self.alive.insert(entity, components);
+    }
+
     fn target(&self, index: usize) -> Entity {
         self.spawned[index % self.spawned.len()]
     }
@@ -111,20 +124,14 @@ fn spawn(
     components: Components,
 ) -> Outcome {
     let entity = world.spawn(bundle);
-    assert!(
-        !model.alive.contains_key(&entity),
-        "{entity} is already alive"
-    );
-    model.spawned.push(entity);
-    model.alive.insert(entity, components);
+    model.add(entity, components);
     Outcome::Spawned(entity)
 }
 
-/// Applies `operation` to both the world and the model, checks that their
-/// results agree and returns the result of the world. An operation with a
-/// target spawns the empty bundle instead while nothing was spawned.
-fn step(world: &mut World, model: &mut Model, operation: Operation) -> Outcome {
-    let operation = match operation {
+/// Replaces an operation with a target by spawning the empty bundle while
+/// nothing was spawned.
+fn retarget(model: &Model, operation: Operation) -> Operation {
+    match operation {
         Operation::Despawn(_)
         | Operation::InsertSmall(..)
         | Operation::InsertLargeTag(..)
@@ -136,8 +143,13 @@ fn step(world: &mut World, model: &mut Model, operation: Operation) -> Outcome {
             Operation::SpawnEmpty
         }
         operation => operation,
-    };
-    match operation {
+    }
+}
+
+/// Applies `operation` to both the world and the model, checks that their
+/// results agree and returns the result of the world.
+fn step(world: &mut World, model: &mut Model, operation: Operation) -> Outcome {
+    match retarget(model, operation) {
         Operation::SpawnEmpty => spawn(world, model, (), Components::default()),
         Operation::SpawnSmall(small) => {
             let components = Components {
@@ -216,6 +228,80 @@ fn step(world: &mut World, model: &mut Model, operation: Operation) -> Outcome {
             });
             assert_eq!(result, expected);
             Outcome::RemovedTag(result)
+        }
+    }
+}
+
+/// Records `operation` through `commands` and applies it to the model, as
+/// the world applies it once the commands run. Both ignore stale targets.
+fn record(commands: &mut Commands, model: &mut Model, operation: Operation) {
+    match retarget(model, operation) {
+        Operation::SpawnEmpty => model.add(commands.spawn(()), Components::default()),
+        Operation::SpawnSmall(small) => {
+            let components = Components {
+                small: Some(Small(small)),
+                ..Components::default()
+            };
+            model.add(commands.spawn(Small(small)), components);
+        }
+        Operation::SpawnSmallLarge(small, large) => {
+            let components = Components {
+                small: Some(Small(small)),
+                large: Some(Large(large)),
+                tag: false,
+            };
+            model.add(commands.spawn((Small(small), Large(large))), components);
+        }
+        Operation::SpawnLargeTag(large) => {
+            let components = Components {
+                large: Some(Large(large)),
+                tag: true,
+                ..Components::default()
+            };
+            model.add(commands.spawn((Large(large), Tag)), components);
+        }
+        Operation::Despawn(index) => {
+            let entity = model.target(index);
+            commands.despawn(entity);
+            model.alive.remove(&entity);
+        }
+        Operation::InsertSmall(index, small) => {
+            let entity = model.target(index);
+            commands.insert(entity, Small(small));
+            model
+                .update(entity, |components| components.small = Some(Small(small)))
+                .ok();
+        }
+        Operation::InsertLargeTag(index, large) => {
+            let entity = model.target(index);
+            commands.insert(entity, (Large(large), Tag));
+            model
+                .update(entity, |components| {
+                    components.large = Some(Large(large));
+                    components.tag = true;
+                })
+                .ok();
+        }
+        Operation::RemoveSmall(index) => {
+            let entity = model.target(index);
+            commands.remove::<Small>(entity);
+            model
+                .update(entity, |components| components.small = None)
+                .ok();
+        }
+        Operation::RemoveLarge(index) => {
+            let entity = model.target(index);
+            commands.remove::<Large>(entity);
+            model
+                .update(entity, |components| components.large = None)
+                .ok();
+        }
+        Operation::RemoveTag(index) => {
+            let entity = model.target(index);
+            commands.remove::<Tag>(entity);
+            model
+                .update(entity, |components| components.tag = false)
+                .ok();
         }
     }
 }
@@ -321,5 +407,22 @@ proptest! {
         let replay = run(&mut world, &mut model, &after);
 
         prop_assert_eq!(first, replay);
+    }
+
+    #[test]
+    fn commands_apply_like_the_model(operations in prop::collection::vec(operation(), 1..64)) {
+        let mut world = world();
+        let model = Rc::new(RefCell::new(Model::default()));
+        let recorded = Rc::clone(&model);
+        let mut schedule = Schedule::builder();
+        schedule.add(move |mut commands: Commands| {
+            for &operation in &operations {
+                record(&mut commands, &mut recorded.borrow_mut(), operation);
+            }
+        });
+
+        schedule.build(&world).expect("a single system is valid").run(&mut world);
+
+        check(&world, &model.borrow());
     }
 }
