@@ -5,7 +5,7 @@
 pub const GRAPH_COLOR_COUNT: usize = 12;
 
 /// Constraints or bodies per parallel task.
-pub const SOLVER_CHUNK: usize = 64;
+pub const SOLVER_CHUNK: usize = 256;
 
 /// Greedy coloring of touching contacts given in pair order as body index pairs: each
 /// constraint takes the lowest color holding neither of its dynamic bodies. Static and

@@ -34,7 +34,7 @@ impl Parallel {
     }
 
     /// Applies `f` to every item, `chunk` items per task, and returns the results in item
-    /// order.
+    /// order. Work that fits in one chunk runs on the calling thread.
     ///
     /// # Panics
     /// If `chunk` is 0.
@@ -45,7 +45,7 @@ impl Parallel {
         f: impl Fn(&T) -> R + Sync + Send,
     ) -> Vec<R> {
         #[cfg(not(target_family = "wasm"))]
-        if let Some(pool) = &self.pool {
+        if let Some(pool) = self.pool_for(items.len(), chunk) {
             use rayon::prelude::*;
             return pool.install(|| {
                 items
@@ -60,7 +60,8 @@ impl Parallel {
             .collect()
     }
 
-    /// Applies `f` to every item in place, `chunk` items per task.
+    /// Applies `f` to every item in place, `chunk` items per task. Work that fits in one
+    /// chunk runs on the calling thread.
     ///
     /// # Panics
     /// If `chunk` is 0.
@@ -71,7 +72,7 @@ impl Parallel {
         f: impl Fn(&mut T) + Sync + Send,
     ) {
         #[cfg(not(target_family = "wasm"))]
-        if let Some(pool) = &self.pool {
+        if let Some(pool) = self.pool_for(items.len(), chunk) {
             use rayon::prelude::*;
             return pool.install(|| {
                 items
@@ -82,6 +83,13 @@ impl Parallel {
         items
             .chunks_mut(chunk)
             .for_each(|chunk| chunk.iter_mut().for_each(&f));
+    }
+
+    /// The pool, unless the work fits in one chunk: entering the pool costs more than a
+    /// single chunk saves.
+    #[cfg(not(target_family = "wasm"))]
+    fn pool_for(&self, len: usize, chunk: usize) -> Option<&rayon::ThreadPool> {
+        self.pool.as_ref().filter(|_| len > chunk)
     }
 }
 

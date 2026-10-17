@@ -18,19 +18,24 @@ fn millis_per_iteration(iterations: u32, mut work: impl FnMut()) -> f64 {
     start.elapsed().as_secs_f64() * 1000.0 / f64::from(iterations)
 }
 
-fn ms_per_tick(scene: &str, threads: usize) -> f64 {
+/// The scenario after the warmup, so the bodies have settled into active contacts.
+fn warmed_up(scene: &str, threads: usize) -> Simulation {
     let mut simulation = app().build().expect("the app must build");
     simulation.load_scene(scene).expect("the scene must load");
     simulation.set_threads(threads);
     for _ in 0..WARMUP_TICKS {
         simulation.step();
     }
+    simulation
+}
+
+fn ms_per_tick(scene: &str, threads: usize) -> f64 {
+    let mut simulation = warmed_up(scene, threads);
     millis_per_iteration(MEASURED_TICKS, || simulation.step())
 }
 
 fn snapshot_and_restore(scene: &str) -> (f64, f64) {
-    let mut simulation: Simulation = app().build().expect("the app must build");
-    simulation.load_scene(scene).expect("the scene must load");
+    let mut simulation = warmed_up(scene, 1);
     let snapshot = simulation.snapshot();
     let snapshot_ms = millis_per_iteration(SNAPSHOTS, || {
         simulation.snapshot();

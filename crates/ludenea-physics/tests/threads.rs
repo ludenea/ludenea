@@ -22,7 +22,9 @@ fn boxed(half_width: f32, half_height: f32) -> Collider {
     Collider::new(Shape::Polygon(Polygon::make_box(half_width, half_height)))
 }
 
-/// 200 bodies: a static floor and walls, a kinematic paddle, and a pile of mixed shapes.
+/// 564 bodies: a static floor and walls, a kinematic paddle, and a pile of mixed shapes.
+/// The 560 dynamic bodies and their contacts exceed one solver chunk (256), so the body
+/// stages and the largest colors are split across threads.
 fn scene(threads: usize) -> Simulation {
     let mut app = App::new();
     app.plugin(PhysicsPlugin);
@@ -31,15 +33,15 @@ fn scene(threads: usize) -> Simulation {
     spawn(&mut simulation, Vec2::ZERO, Body::fixed(), boxed(12.0, 0.5));
     spawn(
         &mut simulation,
-        Vec2::new(-12.0, 10.0),
+        Vec2::new(-12.0, 30.0),
         Body::fixed(),
-        boxed(0.5, 10.0),
+        boxed(0.5, 30.0),
     );
     spawn(
         &mut simulation,
-        Vec2::new(12.0, 10.0),
+        Vec2::new(12.0, 30.0),
         Body::fixed(),
-        boxed(0.5, 10.0),
+        boxed(0.5, 30.0),
     );
     let mut paddle = Body::kinematic();
     paddle.angular_velocity = 1.0;
@@ -49,7 +51,7 @@ fn scene(threads: usize) -> Simulation {
         paddle,
         boxed(3.0, 0.2),
     );
-    for i in 0..196 {
+    for i in 0..560 {
         let (column, row) = (i % 14, i / 14);
         let position = Vec2::new(
             -9.1 + 1.4 * column as f32 + 0.1 * (row % 2) as f32,
