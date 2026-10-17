@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 use std::{fs, thread};
@@ -136,12 +137,25 @@ impl Project {
         fs::read_to_string(&file).map_err(|error| io_error(&file, error))
     }
 
+    /// Writes `text` to a temporary file in `.ludenea/` (unwatched, on the same file system),
+    /// then renames it over `path`: a crash mid-write never leaves a truncated file.
     pub fn write_text(&mut self, path: &str, text: &str) -> Result<(), ProjectError> {
+        static WRITES: AtomicU64 = AtomicU64::new(0);
         let file = self.resolve(path)?;
         if let Some(parent) = file.parent() {
             fs::create_dir_all(parent).map_err(|error| io_error(parent, error))?;
         }
-        fs::write(&file, text).map_err(|error| io_error(&file, error))
+        let staging = self.root.join(".ludenea");
+        fs::create_dir_all(&staging).map_err(|error| io_error(&staging, error))?;
+        let write = WRITES.fetch_add(1, Ordering::Relaxed);
+        let temporary = staging.join(format!("write-{}-{write}.tmp", std::process::id()));
+        let written = fs::write(&temporary, text)
+            .map_err(|error| io_error(&temporary, error))
+            .and_then(|()| fs::rename(&temporary, &file).map_err(|error| io_error(&file, error)));
+        if written.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        written
     }
 
     /// Reports changes under the project root, debounced. Watching stops when the receiver is

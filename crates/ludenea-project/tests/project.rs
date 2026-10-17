@@ -92,6 +92,37 @@ fn paths_outside_project_are_rejected() {
     }
 }
 
+/// A reader holding the old file keeps the old text: the new text replaced the file in one
+/// rename instead of being written over it, so a crash mid-write cannot leave half a scene.
+#[cfg(unix)]
+#[test]
+fn write_text_replaces_the_file_in_one_step() {
+    use std::io::Read;
+
+    let dir = TempDir::new().unwrap();
+    let mut project = new_project(&dir);
+    let scene = project.root().join("scenes/main.scene.ron");
+    let old = fs::read_to_string(&scene).unwrap();
+    let mut reader = fs::File::open(&scene).unwrap();
+    project
+        .write_text("scenes/main.scene.ron", "new text")
+        .unwrap();
+    let mut held = String::new();
+    reader.read_to_string(&mut held).unwrap();
+    assert_eq!(held, old);
+    assert_eq!(fs::read_to_string(&scene).unwrap(), "new text");
+    let scenes: Vec<_> = fs::read_dir(project.root().join("scenes"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(scenes, ["main.scene.ron"], "no temporary file is left");
+    let leftovers = fs::read_dir(project.root().join(".ludenea"))
+        .unwrap()
+        .filter(|entry| entry.as_ref().unwrap().path().is_file())
+        .count();
+    assert_eq!(leftovers, 0, "no temporary file is left");
+}
+
 #[test]
 fn watch_reports_scene_change_on_disk() {
     let dir = TempDir::new().unwrap();
