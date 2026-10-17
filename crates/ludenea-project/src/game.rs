@@ -26,7 +26,7 @@ pub struct GameOutput {
 /// A running game: `<binary> host --stdio`, speaking the control protocol line by line.
 pub struct GameProcess {
     child: Child,
-    stdin: ChildStdin,
+    stdin: Option<ChildStdin>,
     messages: Option<Receiver<String>>,
     output: Option<Receiver<GameOutput>>,
 }
@@ -62,7 +62,7 @@ impl GameProcess {
         });
         Ok(GameProcess {
             child,
-            stdin,
+            stdin: Some(stdin),
             messages: Some(messages),
             output: Some(output),
         })
@@ -70,8 +70,17 @@ impl GameProcess {
 
     /// Sends one protocol message, without its trailing newline.
     pub fn send(&mut self, line: &str) -> io::Result<()> {
-        writeln!(self.stdin, "{line}")?;
-        self.stdin.flush()
+        let stdin = self
+            .stdin
+            .as_mut()
+            .ok_or_else(|| io::Error::from(io::ErrorKind::BrokenPipe))?;
+        writeln!(stdin, "{line}")?;
+        stdin.flush()
+    }
+
+    /// Closes the game's input, which makes the host exit. Later sends fail.
+    pub fn close_input(&mut self) {
+        self.stdin = None;
     }
 
     /// The protocol messages the game prints. The receiver disconnects when the game exits.
@@ -85,9 +94,14 @@ impl GameProcess {
         self.output.take().unwrap_or_else(|| mpsc::channel().1)
     }
 
-    /// Waits for the game to exit and returns its exit code (`None` when a signal ended it).
+    /// The exit code once the game has exited; `None` while it runs (and when a signal ended
+    /// it). Never blocks: detect the exit by the message receiver disconnecting, then call this.
     pub fn wait(&mut self) -> Option<i32> {
-        self.child.wait().ok().and_then(|status| status.code())
+        self.child
+            .try_wait()
+            .ok()
+            .flatten()
+            .and_then(|status| status.code())
     }
 
     pub fn stop(self) {}

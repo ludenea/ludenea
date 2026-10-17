@@ -195,3 +195,29 @@ fn game_types_declare_template_components() {
         assert!(types.join(file).is_file(), "{file}");
     }
 }
+
+#[test]
+#[ignore]
+fn wait_is_none_while_running_and_has_the_code_after_exit() {
+    let mut game = GameProcess::start(game_binary()).unwrap();
+    let messages = game.take_messages();
+    handshake(&mut game, &messages);
+    assert_eq!(game.wait(), None);
+    game.close_input();
+    assert!(game.send("{}").is_err());
+    // The receiver disconnects when the game exits.
+    while messages.recv_timeout(TIMEOUT).is_ok() {}
+    assert!(matches!(
+        messages.try_recv(),
+        Err(mpsc::TryRecvError::Disconnected)
+    ));
+    let mut code = game.wait();
+    for _ in 0..100 {
+        if code.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+        code = game.wait();
+    }
+    assert_eq!(code, Some(0));
+}
