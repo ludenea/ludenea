@@ -2,7 +2,9 @@
 //! constraints, relax iterations, and restitution, run as distinct stages over a body
 //! array and a constraint array.
 
+use crate::coloring::{GRAPH_COLOR_COUNT, SOLVER_CHUNK, color_constraints};
 use crate::components::BodyKind;
+use ludenea_app::Parallel;
 use ludenea_math::{PI, Rot, Vec2, clamp, max, min};
 
 /// Linear speed clamp, a guard against tunnelling and overflow.
@@ -126,42 +128,105 @@ impl StepContext {
     }
 }
 
-/// Runs the whole soft step on `bodies` and `constraints`.
+/// Runs the whole soft step on `bodies` and `constraints`. Constraint stages run color by
+/// color, so the result never depends on the thread count of `parallel`.
 pub(crate) fn solve(
     bodies: &mut [SolverBody],
     constraints: &mut [ContactConstraint],
     context: &StepContext,
+    parallel: &Parallel,
 ) {
-    for_each_constraint(bodies, constraints, |c, a, b| prepare(c, a, b, context));
+    let pairs: Vec<(u32, u32)> = constraints
+        .iter()
+        .map(|c| (c.body_a as u32, c.body_b as u32))
+        .collect();
+    let is_dynamic: Vec<bool> = bodies.iter().map(|b| b.kind == BodyKind::Dynamic).collect();
+    let colors = color_constraints(&pairs, &is_dynamic);
+    let read: &[SolverBody] = bodies;
+    parallel.for_each_mut(constraints, SOLVER_CHUNK, |c| {
+        prepare(c, &read[c.body_a], &read[c.body_b], context)
+    });
+    let mut stage = |bodies: &mut [SolverBody], stage: &Stage| {
+        solve_colored(bodies, constraints, &colors, parallel, stage)
+    };
     for _ in 0..context.substeps {
-        for body in bodies.iter_mut() {
-            integrate_velocity(body, context);
-        }
-        for_each_constraint(bodies, constraints, warm_start);
-        for_each_constraint(bodies, constraints, |c, a, b| {
-            solve_contact(c, a, b, context, true)
+        parallel.for_each_mut(bodies, SOLVER_CHUNK, |body| {
+            integrate_velocity(body, context)
         });
-        for body in bodies.iter_mut() {
-            integrate_position(body, context.h);
-        }
-        for_each_constraint(bodies, constraints, |c, a, b| {
-            solve_contact(c, a, b, context, false)
+        stage(bodies, &warm_start);
+        stage(bodies, &|c, a, b| solve_contact(c, a, b, context, true));
+        parallel.for_each_mut(bodies, SOLVER_CHUNK, |body| {
+            integrate_position(body, context.h)
         });
+        stage(bodies, &|c, a, b| solve_contact(c, a, b, context, false));
     }
-    for_each_constraint(bodies, constraints, |c, a, b| {
+    stage(bodies, &|c, a, b| {
         apply_restitution(c, a, b, context.restitution_threshold)
     });
 }
 
-/// Visits constraints in array order with mutable access to both bodies.
-fn for_each_constraint(
+/// A constraint stage, applied to a constraint and copies of its two bodies.
+type Stage<'a> = dyn Fn(&mut ContactConstraint, &mut SolverBody, &mut SolverBody) + Sync + 'a;
+
+/// The constraint and body velocities a stage produced for one constraint.
+type Solved = (ContactConstraint, [(Vec2, f32); 2]);
+
+fn solve_one(constraint: &ContactConstraint, bodies: &[SolverBody], stage: &Stage) -> Solved {
+    let mut c = *constraint;
+    let (mut a, mut b) = (bodies[c.body_a], bodies[c.body_b]);
+    stage(&mut c, &mut a, &mut b);
+    (
+        c,
+        [
+            (a.linear_velocity, a.angular_velocity),
+            (b.linear_velocity, b.angular_velocity),
+        ],
+    )
+}
+
+/// Writes a solved constraint back. Only dynamic bodies are written: static and kinematic
+/// bodies are read only, which keeps writes within a color disjoint.
+fn scatter(
     bodies: &mut [SolverBody],
     constraints: &mut [ContactConstraint],
-    mut f: impl FnMut(&mut ContactConstraint, &mut SolverBody, &mut SolverBody),
+    index: u32,
+    (constraint, velocities): Solved,
 ) {
-    for constraint in constraints {
-        let (low, high) = bodies.split_at_mut(constraint.body_b);
-        f(constraint, &mut low[constraint.body_a], &mut high[0]);
+    for (body, (linear, angular)) in [constraint.body_a, constraint.body_b]
+        .into_iter()
+        .zip(velocities)
+    {
+        let body = &mut bodies[body];
+        if body.kind == BodyKind::Dynamic {
+            body.linear_velocity = linear;
+            body.angular_velocity = angular;
+        }
+    }
+    constraints[index as usize] = constraint;
+}
+
+/// Runs `stage` on every color in parallel then on the overflow group sequentially.
+fn solve_colored(
+    bodies: &mut [SolverBody],
+    constraints: &mut [ContactConstraint],
+    colors: &[Vec<u32>],
+    parallel: &Parallel,
+    stage: &Stage,
+) {
+    // ponytail: gather then scatter costs one copy per color; switch to disjoint unsafe writes if profiling shows it
+    for color in &colors[..GRAPH_COLOR_COUNT] {
+        let (read_bodies, read_constraints): (&[SolverBody], &[ContactConstraint]) =
+            (bodies, constraints);
+        let solved = parallel.map(color, SOLVER_CHUNK, |&index| {
+            solve_one(&read_constraints[index as usize], read_bodies, stage)
+        });
+        for (&index, solved) in color.iter().zip(solved) {
+            scatter(bodies, constraints, index, solved);
+        }
+    }
+    for &index in &colors[GRAPH_COLOR_COUNT] {
+        let solved = solve_one(&constraints[index as usize], bodies, stage);
+        scatter(bodies, constraints, index, solved);
     }
 }
 

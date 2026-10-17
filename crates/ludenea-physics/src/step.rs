@@ -2,8 +2,8 @@
 
 use std::collections::BTreeMap;
 
-use ludenea_app::Time;
-use ludenea_ecs::{Entity, Query, Res, ResMut};
+use ludenea_app::{Parallel, Time};
+use ludenea_ecs::{Entity, Query, Res, ResMut, Runtime};
 use ludenea_math::{Rot, Transform, Vec2, max};
 
 use crate::broad_phase::{Proxy, find_pairs};
@@ -64,6 +64,7 @@ pub(crate) fn physics_step(
     time: Res<Time>,
     settings: Res<PhysicsSettings>,
     mut cache: ResMut<ContactCache>,
+    parallel: Runtime<Parallel>,
     mut bodies: Query<(Entity, &mut Pose, &mut Body)>,
     colliders: Query<&Collider>,
 ) {
@@ -177,7 +178,7 @@ pub(crate) fn physics_step(
         settings.contact_push_max_velocity,
         settings.restitution_threshold,
     );
-    solve(&mut solver_bodies, &mut constraints, &context);
+    solve(&mut solver_bodies, &mut constraints, &context, &parallel);
 
     for (key, constraint) in keys.into_iter().zip(&constraints) {
         let points = constraint

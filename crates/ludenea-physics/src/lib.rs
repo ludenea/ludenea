@@ -1,4 +1,5 @@
 pub mod broad_phase;
+pub mod coloring;
 pub mod components;
 pub mod contacts;
 pub mod manifold;
