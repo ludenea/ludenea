@@ -34,16 +34,24 @@ struct Backend {
 }
 
 impl Backend {
-    /// Answers one project message and sends the reply on the project channel.
+    /// Answers one project message and sends the reply on the project channel. After a
+    /// hello, also what the editor missed about the games (a fast build, a reloaded window).
     fn answer(&self, text: &str) {
-        let reply = {
+        let (reply, missed) = {
             let mut service = lock(&self.service);
             let mut connected = self.connected.load(Ordering::SeqCst);
             let reply = service.answer(&mut connected, text);
             self.connected.store(connected, Ordering::SeqCst);
-            reply
+            let missed = match reply {
+                ProjectServerMessage::Welcome { .. } => service.announcements(),
+                _ => Vec::new(),
+            };
+            (reply, missed)
         };
         deliver(&self.project, encode(&reply));
+        if !missed.is_empty() {
+            deliver(&self.project, events_batch(missed));
+        }
     }
 
     /// Takes the control channel of the game just started and relays what it prints.
@@ -93,11 +101,7 @@ impl Backend {
             if !self.connected.load(Ordering::SeqCst) {
                 continue;
             }
-            let lines: Vec<String> = batch
-                .into_iter()
-                .map(|event| encode(&ProjectServerMessage::Event { event }))
-                .collect();
-            deliver(&self.project, lines.join("\n"));
+            deliver(&self.project, events_batch(batch));
         }
     }
 }
@@ -180,6 +184,14 @@ fn deliver(slot: &Mutex<Option<Channel<String>>>, batch: String) {
     if let Some(channel) = lock(slot).as_ref() {
         let _ = channel.send(batch);
     }
+}
+
+fn events_batch(events: Vec<ProjectEvent>) -> String {
+    let lines: Vec<String> = events
+        .into_iter()
+        .map(|event| encode(&ProjectServerMessage::Event { event }))
+        .collect();
+    lines.join("\n")
 }
 
 fn encode(message: &ProjectServerMessage) -> String {

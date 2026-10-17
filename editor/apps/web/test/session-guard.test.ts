@@ -1,6 +1,6 @@
 import { ControlClient, fakeTransport, type GameInfo, type WorkerCrash } from "@ludenea/control-client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { guardSession } from "../src/session-guard";
+import { guardSession, restoreSession } from "../src/session-guard";
 
 type Command = { type: string; [key: string]: unknown };
 
@@ -20,7 +20,7 @@ async function fakeGame(answer: (command: Command) => object = () => ({ type: "d
     return [JSON.stringify({ type: "response", id: message.id, result: { ok: answer(message.command) } })];
   });
   const control = await ControlClient.connect(transport);
-  return { control, sent, push: (event: object) => transport.push(JSON.stringify({ type: "event", event })) };
+  return { control, sent, push: (event: object) => transport.push(JSON.stringify({ type: "event", event })), drop: transport.drop };
 }
 
 /** A worker the test crashes by hand. */
@@ -122,5 +122,21 @@ describe("guardSession", () => {
     guard.dispose();
     await vi.advanceTimersByTimeAsync(5000);
     expect(exports(game.sent)).toBe(4);
+  });
+
+  it("restore_fails_when_the_game_dies_or_panics_while_resimulating", async () => {
+    const saved = { load: { type: "load_session" as const, scene: "s", inputs: "", edits: "", undo: "", expected: hashes }, tick: 4 };
+    const resimulating = (command: Command) => (command.type === "get_timeline" ? { type: "timeline", ...timeline, simulated: 0, resimulating: true } : { type: "done" });
+    const dying = await fakeGame(resimulating);
+    const died = restoreSession(dying.control, saved);
+    await settle();
+    dying.drop("the game crashed");
+    await expect(died).rejects.toThrow("the game stopped while resimulating");
+
+    const panicking = await fakeGame(resimulating);
+    const panicked = restoreSession(panicking.control, saved);
+    await settle();
+    panicking.push({ type: "paused", reason: { type: "panicked", tick: 2, message: "boom" } });
+    await expect(panicked).rejects.toThrow("boom");
   });
 });

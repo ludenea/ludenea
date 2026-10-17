@@ -22,22 +22,35 @@ export async function exportSession(control: ControlClient): Promise<SavedSessio
   return { load: { type: "load_session", scene, inputs, edits, undo, expected: hashes }, tick: timeline.current };
 }
 
-/** Resolves once the game has simulated `tick`; a seek further than the resimulation fails. */
+/** How long a restore may wait for resimulation before it gives up. */
+const RESIMULATION_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * Resolves once the game has simulated `tick` (a seek further than the resimulation fails);
+ * rejects if the game goes away, panics, or takes longer than `RESIMULATION_TIMEOUT_MS`.
+ */
 function simulated(control: ControlClient, tick: number): Promise<void> {
   return new Promise((resolve, reject) => {
-    const stop = control.on("resimulated", ({ up_to }) => {
-      if (up_to < tick) return;
-      stop();
-      resolve();
-    });
+    const stops: (() => void)[] = [];
+    const settle = (error?: Error) => {
+      stops.forEach((stop) => stop());
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve();
+    };
+    const timer = setTimeout(() => settle(new Error(`the game did not resimulate to tick ${tick} in time`)), RESIMULATION_TIMEOUT_MS);
+    stops.push(
+      control.on("resimulated", ({ up_to }) => {
+        if (up_to >= tick) settle();
+      }),
+      control.on("paused", ({ reason }) => {
+        if (reason.type === "panicked") settle(new Error(`the game panicked at tick ${reason.tick} while resimulating: ${reason.message}`));
+      }),
+      control.onClose((reason) => settle(new Error(`the game stopped while resimulating: ${reason}`))),
+    );
     control.request({ type: "get_timeline" }).then((timeline) => {
-      if (timeline.resimulating && timeline.simulated < tick) return;
-      stop();
-      resolve();
-    }, (error) => {
-      stop();
-      reject(error);
-    });
+      if (!timeline.resimulating || timeline.simulated >= tick) settle();
+    }, settle);
   });
 }
 

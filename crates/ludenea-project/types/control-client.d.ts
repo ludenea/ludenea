@@ -750,6 +750,8 @@ type ProjectRequest = {
 } | {
     "type": "write_game_types";
     info: GameInfo;
+} | {
+    "type": "restart_game";
 };
 
 type ProjectClientMessage = {
@@ -769,6 +771,8 @@ type ProjectEvent = {
     event: BuildEvent;
 } | {
     "type": "game_ready";
+} | {
+    "type": "game_rebuilt";
 } | {
     "type": "game_exited";
     code: number | null;
@@ -969,6 +973,8 @@ class ControlClient {
     on<T extends Event["type"]>(type: T, listener: (event: Extract<Event, {
         type: T;
     }>) => void): () => void;
+    /** Calls `listener` when the connection to the game ends (it exited, crashed, or was closed). */
+    onClose(listener: (reason: string) => void): () => void;
     close(): void;
     private dispatch;
 }

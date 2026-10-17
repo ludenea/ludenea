@@ -205,6 +205,11 @@ export class ControlClient {
     return () => set.delete(listener as Listener);
   }
 
+  /** Calls `listener` when the connection to the game ends (it exited, crashed, or was closed). */
+  onClose(listener: (reason: string) => void): () => void {
+    return this.transport.onClose(listener);
+  }
+
   close(): void {
     this.closed = true;
     this.requests.rejectAll("client closed");
