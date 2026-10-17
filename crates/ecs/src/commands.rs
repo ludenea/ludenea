@@ -139,3 +139,111 @@ impl SystemParam for Commands<'_> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::system::tests::run;
+    use crate::{Commands, Component, Entity, Query, World};
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    struct Position(i32);
+    impl Component for Position {}
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    struct Velocity(i32);
+    impl Component for Velocity {}
+
+    fn world() -> World {
+        let mut builder = World::builder();
+        builder.register::<Position>().register::<Velocity>();
+        builder.build()
+    }
+
+    #[test]
+    fn a_spawned_entity_is_stored_when_its_command_is_applied() {
+        let mut world = world();
+
+        run(
+            &mut world,
+            |mut commands: Commands, positions: Query<&Position>| {
+                let entity = commands.spawn(Position(1));
+                assert_eq!(positions.get(entity), None);
+            },
+            1,
+        );
+
+        let stored: Vec<_> = world.query::<&Position>().iter().collect();
+        assert_eq!(stored, [&Position(1)]);
+    }
+
+    #[test]
+    fn commands_apply_in_recording_order() {
+        let mut world = world();
+        let entity = world.spawn(Position(1));
+
+        run(
+            &mut world,
+            move |mut commands: Commands| {
+                commands.insert(entity, Velocity(2));
+                commands.remove::<Position>(entity);
+                commands.insert(entity, Position(3));
+            },
+            1,
+        );
+
+        assert_eq!(world.get::<Position>(entity), Some(&Position(3)));
+        assert_eq!(world.get::<Velocity>(entity), Some(&Velocity(2)));
+    }
+
+    #[test]
+    fn a_command_on_a_stale_entity_is_ignored() {
+        let mut world = world();
+        let entity = world.spawn(Position(1));
+
+        run(
+            &mut world,
+            move |mut commands: Commands| {
+                commands.despawn(entity);
+                commands.despawn(entity);
+                commands.insert(entity, Velocity(1));
+                commands.remove::<Position>(entity);
+            },
+            1,
+        );
+
+        assert!(!world.contains(entity));
+    }
+
+    #[test]
+    fn spawning_then_despawning_in_one_run_frees_the_index() {
+        let mut world = world();
+
+        run(
+            &mut world,
+            |mut commands: Commands| {
+                let entity = commands.spawn(Position(1));
+                commands.despawn(entity);
+            },
+            1,
+        );
+
+        assert_eq!(world.query::<Entity>().iter().count(), 0);
+        assert_eq!(world.spawn(()).to_string(), "0v1");
+    }
+
+    #[test]
+    #[should_panic(expected = "is not registered")]
+    fn recording_an_unregistered_component_panics() {
+        #[derive(Clone, Copy)]
+        struct Unknown;
+        impl Component for Unknown {}
+
+        run(
+            &mut world(),
+            |mut commands: Commands| {
+                commands.spawn(Unknown);
+            },
+            1,
+        );
+    }
+}
