@@ -1,10 +1,13 @@
 //! Ludenea projects on disk: the manifest, the template, stable asset identifiers, and file
 //! watching. It is the base of the project service; nothing here is part of the simulation.
 
+mod build;
 mod files;
+mod game;
 mod manifest;
 mod meta;
 mod template;
+mod types;
 
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
@@ -13,7 +16,9 @@ use std::{fs, io};
 
 use ludenea_ecs::AssetId;
 
+pub use build::{BuildArtifact, BuildError, BuildEvent, BuildTarget, Diagnostic};
 pub use files::{FileChange, FileEntry};
+pub use game::{GameOutput, GameProcess, OutputStream};
 pub use manifest::Manifest;
 pub use meta::AssetKind;
 

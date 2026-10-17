@@ -7,6 +7,7 @@ use std::{fs, thread};
 use ludenea_ecs::AssetId;
 use notify::RecursiveMode;
 use notify_debouncer_full::new_debouncer;
+use serde::{Deserialize, Serialize};
 
 use crate::meta::{AssetKind, Meta};
 use crate::{Project, ProjectError, ProjectWarning, io_error};
@@ -15,16 +16,19 @@ const WATCH_DEBOUNCE: Duration = Duration::from_millis(100);
 /// The directories whose files get identifiers.
 const ASSET_DIRECTORIES: [&str; 2] = ["scenes", "assets"];
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct FileEntry {
     /// Relative to the project root, with forward slashes.
     pub path: String,
+    #[cfg_attr(feature = "ts", ts(type = "string"))]
     pub id: AssetId,
     pub kind: AssetKind,
 }
 
 /// A change on disk, with the path relative to the project root.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum FileChange {
     Changed(String),
     Created(String),

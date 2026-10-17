@@ -3,10 +3,11 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use ludenea_ecs::AssetId;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// What an asset is, as far as the editor cares.
-#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum AssetKind {
     Scene,
     Other,
