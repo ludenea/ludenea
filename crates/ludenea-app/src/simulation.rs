@@ -10,7 +10,7 @@ use ludenea_ecs::{HashTree, Schedule, Snapshot, SnapshotError, World};
 
 use crate::app::EditorHooks;
 use crate::input::{self, Input, InputType};
-use crate::{Parallel, Time};
+use crate::{Parallel, RawInput, Time};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SimError {
@@ -32,6 +32,8 @@ pub enum SimError {
     EditLogVersion { found: u32, expected: u32 },
     #[error("cannot decode the edit log: {0}; was it written by this build?")]
     EditLogDecode(String),
+    #[error("this app has no raw input mapping; register one with `App::input_mapping`")]
+    NoInputMapping,
     #[error("the input log has no players; record it with at least one player")]
     NoPlayers,
 }
@@ -119,6 +121,17 @@ impl Simulation {
         self.input
             .as_ref()
             .map(|input| (input.encode_defaults)(self.players))
+    }
+
+    /// Maps one raw input per player to the postcard bytes `step_encoded` takes.
+    pub fn map_raw_input(&self, players: &[RawInput]) -> Result<Vec<u8>, SimError> {
+        let mapping = self
+            .hooks
+            .mapping
+            .as_ref()
+            .ok_or(SimError::NoInputMapping)?;
+        input::check_player_count(self.players, players.len())?;
+        Ok((mapping.encode)(players))
     }
 
     /// The schema of the app's input type, or `None` when it has none.

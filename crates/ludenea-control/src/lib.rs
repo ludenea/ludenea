@@ -4,6 +4,7 @@
 pub mod checkpoints;
 pub mod host;
 pub mod in_process;
+pub mod pacer;
 pub mod protocol;
 pub mod session;
 mod undo;

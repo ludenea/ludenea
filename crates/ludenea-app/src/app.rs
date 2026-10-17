@@ -1,3 +1,4 @@
+use std::any::{TypeId, type_name};
 use std::collections::BTreeSet;
 
 use ludenea_debug_draw::DebugDrawFrame;
@@ -9,7 +10,7 @@ use ludenea_ecs::Entity;
 use ludenea_math::Vec2;
 
 use crate::input::{Input, InputType, Inputs};
-use crate::{Parallel, Rng, Simulation, Time};
+use crate::{Parallel, RawInput, Rng, Simulation, Time};
 
 /// Draws the requested layers of a world into a frame; skips layers not in the set.
 pub type DebugDrawFn = fn(&World, &BTreeSet<String>, &mut DebugDrawFrame);
@@ -22,6 +23,17 @@ pub(crate) struct EditorHooks {
     pub(crate) layers: BTreeSet<&'static str>,
     pub(crate) drawers: Vec<DebugDrawFn>,
     pub(crate) pickers: Vec<PickFn>,
+    pub(crate) mapping: Option<RawMapping>,
+}
+
+/// Encodes one raw input per player as the postcard bytes of a `Vec` of the mapped input type.
+pub(crate) type MapRawFn = Box<dyn Fn(&[RawInput]) -> Vec<u8> + Send + Sync>;
+
+/// A registered raw input mapping, erased like `InputType`.
+pub(crate) struct RawMapping {
+    pub(crate) id: TypeId,
+    pub(crate) name: &'static str,
+    pub(crate) encode: MapRawFn,
 }
 
 /// A group of registrations and systems added to an app in one call.
@@ -38,6 +50,13 @@ pub enum AppError {
     Ecs(#[from] EcsError),
     #[error("app schedule is invalid: {0}")]
     Build(#[from] BuildError),
+    #[error(
+        "the input mapping builds `{mapping}` but the app's input type is {input}; map the type given to `App::input`"
+    )]
+    InputMappingMismatch {
+        mapping: &'static str,
+        input: String,
+    },
 }
 
 /// Collects registrations, plugins, and systems, then builds a `Simulation`.
@@ -112,6 +131,24 @@ impl App {
         self
     }
 
+    /// Registers how raw keyboard and gamepad state becomes the app's input; the `usize`
+    /// is the player index. A later call replaces it.
+    pub fn input_mapping<I: Input>(&mut self, map: fn(&RawInput, usize) -> I) -> &mut Self {
+        self.hooks.mapping = Some(RawMapping {
+            id: TypeId::of::<I>(),
+            name: type_name::<I>(),
+            encode: Box::new(move |players| {
+                let inputs: Vec<I> = players
+                    .iter()
+                    .enumerate()
+                    .map(|(index, raw)| map(raw, index))
+                    .collect();
+                postcard::to_allocvec(&inputs).expect("inputs always encode")
+            }),
+        });
+        self
+    }
+
     /// Registers a debug drawer for `layers`, shown by the editor viewport.
     pub fn debug_draw(&mut self, layers: &[&'static str], draw: DebugDrawFn) -> &mut Self {
         self.hooks.layers.extend(layers);
@@ -139,6 +176,17 @@ impl App {
     pub fn build(mut self) -> Result<Simulation, AppError> {
         if let Some(error) = self.errors.into_iter().next() {
             return Err(error.into());
+        }
+        if let Some(mapping) = &self.hooks.mapping
+            && self.input.as_ref().map(|input| input.id) != Some(mapping.id)
+        {
+            return Err(AppError::InputMappingMismatch {
+                mapping: mapping.name,
+                input: self
+                    .input
+                    .as_ref()
+                    .map_or("missing".to_string(), |input| format!("`{}`", input.name)),
+            });
         }
         if let Some(time) = self.world.resource_mut::<Time>() {
             time.dt = 1.0 / self.tick_rate as f32;

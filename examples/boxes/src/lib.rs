@@ -38,6 +38,7 @@ pub struct BoxesPlugin;
 impl Plugin for BoxesPlugin {
     fn build(&self, app: &mut App) {
         app.input::<BoxesInput>()
+            .input_mapping(map_raw_input)
             .component::<Crate>()
             .resource(ContactStats::default())
             .system(Sim, apply_inputs.before(physics::Step))
@@ -64,6 +65,22 @@ pub(crate) fn crate_shape(variant: u32, size: f32) -> Shape {
             center2: Vec2::new(0.5 * size, 0.0),
             radius: 0.5 * size,
         }),
+    }
+}
+
+/// Arrow keys nudge a crate (opposite keys cancel), `KeyS` drops one at x = 0, `Delete` removes one.
+fn map_raw_input(raw: &RawInput, _player: usize) -> BoxesInput {
+    let axis = |negative: &str, positive: &str| {
+        f32::from(i8::from(raw.keys.contains(positive)) - i8::from(raw.keys.contains(negative)))
+    };
+    let direction = Vec2::new(
+        axis("ArrowLeft", "ArrowRight"),
+        axis("ArrowDown", "ArrowUp"),
+    );
+    BoxesInput {
+        velocity_change: (direction != Vec2::ZERO).then_some(direction),
+        spawn: raw.keys.contains("KeyS").then_some(0.0),
+        despawn: raw.keys.contains("Delete"),
     }
 }
 

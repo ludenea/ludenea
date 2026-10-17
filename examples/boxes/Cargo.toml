@@ -8,3 +8,6 @@ default-run = "boxes"
 [dependencies]
 ludenea.workspace = true
 serde.workspace = true
+
+[dev-dependencies]
+postcard.workspace = true

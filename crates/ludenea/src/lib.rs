@@ -12,7 +12,8 @@ pub use serde;
 
 pub mod prelude {
     pub use crate::app::{
-        App, Edit, EditLog, Input, InputLog, Inputs, Plugin, Rng, Sim, Simulation, Time, TimedEdit,
+        App, Edit, EditLog, Input, InputLog, Inputs, Plugin, RawInput, Rng, Sim, Simulation, Time,
+        TimedEdit,
     };
     pub use crate::ecs::{
         Commands, Component, Entity, EventWriter, Events, IntoSystemConfig, Query, Res, ResMut,
