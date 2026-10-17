@@ -35,6 +35,11 @@ impl fmt::Display for Difference {
 impl World {
     /// Lists every difference between `a` and `b`, both of which must match this world's
     /// registry: the entity allocator first, then resources and components by name.
+    ///
+    /// Field paths come from `ron::Value`, which collapses enum variants: a variant change
+    /// shows up only when nothing else in that value differs (as one whole-value
+    /// difference with an empty path), so it can go unreported beside a changed sibling
+    /// field. The differing component or resource is always named.
     pub fn diff_snapshots(
         &self,
         a: &Snapshot,

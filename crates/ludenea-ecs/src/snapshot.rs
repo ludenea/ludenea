@@ -57,10 +57,7 @@ impl Snapshot {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Snapshot, SnapshotError> {
-        postcard::from_bytes(bytes).map_err(|error| SnapshotError::Decode {
-            name: "snapshot".to_string(),
-            reason: error.to_string(),
-        })
+        crate::component::decode_exact(bytes).map_err(decode_error("snapshot"))
     }
 }
 

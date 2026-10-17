@@ -94,7 +94,7 @@ fn insert_unregistered_component_errors_with_its_name() {
     let a = world.spawn();
     let error = world.insert(a, Health(1)).unwrap_err();
     assert!(
-        matches!(error, EcsError::UnregisteredComponent(name) if name == <Health as Component>::NAME)
+        matches!(&error, EcsError::UnregisteredComponent(name) if name == <Health as Component>::NAME)
     );
     assert!(error.to_string().contains(<Health as Component>::NAME));
 }

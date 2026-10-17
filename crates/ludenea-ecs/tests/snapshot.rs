@@ -1,5 +1,6 @@
 use ludenea_ecs::{
-    Component, Entity, Resource, SNAPSHOT_VERSION, Snapshot, SnapshotError, World, hash_value,
+    Component, EcsError, Entity, Resource, SNAPSHOT_VERSION, Snapshot, SnapshotError, World,
+    hash_value,
 };
 use serde::{Deserialize, Serialize};
 
@@ -242,4 +243,63 @@ fn golden_hash_value_of_known_struct() {
         kind: ('z', -7),
     };
     assert_eq!(hash_value(&value), 13_400_747_774_808_448_267);
+}
+
+#[test]
+fn restore_rejects_trailing_component_bytes_and_leaves_world_unchanged() {
+    let (world, _) = populated_world();
+    let mut snapshot = world.snapshot();
+    let (_, values) = snapshot
+        .components
+        .iter_mut()
+        .find(|(name, _)| name == Health::NAME)
+        .unwrap();
+    values[0].1.push(0);
+    let mut target = base_world();
+    let before = target.hash_tree();
+    let error = target.restore(&snapshot).unwrap_err();
+    assert!(matches!(&error, SnapshotError::Decode { name, .. } if name == Health::NAME));
+    assert_eq!(target.hash_tree(), before);
+}
+
+#[test]
+fn snapshot_decode_rejects_trailing_bytes() {
+    let (world, _) = populated_world();
+    let mut bytes = world.snapshot().encode();
+    bytes.push(0);
+    assert!(matches!(
+        Snapshot::decode(&bytes),
+        Err(SnapshotError::Decode { .. })
+    ));
+}
+
+#[test]
+fn insert_boxed_inserts_a_ron_decoded_component_by_name() {
+    let mut world = base_world();
+    let entity = world.spawn();
+    let codec = world.component_codec(Health::NAME).unwrap();
+    let value = (codec.decode_ron)("(hp: 4)").unwrap();
+    world.insert_boxed(entity, Health::NAME, value).unwrap();
+    assert_eq!(*world.get::<Health>(entity).unwrap(), Health { hp: 4 });
+
+    let value = (codec.decode_ron)("(hp: 5)").unwrap();
+    let error = world
+        .insert_boxed(entity, "game::Unknown", value)
+        .unwrap_err();
+    assert!(matches!(&error, EcsError::UnregisteredComponent(name) if name == "game::Unknown"));
+}
+
+#[test]
+fn insert_resource_boxed_replaces_a_resource_by_name() {
+    let mut world = base_world();
+    let codec = world.resource_codec(Score::NAME).unwrap();
+    let value = (codec.decode_ron)("(42)").unwrap();
+    world.insert_resource_boxed(Score::NAME, value).unwrap();
+    assert_eq!(*world.resource::<Score>().unwrap(), Score(42));
+
+    let value = (codec.decode_ron)("(1)").unwrap();
+    let error = world
+        .insert_resource_boxed("game::Unknown", value)
+        .unwrap_err();
+    assert!(matches!(&error, EcsError::UnregisteredResource(name) if name == "game::Unknown"));
 }

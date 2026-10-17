@@ -48,10 +48,7 @@ impl Codec {
                 postcard::to_allocvec(typed::<T>(value))
                     .unwrap_or_else(|error| panic!("cannot encode {}: {error}", type_name::<T>()))
             },
-            decode: |bytes| {
-                let value: T = postcard::from_bytes(bytes).map_err(|error| error.to_string())?;
-                Ok(Box::new(value))
-            },
+            decode: |bytes| Ok(Box::new(decode_exact::<T>(bytes)?)),
             hash: |value| crate::hash_value(typed::<T>(value)),
             encode_ron: |value| {
                 ron::to_string(typed::<T>(value))
@@ -62,6 +59,16 @@ impl Codec {
                 Ok(Box::new(value))
             },
         }
+    }
+}
+
+/// Decodes postcard bytes, rejecting any bytes left unread after the value.
+pub(crate) fn decode_exact<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, String> {
+    let (value, rest) = postcard::take_from_bytes(bytes).map_err(|error| error.to_string())?;
+    if rest.is_empty() {
+        Ok(value)
+    } else {
+        Err(format!("{} unexpected trailing bytes", rest.len()))
     }
 }
 

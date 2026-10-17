@@ -12,6 +12,9 @@ pub(crate) trait Storage {
     fn clear(&mut self, index: u32);
     /// Visits every stored component in ascending index order.
     fn for_each(&self, visit: &mut dyn FnMut(u32, &dyn Any));
+    /// Inserts or replaces the component of slot `index` with `value`, a boxed `T` from
+    /// this type's codec.
+    fn insert_boxed(&mut self, index: u32, value: Box<dyn Any + Send>);
     /// Replaces every component with `values`, each a boxed `T` from this type's codec.
     fn replace_all(&mut self, values: Vec<(u32, Box<dyn Any + Send>)>);
 }
@@ -43,15 +46,19 @@ impl<T: Component> Storage for ComponentStorage<T> {
         }
     }
 
-    fn replace_all(&mut self, values: Vec<(u32, Box<dyn Any + Send>)>) {
+    fn insert_boxed(&mut self, index: u32, value: Box<dyn Any + Send>) {
         let slots = self.0.get_mut();
-        slots.clear();
+        let index = index as usize;
+        if slots.len() <= index {
+            slots.resize_with(index + 1, || None);
+        }
+        slots[index] = Some(*downcast::<T>(value));
+    }
+
+    fn replace_all(&mut self, values: Vec<(u32, Box<dyn Any + Send>)>) {
+        self.0.get_mut().clear();
         for (index, value) in values {
-            let index = index as usize;
-            if slots.len() <= index {
-                slots.resize_with(index + 1, || None);
-            }
-            slots[index] = Some(*downcast::<T>(value));
+            self.insert_boxed(index, value);
         }
     }
 }
@@ -187,7 +194,7 @@ impl World {
         self.ensure_alive(entity)?;
         let slots = self
             .storage_mut::<T>()
-            .ok_or(EcsError::UnregisteredComponent(T::NAME))?;
+            .ok_or_else(|| EcsError::UnregisteredComponent(T::NAME.to_string()))?;
         let index = entity.index() as usize;
         if slots.len() <= index {
             slots.resize_with(index + 1, || None);
@@ -201,7 +208,7 @@ impl World {
         self.ensure_alive(entity)?;
         let slots = self
             .storage_mut::<T>()
-            .ok_or(EcsError::UnregisteredComponent(T::NAME))?;
+            .ok_or_else(|| EcsError::UnregisteredComponent(T::NAME.to_string()))?;
         Ok(slots
             .get_mut(entity.index() as usize)
             .and_then(Option::take))
@@ -223,6 +230,44 @@ impl World {
         self.storage_mut::<T>()?
             .get_mut(entity.index() as usize)?
             .as_mut()
+    }
+
+    /// Inserts or replaces the component registered under `name` on `entity`. `value` must
+    /// come from that name's codec (`decode` or `decode_ron`).
+    ///
+    /// # Panics
+    /// If `value` is not of the type registered under `name`.
+    pub fn insert_boxed(
+        &mut self,
+        entity: Entity,
+        name: &str,
+        value: Box<dyn Any + Send>,
+    ) -> Result<(), EcsError> {
+        self.ensure_alive(entity)?;
+        let entry = self
+            .components
+            .get_mut(name)
+            .ok_or_else(|| EcsError::UnregisteredComponent(name.to_string()))?;
+        entry.storage.insert_boxed(entity.index(), value);
+        Ok(())
+    }
+
+    /// Replaces the resource registered under `name`. `value` must come from that name's
+    /// codec (`decode` or `decode_ron`).
+    ///
+    /// # Panics
+    /// If `value` is not of the type registered under `name`.
+    pub fn insert_resource_boxed(
+        &mut self,
+        name: &str,
+        value: Box<dyn Any + Send>,
+    ) -> Result<(), EcsError> {
+        let entry = self
+            .resources
+            .get_mut(name)
+            .ok_or_else(|| EcsError::UnregisteredResource(name.to_string()))?;
+        entry.value.set(value);
+        Ok(())
     }
 
     pub fn resource<T: Resource>(&self) -> Option<Ref<'_, T>> {
