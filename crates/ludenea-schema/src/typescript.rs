@@ -140,6 +140,8 @@ fn reference(schema: &TypeSchema, names: &Names) -> String {
         U64 | I64 => "number | string".into(),
         String => "string".into(),
         Unit => "null".into(),
+        // `Option<Option<T>>` also maps to `T | null`: serde JSON writes both `None` and
+        // `Some(None)` as `null`, so no TypeScript type can tell them apart.
         Option { item } => format!("{} | null", reference(item, names)),
         List { item } | Array { item, .. } => format!("Array<{}>", reference(item, names)),
         // ponytail: a map whose keys are not strings or integers has no JSON object form, so it is a list of pairs; the host shows such values read-only

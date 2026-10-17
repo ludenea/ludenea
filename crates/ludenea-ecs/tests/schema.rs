@@ -57,9 +57,9 @@ fn entity_and_asset_id_have_their_own_schemas() {
 #[test]
 fn asset_id_serializes_as_32_lowercase_hex_digits() {
     let id = AssetId(0xAB);
-    let json = ron::to_string(&id).unwrap();
-    assert_eq!(json, "\"000000000000000000000000000000ab\"");
-    assert_eq!(ron::from_str::<AssetId>(&json).unwrap(), id);
+    let ron_text = ron::to_string(&id).unwrap();
+    assert_eq!(ron_text, "\"000000000000000000000000000000ab\"");
+    assert_eq!(ron::from_str::<AssetId>(&ron_text).unwrap(), id);
     assert!(ron::from_str::<AssetId>("\"AB\"").is_err());
     assert!(ron::from_str::<AssetId>("\"0000000000000000000000000000000G\"").is_err());
 }

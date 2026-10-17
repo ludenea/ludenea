@@ -200,6 +200,53 @@ tuple!(A, B, C, D);
 ///     hidden: u8,
 /// }
 /// ```
+///
+/// Likewise every other shape-changing attribute, such as `transparent` on a container or
+/// `skip_serializing_if` on a field.
+///
+/// ```compile_fail
+/// use ludenea_schema::Schema;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Schema, Serialize, Deserialize)]
+/// #[serde(transparent)]
+/// struct Transparent {
+///     inner: u8,
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use ludenea_schema::Schema;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Schema, Serialize, Deserialize)]
+/// struct Optional {
+///     #[serde(skip_serializing_if = "Option::is_none")]
+///     value: Option<u8>,
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use ludenea_schema::Schema;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Schema, Serialize, Deserialize)]
+/// #[serde(rename_all_fields = "camelCase")]
+/// enum Fields {
+///     Variant { field_name: u8 },
+/// }
+/// ```
+///
+/// A generic type is rejected too: all its instantiations would share one schema name.
+///
+/// ```compile_fail
+/// use ludenea_schema::Schema;
+///
+/// #[derive(Schema)]
+/// struct Wrapper<T> {
+///     inner: T,
+/// }
+/// ```
 #[cfg(doctest)]
 struct _CompileFail;
 

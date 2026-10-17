@@ -7,7 +7,7 @@ use quote::quote;
 use syn::ext::IdentExt;
 use syn::{
     Attribute, Data, DeriveInput, Expr, Fields, GenericArgument, Ident, Lifetime, LitStr,
-    PathArguments, Token, Type, parenthesized, parse_macro_input, parse_quote, token,
+    PathArguments, Token, Type, parenthesized, parse_macro_input, token,
 };
 
 /// Implements `Component` with a stable name: `module_path!()::Type` by default,
@@ -59,8 +59,11 @@ fn expand(input: &DeriveInput, trait_name: &str, attribute: &str) -> syn::Result
 ///
 /// The schema must match the serde shape, so serde attributes that change it (`rename`,
 /// `rename_all`, `tag`, `content`, `untagged`, `flatten`, `skip`, `skip_serializing`,
-/// `skip_deserializing`, `default`, `with`) fail to compile. The container attributes
-/// `try_from`, `from`, and `into` are accepted: the mirror type must have identical fields.
+/// `skip_deserializing`, `skip_serializing_if`, `default`, `with`, `serialize_with`,
+/// `deserialize_with`, `transparent`, `rename_all_fields`) fail to compile. The container
+/// attributes `try_from`, `from`, and `into` are accepted: the mirror type must have
+/// identical fields. Generic types fail to compile too: every instantiation would share one
+/// schema name.
 #[proc_macro_derive(Schema)]
 pub fn derive_schema(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -72,6 +75,12 @@ pub fn derive_schema(input: TokenStream) -> TokenStream {
 
 fn expand_schema(input: &DeriveInput) -> syn::Result<TokenStream2> {
     check_serde_attributes(&input.attrs)?;
+    if !input.generics.params.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &input.generics,
+            "`Schema` cannot be derived for a generic type: every instantiation would share one schema name",
+        ));
+    }
     let schema = schema_path();
     let ident = &input.ident;
     let name = ident.to_string();
@@ -168,13 +177,8 @@ fn expand_schema(input: &DeriveInput) -> syn::Result<TokenStream2> {
             ));
         }
     };
-    let mut generics = input.generics.clone();
-    for param in generics.type_params_mut() {
-        param.bounds.push(parse_quote!(#schema::Schema));
-    }
-    let (impl_generics, type_generics, where_clause) = generics.split_for_impl();
     Ok(quote! {
-        impl #impl_generics #schema::Schema for #ident #type_generics #where_clause {
+        impl #schema::Schema for #ident {
             fn schema() -> #schema::TypeSchema {
                 #body
             }
@@ -183,7 +187,7 @@ fn expand_schema(input: &DeriveInput) -> syn::Result<TokenStream2> {
 }
 
 /// Serde attributes that change the serialized shape, which a schema cannot follow.
-const SHAPE_ATTRIBUTES: [&str; 11] = [
+const SHAPE_ATTRIBUTES: [&str; 16] = [
     "rename",
     "rename_all",
     "tag",
@@ -193,8 +197,13 @@ const SHAPE_ATTRIBUTES: [&str; 11] = [
     "skip",
     "skip_serializing",
     "skip_deserializing",
+    "skip_serializing_if",
     "default",
     "with",
+    "serialize_with",
+    "deserialize_with",
+    "transparent",
+    "rename_all_fields",
 ];
 
 fn check_serde_attributes(attrs: &[Attribute]) -> syn::Result<()> {
