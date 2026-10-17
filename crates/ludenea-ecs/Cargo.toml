@@ -1,0 +1,9 @@
+[package]
+name = "ludenea-ecs"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+ludenea-macros.workspace = true
+serde.workspace = true
+thiserror.workspace = true

@@ -13,3 +13,11 @@ opt-level = 1
 
 [workspace.dependencies]
 serde = { version = "1.0.229", features = ["derive"] }
+thiserror = "2.0.21"
+syn = "3.0.9"
+quote = "1.0.47"
+proc-macro2 = "1.0.107"
+proc-macro-crate = "3.5.0"
+ludenea-math = { path = "crates/ludenea-math" }
+ludenea-ecs = { path = "crates/ludenea-ecs" }
+ludenea-macros = { path = "crates/ludenea-macros" }
