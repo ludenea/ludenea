@@ -309,6 +309,24 @@ impl World {
         self.components.get(name).map(|entry| entry.codec)
     }
 
+    /// The components of `entity` as RON strings keyed by stable name (name order), or
+    /// `None` when `entity` is not alive.
+    // ponytail: scans each storage; index lookup per type if entity inspection gets hot
+    pub fn entity_components_ron(&self, entity: Entity) -> Option<BTreeMap<String, String>> {
+        if !self.is_alive(entity) {
+            return None;
+        }
+        let mut out = BTreeMap::new();
+        for (name, entry) in &self.components {
+            entry.storage.for_each(&mut |index, value| {
+                if index == entity.index() {
+                    out.insert(name.to_string(), (entry.codec.encode_ron)(value));
+                }
+            });
+        }
+        Some(out)
+    }
+
     /// Serialization functions of the resource registered under `name`.
     pub fn resource_codec(&self, name: &str) -> Option<Codec> {
         self.resources.get(name).map(|entry| entry.codec)

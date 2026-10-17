@@ -1,0 +1,13 @@
+[package]
+name = "ludenea-control"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+ludenea-app.workspace = true
+ludenea-ecs.workspace = true
+base64.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

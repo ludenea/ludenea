@@ -1,6 +1,7 @@
 //! Ludenea, a deterministic 2D game engine.
 
 pub use ludenea_app as app;
+pub use ludenea_control as control;
 pub use ludenea_ecs as ecs;
 pub use ludenea_math as math;
 pub use ludenea_physics as physics;
