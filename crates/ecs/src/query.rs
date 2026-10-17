@@ -1,6 +1,6 @@
 //! Queries: iteration over the entities that have a set of components.
 
-use std::iter::{Copied, Flatten};
+use std::iter::Copied;
 use std::marker::PhantomData;
 use std::slice;
 
@@ -252,7 +252,7 @@ impl<'w, D: QueryData> Query<'w, D> {
     /// then rows in storage order.
     // ponytail: matches every archetype on each call, cache the matches in a
     // query state when the scheduler needs to know the access of systems.
-    pub fn iter(self) -> Flatten<std::vec::IntoIter<D::Fetch<'w>>> {
+    pub fn iter(self) -> impl Iterator<Item = D::Item<'w>> + use<'w, D> {
         let Self {
             registry,
             archetypes,
@@ -342,6 +342,28 @@ mod tests {
             .register::<Velocity>()
             .register::<Frozen>();
         builder.build()
+    }
+
+    #[test]
+    fn query_mut_writes_across_archetypes() {
+        let mut world = world();
+        let a = world.spawn((Position(1), Velocity(10)));
+        let b = world.spawn((Position(2), Velocity(20), Frozen));
+        let c = world.spawn((Position(3), Velocity(30)));
+
+        let mut visited = Vec::new();
+        for (entity, position, velocity) in world
+            .query_mut::<(Entity, &mut Position, &Velocity)>()
+            .iter()
+        {
+            visited.push(entity);
+            position.0 += velocity.0;
+        }
+
+        assert_eq!(visited, [a, c, b]);
+        assert_eq!(world.get::<Position>(a), Some(&Position(11)));
+        assert_eq!(world.get::<Position>(b), Some(&Position(22)));
+        assert_eq!(world.get::<Position>(c), Some(&Position(33)));
     }
 
     #[test]
