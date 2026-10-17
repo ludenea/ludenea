@@ -67,6 +67,14 @@ impl EntitiesState {
         self.alive.get(slot) == Some(&true) && self.generations[slot] == entity.generation
     }
 
+    /// The handle of slot `index` with its current generation.
+    pub(crate) fn entity_at(&self, index: u32) -> Entity {
+        Entity {
+            index,
+            generation: self.generations[index as usize],
+        }
+    }
+
     pub(crate) fn iter(&self) -> impl Iterator<Item = Entity> + '_ {
         self.alive
             .iter()

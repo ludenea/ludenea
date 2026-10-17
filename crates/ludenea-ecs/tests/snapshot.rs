@@ -1,0 +1,245 @@
+use ludenea_ecs::{
+    Component, Entity, Resource, SNAPSHOT_VERSION, Snapshot, SnapshotError, World, hash_value,
+};
+use serde::{Deserialize, Serialize};
+
+#[derive(Component, Serialize, Deserialize, Debug, PartialEq, Clone)]
+struct Health {
+    hp: u32,
+}
+
+#[derive(Component, Serialize, Deserialize, Debug, PartialEq, Clone)]
+struct Speed(f32);
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+enum BodyKind {
+    Static,
+    Dynamic,
+}
+
+#[derive(Component, Serialize, Deserialize, Debug, PartialEq, Clone)]
+struct Body {
+    kind: BodyKind,
+}
+
+#[derive(Component, Serialize, Deserialize, Debug, PartialEq, Clone)]
+struct Extra;
+
+#[derive(Resource, Serialize, Deserialize, Debug, PartialEq, Clone)]
+struct Score(u64);
+
+#[derive(Resource, Serialize, Deserialize, Debug, PartialEq, Clone)]
+struct Gravity(f32);
+
+fn base_world() -> World {
+    let mut world = World::new();
+    world.register_component::<Health>().unwrap();
+    world.register_component::<Speed>().unwrap();
+    world.register_component::<Body>().unwrap();
+    world.register_resource(Score(7)).unwrap();
+    world.register_resource(Gravity(-10.0)).unwrap();
+    world
+}
+
+/// Three entities, the middle one despawned so the free list is not empty.
+fn populated_world() -> (World, Vec<Entity>) {
+    let mut world = base_world();
+    let a = world.spawn();
+    let b = world.spawn();
+    let c = world.spawn();
+    world.insert(a, Health { hp: 10 }).unwrap();
+    world.insert(a, Speed(1.5)).unwrap();
+    world
+        .insert(
+            c,
+            Body {
+                kind: BodyKind::Static,
+            },
+        )
+        .unwrap();
+    world.despawn(b).unwrap();
+    (world, vec![a, c])
+}
+
+#[test]
+fn hash_is_independent_of_insertion_order() {
+    let mut first = base_world();
+    let a = first.spawn();
+    first.insert(a, Health { hp: 3 }).unwrap();
+    first.insert(a, Speed(2.0)).unwrap();
+
+    let mut second = base_world();
+    let b = second.spawn();
+    second.insert(b, Speed(2.0)).unwrap();
+    second.insert(b, Health { hp: 3 }).unwrap();
+
+    assert_eq!(first.hash(), second.hash());
+    assert_eq!(first.hash_tree(), second.hash_tree());
+    assert_eq!(first.hash(), first.hash_tree().root);
+}
+
+#[test]
+fn hash_changes_when_a_field_changes() {
+    let (mut world, entities) = populated_world();
+    let before = world.hash_tree();
+    world.get_mut::<Health>(entities[0]).unwrap().hp = 11;
+    let after = world.hash_tree();
+    assert_ne!(before.root, after.root);
+    assert_ne!(before.entities[0].hash, after.entities[0].hash);
+    assert_eq!(before.entities[1], after.entities[1]);
+}
+
+#[test]
+fn hash_changes_when_free_list_order_changes() {
+    let mut first = base_world();
+    let mut second = base_world();
+    for world in [&mut first, &mut second] {
+        for _ in 0..3 {
+            world.spawn();
+        }
+    }
+    let entities: Vec<Entity> = first.entities().collect();
+    first.despawn(entities[0]).unwrap();
+    first.despawn(entities[1]).unwrap();
+    second.despawn(entities[1]).unwrap();
+    second.despawn(entities[0]).unwrap();
+    assert_ne!(first.hash(), second.hash());
+}
+
+#[test]
+fn nan_payloads_hash_equal() {
+    let mut first = base_world();
+    let a = first.spawn();
+    first.insert(a, Speed(f32::from_bits(0x7fc0_0001))).unwrap();
+    let mut second = base_world();
+    let b = second.spawn();
+    second.insert(b, Speed(f32::NAN)).unwrap();
+    assert_eq!(first.hash(), second.hash());
+}
+
+#[test]
+fn snapshot_restore_round_trip_preserves_hash_and_iteration_order() {
+    let (world, _) = populated_world();
+    let snapshot = world.snapshot();
+    assert_eq!(snapshot.version, SNAPSHOT_VERSION);
+    let decoded = Snapshot::decode(&snapshot.encode()).unwrap();
+    assert_eq!(decoded, snapshot);
+
+    let mut restored = base_world();
+    restored.spawn();
+    restored.register_resource(Score(0)).unwrap();
+    restored.restore(&decoded).unwrap();
+
+    assert_eq!(restored.hash_tree(), world.hash_tree());
+    assert_eq!(
+        restored.entities().collect::<Vec<_>>(),
+        world.entities().collect::<Vec<_>>()
+    );
+    assert_eq!(*restored.resource::<Score>().unwrap(), Score(7));
+    // The free list survives, so the next spawn reuses the same slot in both worlds.
+    let mut world = world;
+    assert_eq!(restored.spawn(), world.spawn());
+}
+
+#[test]
+fn restore_rejects_other_version_and_leaves_world_unchanged() {
+    let (world, _) = populated_world();
+    let mut snapshot = world.snapshot();
+    snapshot.version = SNAPSHOT_VERSION + 1;
+    let mut target = base_world();
+    let before = target.hash_tree();
+    let error = target.restore(&snapshot).unwrap_err();
+    assert!(matches!(
+        error,
+        SnapshotError::Version { found, expected } if found == SNAPSHOT_VERSION + 1 && expected == SNAPSHOT_VERSION
+    ));
+    assert_eq!(target.hash_tree(), before);
+}
+
+#[test]
+fn restore_rejects_unknown_component_and_leaves_world_unchanged() {
+    let (mut source, _) = populated_world();
+    source.register_component::<Extra>().unwrap();
+    let snapshot = source.snapshot();
+    let (mut target, _) = populated_world();
+    let before = target.hash_tree();
+    let error = target.restore(&snapshot).unwrap_err();
+    assert!(matches!(&error, SnapshotError::UnknownComponent(name) if name == Extra::NAME));
+    assert_eq!(target.hash_tree(), before);
+}
+
+#[test]
+fn restore_rejects_missing_resource_and_leaves_world_unchanged() {
+    let mut source = World::new();
+    source.register_component::<Health>().unwrap();
+    source.register_component::<Speed>().unwrap();
+    source.register_component::<Body>().unwrap();
+    source.register_resource(Score(1)).unwrap();
+    let snapshot = source.snapshot();
+    let (mut target, _) = populated_world();
+    let before = target.hash_tree();
+    let error = target.restore(&snapshot).unwrap_err();
+    assert!(matches!(&error, SnapshotError::MissingResource(name) if name == Gravity::NAME));
+    assert_eq!(target.hash_tree(), before);
+}
+
+#[test]
+fn diff_reports_entity_component_and_field_path() {
+    let (mut world, entities) = populated_world();
+    let left = world.snapshot();
+    world.get_mut::<Health>(entities[0]).unwrap().hp = 9;
+    let right = world.snapshot();
+    let differences = world.diff_snapshots(&left, &right).unwrap();
+    assert_eq!(differences.len(), 1);
+    let difference = &differences[0];
+    assert_eq!(difference.subject, format!("entity {}", entities[0]));
+    assert_eq!(difference.component, Health::NAME);
+    assert_eq!(difference.path, ".hp");
+    assert_eq!(difference.left, "10");
+    assert_eq!(difference.right, "9");
+    assert_eq!(
+        difference.to_string(),
+        format!("entity 0v0 {} .hp: 10 != 9", Health::NAME)
+    );
+}
+
+#[test]
+fn diff_reports_enum_variant_change() {
+    let (mut world, entities) = populated_world();
+    let left = world.snapshot();
+    world.get_mut::<Body>(entities[1]).unwrap().kind = BodyKind::Dynamic;
+    let right = world.snapshot();
+    let differences = world.diff_snapshots(&left, &right).unwrap();
+    assert_eq!(differences.len(), 1);
+    assert_eq!(differences[0].component, Body::NAME);
+    assert_ne!(differences[0].left, differences[0].right);
+}
+
+#[derive(Serialize)]
+struct Known {
+    flag: bool,
+    small: i8,
+    count: usize,
+    ratio: f32,
+    precise: f64,
+    name: String,
+    items: Vec<u16>,
+    maybe: Option<u32>,
+    kind: (char, i64),
+}
+
+#[test]
+fn golden_hash_value_of_known_struct() {
+    let value = Known {
+        flag: true,
+        small: -3,
+        count: 42,
+        ratio: 0.5,
+        precise: -1.25,
+        name: "ludenea".to_string(),
+        items: vec![1, 2, 3],
+        maybe: Some(9),
+        kind: ('z', -7),
+    };
+    assert_eq!(hash_value(&value), 13_400_747_774_808_448_267);
+}

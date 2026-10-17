@@ -2,7 +2,7 @@ use std::any::{Any, TypeId, type_name};
 use std::cell::{Ref, RefCell};
 use std::collections::BTreeMap;
 
-use crate::{Component, EcsError, EntitiesState, Entity, Resource};
+use crate::{Codec, Component, EcsError, EntitiesState, Entity, Resource};
 
 /// Type-erased access to one component storage.
 pub(crate) trait Storage {
@@ -10,6 +10,10 @@ pub(crate) trait Storage {
     fn as_any_mut(&mut self) -> &mut dyn Any;
     /// Drops the component held by the slot `index`, if any.
     fn clear(&mut self, index: u32);
+    /// Visits every stored component in ascending index order.
+    fn for_each(&self, visit: &mut dyn FnMut(u32, &dyn Any));
+    /// Replaces every component with `values`, each a boxed `T` from this type's codec.
+    fn replace_all(&mut self, values: Vec<(u32, Box<dyn Any + Send>)>);
 }
 
 /// Components of one type, indexed by entity index.
@@ -30,28 +34,82 @@ impl<T: Component> Storage for ComponentStorage<T> {
             *slot = None;
         }
     }
+
+    fn for_each(&self, visit: &mut dyn FnMut(u32, &dyn Any)) {
+        for (index, slot) in (0u32..).zip(self.0.borrow().iter()) {
+            if let Some(value) = slot {
+                visit(index, value);
+            }
+        }
+    }
+
+    fn replace_all(&mut self, values: Vec<(u32, Box<dyn Any + Send>)>) {
+        let slots = self.0.get_mut();
+        slots.clear();
+        for (index, value) in values {
+            let index = index as usize;
+            if slots.len() <= index {
+                slots.resize_with(index + 1, || None);
+            }
+            slots[index] = Some(*downcast::<T>(value));
+        }
+    }
+}
+
+/// Type-erased access to one resource, stored as a `RefCell<T>`.
+pub(crate) trait ResourceCell {
+    fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+    fn value(&self) -> Ref<'_, dyn Any>;
+    /// Replaces the value with `value`, a boxed `T` from this type's codec.
+    fn set(&mut self, value: Box<dyn Any + Send>);
+}
+
+impl<T: Resource> ResourceCell for RefCell<T> {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn value(&self) -> Ref<'_, dyn Any> {
+        Ref::map(self.borrow(), |value| value as &dyn Any)
+    }
+
+    fn set(&mut self, value: Box<dyn Any + Send>) {
+        *self.get_mut() = *downcast::<T>(value);
+    }
+}
+
+fn downcast<T: 'static>(value: Box<dyn Any + Send>) -> Box<T> {
+    value
+        .downcast::<T>()
+        .unwrap_or_else(|_| panic!("expected a value of {}", type_name::<T>()))
 }
 
 pub(crate) struct ComponentEntry {
     pub(crate) type_id: TypeId,
     pub(crate) type_name: &'static str,
+    pub(crate) codec: Codec,
     pub(crate) storage: Box<dyn Storage + Send>,
 }
 
 pub(crate) struct ResourceEntry {
     pub(crate) type_id: TypeId,
     pub(crate) type_name: &'static str,
-    /// Holds a `RefCell<T>`.
-    pub(crate) value: Box<dyn Any + Send>,
+    pub(crate) codec: Codec,
+    pub(crate) value: Box<dyn ResourceCell + Send>,
 }
 
 /// Entities, their components, and resources. Registered types are keyed by stable name,
 /// so every iteration over them is in name order and never depends on `TypeId`.
 #[derive(Default)]
 pub struct World {
-    entities: EntitiesState,
-    components: BTreeMap<&'static str, ComponentEntry>,
-    resources: BTreeMap<&'static str, ResourceEntry>,
+    pub(crate) entities: EntitiesState,
+    pub(crate) components: BTreeMap<&'static str, ComponentEntry>,
+    pub(crate) resources: BTreeMap<&'static str, ResourceEntry>,
     /// Never hashed, snapshotted, or iterated; each value is a `RefCell<T>`.
     runtime: BTreeMap<TypeId, Box<dyn Any + Send>>,
 }
@@ -71,6 +129,7 @@ impl World {
             ComponentEntry {
                 type_id: TypeId::of::<T>(),
                 type_name: type_name::<T>(),
+                codec: Codec::of::<T>(),
                 storage: Box::new(ComponentStorage::<T>(RefCell::new(Vec::new()))),
             },
         );
@@ -87,6 +146,7 @@ impl World {
             ResourceEntry {
                 type_id: TypeId::of::<T>(),
                 type_name: type_name::<T>(),
+                codec: Codec::of::<T>(),
                 value: Box::new(RefCell::new(value)),
             },
         );
@@ -170,6 +230,7 @@ impl World {
             .resources
             .get(T::NAME)?
             .value
+            .as_any()
             .downcast_ref::<RefCell<T>>()?;
         Some(value.borrow())
     }
@@ -179,8 +240,19 @@ impl World {
             .resources
             .get_mut(T::NAME)?
             .value
+            .as_any_mut()
             .downcast_mut::<RefCell<T>>()?;
         Some(value.get_mut())
+    }
+
+    /// Serialization functions of the component registered under `name`.
+    pub fn component_codec(&self, name: &str) -> Option<Codec> {
+        self.components.get(name).map(|entry| entry.codec)
+    }
+
+    /// Serialization functions of the resource registered under `name`.
+    pub fn resource_codec(&self, name: &str) -> Option<Codec> {
+        self.resources.get(name).map(|entry| entry.codec)
     }
 
     pub fn runtime<T: Send + 'static>(&self) -> Option<Ref<'_, T>> {

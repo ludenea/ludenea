@@ -7,3 +7,6 @@ edition.workspace = true
 ludenea-macros.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+postcard.workspace = true
+xxhash-rust.workspace = true
+ron.workspace = true
