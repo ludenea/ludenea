@@ -124,4 +124,8 @@ State {
             3,
         ),
     },
+    resources: Resources {
+        count: 1,
+        ..
+    },
 }

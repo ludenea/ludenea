@@ -1,16 +1,17 @@
 //! Snapshots: the whole state of a world, restored with memory copies.
 
-use crate::registry::Fingerprint;
+use crate::registry::RegistryFingerprint;
 use crate::world::State;
 use crate::{EcsError, World};
 
-/// The whole state of a [`World`]: entities, allocator and components.
+/// The whole state of a [`World`]: entities, allocator, components and
+/// resources.
 ///
 /// Restoring it yields the same entity identifiers and the same iteration
 /// order as when it was taken.
 #[derive(Clone)]
 pub struct Snapshot {
-    fingerprint: Vec<Fingerprint>,
+    fingerprint: RegistryFingerprint,
     state: State,
 }
 
@@ -43,7 +44,7 @@ impl World {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Component, EcsError, Entity, World};
+    use crate::{Component, EcsError, Entity, Resource, World};
 
     #[derive(Clone, Copy, Debug, PartialEq)]
     struct Position(i32);
@@ -53,10 +54,54 @@ mod tests {
     struct Velocity(i32);
     impl Component for Velocity {}
 
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    struct Score(u32);
+    impl Resource for Score {}
+
     fn world() -> World {
         let mut builder = World::builder();
-        builder.register::<Position>().register::<Velocity>();
+        builder
+            .register::<Position>()
+            .register::<Velocity>()
+            .insert_resource(Score(0));
         builder.build()
+    }
+
+    #[test]
+    fn restore_brings_back_the_resources() {
+        let mut world = world();
+        let snapshot = world.snapshot();
+
+        world.resource_mut::<Score>().0 = 7;
+        world.restore(&snapshot).expect("same registry");
+
+        assert_eq!(world.resource::<Score>(), &Score(0));
+    }
+
+    #[test]
+    fn a_snapshot_from_a_world_with_other_resources_is_rejected() {
+        let snapshot = world().snapshot();
+        let mut builder = World::builder();
+        builder.register::<Position>().register::<Velocity>();
+        let mut without_resources = builder.build();
+
+        assert_eq!(
+            without_resources.restore(&snapshot),
+            Err(EcsError::IncompatibleSnapshot)
+        );
+    }
+
+    #[test]
+    fn restore_reuses_the_resource_allocations() {
+        let mut world = world();
+        let snapshot = world.snapshot();
+        world.restore(&snapshot).expect("same registry");
+        let before = std::ptr::from_ref(world.resource::<Score>());
+
+        world.resource_mut::<Score>().0 = 3;
+        world.restore(&snapshot).expect("same registry");
+
+        assert_eq!(std::ptr::from_ref(world.resource::<Score>()), before);
     }
 
     #[test]

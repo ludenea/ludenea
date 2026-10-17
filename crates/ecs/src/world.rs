@@ -5,12 +5,15 @@ use std::collections::BTreeMap;
 use crate::archetype::{Archetype, ArchetypeId};
 use crate::entity::Allocator;
 use crate::registry::{ComponentId, Registry};
-use crate::{Bundle, Component, EcsError, Entity};
+use crate::resource::Resources;
+use crate::{Bundle, Component, EcsError, Entity, Resource};
 
-/// Registers the components of a [`World`] before building it.
+/// Registers the components and inserts the resources of a [`World`] before
+/// building it.
 #[derive(Default)]
 pub struct WorldBuilder {
     registry: Registry,
+    resources: Resources,
 }
 
 impl WorldBuilder {
@@ -19,6 +22,15 @@ impl WorldBuilder {
     /// order. Registering a component twice keeps its first identifier.
     pub fn register<T: Component>(&mut self) -> &mut Self {
         self.registry.register::<T>();
+        self
+    }
+
+    /// Inserts the resource `value`. Resource identifiers follow insertion
+    /// order, like component identifiers. Inserting a resource twice
+    /// overwrites its value and keeps its first identifier.
+    pub fn insert_resource<T: Resource>(&mut self, value: T) -> &mut Self {
+        let id = self.registry.register_resource::<T>();
+        self.resources.insert(id, value);
         self
     }
 
@@ -33,6 +45,7 @@ impl WorldBuilder {
                 locations: Vec::new(),
                 archetypes: vec![empty],
                 archetype_ids: BTreeMap::from([(Vec::new(), ArchetypeId::EMPTY)]),
+                resources: self.resources,
             },
         }
     }
@@ -54,6 +67,7 @@ pub(crate) struct State {
     /// Every archetype, in creation order.
     pub(crate) archetypes: Vec<Archetype>,
     pub(crate) archetype_ids: BTreeMap<Vec<ComponentId>, ArchetypeId>,
+    pub(crate) resources: Resources,
 }
 
 impl Clone for State {
@@ -63,6 +77,7 @@ impl Clone for State {
             locations: self.locations.clone(),
             archetypes: self.archetypes.clone(),
             archetype_ids: self.archetype_ids.clone(),
+            resources: self.resources.clone(),
         }
     }
 
@@ -71,6 +86,7 @@ impl Clone for State {
         self.locations.clone_from(&source.locations);
         self.archetypes.clone_from(&source.archetypes);
         self.archetype_ids.clone_from(&source.archetype_ids);
+        self.resources.clone_from(&source.resources);
     }
 }
 
@@ -212,6 +228,28 @@ impl World {
             .map(|column| &mut column[location.row])
     }
 
+    /// Returns the resource `T`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the resource `T` is not inserted.
+    #[must_use]
+    pub fn resource<T: Resource>(&self) -> &T {
+        self.state.resources.get(self.registry.resource_id::<T>())
+    }
+
+    /// Returns the resource `T` for writing.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the resource `T` is not inserted.
+    #[must_use]
+    pub fn resource_mut<T: Resource>(&mut self) -> &mut T {
+        self.state
+            .resources
+            .get_mut(self.registry.resource_id::<T>())
+    }
+
     /// Whether `entity` is alive in this world.
     #[must_use]
     pub fn contains(&self, entity: Entity) -> bool {
@@ -281,13 +319,45 @@ mod tests {
     struct Frozen;
     impl Component for Frozen {}
 
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    struct Score(u32);
+    impl Resource for Score {}
+
     fn world() -> World {
         let mut builder = World::builder();
         builder
             .register::<Position>()
             .register::<Velocity>()
-            .register::<Frozen>();
+            .register::<Frozen>()
+            .insert_resource(Score(0));
         builder.build()
+    }
+
+    #[test]
+    fn resources_are_read_and_written_in_place() {
+        let mut world = world();
+
+        world.resource_mut::<Score>().0 += 2;
+
+        assert_eq!(world.resource::<Score>(), &Score(2));
+    }
+
+    #[test]
+    fn inserting_a_resource_twice_keeps_the_last_value() {
+        let mut builder = World::builder();
+        builder.insert_resource(Score(1)).insert_resource(Score(5));
+
+        assert_eq!(builder.build().resource::<Score>(), &Score(5));
+    }
+
+    #[test]
+    #[should_panic(expected = "is not inserted")]
+    fn reading_a_missing_resource_panics() {
+        #[derive(Clone, Copy)]
+        struct Missing;
+        impl Resource for Missing {}
+
+        let _ = world().resource::<Missing>();
     }
 
     #[test]
