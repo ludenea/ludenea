@@ -30,10 +30,10 @@ Before each system run, the schedule takes the world mutably once and
 splits it into disjoint borrows: one slot per column of every archetype and
 one per resource. Each parameter takes the slots it declared. A written
 column is taken out of its slot, once; a read column is turned into a
-shared borrow left in place, so several parameters can read it. When a
-system is added, its parameters are checked against each other: two
-parameters writing the same component in archetypes that can overlap, given
-their `With` and `Without` filters, make the system panic. Taking a slot
+shared borrow left in place, so several parameters can read it. When the
+schedule is built, the parameters of each system are checked against each
+other: two parameters writing the same component in archetypes that can
+overlap, given their `With` and `Without` filters, make the system panic. Taking a slot
 therefore never fails at run time.
 
 The same declared access lets the schedule reject two conflicting systems
