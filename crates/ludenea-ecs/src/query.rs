@@ -1,5 +1,47 @@
 //! Typed queries over component storages. A query borrows every storage it touches for
 //! its whole lifetime and iterates matching entities in ascending index order.
+//!
+//! `#[derive(Query)]` accepts only `&'w T`, `&'w mut T`, `Entity`, `Option<&'w T>`, and
+//! `Option<&'w mut T>` fields:
+//!
+//! ```
+//! use ludenea_ecs::{Component, Entity, Query};
+//! # #[derive(Component, serde::Serialize, serde::Deserialize)]
+//! # struct Health(u32);
+//! #[derive(Query)]
+//! struct Status<'w> {
+//!     entity: Entity,
+//!     health: &'w Health,
+//! }
+//! ```
+//!
+//! A tuple field would hide a `&mut` from read-only detection, so it is rejected:
+//!
+//! ```compile_fail
+//! use ludenea_ecs::{Component, Query};
+//! # #[derive(Component, serde::Serialize, serde::Deserialize)]
+//! # struct Health(u32);
+//! #[derive(Query)]
+//! struct Hidden<'w> {
+//!     inner: (&'w mut Health,),
+//! }
+//! ```
+//!
+//! An alias passes the syntactic check, but the generated read-only assertion rejects it:
+//!
+//! ```compile_fail,E0277
+//! use ludenea_ecs::{Component, Entity, Query};
+//! # #[derive(Component, serde::Serialize, serde::Deserialize)]
+//! # struct Health(u32);
+//! mod alias {
+//!     pub type Entity = &'static mut super::Health;
+//! }
+//! #[derive(Query)]
+//! struct Aliased<'w> {
+//!     health: alias::Entity,
+//!     other: &'w Health,
+//! }
+//! ```
 
 use std::cell::{Ref, RefMut};
 use std::marker::PhantomData;
@@ -80,6 +122,11 @@ pub unsafe trait ReadOnlyQueryData: QueryData {
 
     fn into_read(item: Self::Item<'_>) -> Self::ReadItem<'_>;
 }
+
+/// Fails to compile unless `T` is read-only; `derive(Query)` calls it for every field of
+/// a struct it declares read-only.
+#[doc(hidden)]
+pub fn __assert_read_only<T: ReadOnlyQueryData>() {}
 
 /// Selects entities without yielding anything.
 pub trait QueryFilter {

@@ -5,7 +5,7 @@ use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::quote;
 use syn::{
-    Data, DeriveInput, Fields, GenericArgument, Ident, LitStr, PathArguments, Type,
+    Data, DeriveInput, Fields, GenericArgument, Ident, Lifetime, LitStr, PathArguments, Type,
     parse_macro_input,
 };
 
@@ -121,7 +121,11 @@ fn expand_query(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let filter = query_filter(input)?.map_or_else(|| quote!(()), |filter| quote!(#filter));
     let data = quote!((#(#types,)*));
 
-    let read_only = if types.iter().any(|ty| is_mutable(ty)) {
+    let mut writes = false;
+    for ty in &types {
+        writes |= field_writes(ty, lifetime)?;
+    }
+    let read_only = if writes {
         quote!()
     } else {
         quote! {
@@ -129,6 +133,9 @@ fn expand_query(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 type ReadItem<'__item> = #ident<'__item>;
 
                 fn into_read(item: Self::Item<'_>) -> Self::ReadItem<'_> {
+                    // Concrete calls, not `where` bounds: they catch an alias of `&mut T`
+                    // or of `Entity` that the syntactic check above cannot see.
+                    #(#ecs::query::__assert_read_only::<#types>();)*
                     item
                 }
             }
@@ -194,17 +201,46 @@ fn query_filter(input: &DeriveInput) -> syn::Result<Option<Type>> {
     Ok(filter)
 }
 
-/// Whether a field type is `&mut T` or `Option<&mut T>`.
-fn is_mutable(ty: &Type) -> bool {
+/// Checks that a field type is `&'w T`, `&'w mut T`, `Entity`, `Option<&'w T>`, or
+/// `Option<&'w mut T>`, and returns whether it writes. Anything else (tuples, aliases,
+/// nested query structs) is rejected so read-only detection cannot be fooled.
+fn field_writes(ty: &Type, lifetime: &Lifetime) -> syn::Result<bool> {
+    let error = || {
+        syn::Error::new_spanned(
+            ty,
+            format!(
+                "a query field is `&{lifetime} T`, `&{lifetime} mut T`, `Entity`, \
+                 `Option<&{lifetime} T>`, or `Option<&{lifetime} mut T>`"
+            ),
+        )
+    };
+    let reference_writes = |ty: &Type| match ty {
+        Type::Reference(reference)
+            if reference
+                .lifetime
+                .as_ref()
+                .is_some_and(|used| used.ident == lifetime.ident) =>
+        {
+            Ok(reference.mutability.is_some())
+        }
+        _ => Err(error()),
+    };
     match ty {
-        Type::Reference(reference) => reference.mutability.is_some(),
-        Type::Path(path) => path.path.segments.last().is_some_and(|segment| {
-            segment.ident == "Option"
-                && matches!(&segment.arguments, PathArguments::AngleBracketed(arguments)
-                    if arguments.args.iter().any(|argument|
-                        matches!(argument, GenericArgument::Type(inner) if is_mutable(inner))))
-        }),
-        _ => false,
+        Type::Reference(_) => reference_writes(ty),
+        Type::Path(path) if path.qself.is_none() => {
+            let segment = path.path.segments.last().ok_or_else(error)?;
+            match (&segment.arguments, segment.ident.to_string().as_str()) {
+                (PathArguments::None, "Entity") => Ok(false),
+                (PathArguments::AngleBracketed(arguments), "Option") => {
+                    match arguments.args.iter().collect::<Vec<_>>()[..] {
+                        [GenericArgument::Type(inner)] => reference_writes(inner),
+                        _ => Err(error()),
+                    }
+                }
+                _ => Err(error()),
+            }
+        }
+        _ => Err(error()),
     }
 }
 
