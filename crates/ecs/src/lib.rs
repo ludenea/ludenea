@@ -41,6 +41,7 @@ mod entity;
 mod error;
 mod query;
 mod registry;
+mod resource;
 mod snapshot;
 mod world;
 
@@ -48,6 +49,7 @@ pub use bundle::Bundle;
 pub use entity::Entity;
 pub use error::EcsError;
 pub use query::{Query, QueryData, ReadOnlyQuery};
+pub use resource::Resource;
 pub use snapshot::Snapshot;
 pub use world::{World, WorldBuilder};
 

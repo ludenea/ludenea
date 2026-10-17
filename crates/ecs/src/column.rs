@@ -1,10 +1,9 @@
-//! Type-erased storage for the values of one component in one archetype.
+//! Type-erased storage for the values of one component in one archetype, or
+//! for the value of one resource.
 
 use std::any::Any;
 
-use crate::Component;
-
-/// A `Vec<T>` of one component type, seen without its type.
+/// A `Vec<T>` of one component or resource type, seen without its type.
 pub trait Column: Any {
     /// Removes `row`, moving the last value into its place.
     fn swap_remove(&mut self, row: usize);
@@ -20,7 +19,7 @@ pub trait Column: Any {
     fn copy_into(&self, destination: &mut dyn Column) -> bool;
 }
 
-impl<T: Component> Column for Vec<T> {
+impl<T: Copy + 'static> Column for Vec<T> {
     fn swap_remove(&mut self, row: usize) {
         Vec::swap_remove(self, row);
     }
@@ -62,7 +61,7 @@ impl Clone for Box<dyn Column> {
 ///
 /// Panics when `column` does not hold `T` values, which the archetype key
 /// rules out.
-pub(crate) fn downcast_ref<T: Component>(column: &dyn Column) -> &Vec<T> {
+pub(crate) fn downcast_ref<T: Copy + 'static>(column: &dyn Column) -> &Vec<T> {
     let column: &dyn Any = column;
     column
         .downcast_ref()
@@ -73,7 +72,7 @@ pub(crate) fn downcast_ref<T: Component>(column: &dyn Column) -> &Vec<T> {
 ///
 /// Panics when `column` does not hold `T` values, which the archetype key
 /// rules out.
-pub(crate) fn downcast_mut<T: Component>(column: &mut dyn Column) -> &mut Vec<T> {
+pub(crate) fn downcast_mut<T: Copy + 'static>(column: &mut dyn Column) -> &mut Vec<T> {
     let column: &mut dyn Any = column;
     column
         .downcast_mut()
@@ -83,9 +82,6 @@ pub(crate) fn downcast_mut<T: Component>(column: &mut dyn Column) -> &mut Vec<T>
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    impl Component for u8 {}
-    impl Component for u16 {}
 
     #[test]
     fn swap_remove_moves_the_last_value_into_the_hole() {
