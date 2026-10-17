@@ -48,10 +48,12 @@ impl GameProcess {
         let stdout_output = output_sender.clone();
         thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                if line.starts_with(r#"{"type":"#) {
-                    let _ = message_sender.send(line);
-                } else {
-                    forward(&stdout_output, OutputStream::Stdout, line);
+                let (printed, message) = split_stdout_line(&line);
+                if let Some(printed) = printed {
+                    forward(&stdout_output, OutputStream::Stdout, printed.to_string());
+                }
+                if let Some(message) = message {
+                    let _ = message_sender.send(message.to_string());
                 }
             }
         });
@@ -116,4 +118,31 @@ impl Drop for GameProcess {
 
 fn forward(sender: &Sender<GameOutput>, stream: OutputStream, line: String) {
     let _ = sender.send(GameOutput { stream, line });
+}
+
+/// Splits a stdout line into what the game printed and a protocol message, which starts
+/// with `{"type":`. Text the game printed without a trailing newline ends up in front of
+/// the next protocol line on the same line; it is split off as the game's own output.
+fn split_stdout_line(line: &str) -> (Option<&str>, Option<&str>) {
+    match line.find(r#"{"type":"#) {
+        Some(0) => (None, Some(line)),
+        Some(at) => (Some(&line[..at]), Some(&line[at..])),
+        None => (Some(line), None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_stdout_line;
+
+    #[test]
+    fn printed_text_without_a_newline_is_split_from_the_next_message() {
+        let message = r#"{"type":"event"}"#;
+        assert_eq!(split_stdout_line(message), (None, Some(message)));
+        assert_eq!(
+            split_stdout_line(&format!("loading...{message}")),
+            (Some("loading..."), Some(message))
+        );
+        assert_eq!(split_stdout_line("hello"), (Some("hello"), None));
+    }
 }
