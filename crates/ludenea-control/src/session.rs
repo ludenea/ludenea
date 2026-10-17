@@ -54,6 +54,7 @@ pub enum SessionError {
 
 /// What the timeline shows.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Timeline {
     pub head: u64,
     pub simulated: u64,

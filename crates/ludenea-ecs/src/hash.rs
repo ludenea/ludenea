@@ -50,16 +50,20 @@ pub mod hex_u64 {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct NamedHash {
     pub name: String,
     #[serde(with = "hex_u64")]
+    #[cfg_attr(feature = "ts", ts(type = "string"))]
     pub hash: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct EntityHash {
     pub entity: Entity,
     #[serde(with = "hex_u64")]
+    #[cfg_attr(feature = "ts", ts(type = "string"))]
     pub hash: u64,
     /// Sorted by name.
     pub components: Vec<NamedHash>,
@@ -68,8 +72,10 @@ pub struct EntityHash {
 /// Hashes of the world state, from the root down to each component, so two diverging
 /// worlds can be compared leaf by leaf.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct HashTree {
     #[serde(with = "hex_u64")]
+    #[cfg_attr(feature = "ts", ts(type = "string"))]
     pub root: u64,
     /// Registered resources sorted by name, then the `ludenea::Entities` leaf.
     pub resources: Vec<NamedHash>,

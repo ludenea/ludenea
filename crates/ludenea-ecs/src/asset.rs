@@ -6,6 +6,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// The identifier of an asset, serialized as 32 lowercase hexadecimal digits.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(type = "string"))]
 pub struct AssetId(pub u128);
 
 impl fmt::Display for AssetId {

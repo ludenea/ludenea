@@ -10,6 +10,7 @@ use serde_json::Value as JsonValue;
 /// is that field's value directly, so `Collider.shape` as `{"Circle": {"radius": ..}}`
 /// takes the path `shape`, `Circle`, `radius`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PathSegment {
     Field { name: String },

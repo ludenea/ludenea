@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 #[derive(Copy, Clone, Debug, PartialEq, Default, Serialize, Deserialize, Schema)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Vec2 {
     pub x: f32,
     pub y: f32,

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 /// A generational handle: the index of a slot plus the generation of that slot when the
 /// entity was spawned, so a handle kept after despawn never aliases a reused slot.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Entity {
     index: u32,
     generation: u32,

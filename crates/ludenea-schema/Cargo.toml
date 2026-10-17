@@ -3,7 +3,11 @@ name = "ludenea-schema"
 version = "0.1.0"
 edition.workspace = true
 
+[features]
+ts = ["dep:ts-rs"]
+
 [dependencies]
+ts-rs = { workspace = true, optional = true }
 ludenea-macros.workspace = true
 serde.workspace = true
 

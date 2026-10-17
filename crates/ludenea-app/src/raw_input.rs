@@ -12,6 +12,7 @@ const DEAD_ZONE: f32 = 0.2;
 
 /// What one player holds down at a moment.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RawInput {
     /// `KeyboardEvent.code` values of the keys held down.
     pub keys: BTreeSet<String>,
@@ -20,6 +21,7 @@ pub struct RawInput {
 
 /// One gamepad in the Gamepad API standard mapping.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RawGamepad {
     pub buttons: Vec<f32>,
     pub axes: Vec<f32>,

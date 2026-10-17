@@ -18,6 +18,8 @@ pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Binary data, serialized as a standard base64 string.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(type = "string"))]
 pub struct Bytes(pub Vec<u8>);
 
 impl Serialize for Bytes {
@@ -39,6 +41,8 @@ impl<'de> Deserialize<'de> for Bytes {
 /// A state hash, serialized as 16 lowercase hexadecimal digits because JavaScript
 /// numbers lose `u64` precision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(type = "string"))]
 pub struct Hash64(pub u64);
 
 impl Serialize for Hash64 {
@@ -54,13 +58,14 @@ impl<'de> Deserialize<'de> for Hash64 {
 }
 
 /// Serde helper: `Result<Reply, ProtocolError>` as `{"ok": reply}` or `{"error": error}`.
-mod outcome {
+pub mod outcome {
     use super::{ProtocolError, Reply};
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     #[derive(Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "Outcome"))]
     #[serde(rename_all = "snake_case")]
-    enum Wire {
+    pub enum Wire {
         Ok(Reply),
         Error(ProtocolError),
     }
@@ -87,6 +92,7 @@ mod outcome {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
     Hello { protocol_version: u32 },
@@ -94,6 +100,7 @@ pub enum ClientMessage {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
     Welcome {
@@ -107,6 +114,7 @@ pub enum ServerMessage {
     Response {
         id: u64,
         #[serde(with = "outcome")]
+        #[cfg_attr(feature = "ts", ts(as = "outcome::Wire"))]
         result: Result<Reply, ProtocolError>,
     },
     Event {
@@ -116,6 +124,7 @@ pub enum ServerMessage {
 
 /// What the client needs to know about the game: its types and how fast it ticks.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct GameInfo {
     pub components: Vec<NamedSchema>,
     pub resources: Vec<NamedSchema>,
@@ -126,12 +135,14 @@ pub struct GameInfo {
 
 /// The schema of a component or resource type, by stable name.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct NamedSchema {
     pub name: String,
     pub schema: TypeSchema,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Command {
     LoadScene {
@@ -268,6 +279,7 @@ pub enum Command {
 
 /// What a client can subscribe to. Changes are pushed as events from `Host::advance`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Topic {
     /// `EntitiesChanged` when the matching entities or their hashes change.
@@ -281,6 +293,7 @@ pub enum Topic {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Reply {
     Done,
@@ -351,6 +364,7 @@ pub enum Reply {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct EntityRow {
     pub entity: Entity,
     pub hash: Hash64,
@@ -359,6 +373,7 @@ pub struct EntityRow {
 /// A system in run order, its accesses as `"kind name"` (for example
 /// `"component ludenea::Body"`), and its mean time over the last observed ticks.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SystemRow {
     pub name: String,
     pub reads: Vec<String>,
@@ -369,6 +384,7 @@ pub struct SystemRow {
 
 /// An event by its Rust type name (for display only) and its JSON value.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RecordedEvent {
     pub event_type: String,
     pub value: JsonValue,
@@ -377,6 +393,7 @@ pub struct RecordedEvent {
 /// The commands a system issued, applied right after it, such as
 /// `"insert ludenea::Body on 12v0"`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SyncPoint {
     pub after_system: String,
     pub commands: Vec<String>,
@@ -384,6 +401,7 @@ pub struct SyncPoint {
 
 /// What `SetField` changes.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FieldTarget {
     Component { entity: Entity, component: String },
@@ -393,6 +411,7 @@ pub enum FieldTarget {
 /// A component or resource value: JSON in its wire form, or RON text when the value has
 /// no exact JSON form (maps with non-string keys, non-finite floats), which is read-only.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ComponentValue {
     Json { value: JsonValue },
@@ -401,6 +420,7 @@ pub enum ComponentValue {
 
 /// What the host reports on its own, from `Host::advance`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
     Ticked {
@@ -452,6 +472,7 @@ pub enum Event {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PauseReason {
     User,
@@ -463,6 +484,7 @@ pub enum PauseReason {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum ConsoleLevel {
     Info,
@@ -471,12 +493,14 @@ pub enum ConsoleLevel {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ProtocolError {
     pub code: ErrorCode,
     pub message: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
     VersionMismatch,

@@ -11,9 +11,11 @@ pub mod mesh;
 
 /// `0xRRGGBBAA`.
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Color(pub u32);
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Primitive {
     Line {
@@ -47,6 +49,7 @@ pub enum Primitive {
 
 /// A primitive and the entity it stands for, so selected entities can be highlighted.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Item {
     pub entity: Option<Entity>,
     pub primitive: Primitive,
@@ -54,6 +57,7 @@ pub struct Item {
 
 /// Primitives by layer name, in insertion order within a layer.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct DebugDrawFrame {
     pub layers: BTreeMap<String, Vec<Item>>,
 }
