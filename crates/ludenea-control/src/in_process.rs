@@ -1,6 +1,6 @@
 use crate::host::Host;
 use crate::protocol::{
-    ClientMessage, Command, ErrorCode, GameInfo, PROTOCOL_VERSION, ProtocolError, Reply,
+    ClientMessage, Command, ErrorCode, Event, GameInfo, PROTOCOL_VERSION, ProtocolError, Reply,
     ServerMessage,
 };
 
@@ -30,13 +30,20 @@ impl InProcess {
         }
     }
 
+    /// Lets the host work through time that passed: resimulation and play. Returns the
+    /// events since the last call.
+    pub fn advance(&mut self, elapsed_seconds: f64) -> Vec<Event> {
+        self.host.advance(elapsed_seconds)
+    }
+
     /// The game described in the welcome.
     pub fn game(&self) -> &GameInfo {
         &self.game
     }
 }
 
-fn handshake(host: &Host, hello: ClientMessage) -> ServerMessage {
+/// Answers a message that arrives before the connection is established.
+pub(crate) fn handshake(host: &Host, hello: ClientMessage) -> ServerMessage {
     match hello {
         ClientMessage::Hello { protocol_version } if protocol_version == PROTOCOL_VERSION => {
             ServerMessage::Welcome {

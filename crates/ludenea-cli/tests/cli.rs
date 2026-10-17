@@ -235,3 +235,92 @@ fn trace_parent_directory_is_created() {
     assert_eq!(code, 0);
     assert!(dir.join("a/b/golden.bin").exists());
 }
+
+/// A session with a recorded edit, exported through the protocol and written as files.
+fn export_session_with_edits(dir: &Path) -> Vec<u64> {
+    let mut client = InProcess::connect(Host::new(app()).unwrap(), PROTOCOL_VERSION).unwrap();
+    let ron = fs::read_to_string(dir.join("scene.ron")).unwrap();
+    let log = Bytes(fs::read(dir.join("inputs.bin")).unwrap());
+    client.request(Command::LoadScene { ron }).unwrap();
+    client.request(Command::LoadInputs { log }).unwrap();
+    client
+        .request(Command::Step {
+            ticks: 8,
+            record_hashes: false,
+        })
+        .unwrap();
+    client
+        .request(Command::Spawn {
+            components: [("cli::Counter".to_string(), serde_json::json!(3))].into(),
+        })
+        .unwrap();
+    client
+        .request(Command::Step {
+            ticks: 6,
+            record_hashes: false,
+        })
+        .unwrap();
+    let Ok(Reply::Session {
+        inputs,
+        edits,
+        hashes,
+        ..
+    }) = client.request(Command::ExportSession)
+    else {
+        panic!("export failed");
+    };
+    fs::write(dir.join("edits.bin"), edits.0).unwrap();
+    fs::write(dir.join("inputs.bin"), inputs.0).unwrap();
+    hashes.iter().map(|hash| hash.0).collect()
+}
+
+#[test]
+fn verify_with_edits_replays_exported_session() {
+    let dir = dir("verify_with_edits");
+    let exported = export_session_with_edits(&dir);
+    let (code, out) = cli(
+        &dir,
+        &[
+            "run",
+            "{}/scene.ron",
+            "--inputs",
+            "{}/inputs.bin",
+            "--edits",
+            "{}/edits.bin",
+            "--ticks",
+            "14",
+            "--trace",
+            "{}/golden.bin",
+        ],
+    );
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(golden_hashes(&dir), exported);
+    let (code, out) = cli(
+        &dir,
+        &[
+            "verify",
+            "{}/scene.ron",
+            "--inputs",
+            "{}/inputs.bin",
+            "--edits",
+            "{}/edits.bin",
+            "--golden",
+            "{}/golden.bin",
+        ],
+    );
+    assert_eq!((code, out.as_str()), (0, "ok: 15 hashes match\n"));
+    // The same trace does not verify against a run without the edits.
+    assert_eq!(verify(&dir).0, 2);
+}
+
+#[test]
+fn golden_trace_still_verifies_without_edits() {
+    let dir = dir("golden_without_edits");
+    record(&dir);
+    assert_eq!(verify(&dir).0, 0);
+    let trace = Trace::decode(&fs::read(dir.join("golden.bin")).unwrap()).unwrap();
+    assert_eq!(
+        trace.inputs_hash,
+        xxhash_rust::xxh3::xxh3_64(&fs::read(dir.join("inputs.bin")).unwrap())
+    );
+}

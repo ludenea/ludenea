@@ -256,6 +256,7 @@ dependencies = [
  "ludenea-ecs",
  "postcard",
  "serde",
+ "serde_json",
  "xxhash-rust",
 ]
 

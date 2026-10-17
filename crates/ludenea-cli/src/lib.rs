@@ -1,4 +1,4 @@
-//! The `ludenea` command line: `run`, `verify`, and `diff`. A game provides its own
+//! The `ludenea` command line: `run`, `verify`, `diff`, and `host`. A game provides its own
 //! `main` and passes its app constructor to [`main`].
 
 mod commands;
@@ -27,6 +27,9 @@ enum Cmd {
     Verify(commands::VerifyArgs),
     /// List the differences between two snapshots.
     Diff(commands::DiffArgs),
+    /// Serve the game to the editor over stdin and stdout.
+    #[cfg(not(target_family = "wasm"))]
+    Host(commands::HostArgs),
 }
 
 pub fn main(app: fn() -> App) -> ExitCode {
@@ -48,6 +51,8 @@ pub fn run<S: AsRef<str>>(app: fn() -> App, args: &[S], out: &mut dyn Write) -> 
         Cmd::Run(args) => commands::run(app, args, out),
         Cmd::Verify(args) => commands::verify(app, args, out),
         Cmd::Diff(args) => commands::diff(app, args, out),
+        #[cfg(not(target_family = "wasm"))]
+        Cmd::Host(args) => commands::host(app, args),
     };
     outcome.unwrap_or_else(|message| {
         let _ = writeln!(out, "error: {message}");

@@ -535,7 +535,9 @@ impl Host {
                 error
             })?;
             if record_hashes {
-                hashes.push(Hash64(self.simulation.hash()));
+                // The hash after the tick, before the edits recorded at the new tick.
+                let recorded = self.session.recorded_hash(self.simulation.tick());
+                hashes.push(Hash64(recorded.unwrap_or_else(|| self.simulation.hash())));
             }
         }
         Ok(Reply::Stepped {

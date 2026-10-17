@@ -9,6 +9,8 @@ pub mod pacer;
 pub mod path;
 pub mod protocol;
 pub mod session;
+#[cfg(not(target_family = "wasm"))]
+pub mod stdio;
 mod subscriptions;
 mod undo;
 

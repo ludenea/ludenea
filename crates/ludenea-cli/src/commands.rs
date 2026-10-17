@@ -23,6 +23,7 @@ impl Session {
         app: fn() -> App,
         scene: &Path,
         inputs: Option<&Path>,
+        edits: Option<&Path>,
         threads: Option<u32>,
     ) -> Result<Session, String> {
         let scene_bytes = read(scene)?;
@@ -35,16 +36,29 @@ impl Session {
             send(&mut client, Command::SetThreads { threads })?;
         }
         send(&mut client, Command::LoadScene { ron })?;
-        let mut inputs_hash = 0;
-        if let Some(path) = inputs {
-            let log = read(path)?;
-            inputs_hash = xxh3_64(&log);
-            send(&mut client, Command::LoadInputs { log: Bytes(log) })?;
+        let inputs_log = inputs.map(read).transpose()?;
+        let edits_log = edits.map(read).transpose()?;
+        if let Some(log) = &inputs_log {
+            send(
+                &mut client,
+                Command::LoadInputs {
+                    log: Bytes(log.clone()),
+                },
+            )?;
+        }
+        if let Some(log) = &edits_log {
+            send(
+                &mut client,
+                Command::LoadEdits {
+                    log: Bytes(log.clone()),
+                },
+            )?;
+            settle(&mut client)?;
         }
         Ok(Session {
             client,
             scene_hash: xxh3_64(&scene_bytes),
-            inputs_hash,
+            inputs_hash: inputs_hash(inputs_log.as_deref(), edits_log.as_deref()),
         })
     }
 
@@ -75,6 +89,28 @@ impl Session {
     }
 }
 
+/// xxh3 of the input log followed by the edit log; 0 when there is neither.
+fn inputs_hash(inputs: Option<&[u8]>, edits: Option<&[u8]>) -> u64 {
+    match (inputs, edits) {
+        (None, None) => 0,
+        (inputs, edits) => {
+            xxh3_64(&[inputs.unwrap_or_default(), edits.unwrap_or_default()].concat())
+        }
+    }
+}
+
+/// Lets the host finish resimulating after the recorded edits were loaded.
+fn settle(client: &mut InProcess) -> Result<(), String> {
+    loop {
+        client.advance(0.0);
+        match send(client, Command::GetTimeline)? {
+            Reply::Timeline(timeline) if !timeline.resimulating => return Ok(()),
+            Reply::Timeline(_) => {}
+            _ => return Err("unexpected reply to GetTimeline".into()),
+        }
+    }
+}
+
 fn send(client: &mut InProcess, command: Command) -> Result<Reply, String> {
     client.request(command).map_err(|error| error.message)
 }
@@ -100,6 +136,9 @@ pub struct RunArgs {
     scene: PathBuf,
     #[arg(long)]
     inputs: Option<PathBuf>,
+    /// The edit log of an editor session, replayed with the inputs.
+    #[arg(long)]
+    edits: Option<PathBuf>,
     #[arg(long)]
     ticks: u32,
     #[arg(long)]
@@ -117,6 +156,9 @@ pub struct VerifyArgs {
     scene: PathBuf,
     #[arg(long)]
     inputs: PathBuf,
+    /// The edit log of an editor session, replayed with the inputs.
+    #[arg(long)]
+    edits: Option<PathBuf>,
     #[arg(long)]
     golden: PathBuf,
     #[arg(long)]
@@ -136,13 +178,14 @@ pub fn run(app: fn() -> App, args: &RunArgs, out: &mut dyn Write) -> Outcome {
     let RunArgs {
         scene,
         inputs,
+        edits,
         ticks,
         threads,
         hash: print_hash,
         trace,
     } = args;
     let ticks = *ticks;
-    let mut session = Session::open(app, scene, inputs.as_deref(), *threads)?;
+    let mut session = Session::open(app, scene, inputs.as_deref(), edits.as_deref(), *threads)?;
     let mut hashes = vec![session.hash()?];
     hashes.extend(session.step(ticks)?);
     let last = hashes[hashes.len() - 1];
@@ -165,21 +208,23 @@ pub fn verify(app: fn() -> App, args: &VerifyArgs, out: &mut dyn Write) -> Outco
     let VerifyArgs {
         scene,
         inputs,
+        edits,
         golden,
         threads,
         dump_dir,
     } = args;
     let threads = *threads;
     let golden = Trace::decode(&read(golden)?)?;
-    if (xxh3_64(&read(scene)?), xxh3_64(&read(inputs)?)) != (golden.scene_hash, golden.inputs_hash)
-    {
+    let edits_log = edits.as_deref().map(read).transpose()?;
+    let recorded = inputs_hash(Some(&read(inputs)?), edits_log.as_deref());
+    if (xxh3_64(&read(scene)?), recorded) != (golden.scene_hash, golden.inputs_hash) {
         say(
             out,
             "golden trace was recorded for a different scene or input log",
         )?;
         return Ok(2);
     }
-    let mut session = Session::open(app, scene, Some(inputs), threads)?;
+    let mut session = Session::open(app, scene, Some(inputs), edits.as_deref(), threads)?;
     // The snapshot after the previous tick stays available for the dump.
     let mut previous = session.snapshot()?;
     for (tick, expected) in golden.hashes.iter().enumerate() {
@@ -241,4 +286,20 @@ pub fn diff(app: fn() -> App, args: &DiffArgs, out: &mut dyn Write) -> Outcome {
         say(out, line)?;
     }
     Ok(1)
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[derive(Args)]
+pub struct HostArgs {
+    /// Speak the control protocol on stdin and stdout.
+    #[arg(long, required = true)]
+    stdio: bool,
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub fn host(app: fn() -> App, _args: &HostArgs) -> Outcome {
+    let input = std::io::BufReader::new(std::io::stdin());
+    ludenea_control::stdio::serve_stdio(app, input, std::io::stdout().lock())
+        .map_err(|error| error.to_string())?;
+    Ok(0)
 }

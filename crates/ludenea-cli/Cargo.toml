@@ -13,3 +13,4 @@ xxhash-rust.workspace = true
 
 [dev-dependencies]
 ludenea-ecs.workspace = true
+serde_json.workspace = true
