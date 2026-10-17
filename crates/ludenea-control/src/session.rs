@@ -158,7 +158,8 @@ impl Session {
         self.reset_future(sim)
     }
 
-    /// Replaces the recorded edits and seeks to tick 0.
+    /// Replaces the recorded edits and seeks to tick 0. The edits are checked by
+    /// resimulation: those that fail are dropped and reported by `resimulate`.
     pub fn load_edits(&mut self, sim: &mut Simulation, log: EditLog) -> Result<(), SessionError> {
         self.edits = log;
         self.reset_future(sim)
@@ -456,15 +457,16 @@ impl Session {
         self.update_head();
     }
 
-    /// After new logs: only tick 0 stays simulated, and the session is at tick 0.
+    /// After new logs: only tick 0 stays simulated, the session is at tick 0, and recorded
+    /// edits are checked on this state by resimulation.
     fn reset_future(&mut self, sim: &mut Simulation) -> Result<(), SessionError> {
         self.hashes.truncate(1);
-        self.checkpoints.truncate_after(0);
-        self.resimulating = None;
-        self.reports.clear();
         self.update_head();
-        self.current = 0;
-        self.replay_to(sim, 0)
+        let (_, scene_state) = self.checkpoints.nearest_at_or_before(0);
+        sim.restore(scene_state)
+            .expect("a checkpoint restores into the world it was taken from");
+        self.start_resimulation(sim);
+        Ok(())
     }
 
     /// Applies `edit` to the scene: the scene is saved and reloaded so entity indices and
@@ -497,8 +499,10 @@ impl Session {
     }
 
     /// The world holds a new tick 0 state, before the edits of tick 0: the recorded future
-    /// is kept but its checkpoints are dropped, and it is resimulated from tick 0. The new
-    /// tick 0 hash is not compared, since the state changed on purpose.
+    /// is kept but its checkpoints are dropped, and it is resimulated from tick 0 when it has
+    /// hashes to replace or edits past tick 0 to check (a recorded edit that fails on the new
+    /// state is dropped and reported; inputs alone always replay). The new tick 0 hash is not
+    /// compared, since the state changed on purpose.
     fn start_resimulation(&mut self, sim: &mut Simulation) {
         self.checkpoints = Checkpoints::new(sim.snapshot());
         self.hashes[0] = sim.hash();
@@ -506,6 +510,7 @@ impl Session {
         self.diverged = false;
         self.reports.clear();
         self.apply_edits_or_drop(sim, 0);
-        self.resimulating = (self.end() > 0).then_some(0);
+        let stale = self.simulated() > 0 || self.edits.last_tick().is_some_and(|tick| tick > 0);
+        self.resimulating = stale.then_some(0);
     }
 }

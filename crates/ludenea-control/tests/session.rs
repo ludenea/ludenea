@@ -2,7 +2,7 @@ use std::fs;
 
 use boxes::{BoxesInput, Crate};
 use ludenea::cli::Trace;
-use ludenea::control::{Resimulation, Session, SessionError};
+use ludenea::control::{Resimulation, Session, SessionError, SessionExport};
 use ludenea::prelude::*;
 use ludenea_app::ValueKind;
 use serde_json::json;
@@ -106,6 +106,24 @@ fn resimulate_all(session: &mut Session, sim: &mut Simulation) -> Vec<Resimulati
             }
             report => reports.push(report),
         }
+    }
+}
+
+/// Replays an export on a fresh simulation, tick by tick, against its hashes.
+fn assert_fresh_replay_matches(export: &SessionExport) {
+    let mut fresh = simulation();
+    fresh.load_scene(&export.scene).unwrap();
+    let inputs = InputLog::decode(&export.inputs).unwrap();
+    let edits = EditLog::decode(&export.edits).unwrap();
+    fresh.set_players(usize::from(inputs.players));
+    assert_eq!(fresh.hash(), export.hashes[0]);
+    for (tick, expected) in export.hashes.iter().enumerate().skip(1) {
+        let tick = tick as u64 - 1;
+        for timed in edits.at(tick) {
+            fresh.apply_edit(&timed.edit).unwrap();
+        }
+        fresh.step_encoded(inputs.tick(tick)).unwrap();
+        assert_eq!(fresh.hash(), *expected, "tick {}", tick + 1);
     }
 }
 
@@ -277,6 +295,12 @@ fn tick_zero_despawn_reloads_scene_with_matching_indices() {
     };
     let spawned = session.edit(&mut sim, spawn).unwrap().unwrap();
     assert_eq!(spawned, last_entity(&sim));
+    let components = sim.world().entity_components_ron(spawned).unwrap();
+    assert_eq!(
+        components.keys().collect::<Vec<_>>(),
+        ["boxes::Crate"],
+        "the returned entity holds the spawned components"
+    );
     fresh.load_scene(session.scene()).unwrap();
     assert_eq!(sim.hash(), fresh.hash());
 }
@@ -387,24 +411,7 @@ fn export_then_fresh_replay_matches() {
     let export = session.export().unwrap();
     assert_eq!(export.hashes.len(), 201);
 
-    let mut fresh = simulation();
-    fresh.load_scene(&export.scene).unwrap();
-    let inputs = InputLog::decode(&export.inputs).unwrap();
-    let edits = EditLog::decode(&export.edits).unwrap();
-    fresh.set_players(usize::from(inputs.players));
-    assert_eq!(fresh.hash(), export.hashes[0]);
-    for tick in 0..200 {
-        for timed in edits.at(tick) {
-            fresh.apply_edit(&timed.edit).unwrap();
-        }
-        fresh.step_encoded(inputs.tick(tick)).unwrap();
-        assert_eq!(
-            fresh.hash(),
-            export.hashes[tick as usize + 1],
-            "tick {}",
-            tick + 1
-        );
-    }
+    assert_fresh_replay_matches(&export);
 }
 
 fn panic_at_50(time: Res<Time>) {
@@ -435,4 +442,56 @@ fn panic_restores_state_and_keeps_logs() {
     assert_eq!(session.timeline().current, 50);
     assert_eq!(sim.hash(), before.hashes[50]);
     assert_eq!(session.export().unwrap(), before);
+}
+
+#[test]
+fn load_edits_drops_recorded_edits_that_fail() {
+    let (mut sim, mut session) = started(recorded(200, None));
+    let target = last_entity(&sim);
+    let at = |tick, edit| TimedEdit { tick, edit };
+    let good = stats_edit(&sim, 1_000);
+    let mut log = EditLog::new();
+    log.edits = vec![
+        at(0, Edit::Despawn { entity: target }),
+        at(
+            0,
+            Edit::SetResource {
+                resource: "ludenea::Time".to_string(),
+                value: Vec::new(),
+            },
+        ),
+        at(
+            50,
+            Edit::Remove {
+                entity: target,
+                component: "boxes::Crate".to_string(),
+            },
+        ),
+        at(80, good.clone()),
+    ];
+    session.load_edits(&mut sim, log).unwrap();
+    assert!(session.timeline().resimulating);
+    assert!(matches!(
+        session.seek(&mut sim, 100),
+        Err(SessionError::Resimulating { .. })
+    ));
+    let reports = resimulate_all(&mut session, &mut sim);
+    let ticks: Vec<_> = reports
+        .iter()
+        .map(|report| match report {
+            Resimulation::EditDropped { tick, .. } => Some(*tick),
+            Resimulation::Done => None,
+            other => panic!("unexpected report {other:?}"),
+        })
+        .collect();
+    assert_eq!(ticks, [Some(0), Some(50), None]);
+    assert_eq!(session.timeline().edit_ticks, vec![0, 80]);
+
+    session.seek(&mut sim, 150).unwrap();
+    assert_eq!(sim.hash(), hashes(&session)[150]);
+    play(&mut session, &mut sim, 10);
+    let export = session.export().unwrap();
+    let edits = EditLog::decode(&export.edits).unwrap();
+    assert_eq!(edits.edits.last(), Some(&at(80, good)));
+    assert_fresh_replay_matches(&export);
 }
