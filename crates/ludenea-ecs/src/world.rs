@@ -2,6 +2,8 @@ use std::any::{Any, TypeId, type_name};
 use std::cell::{Ref, RefCell};
 use std::collections::BTreeMap;
 
+use crate::commands::CommandQueue;
+use crate::event::EventQueue;
 use crate::{Codec, Component, EcsError, EntitiesState, Entity, Resource};
 
 /// Type-erased access to one component storage.
@@ -119,6 +121,10 @@ pub struct World {
     pub(crate) resources: BTreeMap<&'static str, ResourceEntry>,
     /// Never hashed, snapshotted, or iterated; each value is a `RefCell<T>`.
     runtime: BTreeMap<TypeId, Box<dyn Any + Send>>,
+    /// Events of the current tick, keyed by type name; each value is a `RefCell<Vec<T>>`.
+    events: BTreeMap<&'static str, Box<dyn EventQueue + Send>>,
+    /// Commands issued by the running system, applied when it returns.
+    pub(crate) commands: RefCell<CommandQueue>,
 }
 
 impl World {
@@ -164,6 +170,20 @@ impl World {
     pub fn insert_runtime<T: Send + 'static>(&mut self, value: T) {
         self.runtime
             .insert(TypeId::of::<T>(), Box::new(RefCell::new(value)));
+    }
+
+    /// Registers the event type `T`; registering it again is a no-op.
+    pub fn register_event<T: Send + 'static>(&mut self) {
+        self.events
+            .entry(type_name::<T>())
+            .or_insert_with(|| Box::new(RefCell::new(Vec::<T>::new())));
+    }
+
+    /// Drops every event sent this tick.
+    pub fn clear_events(&mut self) {
+        for queue in self.events.values_mut() {
+            queue.clear();
+        }
     }
 
     pub fn spawn(&mut self) -> Entity {
@@ -271,13 +291,7 @@ impl World {
     }
 
     pub fn resource<T: Resource>(&self) -> Option<Ref<'_, T>> {
-        let value = self
-            .resources
-            .get(T::NAME)?
-            .value
-            .as_any()
-            .downcast_ref::<RefCell<T>>()?;
-        Some(value.borrow())
+        Some(self.resource_cell::<T>()?.borrow())
     }
 
     pub fn resource_mut<T: Resource>(&mut self) -> Option<&mut T> {
@@ -301,11 +315,7 @@ impl World {
     }
 
     pub fn runtime<T: Send + 'static>(&self) -> Option<Ref<'_, T>> {
-        let value = self
-            .runtime
-            .get(&TypeId::of::<T>())?
-            .downcast_ref::<RefCell<T>>()?;
-        Some(value.borrow())
+        Some(self.runtime_cell::<T>()?.borrow())
     }
 
     pub fn runtime_mut<T: Send + 'static>(&mut self) -> Option<&mut T> {
@@ -332,6 +342,22 @@ impl World {
                 second: type_name::<T>(),
             }),
         }
+    }
+
+    pub(crate) fn resource_cell<T: Resource>(&self) -> Option<&RefCell<T>> {
+        self.resources
+            .get(T::NAME)?
+            .value
+            .as_any()
+            .downcast_ref::<RefCell<T>>()
+    }
+
+    pub(crate) fn runtime_cell<T: Send + 'static>(&self) -> Option<&RefCell<T>> {
+        self.runtime.get(&TypeId::of::<T>())?.downcast_ref()
+    }
+
+    pub(crate) fn event_cell<T: Send + 'static>(&self) -> Option<&RefCell<Vec<T>>> {
+        self.events.get(type_name::<T>())?.as_any().downcast_ref()
     }
 
     fn ensure_alive(&self, entity: Entity) -> Result<(), EcsError> {
