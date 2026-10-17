@@ -19,18 +19,18 @@ for any thread count. The guarantee is enforced by:
 
 ## Workspace layout
 
-| Path                      | Purpose                                        |
-| ------------------------- | ---------------------------------------------- |
-| `crates/ludenea-math`     | Deterministic vectors, matrices, and functions |
-| `crates/ludenea-ecs`      | World, components, queries, and state hashing  |
-| `crates/ludenea-macros`   | Derive macros                                  |
-| `crates/ludenea-app`      | Simulation loop, scenes, snapshots, input logs |
-| `crates/ludenea-physics`  | Rigid body physics                             |
-| `crates/ludenea-control`  | Versioned control protocol and host            |
-| `crates/ludenea-cli`      | `run`, `verify`, and `diff` commands           |
-| `crates/ludenea`          | Facade crate re-exporting the engine           |
-| `examples/boxes`          | Reference scenario, golden trace, and benchmark |
-| `golden`                  | Golden hash traces                             |
+| Path                     | Purpose                                         |
+| ------------------------ | ----------------------------------------------- |
+| `crates/ludenea-math`    | Deterministic vectors, matrices, and functions  |
+| `crates/ludenea-ecs`     | World, components, queries, and state hashing   |
+| `crates/ludenea-macros`  | Derive macros                                   |
+| `crates/ludenea-app`     | Simulation loop, scenes, snapshots, input logs  |
+| `crates/ludenea-physics` | Rigid body physics                              |
+| `crates/ludenea-control` | Versioned control protocol and host             |
+| `crates/ludenea-cli`     | `run`, `verify`, and `diff` commands            |
+| `crates/ludenea`         | Facade crate re-exporting the engine            |
+| `examples/boxes`         | Reference scenario, golden trace, and benchmark |
+| `golden`                 | Golden hash traces                              |
 
 ## Commands
 

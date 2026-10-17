@@ -2,7 +2,11 @@ name: determinism
 
 on:
   push:
+    branches: [main]
   pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   native:
@@ -14,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install the pinned toolchain
-        run: rustup show
+        run: rustup toolchain install
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace
       - name: Verify the golden trace
@@ -36,7 +40,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install the pinned toolchain
-        run: rustup show
+        run: rustup toolchain install
       - uses: bytecodealliance/actions/wasmtime/setup@v1
       - run: cargo build --locked --release --target wasm32-wasip1 -p boxes --bin boxes
       - run: wasmtime run --dir=. target/wasm32-wasip1/release/boxes.wasm verify examples/boxes/assets/boxes.scene.ron --inputs examples/boxes/assets/boxes.inputs --golden golden/boxes.trace
