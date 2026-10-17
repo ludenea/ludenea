@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use ludenea_app::{App, InputLog, Rng, Sim};
 use ludenea_cli::{Trace, run};
+use ludenea_control::{Bytes, Command, Host, InProcess, PROTOCOL_VERSION, Reply, Transport};
 use ludenea_ecs::{Component, Query, ResMut};
 use serde::{Deserialize, Serialize};
 
@@ -113,6 +114,23 @@ fn run_then_verify_passes() {
     assert_eq!(code, 0);
 }
 
+fn golden_hashes(dir: &Path) -> Vec<u64> {
+    Trace::decode(&fs::read(dir.join("golden.bin")).unwrap())
+        .unwrap()
+        .hashes
+}
+
+/// The state hash of a dumped snapshot, after restoring it into a fresh host.
+fn snapshot_hash(path: &Path) -> u64 {
+    let mut client = InProcess::connect(Host::new(app()).unwrap(), PROTOCOL_VERSION).unwrap();
+    let snapshot = Bytes(fs::read(path).unwrap());
+    client.request(Command::Restore { snapshot }).unwrap();
+    match client.request(Command::GetHash) {
+        Ok(Reply::Hash { hash, .. }) => hash.0,
+        other => panic!("{other:?}"),
+    }
+}
+
 fn tamper(dir: &Path, index: usize) {
     let path = dir.join("golden.bin");
     let mut trace = Trace::decode(&fs::read(&path).unwrap()).unwrap();
@@ -124,23 +142,29 @@ fn tamper(dir: &Path, index: usize) {
 fn verify_against_tampered_golden_reports_tick_and_writes_dumps() {
     let dir = dir("verify_tampered");
     record(&dir);
+    let expected = golden_hashes(&dir);
     tamper(&dir, 7);
     let (code, out) = verify(&dir);
     assert_eq!(code, 1);
     assert!(out.contains("mismatch at tick 7"), "{out}");
-    assert!(dir.join("dump/tick-6.snap").exists());
-    assert!(dir.join("dump/tick-7.snap").exists());
+    assert!(
+        out.contains("tick-6.snap and ") && out.contains("tick-7.snap"),
+        "{out}"
+    );
+    assert_eq!(snapshot_hash(&dir.join("dump/tick-6.snap")), expected[6]);
+    assert_eq!(snapshot_hash(&dir.join("dump/tick-7.snap")), expected[7]);
 }
 
 #[test]
 fn verify_mismatch_at_tick_zero_writes_one_dump() {
     let dir = dir("verify_tick_zero");
     record(&dir);
+    let expected = golden_hashes(&dir);
     tamper(&dir, 0);
     let (code, out) = verify(&dir);
     assert_eq!(code, 1);
     assert!(out.contains("mismatch at tick 0"), "{out}");
-    assert!(dir.join("dump/tick-0.snap").exists());
+    assert_eq!(snapshot_hash(&dir.join("dump/tick-0.snap")), expected[0]);
     assert_eq!(fs::read_dir(dir.join("dump")).unwrap().count(), 1);
 }
 
@@ -173,7 +197,7 @@ fn diff_of_dumps_names_entity_component_and_field() {
     let (a, b) = dumps(&dir);
     let (code, out) = cli(&dir, &["diff", &a, &b]);
     assert_eq!(code, 1);
-    assert!(out.contains("Counter"), "{out}");
+    assert!(out.contains("entity 0v0 cli::Counter [0]: "), "{out}");
 }
 
 #[test]

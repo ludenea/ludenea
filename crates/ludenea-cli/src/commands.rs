@@ -48,36 +48,23 @@ impl Session {
         })
     }
 
-    /// The hash after loading, then after each of `ticks` ticks.
-    fn hashes(&mut self, ticks: u32) -> Result<Vec<u64>, String> {
-        let Reply::Hash { hash, .. } = send(&mut self.client, Command::GetHash)? else {
-            return Err("unexpected reply to GetHash".into());
-        };
-        let Reply::Stepped { hashes, .. } = send(
-            &mut self.client,
-            Command::Step {
-                ticks,
-                record_hashes: true,
-            },
-        )?
-        else {
-            return Err("unexpected reply to Step".into());
-        };
-        Ok(std::iter::once(hash)
-            .chain(hashes)
-            .map(|hash| hash.0)
-            .collect())
+    fn hash(&mut self) -> Result<u64, String> {
+        match send(&mut self.client, Command::GetHash)? {
+            Reply::Hash { hash, .. } => Ok(hash.0),
+            _ => Err("unexpected reply to GetHash".into()),
+        }
     }
 
-    fn step(&mut self, ticks: u32) -> Result<(), String> {
-        send(
-            &mut self.client,
-            Command::Step {
-                ticks,
-                record_hashes: false,
-            },
-        )
-        .map(drop)
+    /// Runs `ticks` ticks and returns the hash after each.
+    fn step(&mut self, ticks: u32) -> Result<Vec<u64>, String> {
+        let command = Command::Step {
+            ticks,
+            record_hashes: true,
+        };
+        match send(&mut self.client, command)? {
+            Reply::Stepped { hashes, .. } => Ok(hashes.into_iter().map(|hash| hash.0).collect()),
+            _ => Err("unexpected reply to Step".into()),
+        }
     }
 
     fn snapshot(&mut self) -> Result<Vec<u8>, String> {
@@ -156,11 +143,9 @@ pub fn run(app: fn() -> App, args: &RunArgs, out: &mut dyn Write) -> Outcome {
     } = args;
     let ticks = *ticks;
     let mut session = Session::open(app, scene, inputs.as_deref(), *threads)?;
-    let hashes = session.hashes(ticks)?;
-    if *print_hash {
-        let last = hashes.last().copied().unwrap_or_default();
-        say(out, format_args!("tick {ticks} hash {last:016x}"))?;
-    }
+    let mut hashes = vec![session.hash()?];
+    hashes.extend(session.step(ticks)?);
+    let last = hashes[hashes.len() - 1];
     if let Some(path) = trace {
         let trace = Trace {
             version: TRACE_VERSION,
@@ -169,6 +154,9 @@ pub fn run(app: fn() -> App, args: &RunArgs, out: &mut dyn Write) -> Outcome {
             hashes,
         };
         write(path, &trace.encode())?;
+    }
+    if *print_hash {
+        say(out, format_args!("tick {ticks} hash {last:016x}"))?;
     }
     Ok(0)
 }
@@ -183,48 +171,52 @@ pub fn verify(app: fn() -> App, args: &VerifyArgs, out: &mut dyn Write) -> Outco
     } = args;
     let threads = *threads;
     let golden = Trace::decode(&read(golden)?)?;
-    let ticks = u32::try_from(golden.hashes.len().saturating_sub(1))
-        .map_err(|_| "golden trace has too many ticks".to_string())?;
-    let mut session = Session::open(app, scene, Some(inputs), threads)?;
-    if (session.scene_hash, session.inputs_hash) != (golden.scene_hash, golden.inputs_hash) {
+    if (xxh3_64(&read(scene)?), xxh3_64(&read(inputs)?)) != (golden.scene_hash, golden.inputs_hash)
+    {
         say(
             out,
             "golden trace was recorded for a different scene or input log",
         )?;
         return Ok(2);
     }
-    let hashes = session.hashes(ticks)?;
-    let Some(tick) = hashes
-        .iter()
-        .zip(&golden.hashes)
-        .position(|(got, want)| got != want)
-    else {
-        say(out, format_args!("ok: {} hashes match", hashes.len()))?;
-        return Ok(0);
-    };
+    let mut session = Session::open(app, scene, Some(inputs), threads)?;
+    // The snapshot after the previous tick stays available for the dump.
+    let mut previous = session.snapshot()?;
+    for (tick, expected) in golden.hashes.iter().enumerate() {
+        let got = if tick == 0 {
+            session.hash()?
+        } else {
+            session.step(1)?[0]
+        };
+        if got == *expected {
+            if tick + 1 < golden.hashes.len() {
+                previous = session.snapshot()?;
+            }
+            continue;
+        }
+        say(
+            out,
+            format_args!("mismatch at tick {tick}: expected {expected:016x}, got {got:016x}"),
+        )?;
+        let mut dumps = Vec::new();
+        if tick > 0 {
+            dumps.push((tick - 1, previous));
+        }
+        dumps.push((tick, session.snapshot()?));
+        let mut paths = Vec::new();
+        for (dumped_tick, bytes) in dumps {
+            let path = dump_dir.join(format!("tick-{dumped_tick}.snap"));
+            write(&path, &bytes)?;
+            paths.push(path.display().to_string());
+        }
+        say(out, format_args!("wrote {}", paths.join(" and ")))?;
+        return Ok(1);
+    }
     say(
         out,
-        format_args!(
-            "mismatch at tick {tick}: expected {:016x}, got {:016x}",
-            golden.hashes[tick], hashes[tick]
-        ),
+        format_args!("ok: {} hashes match", golden.hashes.len()),
     )?;
-    // Replay to capture the snapshots around the mismatch; the run is deterministic.
-    let mut replay = Session::open(app, scene, Some(inputs), threads)?;
-    let mut written: Vec<PathBuf> = Vec::new();
-    if tick > 0 {
-        replay.step(u32::try_from(tick - 1).expect("tick fits the golden tick count"))?;
-        let path = dump_dir.join(format!("tick-{}.snap", tick - 1));
-        write(&path, &replay.snapshot()?)?;
-        written.push(path);
-        replay.step(1)?;
-    }
-    let path = dump_dir.join(format!("tick-{tick}.snap"));
-    write(&path, &replay.snapshot()?)?;
-    written.push(path);
-    let paths: Vec<String> = written.iter().map(|p| p.display().to_string()).collect();
-    say(out, format_args!("wrote {}", paths.join(" and ")))?;
-    Ok(1)
+    Ok(0)
 }
 
 pub fn diff(app: fn() -> App, args: &DiffArgs, out: &mut dyn Write) -> Outcome {

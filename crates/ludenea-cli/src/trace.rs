@@ -20,8 +20,11 @@ impl Trace {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Trace, String> {
-        let trace: Trace = postcard::from_bytes(bytes)
+        let (trace, rest): (Trace, _) = postcard::take_from_bytes(bytes)
             .map_err(|error| format!("golden file is not a trace: {error}"))?;
+        if !rest.is_empty() {
+            return Err("golden file is not a trace: trailing bytes".into());
+        }
         if trace.version != TRACE_VERSION {
             return Err(format!(
                 "golden trace has version {}, this tool reads version {TRACE_VERSION}",
