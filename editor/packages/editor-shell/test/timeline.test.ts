@@ -18,12 +18,15 @@ describe("timeline store", () => {
     const store = host.editor.timeline;
     expect(store.getState()).toMatchObject({ timeline, hash: "00000000000000aa", pending: true });
 
-    first.push({ type: "ticked", tick: 6, hash: "00000000000000bb", playing: true, effective_rate: 60 });
+    first.push({ type: "ticked", tick: 6, hash: "00000000000000bb", pending: false, playing: true, effective_rate: 60 });
     first.push({ type: "diverged", tick: 3, expected: "0000000000000001", got: "0000000000000002" });
     expect(store.getState()).toMatchObject({ hash: "00000000000000bb", pending: false, playing: true, divergence: { tick: 3 } });
     expect(store.getState().timeline?.current).toBe(6);
 
-    // Pausing asks for the hash again, since `Ticked` carries no pending flag.
+    // An edit's `Ticked` says it is pending, whenever it arrives.
+    first.push({ type: "ticked", tick: 6, hash: "00000000000000cc", pending: true, playing: false, effective_rate: 0 });
+    expect(store.getState()).toMatchObject({ hash: "00000000000000cc", pending: true });
+
     first.push({ type: "paused", reason: { type: "user" } });
     await settle();
     expect(store.getState()).toMatchObject({ playing: false, hash: "00000000000000aa", pending: true });

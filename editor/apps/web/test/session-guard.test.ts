@@ -8,16 +8,18 @@ const info: GameInfo = { components: [], resources: [], input: null, tick_rate: 
 const timeline = { head: 5, simulated: 5, current: 3, checkpoints: [], edit_ticks: [], can_undo: false, can_redo: false, scene_dirty: false, resimulating: false };
 // Six recorded hashes: ticks 0 to 5.
 const hashes = ["1", "2", "3", "4", "5", "6"].map((digit) => digit.padStart(16, "0"));
-const session = (scene: string) => ({ type: "session", scene, inputs: "AA==", edits: "", undo: "", hashes });
+const session = (scene: string) => ({ type: "session", scene, saved_scene: null, inputs: "AA==", edits: "", undo: "", hashes });
 
-/** A game whose host answers with `answer(command)`, recording every command. */
-async function fakeGame(answer: (command: Command) => object = () => ({ type: "done" })) {
+/** A game whose host answers with `answer(command)` (`null` fails), recording every command. */
+async function fakeGame(answer: (command: Command) => object | null = () => ({ type: "done" })) {
   const sent: Command[] = [];
   const transport = fakeTransport((raw) => {
     const message = JSON.parse(raw);
     if (message.type === "hello") return [JSON.stringify({ type: "welcome", protocol_version: 2, engine_version: "0", game: info })];
     sent.push(message.command);
-    return [JSON.stringify({ type: "response", id: message.id, result: { ok: answer(message.command) } })];
+    const reply = answer(message.command);
+    const result = reply === null ? { error: { code: "resimulating", message: "still resimulating" } } : { ok: reply };
+    return [JSON.stringify({ type: "response", id: message.id, result })];
   });
   const control = await ControlClient.connect(transport);
   return { control, sent, push: (event: object) => transport.push(JSON.stringify({ type: "event", event })), drop: transport.drop };
@@ -70,7 +72,7 @@ describe("guardSession", () => {
     expect(errors.mock.calls.flat().join(" ")).toContain("boom");
     // The seek waits for the resimulation to reach the crash tick.
     expect(second.sent.map((command) => command.type)).toEqual(["load_scene", "load_session", "get_timeline"]);
-    expect(second.sent[1]).toEqual({ type: "load_session", scene: "edited", inputs: "AA==", edits: "", undo: "", expected: hashes });
+    expect(second.sent[1]).toEqual({ type: "load_session", scene: "edited", saved_scene: null, inputs: "AA==", edits: "", undo: "", expected: hashes });
     second.push({ type: "resimulated", up_to: 2 });
     await settle();
     expect(second.sent.at(-1)?.type).toBe("get_timeline");
@@ -111,7 +113,7 @@ describe("guardSession", () => {
     expect(exports(game.sent)).toBe(3);
 
     // While playing: once a second, not on every timeline change.
-    game.push({ type: "ticked", tick: 4, hash: "0000000000000003", playing: true, effective_rate: 1 });
+    game.push({ type: "ticked", tick: 4, hash: "0000000000000003", pending: false, playing: true, effective_rate: 1 });
     game.push({ type: "timeline_changed", timeline: { ...timeline, head: 6 } });
     await vi.advanceTimersByTimeAsync(999);
     expect(exports(game.sent)).toBe(3);
@@ -125,7 +127,7 @@ describe("guardSession", () => {
   });
 
   it("restore_fails_when_the_game_dies_or_panics_while_resimulating", async () => {
-    const saved = { load: { type: "load_session" as const, scene: "s", inputs: "", edits: "", undo: "", expected: hashes }, tick: 4 };
+    const saved = { load: { type: "load_session" as const, scene: "s", saved_scene: null, inputs: "", edits: "", undo: "", expected: hashes }, tick: 4 };
     const resimulating = (command: Command) => (command.type === "get_timeline" ? { type: "timeline", ...timeline, simulated: 0, resimulating: true } : { type: "done" });
     const dying = await fakeGame(resimulating);
     const died = restoreSession(dying.control, saved);
@@ -138,5 +140,47 @@ describe("guardSession", () => {
     await settle();
     panicking.push({ type: "paused", reason: { type: "panicked", tick: 2, message: "boom" } });
     await expect(panicked).rejects.toThrow("boom");
+  });
+
+  it("a_crash_while_restoring_reloads_only_the_restored_scene", async () => {
+    const seed = {
+      load: { type: "load_session" as const, scene: "edited", saved_scene: "saved", inputs: "AA==", edits: "AQ==", undo: "Ag==", expected: hashes },
+      tick: 4,
+    };
+    // Still resimulating the restored session: every export fails.
+    const first = await fakeGame((command) => (command.type === "export_session" ? null : { type: "done" }));
+    const worker = fakeWorker();
+    const second = await fakeGame((command) => (command.type === "get_timeline" ? { type: "timeline", ...timeline, current: 0 } : { type: "done" }));
+    const restart = vi.fn(async () => second.control);
+    const logged: string[] = [];
+    guardSession(first.control, worker, restart, { seed, log: (level, text) => logged.push(`${level}: ${text}`) });
+    first.push({ type: "timeline_changed", timeline: { ...timeline, resimulating: false } });
+    await settle();
+    expect(exports(first.sent)).toBe(1);
+
+    worker.crash({ tick: 4, message: "boom" });
+    await settle();
+    const sceneOnly = { type: "load_session", scene: "edited", saved_scene: "saved", inputs: "", edits: "", undo: "", expected: [] };
+    expect(restart).toHaveBeenCalledWith({ load: sceneOnly, tick: 0 });
+    expect(second.sent).toEqual([sceneOnly, { type: "get_timeline" }, { type: "seek", tick: 0 }]);
+    expect(logged[0]).toBe("error: The game crashed at tick 4: boom");
+    expect(logged[1]).toMatch(/^warning: .*only its scene/);
+  });
+
+  it("a_seeded_guard_restores_a_newer_export_in_full", async () => {
+    const seed = { load: { type: "load_session" as const, scene: "old", saved_scene: null, inputs: "", edits: "", undo: "", expected: hashes }, tick: 2 };
+    const first = await fakeGame((command) => (command.type === "export_session" ? session("newer") : command.type === "get_timeline" ? { type: "timeline", ...timeline } : { type: "done" }));
+    const worker = fakeWorker();
+    const second = await fakeGame((command) => (command.type === "get_timeline" ? { type: "timeline", ...timeline } : { type: "done" }));
+    const guard = guardSession(first.control, worker, async () => second.control, { seed, log: () => {} });
+    expect(guard.latest()).toBe(seed);
+    first.push({ type: "paused", reason: { type: "user" } });
+    await settle();
+    expect(guard.latest()?.load.scene).toBe("newer");
+    worker.crash({ tick: 4, message: "boom" });
+    await settle();
+    expect(second.sent.map((command) => command.type)).toEqual(["load_session", "get_timeline", "seek"]);
+    expect(second.sent[0]).toMatchObject({ scene: "newer", inputs: "AA==" });
+    expect(second.sent.at(-1)).toEqual({ type: "seek", tick: 4 });
   });
 });

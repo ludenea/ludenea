@@ -10,3 +10,4 @@ import { viewportPlugin } from "./viewport";
 
 /** The editor's own panels, plugins on the public `Editor` API like any project plugin. */
 export const builtinPlugins: PluginDefinition[] = [projectPlugin, assetsPlugin, sceneTreePlugin, explorerPlugin, inspectorPlugin, viewportPlugin, timelinePlugin, consolePlugin];
+export { logToConsole } from "./console";

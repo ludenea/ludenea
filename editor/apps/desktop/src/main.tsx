@@ -9,8 +9,9 @@ const PLUGIN_ORIGIN = navigator.userAgent.includes("Windows") ? "http://ludenea-
 async function main() {
   const project = await ProjectClient.connect(await tauriTransport("project"));
   const app = startEditor(project, (bundle) => `${PLUGIN_ORIGIN}/${bundle.url_path}`);
-  // A project given on the command line is open already; one opened later brings its plugins
-  // with its first game. The backend repeats `GameReady` after the hello when a game runs.
+  // A project given on the command line is open already; one opened later announces
+  // `ProjectOpened`, which loads its plugins. The backend repeats `GameReady` after the hello
+  // when a game runs.
   project.request({ type: "info" }).then(() => app.loadPlugins(), () => {});
   followNativeGames(project, app, () => tauriTransport("control"));
 }

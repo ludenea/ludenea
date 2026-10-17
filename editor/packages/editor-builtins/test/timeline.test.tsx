@@ -79,7 +79,7 @@ describe("timeline", () => {
     expect(screen.getByLabelText("Hash").textContent).toContain("pending");
 
     // Playing reports recorded ticks only.
-    act(() => game.push({ type: "ticked", tick: 41, hash: "00000000000000cc", playing: true, effective_rate: 60 }));
+    act(() => game.push({ type: "ticked", tick: 41, hash: "00000000000000cc", pending: false, playing: true, effective_rate: 60 }));
     expect(screen.getByLabelText("Hash").textContent).toBe("00000000000000cc");
     expect(screen.getByText(/Tick 41/)).toBeTruthy();
   });

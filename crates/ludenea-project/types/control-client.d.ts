@@ -183,6 +183,10 @@ type Command = {
 } | {
     "type": "load_session";
     scene: string;
+    /**
+     * The scene as last saved, when `scene` holds unsaved edits.
+     */
+    saved_scene: string | null;
     inputs: Bytes;
     edits: Bytes;
     undo: Bytes;
@@ -334,6 +338,10 @@ type Event = {
     "type": "ticked";
     tick: number;
     hash: Hash64;
+    /**
+     * True when edits recorded at `tick` are applied but not yet simulated.
+     */
+    pending: boolean;
     playing: boolean;
     effective_rate: number;
 } | {
@@ -589,6 +597,10 @@ type Reply = {
 } & Timeline) | {
     "type": "session";
     scene: string;
+    /**
+     * The scene as last saved, when `scene` holds unsaved edits.
+     */
+    saved_scene: string | null;
     inputs: Bytes;
     edits: Bytes;
     undo: Bytes;
@@ -763,7 +775,22 @@ type ProjectClientMessage = {
     request: ProjectRequest;
 };
 
+/**
+ * Where the editor runs, which decides how the game is built and run.
+ */
+type ServiceMode = "desktop" | "browser";
+
+type ProjectInfo = {
+    name: string;
+    root: string;
+    default_scene: string | null;
+    mode: ServiceMode;
+};
+
 type ProjectEvent = {
+    "type": "project_opened";
+    info: ProjectInfo;
+} | {
     "type": "files_changed";
     changes: Array<FileChange>;
 } | {
@@ -792,18 +819,6 @@ type ProjectEvent = {
 type ProjectFailure = {
     code: FailureCode;
     message: string;
-};
-
-/**
- * Where the editor runs, which decides how the game is built and run.
- */
-type ServiceMode = "desktop" | "browser";
-
-type ProjectInfo = {
-    name: string;
-    root: string;
-    default_scene: string | null;
-    mode: ServiceMode;
 };
 
 type ProjectReply = {

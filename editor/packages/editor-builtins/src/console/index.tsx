@@ -1,5 +1,5 @@
 import type { ConsoleLevel, ControlClient, Diagnostic } from "@ludenea/control-client";
-import { definePlugin } from "@ludenea/editor-shell";
+import { definePlugin, type Editor } from "@ludenea/editor-shell";
 import { createStore, shared, showPanel } from "../shared";
 import { ConsolePanel, type Entry, type Levels } from "./ConsolePanel";
 
@@ -30,6 +30,18 @@ function located(entries: Entry[], diagnostic: Diagnostic, next: () => number): 
   return [...entries, { id: next(), level, source: "build", text: `${diagnostic.level}: ${diagnostic.message}`, location }];
 }
 
+/** Where each editor's Console panel takes messages from the application around it. */
+const sinks = new WeakMap<Editor, (level: ConsoleLevel, text: string) => void>();
+
+/** Shows `text` in the editor's Console panel; in the devtools console when there is none. */
+export function logToConsole(editor: Editor, level: ConsoleLevel, text: string): void {
+  const sink = sinks.get(editor);
+  if (sink) sink(level, text);
+  else if (level === "error") console.error(text);
+  else if (level === "warning") console.warn(text);
+  else console.info(text);
+}
+
 export const consolePlugin = definePlugin({
   name: "ludenea.console",
   activate(editor) {
@@ -40,6 +52,7 @@ export const consolePlugin = definePlugin({
     const add = (level: ConsoleLevel, text: string, source: Entry["source"] = "editor") =>
       update((entries) => [...entries, { id: next(), level, source, text }]);
 
+    sinks.set(editor, (level, text) => add(level, text));
     const project = editor.project;
     const stops = [
       project.on("build", ({ event }) => {
@@ -77,6 +90,7 @@ export const consolePlugin = definePlugin({
       component: () => <ConsolePanel state={state} onReveal={reveal} />,
     });
     return () => {
+      sinks.delete(editor);
       stops.forEach((stop) => stop());
       stopHost?.();
     };

@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { builtinPlugins } from "../src";
+import { builtinPlugins, logToConsole } from "../src";
 import { renderPanel, settle, testEditor, testGame } from "./support";
 
 const RENDERED = "error[E0425]: cannot find value `speed` in this scope\n --> src/lib.rs:12:5\n";
@@ -50,5 +50,12 @@ describe("console", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "Errors" }));
     expect(screen.queryByText(/panicked at tick 12/)).toBeNull();
     expect(screen.getByText("hello from the game")).toBeTruthy();
+  });
+
+  it("console_shows_what_the_application_reports", async () => {
+    const host = await testEditor(builtinPlugins);
+    renderPanel(host, "ludenea.console");
+    act(() => logToConsole(host.editor, "error", "The game crashed at tick 4: boom"));
+    expect(screen.getByText("The game crashed at tick 4: boom")).toBeTruthy();
   });
 });

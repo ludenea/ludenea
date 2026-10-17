@@ -7,8 +7,8 @@ import { startEditor } from "../src/app";
 const pluginModule = (name: string, version: number) =>
   `data:text/javascript,export default { name: ${JSON.stringify(name)}, activate() { globalThis.activations.push(${JSON.stringify(`${name} v${version}`)}); } };`;
 
-it("plugin_rebuilt_reloads_the_plugin_its_bundle_activated", async () => {
-  // jsdom has no `ResizeObserver`, which the dock needs, and no canvas, which the viewport tries.
+/** A page with the root the shell mounts in; jsdom lacks what the dock and viewport probe. */
+function page() {
   HTMLCanvasElement.prototype.getContext = () => null;
   globalThis.ResizeObserver ??= class {
     observe() {}
@@ -16,6 +16,47 @@ it("plugin_rebuilt_reloads_the_plugin_its_bundle_activated", async () => {
     disconnect() {}
   };
   document.body.innerHTML = '<div id="root"></div>';
+}
+
+/** A project service answering `list_plugins` with `plugins()`; `push` sends an event. */
+async function fakeProject(plugins: () => PluginBundle[]) {
+  const transport = fakeTransport((raw) => {
+    const message = JSON.parse(raw);
+    if (message.type === "hello") return [JSON.stringify({ type: "welcome", protocol_version: 1 })];
+    if (message.request.type === "list_plugins") return [JSON.stringify({ type: "response", id: message.id, result: { ok: { type: "plugins", plugins: plugins() } } })];
+    return [];
+  });
+  const project = await ProjectClient.connect(transport);
+  return { project, push: (event: object) => transport.push(JSON.stringify({ type: "event", event })) };
+}
+
+const projectBundle = (name: string): PluginBundle => ({ name, url_path: `plugins/${name}.js`, source: { type: "project" } });
+
+it("opening_another_project_swaps_the_project_plugins", async () => {
+  page();
+  const activations: string[] = [];
+  Object.assign(globalThis, { activations });
+  let current = "first";
+  const { project, push } = await fakeProject(() => [projectBundle(current)]);
+  const module = (name: string) =>
+    `data:text/javascript,export default { name: ${JSON.stringify(name)}, activate() { globalThis.activations.push("+${name}"); return () => globalThis.activations.push("-${name}"); } };`;
+  const app = startEditor(project, (bundle) => module(bundle.name));
+  await app.loadPlugins();
+  current = "second";
+  push({ type: "project_opened", info: { name: "second", root: "/second", default_scene: null, mode: "browser" } });
+  await vi.waitFor(() => expect(activations).toEqual(["+first", "-first", "+second"]));
+});
+
+it("a_plugin_that_fails_to_load_is_reported_in_the_console_panel", async () => {
+  page();
+  const { project } = await fakeProject(() => [projectBundle("broken")]);
+  const app = startEditor(project, () => "data:text/javascript,export default 42;");
+  await app.loadPlugins();
+  await vi.waitFor(() => expect(document.body.textContent).toContain("The editor plugin broken failed to load"));
+});
+
+it("plugin_rebuilt_reloads_the_plugin_its_bundle_activated", async () => {
+  page();
   const activations: string[] = [];
   Object.assign(globalThis, { activations });
   // The crate is `ludenea-physics`; its plugin calls itself `ludenea_physics`.

@@ -10,6 +10,8 @@ const hashes = ["1", "2", "3", "4", "5", "6"].map((digit) => digit.padStart(16, 
 
 /** Everything sent to the project service and to every game, in order, as `<peer>:<type>`. */
 let log: string[] = [];
+/** Every `LoadSession` a game received, in order. */
+let loads: Message[] = [];
 
 /** A game host answering like a real one, `resimulating` as told; `drop` ends its connection. */
 function fakeHost(name: string, options: { resimulating?: boolean } = {}) {
@@ -17,8 +19,9 @@ function fakeHost(name: string, options: { resimulating?: boolean } = {}) {
     const message = JSON.parse(raw);
     if (message.type === "hello") return [JSON.stringify({ type: "welcome", protocol_version: 2, engine_version: "0", game: info })];
     log.push(`${name}:${message.command.type}`);
+    if (message.command.type === "load_session") loads.push(message.command);
     const answers: Record<string, object> = {
-      export_session: { type: "session", scene: `${name} scene`, inputs: "", edits: "", undo: "", hashes },
+      export_session: { type: "session", scene: `${name} scene`, saved_scene: "saved", inputs: "AA==", edits: "", undo: "", hashes },
       get_timeline: { type: "timeline", ...timeline, resimulating: options.resimulating ?? false },
     };
     return [JSON.stringify({ type: "response", id: message.id, result: { ok: answers[message.command.type] ?? { type: "done" } } })];
@@ -38,11 +41,12 @@ async function fakeProject(answer: (request: Message) => object) {
   return { project, push: (event: object) => transport.push(JSON.stringify({ type: "event", event })) };
 }
 
-const app = () => ({ connectGame: vi.fn(), loadPlugins: vi.fn(async () => {}) });
+const app = () => ({ connectGame: vi.fn(), log: vi.fn() });
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 afterEach(() => {
   log = [];
+  loads = [];
   vi.restoreAllMocks();
 });
 
@@ -76,6 +80,33 @@ describe("followWasmGames", () => {
     push({ type: "game_ready" });
     await settle();
     expect(start).toHaveBeenLastCalledWith(builds[2]);
+  });
+});
+
+describe("followWasmGames crashes", () => {
+  it("a_rebuild_that_crashes_while_restoring_keeps_the_scene_of_the_session", async () => {
+    const builds = ["/game/a/game.js", "/game/b/game.js"] as const;
+    let build = 0;
+    const { project, push } = await fakeProject(() => ({ ok: { type: "wasm", glue_url: builds[build] } }));
+    const crashes: ((crash: WorkerCrash) => void)[] = [];
+    // Every game started from the second build is still resimulating when asked.
+    const start = vi.fn((glueUrl: string): WorkerGame => {
+      const host = fakeHost(glueUrl, { resimulating: glueUrl === builds[1] });
+      return { transport: host, onCrashed: (listener: (crash: WorkerCrash) => void) => (crashes.push(listener), () => {}), terminate: () => host.close() };
+    });
+    const editor = app();
+    followWasmGames(project, editor, start);
+    await settle();
+    build = 1;
+    push({ type: "game_ready" });
+    await settle();
+    expect(loads).toHaveLength(1);
+    // The new build panics in the recorded future of the session it restores.
+    crashes.at(-1)!({ tick: 3, message: "boom" });
+    await settle();
+    expect(start).toHaveBeenCalledTimes(3);
+    expect(loads[1]).toEqual({ type: "load_session", scene: `${builds[0]} scene`, saved_scene: "saved", inputs: "", edits: "", undo: "", expected: [] });
+    expect(editor.log).toHaveBeenCalledWith("error", "The game crashed at tick 3: boom");
   });
 });
 

@@ -1,4 +1,4 @@
-import type { Command, ControlClient, WorkerGame } from "@ludenea/control-client";
+import type { Command, ConsoleLevel, ControlClient, WorkerGame } from "@ludenea/control-client";
 import type { Disposable } from "@ludenea/editor-shell";
 
 const EXPORT_INTERVAL_MS = 1000;
@@ -14,12 +14,22 @@ export interface SessionGuard extends Disposable {
   latest(): SavedSession | null;
 }
 
+/** Shows a message in the editor's Console panel. */
+export type Log = (level: ConsoleLevel, text: string) => void;
+
+const devtools: Log = (level, text) => (level === "error" ? console.error(text) : console.warn(text));
+
 export async function exportSession(control: ControlClient): Promise<SavedSession> {
-  const [{ scene, inputs, edits, undo, hashes }, timeline] = await Promise.all([
+  const [{ scene, saved_scene, inputs, edits, undo, hashes }, timeline] = await Promise.all([
     control.request({ type: "export_session" }),
     control.request({ type: "get_timeline" }),
   ]);
-  return { load: { type: "load_session", scene, inputs, edits, undo, expected: hashes }, tick: timeline.current };
+  return { load: { type: "load_session", scene, saved_scene, inputs, edits, undo, expected: hashes }, tick: timeline.current };
+}
+
+/** `saved` without its recorded future: its scene (unsaved edits included) at tick 0. */
+function sceneOf(saved: SavedSession): SavedSession {
+  return { load: { ...saved.load, inputs: "", edits: "", undo: "", expected: [] }, tick: 0 };
 }
 
 /** How long a restore may wait for resimulation before it gives up. */
@@ -62,30 +72,38 @@ function simulated(control: ControlClient, tick: number): Promise<void> {
  */
 export async function restoreSession(control: ControlClient, saved: SavedSession, tick = saved.tick): Promise<void> {
   await control.request(saved.load);
-  const target = Math.min(tick, saved.load.expected.length - 1);
+  const target = Math.max(0, Math.min(tick, saved.load.expected.length - 1));
   await simulated(control, target);
   await control.request({ type: "seek", tick: target });
 }
 
 /**
  * Keeps the latest export of the session (on every pause, after every edit once resimulated,
- * and every second while playing). When the worker crashes, restarts it, loads that export,
- * and seeks back to the crash tick when known (else the exported tick).
+ * and every second while playing). When the worker crashes, reports it in the console,
+ * restarts it, loads that export, and seeks back to the crash tick when known (else the
+ * exported tick). `seed` is the session being restored into this game: it stays the latest
+ * until a newer export exists, and a crash before then (the restored session crashes this
+ * build) reloads only its scene, so the game does not crash again at once.
  */
 export function guardSession(
   control: ControlClient,
   game: Pick<WorkerGame, "onCrashed">,
-  restart: () => Promise<ControlClient>,
+  restart: (saved: SavedSession | null) => Promise<ControlClient>,
+  options: { seed?: SavedSession | null; log?: Log } = {},
 ): SessionGuard {
-  let latest: SavedSession | null = null;
+  const log = options.log ?? devtools;
+  let latest: SavedSession | null = options.seed ?? null;
+  let restoring = latest !== null;
   let playing = false;
   let disposed = false;
   const take = () => {
     exportSession(control).then(
       (saved) => {
-        if (!disposed) latest = saved;
+        if (disposed) return;
+        latest = saved;
+        restoring = false;
       },
-      // Nothing loaded yet, or the game is gone: the previous export stays.
+      // Nothing loaded yet, still resimulating, or the game is gone: the previous export stays.
       () => {},
     );
   };
@@ -101,14 +119,20 @@ export function guardSession(
       if (!playing && !timeline.resimulating) take();
     }),
     game.onCrashed(async (crash) => {
-      console.error(`the game crashed${crash.tick === undefined ? "" : ` at tick ${crash.tick}`}: ${crash.message}`);
-      const saved = latest;
+      log("error", `The game crashed${crash.tick === undefined ? "" : ` at tick ${crash.tick}`}: ${crash.message}`);
+      let saved = latest;
+      let tick = crash.tick ?? saved?.tick;
+      if (saved && restoring) {
+        saved = sceneOf(saved);
+        tick = 0;
+        log("warning", "The game crashed while restoring the session: only its scene was reloaded, without its recorded inputs and edits.");
+      }
       dispose();
       try {
-        const next = await restart();
-        if (saved) await restoreSession(next, saved, crash.tick ?? saved.tick);
+        const next = await restart(saved);
+        if (saved) await restoreSession(next, saved, tick);
       } catch (error) {
-        console.error("cannot restore the session after the crash:", error);
+        log("error", `Cannot restore the session after the crash: ${error instanceof Error ? error.message : String(error)}`);
       }
     }),
   ];
@@ -120,6 +144,6 @@ export function guardSession(
     clearInterval(timer);
     stops.forEach((stop) => stop());
   };
-  take();
+  if (!restoring) take();
   return { latest: () => latest, dispose };
 }

@@ -44,7 +44,7 @@ describe("physics plugin", () => {
       if (command.type === "load_scene") {
         loaded = true;
         // The host announces the new state at the same tick on its next advance.
-        setTimeout(() => game.push({ type: "ticked", tick: 0, hash: "00000000000000aa", playing: false, effective_rate: 0 }));
+        setTimeout(() => game.push({ type: "ticked", tick: 0, hash: "00000000000000aa", pending: false, playing: false, effective_rate: 0 }));
       }
       return { type: "done" };
     });

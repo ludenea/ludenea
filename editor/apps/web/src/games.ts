@@ -2,19 +2,21 @@ import { ControlClient, type MessageTransport, type ProjectClient, type WorkerGa
 import type { EditorApp } from "./app";
 import { exportSession, guardSession, restoreSession, type SavedSession, type SessionGuard } from "./session-guard";
 
-type App = Pick<EditorApp, "connectGame" | "loadPlugins">;
+type App = Pick<EditorApp, "connectGame" | "log">;
 
 /** Runs steps one after the other; a failing step is reported and never blocks the next. */
-function sequence(): (what: string, step: () => Promise<void>) => void {
+function sequence(app: App): (what: string, step: () => Promise<void>) => void {
   let queue = Promise.resolve();
   return (what, step) => {
-    queue = queue.then(step).catch((error) => console.error(`cannot ${what}:`, error));
+    queue = queue.then(step).catch((error) => app.log("error", `Cannot ${what}: ${errorText(error)}`));
   };
 }
 
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
 /** Restores off the queue: a restore waiting for resimulation never holds up the next game. */
-function restoreInBackground(control: ControlClient, saved: SavedSession): void {
-  restoreSession(control, saved).catch((error) => console.error("cannot restore the session:", error));
+function restoreInBackground(app: App, control: ControlClient, saved: SavedSession): void {
+  restoreSession(control, saved).catch((error) => app.log("error", `Cannot restore the session: ${errorText(error)}`));
 }
 
 /**
@@ -25,7 +27,8 @@ function restoreInBackground(control: ControlClient, saved: SavedSession): void 
 export function followWasmGames(project: ProjectClient, app: App, start: (glueUrl: string) => WorkerGame): void {
   type Running = { glueUrl: string; game: WorkerGame; control: ControlClient; guard: SessionGuard };
   let running: Running | null = null;
-  const launch = async (glueUrl: string): Promise<ControlClient> => {
+  // `seed` is the session about to be restored into the new game.
+  const launch = async (glueUrl: string, seed: SavedSession | null): Promise<ControlClient> => {
     running?.guard.dispose();
     running?.game.terminate();
     running = null;
@@ -33,7 +36,7 @@ export function followWasmGames(project: ProjectClient, app: App, start: (glueUr
     const control = await ControlClient.connect(game.transport);
     // The asset browser loads the open scene into the new game here, before any restore.
     app.connectGame(control);
-    const guard = guardSession(control, game, () => launch(glueUrl));
+    const guard = guardSession(control, game, (saved) => launch(glueUrl, saved), { seed, log: app.log });
     running = { glueUrl, game, control, guard };
     return control;
   };
@@ -42,10 +45,10 @@ export function followWasmGames(project: ProjectClient, app: App, start: (glueUr
     if (endpoint?.type !== "wasm" || endpoint.glue_url === running?.glueUrl) return;
     const previous = running;
     const saved = previous && (await exportSession(previous.control).catch(() => previous.guard.latest()));
-    const control = await launch(endpoint.glue_url);
-    if (saved) restoreInBackground(control, saved);
+    const control = await launch(endpoint.glue_url, saved);
+    if (saved) restoreInBackground(app, control, saved);
   };
-  const enqueue = sequence();
+  const enqueue = sequence(app);
   project.on("game_ready", () => enqueue("start the game", update));
   enqueue("start the game", update);
 }
@@ -58,7 +61,7 @@ export function followWasmGames(project: ProjectClient, app: App, start: (glueUr
 export function followNativeGames(project: ProjectClient, app: App, connect: () => Promise<MessageTransport>): void {
   let running: { control: ControlClient; guard: SessionGuard } | null = null;
   let pending: SavedSession | null = null;
-  const enqueue = sequence();
+  const enqueue = sequence(app);
   project.on("game_rebuilt", () =>
     enqueue("restart the rebuilt game", async () => {
       const current = running;
@@ -77,10 +80,9 @@ export function followNativeGames(project: ProjectClient, app: App, connect: () 
       // The asset browser loads the open scene into the new game here, before any restore.
       app.connectGame(control);
       // The native host recovers from panics itself, so there is no crash to restart from.
-      running = { control, guard: guardSession(control, { onCrashed: () => () => {} }, async () => control) };
-      if (saved) restoreInBackground(control, saved);
-      // A project opened from the Project panel brings its plugins with its first game.
-      await app.loadPlugins();
+      const guard = guardSession(control, { onCrashed: () => () => {} }, async () => control, { seed: saved, log: app.log });
+      running = { control, guard };
+      if (saved) restoreInBackground(app, control, saved);
     }),
   );
 }

@@ -4,15 +4,15 @@ import { create, type StoreApi, type UseBoundStore } from "zustand";
 export interface TimelineState {
   timeline: Timeline | null;
   hash: string | null;
-  /** The hash shown includes edits not yet stepped into a recorded tick (only `GetHash` replies say). */
+  /** The hash shown includes edits not yet stepped into a recorded tick. */
   pending: boolean;
   playing: boolean;
   effectiveRate: number;
   /** The last `Diverged` report; kept until another replaces it or the game changes. */
   divergence: { tick: number } | null;
   /**
-   * Fetches the timeline and the hash with its pending flag, which no event carries: run after
-   * an edit, a seek, a step, or an undo. Failures are logged, never thrown.
+   * Fetches the timeline and the hash with its pending flag: run after an edit, a seek, a
+   * step, or an undo. Failures are logged, never thrown.
    */
   refresh(): Promise<void>;
 }
@@ -53,7 +53,7 @@ export function feedTimeline(control: ControlClient | null, store: TimelineStore
       store.setState(({ timeline }) => ({
         timeline: timeline && { ...timeline, current: event.tick },
         hash: event.hash,
-        pending: false,
+        pending: event.pending,
         playing: event.playing,
         effectiveRate: event.effective_rate,
       })),

@@ -172,7 +172,7 @@ type SelectionStore = UseBoundStore<StoreApi<SelectionState>>;
 interface TimelineState {
     timeline: Timeline | null;
     hash: string | null;
-    /** The hash shown includes edits not yet stepped into a recorded tick (only `GetHash` replies say). */
+    /** The hash shown includes edits not yet stepped into a recorded tick. */
     pending: boolean;
     playing: boolean;
     effectiveRate: number;
@@ -181,8 +181,8 @@ interface TimelineState {
         tick: number;
     } | null;
     /**
-     * Fetches the timeline and the hash with its pending flag, which no event carries: run after
-     * an edit, a seek, a step, or an undo. Failures are logged, never thrown.
+     * Fetches the timeline and the hash with its pending flag: run after an edit, a seek, a
+     * step, or an undo. Failures are logged, never thrown.
      */
     refresh(): Promise<void>;
 }
