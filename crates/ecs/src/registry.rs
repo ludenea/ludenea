@@ -109,10 +109,12 @@ impl Registry {
     ///
     /// Panics when the resource `T` is not inserted.
     pub(crate) fn resource_id<T: Resource>(&self) -> ResourceId {
-        *self
-            .resource_ids
-            .get(&TypeId::of::<T>())
+        self.find_resource_id::<T>()
             .unwrap_or_else(|| panic!("resource {} is not inserted", type_name::<T>()))
+    }
+
+    pub(crate) fn find_resource_id<T: Resource>(&self) -> Option<ResourceId> {
+        self.resource_ids.get(&TypeId::of::<T>()).copied()
     }
 
     /// # Panics

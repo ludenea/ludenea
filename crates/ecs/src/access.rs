@@ -46,8 +46,9 @@ impl QueryAccess {
 }
 
 /// Everything one system accesses.
+#[doc(hidden)]
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Access {
+pub struct Access {
     pub(crate) queries: Vec<QueryAccess>,
     pub(crate) resource_reads: BTreeSet<ResourceId>,
     pub(crate) resource_writes: BTreeSet<ResourceId>,
