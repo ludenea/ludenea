@@ -3,7 +3,7 @@
 
 use std::borrow::Cow;
 
-use crate::shape::{Circle, LINEAR_SLOP, MAX_POLYGON_VERTICES, Polygon, Shape};
+use crate::shape::{Capsule, Circle, LINEAR_SLOP, MAX_POLYGON_VERTICES, Polygon, Shape};
 use ludenea_math::{Rot, Transform, Vec2, clamp, max};
 
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
@@ -22,7 +22,8 @@ pub struct ManifoldPoint {
 
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct Manifold {
-    /// Unit normal pointing from A to B.
+    /// Normal pointing from A to B: unit length, except zero when two circle
+    /// centers coincide, so never divide by its length.
     pub normal: Vec2,
     pub points: [ManifoldPoint; 2],
     pub count: usize,
@@ -32,6 +33,9 @@ pub struct Manifold {
 const FLIP_BIT: u16 = 0x8000;
 /// SAT hysteresis and speculative fallback threshold.
 const TOLERANCE: f32 = 0.1 * LINEAR_SLOP;
+/// Sine of the largest angle (about 3 degrees) at which two capsule segments
+/// count as parallel and get a two-point manifold.
+const PARALLEL_SINE: f32 = 0.05;
 
 /// Computes the contact manifold of `a` against `b`. Points whose separation
 /// exceeds `speculative_distance` are dropped.
@@ -74,6 +78,9 @@ pub fn collide(
             xf_a,
             speculative_distance,
         )),
+        (Shape::Capsule(ca), Shape::Capsule(cb)) => {
+            collide_capsules(ca, xf_a, cb, xf_b, speculative_distance)
+        }
         _ => collide_polygons(
             &as_polygon(a),
             xf_a,
@@ -264,6 +271,136 @@ fn collide_polygon_circle(
         0,
     );
     to_world(xf_a, xf_a, xf_b, local, speculative_distance)
+}
+
+/// Capsule pair by segment-segment closest points (SAT on two segments has
+/// no axis along them, so collinear capsules cannot go through polygons).
+/// Near-parallel segments that overlap along A's axis clip B onto A for two
+/// points; every other configuration gives the single closest pair.
+fn collide_capsules(
+    a: &Capsule,
+    xf_a: Transform,
+    b: &Capsule,
+    xf_b: Transform,
+    speculative_distance: f32,
+) -> Manifold {
+    let frame = Transform {
+        position: xf_a.apply(a.center1),
+        rotation: xf_a.rotation,
+    };
+    let xf = frame.inv_mul(xf_b);
+    let (p1, q1) = (Vec2::ZERO, a.center2 - a.center1);
+    let (p2, q2) = (xf.apply(b.center1), xf.apply(b.center2));
+    let (radius_a, radius_b) = (a.radius, b.radius);
+
+    let (f1, f2) = segment_fractions(p1, q1, p2, q2);
+    let closest1 = Vec2::lerp(p1, q1, f1);
+    let closest2 = Vec2::lerp(p2, q2, f2);
+    let offset = closest2 - closest1;
+    let distance = offset.length();
+    if distance - radius_a - radius_b > speculative_distance {
+        return Manifold::default();
+    }
+
+    let (d1, d2) = (q1 - p1, q2 - p2);
+    let (length1, length2) = (d1.length(), d2.length());
+    let (u1, u2) = (d1.normalize(), d2.normalize());
+    let outside =
+        |fp: f32, fq: f32, length: f32| (fp <= 0.0 && fq <= 0.0) || (fp >= length && fq >= length);
+    let (fp2, fq2) = ((p2 - p1).dot(u1), (q2 - p1).dot(u1));
+    let outside_a = outside(fp2, fq2, length1);
+    let outside_b = outside((p1 - p2).dot(u2), (q1 - p2).dot(u2), length2);
+    let parallel = u1.cross(u2).abs() <= PARALLEL_SINE;
+
+    // A positive distance means the segments do not cross, so the clipped
+    // part of B lies on one side of A.
+    let local = if parallel && !outside_a && !outside_b && distance > f32::EPSILON {
+        clip_capsule_segments(
+            p1,
+            u1,
+            length1,
+            [p2, q2],
+            [fp2, fq2],
+            offset,
+            radius_a,
+            radius_b,
+        )
+    } else {
+        let normal = if distance > f32::EPSILON {
+            offset * (1.0 / distance)
+        } else {
+            u1.left_perp()
+        };
+        let contact = Vec2::lerp(
+            closest1 + normal * radius_a,
+            closest2 - normal * radius_b,
+            0.5,
+        );
+        let nearest_end = |f: f32| usize::from(f >= 0.5);
+        single_point(
+            normal,
+            contact,
+            distance - radius_a - radius_b,
+            make_id(nearest_end(f1), nearest_end(f2)),
+        )
+    };
+    to_world(frame, xf_a, xf_b, local, speculative_distance)
+}
+
+/// Clips segment B (`ends`, projected at `projections` along `u1`) to the
+/// span `[0, length1]` of segment A, which starts at `p1`. Ids follow the
+/// polygon convention: A's edge facing B (as `Polygon::from_segment` numbers
+/// it) and B's segment end each point comes from.
+#[allow(clippy::too_many_arguments)]
+fn clip_capsule_segments(
+    p1: Vec2,
+    u1: Vec2,
+    length1: f32,
+    ends: [Vec2; 2],
+    projections: [f32; 2],
+    offset: Vec2,
+    radius_a: f32,
+    radius_b: f32,
+) -> Manifold {
+    let (lower_end, upper_end) = if projections[0] <= projections[1] {
+        (0, 1)
+    } else {
+        (1, 0)
+    };
+    let (lower, upper) = (ends[lower_end], ends[upper_end]);
+    let (t_lower, t_upper) = (projections[lower_end], projections[upper_end]);
+    let span = t_upper - t_lower;
+    let v_lower = if t_lower < 0.0 && span > f32::EPSILON {
+        Vec2::lerp(lower, upper, -t_lower / span)
+    } else {
+        lower
+    };
+    let v_upper = if t_upper > length1 && span > f32::EPSILON {
+        Vec2::lerp(lower, upper, (length1 - t_lower) / span)
+    } else {
+        upper
+    };
+
+    // Edge 0 of a segment polygon faces right of `u1`, edge 1 faces left.
+    let (normal, edge) = if u1.left_perp().dot(offset) >= 0.0 {
+        (u1.left_perp(), 1)
+    } else {
+        (u1.right_perp(), 0)
+    };
+    let point = |v: Vec2, end: usize| {
+        let separation = (v - p1).dot(normal);
+        ManifoldPoint {
+            point: v + normal * (0.5 * (radius_a - radius_b - separation)),
+            separation: separation - radius_a - radius_b,
+            id: make_id(edge, end),
+            ..ManifoldPoint::default()
+        }
+    };
+    Manifold {
+        normal,
+        points: [point(v_lower, lower_end), point(v_upper, upper_end)],
+        count: 2,
+    }
 }
 
 /// Polygon expressed in the shared collision frame.
@@ -641,6 +778,58 @@ mod tests {
         assert_eq!(m.count, 2);
     }
 
+    fn segment_capsule(radius: f32) -> Shape {
+        Shape::Capsule(Capsule {
+            center1: Vec2::new(-0.5, 0.0),
+            center2: Vec2::new(0.5, 0.0),
+            radius,
+        })
+    }
+
+    #[test]
+    fn collinear_capsules_end_to_end_give_one_point() {
+        let capsule = segment_capsule(0.2);
+        let m = collide(&capsule, at(0.0, 0.0), &capsule, at(1.41, 0.0), SPECULATIVE);
+        assert_eq!(m.count, 1);
+        assert_near(m.normal, Vec2::new(1.0, 0.0), 1e-5);
+        assert!((m.points[0].separation - 0.01).abs() <= 1e-5, "{m:?}");
+        assert_near(m.points[0].point, Vec2::new(0.705, 0.0), 1e-5);
+    }
+
+    #[test]
+    fn parallel_stacked_capsules_give_two_points() {
+        let capsule = segment_capsule(0.2);
+        let m = collide(&capsule, at(0.0, 0.0), &capsule, at(0.2, 0.39), SPECULATIVE);
+        assert_eq!(m.count, 2);
+        assert_near(m.normal, Vec2::new(0.0, 1.0), 1e-6);
+        assert!(m.points[0].id < m.points[1].id);
+        let mut xs = [m.points[0].point.x, m.points[1].point.x];
+        xs.sort_by(f32::total_cmp);
+        assert_near(Vec2::new(xs[0], xs[1]), Vec2::new(-0.3, 0.5), 1e-5);
+        for p in &m.points {
+            assert!((p.separation + 0.01).abs() <= 1e-5, "{p:?}");
+            assert!((p.point.y - 0.195).abs() <= 1e-5, "{p:?}");
+        }
+    }
+
+    #[test]
+    fn crossing_capsules_give_one_point() {
+        let capsule = segment_capsule(0.2);
+        let upright = |y| Transform {
+            position: Vec2::new(0.1, y),
+            rotation: Rot::from_angle(PI / 2.0),
+        };
+        let crossing = collide(&capsule, at(0.0, 0.0), &capsule, upright(0.1), SPECULATIVE);
+        assert_eq!(crossing.count, 1);
+        assert!((crossing.points[0].separation + 0.4).abs() <= 1e-5);
+
+        // Upright capsule standing on the middle of a lying one.
+        let standing = collide(&capsule, at(0.0, 0.0), &capsule, upright(0.85), SPECULATIVE);
+        assert_eq!(standing.count, 1);
+        assert_near(standing.normal, Vec2::new(0.0, 1.0), 1e-5);
+        assert!((standing.points[0].separation + 0.05).abs() <= 1e-5);
+    }
+
     #[test]
     fn rotated_box_corner_contact_gives_one_point() {
         let half_diagonal = 0.5 * 2.0f32.sqrt();
@@ -670,19 +859,29 @@ mod tests {
         }
     }
 
-    /// True when the SAT separations are within the hysteresis band, where
-    /// the reference face legitimately depends on argument order.
-    fn near_sat_tie(a: &Shape, xf_a: Transform, b: &Shape, xf_b: Transform) -> bool {
-        if matches!(a, Shape::Circle(_)) || matches!(b, Shape::Circle(_)) {
-            return false;
+    /// True when the result legitimately depends on argument order: SAT
+    /// separations within the hysteresis band, or crossing capsule cores,
+    /// whose fallback normal is perpendicular to A.
+    fn order_dependent(a: &Shape, xf_a: Transform, b: &Shape, xf_b: Transform) -> bool {
+        match (a, b) {
+            (Shape::Circle(_), _) | (_, Shape::Circle(_)) => false,
+            (Shape::Capsule(ca), Shape::Capsule(cb)) => {
+                let (p1, q1) = (xf_a.apply(ca.center1), xf_a.apply(ca.center2));
+                let (p2, q2) = (xf_b.apply(cb.center1), xf_b.apply(cb.center2));
+                let (f1, f2) = segment_fractions(p1, q1, p2, q2);
+                Vec2::lerp(p1, q1, f1).distance(Vec2::lerp(p2, q2, f2)) <= TOLERANCE
+            }
+            _ => {
+                let tie = |a: &Shape, xf_a, b: &Shape, xf_b| {
+                    let (_, local_a, local_b) =
+                        local_pair(&as_polygon(a), xf_a, &as_polygon(b), xf_b);
+                    let (_, separation_a) = find_max_separation(&local_a, &local_b);
+                    let (_, separation_b) = find_max_separation(&local_b, &local_a);
+                    (separation_a - separation_b).abs() <= TOLERANCE
+                };
+                tie(a, xf_a, b, xf_b) || tie(b, xf_b, a, xf_a)
+            }
         }
-        let tie = |a: &Shape, xf_a, b: &Shape, xf_b| {
-            let (_, local_a, local_b) = local_pair(&as_polygon(a), xf_a, &as_polygon(b), xf_b);
-            let (_, separation_a) = find_max_separation(&local_a, &local_b);
-            let (_, separation_b) = find_max_separation(&local_b, &local_a);
-            (separation_a - separation_b).abs() <= TOLERANCE
-        };
-        tie(a, xf_a, b, xf_b) || tie(b, xf_b, a, xf_a)
     }
 
     #[test]
@@ -712,30 +911,63 @@ mod tests {
         ];
         let mut rng = XorShift(0x9E37_79B9);
         let mut contacts = 0;
-        for _ in 0..100 {
-            let a = &shapes[(rng.next() * 4.0) as usize];
-            let b = &shapes[(rng.next() * 4.0) as usize];
+        // Even iterations draw any pair; odd ones draw capsule pairs, every
+        // other one near parallel so the two-point path is covered too.
+        let (mut capsule_pairs, mut two_point_capsule_pairs) = (0, 0);
+        for i in 0..200 {
+            let (a, b) = if i % 2 == 0 {
+                (
+                    &shapes[(rng.next() * 4.0) as usize],
+                    &shapes[(rng.next() * 4.0) as usize],
+                )
+            } else {
+                (&shapes[1], &shapes[1])
+            };
             let xf_a = Transform {
                 position: Vec2::new(rng.range(-0.5, 0.5), rng.range(-0.5, 0.5)),
                 rotation: Rot::from_angle(rng.range(-PI, PI)),
             };
+            let rotation_b = if i % 4 == 1 {
+                xf_a.rotation.mul(Rot::from_angle(rng.range(-0.04, 0.04)))
+            } else {
+                Rot::from_angle(rng.range(-PI, PI))
+            };
             let xf_b = Transform {
                 position: xf_a.position + Vec2::new(rng.range(-1.0, 1.0), rng.range(-1.0, 1.0)),
-                rotation: Rot::from_angle(rng.range(-PI, PI)),
+                rotation: rotation_b,
             };
-            if near_sat_tie(a, xf_a, b, xf_b) {
+            if order_dependent(a, xf_a, b, xf_b) {
                 continue;
             }
             let ab = collide(a, xf_a, b, xf_b, SPECULATIVE);
             let ba = collide(b, xf_b, a, xf_a, SPECULATIVE);
             assert_eq!(ab.count, ba.count, "{a:?} {xf_a:?} {b:?} {xf_b:?}");
-            if ab.count > 0 {
-                contacts += 1;
-                assert_near(ab.normal, -ba.normal, 1e-5);
+            if ab.count == 0 {
+                continue;
             }
+            contacts += 1;
+            // Two-point capsule manifolds take the normal from the first
+            // segment, so the orders differ by the angle between segments.
+            let mut tolerance = 1e-5;
+            if matches!((a, b), (Shape::Capsule(_), Shape::Capsule(_))) {
+                capsule_pairs += 1;
+                if ab.count == 2 {
+                    two_point_capsule_pairs += 1;
+                    tolerance = PARALLEL_SINE;
+                }
+            }
+            assert_near(ab.normal, -ba.normal, tolerance);
         }
 
-        assert!(contacts >= 20, "only {contacts} configurations touched");
+        assert!(contacts >= 40, "only {contacts} configurations touched");
+        assert!(
+            capsule_pairs >= 10,
+            "only {capsule_pairs} capsule pairs touched"
+        );
+        assert!(
+            two_point_capsule_pairs >= 3,
+            "only {two_point_capsule_pairs} two-point capsule pairs"
+        );
     }
 
     #[test]
