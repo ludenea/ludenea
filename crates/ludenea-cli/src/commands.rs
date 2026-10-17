@@ -299,7 +299,8 @@ pub struct HostArgs {
 #[cfg(not(target_family = "wasm"))]
 pub fn host(app: fn() -> App, _args: &HostArgs) -> Outcome {
     let input = std::io::BufReader::new(std::io::stdin());
-    ludenea_control::stdio::serve_stdio(app, input, std::io::stdout().lock())
+    // Unlocked: game code printing from the pool's threads must not wait for the whole session.
+    ludenea_control::stdio::serve_stdio(app, input, std::io::stdout())
         .map_err(|error| error.to_string())?;
     Ok(0)
 }

@@ -10,14 +10,15 @@ use ludenea_app::App;
 
 use crate::host::Host;
 use crate::in_process::answer;
-use crate::protocol::ServerMessage;
+use crate::protocol::{Command, ServerMessage};
 
 /// How long the loop waits for a message before it advances the host anyway.
 const FRAME: Duration = Duration::from_nanos(1_000_000_000 / 60);
 
 /// Reads one `ClientMessage` per line from `input`, executes it, and writes one
 /// `ServerMessage` per line to `output`, advancing play in real time. Returns `Ok` at the
-/// end of the input.
+/// end of the input. The game runs on every core. Each batch of messages reaches `output` in
+/// one write, so lines the game prints from other threads never land inside a message.
 pub fn serve_stdio(
     app: fn() -> App,
     input: impl BufRead + Send + 'static,
@@ -25,6 +26,10 @@ pub fn serve_stdio(
 ) -> io::Result<()> {
     let host = Host::new(app()).map_err(io::Error::other);
     let mut host = host?;
+    host.handle(Command::SetThreads {
+        threads: available_threads(),
+    })
+    .expect("SetThreads always succeeds");
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
         for line in input.lines() {
@@ -45,21 +50,31 @@ pub fn serve_stdio(
             Err(RecvTimeoutError::Disconnected) => ended = true,
         }
         lines.extend(receiver.try_iter());
+        let mut batch = Vec::new();
         for line in lines.iter().filter(|line| !line.trim().is_empty()) {
             let reply = answer(&mut host, &mut connected, line);
-            write_message(&mut output, &reply)?;
+            write_message(&mut batch, &reply)?;
         }
         let elapsed = now();
         let events = host.advance(elapsed.duration_since(last).as_secs_f64());
         last = elapsed;
         for event in events {
-            write_message(&mut output, &ServerMessage::Event { event })?;
+            write_message(&mut batch, &ServerMessage::Event { event })?;
         }
+        output.write_all(&batch)?;
         output.flush()?;
         if ended {
             return Ok(());
         }
     }
+}
+
+/// Every core: results never depend on the thread count.
+#[allow(clippy::disallowed_methods)]
+fn available_threads() -> u32 {
+    std::thread::available_parallelism().map_or(1, |threads| {
+        u32::try_from(threads.get()).unwrap_or(u32::MAX)
+    })
 }
 
 #[allow(clippy::disallowed_methods)]
