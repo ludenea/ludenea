@@ -1,0 +1,9 @@
+---
+source: crates/ecs/src/schedule.rs
+expression: "format!(\"{ambiguous}\\n\\n{cycle}\")"
+---
+the schedule is ambiguous:
+- game::integrate and game::apply_gravity are unordered and conflict on game::Velocity, game::Gravity; order them with `game::integrate.before(game::apply_gravity)` or `game::apply_gravity.before(game::integrate)`
+- game::integrate and game::save are unordered and one of them takes the whole world; order them with `game::integrate.before(game::save)` or `game::save.before(game::integrate)`
+
+the ordering constraints form a cycle: game::input -> game::physics -> game::input
