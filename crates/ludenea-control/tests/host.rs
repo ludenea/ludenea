@@ -498,6 +498,12 @@ fn every_command_and_reply_round_trips_through_json() {
                 message: "boom".into(),
             },
         },
+        Event::Paused {
+            reason: PauseReason::Failed {
+                tick: 3,
+                message: "bad input".into(),
+            },
+        },
         Event::TimelineChanged { timeline },
         Event::Resimulated { up_to: 7 },
         Event::Diverged {
@@ -540,6 +546,20 @@ fn every_command_and_reply_round_trips_through_json() {
             message
         );
     }
+    for code in every_error_code() {
+        let message = ServerMessage::Response {
+            id: 3,
+            result: Err(ProtocolError {
+                code,
+                message: "m".into(),
+            }),
+        };
+        let json = serde_json::to_string(&message).unwrap();
+        assert_eq!(
+            serde_json::from_str::<ServerMessage>(&json).unwrap(),
+            message
+        );
+    }
     let json = serde_json::to_string(&Reply::Hash {
         tick: 1,
         hash: Hash64(0xab),
@@ -550,6 +570,40 @@ fn every_command_and_reply_round_trips_through_json() {
         json,
         r#"{"type":"hash","tick":1,"hash":"00000000000000ab","pending":false}"#
     );
+}
+
+/// Every `ErrorCode`; the match fails to compile when a variant is added without listing it.
+fn every_error_code() -> Vec<ErrorCode> {
+    use ErrorCode::*;
+    let all = vec![
+        VersionMismatch,
+        NotConnected,
+        InvalidScene,
+        InvalidInputs,
+        InvalidSnapshot,
+        NoSuchEntity,
+        InvalidEdit,
+        UnknownComponent,
+        UnknownResource,
+        InvalidPath,
+        InvalidCommand,
+        InvalidTick,
+        Resimulating,
+        NothingToUndo,
+        NothingToRedo,
+        NoInputMapping,
+        SystemPanicked,
+        InvalidFilter,
+    ];
+    for code in &all {
+        match code {
+            VersionMismatch | NotConnected | InvalidScene | InvalidInputs | InvalidSnapshot
+            | NoSuchEntity | InvalidEdit | UnknownComponent | UnknownResource | InvalidPath
+            | InvalidCommand | InvalidTick | Resimulating | NothingToUndo | NothingToRedo
+            | NoInputMapping | SystemPanicked | InvalidFilter => {}
+        }
+    }
+    all
 }
 
 fn game() -> GameInfo {
@@ -806,4 +860,43 @@ fn step_hashes_exclude_the_edits_get_hash_includes() {
     let (at_two, pending) = get_hash(&mut client);
     assert!(pending);
     assert_ne!(at_two, stepped[1]);
+}
+
+#[test]
+fn a_failing_play_tick_pauses_with_failed() {
+    let mut bad = InputLog::new(1);
+    bad.record(&[1u8]);
+    bad.ticks.push(vec![0xff, 0xff, 0xff]);
+    let mut client = client();
+    client
+        .request(Command::LoadInputs {
+            log: Bytes(bad.encode()),
+        })
+        .unwrap();
+    client.request(Command::Play).unwrap();
+    let events = client.advance(1.0);
+    let paused: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Paused { reason } => Some(reason),
+            _ => None,
+        })
+        .collect();
+    let [PauseReason::Failed { tick: 1, message }] = paused.as_slice() else {
+        panic!("{events:?}");
+    };
+    assert!(message.contains("input"), "{message}");
+}
+
+#[test]
+fn drain_events_returns_what_commands_queued() {
+    let mut client = client();
+    client
+        .request(Command::Step {
+            ticks: 2,
+            record_hashes: false,
+        })
+        .unwrap();
+    assert!(!client.drain_events().is_empty());
+    assert!(client.drain_events().is_empty());
 }

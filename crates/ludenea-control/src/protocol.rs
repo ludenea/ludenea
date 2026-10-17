@@ -161,11 +161,15 @@ pub enum Command {
         threads: u32,
     },
     /// Runs `ticks` ticks. When a tick fails, the ticks before it stay applied; the error
-    /// message names the failing tick.
+    /// message names the failing tick. With `record_hashes`, the reply holds the hash after
+    /// each tick before the edits recorded at the new tick (the session's recorded hashes),
+    /// so it differs from `GetHash` at a tick with a pending edit.
     Step {
         ticks: u32,
         record_hashes: bool,
     },
+    /// The hash of the current state, edits recorded at the current tick included (see
+    /// `pending`); `Step` with `record_hashes` reports hashes before those edits.
     GetHash,
     GetHashTree,
     TakeSnapshot,
@@ -489,6 +493,12 @@ pub enum PauseReason {
     User,
     /// A system panicked while running `tick`; the session stays at `tick`.
     Panicked {
+        tick: u64,
+        message: String,
+    },
+    /// Running `tick` failed without a panic (such as an input the game cannot read); the
+    /// session stays at `tick`.
+    Failed {
         tick: u64,
         message: String,
     },

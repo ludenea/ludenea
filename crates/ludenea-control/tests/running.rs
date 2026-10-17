@@ -559,6 +559,63 @@ fn a_command_that_changes_the_state_announces_it_once() {
     ok(&mut host, Command::Seek { tick: 2 });
     let seeked = hash(&mut host);
     assert_eq!(ticked(&host.advance(0.0)), vec![(2, seeked)]);
+
+    let entity = match ok(
+        &mut host,
+        Command::QueryEntities {
+            filter: "With<Crate>".to_string(),
+            offset: 0,
+            limit: 1,
+        },
+    ) {
+        Reply::Entities { rows, .. } => rows[0].entity,
+        other => panic!("{other:?}"),
+    };
+    ok(
+        &mut host,
+        Command::SetField {
+            target: FieldTarget::Component {
+                entity,
+                component: "ludenea::Pose".to_string(),
+            },
+            path: vec![
+                PathSegment::Field {
+                    name: "position".to_string(),
+                },
+                PathSegment::Field {
+                    name: "x".to_string(),
+                },
+            ],
+            value: serde_json::json!(0.25),
+        },
+    );
+    let edited = hash(&mut host);
+    assert_eq!(ticked(&host.advance(0.0)), vec![(2, edited)]);
+    ok(&mut host, Command::Undo);
+    assert_eq!(ticked(&host.advance(0.0)), vec![(2, seeked)]);
+}
+
+#[test]
+fn a_panicking_step_names_its_tick_once() {
+    let mut app = boxes::app();
+    app.system(Sim, panic_at_50);
+    let mut host = loaded_with(app, scene_a(), recorded(100));
+    step(&mut host, 50);
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let error = host
+        .handle(Command::Step {
+            ticks: 1,
+            record_hashes: false,
+        })
+        .unwrap_err();
+    std::panic::set_hook(hook);
+    assert_eq!(
+        error.message.matches("tick 50").count(),
+        1,
+        "{}",
+        error.message
+    );
 }
 
 #[test]

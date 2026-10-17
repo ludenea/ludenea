@@ -100,29 +100,32 @@ impl Host {
     /// while the recorded future is stale. Returns the events since the last call.
     pub fn advance(&mut self, elapsed_seconds: f64) -> Vec<Event> {
         if self.session.timeline().resimulating {
-            let before = self.state();
+            // Resimulation changes the state shown only by moving to another tick (back
+            // to the tick of a scene change), so the tick alone says whether to announce it.
+            let before = self.simulation.tick();
             self.resimulate();
-            self.report_state(before);
+            if self.simulation.tick() != before {
+                self.ticked();
+            }
         }
         if self.playing {
-            for _ in 0..self.pacer.advance(elapsed_seconds) {
+            let due = self.pacer.advance(elapsed_seconds);
+            for ran in 0..due {
                 match self
                     .session
                     .step(&mut self.simulation, self.live.as_deref())
                 {
-                    Ok(tick) => self.events.push(Event::Ticked {
-                        tick,
-                        hash: Hash64(self.simulation.hash()),
-                        pending: self.session.is_pending(),
-                        playing: self.playing,
-                        effective_rate: self.pacer.effective_rate(),
-                    }),
-                    // Play waits for resimulation to catch up.
-                    Err(SessionError::Resimulating { .. }) => break,
+                    Ok(_) => self.ticked(),
                     Err(error) => {
-                        self.fail_unattended(error);
-                        if self.playing {
-                            self.pause(PauseReason::User);
+                        // Ticks that did not run stay owed: play waits for resimulation to
+                        // catch up, or stops on a failure.
+                        self.pacer.not_run(due - ran);
+                        if !matches!(error, SessionError::Resimulating { .. }) {
+                            let tick = self.simulation.tick();
+                            let message = self.fail_unattended(error);
+                            if self.playing {
+                                self.pause(PauseReason::Failed { tick, message });
+                            }
                         }
                         break;
                     }
@@ -131,6 +134,12 @@ impl Host {
         }
         self.report_changes();
         self.report_timeline();
+        std::mem::take(&mut self.events)
+    }
+
+    /// The events queued since the last `advance` or `drain_events`, for a client that
+    /// never advances (the command line): they would otherwise pile up.
+    pub fn drain_events(&mut self) -> Vec<Event> {
         std::mem::take(&mut self.events)
     }
 
@@ -555,9 +564,14 @@ impl Host {
         for _ in 0..ticks {
             let tick = self.simulation.tick();
             self.session.step(&mut self.simulation, None).map_err(|e| {
+                // A panic message names its tick already.
+                let panicked = matches!(e, SessionError::Panicked { .. });
                 let mut error = self.fail(e);
-                error.message =
-                    format!("tick {tick}: {}; earlier ticks stay applied", error.message);
+                error.message = if panicked {
+                    format!("{}; earlier ticks stay applied", error.message)
+                } else {
+                    format!("tick {tick}: {}; earlier ticks stay applied", error.message)
+                };
                 error
             })?;
             if record_hashes {
@@ -631,16 +645,19 @@ impl Host {
     }
 
     /// A failure with no command to reply to: every kind is written to the console.
-    fn fail_unattended(&mut self, error: SessionError) {
+    /// Returns its message.
+    fn fail_unattended(&mut self, error: SessionError) -> String {
         let panicked = matches!(error, SessionError::Panicked { .. });
         let protocol = self.fail(error);
         if !panicked {
-            self.console(ConsoleLevel::Error, protocol.message);
+            self.console(ConsoleLevel::Error, protocol.message.clone());
         }
+        protocol.message
     }
 
     fn pause(&mut self, reason: PauseReason) {
         self.playing = false;
+        self.pacer.stop();
         self.events.push(Event::Paused { reason });
     }
 
@@ -670,16 +687,20 @@ impl Host {
     /// Announces the current state with `Ticked` when it differs from `before`, so clients
     /// refresh after a change that play did not report.
     fn report_state(&mut self, before: (u64, u64)) {
-        let (tick, hash) = self.state();
-        if (tick, hash) != before {
-            self.events.push(Event::Ticked {
-                tick,
-                hash: Hash64(hash),
-                pending: self.session.is_pending(),
-                playing: self.playing,
-                effective_rate: self.pacer.effective_rate(),
-            });
+        if self.state() != before {
+            self.ticked();
         }
+    }
+
+    /// Announces the current state with `Ticked`.
+    fn ticked(&mut self) {
+        self.events.push(Event::Ticked {
+            tick: self.simulation.tick(),
+            hash: Hash64(self.simulation.hash()),
+            pending: self.session.is_pending(),
+            playing: self.playing,
+            effective_rate: self.pacer.effective_rate(),
+        });
     }
 
     fn report_changes(&mut self) {

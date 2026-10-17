@@ -36,6 +36,11 @@ impl InProcess {
         self.host.advance(elapsed_seconds)
     }
 
+    /// The events queued by commands since the last `advance` or `drain_events`.
+    pub fn drain_events(&mut self) -> Vec<Event> {
+        self.host.drain_events()
+    }
+
     /// The game described in the welcome.
     pub fn game(&self) -> &GameInfo {
         &self.game

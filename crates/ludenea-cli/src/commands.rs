@@ -11,6 +11,34 @@ use crate::trace::{TRACE_VERSION, Trace};
 
 pub type Outcome = Result<i32, String>;
 
+/// The files of a run, read once, with the hashes a trace records of them.
+struct Recording {
+    ron: String,
+    inputs: Option<Vec<u8>>,
+    edits: Option<Vec<u8>>,
+    scene_hash: u64,
+    inputs_hash: u64,
+}
+
+impl Recording {
+    fn read(scene: &Path, inputs: Option<&Path>, edits: Option<&Path>) -> Result<Self, String> {
+        let scene_bytes = read(scene)?;
+        let scene_hash = xxh3_64(&scene_bytes);
+        let ron = String::from_utf8(scene_bytes)
+            .map_err(|_| format!("{} is not valid UTF-8", scene.display()))?;
+        let inputs = inputs.map(read).transpose()?;
+        let edits = edits.map(read).transpose()?;
+        let inputs_hash = inputs_hash(inputs.as_deref(), edits.as_deref());
+        Ok(Recording {
+            ron,
+            inputs,
+            edits,
+            scene_hash,
+            inputs_hash,
+        })
+    }
+}
+
 /// A connected client with the scene loaded and the inputs and thread count applied.
 struct Session {
     client: InProcess,
@@ -21,44 +49,27 @@ struct Session {
 impl Session {
     fn open(
         app: fn() -> App,
-        scene: &Path,
-        inputs: Option<&Path>,
-        edits: Option<&Path>,
+        recording: Recording,
         threads: Option<u32>,
     ) -> Result<Session, String> {
-        let scene_bytes = read(scene)?;
-        let ron = String::from_utf8(scene_bytes.clone())
-            .map_err(|_| format!("{} is not valid UTF-8", scene.display()))?;
         let host = Host::new(app()).map_err(|error| error.to_string())?;
         let mut client =
             InProcess::connect(host, PROTOCOL_VERSION).map_err(|error| error.message)?;
         if let Some(threads) = threads {
             send(&mut client, Command::SetThreads { threads })?;
         }
-        send(&mut client, Command::LoadScene { ron })?;
-        let inputs_log = inputs.map(read).transpose()?;
-        let edits_log = edits.map(read).transpose()?;
-        if let Some(log) = &inputs_log {
-            send(
-                &mut client,
-                Command::LoadInputs {
-                    log: Bytes(log.clone()),
-                },
-            )?;
+        send(&mut client, Command::LoadScene { ron: recording.ron })?;
+        if let Some(log) = recording.inputs {
+            send(&mut client, Command::LoadInputs { log: Bytes(log) })?;
         }
-        if let Some(log) = &edits_log {
-            send(
-                &mut client,
-                Command::LoadEdits {
-                    log: Bytes(log.clone()),
-                },
-            )?;
+        if let Some(log) = recording.edits {
+            send(&mut client, Command::LoadEdits { log: Bytes(log) })?;
             settle(&mut client)?;
         }
         Ok(Session {
             client,
-            scene_hash: xxh3_64(&scene_bytes),
-            inputs_hash: inputs_hash(inputs_log.as_deref(), edits_log.as_deref()),
+            scene_hash: recording.scene_hash,
+            inputs_hash: recording.inputs_hash,
         })
     }
 
@@ -111,8 +122,11 @@ fn settle(client: &mut InProcess) -> Result<(), String> {
     }
 }
 
+/// Sends `command`; the events it queues are dropped, since nothing here shows them.
 fn send(client: &mut InProcess, command: Command) -> Result<Reply, String> {
-    client.request(command).map_err(|error| error.message)
+    let reply = client.request(command).map_err(|error| error.message);
+    client.drain_events();
+    reply
 }
 
 fn read(path: &Path) -> Result<Vec<u8>, String> {
@@ -185,7 +199,8 @@ pub fn run(app: fn() -> App, args: &RunArgs, out: &mut dyn Write) -> Outcome {
         trace,
     } = args;
     let ticks = *ticks;
-    let mut session = Session::open(app, scene, inputs.as_deref(), edits.as_deref(), *threads)?;
+    let recording = Recording::read(scene, inputs.as_deref(), edits.as_deref())?;
+    let mut session = Session::open(app, recording, *threads)?;
     let mut hashes = vec![session.hash()?];
     hashes.extend(session.step(ticks)?);
     let last = hashes[hashes.len() - 1];
@@ -215,16 +230,15 @@ pub fn verify(app: fn() -> App, args: &VerifyArgs, out: &mut dyn Write) -> Outco
     } = args;
     let threads = *threads;
     let golden = Trace::decode(&read(golden)?)?;
-    let edits_log = edits.as_deref().map(read).transpose()?;
-    let recorded = inputs_hash(Some(&read(inputs)?), edits_log.as_deref());
-    if (xxh3_64(&read(scene)?), recorded) != (golden.scene_hash, golden.inputs_hash) {
+    let recording = Recording::read(scene, Some(inputs), edits.as_deref())?;
+    if (recording.scene_hash, recording.inputs_hash) != (golden.scene_hash, golden.inputs_hash) {
         say(
             out,
             "golden trace was recorded for a different scene or input log",
         )?;
         return Ok(2);
     }
-    let mut session = Session::open(app, scene, Some(inputs), edits.as_deref(), threads)?;
+    let mut session = Session::open(app, recording, threads)?;
     // The snapshot after the previous tick stays available for the dump.
     let mut previous = session.snapshot()?;
     for (tick, expected) in golden.hashes.iter().enumerate() {

@@ -11,6 +11,14 @@ import type {
 } from "./generated";
 import type { MessageTransport } from "./transports/transport";
 
+/**
+ * The control protocol version this client speaks.
+ *
+ * Component and resource values travel as JSON in serde's externally tagged form. An
+ * integer whose magnitude exceeds `Number.MAX_SAFE_INTEGER` (2^53 - 1) travels as a string
+ * of decimal digits, in both directions: send such an integer as a string, and read
+ * `u64`/`i64` fields as `number | string`. Hashes are 16-digit hex strings.
+ */
 export const PROTOCOL_VERSION = 2;
 
 export class ProtocolFailure<C extends string = ErrorCode> extends Error {
