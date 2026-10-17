@@ -91,10 +91,17 @@ architecture the later ones must fit.
    physics, app and tick loop, snapshot and restore, hash tree, control
    protocol core with in-process transport, CLI. Proof: identical golden
    hashes on the four platforms and across thread counts.
-2. **Editor and control surface.** Tauri plus React editor, desktop and
-   browser; Tauri IPC, Web Worker, and WebSocket transports; scene editing,
-   inspector, play, pause, step, timeline backed by logarithmic
-   checkpoints. Viewport uses a minimal wgpu debug-draw renderer.
+2. **Editor and control surface**, split into two milestones with their own
+   design documents:
+   - **2a, the usable editor** (`2026-10-17-ludenea-editor-2a-design.md`):
+     projects, Tauri plus React editor on desktop and in the browser,
+     React editor plugins, Tauri IPC, Web Worker, and WebSocket transports,
+     scene editing, ECS explorer, inspector, play, pause, step, linear
+     timeline backed by logarithmic checkpoints with edits recorded as
+     inputs, undo and redo, asset foundation, minimal wgpu debug-draw
+     viewport.
+   - **2b**: prefabs, data assets, replays, trace and diff viewer, timeline
+     branches, ghost future with causal divergence.
 3. **Rendering.** wgpu renderer: sprites, atlases, 2D camera, frame
    animations, interpolation between ticks, native window and web canvas.
 4. **Networking.** Rollback netcode (GGPO style): input prediction, rollback
