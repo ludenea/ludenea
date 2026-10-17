@@ -2,6 +2,7 @@
 
 use std::any::{TypeId, type_name};
 use std::collections::BTreeMap;
+use std::mem::{align_of, size_of};
 
 use crate::Component;
 use crate::column::Column;
@@ -18,8 +19,16 @@ impl ComponentId {
     }
 }
 
-struct ComponentInfo {
+/// What a snapshot checks to make sure it comes from the same binary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Fingerprint {
     name: &'static str,
+    size: usize,
+    align: usize,
+}
+
+struct ComponentInfo {
+    fingerprint: Fingerprint,
     new_column: fn() -> Box<dyn Column>,
 }
 
@@ -39,7 +48,11 @@ impl Registry {
         );
         self.ids.entry(TypeId::of::<T>()).or_insert_with(|| {
             self.components.push(ComponentInfo {
-                name: type_name::<T>(),
+                fingerprint: Fingerprint {
+                    name: type_name::<T>(),
+                    size: size_of::<T>(),
+                    align: align_of::<T>(),
+                },
                 new_column: || Box::new(Vec::<T>::new()),
             });
             next
@@ -57,7 +70,7 @@ impl Registry {
     }
 
     pub(crate) fn name(&self, id: ComponentId) -> &'static str {
-        self.components[id.index()].name
+        self.components[id.index()].fingerprint.name
     }
 
     /// Sorts the component identifiers accessed by a `context` (a bundle or
@@ -83,6 +96,20 @@ impl Registry {
 
     pub(crate) fn new_column(&self, id: ComponentId) -> Box<dyn Column> {
         (self.components[id.index()].new_column)()
+    }
+
+    pub(crate) fn fingerprint(&self) -> Vec<Fingerprint> {
+        self.components
+            .iter()
+            .map(|info| info.fingerprint)
+            .collect()
+    }
+
+    pub(crate) fn has_fingerprint(&self, fingerprint: &[Fingerprint]) -> bool {
+        self.components
+            .iter()
+            .map(|info| &info.fingerprint)
+            .eq(fingerprint)
     }
 }
 
@@ -118,7 +145,7 @@ mod tests {
         registry.register::<Position>();
 
         assert_eq!(registry.id::<Position>(), ComponentId(0));
-        assert_eq!(registry.components.len(), 2);
+        assert_eq!(registry.fingerprint().len(), 2);
     }
 
     #[test]

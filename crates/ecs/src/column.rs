@@ -12,6 +12,12 @@ pub trait Column: Any {
     /// Removes `row` like [`Column::swap_remove`] and pushes its value at
     /// the end of `destination`, a column of the same type.
     fn move_row(&mut self, row: usize, destination: &mut dyn Column);
+
+    fn boxed_clone(&self) -> Box<dyn Column>;
+
+    /// Copies `self` into `destination`, reusing its allocation. Returns
+    /// `false`, leaving `destination` untouched, when the types differ.
+    fn copy_into(&self, destination: &mut dyn Column) -> bool;
 }
 
 impl<T: Component> Column for Vec<T> {
@@ -22,6 +28,33 @@ impl<T: Component> Column for Vec<T> {
     fn move_row(&mut self, row: usize, destination: &mut dyn Column) {
         let value = Vec::swap_remove(self, row);
         downcast_mut::<T>(destination).push(value);
+    }
+
+    fn boxed_clone(&self) -> Box<dyn Column> {
+        Box::new(self.clone())
+    }
+
+    fn copy_into(&self, destination: &mut dyn Column) -> bool {
+        let destination: &mut dyn Any = destination;
+        match destination.downcast_mut::<Self>() {
+            Some(destination) => {
+                destination.clone_from(self);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+impl Clone for Box<dyn Column> {
+    fn clone(&self) -> Self {
+        self.boxed_clone()
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        if !source.copy_into(self.as_mut()) {
+            *self = source.boxed_clone();
+        }
     }
 }
 
@@ -52,6 +85,7 @@ mod tests {
     use super::*;
 
     impl Component for u8 {}
+    impl Component for u16 {}
 
     #[test]
     fn swap_remove_moves_the_last_value_into_the_hole() {
@@ -71,5 +105,28 @@ mod tests {
 
         assert_eq!(downcast_ref::<u8>(source.as_ref()), &[3, 2]);
         assert_eq!(downcast_ref::<u8>(destination.as_ref()), &[9, 1]);
+    }
+
+    #[test]
+    fn clone_from_reuses_the_allocation_of_the_same_type() {
+        let source: Box<dyn Column> = Box::new(vec![1u8, 2]);
+        let mut destination: Box<dyn Column> = Box::new(Vec::<u8>::with_capacity(8));
+        let allocation = downcast_ref::<u8>(destination.as_ref()).as_ptr();
+
+        destination.clone_from(&source);
+
+        let destination = downcast_ref::<u8>(destination.as_ref());
+        assert_eq!(destination, &[1, 2]);
+        assert_eq!(destination.as_ptr(), allocation);
+    }
+
+    #[test]
+    fn clone_from_replaces_a_column_of_another_type() {
+        let source: Box<dyn Column> = Box::new(vec![7u16]);
+        let mut destination: Box<dyn Column> = Box::new(vec![1u8]);
+
+        destination.clone_from(&source);
+
+        assert_eq!(downcast_ref::<u16>(destination.as_ref()), &[7]);
     }
 }

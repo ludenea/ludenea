@@ -1,6 +1,9 @@
 //! Entity component system for the Ludenea engine.
 //!
-//! A [`World`] stores entities and their components in archetype tables.
+//! A [`World`] stores entities and their components in archetype tables. Its
+//! whole state can be captured in a [`Snapshot`] and restored with memory
+//! copies, and a restored world yields the same entity identifiers and the
+//! same iteration order as the original.
 
 mod archetype;
 mod bundle;
@@ -9,12 +12,14 @@ mod entity;
 mod error;
 mod query;
 mod registry;
+mod snapshot;
 mod world;
 
 pub use bundle::Bundle;
 pub use entity::Entity;
 pub use error::EcsError;
 pub use query::{Query, QueryData, ReadOnlyQuery};
+pub use snapshot::Snapshot;
 pub use world::{World, WorldBuilder};
 
 /// Marker for the types a [`World`] stores as components.

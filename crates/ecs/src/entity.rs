@@ -64,6 +64,20 @@ impl Allocator {
     }
 }
 
+impl Clone for Allocator {
+    fn clone(&self) -> Self {
+        Self {
+            generations: self.generations.clone(),
+            free: self.free.clone(),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.generations.clone_from(&source.generations);
+        self.free.clone_from(&source.free);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

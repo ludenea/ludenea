@@ -45,7 +45,7 @@ pub(crate) struct Location {
     pub(crate) row: usize,
 }
 
-/// The mutable state of a world.
+/// Everything a snapshot captures.
 #[derive(Debug)]
 pub(crate) struct State {
     pub(crate) allocator: Allocator,
@@ -54,6 +54,24 @@ pub(crate) struct State {
     /// Every archetype, in creation order.
     pub(crate) archetypes: Vec<Archetype>,
     pub(crate) archetype_ids: BTreeMap<Vec<ComponentId>, ArchetypeId>,
+}
+
+impl Clone for State {
+    fn clone(&self) -> Self {
+        Self {
+            allocator: self.allocator.clone(),
+            locations: self.locations.clone(),
+            archetypes: self.archetypes.clone(),
+            archetype_ids: self.archetype_ids.clone(),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.allocator.clone_from(&source.allocator);
+        self.locations.clone_from(&source.locations);
+        self.archetypes.clone_from(&source.archetypes);
+        self.archetype_ids.clone_from(&source.archetype_ids);
+    }
 }
 
 /// Every entity and its components, stored in archetype tables.

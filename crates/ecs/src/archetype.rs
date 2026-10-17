@@ -95,6 +95,22 @@ impl Archetype {
     }
 }
 
+impl Clone for Archetype {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            entities: self.entities.clone(),
+            columns: self.columns.clone(),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.key.clone_from(&source.key);
+        self.entities.clone_from(&source.entities);
+        self.columns.clone_from(&source.columns);
+    }
+}
+
 /// Shows the layout, not the values: components need not be `Debug`.
 impl fmt::Debug for Archetype {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
