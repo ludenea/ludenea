@@ -8,6 +8,7 @@ ludenea-ecs.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 postcard.workspace = true
+ron.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 rayon.workspace = true

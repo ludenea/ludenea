@@ -6,7 +6,7 @@ pub use ludenea_math as math;
 pub use serde;
 
 pub mod prelude {
-    pub use crate::app::{App, Input, Inputs, Plugin, Rng, Sim, Simulation, Time};
+    pub use crate::app::{App, Input, InputLog, Inputs, Plugin, Rng, Sim, Simulation, Time};
     pub use crate::ecs::{
         Commands, Component, Entity, EventWriter, Events, IntoSystemConfig, Query, Res, ResMut,
         Resource, Runtime, RuntimeMut, SystemLabel, With, Without, World,

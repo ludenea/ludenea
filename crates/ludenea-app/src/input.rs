@@ -40,7 +40,8 @@ pub(crate) struct InputType {
     /// Writes `players` default inputs.
     pub(crate) write_defaults: fn(&mut World, usize),
     /// Decodes a postcard `Vec<I>`, rejecting leftover bytes, then writes it.
-    pub(crate) write_encoded: fn(&mut World, &[u8]) -> Result<(), SimError>,
+    /// Also rejects a `Vec` that does not hold exactly the given number of players.
+    pub(crate) write_encoded: fn(&mut World, &[u8], usize) -> Result<(), SimError>,
 }
 
 impl InputType {
@@ -49,19 +50,37 @@ impl InputType {
             id: TypeId::of::<I>(),
             name: type_name::<I>(),
             write_defaults: |world, players| write(world, vec![I::default(); players]),
-            write_encoded: |world, bytes| {
-                let (players, rest) = postcard::take_from_bytes::<Vec<I>>(bytes)
-                    .map_err(|error| SimError::InputDecode(error.to_string()))?;
-                if !rest.is_empty() {
-                    return Err(SimError::InputDecode(format!(
-                        "{} unexpected trailing bytes",
-                        rest.len()
-                    )));
-                }
+            write_encoded: |world, bytes, expected| {
+                let players = decode_exact::<Vec<I>>(bytes)?;
+                check_player_count(expected, players.len())?;
                 write(world, players);
                 Ok(())
             },
         }
+    }
+}
+
+/// Decodes postcard bytes, rejecting any bytes left unread after the value.
+pub(crate) fn decode_exact<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, SimError> {
+    let (value, rest) = postcard::take_from_bytes(bytes)
+        .map_err(|error| SimError::InputDecode(error.to_string()))?;
+    if rest.is_empty() {
+        Ok(value)
+    } else {
+        Err(SimError::InputDecode(format!(
+            "{} unexpected trailing bytes",
+            rest.len()
+        )))
+    }
+}
+
+pub(crate) fn check_player_count(expected: usize, got: usize) -> Result<(), SimError> {
+    if expected == got {
+        Ok(())
+    } else {
+        Err(SimError::InputDecode(format!(
+            "expected {expected} players, got {got}"
+        )))
     }
 }
 

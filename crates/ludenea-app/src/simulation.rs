@@ -23,12 +23,12 @@ pub enum SimError {
 
 /// A built app: the world and its schedule, stepped one fixed tick at a time.
 pub struct Simulation {
-    world: World,
+    pub(crate) world: World,
     schedule: Schedule,
     input: Option<InputType>,
     players: usize,
     /// The world as built, before any step.
-    initial: Snapshot,
+    pub(crate) initial: Snapshot,
 }
 
 impl Simulation {
@@ -64,7 +64,7 @@ impl Simulation {
         self.advance();
     }
 
-    /// Steps with `inputs`, one per player. On error nothing changes.
+    /// Steps with `inputs`, exactly one per player. On error nothing changes.
     pub fn step_with<I: Input>(&mut self, inputs: &[I]) -> Result<(), SimError> {
         let input = self.input.as_ref().ok_or(SimError::NoInputType)?;
         if input.id != TypeId::of::<I>() {
@@ -72,12 +72,13 @@ impl Simulation {
                 expected: input.name,
             });
         }
+        input::check_player_count(self.players, inputs.len())?;
         input::write(&mut self.world, inputs.to_vec());
         self.advance();
         Ok(())
     }
 
-    /// Steps with a postcard `Vec` of the app's input type, or default inputs for `None`.
+    /// Steps with a postcard `Vec` of the app's input type (one per player), or default inputs for `None`.
     /// On error nothing changes.
     pub fn step_encoded(&mut self, inputs: Option<&[u8]>) -> Result<(), SimError> {
         let Some(bytes) = inputs else {
@@ -85,7 +86,7 @@ impl Simulation {
             return Ok(());
         };
         let input = self.input.as_ref().ok_or(SimError::NoInputType)?;
-        (input.write_encoded)(&mut self.world, bytes)?;
+        (input.write_encoded)(&mut self.world, bytes, self.players)?;
         self.advance();
         Ok(())
     }

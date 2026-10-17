@@ -3,14 +3,18 @@
 
 pub mod app;
 pub mod input;
+pub mod input_log;
 pub mod parallel;
 pub mod rng;
+pub mod scene;
 pub mod simulation;
 pub mod time;
 
 pub use app::{App, AppError, Plugin, Sim};
 pub use input::{Input, Inputs};
+pub use input_log::{INPUT_LOG_VERSION, InputLog};
 pub use parallel::Parallel;
 pub use rng::Rng;
+pub use scene::SceneError;
 pub use simulation::{SimError, Simulation};
 pub use time::Time;

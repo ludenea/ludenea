@@ -102,6 +102,7 @@ dependencies = [
  "ludenea-ecs",
  "postcard",
  "rayon",
+ "ron",
  "serde",
  "thiserror",
 ]
