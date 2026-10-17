@@ -654,18 +654,16 @@ impl Session {
     /// passes the hash of the tick to introspection.
     fn record_tick(&mut self, sim: &Simulation) {
         let tick = sim.tick();
-        let hash = if tick == self.hashes.len() as u64 {
-            let hash = sim.hash();
-            self.hashes.push(hash);
+        if tick == self.hashes.len() as u64 {
+            self.hashes.push(sim.hash());
             if self.checkpoints.wants(tick) {
                 self.checkpoints.insert(tick, sim.snapshot());
             }
-            hash
-        } else {
-            // Ticks replayed here are never stale: seeking past resimulation is refused.
-            self.hashes[tick as usize]
-        };
-        if let Some(introspection) = &mut self.introspection {
+        }
+        // Ticks replayed here are never stale: seeking past resimulation is refused.
+        if let (Some(introspection), Some(&hash)) =
+            (&mut self.introspection, self.hashes.get(tick as usize))
+        {
             introspection.hashed(tick, hash);
         }
     }
