@@ -85,6 +85,8 @@ pub struct World {
 }
 
 impl World {
+    /// Starts a [`WorldBuilder`], on which every component type is registered
+    /// before the world is built.
     #[must_use]
     pub fn builder() -> WorldBuilder {
         WorldBuilder::default()
@@ -217,8 +219,8 @@ impl World {
     }
 
     /// Finds a live entity. The entity stored at the location must be
-    /// `entity` itself, which rules out stale generations and identifiers
-    /// from another world.
+    /// `entity` itself, which rules out stale generations. An identifier from
+    /// another world with the same index and generation is indistinguishable.
     fn locate(&self, entity: Entity) -> Option<Location> {
         let location = (*self.state.locations.get(entity.index())?)?;
         let stored = self.state.archetypes[location.archetype.0].entities()[location.row];

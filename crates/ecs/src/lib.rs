@@ -4,6 +4,35 @@
 //! whole state can be captured in a [`Snapshot`] and restored with memory
 //! copies, and a restored world yields the same entity identifiers and the
 //! same iteration order as the original.
+//!
+//! ```
+//! use ludenea_ecs::{Component, Entity, World};
+//!
+//! #[derive(Clone, Copy, Debug, PartialEq)]
+//! struct Position(i32);
+//! impl Component for Position {}
+//!
+//! #[derive(Clone, Copy)]
+//! struct Velocity(i32);
+//! impl Component for Velocity {}
+//!
+//! let mut builder = World::builder();
+//! builder.register::<Position>().register::<Velocity>();
+//! let mut world = builder.build();
+//!
+//! let player = world.spawn((Position(0), Velocity(2)));
+//!
+//! for (position, velocity) in world.query_mut::<(&mut Position, &Velocity)>().iter() {
+//!     position.0 += velocity.0;
+//! }
+//! let entities: Vec<Entity> = world.query::<Entity>().iter().collect();
+//! assert_eq!(entities, [player]);
+//!
+//! let snapshot = world.snapshot();
+//! world.despawn(player).unwrap();
+//! world.restore(&snapshot).unwrap();
+//! assert_eq!(world.get::<Position>(player), Some(&Position(2)));
+//! ```
 
 mod archetype;
 mod bundle;
