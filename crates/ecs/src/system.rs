@@ -7,9 +7,10 @@ use crate::World;
 use crate::access::Access;
 use crate::archetype::ArchetypeId;
 use crate::column::Column;
-use crate::entity::Entity;
+use crate::commands::CommandBuffer;
+use crate::entity::{Allocator, Entity};
 use crate::query::ColumnBorrow;
-use crate::registry::ResourceId;
+use crate::registry::{Registry, ResourceId};
 use crate::world::{Location, State};
 
 /// The parts of a world lent to the parameters of one system run: every
@@ -20,26 +21,32 @@ use crate::world::{Location, State};
 /// parameters can hold.
 #[doc(hidden)]
 pub struct WorldParts<'w> {
+    pub(crate) registry: &'w Registry,
     pub(crate) locations: &'w [Option<Location>],
     /// Entities of every archetype and the index of its first column in
     /// `columns`.
     archetypes: Vec<(&'w [Entity], usize)>,
     columns: Vec<Option<ColumnBorrow<'w>>>,
     resources: Vec<Option<ColumnBorrow<'w>>>,
+    /// Taken by the only commands parameter of the system.
+    pub(crate) commands: Option<(&'w mut Allocator, &'w mut CommandBuffer)>,
 }
 
 impl<'w> WorldParts<'w> {
     // ponytail: lends every column of every archetype on each system run,
     // lend only the archetypes a system matches if the counters of the
     // benchmark harness show it.
-    pub(crate) fn new(world: &'w mut World) -> Self {
+    pub(crate) fn new(world: &'w mut World, commands: &'w mut CommandBuffer) -> Self {
         let State {
+            allocator,
             locations,
             archetypes,
             resources,
             ..
         } = &mut world.state;
         let mut parts = Self {
+            registry: &world.registry,
+            commands: Some((allocator, commands)),
             locations,
             archetypes: Vec::with_capacity(archetypes.len()),
             columns: Vec::new(),
@@ -103,7 +110,8 @@ fn lend<'w>(slot: &mut Option<ColumnBorrow<'w>>, write: bool) -> ColumnBorrow<'w
 }
 
 /// A system parameter: [`Query`](crate::Query), [`Res`](crate::Res),
-/// [`ResMut`](crate::ResMut), or a tuple of up to eight of them.
+/// [`ResMut`](crate::ResMut), [`Commands`](crate::Commands), or a tuple of
+/// up to eight of them.
 pub trait SystemParam {
     /// What the parameter keeps between runs, such as a query cache. It is
     /// derived from the world and never part of a snapshot.
@@ -184,7 +192,8 @@ pub trait System {
     /// Creates the parameter states and returns the access of the system.
     fn initialize(&mut self, world: &World) -> Access;
 
-    fn run(&mut self, world: &mut World);
+    /// Runs the system, recording its commands in `commands`.
+    fn run(&mut self, world: &mut World, commands: &mut CommandBuffer);
 }
 
 /// A function whose parameters are all [`SystemParam`]s. `Marker` tells
@@ -253,13 +262,13 @@ where
         access
     }
 
-    fn run(&mut self, world: &mut World) {
+    fn run(&mut self, world: &mut World, commands: &mut CommandBuffer) {
         let state = self
             .state
             .as_mut()
             .expect("the schedule initializes a system before running it");
         Function::Param::update(state, world);
-        let mut parts = WorldParts::new(world);
+        let mut parts = WorldParts::new(world, commands);
         let params = Function::Param::get(state, &mut parts);
         self.function.run(params);
     }
@@ -282,7 +291,7 @@ impl<Function: FnMut(&mut World) + 'static> System for ExclusiveSystem<Function>
         }
     }
 
-    fn run(&mut self, world: &mut World) {
+    fn run(&mut self, world: &mut World, _: &mut CommandBuffer) {
         (self.function)(world);
     }
 }
@@ -340,11 +349,12 @@ impl<Function: FnMut(&mut World) + 'static> IntoSystem<ExclusiveMarker> for Func
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
 
     use super::IntoSystem;
+    use crate::commands::CommandBuffer;
     use crate::{Component, Entity, Query, Res, ResMut, Resource, With, Without, World};
 
     #[derive(Clone, Copy, Debug, PartialEq)]
@@ -383,12 +393,15 @@ mod tests {
         builder.build()
     }
 
-    /// Initializes `system` on `world` and runs it `times` times.
-    fn run<M>(world: &mut World, system: impl IntoSystem<M>, times: usize) {
+    /// Initializes `system` on `world` and runs it `times` times, applying
+    /// its commands after each run.
+    pub(crate) fn run<M>(world: &mut World, system: impl IntoSystem<M>, times: usize) {
         let mut system = system.into_system();
+        let mut commands = CommandBuffer::default();
         system.initialize(world);
         for _ in 0..times {
-            system.run(world);
+            system.run(world, &mut commands);
+            commands.apply(world);
         }
     }
 
@@ -530,7 +543,7 @@ mod tests {
         system.initialize(&world);
         let body = world.spawn((Velocity(0), Player));
 
-        system.run(&mut world);
+        system.run(&mut world, &mut CommandBuffer::default());
 
         assert_eq!(world.get::<Velocity>(body), Some(&Velocity(-1)));
     }

@@ -38,6 +38,7 @@ mod access;
 mod archetype;
 mod bundle;
 mod column;
+mod commands;
 mod entity;
 mod error;
 mod query;
@@ -49,6 +50,7 @@ mod system;
 mod world;
 
 pub use bundle::Bundle;
+pub use commands::Commands;
 pub use entity::Entity;
 pub use error::EcsError;
 pub use query::{QueryData, QueryFilter, ReadOnlyQuery, With, Without, WorldQuery};

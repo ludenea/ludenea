@@ -130,17 +130,27 @@ impl World {
     /// Panics when a component is not registered or appears twice, or when
     /// entity indices are exhausted.
     pub fn spawn<B: Bundle>(&mut self, bundle: B) -> Entity {
+        let entity = self.state.allocator.allocate();
+        self.spawn_at(entity, bundle);
+        entity
+    }
+
+    /// Stores `bundle` for `entity`, allocated earlier and not stored yet,
+    /// such as an entity reserved by a command.
+    ///
+    /// # Panics
+    ///
+    /// Panics when a component is not registered or appears twice.
+    pub(crate) fn spawn_at<B: Bundle>(&mut self, entity: Entity, bundle: B) {
         let mut ids = Vec::new();
         B::component_ids(&self.registry, &mut ids);
         let archetype = self.archetype_for(self.registry.sorted_without_duplicates(ids, "bundle"));
-        let entity = self.state.allocator.allocate();
         let row = self.state.archetypes[archetype.0].push_entity(entity);
         bundle.write(&self.registry, &mut self.state.archetypes[archetype.0], row);
-        if entity.index() == self.state.locations.len() {
-            self.state.locations.push(None);
+        if entity.index() >= self.state.locations.len() {
+            self.state.locations.resize(entity.index() + 1, None);
         }
         self.state.locations[entity.index()] = Some(Location { archetype, row });
-        entity
     }
 
     /// Despawns `entity` with all its components.
