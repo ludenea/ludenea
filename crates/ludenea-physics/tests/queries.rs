@@ -152,7 +152,7 @@ fn raycast_hits_circle_capsule_and_rounded_polygon() {
     // The normal points from the vertex (21, 1) through the hit point.
     let radial = (hit.point - Vec2::new(21.0, 1.0)).normalize();
     assert!(hit.normal.distance(radial) < 1e-4);
-    assert!((hit.point - Vec2::new(21.0, 1.0)).length() - 0.5 < 1e-4);
+    assert!(((hit.point - Vec2::new(21.0, 1.0)).length() - 0.5).abs() < 1e-4);
 }
 
 #[test]
