@@ -1,4 +1,4 @@
-import { RequestTracker, unwrap } from "./client";
+import { RequestTracker, parseFrame, unwrap } from "./client";
 import type { MessageTransport } from "./transports/transport";
 
 // Replaced by the generated project protocol types.
@@ -11,8 +11,8 @@ export class ProjectClient {
   constructor(private readonly transport: MessageTransport) {
     this.requests = new RequestTracker(transport);
     transport.onMessage((raw) => {
-      const message = JSON.parse(raw) as { type: string; id?: number; result?: never };
-      if (message.type === "response" && message.id !== undefined) this.requests.resolve(message.id, message.result!);
+      const message = parseFrame<{ type: string; id?: number; result?: never }>(raw);
+      if (message?.type === "response" && message.id !== undefined) this.requests.resolve(message.id, message.result!);
     });
     transport.onClose((reason) => this.requests.rejectAll(`connection closed: ${reason}`));
   }

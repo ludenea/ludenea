@@ -94,6 +94,16 @@ export function unwrap(result: Outcome): Reply {
   return result.ok;
 }
 
+/** Parses an incoming frame; a malformed one is ignored with a warning so it cannot break delivery or hang requests. */
+export function parseFrame<T>(raw: string): T | undefined {
+  try {
+    return JSON.parse(raw) as T;
+  } catch (error) {
+    console.warn(`ignoring malformed message: ${String(error)}`);
+    return undefined;
+  }
+}
+
 type Listener = (event: never) => void;
 
 export class ControlClient {
@@ -106,9 +116,9 @@ export class ControlClient {
     readonly game: GameInfo,
   ) {
     transport.onMessage((raw) => {
-      const message = JSON.parse(raw) as ServerMessage;
-      if (message.type === "response") requests.resolve(message.id, message.result);
-      else if (message.type === "event") this.dispatch(message.event);
+      const message = parseFrame<ServerMessage>(raw);
+      if (message?.type === "response") requests.resolve(message.id, message.result);
+      else if (message?.type === "event") this.dispatch(message.event);
     });
     transport.onClose((reason) => {
       this.closed = true;
@@ -119,12 +129,12 @@ export class ControlClient {
   static connect(transport: MessageTransport): Promise<ControlClient> {
     return new Promise((resolve, reject) => {
       const stopMessages = transport.onMessage((raw) => {
-        const message = JSON.parse(raw) as ServerMessage;
-        if (message.type === "welcome") {
+        const message = parseFrame<ServerMessage>(raw);
+        if (message?.type === "welcome") {
           stopMessages();
           stopClose();
           resolve(new ControlClient(transport, new RequestTracker(transport), message.game));
-        } else if (message.type === "refused") {
+        } else if (message?.type === "refused") {
           stopMessages();
           stopClose();
           reject(new Error(message.error.message));

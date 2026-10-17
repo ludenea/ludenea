@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ControlClient, ProtocolFailure, fakeTransport, type GameInfo } from "../src";
 
 const game: GameInfo = { components: [], resources: [], input: null, tick_rate: 60, debug_layers: [] };
@@ -75,6 +75,18 @@ describe("ControlClient", () => {
     transport.push(JSON.stringify({ type: "event", event: { type: "entity_despawned", entity: 6 } }));
     expect(ticks).toEqual([5]);
     expect(other).toEqual(["hi"]);
+  });
+
+  it("malformed_frame_is_ignored_and_does_not_break_pending_requests", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { transport, client: connecting } = connected();
+    const client = await connecting;
+    const pending = client.request({ type: "get_hash" });
+    transport.push("{not json");
+    transport.push(ok(1, { type: "hash", tick: 1, hash: "1", pending: false }));
+    expect((await pending).tick).toBe(1);
+    expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
   });
 
   it("close_rejects_pending_requests", async () => {
