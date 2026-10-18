@@ -11,6 +11,7 @@ use ludenea_ecs::{Asset, AssetId, Entity, Prefab};
 use ron::value::RawValue;
 use serde::{Deserialize, Serialize};
 
+use crate::Simulation;
 use crate::assets::{AssetSource, parse_asset_file};
 use crate::path::{Path, PathSegment};
 use crate::scene::{LoadAddress, NamedValues, SceneEntity, SceneError, parse_scene};
@@ -376,6 +377,515 @@ impl<'a> Resolver<'a> {
         self.stack.pop();
         Ok(())
     }
+}
+
+/// A prefab file of `entities`' current components, with local identifiers `0..n` in
+/// that order. An `Entity` value naming an entity outside `entities` is refused.
+pub fn create_prefab(sim: &Simulation, entities: &[Entity]) -> Result<String, SceneError> {
+    sim.write_prefab(entities)
+}
+
+/// Appends an instance of `prefab` to the scene or prefab `file` with the identifier
+/// `next_id` gives, and returns the new text and that identifier.
+pub fn place_instance(file: &str, prefab: AssetId) -> Result<(String, u32), SceneError> {
+    let root = parse_file(file)?;
+    let missing =
+        || SceneError::Parse("the file has no `next_id`; save it as version 2 first".to_string());
+    let next = field(file, &root, "next_id").ok_or_else(missing)?;
+    let id: u32 = file[next.span.clone()].parse().map_err(|_| missing())?;
+    let text = splice(file, next.span.clone(), &(id + 1).to_string());
+    let entry = format!("(id: {id}, prefab: \"{prefab}\", overrides: [], added: [], removed: [])");
+    Ok((append(&text, ROOT_INSTANCES, &entry)?, id))
+}
+
+/// Removes the scene entities `entities` from `file` and places an instance of `prefab`
+/// in their stead.
+pub fn replace_with_instance(
+    file: &str,
+    entities: &[u32],
+    prefab: AssetId,
+) -> Result<String, SceneError> {
+    let mut text = file.to_string();
+    for &id in entities {
+        let named = |text: &str, entry: &Node| id_of(text, entry) == Some(id);
+        let (removed, count) = remove_where(&text, ROOT_ENTITIES, &named)?;
+        if count == 0 {
+            let root = parse_file(&text)?;
+            let (_, instances) = list(&text, &root, ROOT_INSTANCES)?;
+            let instances = instances.map_or(&[][..], items);
+            return Err(if instances.iter().any(|entry| named(&text, entry)) {
+                SceneError::InstanceEntity(vec![id])
+            } else {
+                SceneError::MissingTarget(format!("entity {id}"))
+            });
+        }
+        text = removed;
+    }
+    Ok(place_instance(&text, prefab)?.0)
+}
+
+/// Sets the override of `component` at `path` on `entity` of the instance at `instance`
+/// (a path of local identifiers, the first one in `file`), replacing an existing one.
+pub fn set_override(
+    file: &str,
+    instance: &[u32],
+    entity: &[u32],
+    component: &str,
+    path: &[PathSegment],
+    value: &str,
+) -> Result<String, SceneError> {
+    let (id, entity) = split_target(instance, entity)?;
+    let path_ron = ron::to_string(path).expect("a path encodes");
+    let entry =
+        format!("(entity: {entity:?}, component: {component:?}, path: {path_ron}, value: {value})");
+    let at = ListAt {
+        instance: Some(id),
+        name: "overrides",
+    };
+    upsert(
+        file,
+        at,
+        &targets(&entity, component, Some(path)),
+        value,
+        &entry,
+    )
+}
+
+/// Removes the override of `component` at `path` on `entity` of `instance`; an empty
+/// `path` removes every override of the component.
+pub fn revert_override(
+    file: &str,
+    instance: &[u32],
+    entity: &[u32],
+    component: &str,
+    path: &[PathSegment],
+) -> Result<String, SceneError> {
+    let (id, entity) = split_target(instance, entity)?;
+    let path = (!path.is_empty()).then_some(path);
+    let at = ListAt {
+        instance: Some(id),
+        name: "overrides",
+    };
+    Ok(remove_where(file, at, &targets(&entity, component, path))?.0)
+}
+
+/// Gives `entity` of `instance` the component `component` with `value`, taking back a
+/// removal of it.
+pub fn add_component_override(
+    file: &str,
+    instance: &[u32],
+    entity: &[u32],
+    component: &str,
+    value: &str,
+) -> Result<String, SceneError> {
+    let (id, entity) = split_target(instance, entity)?;
+    let is = targets(&entity, component, None);
+    let (text, _) = remove_where(
+        file,
+        ListAt {
+            instance: Some(id),
+            name: "removed",
+        },
+        &is,
+    )?;
+    let entry = format!("(entity: {entity:?}, component: {component:?}, value: {value})");
+    upsert(
+        &text,
+        ListAt {
+            instance: Some(id),
+            name: "added",
+        },
+        &is,
+        value,
+        &entry,
+    )
+}
+
+/// Removes the component `component` from `entity` of `instance`, with its overrides: an
+/// added component is taken back, a prefab component gets a removal.
+pub fn remove_component_override(
+    file: &str,
+    instance: &[u32],
+    entity: &[u32],
+    component: &str,
+) -> Result<String, SceneError> {
+    let (id, entity) = split_target(instance, entity)?;
+    let is = targets(&entity, component, None);
+    let at = |name| ListAt {
+        instance: Some(id),
+        name,
+    };
+    let (text, _) = remove_where(file, at("overrides"), &is)?;
+    // An added component is one the prefab lacks: the session overrides existing ones.
+    let (text, added) = remove_where(&text, at("added"), &is)?;
+    if added > 0 {
+        return Ok(text);
+    }
+    let (text, _) = remove_where(&text, at("removed"), &is)?;
+    let entry = format!("(entity: {entity:?}, component: {component:?})");
+    append(&text, at("removed"), &entry)
+}
+
+/// Writes `value` at `path` of `component` into the prefab file: on its own entity when
+/// `entity` has one element, else as an override of its nested instance `entity[0]`.
+pub fn apply_to_prefab(
+    prefab_file: &str,
+    entity: &[u32],
+    component: &str,
+    path: &[PathSegment],
+    value: &str,
+) -> Result<String, SceneError> {
+    let local = match entity {
+        [local] => *local,
+        [instance, rest @ ..] => {
+            return set_override(prefab_file, &[*instance], rest, component, path, value);
+        }
+        [] => {
+            return Err(SceneError::MissingTarget(
+                "an empty entity address".to_string(),
+            ));
+        }
+    };
+    let missing = || {
+        SceneError::MissingTarget(format!(
+            "component `{component}` at `{}` of entity {local}",
+            Path(path)
+        ))
+    };
+    let root = parse_file(prefab_file)?;
+    let (_, entities) = list(prefab_file, &root, ROOT_ENTITIES)?;
+    let entry = entities
+        .map_or(&[][..], items)
+        .iter()
+        .find(|entry| id_of(prefab_file, entry) == Some(local))
+        .ok_or_else(missing)?;
+    let Some(Node {
+        kind: Kind::Map(pairs),
+        ..
+    }) = field(prefab_file, entry, "components")
+    else {
+        return Err(missing());
+    };
+    let key = format!("{component:?}");
+    let (_, current) = pairs
+        .iter()
+        .find(|(name, _)| prefab_file[name.span.clone()] == key)
+        .ok_or_else(missing)?;
+    let target = locate(prefab_file, current, path).ok_or_else(missing)?;
+    Ok(splice(prefab_file, target.span.clone(), value))
+}
+
+/// Checks a prefab file before it is written: refuses an `Entity` value of its own
+/// entities naming none of them, and an instance cycle. `assets` must already hold `file`
+/// under the prefab's identifier, so a cycle back to it is found.
+pub fn save_prefab_checked(file: &str, assets: &dyn AssetSource) -> Result<(), SceneError> {
+    let parse = |error: ron::error::SpannedError| SceneError::Parse(error.to_string());
+    let header: PrefabHeader = ron::from_str(file).map_err(parse)?;
+    if header.version != PREFAB_VERSION {
+        return Err(SceneError::Parse(format!(
+            "prefab version {} is not supported (expected {PREFAB_VERSION})",
+            header.version
+        )));
+    }
+    let prefab: PrefabFile = ron::from_str(file).map_err(parse)?;
+    let locals: BTreeSet<u32> = prefab.entities.iter().map(|entity| entity.id).collect();
+    for entity in &prefab.entities {
+        for (name, value) in &entity.components.0 {
+            let text = value.get_ron();
+            let node = parse_file(text)?;
+            if let Some(path) = foreign(text, &node, &locals, &mut Vec::new()) {
+                return Err(SceneError::ForeignReference {
+                    entity: entity.id,
+                    component: name.clone(),
+                    path: Path(&path).to_string(),
+                });
+            }
+        }
+    }
+    let mut resolver = Resolver::new(assets);
+    for instance in prefab.instances {
+        resolver.instance(&[], instance, &mut Vec::new())?;
+    }
+    Ok(())
+}
+
+/// Refuses despawning an entity a prefab instance spawned (a load address of more than one
+/// element): at tick 0 its components are overridden instead, and the instance is removed
+/// as a whole.
+pub fn check_despawn(address: &[u32]) -> Result<(), SceneError> {
+    match address {
+        [_, _, ..] => Err(SceneError::InstanceEntity(address.to_vec())),
+        _ => Ok(()),
+    }
+}
+
+/// The path, without schema, to the first `(index: n, generation: _)` value in `node` whose
+/// `n` is not in `locals`.
+fn foreign(
+    text: &str,
+    node: &Node,
+    locals: &BTreeSet<u32>,
+    path: &mut Vec<PathSegment>,
+) -> Option<Vec<PathSegment>> {
+    let inside = |segment: PathSegment, node: &Node, path: &mut Vec<PathSegment>| {
+        path.push(segment);
+        let found = foreign(text, node, locals, path);
+        path.pop();
+        found
+    };
+    match &node.kind {
+        Kind::Fields(fields) => {
+            if let [(index, value), (generation, _)] = &fields[..]
+                && text[index.clone()] == *"index"
+                && text[generation.clone()] == *"generation"
+            {
+                let local = text[value.span.clone()].parse::<u32>().ok()?;
+                return (!locals.contains(&local)).then(|| path.clone());
+            }
+            fields.iter().find_map(|(key, value)| {
+                let name = text[key.clone()].to_string();
+                inside(PathSegment::Field { name }, value, path)
+            })
+        }
+        Kind::Items(items) if items.len() == 1 => foreign(text, &items[0], locals, path),
+        Kind::Items(items) | Kind::List(items) => (0..)
+            .zip(items)
+            .find_map(|(index, item)| inside(PathSegment::Index { index }, item, path)),
+        Kind::Map(pairs) => (0..)
+            .zip(pairs)
+            .find_map(|(index, (_, value))| inside(PathSegment::Index { index }, value, path)),
+        Kind::Named { name, body } if text[name.clone()] == *"Some" => {
+            foreign(text, body, locals, path)
+        }
+        Kind::Named { name, body } => {
+            let name = text[name.clone()].to_string();
+            inside(PathSegment::Field { name }, body, path)
+        }
+        Kind::Atom => None,
+    }
+}
+
+/// The identifier of an instance entry and the entity path inside it.
+fn split_target(instance: &[u32], entity: &[u32]) -> Result<(u32, Vec<u32>), SceneError> {
+    let (&id, nested) = instance
+        .split_first()
+        .ok_or_else(|| SceneError::MissingTarget("an empty instance address".to_string()))?;
+    Ok((id, [nested, entity].concat()))
+}
+
+/// The `entity`, `component`, and `path` of an override, added, or removed entry.
+#[derive(Deserialize)]
+struct Target {
+    entity: Vec<u32>,
+    component: String,
+    #[serde(default)]
+    path: Vec<PathSegment>,
+}
+
+/// Whether an entry's text targets `entity` and `component`, and `path` when given.
+fn targets<'a>(
+    entity: &'a [u32],
+    component: &'a str,
+    path: Option<&'a [PathSegment]>,
+) -> impl Fn(&str, &Node) -> bool + 'a {
+    move |text, entry| {
+        ron::from_str::<Target>(&text[entry.span.clone()]).is_ok_and(|target| {
+            target.entity == entity
+                && target.component == component
+                && path.is_none_or(|path| target.path == path)
+        })
+    }
+}
+
+/// A list field of a file: on its root, or on its instance entry `instance`.
+#[derive(Clone, Copy)]
+struct ListAt<'a> {
+    instance: Option<u32>,
+    name: &'a str,
+}
+
+const ROOT_ENTITIES: ListAt = ListAt {
+    instance: None,
+    name: "entities",
+};
+const ROOT_INSTANCES: ListAt = ListAt {
+    instance: None,
+    name: "instances",
+};
+
+fn parse_file(text: &str) -> Result<Node, SceneError> {
+    Parser { text, at: 0 }
+        .node()
+        .ok_or_else(|| SceneError::Parse("the file is not valid RON".to_string()))
+}
+
+/// The node holding the list `at` names, and the list when the field is there.
+fn list<'n>(
+    text: &str,
+    root: &'n Node,
+    at: ListAt,
+) -> Result<(&'n Node, Option<&'n Node>), SceneError> {
+    let owner = match at.instance {
+        None => root,
+        Some(id) => field(text, root, "instances")
+            .map_or(&[][..], items)
+            .iter()
+            .find(|entry| id_of(text, entry) == Some(id))
+            .ok_or_else(|| SceneError::MissingTarget(format!("instance {id}")))?,
+    };
+    Ok((owner, field(text, owner, at.name)))
+}
+
+/// Appends `entry` to the list `at`, adding the field when it is missing.
+fn append(text: &str, at: ListAt, entry: &str) -> Result<String, SceneError> {
+    let root = parse_file(text)?;
+    Ok(match list(text, &root, at)? {
+        (_, Some(list)) => insert(
+            text,
+            list,
+            items(list).last().map(|e| e.span.clone()),
+            entry,
+        ),
+        (owner, None) => {
+            let last = fields_of(owner)
+                .last()
+                .map(|(key, value)| key.start..value.span.end);
+            insert(text, owner, last, &format!("{}: [{entry}]", at.name))
+        }
+    })
+}
+
+/// Replaces the `value` of the first entry of the list `at` that `matches`, or appends
+/// `entry` when none does.
+fn upsert(
+    text: &str,
+    at: ListAt,
+    matches: &dyn Fn(&str, &Node) -> bool,
+    value: &str,
+    entry: &str,
+) -> Result<String, SceneError> {
+    let root = parse_file(text)?;
+    let (_, found) = list(text, &root, at)?;
+    let existing = found
+        .map_or(&[][..], items)
+        .iter()
+        .find(|e| matches(text, e))
+        .and_then(|e| field(text, e, "value"));
+    match existing {
+        Some(current) => Ok(splice(text, current.span.clone(), value)),
+        None => append(text, at, entry),
+    }
+}
+
+/// Removes every entry of the list `at` that `matches`, and counts them; an emptied list
+/// becomes `[]`.
+fn remove_where(
+    text: &str,
+    at: ListAt,
+    matches: &dyn Fn(&str, &Node) -> bool,
+) -> Result<(String, usize), SceneError> {
+    let mut text = text.to_string();
+    let mut removed = 0;
+    loop {
+        let root = parse_file(&text)?;
+        let Some(list) = list(&text, &root, at)?.1 else {
+            return Ok((text, removed));
+        };
+        let all = items(list);
+        let Some(entry) = all.iter().find(|e| matches(&text, e)) else {
+            return Ok((text, removed));
+        };
+        let range = if all.len() == 1 {
+            list.span.clone()
+        } else {
+            element_range(&text, entry.span.clone())
+        };
+        let with = if all.len() == 1 { "[]" } else { "" };
+        text = splice(&text, range, with);
+        removed += 1;
+    }
+}
+
+/// Inserts `element` into the sequence `container` after its `last` element, on a line of
+/// its own when the elements are; `None` for an empty list.
+fn insert(text: &str, container: &Node, last: Option<Range<usize>>, element: &str) -> String {
+    let Some(last) = last else {
+        let indent = line_indent(text, container.span.start);
+        let inner = container.span.start + 1..container.span.end - 1;
+        return splice(text, inner, &format!("\n{indent}    {element},\n{indent}"));
+    };
+    let separator = if starts_line(text, last.start) {
+        format!("\n{}", line_indent(text, last.start))
+    } else {
+        " ".to_string()
+    };
+    let rest = &text[last.end..];
+    let gap = rest.len() - rest.trim_start().len();
+    if rest[gap..].starts_with(',') {
+        let at = last.end + gap + 1;
+        splice(text, at..at, &format!("{separator}{element},"))
+    } else {
+        splice(text, last.end..last.end, &format!(",{separator}{element}"))
+    }
+}
+
+/// The range to remove for the element at `span` of a list of several: the element, the
+/// whitespace before it, and its comma.
+fn element_range(text: &str, span: Range<usize>) -> Range<usize> {
+    let start = text[..span.start].trim_end().len();
+    let rest = &text[span.end..];
+    let gap = rest.len() - rest.trim_start().len();
+    if rest[gap..].starts_with(',') {
+        start..span.end + gap + 1
+    } else if text[..start].ends_with(',') {
+        start - 1..span.end
+    } else {
+        start..span.end
+    }
+}
+
+fn line_indent(text: &str, at: usize) -> &str {
+    let start = text[..at].rfind('\n').map_or(0, |newline| newline + 1);
+    let line = &text[start..];
+    &line[..line.len() - line.trim_start_matches([' ', '\t']).len()]
+}
+
+fn starts_line(text: &str, at: usize) -> bool {
+    text[..at]
+        .rsplit('\n')
+        .next()
+        .is_some_and(|before| before.trim().is_empty())
+}
+
+fn splice(text: &str, range: Range<usize>, with: &str) -> String {
+    format!("{}{with}{}", &text[..range.start], &text[range.end..])
+}
+
+/// The fields of a `Name(...)` or `(...)` node.
+fn fields_of(node: &Node) -> &[(Range<usize>, Node)] {
+    match &node.kind {
+        Kind::Named { body, .. } => fields_of(body),
+        Kind::Fields(fields) => fields,
+        _ => &[],
+    }
+}
+
+fn field<'n>(text: &str, node: &'n Node, name: &str) -> Option<&'n Node> {
+    fields_of(node)
+        .iter()
+        .find(|(key, _)| text[key.clone()] == *name)
+        .map(|(_, value)| value)
+}
+
+fn items(node: &Node) -> &[Node] {
+    match &node.kind {
+        Kind::List(items) => items,
+        _ => &[],
+    }
+}
+
+fn id_of(text: &str, entry: &Node) -> Option<u32> {
+    field(text, entry, "id").and_then(|id| text[id.span.clone()].parse().ok())
 }
 
 /// Replaces the value at `path` (serde's externally tagged form, as `SetField` uses) in the

@@ -6,8 +6,8 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use ludenea_ecs::schema::{TypeSchema, VariantFields};
-use ludenea_ecs::{Asset, AssetId, Codec, EcsError, Entity, Prefab, PrefabEntity};
+use ludenea_ecs::schema::{FieldSchema, TypeSchema, VariantFields};
+use ludenea_ecs::{Asset, AssetId, Codec, EcsError, Entity, Prefab, PrefabEntity, Snapshot};
 use ron::value::RawValue;
 use serde::de::{IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -16,9 +16,10 @@ use crate::Simulation;
 use crate::assets::{
     AssetSource, AssetTexts, NoAssets, asset_file, parse_asset_file_in_place, visit_handles,
 };
+use crate::path::{Path, PathSegment};
 use crate::prefab::{
-    Instance, InstanceInfo, LoadedInstance, Resolved, address_text, expand_prefab, is_prefab_file,
-    resolve,
+    Instance, InstanceInfo, LoadedInstance, PREFAB_VERSION, Resolved, address_text, expand_prefab,
+    is_prefab_file, resolve,
 };
 
 const SCENE_VERSION: u32 = 2;
@@ -86,6 +87,21 @@ pub enum SceneError {
     },
     #[error("prefab instances form a cycle: {}; remove one of these instances", .0.join(" -> "))]
     PrefabCycle(Vec<String>),
+    #[error(
+        "component `{component}` of entity {entity} references an entity outside the prefab at `{path}`; include that entity or clear the reference"
+    )]
+    ForeignReference {
+        entity: u32,
+        component: String,
+        path: String,
+    },
+    #[error(
+        "entity {} belongs to a prefab instance; remove the instance or override its components",
+        address_text(.0)
+    )]
+    InstanceEntity(LoadAddress),
+    #[error("{0} is not in the file; pick one it has")]
+    MissingTarget(String),
 }
 
 fn subject(entity: Option<usize>) -> String {
@@ -368,7 +384,7 @@ impl Decoder {
             rewrite_entities(&shape.schema, &bytes, &mut |local, _| {
                 (locals.contains(&local) || local < next_id).then_some((local, 0))
             })
-            .map_err(|local| match owner_local {
+            .map_err(|(local, _)| match owner_local {
                 Some(entity) => SceneError::UnknownLocal {
                     entity,
                     component: name.to_string(),
@@ -633,23 +649,16 @@ impl Simulation {
         // Stale references, each with an identifier from `next_id` on, in write order.
         let stale: RefCell<BTreeMap<(u32, u32), u32>> = RefCell::default();
         let ron = |codec: Codec, bytes: &[u8]| {
-            let schema = (codec.schema)();
-            let bytes = if mentions(&schema, &|schema| matches!(schema, TypeSchema::Entity)) {
-                rewrite_entities(&schema, bytes, &mut |index, generation| {
-                    let local = by_entity.get(&(index, generation)).copied();
-                    let local = local.unwrap_or_else(|| {
-                        let mut stale = stale.borrow_mut();
-                        let fresh = next_id + u32::try_from(stale.len()).expect("few references");
-                        *stale.entry((index, generation)).or_insert(fresh)
-                    });
-                    Some((local, 0))
-                })
-                .expect("every entity is mapped")
-            } else {
-                bytes.to_vec()
-            };
-            let value = (codec.decode)(&bytes).expect("snapshot bytes decode");
-            (codec.encode_ron)(&*value)
+            value_ron(codec, bytes, &mut |index, generation| {
+                let local = by_entity.get(&(index, generation)).copied();
+                let local = local.unwrap_or_else(|| {
+                    let mut stale = stale.borrow_mut();
+                    let fresh = next_id + u32::try_from(stale.len()).expect("few references");
+                    *stale.entry((index, generation)).or_insert(fresh)
+                });
+                Some((local, 0))
+            })
+            .expect("every entity is mapped")
         };
 
         let snapshot = self.world.snapshot();
@@ -665,16 +674,11 @@ impl Simulation {
         let entities = locals
             .iter()
             .map(|&(entity, local)| {
-                let components = snapshot
-                    .components
-                    .iter()
-                    .filter_map(|(name, values)| {
-                        let (_, bytes) = values.iter().find(|(owner, _)| *owner == entity)?;
-                        let codec = self.world.component_codec(name).expect("snapshotted name");
-                        Some(format!("{name:?}: {}", ron(codec, bytes)))
+                let components = self
+                    .components_ron(&snapshot, entity, |_, codec, bytes| {
+                        Ok::<_, ()>(ron(codec, bytes))
                     })
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                    .expect("writing a scene never fails");
                 format!("    (id: {local}, components: {{{components}}}),\n")
             })
             .collect::<String>();
@@ -691,6 +695,56 @@ impl Simulation {
         format!(
             "Scene(\n    version: {SCENE_VERSION},\n    next_id: {next_id},\n    resources: {{{resources}}},\n    entities: [\n{entities}    ],\n{instances})\n"
         )
+    }
+
+    /// Writes `entities` as a prefab file with local identifiers `0..n` in that order. An
+    /// `Entity` value naming an entity outside `entities` is refused.
+    pub(crate) fn write_prefab(&self, entities: &[Entity]) -> Result<String, SceneError> {
+        let locals: BTreeMap<(u32, u32), u32> = entities
+            .iter()
+            .map(|entity| (entity.index(), entity.generation()))
+            .zip(0..)
+            .collect();
+        let snapshot = self.world.snapshot();
+        let mut written = String::new();
+        for (&entity, local) in entities.iter().zip(0..) {
+            let components = self.components_ron(&snapshot, entity, |name, codec, bytes| {
+                value_ron(codec, bytes, &mut |index, generation| {
+                    let local = locals.get(&(index, generation))?;
+                    Some((*local, 0))
+                })
+                .map_err(|(_, path)| SceneError::ForeignReference {
+                    entity: entity.index(),
+                    component: name.to_string(),
+                    path: Path(&path).to_string(),
+                })
+            })?;
+            written.push_str(&format!(
+                "        (id: {local}, components: {{{components}}}),\n"
+            ));
+        }
+        Ok(format!(
+            "Prefab(\n    version: {PREFAB_VERSION},\n    next_id: {},\n    entities: [\n{written}    ],\n)\n",
+            entities.len()
+        ))
+    }
+
+    /// The components of `entity` in `snapshot` as `"name": value` pairs, each value
+    /// written by `ron`.
+    fn components_ron<E>(
+        &self,
+        snapshot: &Snapshot,
+        entity: Entity,
+        mut ron: impl FnMut(&str, Codec, &[u8]) -> Result<String, E>,
+    ) -> Result<String, E> {
+        let mut pairs = Vec::new();
+        for (name, values) in &snapshot.components {
+            if let Some((_, bytes)) = values.iter().find(|(owner, _)| *owner == entity) {
+                let codec = self.world.component_codec(name).expect("snapshotted name");
+                pairs.push(format!("{name:?}: {}", ron(name, codec, bytes)?));
+            }
+        }
+        Ok(pairs.join(", "))
     }
 
     /// Turns a pending value into a value, remapping local identifiers of `scope` (the
@@ -973,6 +1027,23 @@ fn invalid(entity: Option<usize>, name: &str, reason: String) -> SceneError {
     }
 }
 
+/// The RON of a value's postcard `bytes`, its `Entity` values mapped by `map` (see
+/// `rewrite_entities`).
+fn value_ron(
+    codec: Codec,
+    bytes: &[u8],
+    map: &mut dyn FnMut(u32, u32) -> Option<(u32, u32)>,
+) -> Result<String, Refused> {
+    let schema = (codec.schema)();
+    let bytes = if mentions(&schema, &|schema| matches!(schema, TypeSchema::Entity)) {
+        rewrite_entities(&schema, bytes, map)?
+    } else {
+        bytes.to_vec()
+    };
+    let value = (codec.decode)(&bytes).expect("snapshot bytes decode");
+    Ok((codec.encode_ron)(&*value))
+}
+
 /// Whether `schema` or any type inside it satisfies `matches`.
 fn mentions(schema: &TypeSchema, matches: &dyn Fn(&TypeSchema) -> bool) -> bool {
     let any = |items: &[TypeSchema]| items.iter().any(|item| mentions(item, matches));
@@ -1002,7 +1073,8 @@ fn mentions(schema: &TypeSchema, matches: &dyn Fn(&TypeSchema) -> bool) -> bool 
 }
 
 /// Copies the postcard `bytes` of a value of `schema`, replacing every `Entity` (index,
-/// generation) with what `map` returns for it. Fails with the index `map` refused.
+/// generation) with what `map` returns for it. Fails with the index `map` refused and the
+/// path to it.
 ///
 /// # Panics
 /// If `bytes` do not encode a value of `schema`.
@@ -1010,11 +1082,12 @@ fn rewrite_entities(
     schema: &TypeSchema,
     bytes: &[u8],
     map: &mut dyn FnMut(u32, u32) -> Option<(u32, u32)>,
-) -> Result<Vec<u8>, u32> {
+) -> Result<Vec<u8>, (u32, Vec<PathSegment>)> {
     let mut rewriter = Rewriter {
         bytes,
         out: Vec::with_capacity(bytes.len()),
         map,
+        path: Vec::new(),
     };
     rewriter.value(schema)?;
     assert!(rewriter.bytes.is_empty(), "bytes left after the value");
@@ -1025,10 +1098,14 @@ struct Rewriter<'a> {
     bytes: &'a [u8],
     out: Vec<u8>,
     map: &'a mut dyn FnMut(u32, u32) -> Option<(u32, u32)>,
+    /// Where the value being copied lies, for errors.
+    path: Vec<PathSegment>,
 }
 
+type Refused = (u32, Vec<PathSegment>);
+
 impl Rewriter<'_> {
-    fn value(&mut self, schema: &TypeSchema) -> Result<(), u32> {
+    fn value(&mut self, schema: &TypeSchema) -> Result<(), Refused> {
         match schema {
             TypeSchema::Bool | TypeSchema::U8 | TypeSchema::I8 => self.copy(1),
             TypeSchema::U16
@@ -1054,47 +1131,47 @@ impl Rewriter<'_> {
                 }
             }
             TypeSchema::List { item } => {
-                for _ in 0..self.copy_varint() {
-                    self.value(item)?;
+                for index in 0..self.copy_varint() {
+                    self.at(index, |this| this.value(item))?;
                 }
             }
             TypeSchema::Array { item, len } => {
-                for _ in 0..*len {
-                    self.value(item)?;
+                for index in 0..*len {
+                    self.at(index as u64, |this| this.value(item))?;
                 }
             }
             TypeSchema::Map { key, value } => {
-                for _ in 0..self.copy_varint() {
-                    self.value(key)?;
-                    self.value(value)?;
+                // ponytail: a map entry is named by its position, not its key.
+                for index in 0..self.copy_varint() {
+                    self.at(index, |this| {
+                        this.value(key)?;
+                        this.value(value)
+                    })?;
                 }
             }
             TypeSchema::Tuple { items } | TypeSchema::TupleStruct { items, .. } => {
                 self.values(items)?;
             }
-            TypeSchema::Struct { fields, .. } => {
-                for field in fields {
-                    self.value(&field.schema)?;
-                }
-            }
+            TypeSchema::Struct { fields, .. } => self.fields(fields)?,
             TypeSchema::Newtype { item, .. } => self.value(item)?,
             TypeSchema::Enum { variants, .. } => {
-                let variant = self.copy_varint();
-                match &variants[to_usize(variant)].fields {
+                let variant = &variants[to_usize(self.copy_varint())];
+                self.path.push(PathSegment::Field {
+                    name: variant.name.clone(),
+                });
+                match &variant.fields {
                     VariantFields::Unit => {}
                     VariantFields::Newtype { item } => self.value(item)?,
                     VariantFields::Tuple { items } => self.values(items)?,
-                    VariantFields::Struct { fields } => {
-                        for field in fields {
-                            self.value(&field.schema)?;
-                        }
-                    }
+                    VariantFields::Struct { fields } => self.fields(fields)?,
                 }
+                self.path.pop();
             }
             TypeSchema::Entity => {
                 let index = to_u32(self.read_varint());
                 let generation = to_u32(self.read_varint());
-                let (index, generation) = (self.map)(index, generation).ok_or(index)?;
+                let (index, generation) =
+                    (self.map)(index, generation).ok_or_else(|| (index, self.path.clone()))?;
                 write_varint(&mut self.out, index.into());
                 write_varint(&mut self.out, generation.into());
             }
@@ -1102,8 +1179,35 @@ impl Rewriter<'_> {
         Ok(())
     }
 
-    fn values(&mut self, items: &[TypeSchema]) -> Result<(), u32> {
-        items.iter().try_for_each(|item| self.value(item))
+    fn values(&mut self, items: &[TypeSchema]) -> Result<(), Refused> {
+        (0..)
+            .zip(items)
+            .try_for_each(|(index, item)| self.at(index, |this| this.value(item)))
+    }
+
+    fn fields(&mut self, fields: &[FieldSchema]) -> Result<(), Refused> {
+        for field in fields {
+            self.path.push(PathSegment::Field {
+                name: field.name.clone(),
+            });
+            self.value(&field.schema)?;
+            self.path.pop();
+        }
+        Ok(())
+    }
+
+    /// Runs `copy` with `index` appended to the path.
+    fn at(
+        &mut self,
+        index: u64,
+        copy: impl FnOnce(&mut Self) -> Result<(), Refused>,
+    ) -> Result<(), Refused> {
+        self.path.push(PathSegment::Index {
+            index: to_u32(index),
+        });
+        copy(self)?;
+        self.path.pop();
+        Ok(())
     }
 
     fn copy(&mut self, length: usize) {
