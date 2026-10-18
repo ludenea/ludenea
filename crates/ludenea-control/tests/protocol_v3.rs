@@ -598,6 +598,60 @@ fn text(reply: Reply) -> String {
 }
 
 #[test]
+fn a_refused_load_session_keeps_the_session() {
+    let (mut host, _) = spawner_host(fs::read_to_string(SPAWNER_SCENE).unwrap());
+    step(&mut host, 10);
+    spawn_crate(&mut host);
+    step(&mut host, 5);
+    let before = (
+        ok(&mut host, Command::ExportSession),
+        timeline(&mut host),
+        hash(&mut host),
+    );
+    let Reply::Session {
+        scene,
+        inputs,
+        edits,
+        hashes,
+        ..
+    } = before.0.clone()
+    else {
+        panic!("export_session replies session");
+    };
+    let load =
+        |scene: String, assets: Vec<(AssetId, String)>, branches: Vec<u8>| Command::LoadSession {
+            scene,
+            saved_scene: None,
+            inputs: inputs.clone(),
+            edits: edits.clone(),
+            undo: Bytes(Vec::new()),
+            expected: hashes.clone(),
+            assets,
+            branches: Bytes(branches),
+            document: Document::Scene,
+            keeps_assets: false,
+        };
+    let refused = [
+        // A scene that does not parse, one whose prefab is missing, and a broken branch tree.
+        load("(not a scene".to_string(), assets(), Vec::new()),
+        load(scene.clone(), Vec::new(), Vec::new()),
+        load(scene, assets(), vec![0xff; 16]),
+    ];
+    for command in refused {
+        host.handle(command).unwrap_err();
+        let after = (
+            ok(&mut host, Command::ExportSession),
+            timeline(&mut host),
+            hash(&mut host),
+        );
+        assert_eq!(after, before);
+    }
+    // The kept session goes on.
+    step(&mut host, 5);
+    assert_eq!(timeline(&mut host).current, before.1.current + 5);
+}
+
+#[test]
 fn load_session_replies_what_the_scene_load_reports() {
     let (mut host, loaded) = spawner_host(fs::read_to_string(SPAWNER_SCENE).unwrap());
     let Reply::Session {

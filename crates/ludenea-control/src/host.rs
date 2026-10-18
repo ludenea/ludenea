@@ -616,8 +616,17 @@ impl Host {
                     assets,
                     keeps_assets,
                 };
-                let session = Session::resume(sim, export, document).map_err(|e| self.fail(e))?;
-                self.load(session);
+                match Session::resume(sim, export, document) {
+                    Ok(session) => self.load(session),
+                    Err(error) => {
+                        // The scene may have loaded before the error: the session takes its
+                        // world back, as for `LoadReplay`.
+                        if let Err(reload) = self.session.reload(sim) {
+                            self.fail_unattended(reload);
+                        }
+                        return Err(self.fail(error));
+                    }
+                }
                 Ok(self.loaded())
             }
             Command::GetAsset { id } => {
