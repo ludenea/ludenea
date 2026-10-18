@@ -17,7 +17,7 @@ export const projectPlugin = definePlugin({
     const { project } = shared(editor);
     const ui: Ui = createStore({ form: null as Form, error: null as string | null });
     editor.settings.register({ id: ENGINE_PATH, title: "Engine path", default: "", kind: "path" });
-    editor.settings.register<string[]>({ id: RECENT, title: "Recent projects", default: [], kind: "string" });
+    editor.settings.register<string[]>({ id: RECENT, title: "Recent projects", default: [], kind: "list" });
 
     const opened = (info: ProjectInfo) => {
       project.set({ info });

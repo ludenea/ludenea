@@ -43,7 +43,8 @@ interface SettingDefinition<T> {
     id: string;
     title: string;
     default: T;
-    kind: "boolean" | "number" | "string" | "path";
+    /** What `T` is; `list` is a `string[]`. */
+    kind: "boolean" | "number" | "string" | "path" | "list";
 }
 interface OverlayContext {
     canvas: CanvasRenderingContext2D;

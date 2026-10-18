@@ -48,7 +48,8 @@ export interface SettingDefinition<T> {
   id: string;
   title: string;
   default: T;
-  kind: "boolean" | "number" | "string" | "path";
+  /** What `T` is; `list` is a `string[]`. */
+  kind: "boolean" | "number" | "string" | "path" | "list";
 }
 
 export interface OverlayContext {
