@@ -55,6 +55,7 @@ function withoutTicks(inputs: string): string {
  * resolves to `null` when it gives up restarting. With `sessions`, exports are tagged with
  * their document and stored as its session (except those taken while playing, kept in memory), and a crash restores only a session of the open
  * document: an export taken before switching documents gives way to the open one's stored session.
+ * Closing the page then stores the latest export, and a fresh one if the game answers in time.
  */
 export function guardSession(
   control: ControlClient,
@@ -72,6 +73,7 @@ export function guardSession(
   let deadline: ReturnType<typeof setTimeout> | undefined;
   // While playing, the export every second stays in memory: storing a large session that
   // often stalls the interface. Pauses and edits store it.
+  const failed = (error: unknown) => log("warning", `Cannot store the session: ${error instanceof Error ? error.message : String(error)}`);
   const take = (store = true) => {
     clearTimeout(coalescing);
     clearTimeout(deadline);
@@ -81,7 +83,7 @@ export function guardSession(
         if (disposed) return;
         latest = saved;
         restoring = false;
-        if (store) options.sessions?.store(saved).catch((error) => log("warning", `Cannot store the session: ${error instanceof Error ? error.message : String(error)}`));
+        if (store) options.sessions?.store(saved).catch(failed);
       },
       // Nothing loaded yet, still resimulating, or the game is gone: the previous export stays.
       () => {},
@@ -123,6 +125,14 @@ export function guardSession(
       }
     }),
   ];
+  // Closing the editor: the page rarely lives through a fresh export's two round trips (game,
+  // then project service), so the latest export is stored at once, then a fresh one if in time.
+  const onPageHide = () => {
+    if (latest) options.sessions?.store(latest).catch(failed);
+    options.sessions?.store().catch(failed);
+  };
+  // No page around the guard (a test under Node): nothing to close.
+  if (options.sessions) globalThis.addEventListener?.("pagehide", onPageHide);
   const timer = setInterval(() => {
     if (playing) take(false);
   }, EXPORT_INTERVAL_MS);
@@ -132,6 +142,7 @@ export function guardSession(
     clearTimeout(coalescing);
     clearTimeout(deadline);
     stops.forEach((stop) => stop());
+    if (options.sessions) globalThis.removeEventListener?.("pagehide", onPageHide);
   };
   if (!restoring) take();
   return { latest: () => latest, dispose };

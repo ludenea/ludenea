@@ -43,6 +43,7 @@ const exports = (sent: Command[]) => sent.filter((command) => command.type === "
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
@@ -263,6 +264,33 @@ describe("guardSession", () => {
 });
 
 describe("guardSession with documents", () => {
+  it("closing_the_page_stores_the_latest_export_at_once", async () => {
+    // The page's events, as a browser fires them.
+    const page = new EventTarget();
+    vi.stubGlobal("addEventListener", page.addEventListener.bind(page));
+    vi.stubGlobal("removeEventListener", page.removeEventListener.bind(page));
+    let answering = true;
+    const game = await fakeGame((command) =>
+      command.type === "export_session" ? (answering ? session("paused") : null) : command.type === "get_timeline" ? { type: "timeline", ...timeline } : { type: "done" },
+    );
+    const store = vi.fn(async (_?: SavedSession) => {});
+    const sessions = { export: exportSession, store, own: async () => null, restore: restoreSession };
+    const guard = guardSession(game.control, fakeWorker(), async () => game.control, { sessions, log: () => {} });
+    await settle();
+    store.mockClear();
+    // A page closing mid-play rarely lives through a fresh export's round trips.
+    answering = false;
+
+    page.dispatchEvent(new Event("pagehide"));
+
+    expect(store).toHaveBeenCalledWith(guard.latest());
+    expect(store.mock.calls[0]![0]?.load.scene).toBe("paused");
+    guard.dispose();
+    store.mockClear();
+    page.dispatchEvent(new Event("pagehide"));
+    expect(store).not.toHaveBeenCalled();
+  });
+
   it("a_crash_restores_through_the_document_sessions", async () => {
     const first = await fakeGame((command) => (command.type === "export_session" ? session("edited") : command.type === "get_timeline" ? { type: "timeline", ...timeline } : { type: "done" }));
     const worker = fakeWorker();

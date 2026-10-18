@@ -69,8 +69,7 @@ export function startEditor(project: ProjectClient, pluginUrl: (bundle: PluginBu
     void loadPlugins();
   });
 
-  // Closing the editor stores the session as it is, if the game still answers in time.
-  addEventListener("pagehide", () => void host.sessions.store().catch((error) => log("warning", `Cannot store the session: ${errorText(error)}`)));
+  // Closing the editor stores the session: the guard of the running game does (`guardSession`).
 
   return {
     host,
