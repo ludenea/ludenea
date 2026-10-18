@@ -481,3 +481,32 @@ fn undo_keeps_loads_a_later_edit_at_the_tick_needs() {
     // The remaining spawner spawns at tick 60 from the kept assets.
     play(&mut session, &mut sim, 60);
 }
+
+#[test]
+fn edit_at_a_load_address_despawned_at_tick_0_is_dropped() {
+    let mut sim = simulation();
+    let scene = boxes::generate_scene(30, 7);
+    let mut session = Session::start(&mut sim, scene, AssetTexts::new(), Document::Scene).unwrap();
+    let mut inputs = InputLog::new(1);
+    for _ in 0..40 {
+        inputs.record(&[boxes::BoxesInput::default()]);
+    }
+    session.load_inputs(&mut sim, inputs).unwrap();
+    resimulate_all(&mut session, &mut sim);
+    play(&mut session, &mut sim, 10);
+    let edit = insert_pose(&sim, vec![20], -3.0);
+    session.edit(&mut sim, edit).unwrap();
+
+    session.seek(&mut sim, 0).unwrap();
+    let despawn = Edit::Despawn {
+        entity: EntityRef::Loaded(vec![20]),
+    };
+    session.edit(&mut sim, despawn).unwrap();
+    let reports = resimulate_all(&mut session, &mut sim);
+    assert!(
+        reports
+            .iter()
+            .any(|report| matches!(report, Resimulation::EditDropped { tick: 10, .. })),
+        "{reports:?}"
+    );
+}

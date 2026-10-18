@@ -157,9 +157,18 @@ fn set_field_on_pose_position_records_insert_edit() {
     let edits = recorded_edits(&mut host);
     assert_eq!(edits.edits.len(), 1);
     assert_eq!(edits.edits[0].tick, 10);
+    let address = match ok(&mut host, Command::GetInstances) {
+        Reply::Instances { load_addresses, .. } => load_addresses
+            .into_iter()
+            .find(|(loaded, _)| *loaded == entity)
+            .map(|(_, address)| address)
+            .unwrap(),
+        other => panic!("{other:?}"),
+    };
     assert!(matches!(
         &edits.edits[0].edit,
-        Edit::Insert { entity: EntityRef::Loaded(_), component, .. } if component == "ludenea::Pose"
+        Edit::Insert { entity: EntityRef::Loaded(at), component, .. }
+            if *at == address && component == "ludenea::Pose"
     ));
     assert_eq!(timeline(&mut host).edit_ticks, vec![10]);
 }
