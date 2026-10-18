@@ -1,7 +1,7 @@
 import type { ConsoleLevel, ControlClient, Diagnostic } from "@ludenea/control-client";
 import { definePlugin, type Editor } from "@ludenea/editor-shell";
-import { createStore, shared, showPanel } from "../shared";
-import { ConsolePanel, type Entry, type Levels } from "./ConsolePanel";
+import { ASSET_FOLDERS, createStore, shared, showPanel } from "../shared";
+import { ConsolePanel, where, type Entry, type Levels, type Location } from "./ConsolePanel";
 
 // ponytail: keeps the last lines only; page older ones to disk if long sessions need them.
 const LIMIT = 5000;
@@ -47,7 +47,7 @@ export const consolePlugin = definePlugin({
   activate(editor) {
     let lastId = 0;
     const next = () => ++lastId;
-    const state = createStore({ entries: [] as Entry[], levels: { error: true, warning: true, info: true } as Levels });
+    const state = createStore({ entries: [] as Entry[], levels: { error: true, warning: true, info: true } as Levels, notice: null as string | null });
     const update = (change: (entries: Entry[]) => Entry[]) => state.set({ entries: change(state.get().entries).slice(-LIMIT) });
     const add = (level: ConsoleLevel, text: string, source: Entry["source"] = "editor") =>
       update((entries) => [...entries, { id: next(), level, source, text }]);
@@ -79,15 +79,26 @@ export const consolePlugin = definePlugin({
     listen(editor.control);
     editor.onGameChanged(listen);
 
-    const reveal = (file: string) => {
-      shared(editor).reveal.set({ path: file });
-      showPanel(editor, "ludenea.assets");
+    // Scenes and assets open in the asset browser. It lists nothing else, and the editor has no
+    // source view: a source location goes to the clipboard, for the user's own editor.
+    const open = (location: Location) => {
+      if (ASSET_FOLDERS.some((folder) => location.file.startsWith(`${folder}/`))) {
+        shared(editor).reveal.set({ path: location.file });
+        showPanel(editor, "ludenea.assets");
+        return;
+      }
+      const text = where(location);
+      const copied = navigator.clipboard?.writeText(text) ?? Promise.reject(new Error("no clipboard"));
+      copied.then(
+        () => state.set({ notice: `Copied ${text}` }),
+        () => state.set({ notice: text }),
+      );
     };
     editor.panels.register({
       id: "ludenea.console",
       title: "Console",
       defaultPosition: "bottom",
-      component: () => <ConsolePanel state={state} onReveal={reveal} />,
+      component: () => <ConsolePanel state={state} onLocation={open} />,
     });
     return () => {
       sinks.delete(editor);

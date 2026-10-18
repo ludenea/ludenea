@@ -1,18 +1,16 @@
 import type { FileEntry } from "@ludenea/control-client";
 import type { Editor } from "@ludenea/editor-shell";
 import { useRef, type KeyboardEvent } from "react";
-import { errorText, shared, useStore } from "../shared";
+import { ASSET_FOLDERS, errorText, shared, useStore } from "../shared";
 import type { Action, Assets } from "./index";
 
 export const baseName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 export const folderOf = (path: string) => path.slice(0, Math.max(path.lastIndexOf("/"), 0));
 
-const ROOT_FOLDERS = ["assets", "scenes"];
-
 /** Files grouped under their folder, folders sorted, filtered by a case-insensitive substring of the path. */
 function grouped(files: FileEntry[], filter: string): [string, FileEntry[]][] {
   const needle = filter.trim().toLowerCase();
-  const folders = new Map<string, FileEntry[]>(ROOT_FOLDERS.map((folder) => [folder, []]));
+  const folders = new Map<string, FileEntry[]>(ASSET_FOLDERS.map((folder) => [folder, []]));
   for (const file of files) {
     const folder = folderOf(file.path);
     if (!folders.has(folder)) folders.set(folder, []);

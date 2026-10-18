@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { builtinPlugins, logToConsole } from "../src";
 import { renderPanel, settle, testEditor, testGame } from "./support";
 
@@ -7,7 +7,10 @@ const RENDERED = "error[E0425]: cannot find value `speed` in this scope\n --> sr
 
 describe("console", () => {
   beforeEach(() => localStorage.clear());
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
 
   it("console_shows_build_diagnostic_with_location", async () => {
     const host = await testEditor(builtinPlugins, (request) => (request.type === "list_files" ? { type: "files", entries: [] } : undefined));
@@ -27,8 +30,32 @@ describe("console", () => {
 
     expect(screen.getAllByText(/cannot find value `speed`/)).toHaveLength(1);
     expect(screen.getByText(/Compiling demo/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "src/lib.rs:12:5" }));
-    expect((screen.getByRole("searchbox", { name: "Filter assets" }) as HTMLInputElement).value).toBe("src/lib.rs");
+    expect(screen.getByRole("button", { name: "src/lib.rs:12:5" })).toBeTruthy();
+  });
+
+  it("a_source_location_is_copied_and_an_asset_location_revealed", async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    const host = await testEditor(builtinPlugins, (request) => (request.type === "list_files" ? { type: "files", entries: [] } : undefined));
+    renderPanel(host, "ludenea.console");
+    renderPanel(host, "ludenea.assets");
+    await settle();
+    const diagnostic = (file: string) => ({ type: "build", event: { type: "diagnostic", level: "warning", message: "unused", file, line: 3, column: null } });
+    act(() => {
+      host.project.push(diagnostic("src/lib.rs"));
+      host.project.push(diagnostic("scenes/main.scene.ron"));
+    });
+    const filter = () => (screen.getByRole("searchbox", { name: "Filter assets" }) as HTMLInputElement).value;
+
+    // The asset browser never lists sources: the location goes to the clipboard instead.
+    fireEvent.click(screen.getByRole("button", { name: "src/lib.rs:3" }));
+    await settle();
+    expect(writeText).toHaveBeenCalledWith("src/lib.rs:3");
+    expect(screen.getByRole("status").textContent).toBe("Copied src/lib.rs:3");
+    expect(filter()).toBe("");
+
+    fireEvent.click(screen.getByRole("button", { name: "scenes/main.scene.ron:3" }));
+    expect(filter()).toBe("scenes/main.scene.ron");
   });
 
   it("console_shows_game_output_and_host_console", async () => {

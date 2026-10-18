@@ -2,6 +2,9 @@ import type { ControlClient, ProjectInfo } from "@ludenea/control-client";
 import type { Editor } from "@ludenea/editor-shell";
 import { useSyncExternalStore } from "react";
 
+/** The project folders the asset browser lists. */
+export const ASSET_FOLDERS = ["assets", "scenes"];
+
 /** A minimal observable value, for state a plugin's commands and panel share. */
 export interface Store<T> {
   get(): T;

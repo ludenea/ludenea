@@ -18,11 +18,14 @@ const LEVELS: [ConsoleLevel, string][] = [
   ["info", "Info"],
 ];
 
-const where = ({ file, line, column }: NonNullable<Entry["location"]>) =>
+export type Location = NonNullable<Entry["location"]>;
+
+/** `file:line:column`, as far as known. */
+export const where = ({ file, line, column }: Location) =>
   [file, line, line === null ? null : column].filter((part) => part !== null).join(":");
 
-export function ConsolePanel({ state, onReveal }: { state: Store<{ entries: Entry[]; levels: Levels }>; onReveal(file: string): void }) {
-  const { entries, levels } = useStore(state);
+export function ConsolePanel({ state, onLocation }: { state: Store<{ entries: Entry[]; levels: Levels; notice: string | null }>; onLocation(location: Location): void }) {
+  const { entries, levels, notice } = useStore(state);
   return (
     <div className="ludenea-console">
       <div className="ludenea-toolbar">
@@ -32,6 +35,11 @@ export function ConsolePanel({ state, onReveal }: { state: Store<{ entries: Entr
             {title}
           </label>
         ))}
+        {notice && (
+          <span role="status" className="ludenea-muted">
+            {notice}
+          </span>
+        )}
       </div>
       <ul aria-label="Console" className="ludenea-console-lines">
         {entries
@@ -39,7 +47,7 @@ export function ConsolePanel({ state, onReveal }: { state: Store<{ entries: Entr
           .map((entry) => (
             <li key={entry.id} className={`ludenea-console-${entry.level}`}>
               {entry.location && (
-                <button className="ludenea-link" onClick={() => onReveal(entry.location!.file)}>
+                <button className="ludenea-link" onClick={() => onLocation(entry.location!)}>
                   {where(entry.location)}
                 </button>
               )}
