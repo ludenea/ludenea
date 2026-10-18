@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 const ALLOWED = new Set([
   "react",
   "react/jsx-runtime",
+  "react-dom",
   "@ludenea/editor-shell",
   "@ludenea/control-client",
   "@tanstack/react-virtual",

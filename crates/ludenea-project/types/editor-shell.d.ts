@@ -266,8 +266,8 @@ function Shell({ host }: {
 }): react.JSX.Element;
 
 /**
- * Renders the shell into `element`; returns the unmount. The applications mount through this so
- * the one `react-dom` lives in the shared shell module, next to the dock's own portals.
+ * Renders the shell into `element`; returns the unmount. `react-dom/client` lives in the shared
+ * shell module and uses the shared `react-dom`, the one the dock's portals and the built-ins use.
  */
 function mountShell(element: Element, host: EditorHost): () => void;
 

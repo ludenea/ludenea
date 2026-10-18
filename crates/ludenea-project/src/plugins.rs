@@ -25,9 +25,10 @@ use crate::files::WATCH_DEBOUNCE;
 use crate::{Diagnostic, Project, Watch, next_raw};
 
 /// Provided by the editor at runtime (import map), so every plugin shares one instance.
-const SHARED_MODULES: [&str; 4] = [
+const SHARED_MODULES: [&str; 5] = [
     "react",
     "react/jsx-runtime",
+    "react-dom",
     "@ludenea/editor-shell",
     "@ludenea/control-client",
 ];
@@ -491,8 +492,8 @@ impl Plugin for OnlyOwnFiles {
         } else {
             format!(
                 "cannot import {specifier:?}: editor plugins may import only React, the editor \
-                 packages, and their own files (react, react/jsx-runtime, @ludenea/editor-shell, \
-                 @ludenea/control-client, and relative paths)"
+                 packages, and their own files (react, react/jsx-runtime, react-dom, \
+                 @ludenea/editor-shell, @ludenea/control-client, and relative paths)"
             )
         };
         self.rejected

@@ -40,7 +40,7 @@ function ambient(name, code) {
 
 execFileSync(join(editor, "node_modules/.bin/tsc"), ["-b"], { cwd: editor, stdio: "inherit" });
 
-const shared = ["@ludenea/control-client", "react", "react/jsx-runtime"];
+const shared = ["@ludenea/control-client", "react", "react/jsx-runtime", "react-dom"];
 const editorShell = await roll(join(shell, "dist/src/index.d.ts"), { external: shared, respectExternal: true });
 const controlClient = await roll(join(editor, "packages/control-client/dist/src/index.d.ts"));
 
@@ -50,11 +50,22 @@ const reactIndex = (await roll(join(reactTypes, "index.d.ts"), { respectExternal
   .replace(/^export \{ React as default \};$/m, "export = React;");
 const jsxRuntime = readFileSync(join(reactTypes, "jsx-runtime.d.ts"), "utf8").replaceAll('"./"', '"react"');
 const reactGlobals = readFileSync(join(reactTypes, "global.d.ts"), "utf8");
+// @types/react-dom also augments "react" (view transitions, fragment refs), from inside its
+// module: an ambient module can nest no other, and "react" is `export =`, which takes no
+// augmentation either. Plugins get react-dom's own exports without it.
+const reactDom = readFileSync(join(realpathSync(join(shell, "node_modules/@types/react-dom")), "index.d.ts"), "utf8")
+  .replace(/^declare module "react" \{\n[\s\S]*?\n\}\n/m, "")
+  .replace(/^export as namespace ReactDOM;\n/m, "");
 
 const files = {
   "control-client.d.ts": ambient("@ludenea/control-client", controlClient),
   "editor-shell.d.ts": ambient("@ludenea/editor-shell", editorShell),
-  "react.d.ts": [reactGlobals.trimEnd() + "\n", ambient("react", reactIndex), ambient("react/jsx-runtime", jsxRuntime)].join("\n"),
+  "react.d.ts": [
+    reactGlobals.trimEnd() + "\n",
+    ambient("react", reactIndex),
+    ambient("react/jsx-runtime", jsxRuntime),
+    ambient("react-dom", reactDom),
+  ].join("\n"),
 };
 for (const name of Object.keys(files).sort()) {
   writeFileSync(join(out, name), HEADER + files[name]);

@@ -58,11 +58,12 @@ fn code(project: &Project, bundle: &PluginBundle) -> String {
 }
 
 const PANEL: &str = r#"import { useState } from "react";
+import { createPortal } from "react-dom";
 import { definePlugin } from "@ludenea/editor-shell";
 import { connect } from "@ludenea/control-client";
 import { Counter } from "./counter";
 
-export default definePlugin({ panel: () => <Counter start={1} />, connect });
+export default definePlugin({ panel: () => <Counter start={1} />, connect, createPortal });
 "#;
 
 const COUNTER: &str = r#"import { useState } from "react";
@@ -110,6 +111,7 @@ fn bundles_tsx_plugin_with_shared_imports_external() {
     for import in [
         "from \"react\"",
         "from \"react/jsx-runtime\"",
+        "from \"react-dom\"",
         "from \"@ludenea/editor-shell\"",
         "from \"@ludenea/control-client\"",
     ] {

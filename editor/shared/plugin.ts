@@ -6,6 +6,7 @@ import type { Plugin } from "vite";
 export const SHARED_MODULES = {
   react: "react",
   "react/jsx-runtime": "react-jsx-runtime",
+  "react-dom": "react-dom",
   "@ludenea/editor-shell": "editor-shell",
   "@ludenea/control-client": "control-client",
 } as const;
@@ -27,8 +28,8 @@ function readShared(path: string): string | null {
 const isShared = (id: string): id is keyof typeof SHARED_MODULES => Object.hasOwn(SHARED_MODULES, id);
 
 /**
- * Leaves the shared modules external. CommonJS bundled next to them (`react-dom` requiring
- * `react`) would call `require` at runtime, which browsers lack: such a `require` gets an ES
+ * Leaves the shared modules external. CommonJS bundled next to them (`react-dom/client`
+ * requiring `react` and `react-dom`) would call `require` at runtime, which browsers lack: such a `require` gets an ES
  * module re-exporting the external one instead. On a development server, imports point at
  * the served `/shared/<name>.js` files, the URLs the import map gives plugins.
  */

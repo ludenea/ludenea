@@ -9,6 +9,7 @@
   "dependencies": {
     "@ludenea/control-client": "workspace:*",
     "@ludenea/editor-shell": "workspace:*",
-    "react": "19.3.1"
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
   }
 }

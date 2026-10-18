@@ -38,12 +38,16 @@ const reexport = (path, names) => `${HEADER}export { ${names.join(", ")} } from 
 
 const react = Object.keys(require("react")).sort();
 const jsxRuntime = Object.keys(require("react/jsx-runtime")).sort();
-// Read by the end-to-end smoke test: one React may exist however many plugins load.
+const reactDom = Object.keys(require("react-dom")).sort();
+// Read by the end-to-end smoke test: one React may exist however many plugins load. It ships in
+// production on purpose: one global counter costs nothing, and the test then checks the build
+// users run rather than a variant with a flag set.
 const probe = "globalThis.__ludeneaReactInstances = (globalThis.__ludeneaReactInstances ?? 0) + 1;\n";
 const packages = join(shared, "../packages");
 
 writeFileSync(join(shared, "src/react.js"), commonJs("../node_modules/react/index.js", react, probe));
 writeFileSync(join(shared, "src/react-jsx-runtime.js"), commonJs("../node_modules/react/jsx-runtime.js", jsxRuntime));
+writeFileSync(join(shared, "src/react-dom.js"), commonJs("../node_modules/react-dom/index.js", reactDom));
 for (const name of ["editor-shell", "control-client"]) {
   const index = join(packages, name, "src/index.ts");
   writeFileSync(join(shared, `src/${name}.js`), reexport(`../../packages/${name}/src/index.ts`, valueExports(index)));
