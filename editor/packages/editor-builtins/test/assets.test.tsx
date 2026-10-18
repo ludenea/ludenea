@@ -257,7 +257,8 @@ describe("assets", () => {
     await settle();
 
     expect(screen.queryByLabelText("unsaved changes")).toBeNull();
-    await expect(host.editor.commands.run("scene.save")).rejects.toThrow("no scene is open");
+    await host.editor.commands.run("scene.save");
+    expect(host.project.sent.filter((request) => request.type === "write_text")).toEqual([]);
   });
 
   it("delete_asks_for_confirmation_inside_the_panel", async () => {

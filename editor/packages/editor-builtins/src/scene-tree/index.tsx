@@ -1,5 +1,5 @@
 import { definePlugin } from "@ludenea/editor-shell";
-import { shared } from "../shared";
+import { logToConsole } from "../console";
 import { edit } from "../timeline/editing";
 import { SceneTree } from "./SceneTree";
 
@@ -25,13 +25,13 @@ export const sceneTreePlugin = definePlugin({
       title: "Save scene",
       async run() {
         const open = editor.document.getState().current;
-        if (open?.kind === "replay") throw new Error(`${open.path} is a replay: its file is never overwritten`);
+        // The game may still hold the session of a document removed or moved since: it has no file to go to.
+        if (!open) return logToConsole(editor, "warning", "Nothing saved: no document is open (the open one was removed or moved); open a document first.");
+        if (open.kind === "replay") throw new Error(`${open.path} is a replay: its file is never overwritten`);
         // The session of a prefab document holds the prefab file.
-        const path = open?.path ?? shared(editor).project.get().info?.default_scene;
-        if (!path) throw new Error("no scene is open");
         const { ron } = await game().request({ type: "save_scene" });
-        await editor.project.request({ type: "write_text", path, text: ron });
-        if (open) editor.document.setState({ text: ron });
+        await editor.project.request({ type: "write_text", path: open.path, text: ron });
+        editor.document.setState({ text: ron });
       },
     });
     editor.shortcuts.register({ key: "Mod+S", command: "scene.save" });

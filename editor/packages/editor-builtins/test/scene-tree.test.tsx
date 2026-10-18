@@ -85,14 +85,26 @@ describe("scene tree", () => {
     expect(host.editor.selection.getState().entities).toEqual([]);
   });
 
-  it("save_writes_the_saved_scene_to_the_default_scene", async () => {
+  it("save_without_an_open_document_writes_nothing", async () => {
     const info = { type: "info", name: "demo", root: "/demo", default_scene: "scenes/main.scene.ron", mode: "browser" };
     const { host, game } = await sceneTree((request) => (request.type === "info" ? info : { type: "done" }));
+    renderPanel(host, "ludenea.console");
+
+    await host.editor.commands.run("scene.save");
+    await settle();
+
+    expect(game.sent.filter((command) => command.type === "save_scene")).toEqual([]);
+    expect(host.project.sent.filter((request) => request.type === "write_text")).toEqual([]);
+    expect(screen.getByText(/open a document first/)).toBeTruthy();
+  });
+
+  it("save_writes_a_prefab_document_to_its_own_file", async () => {
+    const { host } = await sceneTree();
+    host.editor.document.setState({ current: { id: "0000000000000000000000000000000d", kind: "prefab", path: "assets/ball.prefab.ron" } });
 
     await host.editor.commands.run("scene.save");
 
-    expect(game.sent).toContainEqual({ type: "save_scene" });
-    expect(host.project.sent).toContainEqual({ type: "write_text", path: "scenes/main.scene.ron", text: "(saved)" });
+    expect(host.project.sent.filter((request) => request.type === "write_text")).toEqual([{ type: "write_text", path: "assets/ball.prefab.ron", text: "(saved)" }]);
   });
 
   it("space_selects_a_row", async () => {
