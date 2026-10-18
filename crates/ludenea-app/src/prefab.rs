@@ -431,12 +431,12 @@ pub fn place_instance(file: &str, prefab: AssetId) -> Result<(String, u32), Scen
 }
 
 /// Removes the scene entities `entities` from `file` and places an instance of `prefab`
-/// in their stead.
+/// in their stead; returns the new text and the instance's local identifier.
 pub fn replace_with_instance(
     file: &str,
     entities: &[u32],
     prefab: AssetId,
-) -> Result<String, SceneError> {
+) -> Result<(String, u32), SceneError> {
     let mut text = file.to_string();
     for &id in entities {
         let named = |text: &str, entry: &Node| id_of(text, entry) == Some(id);
@@ -453,7 +453,7 @@ pub fn replace_with_instance(
         }
         text = removed;
     }
-    Ok(place_instance(&text, prefab)?.0)
+    place_instance(&text, prefab)
 }
 
 /// Sets the override of `component` at `path` on `entity` of the instance at `instance`

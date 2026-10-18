@@ -1067,9 +1067,7 @@ impl Session {
             )
             .collect::<Result<Vec<u32>, SessionError>>()?;
         prefab::save_prefab_checked(prefab, &prefab_text, &self.assets)?;
-        // Removing entities leaves `next_id` as it is: the instance gets the same identifier.
-        let (_, id) = prefab::place_instance(&self.scene, prefab)?;
-        let scene = prefab::replace_with_instance(&self.scene, &locals, prefab)?;
+        let (scene, id) = prefab::replace_with_instance(&self.scene, &locals, prefab)?;
         let previous = self.assets.insert(prefab, prefab_text);
         if let Err(error) = self.change_scene(sim, scene) {
             match previous {

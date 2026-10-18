@@ -142,7 +142,8 @@ fn place_instance_uses_next_id() {
 #[test]
 fn replace_with_instance_removes_entities() {
     let scene = "Scene(\n    version: 2,\n    next_id: 3,\n    resources: {},\n    entities: [\n        (id: 0, components: {\"prefab_editing::Tag\": (10)}),\n        (id: 1, components: {\"prefab_editing::Tag\": (11)}),\n        (id: 2, components: {\"prefab_editing::Tag\": (12)}),\n    ],\n)\n";
-    let text = replace_with_instance(scene, &[0, 2], AssetId(A)).unwrap();
+    let (text, instance) = replace_with_instance(scene, &[0, 2], AssetId(A)).unwrap();
+    assert_eq!(instance, 3);
     let resolved = resolved(&text);
     let addresses: Vec<_> = resolved
         .entities
