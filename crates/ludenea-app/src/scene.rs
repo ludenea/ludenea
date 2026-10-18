@@ -13,9 +13,7 @@ use serde::de::{IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
 use crate::Simulation;
-use crate::assets::{
-    AssetSource, AssetTexts, NoAssets, asset_file, parse_asset_file_in_place, visit_handles,
-};
+use crate::assets::{AssetSource, AssetTexts, NoAssets, asset_file, parse_asset_file_in_place};
 use crate::path::{Path, PathSegment};
 use crate::prefab::{
     Instance, InstanceInfo, LoadedInstance, PREFAB_VERSION, Resolved, address_text, expand_prefab,
@@ -306,7 +304,9 @@ struct Decoder {
     next_id: Option<u32>,
     /// Local identifiers of the scene's own entities.
     locals: BTreeSet<u32>,
-    shapes: BTreeMap<String, Shape>,
+    /// By whether the value is a resource, then stable name: a component and a resource
+    /// may share one.
+    shapes: BTreeMap<(bool, String), Shape>,
     references: Vec<Reference>,
 }
 
@@ -345,22 +345,17 @@ impl Decoder {
         let value = (codec.decode_ron)(text).map_err(invalid)?;
         let shape = self
             .shapes
-            .entry(name.to_string())
+            .entry((owner.is_none(), name.to_string()))
             .or_insert_with(|| Shape::of(codec));
 
         if shape.handles {
-            let value: ron::Value =
-                ron::from_str(text).map_err(|error| invalid(error.to_string()))?;
             let references = &mut self.references;
             visit_handles(
                 &shape.schema,
-                &value,
-                &mut String::new(),
+                &(codec.encode)(&*value),
                 &mut |id, asset, field| {
                     let referenced_by = match owner {
-                        Some(address) => {
-                            format!("entity {}, {name}{field}", address_text(address))
-                        }
+                        Some(address) => format!("entity {}, {name}{field}", address_text(address)),
                         None => format!("resource {name}{field}"),
                     };
                     references.push(Reference {
@@ -794,7 +789,7 @@ impl Simulation {
     /// becomes the dead entity `u32::MAX` of generation `local`.
     fn ready(
         &self,
-        shapes: &BTreeMap<String, Shape>,
+        shapes: &BTreeMap<(bool, String), Shape>,
         name: &str,
         value: Pending,
         spawned: &BTreeMap<LoadAddress, Entity>,
@@ -805,12 +800,16 @@ impl Simulation {
             Pending::Ready(value) => return value,
             Pending::Local(bytes) => bytes,
         };
-        let bytes = rewrite_entities(&shapes[name].schema, &bytes, &mut |local, _| {
-            let address = [scope, &[local]].concat();
-            Some(spawned.get(&address).map_or((u32::MAX, local), |entity| {
-                (entity.index(), entity.generation())
-            }))
-        })
+        let bytes = rewrite_entities(
+            &shapes[&(resource, name.to_string())].schema,
+            &bytes,
+            &mut |local, _| {
+                let address = [scope, &[local]].concat();
+                Some(spawned.get(&address).map_or((u32::MAX, local), |entity| {
+                    (entity.index(), entity.generation())
+                }))
+            },
+        )
         .expect("local identifiers were checked");
         let codec = if resource {
             self.world.resource_codec(name)
@@ -829,7 +828,6 @@ impl Simulation {
         assets: &dyn AssetSource,
         known: &BTreeSet<AssetId>,
     ) -> Result<BTreeMap<AssetId, (String, LoadedValue)>, SceneError> {
-        let schemas: BTreeMap<&str, TypeSchema> = self.world.asset_schemas().into_iter().collect();
         let mut loaded: BTreeMap<AssetId, (String, LoadedValue)> = BTreeMap::new();
         let mut pending = references;
         pending.reverse();
@@ -889,14 +887,12 @@ impl Simulation {
             if found != asset {
                 return Err(wrong_type(&found));
             }
-            if let Some(schema) = schemas.get(found.as_str()) {
-                let parsed: ron::Value =
-                    ron::from_str(&value).map_err(|error| invalid(error.to_string()))?;
+            if let Some(codec) = self.world.asset_codec(&found) {
+                let decoded = (codec.decode_ron)(&value).map_err(invalid)?;
                 let mut nested = Vec::new();
                 visit_handles(
-                    schema,
-                    &parsed,
-                    &mut String::new(),
+                    &(codec.schema)(),
+                    &(codec.encode)(&*decoded),
                     &mut |to, asset, field| {
                         nested.push(Reference {
                             id: to,
@@ -950,7 +946,7 @@ impl Simulation {
                         Pending::Ready(value) => (codec.encode)(&*value),
                         Pending::Local(bytes) => {
                             entity_components.insert(name.clone());
-                            let schema = &decoder.shapes[&name].schema;
+                            let schema = &decoder.shapes[&(false, name.clone())].schema;
                             rewrite_entities(schema, &bytes, &mut |local, _| {
                                 let address = [scope, &[local]].concat();
                                 Some(
@@ -1139,6 +1135,7 @@ fn rewrite_entities(
         bytes,
         out: Vec::with_capacity(bytes.len()),
         map,
+        handles: &mut |_, _, _| {},
         path: Vec::new(),
     };
     rewriter.value(schema)?;
@@ -1146,10 +1143,43 @@ fn rewrite_entities(
     Ok(rewriter.out)
 }
 
+/// Calls `found` with the identifier, asset type name, and field path (such as `.stats`,
+/// `.weapons[2]`, or `.Armed.0`) of every handle inside the postcard `bytes` of a value of
+/// `schema`. Enum values are walked through their own variant only.
+///
+/// # Panics
+/// If `bytes` do not encode a value of `schema`.
+pub(crate) fn visit_handles(
+    schema: &TypeSchema,
+    bytes: &[u8],
+    found: &mut dyn FnMut(AssetId, &str, &str),
+) {
+    let mut rewriter = Rewriter {
+        bytes,
+        out: Vec::new(),
+        map: &mut |index, generation| Some((index, generation)),
+        handles: &mut |id, asset, path| {
+            let field: String = path
+                .iter()
+                .map(|segment| match segment {
+                    PathSegment::Field { name } => format!(".{name}"),
+                    PathSegment::Index { index } => format!("[{index}]"),
+                })
+                .collect();
+            found(id, asset, &field);
+        },
+        path: Vec::new(),
+    };
+    rewriter.value(schema).expect("every entity is kept");
+    assert!(rewriter.bytes.is_empty(), "bytes left after the value");
+}
+
 struct Rewriter<'a> {
     bytes: &'a [u8],
     out: Vec<u8>,
     map: &'a mut dyn FnMut(u32, u32) -> Option<(u32, u32)>,
+    /// Called with every handle and its path.
+    handles: &'a mut dyn FnMut(AssetId, &str, &[PathSegment]),
     /// Where the value being copied lies, for errors.
     path: Vec<PathSegment>,
 }
@@ -1170,9 +1200,18 @@ impl Rewriter<'_> {
             }
             TypeSchema::F32 => self.copy(4),
             TypeSchema::F64 => self.copy(8),
-            TypeSchema::String | TypeSchema::AssetId | TypeSchema::Handle { .. } => {
+            TypeSchema::String | TypeSchema::AssetId => {
                 let length = self.copy_varint();
                 self.copy(to_usize(length));
+            }
+            TypeSchema::Handle { asset } => {
+                let length = to_usize(self.copy_varint());
+                let id = std::str::from_utf8(&self.bytes[..length])
+                    .ok()
+                    .and_then(|hex| u128::from_str_radix(hex, 16).ok())
+                    .expect("a handle encodes its identifier in hexadecimal");
+                (self.handles)(AssetId(id), asset, &self.path);
+                self.copy(length);
             }
             TypeSchema::Unit | TypeSchema::UnitStruct { .. } => {}
             TypeSchema::Option { item } => {

@@ -28,11 +28,18 @@ struct Target(Entity);
 #[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
 struct Tag(u32);
 
+#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+enum Slot {
+    Armed(Handle<Stats>),
+    Label(String),
+}
+
 fn simulation() -> Simulation {
     let mut app = App::new();
     app.component::<Turret>()
         .component::<Target>()
         .component::<Tag>()
+        .component::<Slot>()
         .asset::<Stats>()
         .asset::<Sound>();
     app.build().unwrap()
@@ -524,4 +531,53 @@ fn entities_inside_mixed_values_are_remapped_and_round_trip() {
     second.load_scene_with(&saved, &assets).unwrap();
     assert_eq!(second.hash(), first.hash());
     assert_eq!(second.save_scene(), saved);
+}
+
+#[test]
+fn handles_are_found_in_the_enum_variant_written_only() {
+    let id = AssetId(5);
+    let mut simulation = simulation();
+    let label = format!("\"scene_assets::Slot\": Label(\"{id}\")");
+    simulation
+        .load_scene_with(&scene(1, &[(0, &label)]), &NoAssets)
+        .unwrap();
+    assert!(simulation.world().asset_ids().is_empty());
+
+    let armed = format!("\"scene_assets::Slot\": Armed(\"{id}\")");
+    let error = simulation
+        .load_scene_with(&scene(1, &[(0, &armed)]), &NoAssets)
+        .unwrap_err();
+    assert!(
+        matches!(&error, SceneError::MissingAsset { referenced_by, id: AssetId(5) }
+            if referenced_by == "entity 0, scene_assets::Slot.Armed"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_resource_and_a_component_may_share_a_stable_name() {
+    #[derive(Resource, Serialize, Deserialize)]
+    #[resource(name = "test::Same")]
+    struct Pair(Option<Entity>, Option<Entity>);
+
+    #[derive(Component, Serialize, Deserialize)]
+    #[component(name = "test::Same")]
+    struct One(Entity);
+
+    let mut app = App::new();
+    app.component::<One>()
+        .component::<Tag>()
+        .resource(Pair(None, None));
+    let mut simulation = app.build().unwrap();
+    let pair = "Some((index: 0, generation: 0))";
+    let ron = format!(
+        "Scene(version: 2, next_id: 2, resources: {{\"test::Same\": ({pair}, {pair})}}, entities: [(id: 0, components: {{{}}}), (id: 1, components: {{\"test::Same\": ((index: 1, generation: 0))}})])",
+        tag(1)
+    );
+    simulation.load_scene(&ron).unwrap();
+    let world = simulation.world();
+    let first = tagged(&simulation, 1);
+    assert_eq!(world.resource::<Pair>().unwrap().1, Some(first));
+    let holder = world.entities().find(|&e| e != first).unwrap();
+    assert_eq!(world.get::<One>(holder).unwrap().0, holder);
 }

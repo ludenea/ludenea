@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use ludenea_ecs::{AssetId, Codec, Entity};
 use serde::{Deserialize, Serialize};
 
-use crate::assets::{AssetSource, visit_handles};
-use crate::scene::{LoadAddress, LoadedValue, Reference};
+use crate::assets::AssetSource;
+use crate::scene::{LoadAddress, LoadedValue, Reference, visit_handles};
 use crate::{SceneError, SimError, Simulation};
 
 const TIME: &str = "ludenea::Time";
@@ -383,13 +383,10 @@ impl Simulation {
         for (name, codec, bytes) in values {
             let name = name.as_str();
             let value = decode(&codec, name, bytes)?;
-            let ron: ron::Value = ron::from_str(&(codec.encode_ron)(&*value))
-                .map_err(|error| invalid(name, error.to_string()))?;
             let mut references = Vec::new();
             visit_handles(
                 &(codec.schema)(),
-                &ron,
-                &mut String::new(),
+                &(codec.encode)(&*value),
                 &mut |id, asset, field| {
                     references.push(Reference {
                         id,

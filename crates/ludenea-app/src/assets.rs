@@ -1,13 +1,10 @@
-//! Asset texts a scene load reads, the data asset file form, and the handles a value holds.
+//! Asset texts a scene load reads and the data asset file form.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use ludenea_ecs::AssetId;
-use ludenea_ecs::schema::{TypeSchema, VariantFields};
-use ron::Value;
 use ron::value::RawValue;
 use serde::Deserialize;
-use serde::de::IntoDeserializer;
 
 /// Where a scene load finds asset texts, by identifier.
 pub trait AssetSource {
@@ -127,123 +124,4 @@ fn shift_line_one(message: &str, by: usize) -> String {
         Some(shifted) => format!("{}: {rest}", shifted.join("-")),
         None => message.to_string(),
     }
-}
-
-/// Adds every `Handle` inside `value` (identifier and asset type name), walked by `schema`.
-/// RON values do not keep enum variant names, so every variant whose shape matches is walked.
-pub fn reachable_handles(
-    schema: &TypeSchema,
-    value: &Value,
-    out: &mut BTreeSet<(AssetId, String)>,
-) {
-    visit_handles(schema, value, &mut String::new(), &mut |id, asset, _| {
-        out.insert((id, asset.to_string()));
-    });
-}
-
-/// Calls `found` with the identifier, asset type name, and field path (such as `.stats` or
-/// `.weapons[2]`, appended to `path`) of every handle inside `value`.
-pub(crate) fn visit_handles(
-    schema: &TypeSchema,
-    value: &Value,
-    path: &mut String,
-    found: &mut dyn FnMut(AssetId, &str, &str),
-) {
-    match (schema, value) {
-        (TypeSchema::Handle { asset }, Value::String(text)) => {
-            let text: &str = text;
-            if let Ok(id) =
-                AssetId::deserialize(text.into_deserializer()) as Result<_, serde::de::value::Error>
-            {
-                found(id, asset, path);
-            }
-        }
-        (TypeSchema::Option { item }, Value::Option(Some(inner))) => {
-            visit_handles(item, inner, path, found);
-        }
-        (TypeSchema::List { item } | TypeSchema::Array { item, .. }, Value::Seq(values)) => {
-            for (index, value) in values.iter().enumerate() {
-                at(path, &format!("[{index}]"), |path| {
-                    visit_handles(item, value, path, found);
-                });
-            }
-        }
-        (TypeSchema::Map { key, value: item }, Value::Map(map)) => {
-            for (index, (key_value, value)) in map.iter().enumerate() {
-                at(path, &format!("[{index}]"), |path| {
-                    visit_handles(key, key_value, path, found);
-                    visit_handles(item, value, path, found);
-                });
-            }
-        }
-        (TypeSchema::Tuple { items } | TypeSchema::TupleStruct { items, .. }, value) => {
-            visit_items(items, value, path, found);
-        }
-        (TypeSchema::Struct { fields, .. }, value) => visit_fields(fields, value, path, found),
-        (TypeSchema::Newtype { item, .. }, value) => {
-            visit_handles(item, newtype_inner(value), path, found);
-        }
-        (TypeSchema::Enum { variants, .. }, value) => {
-            for variant in variants {
-                match &variant.fields {
-                    VariantFields::Unit => {}
-                    VariantFields::Newtype { item } => {
-                        visit_handles(item, newtype_inner(value), path, found);
-                    }
-                    VariantFields::Tuple { items } => visit_items(items, value, path, found),
-                    VariantFields::Struct { fields } => visit_fields(fields, value, path, found),
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-fn visit_items(
-    items: &[TypeSchema],
-    value: &Value,
-    path: &mut String,
-    found: &mut dyn FnMut(AssetId, &str, &str),
-) {
-    if let Value::Seq(values) = value
-        && values.len() == items.len()
-    {
-        for (index, (item, value)) in items.iter().zip(values).enumerate() {
-            at(path, &format!(".{index}"), |path| {
-                visit_handles(item, value, path, found);
-            });
-        }
-    }
-}
-
-fn visit_fields(
-    fields: &[ludenea_ecs::schema::FieldSchema],
-    value: &Value,
-    path: &mut String,
-    found: &mut dyn FnMut(AssetId, &str, &str),
-) {
-    let Value::Map(map) = value else { return };
-    for field in fields {
-        if let Some(value) = map.get(&Value::String(field.name.clone())) {
-            at(path, &format!(".{}", field.name), |path| {
-                visit_handles(&field.schema, value, path, found);
-            });
-        }
-    }
-}
-
-/// RON writes a newtype as `(inner)`, which parses as a one-element sequence.
-fn newtype_inner(value: &Value) -> &Value {
-    match value {
-        Value::Seq(values) if values.len() == 1 => &values[0],
-        _ => value,
-    }
-}
-
-/// Runs `visit` with `segment` appended to `path`.
-fn at(path: &mut String, segment: &str, visit: impl FnOnce(&mut String)) {
-    let length = path.len();
-    path.push_str(segment);
-    visit(path);
-    path.truncate(length);
 }
