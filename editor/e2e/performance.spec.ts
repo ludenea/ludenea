@@ -55,15 +55,22 @@ test("the UI stays at 60 fps with 100,000 entities", async ({ page }) => {
   await page.evaluate(() => {
     const times: number[] = [];
     const ticks: { tick: number; at: number }[] = [];
-    const label = [...document.querySelectorAll("p")].find((element) => /^Tick \d+ of/.test(element.textContent ?? ""))!;
+    // Queried each frame: a re-render may replace the label element.
+    const shownTick = () => {
+      for (const element of document.querySelectorAll("p")) {
+        const match = /^Tick (\d+) of/.exec(element.textContent ?? "");
+        if (match) return Number(match[1]);
+      }
+      return undefined;
+    };
     let last = performance.now();
     let running = true;
     const frame = (now: number) => {
       if (!running) return;
       times.push(now - last);
       last = now;
-      const tick = Number(/^Tick (\d+)/.exec(label.textContent ?? "")?.[1]);
-      if (tick !== ticks.at(-1)?.tick) ticks.push({ tick, at: now });
+      const tick = shownTick();
+      if (tick !== undefined && tick !== ticks.at(-1)?.tick) ticks.push({ tick, at: now });
       requestAnimationFrame(frame);
     };
     requestAnimationFrame((now) => {

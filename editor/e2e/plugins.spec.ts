@@ -33,7 +33,9 @@ function installGlobalProbe() {
   };
   const probe = (target: object, name: string, recorded: string) => {
     const descriptor = Object.getOwnPropertyDescriptor(target, name);
-    if (!descriptor?.configurable) return;
+    // Each name is expected to be probeable: one that is not would go unseen, so it fails the
+    // test (as a page error) instead.
+    if (!descriptor?.configurable) throw new Error(`the probe cannot wrap ${recorded}`);
     let value = descriptor.get ? undefined : descriptor.value;
     Object.defineProperty(target, name, {
       configurable: true,
