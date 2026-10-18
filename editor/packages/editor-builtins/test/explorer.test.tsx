@@ -52,6 +52,35 @@ describe("explorer", () => {
     expect(screen.queryAllByRole("option")).toHaveLength(0);
   });
 
+  it("a_column_that_notifies_renders_its_new_values_in_place", async () => {
+    const { host } = await explorer();
+    const listeners = new Set<() => void>();
+    let tick = "10";
+    act(() => {
+      host.editor.explorer.columns.register({ id: "test.first", title: "First", width: 40, value: () => "a" });
+      host.editor.explorer.columns.register({
+        id: "test.tick",
+        title: "Tick",
+        width: 40,
+        value: () => tick,
+        subscribe: (listener) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      });
+    });
+    await settle();
+    expect(screen.getAllByRole("option")[0]!.textContent).toContain("a10");
+
+    tick = "20";
+    act(() => listeners.forEach((listener) => listener()));
+
+    expect(screen.getAllByRole("option")[0]!.textContent).toContain("a20");
+    expect(screen.getAllByRole("columnheader").map((header) => header.textContent)).toEqual(["Entity", "Diverged at", "First", "Tick"]);
+    cleanup();
+    expect(listeners.size).toBe(0);
+  });
+
   it("list_renders_only_visible_rows_for_100000_entities", async () => {
     await explorer(100_000);
     const rows = screen.getAllByRole("option");

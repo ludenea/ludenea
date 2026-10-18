@@ -79,4 +79,6 @@ export interface ExplorerColumn {
   title: string;
   width: number;
   value(entity: Entity): string | null;
+  /** Calls `listener` whenever `value` may answer differently, so the explorer reads it again in place; returns the unsubscribe. */
+  subscribe?(listener: () => void): () => void;
 }

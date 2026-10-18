@@ -1,6 +1,6 @@
 import type { ControlClient } from "@ludenea/control-client";
 import type { Editor } from "@ludenea/editor-shell";
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { useGame, useStore, type Store } from "../shared";
 import { EntityList, entityKey } from "../shared/EntityList";
 import { Introspection, type IntrospectionTab } from "./Introspection";
@@ -36,6 +36,12 @@ function Entities({ editor, control, state }: { editor: Editor; control: Control
   const { text, filter, scroll } = useStore(state);
   const [error, setError] = useState<string | null>(null);
   const columns = useSyncExternalStore(editor.explorer.columns.subscribe, editor.explorer.columns.list);
+  // A column whose values changed: the rows read them again.
+  const [, setValues] = useState(0);
+  useEffect(() => {
+    const stops = columns.map((column) => column.subscribe?.(() => setValues((version) => version + 1)));
+    return () => stops.forEach((stop) => stop?.());
+  }, [columns]);
   return (
     <div className="ludenea-entities">
       <form

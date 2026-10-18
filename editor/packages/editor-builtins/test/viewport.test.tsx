@@ -2,6 +2,7 @@ import type { DebugDrawFrame, Entity, GameInfo } from "@ludenea/control-client";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { viewportPlugin } from "../src/viewport";
+import { shared } from "../src/shared";
 import { bounds, screenToWorld, worldToScreen, zoomAt } from "../src/viewport/camera";
 import { renderers } from "./fake-renderer";
 import { renderPanel, settle, testEditor, testGame } from "./support";
@@ -171,6 +172,11 @@ describe("viewport", () => {
 
     await act(() => host.editor.commands.run("viewport.toggle-layer.colliders"));
     await waitFor(() => expect(sentOf(game.sent, "get_debug_draw").at(-1)).toEqual({ type: "get_debug_draw", layers: ["contacts"] }));
+    // The layers the built-in plugins share are the viewport's: a change there is drawn.
+    act(() => shared(host.editor).layers.set({ hidden: ["contacts"] }));
+    await waitFor(() => expect(sentOf(game.sent, "get_debug_draw").at(-1)).toEqual({ type: "get_debug_draw", layers: ["colliders"] }));
+    await act(() => host.editor.commands.run("viewport.toggle-layer.colliders"));
+    expect(shared(host.editor).layers.get().hidden).toEqual(["contacts", "colliders"]);
 
     const other = await testGame(() => ({ type: "debug_draw", tick: 0, frame: { layers: {} } }), { debug_layers: ["aabbs"] });
     act(() => host.setControl(other.client));

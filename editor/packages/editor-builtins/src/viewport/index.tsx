@@ -14,10 +14,12 @@ const ARROWS = { left: "ArrowLeft", right: "ArrowRight", up: "ArrowUp", down: "A
 export const viewportPlugin = definePlugin({
   name: "ludenea.viewport",
   activate(editor) {
+    // The hidden layers are those the built-in plugins share; the viewport's state follows them.
+    const { layers } = shared(editor);
     const state: ViewportState = createStore({
       camera: { center: { x: 0, y: 0 }, pixelsPerMeter: 50 } as Camera,
       size: { width: 0, height: 0 } as Size,
-      hidden: [] as string[],
+      hidden: layers.get().hidden,
       frame: null as DebugDrawFrame | null,
       tick: 0,
       revision: 0,
@@ -89,16 +91,15 @@ export const viewportPlugin = definePlugin({
           id: `viewport.toggle-layer.${layer}`,
           title: `Toggle the "${layer}" debug layer`,
           run() {
-            const { hidden } = state.get();
-            const next = hidden.includes(layer) ? hidden.filter((name) => name !== layer) : [...hidden, layer];
-            state.set({ hidden: next });
-            shared(editor).layers.set({ hidden: next });
+            const { hidden } = layers.get();
+            layers.set({ hidden: hidden.includes(layer) ? hidden.filter((name) => name !== layer) : [...hidden, layer] });
           },
         }),
       );
     };
     registerToggles(editor.control);
     editor.onGameChanged(registerToggles);
+    const stopLayers = layers.subscribe(() => state.set({ hidden: layers.get().hidden }));
 
     editor.panels.register({
       id: "ludenea.viewport",
@@ -106,6 +107,9 @@ export const viewportPlugin = definePlugin({
       defaultPosition: "center",
       component: ({ editor }) => <ViewportPanel editor={editor} state={state} />,
     });
-    return () => toggles.forEach((toggle) => toggle.dispose());
+    return () => {
+      stopLayers();
+      toggles.forEach((toggle) => toggle.dispose());
+    };
   },
 });

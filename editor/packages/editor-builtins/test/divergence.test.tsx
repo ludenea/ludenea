@@ -132,6 +132,40 @@ describe("divergence", () => {
     expect(sentOf(game.sent, "seek")).toHaveLength(1);
   });
 
+  it("comparisons_with_the_session_follow_it", async () => {
+    const { host, game } = await divergence({
+      game: (command) => {
+        if (command.type === "compare_traces") return { type: "trace_comparison", common: 500, first_divergent: 42, only_in_longer: 10 };
+        if (command.type === "diff_snapshots") return { type: "differences", differences: [] };
+        return undefined;
+      },
+    });
+    renderPanel(host, "ludenea.divergence");
+    await act(() => host.editor.commands.run("divergence.open-file", { path: "assets/run.trace" }));
+    await act(() => host.editor.commands.run("divergence.open-file", { path: "assets/run.snap" }));
+    await settle();
+    const traces = () => sentOf(game.sent, "compare_traces").length;
+    const snapshots = () => sentOf(game.sent, "diff_snapshots").length;
+    expect([traces(), snapshots()]).toEqual([1, 1]);
+
+    // The session records more ticks: the trace is compared again, its marker kept meanwhile.
+    act(() => host.editor.timeline.setState({ timeline: timeline({ simulated: 520, head: 520 }) }));
+    expect(screen.getByRole("button", { name: "First divergent tick 42" })).toBeTruthy();
+    await settle();
+    expect([traces(), snapshots()]).toEqual([2, 1]);
+    // Another current tick: the snapshot is compared with it.
+    act(() => host.editor.timeline.setState({ timeline: timeline({ simulated: 520, head: 520, current: 360 }) }));
+    await settle();
+    expect([traces(), snapshots()]).toEqual([2, 2]);
+
+    // Two files: nothing follows the session.
+    fireEvent.change(screen.getByLabelText("Compare the trace with"), { target: { value: "assets/other.trace" } });
+    await settle();
+    act(() => host.editor.timeline.setState({ timeline: timeline({ simulated: 530, head: 530, current: 360 }) }));
+    await settle();
+    expect(traces()).toBe(3);
+  });
+
   it("snapshot_diff_groups_by_entity_component_field", async () => {
     const differences = [
       { subject: "entity 3v0", component: "ludenea::Pose", path: ["position", "x"], left: 1, right: 2, left_text: "1.0", right_text: "2.0" },
@@ -223,9 +257,14 @@ describe("divergence", () => {
     // No report yet: empty.
     expect(column.value(entity(4))).toBeNull();
 
+    let notified = 0;
+    const stop = column.subscribe!(() => notified++);
     renderPanel(host, "ludenea.divergence-report");
     await settle();
+    // The same column, in its place: it notifies the explorer instead of registering again.
     const current = host.editor.explorer.columns.list().find((registered) => registered.id === "divergence.diverged-at")!;
+    expect(current).toBe(column);
+    expect(notified).toBe(1);
     expect(current.value(entity(4))).toBe("301");
     expect(current.value(entity(5))).toBeNull();
 
@@ -234,6 +273,22 @@ describe("divergence", () => {
     await settle();
     const closed = host.editor.explorer.columns.list().find((registered) => registered.id === "divergence.diverged-at")!;
     expect(closed.value(entity(4))).toBeNull();
+    expect(notified).toBe(2);
+    stop();
+  });
+
+  it("a_report_answered_after_the_last_watcher_left_is_dropped", async () => {
+    let answer: (reply: object) => void = () => {};
+    const { host } = await divergence({ game: (command) => (command.type === "get_divergence" ? new Promise<object>((resolve) => (answer = resolve)) : undefined) });
+    renderPanel(host, "ludenea.divergence-report");
+    await settle();
+    cleanup();
+    await settle();
+
+    answer({ type: "divergence", ...report });
+    await settle();
+    const column = host.editor.explorer.columns.list().find((registered) => registered.id === "divergence.diverged-at")!;
+    expect(column.value(entity(4))).toBeNull();
   });
 
   it("ghost_overlay_draws_only_with_compare_branch", async () => {

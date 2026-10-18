@@ -12,6 +12,8 @@ import { TraceViewer } from "./TraceViewer";
 
 /** What "Extend" adds to the compared range. */
 const DIVERGENCE_TICKS = 600;
+/** How often a comparison with the session follows it while playing. */
+const FOLLOW_PLAYING_MS = 1000;
 const LAGGING = "#ffb000";
 
 /** A file compared with another file or, while `against` is null, with the current session. */
@@ -23,8 +25,9 @@ export type SnapshotComparison = Comparison<Difference[]> & { tick: number | nul
 export interface Viewer {
   trace: Store<Comparison<TraceComparison>>;
   snapshot: Store<SnapshotComparison>;
-  compareTrace(patch?: Partial<Comparison<TraceComparison>>): Promise<void>;
-  diffSnapshot(patch?: Partial<SnapshotComparison>): Promise<void>;
+  /** `refresh`: the same comparison again, the previous result shown until the new one. */
+  compareTrace(patch?: Partial<Comparison<TraceComparison>>, refresh?: boolean): Promise<void>;
+  diffSnapshot(patch?: Partial<SnapshotComparison>, refresh?: boolean): Promise<void>;
   /** Seeks to the traces' first divergent tick, when the current branch is one side, and asks for a snapshot to compare with it. */
   seekDivergence(): Promise<void>;
 }
@@ -86,8 +89,8 @@ export const divergencePlugin = definePlugin({
     const comparing = <R, C extends Comparison<R>>(store: Store<C>, compare: (control: ControlClient, a: string, b: string | null) => Promise<R>) => {
       // Only the latest comparison's answer is shown.
       let latest = 0;
-      return async (patch: Partial<C> = {}) => {
-        store.set({ ...patch, result: null, error: null } as Partial<C>);
+      return async (patch: Partial<C> = {}, refresh = false) => {
+        if (!refresh) store.set({ ...patch, result: null, error: null } as Partial<C>);
         const { path, against } = store.get();
         const request = ++latest;
         if (!path) return;
@@ -118,6 +121,28 @@ export const divergencePlugin = definePlugin({
         await viewer.diffSnapshot({ path: null, against: null, tick: result.first_divergent });
       },
     };
+    // Comparisons with the session follow it: at once while paused, once a second while playing.
+    const live = (store: Store<Comparison<unknown>>) => store.get().path !== null && store.get().against === null;
+    const stale = { trace: false, snapshot: false };
+    let following: ReturnType<typeof setTimeout> | undefined;
+    const followSession = () => {
+      if (following !== undefined) return;
+      following = setTimeout(
+        () => {
+          following = undefined;
+          if (stale.trace && live(trace)) void viewer.compareTrace({}, true);
+          if (stale.snapshot && live(snapshot)) void viewer.diffSnapshot({}, true);
+          stale.trace = stale.snapshot = false;
+        },
+        editor.timeline.getState().playing ? FOLLOW_PLAYING_MS : 0,
+      );
+    };
+    const stopFollowing = editor.timeline.subscribe(({ timeline: next }, { timeline: previous }) => {
+      stale.trace ||= live(trace) && next?.simulated !== previous?.simulated;
+      stale.snapshot ||= live(snapshot) && next?.current !== previous?.current;
+      if (stale.trace || stale.snapshot) followSession();
+    });
+
     editor.commands.register({
       id: "divergence.open-file",
       title: "Open a trace or snapshot in the divergence viewer",
@@ -140,11 +165,13 @@ export const divergencePlugin = definePlugin({
       if (!control || watchers === 0) return;
       // The host refuses the report without a compare branch: the panel says so instead.
       if (!hasCompare()) return reportState.set({ report: null, error: null });
+      // An answer for another game, or for no watcher left (the column stays empty), is dropped.
+      const current = () => editor.control === control && watchers > 0;
       try {
         const { type: _, ...divergence } = await control.request({ type: "get_divergence", up_to: reportState.get().range });
-        if (editor.control === control) reportState.set({ report: divergence, error: null });
+        if (current()) reportState.set({ report: divergence, error: null });
       } catch (error) {
-        if (editor.control === control) reportState.set({ error: errorText(error) });
+        if (current()) reportState.set({ error: errorText(error) });
       }
     });
     const followReport = follower(editor, { type: "divergence" }, "divergence_progress", () => watchers > 0 && hasCompare(), refreshReport);
@@ -173,24 +200,23 @@ export const divergencePlugin = definePlugin({
       },
     };
 
-    // Registered again when the report changes, so the explorer shows the new values.
-    const registerColumn = () =>
-      editor.explorer.columns.register({
-        id: "divergence.diverged-at",
-        title: "Diverged at",
-        width: 80,
-        value(entity) {
-          const found = reportState.get().report?.entities.find((row) => row.entity.index === entity.index && row.entity.generation === entity.generation);
-          return found ? String(found.first_tick) : null;
-        },
-      });
-    let column: Disposable = registerColumn();
-    let shown = reportState.get().report;
-    const stopColumn = reportState.subscribe(() => {
-      if (reportState.get().report === shown) return;
-      shown = reportState.get().report;
-      column.dispose();
-      column = registerColumn();
+    // The explorer reads the values again when the report changes.
+    const column: Disposable = editor.explorer.columns.register({
+      id: "divergence.diverged-at",
+      title: "Diverged at",
+      width: 80,
+      value(entity) {
+        const found = reportState.get().report?.entities.find((row) => row.entity.index === entity.index && row.entity.generation === entity.generation);
+        return found ? String(found.first_tick) : null;
+      },
+      subscribe(listener) {
+        let shown = reportState.get().report;
+        return reportState.subscribe(() => {
+          if (reportState.get().report === shown) return;
+          shown = reportState.get().report;
+          listener();
+        });
+      },
     });
 
     // The ghost: the compare branch drawn over the viewport while one is set.
@@ -265,8 +291,9 @@ export const divergencePlugin = definePlugin({
       editor.timeline.subscribe((next, previous) => {
         if (next.timeline?.current !== previous.timeline?.current) fetchGhost();
       }),
-      stopColumn,
       stopRepaint,
+      stopFollowing,
+      () => clearTimeout(following),
       shared(editor).layers.subscribe(fetchGhost),
     ];
     const changed = editor.onGameChanged(() => {
