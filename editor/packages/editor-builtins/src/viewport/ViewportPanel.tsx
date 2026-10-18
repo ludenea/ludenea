@@ -46,7 +46,8 @@ export function ViewportPanel({ editor, state }: { editor: Editor; state: Viewpo
     const element = root.current!;
     const context = overlay.current!.getContext("2d");
     let renderer: ViewportRenderer | null = null;
-    let rendered: Size = { width: 0, height: 0 };
+    let rendered: Size & { ratio: number } = { width: 0, height: 0, ratio: 0 };
+    let ratio = window.devicePixelRatio || 1;
     let disposed = false;
     // `dirty`: a new frame is needed; `repaint`: the current one must be drawn again.
     let dirty = true;
@@ -81,26 +82,32 @@ export function ViewportPanel({ editor, state }: { editor: Editor; state: Viewpo
       dirty = false;
       control
         .request({ type: "get_debug_draw", layers: visibleLayers(control, state) })
-        .then(({ tick, frame }) => {
-          if (!disposed && editor.control === control) state.set({ frame, tick });
-        }, report("fetching the debug draw"))
+        .then(
+          ({ tick, frame }) => {
+            if (!disposed && editor.control === control) state.set({ frame, tick });
+          },
+          // A game being replaced refuses its last request: only the current game's failures count.
+          (error) => {
+            if (!disposed && editor.control === control) report("fetching the debug draw")(error);
+          },
+        )
         .finally(() => (inFlight = false));
     };
 
     const paint = () => {
       repaint = false;
       const { camera, size, frame, tick } = state.get();
-      const ratio = window.devicePixelRatio || 1;
       const layers = visibleLayers(editor.control, state);
       const selection = editor.selection.getState().entities;
       if (renderer) {
         try {
-          if (size.width !== rendered.width || size.height !== rendered.height) {
+          if (size.width !== rendered.width || size.height !== rendered.height || ratio !== rendered.ratio) {
             renderer.resize(size.width, size.height, ratio);
-            rendered = size;
+            rendered = { ...size, ratio };
           }
           renderer.set_camera(camera.center.x, camera.center.y, camera.pixelsPerMeter);
-          renderer.draw(JSON.stringify(frame ?? { layers: {} }), JSON.stringify(layers), JSON.stringify(selection));
+          // No surface texture this time: draw again on the next animation frame.
+          if (!renderer.draw(JSON.stringify(frame ?? { layers: {} }), JSON.stringify(layers), JSON.stringify(selection))) repaint = true;
         } catch (error) {
           report("drawing")(error);
         }
@@ -115,6 +122,11 @@ export function ViewportPanel({ editor, state }: { editor: Editor; state: Viewpo
 
     // One request in flight at most: every animation frame while playing, on change otherwise.
     let animation = requestAnimationFrame(function loop() {
+      // Moving the window to another screen or zooming the page changes it, with no event here.
+      if ((window.devicePixelRatio || 1) !== ratio) {
+        ratio = window.devicePixelRatio || 1;
+        repaint = true;
+      }
       if (editor.timeline.getState().playing || dirty) fetchFrame();
       if (repaint) paint();
       animation = requestAnimationFrame(loop);
@@ -155,8 +167,11 @@ export function ViewportPanel({ editor, state }: { editor: Editor; state: Viewpo
         const picked = control.request({ type: "pick", point: world(at) }).then(({ entities }) => entities);
         const current: Press = { mode: "select", start: at, last: at, moved: false, shift: event.shiftKey, picked };
         picked.then((entities) => {
-          const selection = editor.selection.getState().entities;
-          current.target = entities.find((entity) => selection.some((selected) => same(selected, entity))) ?? null;
+          const selection = editor.selection.getState();
+          const target = entities.find((entity) => selection.entities.some((selected) => same(selected, entity)));
+          // Pressing an unselected entity selects it, so a drag can start right away.
+          if (!target && entities[0] && !current.shift) selection.select([entities[0]]);
+          current.target = target ?? (current.shift ? null : (entities[0] ?? null));
           repaint = true;
         }, report("picking"));
         press = current;
@@ -202,6 +217,12 @@ export function ViewportPanel({ editor, state }: { editor: Editor; state: Viewpo
         .catch(report("moving"));
     };
 
+    // The browser took the pointer (a gesture, a lost touch): drop the press, move nothing.
+    const onPointerCancel = () => {
+      press = null;
+      repaint = true;
+    };
+
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
       const { camera, size } = state.get();
@@ -214,8 +235,9 @@ export function ViewportPanel({ editor, state }: { editor: Editor; state: Viewpo
         event.preventDefault();
         return;
       }
-      // While playing, plain keys are the game's.
+      // While playing, plain keys are the game's; without a game there is nothing to change.
       const playing = editor.timeline.getState().playing;
+      if (!editor.control) return;
       if (event.key === "Delete" && !playing) {
         event.preventDefault();
         editor.commands.run("scene.despawn-selection").catch(report("despawning"));
@@ -236,6 +258,7 @@ export function ViewportPanel({ editor, state }: { editor: Editor; state: Viewpo
       ["pointerdown", onPointerDown as EventListener],
       ["pointermove", onPointerMove as EventListener],
       ["pointerup", onPointerUp as EventListener],
+      ["pointercancel", onPointerCancel],
       ["keydown", onKeyDown as EventListener],
       ["keyup", onKeyUp as EventListener],
       ["blur", onBlur],

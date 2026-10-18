@@ -98,7 +98,12 @@ impl ViewportRenderer {
             height,
             present_mode: wgpu::PresentMode::Fifo,
             desired_maximum_frame_latency: 2,
-            alpha_mode: capabilities.alpha_modes[0],
+            // Indexing could panic, which aborts the whole instance in the browser.
+            alpha_mode: capabilities
+                .alpha_modes
+                .first()
+                .copied()
+                .unwrap_or(wgpu::CompositeAlphaMode::Auto),
             view_formats: vec![],
             color_space: Default::default(),
         };
@@ -130,13 +135,14 @@ impl ViewportRenderer {
     }
 
     /// Draws `frame_json` (a `DebugDrawFrame`), keeping the layers named in `layers_json` and
-    /// highlighting the entities in `selected_json`.
+    /// highlighting the entities in `selected_json`. Returns false when the surface had no
+    /// texture to draw into: the caller draws again on its next frame.
     pub fn draw(
         &mut self,
         frame_json: &str,
         layers_json: &str,
         selected_json: &str,
-    ) -> Result<(), JsValue> {
+    ) -> Result<bool, JsValue> {
         let frame: DebugDrawFrame = serde_json::from_str(frame_json).map_err(failure)?;
         let layers: BTreeSet<String> = serde_json::from_str(layers_json).map_err(failure)?;
         let selected: BTreeSet<Entity> = serde_json::from_str(selected_json).map_err(failure)?;
@@ -149,10 +155,9 @@ impl ViewportRenderer {
         let texture = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture)
             | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
-            // Skipped: the next draw tries again.
             _ => {
                 self.surface.configure(&self.device, &self.config);
-                return Ok(());
+                return Ok(false);
             }
         };
         let view = texture.texture.create_view(&Default::default());
@@ -187,7 +192,7 @@ impl ViewportRenderer {
         }
         self.queue.submit([encoder.finish()]);
         self.queue.present(texture);
-        Ok(())
+        Ok(true)
     }
 }
 

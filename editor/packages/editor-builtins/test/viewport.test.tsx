@@ -2,7 +2,7 @@ import type { DebugDrawFrame, Entity, GameInfo } from "@ludenea/control-client";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { viewportPlugin } from "../src/viewport";
-import { screenToWorld, worldToScreen, zoomAt } from "../src/viewport/camera";
+import { bounds, screenToWorld, worldToScreen, zoomAt } from "../src/viewport/camera";
 import { renderers } from "./fake-renderer";
 import { renderPanel, settle, testEditor, testGame } from "./support";
 
@@ -52,6 +52,22 @@ describe("camera", () => {
     const back = screenToWorld(camera, size, screenPoint);
     expect(back.x).toBeCloseTo(point.x, 6);
     expect(back.y).toBeCloseTo(point.y, 6);
+  });
+
+  it("bounds_cover_the_selected_entities_shapes_in_the_shown_layers", () => {
+    const frame: DebugDrawFrame = {
+      layers: {
+        colliders: [
+          { entity: entity(1), primitive: { type: "circle", center: { x: 2, y: 3 }, radius: 1, color: 0, fill: false } },
+          { entity: entity(1), primitive: { type: "capsule", a: { x: -1, y: 0 }, b: { x: 0, y: 0 }, radius: 0.5, color: 0 } },
+          { entity: entity(2), primitive: { type: "line", a: { x: 50, y: 50 }, b: { x: 60, y: 60 }, color: 0 } },
+        ],
+        contacts: [{ entity: entity(1), primitive: { type: "label", at: { x: 9, y: 9 }, text: "hidden layer", color: 0 } }],
+      },
+    };
+    expect(bounds(frame, ["colliders"], [entity(1)])).toEqual({ min: { x: -1.5, y: -0.5 }, max: { x: 3, y: 4 } });
+    expect(bounds(frame, ["colliders", "contacts"], [entity(1)])!.max).toEqual({ x: 9, y: 9 });
+    expect(bounds(frame, ["colliders"], [entity(3)])).toBeNull();
   });
 
   it("zoom_keeps_point_under_cursor", () => {
@@ -190,5 +206,150 @@ describe("viewport", () => {
     act(() => host.editor.timeline.setState({ playing: true }));
     fireEvent.keyDown(view, { key: "Delete" });
     expect(despawn).toHaveBeenCalledTimes(1);
+  });
+
+  /** The camera the renderer last drew with: center x, center y, pixels per meter. */
+  const camera = () => renderers.at(-1)!.calls.filter((call) => call.method === "set_camera").at(-1)?.args;
+  const circleOf = (index: number, x: number, y: number): DebugDrawFrame => ({
+    layers: { colliders: [{ entity: entity(index), primitive: { type: "circle", center: { x, y }, radius: 0.5, color: 0xffffffff, fill: false } }] },
+  });
+
+  it("space_drag_and_middle_drag_pan", async () => {
+    const { view } = await viewport();
+    fireEvent.keyDown(view, { key: " " });
+    fireEvent.pointerDown(view, { button: 0, clientX: 200, clientY: 150, pointerId: 1 });
+    fireEvent.pointerMove(view, { clientX: 250, clientY: 100, pointerId: 1 });
+    fireEvent.pointerUp(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    fireEvent.keyUp(view, { key: " " });
+    // The content follows the pointer: 50 pixels at 50 pixels per meter is one meter.
+    await waitFor(() => expect(camera()).toEqual([-1, -1, 50]));
+
+    fireEvent.pointerDown(view, { button: 1, clientX: 200, clientY: 150, pointerId: 1 });
+    fireEvent.pointerMove(view, { clientX: 150, clientY: 150, pointerId: 1 });
+    fireEvent.pointerUp(view, { button: 1, clientX: 150, clientY: 150, pointerId: 1 });
+    await waitFor(() => expect(camera()).toEqual([0, -1, 50]));
+  });
+
+  it("wheel_zooms_at_the_cursor", async () => {
+    const { view } = await viewport();
+    fireEvent.wheel(view, { deltaY: -200, clientX: 200, clientY: 150 });
+    await waitFor(() => expect(camera()?.[2]).toBeCloseTo(50 * Math.exp(0.3), 6));
+    // Centered on the view's middle, the center stays.
+    expect(camera()!.slice(0, 2)).toEqual([0, 0]);
+  });
+
+  it("pan_zoom_and_frame_commands_move_the_camera", async () => {
+    const { host } = await viewport((command) => (command.type === "get_debug_draw" ? { type: "debug_draw", tick: 7, frame: circleOf(1, 4, -2) } : undefined));
+    await act(() => host.editor.commands.run("viewport.pan-right"));
+    await waitFor(() => expect(camera()).toEqual([64 / 50, 0, 50]));
+    await act(() => host.editor.commands.run("viewport.zoom-in"));
+    await waitFor(() => expect(camera()?.[2]).toBe(62.5));
+
+    act(() => host.editor.selection.getState().select([entity(1)]));
+    await act(() => host.editor.commands.run("viewport.frame-selection"));
+    // A one-meter box in a 400 by 300 view, with a fifth of margin each side: 300 * 0.6.
+    await waitFor(() => expect(camera()).toEqual([4, -2, 180]));
+  });
+
+  it("drag_outline_is_drawn_while_dragging", async () => {
+    const { host, view } = await viewport((command) => {
+      if (command.type === "get_debug_draw") return { type: "debug_draw", tick: 7, frame: circleOf(1, 1, 1) };
+      if (command.type === "pick") return { type: "picked", entities: [entity(1)] };
+      return undefined;
+    });
+    act(() => host.editor.selection.getState().select([entity(1)]));
+    fireEvent.pointerDown(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    await settle();
+    fireEvent.pointerMove(view, { clientX: 300, clientY: 100, pointerId: 1 });
+    // The outline: dashed, around the circle moved one meter right.
+    await waitFor(() => expect(drawn.calls).toContainEqual({ method: "arc", args: [300, 100, 25, 0, 2 * Math.PI] }));
+    expect(drawn.calls).toContainEqual({ method: "setLineDash", args: [[4, 3]] });
+  });
+
+  it("a_drag_starting_on_an_unselected_entity_selects_and_moves_it", async () => {
+    const { host, game, view } = await viewport((command) => {
+      if (command.type === "pick") return { type: "picked", entities: [entity(2)] };
+      if (command.type === "get_entity") return { type: "entity", entity: entity(2), components: { "ludenea::Pose": pose(1, 1) } };
+      return undefined;
+    });
+    fireEvent.pointerDown(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    await settle();
+    expect(host.editor.selection.getState().entities).toEqual([entity(2)]);
+    fireEvent.pointerMove(view, { clientX: 300, clientY: 100, pointerId: 1 });
+    fireEvent.pointerUp(view, { button: 0, clientX: 300, clientY: 100, pointerId: 1 });
+    await settle();
+    expect(sentOf(game.sent, "set_field").map((command) => command.value)).toEqual([{ x: 2, y: 1 }]);
+  });
+
+  it("a_cancelled_drag_moves_nothing", async () => {
+    const { host, game, view } = await viewport((command) => {
+      if (command.type === "pick") return { type: "picked", entities: [entity(1)] };
+      if (command.type === "get_entity") return { type: "entity", entity: entity(1), components: { "ludenea::Pose": pose(1, 1) } };
+      return undefined;
+    });
+    act(() => host.editor.selection.getState().select([entity(1)]));
+    fireEvent.pointerDown(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    await settle();
+    fireEvent.pointerMove(view, { clientX: 300, clientY: 100, pointerId: 1 });
+    fireEvent.pointerCancel(view, { pointerId: 1 });
+    fireEvent.pointerUp(view, { button: 0, clientX: 300, clientY: 100, pointerId: 1 });
+    await settle();
+    expect(sentOf(game.sent, "set_field")).toEqual([]);
+  });
+
+  it("a_skipped_draw_is_drawn_again_while_paused", async () => {
+    const { host } = await viewport();
+    const renderer = renderers.at(-1)!;
+    const draws = () => renderer.calls.filter((call) => call.method === "draw").length;
+    await waitFor(() => expect(draws()).toBeGreaterThan(0));
+    const before = draws();
+    renderer.skips = 2;
+    // Any change asks for a repaint; the two skipped ones are retried without another.
+    act(() => host.editor.selection.getState().select([entity(9)]));
+    await act(async () => {
+      for (let frame = 0; frame < 3; frame++) await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(draws()).toBeGreaterThanOrEqual(before + 3);
+  });
+
+  it("a_pixel_ratio_change_resizes_the_drawing_buffer", async () => {
+    await viewport();
+    const resizes = () => renderers.at(-1)!.calls.filter((call) => call.method === "resize").map((call) => call.args);
+    await waitFor(() => expect(resizes().at(-1)).toEqual([400, 300, 1]));
+    vi.spyOn(window, "devicePixelRatio", "get").mockReturnValue(2);
+    await waitFor(() => expect(resizes().at(-1)).toEqual([400, 300, 2]));
+  });
+
+  it("the_renderer_is_freed_on_unmount", async () => {
+    await viewport();
+    const renderer = renderers.at(-1)!;
+    cleanup();
+    expect(renderer.calls.at(-1)?.method).toBe("free");
+  });
+
+  it("expected_misses_stay_out_of_the_error_log", async () => {
+    const error = vi.spyOn(console, "error");
+    let refuse = false;
+    const { host, view } = await viewport((command) => (refuse && command.type === "get_debug_draw" ? { error: { code: "internal", message: "game closed" } } : undefined));
+    // Nothing selected to frame.
+    await act(() => host.editor.commands.run("viewport.frame-selection"));
+    // A frame refused by the game being replaced.
+    refuse = true;
+    act(() => host.editor.timeline.setState({ hash: "0000000000000001" }));
+    act(() => host.setControl(null));
+    await settle();
+    // Nudging and despawning without a game.
+    fireEvent.keyDown(view, { key: "ArrowRight" });
+    fireEvent.keyDown(view, { key: "Delete" });
+    await settle();
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it("nudging_waits_for_a_pause", async () => {
+    const { host, game } = await viewport();
+    act(() => host.editor.selection.getState().select([entity(1)]));
+    act(() => host.editor.timeline.setState({ playing: true }));
+    await expect(host.editor.commands.run("viewport.nudge-right")).rejects.toThrow(/pause/);
+    expect(sentOf(game.sent, "get_entity")).toEqual([]);
   });
 });

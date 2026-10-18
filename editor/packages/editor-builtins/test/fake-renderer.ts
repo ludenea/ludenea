@@ -27,8 +27,14 @@ export class ViewportRenderer implements Shape {
     this.calls.push({ method: "set_camera", args });
   }
 
+  /** How many of the next draws find no surface texture and are skipped. */
+  skips = 0;
+
   draw(...args: [string, string, string]) {
     this.calls.push({ method: "draw", args });
+    if (this.skips === 0) return true;
+    this.skips--;
+    return false;
   }
 
   free() {

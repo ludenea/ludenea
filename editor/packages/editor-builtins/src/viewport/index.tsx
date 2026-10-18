@@ -41,6 +41,8 @@ export const viewportPlugin = definePlugin({
         async run() {
           const control = editor.control;
           if (!control) throw new Error("no game is running");
+          // While playing, the arrows are the game's input: the same rule from the palette.
+          if (editor.timeline.getState().playing) throw new Error("pause the game to nudge the selection");
           const offset = { x: x * NUDGE_METERS, y: y * NUDGE_METERS };
           await Promise.all(editor.selection.getState().entities.map((entity) => moveBy(editor, control, entity, offset, state)));
         },
@@ -62,7 +64,8 @@ export const viewportPlugin = definePlugin({
       run() {
         const { frame, size } = state.get();
         const box = frame && bounds(frame, visibleLayers(editor.control, state), editor.selection.getState().entities);
-        if (!box) throw new Error("select an entity the viewport draws first");
+        // Nothing drawn to frame (no selection, or not in a shown layer): the view stays.
+        if (!box) return;
         // A fifth of the view as margin on each side.
         const fit = Math.min(size.width / Math.max(box.max.x - box.min.x, 0.5), size.height / Math.max(box.max.y - box.min.y, 0.5)) * 0.6;
         state.set({
