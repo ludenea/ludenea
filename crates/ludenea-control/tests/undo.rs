@@ -81,7 +81,8 @@ fn undo_run_edit_restores_exact_hash() {
     assert!(session.timeline().can_undo);
     session.undo(&mut sim).unwrap();
     let timeline = session.timeline();
-    assert_eq!((timeline.current, timeline.head), (300, 300));
+    // The edit forked a branch, which the undo deletes: the parent kept its future.
+    assert_eq!((timeline.current, timeline.head), (300, 499));
     assert_eq!(sim.hash(), before[300]);
     assert!(!session.is_pending());
     assert!(edits(&session).is_empty());
@@ -177,6 +178,7 @@ fn undo_survives_export_and_resume() {
         InputLog::decode(&export.inputs).unwrap(),
         EditLog::decode(&export.edits).unwrap(),
         &export.undo,
+        &export.branches,
         export.hashes,
     )
     .unwrap();
@@ -187,6 +189,8 @@ fn undo_survives_export_and_resume() {
     resimulate_all(&mut session, &mut sim);
     assert!(session.timeline().can_undo);
     session.undo(&mut sim).unwrap();
+    // The undo deletes the branch the edit forked; its parent is stale after the resume.
+    resimulate_all(&mut session, &mut sim);
     assert_eq!(session.timeline().current, 300);
     assert_eq!(sim.hash(), before[300]);
     assert!(edits(&session).is_empty());
@@ -295,6 +299,7 @@ fn resume_with_empty_undo_bytes_has_empty_history() {
         InputLog::decode(&export.inputs).unwrap(),
         EditLog::decode(&export.edits).unwrap(),
         &[],
+        &[],
         export.hashes,
     )
     .unwrap();
@@ -325,6 +330,7 @@ fn unsaved_scene_edits_stay_unsaved_across_export_and_resume() {
             InputLog::decode(&export.inputs).unwrap(),
             EditLog::decode(&export.edits).unwrap(),
             &export.undo,
+            &export.branches,
             export.hashes,
         )
         .unwrap()

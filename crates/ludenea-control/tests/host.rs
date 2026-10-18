@@ -368,6 +368,15 @@ fn every_command_and_reply_round_trips_through_json() {
         can_redo: false,
         scene_dirty: true,
         resimulating: false,
+        branch: BranchId(1),
+        branches: vec![BranchInfo {
+            id: BranchId(1),
+            name: "Branch 2".to_string(),
+            parent: Some(BranchId(0)),
+            fork_tick: 2,
+            head: 9,
+            stale: false,
+        }],
     };
     let replies = vec![
         Reply::Done,

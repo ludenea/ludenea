@@ -1,6 +1,7 @@
 //! The control protocol between a client (CLI, editor) and the engine, the host that
 //! executes its commands, the in-process transport, and the editor session timeline.
 
+pub mod branches;
 pub mod checkpoints;
 pub mod host;
 pub mod in_process;
@@ -17,6 +18,7 @@ mod values;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 pub mod worker;
 
+pub use branches::{BranchId, BranchInfo};
 pub use host::Host;
 pub use in_process::{InProcess, Transport};
 pub use json::{from_wire, to_wire, untyped_to_wire};

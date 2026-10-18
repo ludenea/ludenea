@@ -8,6 +8,13 @@
 //! the checkpoint, then applies the edits recorded at `t + 1`. Seeking to `t` restores the
 //! nearest checkpoint `c <= t`, applies the edits of `c`, and repeats "run tick, apply its
 //! edits" up to `t`.
+//!
+//! Fork rule: an edit past tick 0, or a take-over, at tick `N` while the current branch has
+//! recorded ticks after `N` creates a child branch forked at `(N, edits already recorded at
+//! N)` and makes it current; the parent keeps its future. With nothing recorded after `N`,
+//! the edit or input extends the current branch, so playing forward never forks. The
+//! current branch lives flattened in the session's logs; the others are stored in the
+//! branch tree.
 
 use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -18,7 +25,8 @@ use ludenea_app::{
 use ludenea_ecs::{Entity, Snapshot, SnapshotError};
 use serde::{Deserialize, Serialize};
 
-use crate::checkpoints::Checkpoints;
+use crate::branches::{BranchId, BranchInfo, BranchTree, BranchesError, Segment};
+use crate::checkpoints::{CHECKPOINT_BUDGET, Checkpoints};
 use crate::subscriptions::Introspection;
 use crate::undo::{UndoEntry, UndoHistory};
 
@@ -51,6 +59,12 @@ pub enum SessionError {
     Scene(#[from] SceneError),
     #[error(transparent)]
     Snapshot(#[from] SnapshotError),
+    #[error("there is no branch {}", .0.0)]
+    NoSuchBranch(BranchId),
+    #[error("the root branch cannot be deleted")]
+    RootBranch,
+    #[error("the branch tree cannot be decoded: {0}")]
+    BranchesDecode(#[from] BranchesError),
 }
 
 /// What the timeline shows.
@@ -66,6 +80,8 @@ pub struct Timeline {
     pub can_redo: bool,
     pub scene_dirty: bool,
     pub resimulating: bool,
+    pub branch: BranchId,
+    pub branches: Vec<BranchInfo>,
 }
 
 /// One report of `Session::resimulate`.
@@ -102,6 +118,9 @@ pub struct SessionExport {
     /// The undo and redo stacks, so a rebuild keeps the history.
     pub undo: Vec<u8>,
     pub hashes: Vec<u64>,
+    /// The other branches, the current one, and the names; empty for a linear session.
+    /// `inputs`, `edits`, and `hashes` are the current branch's flattened run.
+    pub branches: Vec<u8>,
 }
 
 pub struct Session {
@@ -128,6 +147,7 @@ pub struct Session {
     reports: VecDeque<Resimulation>,
     /// Records every tick run while the `Introspection` topic is subscribed.
     pub(crate) introspection: Option<Introspection>,
+    tree: BranchTree,
 }
 
 impl Session {
@@ -151,13 +171,15 @@ impl Session {
             diverged: false,
             reports: VecDeque::new(),
             introspection: None,
+            tree: BranchTree::default(),
         })
     }
 
     /// Restarts a recorded session on a new build: the new hashes are compared with
-    /// `expected` while it resimulates. `undo` is the exported undo history; empty bytes
-    /// mean an empty one. `saved_scene` is the scene as last saved when it differs from
-    /// `scene`.
+    /// `expected` while it resimulates. `undo` is the exported undo history and `branches`
+    /// the exported branch tree; empty bytes mean an empty history and a linear session.
+    /// `saved_scene` is the scene as last saved when it differs from `scene`. The other
+    /// branches are stale until switched to.
     #[allow(clippy::too_many_arguments)]
     pub fn resume(
         sim: &mut Simulation,
@@ -166,6 +188,7 @@ impl Session {
         inputs: InputLog,
         edits: EditLog,
         undo: &[u8],
+        branches: &[u8],
         expected: Vec<u64>,
     ) -> Result<Session, SessionError> {
         let history = if undo.is_empty() {
@@ -182,6 +205,9 @@ impl Session {
         session.inputs = inputs;
         session.edits = edits;
         session.history = history;
+        if !branches.is_empty() {
+            session.tree = BranchTree::decode(branches)?;
+        }
         if !expected.is_empty() {
             session.hashes = expected;
         }
@@ -216,8 +242,8 @@ impl Session {
     }
 
     /// Runs one tick and returns the new tick. Below the head it replays the recorded input
-    /// unless `live` differs from it, which takes over: the future after the current tick is
-    /// discarded and `live` is recorded. Past the end of the recorded inputs, `live` or
+    /// unless `live` differs from it, which takes over: a branch forks at the current tick
+    /// and records `live`. Past the end of the recorded inputs, `live` or
     /// default inputs are recorded.
     pub fn step(&mut self, sim: &mut Simulation, live: Option<&[u8]>) -> Result<u64, SessionError> {
         let tick = self.current;
@@ -231,7 +257,7 @@ impl Session {
         let take_over = live.filter(|live| recorded.as_deref() != Some(*live));
         self.run_tick(sim, take_over.or(recorded.as_deref()))?;
         if let Some(live) = take_over {
-            self.discard_after(tick);
+            self.fork_or_discard_after(tick);
             self.record_input(sim, tick, live.to_vec());
         } else if recorded.is_none()
             && tick >= self.head
@@ -250,7 +276,8 @@ impl Session {
     }
 
     /// Applies `edit` at the current tick. At tick 0 it changes the scene and marks the
-    /// recorded future stale; past tick 0 it discards the future and records the edit.
+    /// recorded future stale; past tick 0 it records the edit, forking a branch when the
+    /// current one has recorded ticks after it.
     /// Returns the entity a `Spawn` created.
     pub fn edit(
         &mut self,
@@ -282,6 +309,13 @@ impl Session {
         match &entry {
             UndoEntry::Scene { before, .. } => {
                 let result = self.load_scene_version(sim, before.clone());
+                self.history.undone(entry, result.is_ok());
+                result
+            }
+            UndoEntry::Run { edit } if self.is_forking_edit(edit) => {
+                // The branch it created goes, and the parent is shown at its tick.
+                self.current = edit.tick;
+                let result = self.delete_branch(sim, self.tree.current()).map(drop);
                 self.history.undone(entry, result.is_ok());
                 result
             }
@@ -535,6 +569,7 @@ impl Session {
             }
             if self.checkpoints.wants(up_to) {
                 self.checkpoints.insert(up_to, sim.snapshot());
+                self.enforce_checkpoint_budget();
             }
             self.apply_edits_or_drop(sim, up_to);
         }
@@ -569,6 +604,11 @@ impl Session {
             edits: self.edits.encode(),
             undo: self.history.encode(),
             hashes: self.hashes.clone(),
+            branches: if self.tree.is_branched() {
+                self.tree.encode(self.inputs.players)
+            } else {
+                Vec::new()
+            },
         })
     }
 
@@ -585,6 +625,172 @@ impl Session {
             can_redo: self.history.can_redo(),
             scene_dirty: self.scene_dirty,
             resimulating: self.resimulating.is_some(),
+            branch: self.tree.current(),
+            branches: self.branches(),
+        }
+    }
+
+    pub fn branches(&self) -> Vec<BranchInfo> {
+        self.tree.infos(self.head)
+    }
+
+    pub fn current_branch(&self) -> BranchId {
+        self.tree.current()
+    }
+
+    /// Makes `id` the current branch, at the current tick when it covers it, otherwise at
+    /// its head. A stale branch is resimulated first, as after a scene edit.
+    pub fn switch_branch(
+        &mut self,
+        sim: &mut Simulation,
+        id: BranchId,
+    ) -> Result<(), SessionError> {
+        if self.tree.get(id).is_none() {
+            return Err(SessionError::NoSuchBranch(id));
+        }
+        if id == self.tree.current() {
+            return Ok(());
+        }
+        let tick = self.current;
+        let defaults = sim.encoded_default_inputs();
+        let stale = self
+            .tree
+            .path(id)
+            .iter()
+            .any(|&b| self.tree.get(b).is_some_and(|b| b.stale));
+        let segment = self.current_segment();
+        let target = self
+            .tree
+            .make_current(segment, self.resimulating.is_some(), id)
+            .expect("a branch other than the current one is stored");
+        self.compose(&target, defaults.as_deref());
+        self.enforce_checkpoint_budget();
+        self.resimulating = None;
+        self.return_to = None;
+        self.reports.clear();
+        self.current = if tick <= self.end() { tick } else { self.head };
+        if stale {
+            let (_, scene_state) = self.checkpoints.nearest_at_or_before(0);
+            sim.restore(scene_state)
+                .expect("a checkpoint restores into the world it was taken from");
+            self.resimulate_from_scene(sim);
+            Ok(())
+        } else {
+            self.replay_to(sim, self.current)
+        }
+    }
+
+    pub fn rename_branch(&mut self, id: BranchId, name: String) -> Result<(), SessionError> {
+        let branch = self
+            .tree
+            .get_mut(id)
+            .ok_or(SessionError::NoSuchBranch(id))?;
+        branch.name = name;
+        Ok(())
+    }
+
+    /// Deletes `id` and its descendants, and returns the descendants. Deleting the current
+    /// branch, or one of its ancestors, switches to the parent of `id` first.
+    pub fn delete_branch(
+        &mut self,
+        sim: &mut Simulation,
+        id: BranchId,
+    ) -> Result<Vec<BranchId>, SessionError> {
+        let branch = self.tree.get(id).ok_or(SessionError::NoSuchBranch(id))?;
+        let parent = branch.parent.ok_or(SessionError::RootBranch)?;
+        let mut removed = self.tree.subtree(id);
+        if removed.contains(&self.tree.current()) {
+            self.switch_branch(sim, parent)?;
+        }
+        self.tree.remove(&removed);
+        removed.retain(|&branch| branch != id);
+        Ok(removed)
+    }
+
+    /// Every checkpoint the session holds, across its branches.
+    pub fn checkpoint_count(&self) -> usize {
+        self.checkpoints.len() + self.tree.checkpoint_count()
+    }
+
+    /// The current branch's part of the flattened run.
+    fn current_segment(&self) -> Segment {
+        Segment::split(
+            self.tree.current_branch().fork(),
+            &self.inputs,
+            &self.edits,
+            &self.hashes,
+            &self.checkpoints,
+        )
+    }
+
+    /// Flattens the run of the current branch, whose segment is `target`, from its
+    /// ancestors' segments. Tick 0 is common to every branch.
+    fn compose(&mut self, target: &Segment, defaults: Option<&[u8]>) {
+        let (_, scene_state) = self.checkpoints.nearest_at_or_before(0);
+        let mut checkpoints = Checkpoints::new(scene_state.clone());
+        let mut inputs = InputLog::new(self.inputs.players);
+        let mut edits = EditLog::new();
+        let mut hashes = vec![self.hashes[0]];
+        let current = self.tree.current();
+        for id in self.tree.path(current) {
+            let branch = self.tree.get(id).expect("a branch of the path");
+            let segment = branch.segment.as_ref().unwrap_or(target);
+            segment.append_to(
+                branch.fork(),
+                &mut inputs,
+                &mut edits,
+                &mut hashes,
+                &mut checkpoints,
+                defaults,
+            );
+        }
+        (self.inputs, self.edits, self.hashes, self.checkpoints) =
+            (inputs, edits, hashes, checkpoints);
+        self.update_head();
+    }
+
+    /// Whether `edit` created the current branch: its first own edit at its fork tick.
+    fn is_forking_edit(&self, edit: &TimedEdit) -> bool {
+        let branch = self.tree.current_branch();
+        branch.parent.is_some()
+            && edit.tick == branch.fork_tick
+            && self.edits.at(edit.tick).get(branch.fork_edits) == Some(edit)
+    }
+
+    /// Before recording at `tick`: forks a branch when the current one has recorded ticks
+    /// after it (the fork rule), then drops the future after `tick` from the run.
+    fn fork_or_discard_after(&mut self, tick: u64) {
+        if self.end() > tick {
+            let segment = self.current_segment();
+            let fork = (tick, self.edits.at(tick).len());
+            self.tree.fork(segment, self.resimulating.is_some(), fork);
+        }
+        self.discard_after(tick);
+        self.enforce_checkpoint_budget();
+    }
+
+    /// Evicts checkpoints past `CHECKPOINT_BUDGET`, oldest first: those of stored branches
+    /// other than the current branch's parent, then the parent's, then the current
+    /// branch's. Tick 0, fork ticks, and pinned checkpoints stay.
+    fn enforce_checkpoint_budget(&mut self) {
+        let mut over = self.checkpoint_count().saturating_sub(CHECKPOINT_BUDGET);
+        if over == 0 {
+            return;
+        }
+        let parent = self.tree.current_branch().parent;
+        let fork_ticks = self.tree.fork_ticks();
+        while over > 0 && self.tree.evict_oldest(|id| Some(id) != parent, &fork_ticks) {
+            over -= 1;
+        }
+        while over > 0 && self.tree.evict_oldest(|id| Some(id) == parent, &fork_ticks) {
+            over -= 1;
+        }
+        while over > 0 {
+            let Some(tick) = self.checkpoints.oldest_evictable(&fork_ticks) else {
+                break;
+            };
+            self.checkpoints.evict(tick);
+            over -= 1;
         }
     }
 
@@ -658,6 +864,7 @@ impl Session {
             self.hashes.push(sim.hash());
             if self.checkpoints.wants(tick) {
                 self.checkpoints.insert(tick, sim.snapshot());
+                self.enforce_checkpoint_budget();
             }
         }
         // Ticks replayed here are never stale: seeking past resimulation is refused.
@@ -739,7 +946,8 @@ impl Session {
         }
     }
 
-    /// Applies `edit` at the current tick, discards the future after it, and records it.
+    /// Applies `edit` at the current tick, forks or discards the future after it, and
+    /// records it.
     fn record_edit(
         &mut self,
         sim: &mut Simulation,
@@ -749,7 +957,7 @@ impl Session {
             && self.checkpoints.is_sparse_at(edit.tick))
         .then(|| sim.snapshot());
         let spawned = sim.apply_edit(&edit.edit)?;
-        self.discard_after(edit.tick);
+        self.fork_or_discard_after(edit.tick);
         if let Some(checkpoint) = checkpoint {
             self.checkpoints.pin(edit.tick, checkpoint);
         }
@@ -770,9 +978,10 @@ impl Session {
         Ok(())
     }
 
-    /// After new logs: only tick 0 stays simulated, the session is at tick 0, and recorded
-    /// edits are checked on this state by resimulation.
+    /// After new logs, which define a new linear run: only tick 0 stays simulated, the
+    /// session is at tick 0, and recorded edits are checked on this state by resimulation.
     fn reset_future(&mut self, sim: &mut Simulation) -> Result<(), SessionError> {
+        self.tree = BranchTree::default();
         self.hashes.truncate(1);
         self.update_head();
         self.current = 0;
@@ -836,7 +1045,14 @@ impl Session {
     /// compared, since the state changed on purpose. The session shows tick 0 while it
     /// resimulates, then returns to the tick it was at (or to the last resimulated tick when
     /// the recorded future ends before it).
+    /// The other branches are marked stale.
     fn start_resimulation(&mut self, sim: &mut Simulation) {
+        self.tree.mark_stale();
+        self.resimulate_from_scene(sim);
+    }
+
+    /// `start_resimulation` for the current branch only.
+    fn resimulate_from_scene(&mut self, sim: &mut Simulation) {
         self.checkpoints = Checkpoints::new(sim.snapshot());
         self.hashes[0] = sim.hash();
         let was_at = self.current;

@@ -7,6 +7,9 @@ use ludenea_ecs::Snapshot;
 
 /// Checkpoints are taken on multiples of this many ticks.
 pub const CHECKPOINT_INTERVAL: u64 = 16;
+/// How many checkpoints a session keeps across all its branches, beyond those never
+/// evicted.
+pub const CHECKPOINT_BUDGET: usize = 256;
 /// How many checkpoints each distance level keeps.
 pub const CHECKPOINTS_PER_LEVEL: usize = 2;
 
@@ -77,6 +80,51 @@ impl Checkpoints {
 
     pub fn ticks(&self) -> Vec<u64> {
         self.snapshots.keys().copied().collect()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.snapshots.len()
+    }
+
+    /// No checkpoint, not even tick 0: only for checkpoints stored apart from a run, which
+    /// are never sought from.
+    pub(crate) fn empty() -> Self {
+        Self {
+            snapshots: BTreeMap::new(),
+            pinned: BTreeSet::new(),
+        }
+    }
+
+    /// A copy of the checkpoints after `tick`, pins included.
+    pub(crate) fn after(&self, tick: u64) -> Checkpoints {
+        Checkpoints {
+            snapshots: self
+                .snapshots
+                .range(tick + 1..)
+                .map(|(&t, s)| (t, s.clone()))
+                .collect(),
+            pinned: self.pinned.range(tick + 1..).copied().collect(),
+        }
+    }
+
+    /// Adds `other`'s checkpoints as they are, without thinning.
+    pub(crate) fn extend(&mut self, other: &Checkpoints) {
+        let copies = other.snapshots.iter().map(|(&t, s)| (t, s.clone()));
+        self.snapshots.extend(copies);
+        self.pinned.extend(&other.pinned);
+    }
+
+    /// The oldest checkpoint the budget may evict: never tick 0, a pinned one, or one at
+    /// a tick in `kept`.
+    pub(crate) fn oldest_evictable(&self, kept: &[u64]) -> Option<u64> {
+        self.snapshots
+            .keys()
+            .copied()
+            .find(|tick| *tick != 0 && !self.pinned.contains(tick) && !kept.contains(tick))
+    }
+
+    pub(crate) fn evict(&mut self, tick: u64) {
+        self.snapshots.remove(&tick);
     }
 }
 

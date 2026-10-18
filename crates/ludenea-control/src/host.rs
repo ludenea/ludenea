@@ -385,9 +385,17 @@ impl Host {
                     decode_edits(&edits)?
                 };
                 let expected = expected.into_iter().map(|hash| hash.0).collect();
-                let session =
-                    Session::resume(sim, scene, saved_scene, inputs, edits, &undo.0, expected)
-                        .map_err(|e| self.fail(e))?;
+                let session = Session::resume(
+                    sim,
+                    scene,
+                    saved_scene,
+                    inputs,
+                    edits,
+                    &undo.0,
+                    &[],
+                    expected,
+                )
+                .map_err(|e| self.fail(e))?;
                 self.load(session)
             }
             Command::GetSchedule => {
@@ -759,7 +767,10 @@ fn session_error(error: &SessionError) -> ProtocolError {
         SessionError::Panicked { .. } => ErrorCode::SystemPanicked,
         SessionError::NothingToUndo => ErrorCode::NothingToUndo,
         SessionError::NothingToRedo => ErrorCode::NothingToRedo,
-        SessionError::UndoDecode(_) => ErrorCode::InvalidCommand,
+        SessionError::UndoDecode(_)
+        | SessionError::BranchesDecode(_)
+        | SessionError::NoSuchBranch(_)
+        | SessionError::RootBranch => ErrorCode::InvalidCommand,
         SessionError::Edit(error) => return edit_error(error),
         SessionError::MissingComponent { .. } => ErrorCode::InvalidEdit,
         SessionError::NotInScene(_) => ErrorCode::NoSuchEntity,

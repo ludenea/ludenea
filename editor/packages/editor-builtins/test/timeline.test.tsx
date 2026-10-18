@@ -20,6 +20,8 @@ const timeline = (patch: Partial<Timeline> = {}): Timeline => ({
   can_redo: false,
   scene_dirty: false,
   resimulating: false,
+  branch: 0,
+  branches: [{ id: 0, name: "Branch 1", parent: null, fork_tick: 0, head: 100, stale: false }],
   ...patch,
 });
 const mod = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? { metaKey: true } : { ctrlKey: true };

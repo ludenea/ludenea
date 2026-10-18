@@ -1,3 +1,5 @@
+export * from "./BranchId";
+export * from "./BranchInfo";
 export * from "./Bytes";
 export * from "./ClientMessage";
 export * from "./Color";
