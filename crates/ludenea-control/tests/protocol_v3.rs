@@ -1301,6 +1301,34 @@ fn branch_restored_before_its_edits_still_reloads() {
 }
 
 #[test]
+fn replay_of_a_replay_keeps_prefabs_reached_only_by_handles() {
+    // Without instances 5 and 6, only the spawner's handle reaches the crate prefab.
+    let scene: String = fs::read_to_string(SPAWNER_SCENE)
+        .unwrap()
+        .lines()
+        .filter(|line| !line.contains("(id: 5, prefab") && !line.contains("(id: 6, prefab"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    let (mut host, _) = spawner_host(scene);
+    // The spawner spawns the prefab at tick 60.
+    step(&mut host, 70);
+    let a = export_replay(&mut host, None);
+
+    let mut loaded = Host::new(boxes::app).unwrap();
+    ok(&mut loaded, Command::LoadReplay { replay: a.clone() });
+    settle(&mut loaded);
+    let b = export_replay(&mut loaded, None);
+    let (a, b) = (decode_replay(&a), decode_replay(&b));
+    let ids: Vec<AssetId> = a.assets.iter().map(|(id, _)| *id).collect();
+    assert_eq!(ids, [PREFAB, STATS]);
+    assert_eq!(b.assets, a.assets);
+    assert_eq!(b.hashes, a.hashes);
+    let mut sim = boxes::app().build().unwrap();
+    let report = play_replay(&mut sim, &b, |_, _| {}).unwrap();
+    assert_eq!(report.outcome, ReplayOutcome::Matched);
+}
+
+#[test]
 fn compare_traces_against_the_session_waits_for_resimulation() {
     let mut host = recorded_host();
     let Reply::Scene { ron } = ok(&mut host, Command::SaveScene) else {

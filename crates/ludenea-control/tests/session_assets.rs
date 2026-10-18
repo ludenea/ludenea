@@ -572,3 +572,87 @@ fn warnings_follow_every_scene_load() {
     session.undo(&mut sim).unwrap();
     assert_eq!(session.warnings().len(), 1);
 }
+
+#[test]
+fn tick_0_insert_on_an_added_component_updates_the_added_entry() {
+    // A crate prefab without a pose: the instance adds it.
+    let mut assets = assets();
+    let crate_text = assets.get(&PREFAB).unwrap().clone();
+    let start = crate_text.find(r#", "ludenea::Pose""#).unwrap();
+    let end = start + crate_text[start..].find(")}").unwrap() + 1;
+    let without_pose = format!("{}{}", &crate_text[..start], &crate_text[end..]);
+    assets.insert(PREFAB, without_pose);
+    let mut sim = simulation();
+    let scene = fs::read_to_string(SPAWNER_SCENE).unwrap();
+    let mut session = Session::start(&mut sim, scene, assets, Document::Scene).unwrap();
+
+    for x in [7.0, 8.0] {
+        let edit = insert_pose(&sim, vec![5, 0], x);
+        session.edit(&mut sim, edit).unwrap();
+    }
+    let scene = session.scene();
+    assert_eq!(
+        scene.matches(r#"component: "ludenea::Pose""#).count(),
+        2,
+        "{scene}"
+    );
+    assert!(
+        scene.contains(
+            r#"added: [(entity: [0], component: "ludenea::Pose", value: (position:(x:8.0"#
+        ),
+        "{scene}"
+    );
+    assert!(pose_at(&sim, &[5, 0]).contains("x:8.0"));
+}
+
+/// A prefab holding one instance of the crate prefab, with the identifier `OUTER`.
+const OUTER: AssetId = AssetId(0x0007);
+
+fn outer_prefab() -> String {
+    format!(
+        "Prefab(\n    version: 1,\n    next_id: 1,\n    entities: [],\n    instances: [\n    (id: 0, prefab: \"{PREFAB}\"),\n    ],\n)\n"
+    )
+}
+
+#[test]
+fn tick_0_edit_on_a_nested_instance_entity_overrides_the_outer_instance() {
+    let mut assets = assets();
+    assets.insert(OUTER, outer_prefab());
+    let mut sim = simulation();
+    let scene = fs::read_to_string(SPAWNER_SCENE).unwrap();
+    let mut session = Session::start(&mut sim, scene, assets, Document::Scene).unwrap();
+    let outer = session.place_instance(&mut sim, OUTER).unwrap();
+
+    let edit = insert_pose(&sim, vec![outer, 0, 0], 7.0);
+    session.edit(&mut sim, edit).unwrap();
+    let scene = session.scene();
+    assert!(
+        scene.contains(
+            r#"(entity: [0, 0], component: "ludenea::Pose", path: [], value: (position:(x:7.0"#
+        ),
+        "{scene}"
+    );
+    assert!(pose_at(&sim, &[outer, 0, 0]).contains("x:7.0"));
+    assert!(!pose_at(&sim, &[5, 0]).contains("x:7.0"));
+}
+
+#[test]
+fn tick_0_edit_on_an_instance_entity_in_a_prefab_document_overrides_it() {
+    let mut sim = simulation();
+    let mut session = Session::start(&mut sim, outer_prefab(), assets(), Document::Prefab).unwrap();
+
+    let edit = insert_pose(&sim, vec![0, 0], 2.5);
+    session.edit(&mut sim, edit).unwrap();
+    let text = session.scene().to_string();
+    assert!(text.starts_with("Prefab("), "{text}");
+    assert!(
+        text.contains(
+            r#"(entity: [0], component: "ludenea::Pose", path: [], value: (position:(x:2.5"#
+        ),
+        "{text}"
+    );
+    let mut assets = assets();
+    assets.insert(OUTER, text.clone());
+    save_prefab_checked(OUTER, &text, &assets).unwrap();
+    assert!(pose_at(&sim, &[0, 0]).contains("x:2.5"));
+}
