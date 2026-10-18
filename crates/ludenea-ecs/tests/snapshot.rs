@@ -372,7 +372,7 @@ fn count_pings(pings: Events<Ping>, mut seen: ResMut<Seen>) {
 #[test]
 fn restore_clears_queued_commands_and_events() {
     let (mut world, _) = populated_world();
-    world.register_event::<Ping>();
+    world.register_event::<Ping>().unwrap();
     world.register_resource(Seen(usize::MAX)).unwrap();
     let before = world.snapshot();
 

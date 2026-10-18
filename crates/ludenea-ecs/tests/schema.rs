@@ -77,12 +77,30 @@ fn asset_id_serializes_as_32_lowercase_hex_digits() {
 #[test]
 fn world_lists_event_schemas_by_stable_name() {
     let mut world = World::new();
-    world.register_event::<Hit>();
-    world.register_event::<Alert>();
+    world.register_event::<Hit>().unwrap();
+    world.register_event::<Alert>().unwrap();
 
     let schemas = world.event_schemas();
     let names: Vec<_> = schemas.iter().map(|(name, _)| *name).collect();
     assert_eq!(names, ["test::Alert", "test::Hit"]);
     assert_eq!(field_names(&schemas[1].1), ["target"]);
     assert!(matches!(schemas[0].1, TypeSchema::Newtype { .. }));
+}
+
+#[test]
+fn events_sharing_a_stable_name_are_refused() {
+    #[derive(Event, Serialize)]
+    #[event(name = "test::Hit")]
+    struct OtherHit;
+
+    let mut world = World::new();
+    world.register_event::<Hit>().unwrap();
+    world.register_event::<Hit>().unwrap();
+    assert!(matches!(
+        world.register_event::<OtherHit>(),
+        Err(ludenea_ecs::EcsError::DuplicateName {
+            name: "test::Hit",
+            ..
+        })
+    ));
 }

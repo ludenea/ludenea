@@ -131,7 +131,9 @@ impl App {
     }
 
     pub fn event<T: Event>(&mut self) -> &mut Self {
-        self.world.register_event::<T>();
+        if let Err(error) = self.world.register_event::<T>() {
+            self.errors.push(error);
+        }
         self
     }
 

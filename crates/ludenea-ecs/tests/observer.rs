@@ -36,7 +36,7 @@ fn world() -> World {
     let mut world = World::new();
     world.register_component::<Marker>().unwrap();
     world.register_resource(Counter::default()).unwrap();
-    world.register_event::<Hit>();
+    world.register_event::<Hit>().unwrap();
     world
 }
 
@@ -165,7 +165,7 @@ fn send_unrepresentable(mut events: EventWriter<Unrepresentable>) {
 #[test]
 fn event_without_json_form_shows_as_an_error_object() {
     let mut world = world();
-    world.register_event::<Unrepresentable>();
+    world.register_event::<Unrepresentable>().unwrap();
     let mut builder = ScheduleBuilder::default();
     builder.add(send_unrepresentable);
     let mut schedule = builder.build(&world).unwrap();

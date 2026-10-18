@@ -113,7 +113,7 @@ fn read_hits(hits: Events<Hit>, mut seen: ResMut<Seen>) {
 #[test]
 fn events_are_visible_to_later_systems_and_cleared_by_clear_events() {
     let mut world = world();
-    world.register_event::<Hit>();
+    world.register_event::<Hit>().unwrap();
     run(&mut world, |builder| {
         builder.add(send_hits);
         builder.add(read_hits);

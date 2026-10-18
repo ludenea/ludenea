@@ -195,6 +195,66 @@ mod tests {
     }
 
     #[test]
+    fn entity_refs_paths_through_maps_tuples_arrays_and_tuple_variants() {
+        let entity_box = || Box::new(TypeSchema::Entity);
+        let schema = named(
+            "Board",
+            vec![
+                (
+                    "by_name",
+                    TypeSchema::Map {
+                        key: Box::new(TypeSchema::String),
+                        value: entity_box(),
+                    },
+                ),
+                (
+                    "pair",
+                    TypeSchema::Tuple {
+                        items: vec![TypeSchema::U8, TypeSchema::Entity],
+                    },
+                ),
+                (
+                    "slots",
+                    TypeSchema::Array {
+                        item: entity_box(),
+                        len: 2,
+                    },
+                ),
+                (
+                    "shape",
+                    TypeSchema::Enum {
+                        name: "Shape".into(),
+                        variants: vec![crate::VariantSchema {
+                            name: "Orbit".into(),
+                            fields: VariantFields::Tuple {
+                                items: vec![TypeSchema::Entity, TypeSchema::F32],
+                            },
+                        }],
+                    },
+                ),
+            ],
+        );
+        let entity = |index: u32| json!({ "index": index, "generation": 0 });
+        let value = json!({
+            "by_name": { "a": entity(1), "b": entity(2) },
+            "pair": [9, entity(3)],
+            "slots": [entity(4), entity(5)],
+            "shape": { "Orbit": [entity(6), 1.5] },
+        });
+        assert_eq!(
+            entity_refs(&schema, &value),
+            [
+                at("by_name[a]", 1, 0),
+                at("by_name[b]", 2, 0),
+                at("pair.1", 3, 0),
+                at("slots[0]", 4, 0),
+                at("slots[1]", 5, 0),
+                at("shape.Orbit.0", 6, 0),
+            ]
+        );
+    }
+
+    #[test]
     fn entity_refs_ignores_structs_shaped_like_entities() {
         let lookalike = named(
             "Slot",

@@ -209,10 +209,14 @@ impl World {
     }
 
     /// Registers the event type `T`; registering it again is a no-op.
-    pub fn register_event<T: Event>(&mut self) {
+    pub fn register_event<T: Event>(&mut self) -> Result<(), EcsError> {
+        if let Some(queue) = self.events.get(T::NAME) {
+            let (type_id, type_name) = queue.event_type();
+            return check_same_type::<T>(T::NAME, type_id, type_name);
+        }
         self.events
-            .entry(T::NAME)
-            .or_insert_with(|| Box::new(RefCell::new(Vec::<T>::new())));
+            .insert(T::NAME, Box::new(RefCell::new(Vec::<T>::new())));
+        Ok(())
     }
 
     /// The events sent so far this tick as JSON, per registered event type name (name order,

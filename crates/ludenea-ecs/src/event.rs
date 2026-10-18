@@ -1,7 +1,7 @@
 //! Events of the current tick: written by one system, read by later ones, and dropped by
 //! `World::clear_events`, so none outlive the tick.
 
-use std::any::Any;
+use std::any::{Any, TypeId, type_name};
 use std::cell::{Ref, RefCell, RefMut};
 
 use ludenea_schema::{Schema, TypeSchema};
@@ -22,6 +22,8 @@ pub(crate) trait EventQueue {
     fn clear(&mut self);
     fn to_json(&self) -> Vec<serde_json::Value>;
     fn schema(&self) -> TypeSchema;
+    /// The event type's `TypeId` and Rust name.
+    fn event_type(&self) -> (TypeId, &'static str);
 }
 
 impl<T: Event> EventQueue for RefCell<Vec<T>> {
@@ -45,6 +47,10 @@ impl<T: Event> EventQueue for RefCell<Vec<T>> {
 
     fn schema(&self) -> TypeSchema {
         T::schema()
+    }
+
+    fn event_type(&self) -> (TypeId, &'static str) {
+        (TypeId::of::<T>(), type_name::<T>())
     }
 }
 
