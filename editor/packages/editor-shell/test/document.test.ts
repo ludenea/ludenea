@@ -70,13 +70,12 @@ describe("document store", () => {
 
     project.disk["assets/ball.prefab.ron"] = "(new ball)";
     await open(ids.main);
-    game.push({ type: "diverged", tick: 1, expected: "0000000000000002", got: "00000000000000ff" });
 
+    // The recorded hashes go along: the game reports where the new prefab makes it diverge.
     const restored = game.sent.find((command) => command.type === "load_session")!;
     expect(restored.assets).toEqual(project.assets());
     expect(restored.assets).toContainEqual([ids.ball, "(new ball)"]);
     expect(restored.expected).toEqual(session("").hashes);
-    expect(host.editor.timeline.getState().divergence).toEqual({ tick: 1 });
   });
 
   it("reopening_seeks_once_resimulated_past_the_tick", async () => {
@@ -87,6 +86,8 @@ describe("document store", () => {
     // A resumed session keeps its recorded hashes while it resimulates: `simulated` counts them.
     const game = await testGame((command) => {
       if (command.type === "export_session") return { type: "session", ...exported };
+      // The restored session resimulates.
+      if (command.type === "load_session") resimulating = true;
       if (command.type === "get_timeline") return { ...timeline(2), resimulating };
       if (command.type === "load_scene") return { type: "loaded", warnings: [], instances: [], load_addresses: [] };
       return { type: "done" };
@@ -96,7 +97,6 @@ describe("document store", () => {
     await open(ids.main);
     await open(ids.ball);
 
-    resimulating = true;
     game.sent.length = 0;
     const reopened = open(ids.main);
     await vi.waitFor(() => expect(game.sent.some((command) => command.type === "load_session")).toBe(true));
@@ -106,6 +106,167 @@ describe("document store", () => {
     game.push({ type: "resimulated", up_to: 2 });
     await reopened;
     expect(game.sent).toContainEqual({ type: "seek", tick: 2 });
+  });
+
+  it("switching_documents_waits_for_a_resimulation_to_finish", async () => {
+    const project = fakeProject();
+    const host = await testHost(undefined, project.answer);
+    let resimulating = false;
+    const game = await testGame((command) => {
+      if (command.type === "export_session") return resimulating ? { error: { code: "resimulating", message: "resimulating up to tick 1" } } : { type: "session", ...session("(main)") };
+      if (command.type === "get_timeline") return { ...timeline(2), resimulating };
+      if (command.type === "load_scene") return { type: "loaded", warnings: [], instances: [], load_addresses: [] };
+      return { type: "done" };
+    });
+    host.setControl(game.control);
+    await host.editor.document.getState().open(ids.main);
+
+    resimulating = true;
+    const opened = host.editor.document.getState().open(ids.ball);
+    for (let turn = 0; turn < 5; turn++) await settle();
+    expect(host.editor.document.getState().current?.id).toBe(ids.main);
+
+    resimulating = false;
+    game.push({ type: "timeline_changed", timeline: timeline(2) });
+    await opened;
+    expect(host.editor.document.getState().current?.id).toBe(ids.ball);
+    expect(project.stored(ids.main)?.load.scene).toBe("(main)");
+  });
+
+  it("a_root_branch_that_cannot_be_named_still_opens_the_document", async () => {
+    const project = fakeProject();
+    const log = vi.fn();
+    const host = await testHost(undefined, project.answer, log);
+    const game = await testGame((command) => {
+      if (command.type === "get_timeline") return timeline(0);
+      if (command.type === "rename_branch") return { error: { code: "invalid_command", message: "no such branch" } };
+      if (command.type === "load_scene") return { type: "loaded", warnings: [], instances: [], load_addresses: [] };
+      return { type: "done" };
+    });
+    host.setControl(game.control);
+
+    await host.editor.document.getState().open(ids.main);
+
+    expect(host.editor.document.getState()).toMatchObject({ current: { id: ids.main }, error: null });
+    expect(log).toHaveBeenCalledWith("warning", "Cannot name the root branch main: no such branch");
+  });
+
+  it("a_stored_session_that_fails_to_restore_leaves_the_document_open_from_its_file", async () => {
+    const project = fakeProject();
+    const log = vi.fn();
+    const host = await testHost(undefined, project.answer, log);
+    const loaded = { type: "loaded", warnings: ["from the file"], instances: [], load_addresses: [] };
+    const game = await testGame((command) => {
+      if (command.type === "get_timeline") return timeline(0);
+      if (command.type === "load_scene") return loaded;
+      if (command.type === "load_session") return { error: { code: "invalid_command", message: "the branch tree cannot be decoded" } };
+      return { type: "done" };
+    });
+    host.setControl(game.control);
+    project.store(ids.main, { load: { ...session("(main)", { assets: [[ids.settings, edited]] }), type: "load_session", expected: [] }, tick: 0, document: ids.main, unsavedAssets: [ids.settings] });
+
+    await host.editor.document.getState().open(ids.main);
+
+    expect(host.editor.document.getState()).toMatchObject({ current: { id: ids.main }, error: null, unsavedAssets: [], loaded: { warnings: ["from the file"] } });
+    expect(log).toHaveBeenCalledWith("error", "Cannot restore the stored session of scenes/main.scene.ron: the branch tree cannot be decoded", undefined);
+  });
+
+  it("the_session_of_the_open_document_is_refreshed_from_disk_for_a_new_game", async () => {
+    const project = fakeProject();
+    const host = await testHost(undefined, project.answer);
+    const game = await gameWithSession(session("(main)", { assets: [[ids.ball, "(old ball)"]] }));
+    host.setControl(game.control);
+    await host.editor.document.getState().open(ids.main);
+    await host.sessions.store();
+    // The latest export was taken while another document was open.
+    const other = { ...(await host.sessions.export(game.control)), document: ids.ball };
+
+    const own = await host.sessions.own(other);
+
+    expect(own?.document).toBe(ids.main);
+    expect(own?.load.assets).toEqual(project.assets());
+  });
+
+  /** A game whose session resimulates after each `LoadSession` until `finish` pushes the end. */
+  async function resimulatingGame(resimulatingAtFirst = false) {
+    let resimulating = resimulatingAtFirst;
+    const game = await testGame((command) => {
+      if (command.type === "export_session") return resimulating ? { error: { code: "resimulating", message: "resimulating" } } : { type: "session", ...session("(main)") };
+      if (command.type === "load_session") resimulating = true;
+      if (command.type === "get_timeline") return { ...timeline(2), resimulating };
+      if (command.type === "load_scene" || command.type === "load_session") return { type: "loaded", warnings: [], instances: [], load_addresses: [] };
+      return { type: "done" };
+    });
+    const finish = () => {
+      resimulating = false;
+      game.push({ type: "timeline_changed", timeline: timeline(2) });
+    };
+    return { ...game, finish };
+  }
+
+  it("an_asset_reload_waits_for_a_resimulation_then_plays_on", async () => {
+    const project = fakeProject();
+    const host = await testHost(undefined, project.answer);
+    const game = await resimulatingGame();
+    host.setControl(game.control);
+    await host.editor.document.getState().open(ids.main);
+    game.sent.length = 0;
+    game.finish();
+
+    host.editor.timeline.setState({ playing: true });
+    const reloaded = host.editor.document.getState().reloadAssets();
+    await vi.waitFor(() => expect(game.sent.some((command) => command.type === "load_session")).toBe(true));
+    for (let turn = 0; turn < 5; turn++) await settle();
+    expect(game.sent.filter((command) => command.type === "seek" || command.type === "play")).toEqual([]);
+    game.finish();
+    await reloaded;
+
+    expect(game.sent.filter((command) => ["export_session", "load_session", "seek", "play"].includes(command.type)).map((command) => command.type)).toEqual([
+      "export_session",
+      "load_session",
+      "seek",
+      "play",
+    ]);
+  });
+
+  it("an_asset_reload_during_a_resimulation_exports_once_it_ends", async () => {
+    const project = fakeProject();
+    const host = await testHost(undefined, project.answer);
+    const game = await resimulatingGame();
+    host.setControl(game.control);
+    await host.editor.document.getState().open(ids.main);
+    game.finish();
+    // The first reload resimulates when the files change again.
+    const first = host.editor.document.getState().reloadAssets();
+    await vi.waitFor(() => expect(game.sent.some((command) => command.type === "load_session")).toBe(true));
+    game.sent.length = 0;
+
+    const second = host.editor.document.getState().reloadAssets();
+    for (let turn = 0; turn < 5; turn++) await settle();
+    expect(game.sent.filter((command) => command.type === "export_session")).toEqual([]);
+    game.finish();
+    await vi.waitFor(() => expect(game.sent.some((command) => command.type === "load_session")).toBe(true));
+    game.finish();
+    await Promise.all([first, second]);
+    expect(host.editor.document.getState().error).toBeNull();
+  });
+
+  it("an_asset_reload_leaves_a_new_game_where_it_is", async () => {
+    const project = fakeProject();
+    const host = await testHost(undefined, project.answer);
+    const game = await resimulatingGame();
+    host.setControl(game.control);
+    await host.editor.document.getState().open(ids.main);
+    game.finish();
+
+    const reloaded = host.editor.document.getState().reloadAssets();
+    await vi.waitFor(() => expect(game.sent.some((command) => command.type === "load_session")).toBe(true));
+    game.sent.length = 0;
+    host.setControl((await gameWithSession(session("(main)"))).control);
+    game.finish();
+    await reloaded;
+
+    expect(game.sent.filter((command) => command.type === "seek")).toEqual([]);
   });
 
   it("root_branch_takes_the_document_name", async () => {

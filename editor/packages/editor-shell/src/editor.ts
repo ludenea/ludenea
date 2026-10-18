@@ -123,6 +123,7 @@ export function createEditor(options: {
     control: () => control,
     onGameChanged: (listener) => gameListeners.add(listener),
     log: options.log ?? ((level, text) => (level === "error" ? console.error(text) : console.warn(text))),
+    playing: () => timeline.getState().playing,
   });
   const editor: Editor = {
     get control() {

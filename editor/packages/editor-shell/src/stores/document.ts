@@ -92,10 +92,11 @@ export async function exportSession(control: ControlClient): Promise<SavedSessio
 const RESIMULATION_TIMEOUT_MS = 5 * 60 * 1000;
 
 /**
- * Resolves once the game has simulated `tick` (a seek further than the resimulation fails);
- * rejects if the game goes away, panics, or takes longer than `RESIMULATION_TIMEOUT_MS`.
+ * Resolves once the game has simulated `tick` (a seek further than the resimulation fails),
+ * by default once it no longer resimulates; rejects if the game goes away, panics, or takes
+ * longer than `RESIMULATION_TIMEOUT_MS`.
  */
-function simulated(control: ControlClient, tick: number): Promise<void> {
+function simulated(control: ControlClient, tick = Infinity): Promise<void> {
   return new Promise((resolve, reject) => {
     const stops: (() => void)[] = [];
     const settle = (error?: Error) => {
@@ -104,10 +105,13 @@ function simulated(control: ControlClient, tick: number): Promise<void> {
       if (error) reject(error);
       else resolve();
     };
-    const timer = setTimeout(() => settle(new Error(`the game did not resimulate to tick ${tick} in time`)), RESIMULATION_TIMEOUT_MS);
+    const timer = setTimeout(() => settle(new Error(`the game did not resimulate ${tick === Infinity ? "its session" : `to tick ${tick}`} in time`)), RESIMULATION_TIMEOUT_MS);
     stops.push(
       control.on("resimulated", ({ up_to }) => {
         if (up_to >= tick) settle();
+      }),
+      control.on("timeline_changed", ({ timeline }) => {
+        if (!timeline.resimulating) settle();
       }),
       control.on("paused", ({ reason }) => {
         if (reason.type === "panicked") settle(new Error(`the game panicked at tick ${reason.tick} while resimulating: ${reason.message}`));
@@ -134,11 +138,16 @@ export async function restoreSession(control: ControlClient, saved: SavedSession
   return loadedIn(loaded);
 }
 
-/** Seeks back to `tick` once the loaded `saved` is resimulated that far, within what it recorded. */
-async function returnTo(control: ControlClient, saved: SavedSession, tick: number): Promise<void> {
+/**
+ * Seeks back to `tick` once the loaded `saved` is resimulated that far, within what it
+ * recorded, unless `still()` says the session changed meanwhile; resolves whether it sought.
+ */
+async function returnTo(control: ControlClient, saved: SavedSession, tick: number, still = () => true): Promise<boolean> {
   const target = Math.max(0, Math.min(tick, saved.load.expected.length - 1));
   await simulated(control, target);
+  if (!still()) return false;
   await control.request({ type: "seek", tick: target });
+  return true;
 }
 
 // Stored sessions are the JSON of a `SavedSession`, as base64 bytes.
@@ -170,6 +179,8 @@ export function createDocumentStore(options: {
   control: () => ControlClient | null;
   onGameChanged(listener: (control: ControlClient | null) => void): void;
   log: DocumentLog;
+  /** Whether the game plays: a reload of the assets plays on once it is back. */
+  playing?: () => boolean;
 }): { store: DocumentStore; sessions: DocumentSessions } {
   const { project, control, log } = options;
   // The project's asset texts the game last accepted, the file of each, and the open replay.
@@ -235,12 +246,18 @@ export function createDocumentStore(options: {
   };
   const restore = (game: ControlClient, saved: SavedSession, tick = saved.tick) =>
     restoreSession(game, saved, tick, () => store.setState({ unsavedAssets: unsavedIn(saved) }));
+  const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
+  /** Names the root branch after the document; the document is open either way. */
   const nameRoot = async (game: ControlClient, document: OpenDocument) => {
-    const timeline = await game.request({ type: "get_timeline" });
-    // A host that answers something else (a test double) keeps its names.
-    const root = timeline.type === "timeline" ? timeline.branches.find((branch) => branch.parent === null) : undefined;
     const name = document.path.split("/").at(-1)!.split(".")[0]!;
-    if (root?.name === ROOT_NAME) await game.request({ type: "rename_branch", branch: root.id, name });
+    try {
+      const timeline = await game.request({ type: "get_timeline" });
+      // A host that answers something else (a test double) keeps its names.
+      const root = timeline.type === "timeline" ? timeline.branches.find((branch) => branch.parent === null) : undefined;
+      if (root?.name === ROOT_NAME) await game.request({ type: "rename_branch", branch: root.id, name });
+    } catch (error) {
+      log("warning", `Cannot name the root branch ${name}: ${message(error)}`);
+    }
   };
   const tagged = async (game: ControlClient): Promise<SavedSession> => {
     const document = opening ? null : (store.getState().current?.id ?? null);
@@ -268,7 +285,11 @@ export function createDocumentStore(options: {
         const document = { id, kind, path: entry.path };
         const game = control();
         const previous = get().current;
-        if (previous && game) await storeIn(previous, await tagged(game));
+        // A resimulating session cannot be exported: the switch waits for it.
+        if (previous && game) {
+          await simulated(game);
+          await storeIn(previous, await tagged(game));
+        }
         opening = true;
         try {
           const fresh = await readTexts();
@@ -283,11 +304,24 @@ export function createDocumentStore(options: {
           // Only what the game accepted is kept: a refused document leaves the previous one.
           texts = fresh;
           replay = bytes;
-          // A stored session's load reports what stays loaded: the scene load's report is not kept.
-          set({ current: document, text, loaded: game && restoring ? null : loaded, fingerprintDiffers: differs(reply), unsavedAssets: unsavedIn(restoring), error: null });
+          // A stored session's load reports what stays loaded, and marks its unsaved assets once
+          // the game holds them: the scene load's report and marks are not kept.
+          const restores = game !== null && restoring !== null;
+          set({ current: document, text, loaded: restores ? null : loaded, fingerprintDiffers: differs(reply), unsavedAssets: restores ? [] : unsavedIn(restoring), error: null });
           pending = game ? null : restoring;
           if (!game) return;
-          if (restoring) set({ loaded: await restore(game, restoring).catch(locatedIn(texts.paths)) });
+          if (restoring) {
+            // The document is open, from its file: a stored session it cannot take back is reported, not refused.
+            const restored = await restore(game, restoring).then(
+              (reply) => reply,
+              (error: unknown) => {
+                const failure = locateAssetError(error, texts.paths);
+                log("error", `Cannot restore the stored session of ${entry.path}: ${message(failure)}`, failure instanceof AssetFailure ? { file: failure.path, line: failure.line, column: failure.column } : undefined);
+                return loaded;
+              },
+            );
+            set({ loaded: restored });
+          }
           await nameRoot(game, document);
         } finally {
           opening = false;
@@ -321,7 +355,10 @@ export function createDocumentStore(options: {
       const fresh = await readTexts();
       const game = control();
       let saved: SavedSession | null = null;
+      const playing = options.playing?.() ?? false;
       if (document && game) {
+        // A resimulating session cannot be exported: the reload waits for it.
+        await simulated(game);
         const exported = await exportSession(game);
         const { assets, kept } = keepingUnsaved(fresh.assets, exported.load.assets);
         saved = { ...exported, load: { ...exported.load, assets } };
@@ -329,13 +366,19 @@ export function createDocumentStore(options: {
         store.setState({ loaded, unsavedAssets: kept(store.getState().unsavedAssets), error: null });
       }
       texts = fresh;
-      return game && saved && { game, saved };
+      return game && saved && document && { game, saved, document, playing };
     }).catch(reported("Cannot reload the changed assets"));
-    // Off the queue: a long resimulation holds up no document change.
+    // Off the queue: a long resimulation holds up no document change, and a document opened
+    // or a game started meanwhile is left as it is.
     if (reloaded) {
-      await returnTo(reloaded.game, reloaded.saved, reloaded.saved.tick).catch((error: unknown) =>
-        log("warning", `Cannot go back to tick ${reloaded.saved.tick} after reloading the assets: ${error instanceof Error ? error.message : String(error)}`),
-      );
+      const { game, saved, document } = reloaded;
+      const still = () => !opening && control() === game && store.getState().current?.id === document.id;
+      try {
+        // Loading the session paused the game: it plays on from where it was.
+        if ((await returnTo(game, saved, saved.tick, still)) && reloaded.playing && still()) await game.request({ type: "play" });
+      } catch (error) {
+        log("warning", `Cannot go back to tick ${saved.tick} after reloading the assets: ${message(error)}`);
+      }
     }
   };
   project.on("files_changed", ({ changes }) => {
@@ -379,7 +422,9 @@ export function createDocumentStore(options: {
     async own(saved) {
       const document = store.getState().current;
       if ((saved?.document ?? null) === (document?.id ?? null)) return saved;
-      return document && stored(document);
+      // Like a document that opens: against the scene and assets on disk now.
+      const own = document && (await stored(document));
+      return own && refreshed(own, store.getState().text, texts.assets);
     },
     restore,
   };
