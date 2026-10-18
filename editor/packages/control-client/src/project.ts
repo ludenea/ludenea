@@ -9,7 +9,7 @@ import type {
 } from "./generated/project";
 import type { MessageTransport } from "./transports/transport";
 
-export const PROJECT_PROTOCOL_VERSION = 1;
+export const PROJECT_PROTOCOL_VERSION = 2;
 
 /** The reply variant answering a project request of type `R`. */
 export type ProjectReplyFor<R extends ProjectRequest> = R extends { type: "info" | "open" | "create" }

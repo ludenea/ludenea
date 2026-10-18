@@ -4,8 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use ludenea_app::assets::asset_file;
-use ludenea_app::meta::{AssetKind, Meta};
+use ludenea_app::meta::read_assets;
 use ludenea_app::{AssetTexts, NamedAssetTexts};
 
 const MANIFEST: &str = "ludenea.toml";
@@ -16,7 +15,7 @@ const ASSET_DIRECTORIES: [&str; 2] = ["scenes", "assets"];
 ///
 /// The root is `project`, else the nearest folder above the scene holding `ludenea.toml`,
 /// else the scene's folder. A project root's `scenes/` and `assets/` are scanned, a plain
-/// folder entirely, in sorted path order. Files without a meta are skipped.
+/// folder entirely, as [`read_assets`] reads them.
 pub fn project_assets(scene: &Path, project: Option<&Path>) -> Result<NamedAssetTexts, String> {
     // Absolute, so a bare file name has a folder and the manifest search climbs past the
     // current directory.
@@ -38,37 +37,17 @@ pub fn project_assets(scene: &Path, project: Option<&Path>) -> Result<NamedAsset
         }
         None => collect(folder, &mut files)?,
     }
-    files.sort();
-
+    let files = files
+        .into_iter()
+        .map(|file| (file.to_string_lossy().into_owned(), file))
+        .collect();
     let mut assets = NamedAssetTexts {
         texts: AssetTexts::new(),
         paths: BTreeMap::new(),
     };
-    let mut seen = BTreeMap::new();
-    for file in files {
-        let name = file.to_string_lossy();
-        if !name.ends_with(".ron") {
-            continue;
-        }
-        let meta_file = PathBuf::from(format!("{name}.meta"));
-        if !meta_file.is_file() {
-            continue;
-        }
-        let meta = Meta::read(&meta_file)
-            .map_err(|reason| format!("cannot read {}: {reason}", meta_file.display()))?;
-        if let Some(other) = seen.insert(meta.id, name.to_string()) {
-            return Err(format!(
-                "{other} and {name} have the same identifier {}; give one of them a new meta",
-                meta.id
-            ));
-        }
-        let text = match meta.kind {
-            _ if AssetKind::of(&name) == AssetKind::Prefab => read(&file)?,
-            AssetKind::Data { r#type } => asset_file(&r#type, &read(&file)?),
-            _ => continue,
-        };
-        assets.texts.insert(meta.id, text);
-        assets.paths.insert(meta.id, name.into_owned());
+    for asset in read_assets(files)? {
+        assets.texts.insert(asset.id, asset.text);
+        assets.paths.insert(asset.id, asset.path);
     }
     Ok(assets)
 }
@@ -91,10 +70,6 @@ fn collect(directory: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-fn read(path: &Path) -> Result<String, String> {
-    fs::read_to_string(path).map_err(|error| format!("cannot read {}: {error}", path.display()))
 }
 
 #[cfg(test)]

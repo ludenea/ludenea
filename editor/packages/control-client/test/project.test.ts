@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ProjectClient, ProtocolFailure, fakeTransport } from "../src";
 
-const welcome = JSON.stringify({ type: "welcome", protocol_version: 1 });
+const welcome = JSON.stringify({ type: "welcome", protocol_version: 2 });
 
 /** A transport whose peer welcomes the client and records every request it receives. */
 function connected() {
@@ -23,7 +23,7 @@ describe("ProjectClient", () => {
       return [welcome];
     });
     await ProjectClient.connect(transport);
-    expect(hellos).toEqual([{ type: "hello", protocol_version: 1 }]);
+    expect(hellos).toEqual([{ type: "hello", protocol_version: 2 }]);
   });
 
   it("connect_rejects_a_refusal_with_its_message", async () => {
@@ -87,11 +87,11 @@ describe("ProjectClient", () => {
     const stop = client.on("files_changed", (event) => changes.push(event.changes));
     transport.push(JSON.stringify({ type: "event", event: { type: "game_ready" } }));
     transport.push(
-      JSON.stringify({ type: "event", event: { type: "files_changed", changes: [{ Created: "scenes/a.scene.ron" }] } }),
+      JSON.stringify({ type: "event", event: { type: "files_changed", changes: [{ Created: { path: "scenes/a.scene.ron", kind: "Scene" } }] } }),
     );
     stop();
     transport.push(JSON.stringify({ type: "event", event: { type: "files_changed", changes: [] } }));
-    expect(changes).toEqual([[{ Created: "scenes/a.scene.ron" }]]);
+    expect(changes).toEqual([[{ Created: { path: "scenes/a.scene.ron", kind: "Scene" } }]]);
   });
 
   it("rejects_pending_requests_when_the_transport_closes", async () => {

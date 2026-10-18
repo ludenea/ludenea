@@ -1,14 +1,16 @@
 //! The project protocol: what the editor asks of the project service, one JSON message per
 //! frame, in the envelope of the control protocol.
 
-use ludenea_control::GameInfo;
+use ludenea_control::{Bytes, GameInfo};
+use ludenea_ecs::AssetId;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    BuildEvent, Diagnostic, FileChange, FileEntry, GameOutput, PluginBundle, ProjectError,
+    AssetKind, BuildEvent, Diagnostic, FileChange, FileEntry, GameOutput, PluginBundle,
+    ProjectError,
 };
 
-pub const PROJECT_PROTOCOL_VERSION: u32 = 1;
+pub const PROJECT_PROTOCOL_VERSION: u32 = 2;
 
 /// Serde helper: `Result<ProjectReply, ProjectFailure>` as `{"ok": reply}` or `{"error": error}`.
 pub mod outcome {
@@ -100,6 +102,33 @@ pub enum ProjectRequest {
         path: String,
         text: String,
     },
+    ReadBinary {
+        path: String,
+    },
+    WriteBinary {
+        path: String,
+        bytes: Bytes,
+    },
+    /// Creates a file with its meta, both or neither; an existing file is refused.
+    /// Replies `File`.
+    CreateAsset {
+        path: String,
+        kind: AssetKind,
+        text: String,
+    },
+    /// Every prefab and data asset, for loading a scene into the game.
+    ReadAssetTexts,
+    /// Keeps the session of `document` (an export) for the next time it is opened.
+    StoreSession {
+        #[cfg_attr(feature = "ts", ts(type = "string"))]
+        document: AssetId,
+        bytes: Bytes,
+    },
+    /// The session `StoreSession` kept for `document`, if any.
+    LoadStoredSession {
+        #[cfg_attr(feature = "ts", ts(type = "string"))]
+        document: AssetId,
+    },
     Rename {
         from: String,
         to: String,
@@ -133,6 +162,14 @@ pub enum ProjectReply {
     Text {
         text: String,
     },
+    Bytes {
+        bytes: Bytes,
+    },
+    File(FileEntry),
+    AssetTexts(AssetTexts),
+    StoredSession {
+        bytes: Option<Bytes>,
+    },
     Plugins {
         plugins: Vec<PluginBundle>,
     },
@@ -142,6 +179,15 @@ pub enum ProjectReply {
     Wasm {
         glue_url: String,
     },
+}
+
+/// Every prefab and data asset of the project, in path order; data assets in file form
+/// (`AssetFile(type: .., value: ..)`). `paths` names the file of each.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export_to = "project/"))]
+pub struct AssetTexts {
+    pub assets: Vec<(AssetId, String)>,
+    pub paths: Vec<(AssetId, String)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -224,6 +270,8 @@ pub enum FailureCode {
     InvalidManifest,
     Watch,
     PluginFailed,
+    /// A prefab or data asset that cannot be read, or two with one identifier.
+    InvalidAssets,
 }
 
 impl ProjectFailure {
@@ -244,6 +292,7 @@ impl From<ProjectError> for ProjectFailure {
             ProjectError::Io { .. } => FailureCode::Io,
             ProjectError::Manifest { .. } => FailureCode::InvalidManifest,
             ProjectError::Watch(_) => FailureCode::Watch,
+            ProjectError::Assets(_) => FailureCode::InvalidAssets,
             // The setting names no usable engine either way.
             ProjectError::NoEnginePath | ProjectError::NotAnEngine(_) => FailureCode::NoEnginePath,
         };

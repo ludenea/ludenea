@@ -4,7 +4,7 @@ use std::process::Command;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
-use ludenea_project::{FileChange, Project, ProjectError};
+use ludenea_project::{AssetKind, FileChange, Project, ProjectError};
 use tempfile::TempDir;
 
 fn engine_path() -> PathBuf {
@@ -191,8 +191,46 @@ fn watch_reports_scene_change_on_disk() {
     fs::write(project.root().join("scenes/main.scene.ron"), "changed").unwrap();
     expect_change(
         &changes,
-        &FileChange::Changed("scenes/main.scene.ron".into()),
+        &FileChange::Changed {
+            path: "scenes/main.scene.ron".into(),
+            kind: AssetKind::of("scenes/main.scene.ron"),
+        },
     );
+}
+
+/// Only the meta makes a `.ron` file a data asset, and its changes say so.
+#[test]
+fn watch_reports_data_asset_changes_with_their_kind() {
+    let dir = TempDir::new().unwrap();
+    let project = new_project(&dir);
+    fs::create_dir_all(project.root().join("assets")).unwrap();
+    fs::write(project.root().join("assets/settings.ron"), "()").unwrap();
+    fs::write(
+        project.root().join("assets/settings.ron.meta"),
+        "Meta(version: 1, id: \"0000000000000000000000000000002a\", kind: Data(type: \"demo::Settings\"))",
+    )
+    .unwrap();
+    let changes = project.watch().unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    fs::write(
+        project.root().join("assets/settings.ron"),
+        "(changed: true)",
+    )
+    .unwrap();
+    let kind = AssetKind::Data {
+        r#type: "demo::Settings".to_string(),
+    };
+    let path = "assets/settings.ron".to_string();
+    expect_change(
+        &changes,
+        &FileChange::Changed {
+            path: path.clone(),
+            kind: kind.clone(),
+        },
+    );
+    fs::remove_file(project.root().join("assets/settings.ron")).unwrap();
+    fs::remove_file(project.root().join("assets/settings.ron.meta")).unwrap();
+    expect_change(&changes, &FileChange::Removed { path, kind });
 }
 
 /// The changes that arrive until none has come for a second.
@@ -202,7 +240,9 @@ fn settled_changes(changes: &Receiver<FileChange>) -> Vec<FileChange> {
 
 fn path_of(change: &FileChange) -> &str {
     match change {
-        FileChange::Changed(path) | FileChange::Created(path) | FileChange::Removed(path) => path,
+        FileChange::Changed { path, .. }
+        | FileChange::Created { path, .. }
+        | FileChange::Removed { path, .. } => path,
     }
 }
 
@@ -222,7 +262,10 @@ fn atomic_save_is_reported_as_changed() {
         .collect();
     assert_eq!(
         scene_changes,
-        [FileChange::Changed("scenes/main.scene.ron".into())],
+        [FileChange::Changed {
+            path: "scenes/main.scene.ron".into(),
+            kind: AssetKind::of("scenes/main.scene.ron")
+        }],
         "never a removal or a creation of the saved file"
     );
 }
@@ -237,12 +280,18 @@ fn removing_then_recreating_a_file_is_reported_in_order() {
     fs::remove_file(&scene).unwrap();
     expect_change(
         &changes,
-        &FileChange::Removed("scenes/main.scene.ron".into()),
+        &FileChange::Removed {
+            path: "scenes/main.scene.ron".into(),
+            kind: AssetKind::of("scenes/main.scene.ron"),
+        },
     );
     fs::write(&scene, "back").unwrap();
     expect_change(
         &changes,
-        &FileChange::Created("scenes/main.scene.ron".into()),
+        &FileChange::Created {
+            path: "scenes/main.scene.ron".into(),
+            kind: AssetKind::of("scenes/main.scene.ron"),
+        },
     );
 }
 
@@ -282,10 +331,22 @@ fn watch_follows_new_top_level_directories() {
     std::thread::sleep(Duration::from_millis(500));
     fs::create_dir_all(project.root().join("levels/one")).unwrap();
     fs::write(project.root().join("levels/one/a.txt"), "a").unwrap();
-    expect_change(&changes, &FileChange::Created("levels/one/a.txt".into()));
+    expect_change(
+        &changes,
+        &FileChange::Created {
+            path: "levels/one/a.txt".into(),
+            kind: AssetKind::of("levels/one/a.txt"),
+        },
+    );
     std::thread::sleep(Duration::from_millis(500));
     fs::write(project.root().join("levels/one/a.txt"), "changed").unwrap();
-    expect_change(&changes, &FileChange::Changed("levels/one/a.txt".into()));
+    expect_change(
+        &changes,
+        &FileChange::Changed {
+            path: "levels/one/a.txt".into(),
+            kind: AssetKind::of("levels/one/a.txt"),
+        },
+    );
 }
 
 /// A directory created inside `editor/` after watching started is watched too (`editor/` is
@@ -299,10 +360,22 @@ fn watch_follows_new_directories_in_the_editor_directory() {
     std::thread::sleep(Duration::from_millis(500));
     fs::create_dir_all(project.root().join("editor/panels")).unwrap();
     fs::write(project.root().join("editor/panels/a.ts"), "a").unwrap();
-    expect_change(&changes, &FileChange::Created("editor/panels/a.ts".into()));
+    expect_change(
+        &changes,
+        &FileChange::Created {
+            path: "editor/panels/a.ts".into(),
+            kind: AssetKind::of("editor/panels/a.ts"),
+        },
+    );
     std::thread::sleep(Duration::from_millis(500));
     fs::write(project.root().join("editor/panels/a.ts"), "changed").unwrap();
-    expect_change(&changes, &FileChange::Changed("editor/panels/a.ts".into()));
+    expect_change(
+        &changes,
+        &FileChange::Changed {
+            path: "editor/panels/a.ts".into(),
+            kind: AssetKind::of("editor/panels/a.ts"),
+        },
+    );
 }
 
 #[cfg(unix)]
@@ -384,6 +457,8 @@ fn symlinks_leading_outside_the_project_are_rejected() {
     let outside = TempDir::new().unwrap();
     fs::write(outside.path().join("secret.txt"), "secret").unwrap();
     let mut project = new_project(&dir);
+    // The template's own assets make way for the link.
+    fs::remove_dir_all(project.root().join("assets")).unwrap();
     std::os::unix::fs::symlink(outside.path(), project.root().join("assets")).unwrap();
 
     let is_outside = |result: Result<(), ProjectError>| {

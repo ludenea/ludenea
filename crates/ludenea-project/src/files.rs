@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -12,7 +12,7 @@ use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{Debouncer, RecommendedCache, new_debouncer};
 use serde::{Deserialize, Serialize};
 
-use crate::meta::{AssetKind, Meta};
+use crate::meta::{AssetKind, FoundAsset, Meta, read_assets};
 use crate::{Project, ProjectError, ProjectWarning, Watch, io_error, next_raw, open_unfollowed};
 
 pub(crate) const WATCH_DEBOUNCE: Duration = Duration::from_millis(100);
@@ -34,19 +34,36 @@ pub struct FileEntry {
     pub kind: AssetKind,
 }
 
-/// A change on disk, with the path relative to the project root.
+/// A change on disk, with the path relative to the project root and the file's kind (a
+/// removed file's kind as it was last seen).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export_to = "project/"))]
 pub enum FileChange {
-    Changed(String),
-    Created(String),
-    Removed(String),
+    Changed { path: String, kind: AssetKind },
+    Created { path: String, kind: AssetKind },
+    Removed { path: String, kind: AssetKind },
 }
 
-fn meta_path(file: &Path) -> std::path::PathBuf {
+fn meta_path(file: &Path) -> PathBuf {
     let mut name = file.as_os_str().to_owned();
     name.push(".meta");
     name.into()
+}
+
+/// The kind of the file `path`: its extension decides, except that only a meta makes a file
+/// a data asset.
+fn kind_of(path: &str, meta: Option<&Meta>) -> AssetKind {
+    match meta.map(|meta| &meta.kind) {
+        Some(data @ AssetKind::Data { .. }) => data.clone(),
+        _ => AssetKind::of(path),
+    }
+}
+
+/// The kind of the project file `relative`, reading its meta when it has one.
+fn kind_on_disk(root: &Path, relative: &str) -> AssetKind {
+    let meta = meta_path(&root.join(relative));
+    let meta = meta.is_file().then(|| Meta::read(&meta).ok()).flatten();
+    kind_of(relative, meta.as_ref())
 }
 
 impl Project {
@@ -64,14 +81,14 @@ impl Project {
         for path in all.iter().filter(|path| !path.ends_with(".meta")) {
             let kind = AssetKind::of(path);
             let meta_file = meta_path(&self.root.join(path));
-            let id = match Meta::load_or_create(&meta_file, kind.clone()) {
+            let (id, kind) = match Meta::load_or_create(&meta_file, kind.clone()) {
                 Ok(meta) => {
                     valid.push(format!("{path}.meta"));
-                    meta.id
+                    (meta.id, kind_of(path, Some(&meta)))
                 }
                 Err(reason) => {
                     invalid.push((format!("{path}.meta"), reason));
-                    AssetId(0)
+                    (AssetId(0), kind)
                 }
             };
             entries.push(FileEntry {
@@ -157,11 +174,92 @@ impl Project {
         Ok(text)
     }
 
+    /// Like [`Project::read_text`], for any bytes.
+    pub fn read_binary(&self, path: &str) -> Result<Vec<u8>, ProjectError> {
+        let file = self.resolve_target(path)?;
+        let mut bytes = Vec::new();
+        open_unfollowed(&file)
+            .and_then(|mut opened| opened.read_to_end(&mut bytes))
+            .map_err(|error| io_error(&file, error))?;
+        Ok(bytes)
+    }
+
+    /// Writes `text` to the new file `path` and a meta of `kind` next to it, both or neither.
+    /// The meta comes first, so a listing in between cannot give the file another identifier.
+    pub fn create_asset(
+        &mut self,
+        path: &str,
+        kind: AssetKind,
+        text: &str,
+    ) -> Result<FileEntry, ProjectError> {
+        let file = self.resolve(path)?;
+        let meta_file = meta_path(&file);
+        for existing in [&file, &meta_file] {
+            if existing.symlink_metadata().is_ok() {
+                return Err(ProjectError::AlreadyExists(existing.clone()));
+            }
+        }
+        if let Some(parent) = file.parent() {
+            fs::create_dir_all(parent).map_err(|error| io_error(parent, error))?;
+        }
+        let meta = Meta::load_or_create(&meta_file, kind)
+            .map_err(|reason| io_error(&meta_file, std::io::Error::other(reason)))?;
+        if let Err(error) = self.write_text(path, text) {
+            let _ = fs::remove_file(&meta_file);
+            return Err(error);
+        }
+        Ok(FileEntry {
+            path: path.to_string(),
+            id: meta.id,
+            kind: kind_of(path, Some(&meta)),
+        })
+    }
+
+    /// Every prefab and data asset under `scenes/` and `assets/`, read like the CLI reads a
+    /// project (see [`read_assets`]).
+    pub fn asset_texts(&self) -> Result<Vec<FoundAsset>, ProjectError> {
+        let mut files = Vec::new();
+        for directory in ASSET_DIRECTORIES {
+            collect(&self.root, directory, &mut files);
+        }
+        let files = files
+            .into_iter()
+            .map(|path| {
+                let file = self.root.join(&path);
+                (path, file)
+            })
+            .collect();
+        read_assets(files).map_err(ProjectError::Assets)
+    }
+
+    /// Keeps the exported session of `document` in `.ludenea/sessions/`.
+    pub fn store_session(&mut self, document: AssetId, bytes: &[u8]) -> Result<(), ProjectError> {
+        self.write_bytes(&session_path(document), bytes)
+    }
+
+    /// The session [`Project::store_session`] kept for `document`, if any.
+    pub fn load_stored_session(&self, document: AssetId) -> Result<Option<Vec<u8>>, ProjectError> {
+        match self.read_binary(&session_path(document)) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(ProjectError::Io { source, .. })
+                if source.kind() == std::io::ErrorKind::NotFound =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// Writes `text` to a temporary file in `.ludenea/` (unwatched, on the same file system),
     /// synced to disk, then renames it over `path`: neither a crash mid-write nor a power loss
     /// leaves a truncated file. The file keeps its permissions; through a symbolic link inside
     /// the project, the link's target is replaced and the link kept.
     pub fn write_text(&mut self, path: &str, text: &str) -> Result<(), ProjectError> {
+        self.write_bytes(path, text.as_bytes())
+    }
+
+    /// Like [`Project::write_text`], for any bytes.
+    pub fn write_bytes(&mut self, path: &str, bytes: &[u8]) -> Result<(), ProjectError> {
         static WRITES: AtomicU64 = AtomicU64::new(0);
         let file = self.resolve_target(path)?;
         let parent = file.parent().expect("a project file has a parent");
@@ -171,7 +269,7 @@ impl Project {
         let write = WRITES.fetch_add(1, Ordering::Relaxed);
         let temporary = staging.join(format!("write-{}-{write}.tmp", std::process::id()));
         let staged = File::create(&temporary).and_then(|mut staged| {
-            staged.write_all(text.as_bytes())?;
+            staged.write_all(bytes)?;
             if let Ok(existing) = fs::metadata(&file) {
                 staged.set_permissions(existing.permissions())?;
             }
@@ -210,7 +308,7 @@ impl Project {
             }
         }
         let (watch, sender, dropped) = Watch::new();
-        let mut known = BTreeSet::new();
+        let mut known = BTreeMap::new();
         list_files(&self.root, &self.root, &mut known);
         let mut tracked = Tracked {
             root: self.root.clone(),
@@ -233,10 +331,11 @@ impl Project {
     }
 }
 
-/// What the file watcher knows: the files that exist and the directories it watches.
+/// What the file watcher knows: the files that exist with their kinds, and the directories
+/// it watches.
 struct Tracked {
     root: PathBuf,
-    known: BTreeSet<String>,
+    known: BTreeMap<String, AssetKind>,
     watched: BTreeSet<PathBuf>,
     debouncer: Debouncer<RecommendedWatcher, RecommendedCache>,
 }
@@ -281,12 +380,12 @@ impl Tracked {
                     watching
                 };
                 if watching.is_ok() {
-                    let mut inside = BTreeSet::new();
+                    let mut inside = BTreeMap::new();
                     list_files(&self.root, &file, &mut inside);
-                    for relative in inside {
-                        if self.known.insert(relative.clone()) {
-                            created.insert(relative.clone());
-                            changes.push(FileChange::Created(relative));
+                    for (path, kind) in inside {
+                        if self.known.insert(path.clone(), kind.clone()).is_none() {
+                            created.insert(path.clone());
+                            changes.push(FileChange::Created { path, kind });
                         }
                     }
                 }
@@ -298,16 +397,28 @@ impl Tracked {
                 continue;
             } else if !file.exists() {
                 unwatch_below(&mut self.debouncer, &file, &mut self.watched);
-                if !self.known.remove(&relative) {
+                let Some(kind) = self.known.remove(&relative) else {
                     continue;
+                };
+                FileChange::Removed {
+                    path: relative,
+                    kind,
                 }
-                FileChange::Removed(relative)
-            } else if self.known.insert(relative.clone()) {
-                FileChange::Created(relative)
-            } else if created.contains(&relative) {
-                continue;
             } else {
-                FileChange::Changed(relative)
+                let kind = kind_on_disk(&self.root, &relative);
+                if self.known.insert(relative.clone(), kind.clone()).is_none() {
+                    FileChange::Created {
+                        path: relative,
+                        kind,
+                    }
+                } else if created.contains(&relative) {
+                    continue;
+                } else {
+                    FileChange::Changed {
+                        path: relative,
+                        kind,
+                    }
+                }
             };
             changes.push(change);
         }
@@ -350,6 +461,10 @@ pub(crate) fn unwatch_below(
     }
 }
 
+fn session_path(document: AssetId) -> String {
+    format!(".ludenea/sessions/{document}.session")
+}
+
 /// Lists the files below `root/directory`, as relative paths with forward slashes.
 fn collect(root: &Path, directory: &str, out: &mut Vec<String>) {
     let Ok(entries) = fs::read_dir(root.join(directory)) else {
@@ -385,8 +500,9 @@ fn relative_path(root: &Path, path: &Path) -> Option<String> {
     Some(parts.join("/"))
 }
 
-/// Adds every file below `directory` to `out`, skipping what [`relative_path`] ignores.
-fn list_files(root: &Path, directory: &Path, out: &mut BTreeSet<String>) {
+/// Adds every file below `directory` to `out` with its kind, skipping what [`relative_path`]
+/// ignores.
+fn list_files(root: &Path, directory: &Path, out: &mut BTreeMap<String, AssetKind>) {
     let Ok(entries) = fs::read_dir(directory) else {
         return;
     };
@@ -398,7 +514,8 @@ fn list_files(root: &Path, directory: &Path, out: &mut BTreeSet<String>) {
         match entry.file_type() {
             Ok(kind) if kind.is_dir() => list_files(root, &path, out),
             Ok(kind) if kind.is_file() => {
-                out.insert(relative);
+                let kind = kind_on_disk(root, &relative);
+                out.insert(relative, kind);
             }
             _ => {}
         }
@@ -415,7 +532,7 @@ mod tests {
     fn tracked(root: &Path) -> Tracked {
         Tracked {
             root: root.to_path_buf(),
-            known: BTreeSet::new(),
+            known: BTreeMap::new(),
             watched: BTreeSet::new(),
             debouncer: new_debouncer(WATCH_DEBOUNCE, None, |_| {}).unwrap(),
         }
@@ -439,7 +556,10 @@ mod tests {
         ];
         assert_eq!(
             tracked.changes(&batch),
-            [FileChange::Created("levels/a.txt".into())]
+            [FileChange::Created {
+                path: "levels/a.txt".into(),
+                kind: AssetKind::Other
+            }]
         );
         assert!(tracked.watched.contains(&dir.path().join("levels")));
     }
@@ -460,7 +580,10 @@ mod tests {
             .add_path(levels.clone());
         assert_eq!(
             tracked.changes(&[removed, created(levels.clone())]),
-            [FileChange::Created("levels/one/a.txt".into())]
+            [FileChange::Created {
+                path: "levels/one/a.txt".into(),
+                kind: AssetKind::Other
+            }]
         );
         assert!(tracked.watched.contains(&levels.join("one")));
     }

@@ -8,11 +8,12 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
 
+use ludenea_control::Bytes;
 use tokio::sync::broadcast;
 
 use crate::protocol::{
-    FailureCode, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo, ProjectReply,
-    ProjectRequest, ProjectServerMessage, ServiceMode, handshake,
+    AssetTexts, FailureCode, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo,
+    ProjectReply, ProjectRequest, ProjectServerMessage, ServiceMode, handshake,
 };
 use crate::{
     BuildArtifact, BuildError, BuildEvent, BuildTarget, GameProcess, PluginEvent, Project,
@@ -220,6 +221,34 @@ impl ProjectService {
                 self.project()?.write_text(&path, &text)?;
                 Ok(ProjectReply::Done)
             }
+            ProjectRequest::ReadBinary { path } => Ok(ProjectReply::Bytes {
+                bytes: Bytes(self.project()?.read_binary(&path)?),
+            }),
+            ProjectRequest::WriteBinary { path, bytes } => {
+                self.project()?.write_bytes(&path, &bytes.0)?;
+                Ok(ProjectReply::Done)
+            }
+            ProjectRequest::CreateAsset { path, kind, text } => Ok(ProjectReply::File(
+                self.project()?.create_asset(&path, kind, &text)?,
+            )),
+            ProjectRequest::ReadAssetTexts => {
+                let found = self.project()?.asset_texts()?;
+                let paths = found.iter().map(|asset| (asset.id, asset.path.clone()));
+                Ok(ProjectReply::AssetTexts(AssetTexts {
+                    paths: paths.collect(),
+                    assets: found
+                        .into_iter()
+                        .map(|asset| (asset.id, asset.text))
+                        .collect(),
+                }))
+            }
+            ProjectRequest::StoreSession { document, bytes } => {
+                self.project()?.store_session(document, &bytes.0)?;
+                Ok(ProjectReply::Done)
+            }
+            ProjectRequest::LoadStoredSession { document } => Ok(ProjectReply::StoredSession {
+                bytes: self.project()?.load_stored_session(document)?.map(Bytes),
+            }),
             ProjectRequest::Rename { from, to } => {
                 self.project()?.rename(&from, &to)?;
                 Ok(ProjectReply::Done)
@@ -781,7 +810,7 @@ mod tests {
     fn hello_makes_desktop_rebuilds_wait() {
         let mut service = ProjectService::new(ServiceMode::Desktop, None);
         assert!(!service.editor_connected.load(Ordering::SeqCst));
-        service.answer(&mut false, r#"{"type":"hello","protocol_version":1}"#);
+        service.answer(&mut false, r#"{"type":"hello","protocol_version":2}"#);
         assert!(service.editor_connected.load(Ordering::SeqCst));
     }
 

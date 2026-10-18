@@ -1,11 +1,12 @@
 //! The `<file>.meta` sidecar that gives a project file a stable identifier and a kind.
 
+use std::collections::BTreeMap;
 use std::fs;
 #[cfg(not(target_family = "wasm"))]
 use std::fs::OpenOptions;
 #[cfg(not(target_family = "wasm"))]
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
@@ -112,6 +113,57 @@ impl Meta {
             Err(error) => Err(format!("cannot create the meta: {error}")),
         }
     }
+}
+
+/// One prefab or data asset found by [`read_assets`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FoundAsset {
+    pub id: AssetId,
+    pub path: String,
+    /// In file form: a data asset is wrapped as `AssetFile(type: .., value: ..)`.
+    pub text: String,
+}
+
+/// The prefab and data assets among `files` (each named as errors and paths show it, and
+/// where it is on disk), read in name order. Files without a meta are skipped; two metas with
+/// the same identifier are refused, naming both files. The CLI and the project service share
+/// it, so both build the same asset set from the same folder.
+pub fn read_assets(mut files: Vec<(String, PathBuf)>) -> Result<Vec<FoundAsset>, String> {
+    files.sort();
+    let mut found = Vec::new();
+    let mut seen = BTreeMap::new();
+    for (name, file) in files {
+        if !name.ends_with(".ron") {
+            continue;
+        }
+        let mut meta_file = file.clone().into_os_string();
+        meta_file.push(".meta");
+        let meta_file = PathBuf::from(meta_file);
+        if !meta_file.is_file() {
+            continue;
+        }
+        let meta = Meta::read(&meta_file)
+            .map_err(|reason| format!("cannot read {name}.meta: {reason}"))?;
+        if let Some(other) = seen.insert(meta.id, name.clone()) {
+            return Err(format!(
+                "{other} and {name} have the same identifier {}; give one of them a new meta",
+                meta.id
+            ));
+        }
+        let read =
+            || fs::read_to_string(&file).map_err(|error| format!("cannot read {name}: {error}"));
+        let text = match meta.kind {
+            _ if AssetKind::of(&name) == AssetKind::Prefab => read()?,
+            AssetKind::Data { r#type } => crate::assets::asset_file(&r#type, &read()?),
+            _ => continue,
+        };
+        found.push(FoundAsset {
+            id: meta.id,
+            path: name,
+            text,
+        });
+    }
+    Ok(found)
 }
 
 #[cfg(test)]

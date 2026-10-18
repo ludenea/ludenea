@@ -48,7 +48,7 @@ describe("assets", () => {
     setSceneDirty(host, true);
 
     disk.text = "(changed)";
-    act(() => host.project.push({ type: "files_changed", changes: [{ Changed: SCENE }] }));
+    act(() => host.project.push({ type: "files_changed", changes: [{ Changed: { path: SCENE, kind: "Scene" } }] }));
     await settle();
 
     expect(screen.getByRole("alert").textContent).toContain("changed on disk");
@@ -57,7 +57,7 @@ describe("assets", () => {
     expect(game.sent.filter((command) => command.type === "replace_scene")).toEqual([]);
 
     disk.text = "(changed again)";
-    act(() => host.project.push({ type: "files_changed", changes: [{ Changed: SCENE }] }));
+    act(() => host.project.push({ type: "files_changed", changes: [{ Changed: { path: SCENE, kind: "Scene" } }] }));
     await settle();
     fireEvent.click(screen.getByRole("button", { name: "Reload" }));
     await settle();
@@ -70,7 +70,7 @@ describe("assets", () => {
     setSceneDirty(host, false);
 
     disk.text = "(changed)";
-    act(() => host.project.push({ type: "files_changed", changes: [{ Changed: SCENE }, { Created: "assets/new.png" }] }));
+    act(() => host.project.push({ type: "files_changed", changes: [{ Changed: { path: SCENE, kind: "Scene" } }, { Created: { path: "assets/new.png", kind: "Other" } }] }));
     await settle();
 
     expect(screen.queryByRole("alert")).toBeNull();
@@ -127,7 +127,7 @@ describe("assets", () => {
 
     disk.text = "(edited without a game)";
     act(() => host.setControl(null));
-    act(() => host.project.push({ type: "files_changed", changes: [{ Changed: SCENE }] }));
+    act(() => host.project.push({ type: "files_changed", changes: [{ Changed: { path: SCENE, kind: "Scene" } }] }));
     await settle();
     const restarted = await testGame();
     act(() => host.setControl(restarted.client));
@@ -140,7 +140,7 @@ describe("assets", () => {
     await openScene();
     setSceneDirty(host, true);
 
-    act(() => host.project.push({ type: "files_changed", changes: [{ Removed: SCENE }, { Created: "scenes/moved.scene.ron" }] }));
+    act(() => host.project.push({ type: "files_changed", changes: [{ Removed: { path: SCENE, kind: "Scene" } }, { Created: { path: "scenes/moved.scene.ron", kind: "Scene" } }] }));
     await settle();
 
     expect(screen.queryByLabelText("unsaved changes")).toBeNull();
@@ -186,7 +186,7 @@ describe("assets", () => {
       if (request.type === "list_files") return { type: "files", entries };
       if (request.type === "read_text") return { type: "text", text: "(scene)" };
       // The watcher reports the move before the service answers the rename.
-      if (request.type === "rename") push({ type: "files_changed", changes: [{ Removed: request.from }, { Created: request.to }] });
+      if (request.type === "rename") push({ type: "files_changed", changes: [{ Removed: { path: request.from, kind: "Scene" } }, { Created: { path: request.to, kind: "Scene" } }] });
       if (request.type === "info") return undefined;
       return { type: "done" };
     });

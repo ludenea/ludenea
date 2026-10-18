@@ -982,6 +982,15 @@ type AssetKind = "Scene" | "Prefab" | {
     };
 } | "Replay" | "Trace" | "Snapshot" | "Other";
 
+/**
+ * Every prefab and data asset of the project, in path order; data assets in file form
+ * (`AssetFile(type: .., value: ..)`). `paths` names the file of each.
+ */
+type AssetTexts = {
+    assets: Array<[AssetId, string]>;
+    paths: Array<[AssetId, string]>;
+};
+
 type Diagnostic = {
     /**
      * `error`, `warning`, `note`, `help`, `failure-note`, or `ice` (an internal compiler
@@ -1011,17 +1020,27 @@ type BuildEvent = {
     ok: boolean;
 };
 
-type FailureCode = "version_mismatch" | "not_connected" | "invalid_request" | "no_project" | "no_game" | "invalid_name" | "outside_project" | "already_exists" | "no_engine_path" | "io" | "invalid_manifest" | "watch" | "plugin_failed";
+type FailureCode = "version_mismatch" | "not_connected" | "invalid_request" | "no_project" | "no_game" | "invalid_name" | "outside_project" | "already_exists" | "no_engine_path" | "io" | "invalid_manifest" | "watch" | "plugin_failed" | "invalid_assets";
 
 /**
- * A change on disk, with the path relative to the project root.
+ * A change on disk, with the path relative to the project root and the file's kind (a
+ * removed file's kind as it was last seen).
  */
 type FileChange = {
-    "Changed": string;
+    "Changed": {
+        path: string;
+        kind: AssetKind;
+    };
 } | {
-    "Created": string;
+    "Created": {
+        path: string;
+        kind: AssetKind;
+    };
 } | {
-    "Removed": string;
+    "Removed": {
+        path: string;
+        kind: AssetKind;
+    };
 };
 
 type FileEntry = {
@@ -1085,6 +1104,27 @@ type ProjectRequest = {
     "type": "write_text";
     path: string;
     text: string;
+} | {
+    "type": "read_binary";
+    path: string;
+} | {
+    "type": "write_binary";
+    path: string;
+    bytes: Bytes;
+} | {
+    "type": "create_asset";
+    path: string;
+    kind: AssetKind;
+    text: string;
+} | {
+    "type": "read_asset_texts";
+} | {
+    "type": "store_session";
+    document: string;
+    bytes: Bytes;
+} | {
+    "type": "load_stored_session";
+    document: string;
 } | {
     "type": "rename";
     from: string;
@@ -1170,6 +1210,16 @@ type ProjectReply = {
 } | {
     "type": "text";
     text: string;
+} | {
+    "type": "bytes";
+    bytes: Bytes;
+} | ({
+    "type": "file";
+} & FileEntry) | ({
+    "type": "asset_texts";
+} & AssetTexts) | {
+    "type": "stored_session";
+    bytes: Bytes | null;
 } | {
     "type": "plugins";
     plugins: Array<PluginBundle>;
@@ -1375,7 +1425,7 @@ class ControlClient {
     private dispatch;
 }
 
-const PROJECT_PROTOCOL_VERSION = 1;
+const PROJECT_PROTOCOL_VERSION = 2;
 /** The reply variant answering a project request of type `R`. */
 type ProjectReplyFor<R extends ProjectRequest> = R extends {
     type: "info" | "open" | "create";
@@ -1449,5 +1499,5 @@ function startWorkerGame(options: {
 }): WorkerGame;
 
 export { ControlClient, PROJECT_PROTOCOL_VERSION, PROTOCOL_VERSION, ProjectClient, ProtocolFailure, RequestTracker, fakeTransport, handshake, parseFrame, postMessageTransport, startWorkerGame, tauriTransport, unwrap, webSocketTransport };
-export type { AssetId, AssetKind, BranchId, BranchInfo, BuildEvent, Bytes, Cause, ClientMessage, Color, Command, ComponentValue, ConsoleLevel, DebugDrawFrame, Diagnostic, Difference, DivergenceKind, DivergenceReport, Document, Entity, EntityDivergence, EntityHash, EntityRow, ErrorCode, Event, FailureCode, FieldSchema, FieldTarget, FileChange, FileEntry, GameInfo, GameOutput, Hash64, HashTree, InstanceInfo, Item, JsonValue, MessageTransport, NamedHash, NamedSchema, Outcome, OutputStream, PathSegment, PauseReason, PluginBundle, PluginSource, Primitive, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo, ProjectOutcome, ProjectReply, ProjectReplyFor, ProjectRequest, ProjectServerMessage, ProtocolError, RawGamepad, RawInput, RecordedEvent, Reply, ReplyFor, RootCause, RootCauseKind, ServerMessage, ServiceMode, SyncPoint, SystemRow, Timeline, Topic, TraceComparison, TypeSchema, VariantFields, VariantSchema, Vec2, WorkerCrash, WorkerGame };
+export type { AssetId, AssetKind, AssetTexts, BranchId, BranchInfo, BuildEvent, Bytes, Cause, ClientMessage, Color, Command, ComponentValue, ConsoleLevel, DebugDrawFrame, Diagnostic, Difference, DivergenceKind, DivergenceReport, Document, Entity, EntityDivergence, EntityHash, EntityRow, ErrorCode, Event, FailureCode, FieldSchema, FieldTarget, FileChange, FileEntry, GameInfo, GameOutput, Hash64, HashTree, InstanceInfo, Item, JsonValue, MessageTransport, NamedHash, NamedSchema, Outcome, OutputStream, PathSegment, PauseReason, PluginBundle, PluginSource, Primitive, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo, ProjectOutcome, ProjectReply, ProjectReplyFor, ProjectRequest, ProjectServerMessage, ProtocolError, RawGamepad, RawInput, RecordedEvent, Reply, ReplyFor, RootCause, RootCauseKind, ServerMessage, ServiceMode, SyncPoint, SystemRow, Timeline, Topic, TraceComparison, TypeSchema, VariantFields, VariantSchema, Vec2, WorkerCrash, WorkerGame };
 }

@@ -31,8 +31,8 @@ export interface Assets {
   keepMine(): void;
 }
 
-const changedPath = (change: FileChange) => ("Changed" in change ? change.Changed : "Created" in change ? change.Created : null);
-const removedPath = (change: FileChange) => ("Removed" in change ? change.Removed : null);
+const changedPath = (change: FileChange) => ("Changed" in change ? change.Changed.path : "Created" in change ? change.Created.path : null);
+const removedPath = (change: FileChange) => ("Removed" in change ? change.Removed.path : null);
 
 export const assetsPlugin = definePlugin({
   name: "ludenea.assets",

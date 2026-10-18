@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crate::{ProjectError, io_error};
 
-const FILES: [(&str, &str); 10] = [
+const FILES: [(&str, &str); 14] = [
     ("ludenea.toml", include_str!("../template/ludenea.toml")),
     ("Cargo.toml", include_str!("../template/Cargo.toml")),
     (
@@ -15,6 +15,22 @@ const FILES: [(&str, &str); 10] = [
     (
         "scenes/main.scene.ron",
         include_str!("../template/scenes/main.scene.ron"),
+    ),
+    (
+        "assets/ball.prefab.ron",
+        include_str!("../template/assets/ball.prefab.ron"),
+    ),
+    (
+        "assets/ball.prefab.ron.meta",
+        include_str!("../template/assets/ball.prefab.ron.meta"),
+    ),
+    (
+        "assets/settings.ron",
+        include_str!("../template/assets/settings.ron"),
+    ),
+    (
+        "assets/settings.ron.meta",
+        include_str!("../template/assets/settings.ron.meta"),
     ),
     (
         "editor/package.json",

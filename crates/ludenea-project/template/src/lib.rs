@@ -1,3 +1,4 @@
+use ludenea::physics;
 use ludenea::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -10,11 +11,28 @@ pub struct GameInput {
     pub direction: Vec2,
 }
 
+/// Tuning shared by every ball, in `assets/settings.ron`.
+#[derive(Asset, Serialize, Deserialize, Clone)]
+pub struct Settings {
+    /// Multiplies the world's gravity for each ball.
+    pub gravity_scale: f32,
+}
+
+/// A ball of `assets/ball.prefab.ron`, tuned by its settings.
+#[derive(Component, Serialize, Deserialize, Clone)]
+pub struct Ball {
+    pub settings: Handle<Settings>,
+}
+
 pub struct GamePlugin;
 
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
-        app.input::<GameInput>().input_mapping(map_raw_input);
+        app.input::<GameInput>()
+            .input_mapping(map_raw_input)
+            .component::<Ball>()
+            .asset::<Settings>()
+            .system(Sim, apply_settings.before(physics::Step));
     }
 }
 
@@ -33,5 +51,11 @@ fn map_raw_input(raw: &RawInput, _player: usize) -> GameInput {
             axis("ArrowLeft", "ArrowRight"),
             axis("ArrowDown", "ArrowUp"),
         ),
+    }
+}
+
+fn apply_settings(settings: Assets<Settings>, mut balls: Query<(&Ball, &mut Body)>) {
+    for (ball, body) in balls.iter_mut() {
+        body.gravity_scale = settings.get(ball.settings).gravity_scale;
     }
 }

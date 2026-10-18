@@ -4,9 +4,12 @@ use std::path::Path;
 use ludenea_project::{AssetKind, Project, ProjectError, ProjectWarning};
 use tempfile::TempDir;
 
+/// A new project holding only its scene: the template's assets are removed.
 fn new_project(dir: &TempDir) -> Project {
     let engine = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    Project::create(dir.path(), "demo", &engine).expect("the project is created")
+    let project = Project::create(dir.path(), "demo", &engine).expect("the project is created");
+    fs::remove_dir_all(project.root().join("assets")).unwrap();
+    project
 }
 
 #[test]

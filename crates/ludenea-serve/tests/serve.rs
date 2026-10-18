@@ -7,10 +7,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-use ludenea_project::FileChange;
 use ludenea_project::protocol::{
-    ProjectClientMessage, ProjectEvent, ProjectReply, ProjectRequest, ProjectServerMessage,
+    PROJECT_PROTOCOL_VERSION, ProjectClientMessage, ProjectEvent, ProjectReply, ProjectRequest,
+    ProjectServerMessage,
 };
+use ludenea_project::{AssetKind, FileChange};
 use tempfile::TempDir;
 use tungstenite::client::IntoClientRequest;
 use tungstenite::stream::MaybeTlsStream;
@@ -123,13 +124,13 @@ fn handshake(socket: &mut Socket) {
     send(
         socket,
         &ProjectClientMessage::Hello {
-            protocol_version: 1,
+            protocol_version: PROJECT_PROTOCOL_VERSION,
         },
     );
     assert_eq!(
         receive(socket),
         ProjectServerMessage::Welcome {
-            protocol_version: 1
+            protocol_version: PROJECT_PROTOCOL_VERSION
         }
     );
 }
@@ -301,7 +302,10 @@ fn two_clients_both_receive_file_events() {
         handshake(socket);
     }
     write(&server.root, "scenes/new.scene.ron", "(entities: [])\n");
-    let created = FileChange::Created("scenes/new.scene.ron".to_string());
+    let created = FileChange::Created {
+        path: "scenes/new.scene.ron".to_string(),
+        kind: AssetKind::Scene,
+    };
     for socket in &mut sockets {
         loop {
             if let ProjectServerMessage::Event {

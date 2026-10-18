@@ -33,7 +33,7 @@ function fakeHost(name: string, options: { resimulating?: boolean } = {}) {
 async function fakeProject(answer: (request: Message) => object) {
   const transport = fakeTransport((raw) => {
     const message = JSON.parse(raw);
-    if (message.type === "hello") return [JSON.stringify({ type: "welcome", protocol_version: 1 })];
+    if (message.type === "hello") return [JSON.stringify({ type: "welcome", protocol_version: 2 })];
     log.push(`project:${message.request.type}`);
     return [JSON.stringify({ type: "response", id: message.id, result: answer(message.request) })];
   });

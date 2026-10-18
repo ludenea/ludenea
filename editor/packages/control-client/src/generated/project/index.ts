@@ -1,4 +1,5 @@
 export * from "./AssetKind";
+export * from "./AssetTexts";
 export * from "./BuildEvent";
 export * from "./Diagnostic";
 export * from "./FailureCode";

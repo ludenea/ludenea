@@ -191,6 +191,11 @@ fn game_types_declare_template_components() {
     assert!(declarations.contains("declare module \"@ludenea/game\""));
     assert!(declarations.contains("declare module \"@ludenea/editor-shell\""));
     assert!(declarations.contains("interface ComponentTypes"));
+    assert!(declarations.contains("interface AssetTypes extends GameAssetTypes"));
+    assert!(
+        declarations.contains("\"demo::Settings\": Settings"),
+        "{declarations}"
+    );
     let component = info.components[0].name.rsplit("::").next().unwrap();
     assert!(declarations.contains(component), "{declarations}");
     for file in ["editor-shell.d.ts", "control-client.d.ts", "react.d.ts"] {

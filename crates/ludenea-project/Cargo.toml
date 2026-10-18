@@ -33,6 +33,7 @@ xxhash-rust.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
+boxes = { path = "../../examples/boxes" }
 tempfile.workspace = true
 ludenea-project = { path = ".", features = ["ts"] }
 ts-rs.workspace = true

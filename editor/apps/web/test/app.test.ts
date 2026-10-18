@@ -22,7 +22,7 @@ function page() {
 async function fakeProject(plugins: () => PluginBundle[]) {
   const transport = fakeTransport((raw) => {
     const message = JSON.parse(raw);
-    if (message.type === "hello") return [JSON.stringify({ type: "welcome", protocol_version: 1 })];
+    if (message.type === "hello") return [JSON.stringify({ type: "welcome", protocol_version: 2 })];
     if (message.request.type === "list_plugins") return [JSON.stringify({ type: "response", id: message.id, result: { ok: { type: "plugins", plugins: plugins() } } })];
     return [];
   });
@@ -63,7 +63,7 @@ it("plugin_rebuilt_reloads_the_plugin_its_bundle_activated", async () => {
   const bundle = (version: number): PluginBundle => ({ name: "ludenea-physics", url_path: `plugins/v${version}.js`, source: { type: "engine", crate_name: "ludenea-physics" } });
   const transport = fakeTransport((raw) => {
     const message = JSON.parse(raw);
-    if (message.type === "hello") return [JSON.stringify({ type: "welcome", protocol_version: 1 })];
+    if (message.type === "hello") return [JSON.stringify({ type: "welcome", protocol_version: 2 })];
     if (message.request.type === "list_plugins") return [JSON.stringify({ type: "response", id: message.id, result: { ok: { type: "plugins", plugins: [bundle(1)] } } })];
     return [];
   });

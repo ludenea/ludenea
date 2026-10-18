@@ -1693,6 +1693,7 @@ dependencies = [
 name = "ludenea-project"
 version = "0.1.0"
 dependencies = [
+ "boxes",
  "cargo_metadata",
  "libc",
  "ludenea-app",

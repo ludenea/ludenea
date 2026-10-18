@@ -44,6 +44,8 @@ pub enum ProjectError {
     Io { path: PathBuf, source: io::Error },
     #[error("invalid manifest {}: {message}", .path.display())]
     Manifest { path: PathBuf, message: String },
+    #[error("{0}")]
+    Assets(String),
     #[error("cannot watch the project: {0}")]
     Watch(String),
     #[error(
