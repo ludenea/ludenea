@@ -10,6 +10,7 @@ export async function tauriTransport(channel: "control" | "project"): Promise<Me
     for (const message of batch.split("\n")) messages.emit(message);
   };
   await invoke("subscribe", { channel, onMessage });
+  let closed = false;
   return {
     send: (message) => {
       void invoke("send", { channel, message }).catch((error) => closes.emit(String(error)));
@@ -17,6 +18,8 @@ export async function tauriTransport(channel: "control" | "project"): Promise<Me
     onMessage: (listener) => messages.add(listener),
     onClose: (listener) => closes.add(listener),
     close: () => {
+      if (closed) return;
+      closed = true;
       // Names this channel, so it cannot detach a newer subscription that overtook it.
       void invoke("unsubscribe", { channel, id: onMessage.id }).catch((error) => console.warn(`channel ${channel} not detached: ${String(error)}`));
       closes.emit("closed");

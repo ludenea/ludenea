@@ -38,6 +38,15 @@ describe("ControlClient", () => {
     expect(closes).toEqual(["closed"]);
   });
 
+  it("refusal_without_an_error_is_ignored_and_the_handshake_still_settles", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const transport = fakeTransport(() => ['{"type":"refused"}', '{"type":"refused","error":"no"}', welcome]);
+    const client = await ControlClient.connect(transport);
+    expect(client.game).toEqual(game);
+    expect(warn).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
+  });
+
   it("sends_hello_with_the_protocol_version_and_exposes_the_game", async () => {
     const hellos: unknown[] = [];
     const transport = fakeTransport((raw) => {

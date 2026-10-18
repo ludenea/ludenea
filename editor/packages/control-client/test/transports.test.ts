@@ -81,10 +81,11 @@ describe("transports", () => {
     expect(closes).toEqual(["a message could not be read"]);
   });
 
-  it("tauri_close_detaches_its_own_backend_channel", async () => {
+  it("tauri_close_detaches_its_own_backend_channel_once", async () => {
     const transport = await tauriTransport("control");
     const closes: string[] = [];
     transport.onClose((reason) => closes.push(reason));
+    transport.close();
     transport.close();
     expect(vi.mocked(invoke).mock.calls.map(([command, args]) => [command, args])).toEqual([
       ["subscribe", { channel: "control", onMessage: expect.anything() }],

@@ -110,6 +110,7 @@ function isEnvelope(value: unknown): boolean {
   if (!isObject(value) || typeof value.type !== "string") return false;
   if (value.type === "response") return typeof value.id === "number" && isObject(value.result);
   if (value.type === "event") return isObject(value.event) && typeof value.event.type === "string";
+  if (value.type === "refused") return isObject(value.error);
   return true;
 }
 
