@@ -194,3 +194,17 @@ fn app_registers_asset_types_and_reports_name_clashes_at_build() {
     app.asset::<Stats>().asset::<Clash>();
     assert!(matches!(app.build(), Err(ludenea_app::AppError::Ecs(_))));
 }
+
+#[test]
+fn initial_snapshot_is_stamped_with_the_schema_fingerprint() {
+    let simulation = random_simulation();
+    assert_ne!(simulation.schema_fingerprint(), 0);
+    assert_eq!(
+        simulation.initial_snapshot().fingerprint,
+        simulation.schema_fingerprint()
+    );
+    assert_eq!(
+        simulation.snapshot().fingerprint,
+        simulation.schema_fingerprint()
+    );
+}

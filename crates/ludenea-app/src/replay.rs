@@ -105,7 +105,7 @@ impl Replay {
 }
 
 /// Loads `scene` with `assets`, then runs `ticks` ticks of `inputs` and `edits`, recording
-/// the replay of that run.
+/// the replay of that run. Inputs and edits of tick `ticks` and later are left out.
 pub fn record_replay(
     sim: &mut Simulation,
     scene: &str,

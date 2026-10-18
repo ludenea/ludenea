@@ -68,7 +68,7 @@ impl Simulation {
         tick_rate: u32,
         hooks: EditorHooks,
     ) -> Self {
-        Self {
+        let mut simulation = Self {
             initial: world.snapshot(),
             world,
             schedule,
@@ -79,7 +79,9 @@ impl Simulation {
             load_addresses: BTreeMap::new(),
             instances: Vec::new(),
             resolved_scene: None,
-        }
+        };
+        simulation.initial.fingerprint = simulation.schema_fingerprint();
+        simulation
     }
 
     /// Completed steps, from `Time.tick`.
@@ -249,7 +251,8 @@ impl Simulation {
         }
     }
 
-    /// The snapshot taken right after `App::build`, before any step.
+    /// The snapshot taken right after `App::build`, before any step, stamped with
+    /// `schema_fingerprint`.
     pub fn initial_snapshot(&self) -> &Snapshot {
         &self.initial
     }
