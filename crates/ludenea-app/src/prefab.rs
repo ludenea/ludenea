@@ -426,6 +426,9 @@ pub fn replace_with_instance(
 
 /// Sets the override of `component` at `path` on `entity` of the instance at `instance`
 /// (a path of local identifiers, the first one in `file`), replacing an existing one.
+/// Overrides apply in file order. An empty `path` overrides the whole component: it drops
+/// the component's field overrides (the whole value holds them) and is appended, so field
+/// overrides set afterwards come after it and win on their fields.
 pub fn set_override(
     file: &str,
     instance: &[u32],
@@ -441,6 +444,11 @@ pub fn set_override(
     let at = ListAt {
         instance: Some(id),
         name: "overrides",
+    };
+    let file = if path.is_empty() {
+        &remove_where(file, at, &targets(&entity, component, None))?.0
+    } else {
+        file
     };
     upsert(
         file,
@@ -469,8 +477,10 @@ pub fn revert_override(
     Ok(remove_where(file, at, &targets(&entity, component, path))?.0)
 }
 
-/// Gives `entity` of `instance` the component `component` with `value`, taking back a
-/// removal of it.
+/// Gives `entity` of `instance` the component `component` with `value`. An `added` entry
+/// only ever holds a component the prefab lacks: a component this instance removed is a
+/// prefab one, so its `removed` entry is dropped and `value` becomes a whole-component
+/// override (`set_override` with an empty path) instead.
 pub fn add_component_override(
     file: &str,
     instance: &[u32],
@@ -480,7 +490,7 @@ pub fn add_component_override(
 ) -> Result<String, SceneError> {
     let (id, entity) = split_target(instance, entity)?;
     let is = targets(&entity, component, None);
-    let (text, _) = remove_where(
+    let (text, removed) = remove_where(
         file,
         ListAt {
             instance: Some(id),
@@ -488,6 +498,9 @@ pub fn add_component_override(
         },
         &is,
     )?;
+    if removed > 0 {
+        return set_override(&text, &[id], &entity, component, &[], value);
+    }
     let entry = format!("(entity: {entity:?}, component: {component:?}, value: {value})");
     upsert(
         &text,
@@ -501,8 +514,9 @@ pub fn add_component_override(
     )
 }
 
-/// Removes the component `component` from `entity` of `instance`, with its overrides: an
-/// added component is taken back, a prefab component gets a removal.
+/// Removes the component `component` from `entity` of `instance`, with its overrides
+/// (whole or by field): an `added` component (one the prefab lacks, see
+/// `add_component_override`) is taken back, a prefab component gets a `removed` entry.
 pub fn remove_component_override(
     file: &str,
     instance: &[u32],
@@ -575,10 +589,15 @@ pub fn apply_to_prefab(
     Ok(splice(prefab_file, target.span.clone(), value))
 }
 
-/// Checks a prefab file before it is written: refuses an `Entity` value of its own
-/// entities naming none of them, and an instance cycle. `assets` must already hold `file`
-/// under the prefab's identifier, so a cycle back to it is found.
-pub fn save_prefab_checked(file: &str, assets: &dyn AssetSource) -> Result<(), SceneError> {
+/// Checks the prefab `id` before `file` is written as its text: refuses an `Entity` value
+/// of its own entities naming none of them, and an instance cycle, whose chain starts at
+/// `id`. `file` replaces whatever `assets` holds for `id`; a new prefab passes the
+/// identifier its meta will get.
+pub fn save_prefab_checked(
+    id: AssetId,
+    file: &str,
+    assets: &dyn AssetSource,
+) -> Result<(), SceneError> {
     let parse = |error: ron::error::SpannedError| SceneError::Parse(error.to_string());
     let header: PrefabHeader = ron::from_str(file).map_err(parse)?;
     if header.version != PREFAB_VERSION {
@@ -602,11 +621,29 @@ pub fn save_prefab_checked(file: &str, assets: &dyn AssetSource) -> Result<(), S
             }
         }
     }
-    let mut resolver = Resolver::new(assets);
-    for instance in prefab.instances {
-        resolver.instance(&[], instance, &mut Vec::new())?;
+    let overlay = Overlay { id, file, assets };
+    Resolver::new(&overlay).prefab(id, &[], &mut Vec::new())
+}
+
+/// `assets` with the text of `id` replaced by `file`.
+struct Overlay<'a> {
+    id: AssetId,
+    file: &'a str,
+    assets: &'a dyn AssetSource,
+}
+
+impl AssetSource for Overlay<'_> {
+    fn text(&self, id: AssetId) -> Option<&str> {
+        if id == self.id {
+            Some(self.file)
+        } else {
+            self.assets.text(id)
+        }
     }
-    Ok(())
+
+    fn path(&self, id: AssetId) -> Option<&str> {
+        self.assets.path(id)
+    }
 }
 
 /// Refuses despawning an entity a prefab instance spawned (a load address of more than one

@@ -4,7 +4,7 @@ use ludenea_app::prefab::{
     remove_component_override, replace_with_instance, revert_override, save_prefab_checked,
     set_override,
 };
-use ludenea_app::{App, AssetTexts, Resolved, SceneError, Simulation, resolve};
+use ludenea_app::{App, AssetTexts, NamedAssetTexts, Resolved, SceneError, Simulation, resolve};
 use ludenea_ecs::{AssetId, Component, Entity};
 use serde::{Deserialize, Serialize};
 
@@ -91,7 +91,7 @@ fn create_prefab_numbers_entities_from_zero() {
         text,
         "Prefab(\n    version: 1,\n    next_id: 2,\n    entities: [\n        (id: 0, components: {\"prefab_editing::Link\": (to:(index:1,generation:0))}),\n        (id: 1, components: {\"prefab_editing::Tag\": (2)}),\n    ],\n)\n"
     );
-    save_prefab_checked(&text, &AssetTexts::new()).unwrap();
+    save_prefab_checked(AssetId(A), &text, &AssetTexts::new()).unwrap();
 }
 
 #[test]
@@ -213,6 +213,47 @@ fn added_and_removed_overrides_round_trip() {
 }
 
 #[test]
+fn removing_a_readded_prefab_component_removes_it_again() {
+    let scene = scene_with_instance();
+    let tag = "prefab_editing::Tag";
+    let text = remove_component_override(&scene, &[3], &[1], tag).unwrap();
+    let text = add_component_override(&text, &[3], &[1], tag, "(4)").unwrap();
+    assert!(!text.contains("added: [("));
+    assert_eq!(component(&resolved(&text), &[3, 1], "Tag").unwrap(), "(4)");
+    let text = remove_component_override(&text, &[3], &[1], tag).unwrap();
+    let edited = resolved(&text);
+    assert_eq!(component(&edited, &[3, 1], "Tag"), None);
+    assert!(edited.warnings.is_empty());
+}
+
+#[test]
+fn adding_then_removing_a_missing_component_restores_text() {
+    let scene = scene_with_instance();
+    let link = "prefab_editing::Link";
+    let text = add_component_override(&scene, &[3], &[1], link, "(to: (index: 0, generation: 0))")
+        .unwrap();
+    assert!(text.contains("added: [\n"));
+    assert_eq!(
+        remove_component_override(&text, &[3], &[1], link).unwrap(),
+        scene
+    );
+}
+
+#[test]
+fn field_overrides_win_over_an_earlier_whole_override() {
+    let scene = scene_with_instance();
+    let pos = "prefab_editing::Pos";
+    let text = set_override(&scene, &[3], &[0], pos, &[field("y")], "5.0").unwrap();
+    let text = set_override(&text, &[3], &[0], pos, &[], "(x: 3.0, y: 4.0)").unwrap();
+    assert!(!text.contains("5.0"));
+    let text = set_override(&text, &[3], &[0], pos, &[field("x")], "9.0").unwrap();
+    assert_eq!(
+        component(&resolved(&text), &[3, 0], "Pos").unwrap(),
+        "(x: 9.0, y: 4.0)"
+    );
+}
+
+#[test]
 fn apply_to_prefab_writes_nested_override() {
     let outer = format!(
         "Prefab(version: 1, next_id: 4, entities: [\
@@ -249,15 +290,36 @@ fn prefab_cycle_is_refused_on_save() {
     );
     let assets = texts(&[(A, &a), (B, &b)]);
     assert!(matches!(
-        save_prefab_checked(&a, &assets),
-        Err(SceneError::PrefabCycle(chain)) if chain.len() == 3
+        save_prefab_checked(AssetId(A), &a, &assets),
+        Err(SceneError::PrefabCycle(chain))
+            if chain == [AssetId(A), AssetId(B), AssetId(A)].map(|id| id.to_string())
     ));
+
+    // `assets` holds the old A, without the instance of B, or no A at all (a new prefab).
+    let old_a = "Prefab(version: 1, next_id: 0, entities: [])".to_string();
+    let named = |a: Option<&String>| NamedAssetTexts {
+        texts: a
+            .map(|a| (AssetId(A), a.clone()))
+            .into_iter()
+            .chain([(AssetId(B), b.clone())])
+            .collect(),
+        paths: [(AssetId(A), "a.prefab.ron"), (AssetId(B), "b.prefab.ron")]
+            .map(|(id, path)| (id, path.to_string()))
+            .into(),
+    };
+    for stale in [named(Some(&old_a)), named(None)] {
+        assert!(matches!(
+            save_prefab_checked(AssetId(A), &a, &stale),
+            Err(SceneError::PrefabCycle(chain))
+                if chain == ["a.prefab.ron", "b.prefab.ron", "a.prefab.ron"]
+        ));
+    }
 
     let foreign = "Prefab(version: 1, next_id: 2, entities: [\
         (id: 0, components: {\"prefab_editing::Link\": (to: (index: 1, generation: 0))}),\
         ])";
     assert!(matches!(
-        save_prefab_checked(foreign, &AssetTexts::new()),
+        save_prefab_checked(AssetId(A), foreign, &AssetTexts::new()),
         Err(SceneError::ForeignReference { entity: 0, component, path })
             if component == "prefab_editing::Link" && path == "to"
     ));
