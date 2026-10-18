@@ -4,6 +4,7 @@
 use std::any::{Any, TypeId, type_name};
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 use ludenea_schema::TypeSchema;
 use xxhash_rust::xxh3::Xxh3;
@@ -14,11 +15,12 @@ use crate::system::{ASSET, Accesses, Missing, SystemParam, declare_cell};
 use crate::world::check_same_type;
 use crate::{Asset, AssetId, Codec, EcsError, Handle, World, hash_value};
 
-/// A decoded asset; `Sync` so systems may share it across threads.
-pub(crate) type AssetValue = Box<dyn Any + Send + Sync>;
+/// A decoded asset; `Sync` so systems may share it across threads, and shared so a
+/// command may hold it while it changes the world.
+pub(crate) type AssetValue = Arc<dyn Any + Send + Sync>;
 
-/// One registered asset type. `decode` and `decode_ron` mirror the codec's, keeping the
-/// value `Sync`.
+/// One registered asset type. `decode` and `decode_ron` mirror the codec's, which give
+/// values that are only `Send` (components need not be `Sync`), as shared `Sync` values.
 pub(crate) struct AssetType {
     type_id: TypeId,
     type_name: &'static str,
@@ -47,10 +49,10 @@ impl World {
                 type_id: TypeId::of::<T>(),
                 type_name: type_name::<T>(),
                 codec: Codec::of::<T>(),
-                decode: |bytes| Ok(Box::new(decode_exact::<T>(bytes)?)),
+                decode: |bytes| Ok(Arc::new(decode_exact::<T>(bytes)?)),
                 decode_ron: |text| {
                     let value: T = ron::from_str(text).map_err(|error| error.to_string())?;
-                    Ok(Box::new(value))
+                    Ok(Arc::new(value))
                 },
                 default: None,
             },
@@ -64,7 +66,7 @@ impl World {
         self.asset_types
             .get_mut(T::NAME)
             .expect("just registered")
-            .default = Some(|| Box::new(T::default()));
+            .default = Some(|| Arc::new(T::default()));
         Ok(())
     }
 

@@ -26,6 +26,9 @@ struct Aim {
 }
 
 #[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+struct Pair(Entity, f32, Entity);
+
+#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
 struct Spawner {
     bullet: Handle<Prefab>,
     every: u64,
@@ -72,6 +75,7 @@ fn unloaded<M>(spawn: impl IntoSystemConfig<M>) -> Simulation {
         .component::<Target>()
         .component::<Pos>()
         .component::<Aim>()
+        .component::<Pair>()
         .component::<Spawner>()
         .system(Sim, spawn)
         .system(Sim, move_bullets);
@@ -265,4 +269,72 @@ fn remap_keeps_non_finite_floats() {
     assert_eq!(back.target, other);
     assert_eq!(back.angle.to_bits(), f32::NAN.to_bits());
     assert_eq!(back.spread, aim.spread);
+}
+
+#[test]
+fn spawn_records_each_inserted_component() {
+    let mut simulation = simulation(1000);
+    let mut recorder = Recorder::default();
+    simulation.step_observed(None, &mut recorder).unwrap();
+    let world = simulation.world();
+    let (first, second) = (tagged(world, 1)[0], tagged(world, 2)[0]);
+    let inserted: Vec<_> = recorder
+        .0
+        .iter()
+        .filter(|record| record.kind == CommandKind::Insert)
+        .map(|record| (record.entity.unwrap(), record.component.unwrap()))
+        .collect();
+    assert_eq!(
+        inserted,
+        [
+            (first, "spawn_prefab::Tag"),
+            (first, "spawn_prefab::Pos"),
+            (first, "spawn_prefab::Target"),
+            (second, "spawn_prefab::Tag"),
+            (second, "spawn_prefab::Target"),
+        ]
+    );
+}
+
+#[test]
+fn components_outside_entity_components_are_not_remapped() {
+    let mut simulation = simulation(1000);
+    let id = AssetId(BULLET);
+    let (_, bytes) = simulation.world().asset_bytes(id).unwrap();
+    let mut prefab: Prefab = postcard::from_bytes(&bytes).unwrap();
+    prefab.entity_components.clear();
+    let bytes = postcard::to_allocvec(&prefab).unwrap();
+    simulation
+        .world_mut()
+        .insert_asset(id, "ludenea::Prefab", &bytes)
+        .unwrap();
+    simulation.step();
+    let world = simulation.world();
+    let first = tagged(world, 1)[0];
+    // Position 1 is written as is: the raw entity 1v0, which is `first` itself here.
+    assert_eq!(world.get::<Target>(first).unwrap().0, first);
+    assert_ne!(tagged(world, 2)[0], first);
+}
+
+#[test]
+fn remap_maps_each_entity_on_its_own_and_survives_a_panic() {
+    let mut simulation = simulation(1000);
+    simulation.step();
+    let world = simulation.world();
+    let (first, second) = (tagged(world, 1)[0], tagged(world, 2)[0]);
+    let codec = world.component_codec("spawn_prefab::Pair").unwrap();
+    let pair = Pair(first, f32::NAN, second);
+    let bytes = postcard::to_allocvec(&pair).unwrap();
+    let swap = |entity| if entity == first { second } else { first };
+
+    let mut trailing = bytes.clone();
+    trailing.push(0);
+    let panicked = std::panic::catch_unwind(|| (codec.remap_entities)(&trailing, &swap));
+    assert!(panicked.is_err());
+
+    let remapped: Pair = postcard::from_bytes(&(codec.remap_entities)(&bytes, &swap)).unwrap();
+    assert_eq!((remapped.0, remapped.2), (second, first));
+    assert_eq!(remapped.1.to_bits(), f32::NAN.to_bits());
+    let plain: Pair = postcard::from_bytes(&bytes).unwrap();
+    assert_eq!((plain.0, plain.2), (first, second));
 }

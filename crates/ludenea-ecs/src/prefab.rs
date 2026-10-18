@@ -1,6 +1,7 @@
 //! The flattened form of a prefab, loaded as an asset.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use ludenea_macros::Schema;
 use serde::{Deserialize, Serialize};
@@ -87,9 +88,8 @@ pub(crate) fn spawn(
     let flat = world
         .assets
         .get(&id)
-        .and_then(|asset| asset.value.downcast_ref::<Prefab>())
-        .unwrap_or_else(|| panic!("prefab {id} is not loaded"))
-        .clone();
+        .and_then(|asset| Arc::clone(&asset.value).downcast::<Prefab>().ok())
+        .unwrap_or_else(|| panic!("prefab {id} is not loaded"));
     let spawned: Vec<Entity> = flat.entities.iter().map(|_| world.spawn()).collect();
     let map = |entity: Entity| {
         usize::try_from(entity.index())
@@ -106,8 +106,10 @@ pub(crate) fn spawn(
             component: None,
         });
         for (name, bytes) in &entity.components {
-            let codec = world
-                .component_codec(name)
+            let (component, codec) = world
+                .components
+                .get_key_value(name.as_str())
+                .map(|(&component, entry)| (component, entry.codec))
                 .unwrap_or_else(|| panic!("prefab {id} has the unregistered component {name}"));
             let remapped;
             let bytes = if flat.entity_components.contains(name) {
@@ -116,10 +118,17 @@ pub(crate) fn spawn(
             } else {
                 bytes
             };
-            let value = (codec.decode)(bytes).expect("prefab bytes are canonical");
+            let value = (codec.decode)(bytes).unwrap_or_else(|error| {
+                panic!("prefab {id} holds a `{name}` that does not decode: {error}")
+            });
             world
                 .insert_boxed(target, name, value)
                 .expect("spawned this command");
+            report(CommandRecord {
+                kind: CommandKind::Insert,
+                entity: Some(target),
+                component: Some(component),
+            });
         }
     }
     let mut edits = PrefabOverrides::default();
