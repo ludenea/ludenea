@@ -85,4 +85,17 @@ describe("console", () => {
     act(() => logToConsole(host.editor, "error", "The game crashed at tick 4: boom"));
     expect(screen.getByText("The game crashed at tick 4: boom")).toBeTruthy();
   });
+
+  it("scroll_position_survives_hiding_the_panel", async () => {
+    const host = await testEditor(builtinPlugins);
+    renderPanel(host, "ludenea.console");
+    const lines = () => screen.getByRole("list", { name: "Console" });
+    lines().scrollTop = 300;
+    fireEvent.scroll(lines());
+
+    // The shell unmounts a panel while its tab is hidden.
+    cleanup();
+    renderPanel(host, "ludenea.console");
+    expect(lines().scrollTop).toBe(300);
+  });
 });

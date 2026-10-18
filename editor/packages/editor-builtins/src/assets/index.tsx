@@ -1,6 +1,6 @@
 import type { FileChange, FileEntry } from "@ludenea/control-client";
 import { definePlugin, type Editor } from "@ludenea/editor-shell";
-import { createStore, errorText, shared, type Store } from "../shared";
+import { createStore, errorText, shared, type Scroll, type Store } from "../shared";
 import { AssetsPanel, baseName } from "./AssetsPanel";
 
 export type Action = { kind: "rename" | "move" | "delete"; path: string };
@@ -21,6 +21,8 @@ export interface AssetsState {
 
 export interface Assets {
   state: Store<AssetsState>;
+  /** Kept here, not in the panel: the shell unmounts a panel while its tab is hidden. */
+  scroll: Scroll;
   open(path: string): Promise<void>;
   rename(from: string, to: string): Promise<void>;
   move(path: string, folder: string): Promise<void>;
@@ -62,6 +64,7 @@ export const assetsPlugin = definePlugin({
     const renaming = new Set<string>();
     const assets: Assets = {
       state,
+      scroll: { top: 0 },
       async open(path) {
         state.set({ selected: path });
         const entry = state.get().files.find((file) => file.path === path);

@@ -53,6 +53,8 @@ export const consolePlugin = definePlugin({
       update((entries) => [...entries, { id: next(), level, source, text }]);
 
     sinks.set(editor, (level, text) => add(level, text));
+    // Kept here, not in the panel: the shell unmounts a panel while its tab is hidden.
+    const scroll = { top: 0 };
     const project = editor.project;
     const stops = [
       project.on("build", ({ event }) => {
@@ -98,7 +100,7 @@ export const consolePlugin = definePlugin({
       id: "ludenea.console",
       title: "Console",
       defaultPosition: "bottom",
-      component: () => <ConsolePanel state={state} onLocation={open} />,
+      component: () => <ConsolePanel state={state} scroll={scroll} onLocation={open} />,
     });
     return () => {
       sinks.delete(editor);

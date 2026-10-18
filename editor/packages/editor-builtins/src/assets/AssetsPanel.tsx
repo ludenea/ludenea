@@ -1,7 +1,7 @@
 import type { FileEntry } from "@ludenea/control-client";
 import type { Editor } from "@ludenea/editor-shell";
 import { useRef, type KeyboardEvent } from "react";
-import { ASSET_FOLDERS, errorText, shared, useStore } from "../shared";
+import { ASSET_FOLDERS, errorText, shared, useKeptScroll, useStore } from "../shared";
 import type { Action, Assets } from "./index";
 
 export const baseName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
@@ -26,6 +26,7 @@ export function AssetsPanel({ editor, assets }: { editor: Editor; assets: Assets
   const openScene = useStore(shared(editor).scene).path;
   const unsaved = editor.timeline((state) => state.timeline?.scene_dirty ?? false);
   const dragged = useRef<string | null>(null);
+  const scrolled = useKeptScroll<HTMLDivElement>(assets.scroll);
   const set = assets.state.set;
   const attempt = (work: Promise<void>) =>
     void work.then(
@@ -35,7 +36,7 @@ export function AssetsPanel({ editor, assets }: { editor: Editor; assets: Assets
   const groups = grouped(files, filter);
 
   return (
-    <div className="ludenea-assets">
+    <div className="ludenea-assets" ref={scrolled.ref} onScroll={scrolled.onScroll}>
       <input type="search" aria-label="Filter assets" placeholder="Filter" value={filter} onChange={(event) => set({ filter: event.target.value })} />
       {banner && (
         <div role="alert" className="ludenea-banner">

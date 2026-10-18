@@ -1,5 +1,5 @@
 import type { ConsoleLevel } from "@ludenea/control-client";
-import { useStore, type Store } from "../shared";
+import { useKeptScroll, useStore, type Scroll, type Store } from "../shared";
 
 export type Levels = { [level in ConsoleLevel]: boolean };
 
@@ -24,8 +24,10 @@ export type Location = NonNullable<Entry["location"]>;
 export const where = ({ file, line, column }: Location) =>
   [file, line, line === null ? null : column].filter((part) => part !== null).join(":");
 
-export function ConsolePanel({ state, onLocation }: { state: Store<{ entries: Entry[]; levels: Levels; notice: string | null }>; onLocation(location: Location): void }) {
+export function ConsolePanel(props: { state: Store<{ entries: Entry[]; levels: Levels; notice: string | null }>; scroll: Scroll; onLocation(location: Location): void }) {
+  const { state, scroll, onLocation } = props;
   const { entries, levels, notice } = useStore(state);
+  const lines = useKeptScroll<HTMLUListElement>(scroll);
   return (
     <div className="ludenea-console">
       <div className="ludenea-toolbar">
@@ -41,7 +43,7 @@ export function ConsolePanel({ state, onLocation }: { state: Store<{ entries: En
           </span>
         )}
       </div>
-      <ul aria-label="Console" className="ludenea-console-lines">
+      <ul aria-label="Console" className="ludenea-console-lines" ref={lines.ref} onScroll={lines.onScroll}>
         {entries
           .filter((entry) => levels[entry.level])
           .map((entry) => (

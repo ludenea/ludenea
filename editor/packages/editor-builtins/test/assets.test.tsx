@@ -206,4 +206,15 @@ describe("assets", () => {
     await host.editor.commands.run("scene.save");
     expect(host.project.sent).toContainEqual({ type: "write_text", path: "scenes/intro.scene.ron", text: "(saved)" });
   });
+
+  it("scroll_position_survives_hiding_the_panel", async () => {
+    const { host } = await browser();
+    const panel = () => document.querySelector(".ludenea-assets") as HTMLElement;
+    panel().scrollTop = 120;
+    fireEvent.scroll(panel());
+
+    cleanup();
+    renderPanel(host, "ludenea.assets");
+    expect(panel().scrollTop).toBe(120);
+  });
 });
