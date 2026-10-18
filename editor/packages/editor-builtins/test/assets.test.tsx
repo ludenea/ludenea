@@ -83,28 +83,55 @@ describe("assets", () => {
 
   describe("assets changed on disk", () => {
     const BALL = "0000000000000000000000000000000d";
+    const OTHER = "0000000000000000000000000000000e";
     const paths = [
       [BALL, "assets/ball.prefab.ron"],
       [SETTINGS, "assets/settings.ron"],
     ];
-    /** The open scene with unsaved edits, over a project whose asset texts `disk` holds. */
+    const files = [...entries, { path: "scenes/other.scene.ron", id: OTHER, kind: "Scene" }];
+    const timeline = (sceneDirty: boolean) => ({ head: 0, simulated: 0, current: 0, checkpoints: [], edit_ticks: [], can_undo: false, can_redo: false, undo_label: null, redo_label: null, scene_dirty: sceneDirty, resimulating: false, branch: 0, branches: [], compare: null });
+
+    /**
+     * The open scene with an unsaved tick 0 edit, over a project whose asset texts `disk` holds.
+     * The game keeps its unsaved state as the host does: `ReplaceScene` marks its scene saved,
+     * `LoadSession` keeps the session's.
+     */
     async function project() {
       const disk = { ball: "(ball)", settings: "(gravity_scale: 0.5)" };
       const texts = () => [
         [BALL, disk.ball],
         [SETTINGS, `AssetFile(type: "demo::Settings", value: ${disk.settings})`],
       ];
+      const sessions = new Map<string, string>();
+      let dirty = false;
+      let scene = "";
+      const changedTo = (next: boolean) => {
+        dirty = next;
+        setTimeout(() => game.push({ type: "timeline_changed", timeline: timeline(dirty) }));
+      };
       const game = await testGame((command) => {
-        if (command.type === "export_session") return { type: "session", scene: "(edited)", saved_scene: "(scene)", inputs: "", edits: "", undo: "", hashes: [], assets: [], branches: "", document: "Scene", keeps_assets: false };
         // The host refuses the broken data asset, naming it by identifier.
-        if (command.type === "replace_scene" && disk.settings.includes("oops")) return { error: { code: "invalid_scene", message: `asset ${SETTINGS} is invalid: 1:17: Expected float` } };
+        const broken = (command.assets as string[][] | undefined)?.some(([, text]) => text!.includes("oops"));
+        if (broken) return { error: { code: "invalid_scene", message: `asset ${SETTINGS} is invalid: 1:17: Expected float` } };
+        if (command.type === "export_session") return { type: "session", scene: dirty ? "(edited)" : scene, saved_scene: dirty ? scene : null, inputs: "", edits: "", undo: "", hashes: ["0000000000000001"], assets: [], branches: "", document: "Scene", keeps_assets: false };
+        if (command.type === "get_timeline") return { type: "timeline", ...timeline(dirty) };
+        if (command.type === "load_scene") {
+          scene = command.scene as string;
+          changedTo(false);
+        }
+        if (command.type === "replace_scene") changedTo(false);
+        if (command.type === "load_session") {
+          scene = (command.saved_scene ?? command.scene) as string;
+          changedTo(command.saved_scene !== null);
+        }
         return { type: "done" };
       });
       const host = await testEditor(builtinPlugins, (request) => {
-        if (request.type === "list_files") return { type: "files", entries };
-        if (request.type === "read_text") return { type: "text", text: "(scene)" };
+        if (request.type === "list_files") return { type: "files", entries: files };
+        if (request.type === "read_text") return { type: "text", text: `(${request.path})` };
         if (request.type === "read_asset_texts") return { type: "asset_texts", assets: texts(), paths };
-        if (request.type === "load_stored_session") return { type: "stored_session", bytes: null };
+        if (request.type === "store_session") sessions.set(request.document as string, request.bytes as string);
+        if (request.type === "load_stored_session") return { type: "stored_session", bytes: sessions.get(request.document as string) ?? null };
         if (request.type === "info") return undefined;
         return { type: "done" };
       });
@@ -113,21 +140,35 @@ describe("assets", () => {
       renderPanel(host, "ludenea.console");
       await settle();
       await openScene();
-      setSceneDirty(host, true);
-      const changed = (path: string, kind: object | string) => {
+      // A tick 0 edit the user has not saved.
+      act(() => changedTo(true));
+      await settle();
+      const changed = async (path: string, kind: object | string) => {
         act(() => host.project.push({ type: "files_changed", changes: [{ Changed: { path, kind } }] }));
-        return settle();
+        await settle();
+        await settle();
       };
       return { host, game, disk, texts, changed };
     }
 
-    it("a_prefab_change_reloads_the_open_scene_with_its_unsaved_edits", async () => {
-      const { game, disk, texts, changed } = await project();
+    it("a_prefab_change_reloads_the_open_scene_and_keeps_its_unsaved_edits", async () => {
+      const { host, game, disk, texts, changed } = await project();
+      expect(screen.getByLabelText("unsaved changes")).toBeTruthy();
 
       disk.ball = "(bigger ball)";
       await changed("assets/ball.prefab.ron", "Prefab");
 
-      expect(game.sent.filter((command) => command.type === "replace_scene")).toEqual([{ type: "replace_scene", scene: "(edited)", assets: texts() }]);
+      expect(game.sent.filter((command) => command.type === "load_session")).toMatchObject([{ scene: "(edited)", saved_scene: `(${SCENE})`, assets: texts() }]);
+      expect(game.sent.filter((command) => command.type === "replace_scene")).toEqual([]);
+      expect(host.editor.timeline.getState().timeline?.scene_dirty).toBe(true);
+      expect(screen.getByLabelText("unsaved changes")).toBeTruthy();
+
+      // Away and back: the stored session still holds the edited scene.
+      await act(() => host.editor.document.getState().open(OTHER));
+      game.sent.length = 0;
+      await act(() => host.editor.document.getState().open("0000000000000000000000000000000a"));
+      await settle();
+      expect(game.sent.find((command) => command.type === "load_session")).toMatchObject({ scene: "(edited)", saved_scene: `(${SCENE})` });
     });
 
     it("a_data_asset_broken_on_disk_is_refused_and_logged_at_its_file_line_and_column", async () => {
@@ -137,7 +178,7 @@ describe("assets", () => {
       disk.settings = "(gravity_scale: oops)";
       await changed("assets/settings.ron", { Data: { type: "demo::Settings" } });
 
-      expect(game.sent.filter((command) => command.type === "replace_scene")).toHaveLength(1);
+      expect(game.sent.filter((command) => command.type === "load_session")).toHaveLength(1);
       expect(screen.getByRole("button", { name: "assets/settings.ron:1:17" })).toBeTruthy();
       expect(screen.getByRole("list", { name: "Console" }).textContent).toContain("Expected float");
       // The game keeps the previous value, and so does every game started next.

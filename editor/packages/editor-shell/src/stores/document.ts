@@ -101,6 +101,11 @@ function simulated(control: ControlClient, tick: number): Promise<void> {
  */
 export async function restoreSession(control: ControlClient, saved: SavedSession, tick = saved.tick): Promise<void> {
   await control.request(saved.load);
+  await returnTo(control, saved, tick);
+}
+
+/** Seeks back to `tick` once the loaded `saved` is resimulated that far, within what it recorded. */
+async function returnTo(control: ControlClient, saved: SavedSession, tick: number): Promise<void> {
   const target = Math.max(0, Math.min(tick, saved.load.expected.length - 1));
   await simulated(control, target);
   await control.request({ type: "seek", tick: target });
@@ -187,11 +192,14 @@ export function createDocumentStore(options: {
   const store: DocumentStore = create<DocumentState>()((set, get) => ({
     current: null,
     text: null,
-    open: (id) =>
-      serial(async () => {
+    open: (id) => {
+      // The file once known, for the console.
+      let name = `the document ${id}`;
+      return serial(async () => {
         const { entries } = await project.request({ type: "list_files" });
         const entry = entries.find((file) => file.id === id);
         if (!entry) throw new Error(`no project file has the identifier ${id}`);
+        name = entry.path;
         const kind = typeof entry.kind === "string" ? KINDS[entry.kind] : undefined;
         if (!kind) throw new Error(`${entry.path} is not a scene, a prefab, or a replay`);
         const document = { id, kind, path: entry.path };
@@ -219,7 +227,8 @@ export function createDocumentStore(options: {
         } finally {
           opening = false;
         }
-      }).catch(reported(`Cannot open the document ${id}`)),
+      }).catch((error: unknown) => reported(`Cannot open ${name}`)(error));
+    },
     replace: (text) =>
       serial(async () => {
         const fresh = await readTexts();
@@ -230,20 +239,32 @@ export function createDocumentStore(options: {
     store: () => sessions.store(),
   }));
 
-  // A prefab or data asset changed on disk: the open scene or prefab reloads with it, keeping
-  // the session's scene as it is (unsaved edits included). Refused, the previous texts stay.
-  const reloadAssets = () =>
-    serial(async () => {
+  // A prefab or data asset changed on disk: the open scene or prefab reloads with it. The
+  // session goes back with the new texts as a whole (`ReplaceScene` would mark unsaved scene
+  // edits saved): it keeps its edits, history, branches, and unsaved state, and replays.
+  // Refused, the game keeps the previous session and the previous texts stay.
+  const reloadAssets = async () => {
+    const reloaded = await serial(async () => {
       const document = store.getState().current;
-      if (document?.kind === "replay") return;
+      if (document?.kind === "replay") return null;
       const fresh = await readTexts();
       const game = control();
+      let saved: SavedSession | null = null;
       if (document && game) {
-        const { scene } = await game.request({ type: "export_session" });
-        await game.request({ type: "replace_scene", scene, assets: fresh.assets }).catch(locatedIn(fresh.paths));
+        const exported = await exportSession(game);
+        saved = { ...exported, load: { ...exported.load, assets: fresh.assets } };
+        await game.request(saved.load).catch(locatedIn(fresh.paths));
       }
       texts = fresh;
+      return game && saved && { game, saved };
     }).catch(reported("Cannot reload the changed assets"));
+    // Off the queue: a long resimulation holds up no document change.
+    if (reloaded) {
+      await returnTo(reloaded.game, reloaded.saved, reloaded.saved.tick).catch((error: unknown) =>
+        log("warning", `Cannot go back to tick ${reloaded.saved.tick} after reloading the assets: ${error instanceof Error ? error.message : String(error)}`),
+      );
+    }
+  };
   project.on("files_changed", ({ changes }) => {
     const open = store.getState().current?.path;
     const assetChanged = (change: FileChange) => {
