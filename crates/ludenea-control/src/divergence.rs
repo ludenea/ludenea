@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use ludenea_app::{Edit, EntityRef, Simulation};
+use ludenea_ecs::diff::entity_subject;
 use ludenea_ecs::schema::TypeSchema;
 use ludenea_ecs::schema::entities::entity_refs;
 use ludenea_ecs::{
@@ -174,11 +175,12 @@ impl DivergenceRun {
     }
 
     /// Like `invalidate` after play ran ticks: play only records the current branch's
-    /// future, which matters only while the range is capped at the end of the runs. A
+    /// future, which matters only while the range is capped at the current branch's end. A
     /// take-over that forks changes the current branch, which every use checks.
     pub fn played(&mut self) {
         if let Some(progress) = &self.progress
             && progress.target < self.full_target(progress.fork)
+            && progress.runs[COMPARE].end() > progress.target
         {
             self.outdated = true;
         }
@@ -295,7 +297,7 @@ impl DivergenceRun {
                 let mut recorder = Recorder::default();
                 sim.step_observed(run.inputs.tick(now), &mut recorder)
                     .map_err(|error| error.to_string())?;
-                apply_edits(sim, run, now + 1);
+                apply_edits(sim, run, now + 1)?;
                 let records = &mut progress.records[side];
                 if records.len() == 2 {
                     records.remove(0);
@@ -375,15 +377,29 @@ impl Progress {
         self.at == Some(self.target)
     }
 
-    /// Brings both simulations to the fork tick, edits recorded there applied.
+    /// Brings both simulations to the fork tick, edits recorded there applied. The tick
+    /// that ends at the fork runs observed: its events may explain a divergence one tick
+    /// after the fork.
     fn start(&mut self, sims: &mut [Simulation; 2], session: &Session) -> Result<(), String> {
-        for (sim, run) in sims.iter_mut().zip(&self.runs) {
-            let (checkpoint, snapshot) = run.checkpoints.nearest_at_or_before(self.fork);
+        let observed = self.fork.saturating_sub(1);
+        for (side, sim) in sims.iter_mut().enumerate() {
+            let run = &self.runs[side];
+            let (checkpoint, snapshot) = run.checkpoints.nearest_at_or_before(observed);
             restore(sim, session, run, checkpoint, snapshot)?;
             for tick in checkpoint..self.fork {
-                sim.step_encoded(run.inputs.tick(tick))
-                    .map_err(|error| error.to_string())?;
-                apply_edits(sim, run, tick + 1);
+                let input = run.inputs.tick(tick);
+                if tick == observed {
+                    let mut recorder = Recorder::default();
+                    sim.step_observed(input, &mut recorder)
+                        .map_err(|error| error.to_string())?;
+                    self.records[side].push(TickRecord {
+                        tick: self.fork,
+                        ..recorder.record
+                    });
+                } else {
+                    sim.step_encoded(input).map_err(|error| error.to_string())?;
+                }
+                apply_edits(sim, run, tick + 1)?;
             }
         }
         let mut skeleton = sims[CURRENT].world().snapshot();
@@ -490,12 +506,13 @@ impl Progress {
         };
         let world = sims[CURRENT].world();
         let (current, compare) = (restricted(world), restricted(sims[COMPARE].world()));
+        let subjects: BTreeMap<String, Entity> = entities
+            .iter()
+            .map(|&entity| (entity_subject(entity), entity))
+            .collect();
         let mut first = BTreeMap::new();
         for difference in world.diff_snapshots(&current, &compare)? {
-            if let Some(&entity) = entities
-                .iter()
-                .find(|entity| difference.subject == format!("entity {entity}"))
-            {
+            if let Some(&entity) = subjects.get(&difference.subject) {
                 first.entry(entity).or_insert(difference);
             }
         }
@@ -517,8 +534,13 @@ impl Progress {
                 causes.push(cause);
             }
         };
+        // The tick ending at the fork ran before the edits that part the branches: it
+        // explains only later divergences.
+        let explains = |record: &&TickRecord| {
+            tick > self.fork && record.tick + 1 >= tick && record.tick <= tick
+        };
         let records = self.records.iter().flatten();
-        for record in records.filter(|record| record.tick + 1 >= tick && record.tick <= tick) {
+        for record in records.filter(explains) {
             for (name, value) in &record.events {
                 let Some(schema) = event_schemas.get(name) else {
                     continue;
@@ -655,6 +677,48 @@ impl ScheduleObserver for Recorder {
             self.record
                 .events
                 .extend(values.into_iter().map(|value| (name, value)));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ludenea_app::AssetTexts;
+    use serde_json::json;
+
+    use super::*;
+    use crate::session::Document;
+
+    #[test]
+    fn the_tick_ending_at_the_fork_is_observed() {
+        let mut sim = boxes::app().build().unwrap();
+        let scene = boxes::generate_scene(10, 3);
+        let mut session =
+            Session::start(&mut sim, scene, AssetTexts::new(), Document::Scene).unwrap();
+        for _ in 0..40 {
+            session.step(&mut sim, None).unwrap();
+        }
+        session.seek(&mut sim, 20).unwrap();
+        let value = sim
+            .encode_json_value(
+                ludenea_app::ValueKind::Component,
+                "boxes::Crate",
+                json!(null),
+            )
+            .unwrap();
+        let components = vec![("boxes::Crate".to_string(), value)];
+        session.edit(&mut sim, Edit::Spawn { components }).unwrap();
+        for _ in 0..10 {
+            session.step(&mut sim, None).unwrap();
+        }
+
+        let build = || boxes::app().build().unwrap();
+        let mut divergence = DivergenceRun::new(build(), build());
+        divergence.advance(&session, 1).unwrap();
+        let progress = divergence.progress.as_ref().unwrap();
+        for records in &progress.records {
+            let ticks: Vec<u64> = records.iter().map(|record| record.tick).collect();
+            assert_eq!(ticks, [20, 21]);
         }
     }
 }

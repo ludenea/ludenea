@@ -869,10 +869,11 @@ impl Host {
                     self.ghost = false;
                 }
                 if topic == Topic::Divergence {
+                    // A report asked for while subscribed is dropped with the subscription:
+                    // nothing follows it any more.
                     self.divergence_subscribed = false;
-                    if !self.divergence_asked {
-                        self.divergence = None;
-                    }
+                    self.divergence_asked = false;
+                    self.divergence = None;
                 }
                 if topic == Topic::Introspection {
                     self.session.introspection = None;
@@ -1425,6 +1426,95 @@ mod tests {
             let error = host.handle(command).unwrap_err();
             assert_eq!(error.code, ErrorCode::InvalidCommand, "{error:?}");
         }
+    }
+
+    #[test]
+    fn unsubscribing_drops_a_report_asked_for() {
+        let mut host = Host::new(boxes::app).unwrap();
+        host.handle(Command::LoadScene {
+            scene: boxes::generate_scene(10, 3),
+            assets: Vec::new(),
+            document: Document::Scene,
+        })
+        .unwrap();
+        let step = Command::Step {
+            ticks: 40,
+            record_hashes: false,
+        };
+        host.handle(step.clone()).unwrap();
+        host.handle(Command::Seek { tick: 20 }).unwrap();
+        host.handle(Command::Spawn {
+            components: [("boxes::Crate".to_string(), JsonValue::Null)].into(),
+        })
+        .unwrap();
+        host.handle(step).unwrap();
+        let topic = Topic::Divergence;
+        host.handle(Command::Subscribe {
+            topic: topic.clone(),
+        })
+        .unwrap();
+        host.handle(Command::GetDivergence { up_to: None }).unwrap();
+        host.handle(Command::Unsubscribe { topic }).unwrap();
+        assert!(host.divergence.is_none());
+        let events = host.advance(0.0);
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, Event::DivergenceProgress { .. })),
+            "{events:?}"
+        );
+    }
+
+    #[test]
+    fn playing_while_the_compare_branch_caps_the_report_composes_nothing() {
+        let mut host = Host::new(boxes::app).unwrap();
+        let scene = boxes::generate_scene(10, 3);
+        let document = Document::Scene;
+        host.handle(Command::LoadScene {
+            scene,
+            assets: Vec::new(),
+            document,
+        })
+        .unwrap();
+        let step = |host: &mut Host, ticks| {
+            host.handle(Command::Step {
+                ticks,
+                record_hashes: false,
+            })
+            .unwrap();
+        };
+        step(&mut host, 40);
+        host.handle(Command::Seek { tick: 20 }).unwrap();
+        host.handle(Command::Spawn {
+            components: [("boxes::Crate".to_string(), JsonValue::Null)].into(),
+        })
+        .unwrap();
+        step(&mut host, 30);
+        host.handle(Command::Subscribe {
+            topic: Topic::Divergence,
+        })
+        .unwrap();
+        // The default range ends past the root's end at tick 40, which caps it.
+        let report = |host: &mut Host| match host.handle(Command::GetDivergence { up_to: None }) {
+            Ok(Reply::Divergence(report)) => report,
+            other => panic!("{other:?}"),
+        };
+        report(&mut host);
+        host.advance(0.0);
+        let complete = report(&mut host);
+        assert!(complete.complete);
+        assert_eq!(complete.up_to, 40);
+        let composed = host.divergence.as_ref().unwrap().composed;
+
+        host.handle(Command::Play).unwrap();
+        for _ in 0..10 {
+            host.advance(1.0 / 60.0);
+        }
+        assert!(
+            host.tick() > 50,
+            "play recorded the current branch's future"
+        );
+        assert_eq!(host.divergence.as_ref().unwrap().composed, composed);
     }
 
     #[test]

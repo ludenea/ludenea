@@ -31,6 +31,11 @@ pub struct Difference {
     pub right_text: String,
 }
 
+/// The `subject` of a difference in a component value of `entity`.
+pub fn entity_subject(entity: Entity) -> String {
+    format!("entity {entity}")
+}
+
 impl fmt::Display for Difference {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{} {} ", self.subject, self.component)?;
@@ -119,7 +124,7 @@ impl World {
                 }
                 let l = l.map(|bytes| side(codec, name, bytes)).transpose()?;
                 let r = r.map(|bytes| side(codec, name, bytes)).transpose()?;
-                let subject = format!("entity {entity}");
+                let subject = entity_subject(entity);
                 let mut found = Found::new(&subject, name, &mut differences);
                 found.compare(Some(&schema), l.as_ref(), r.as_ref());
             }

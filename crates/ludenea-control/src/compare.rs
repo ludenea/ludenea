@@ -141,7 +141,7 @@ impl CompareRun {
                      {now}, got {got:016x}"
                 ));
             }
-            apply_edits(sim, run, now);
+            apply_edits(sim, run, now)?;
         }
         Ok(CompareState {
             tick: now,
@@ -218,16 +218,23 @@ pub(crate) fn restore(
     // Load addresses and kept assets come from the scene load, not the snapshot.
     session.load_into(sim).map_err(|error| error.to_string())?;
     sim.restore(snapshot).map_err(|error| error.to_string())?;
-    apply_edits(sim, run, tick);
-    Ok(())
+    apply_edits(sim, run, tick)
 }
 
-/// Applies the edits recorded at `tick`. One that fails is skipped, as resimulation drops
-/// it from a stale run.
-pub(crate) fn apply_edits(sim: &mut Simulation, run: &BranchRun, tick: u64) {
+/// Applies the edits recorded at `tick`. On a stale tick, one that fails is skipped, as
+/// resimulation drops it; on a fresh tick, where it applied before, its failure is the
+/// error.
+pub(crate) fn apply_edits(sim: &mut Simulation, run: &BranchRun, tick: u64) -> Result<(), String> {
     for timed in run.edits.at(tick) {
-        let _ = sim.apply_edit(&timed.edit);
+        if let Err(error) = sim.apply_edit(&timed.edit)
+            && tick <= run.fresh
+        {
+            return Err(format!(
+                "the edit recorded at tick {tick} failed on its branch's recorded state: {error}"
+            ));
+        }
     }
+    Ok(())
 }
 
 /// Whether runs `a` and `b` reach the same state at `tick`: the same tick 0 state, recorded
@@ -248,10 +255,33 @@ fn first<T>(items: &[T], count: usize) -> &[T] {
 
 #[cfg(test)]
 mod tests {
-    use ludenea_app::{AssetTexts, Edit, EntityRef};
+    use ludenea_app::{AssetTexts, Edit, EditLog, EntityRef, InputLog, TimedEdit};
 
     use super::*;
+    use crate::checkpoints::Checkpoints;
     use crate::session::Document;
+
+    #[test]
+    fn an_edit_failing_on_a_fresh_tick_fails_and_one_on_a_stale_tick_is_skipped() {
+        let mut sim = boxes::app().build().unwrap();
+        let mut edits = EditLog::new();
+        edits.edits.push(TimedEdit {
+            tick: 5,
+            edit: Edit::Despawn {
+                entity: EntityRef::Loaded(vec![999]),
+            },
+        });
+        let run = |fresh| BranchRun {
+            inputs: InputLog::new(1),
+            edits: edits.clone(),
+            hashes: vec![0],
+            checkpoints: Checkpoints::empty(),
+            fresh,
+        };
+        let error = apply_edits(&mut sim, &run(5), 5).unwrap_err();
+        assert!(error.contains("tick 5"), "{error}");
+        apply_edits(&mut sim, &run(4), 5).unwrap();
+    }
 
     #[test]
     fn following_play_steps_across_checkpoints_without_restoring() {
