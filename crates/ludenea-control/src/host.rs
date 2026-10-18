@@ -148,6 +148,7 @@ impl Host {
             }
         }
         if self.playing {
+            self.subscriptions.played(elapsed_seconds);
             let due = self.pacer.advance(elapsed_seconds);
             if due > 0
                 && let Some(divergence) = &mut self.divergence
@@ -824,6 +825,15 @@ impl Host {
             Command::GetGhostDraw { tick, layers } => self.ghost_draw(tick, layers),
             Command::GetDivergence { up_to } => self.get_divergence(up_to),
             Command::Subscribe { topic } => {
+                if let Topic::Resource { name } = &topic
+                    && !sim
+                        .world()
+                        .resource_schemas()
+                        .iter()
+                        .any(|(known, _)| known == name)
+                {
+                    return Err(edit_error(&EditError::UnknownResource(name.clone())));
+                }
                 if topic == Topic::Ghost {
                     self.ghost = true;
                     self.ghost_reported = None;
@@ -1245,7 +1255,7 @@ impl Host {
     }
 
     fn report_changes(&mut self) {
-        let changes = self.subscriptions.deltas(&self.simulation);
+        let changes = self.subscriptions.deltas(&self.simulation, self.playing);
         self.events.extend(changes);
     }
 }

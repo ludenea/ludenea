@@ -1,6 +1,6 @@
 import { ProtocolFailure, type AssetId, type ComponentValue, type ControlClient, type Entity, type FieldTarget, type JsonValue, type PathSegment, type Timeline, type TypeSchema } from "@ludenea/control-client";
 import type { Editor } from "@ludenea/editor-shell";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { errorText, useGame, useStore } from "../shared";
 import { edit, ResimulatingNotice, useResimulating } from "../timeline/editing";
 import { defaultValue, setAt } from "./default-value";
@@ -25,11 +25,10 @@ export function InspectorPanel({ editor, state }: { editor: Editor; state: Inspe
 function Inspector({ editor, control, state }: { editor: Editor; control: ControlClient; state: InspectorState }) {
   const entity = editor.selection((selection) => selection.entities[0]);
   const asset = editor.selection((selection) => selection.asset);
-  const { adding, focused } = useStore(state);
+  const { adding, focused, expanded } = useStore(state);
   const components = useMemo(() => schemaMap(control.game.components), [control]);
   const resourceSchemas = useMemo(() => schemaMap(control.game.resources), [control]);
   const values = useEntity(editor, control, entity);
-  const resources = useResources(editor, control);
   const resimulating = useResimulating(editor);
 
   const setField = (target: FieldTarget, refresh: () => void): Edit => async (path, value) => {
@@ -66,15 +65,20 @@ function Inspector({ editor, control, state }: { editor: Editor; control: Contro
         </>
       )}
       <h2>Resources</h2>
-      {resources.error && <p className="ludenea-error">{resources.error}</p>}
-      {Object.entries(resources.values).map(([name, value]) => (
-        <Section
+      {[...resourceSchemas].map(([name, schema]) => (
+        <Resource
           key={name}
           editor={editor}
+          control={control}
           name={name}
-          value={value}
-          schema={resourceSchemas.get(name)}
-          edit={setField({ type: "resource", resource: name }, resources.refresh)}
+          schema={schema}
+          expanded={expanded.includes(name)}
+          toggle={() => {
+            const others = state.get().expanded.filter((other) => other !== name);
+            state.set({ expanded: expanded.includes(name) ? others : [...others, name] });
+          }}
+          // The game pushes the edited value.
+          edit={setField({ type: "resource", resource: name }, () => {})}
           readOnly={resimulating || READ_ONLY_RESOURCES.has(name)}
         />
       ))}
@@ -191,41 +195,45 @@ function useEntity(editor: Editor, control: ControlClient, entity: Entity | unde
 }
 
 /**
- * Every resource, kept current through the `Resources` topic while paused. While playing, a
- * resource such as the contact cache changes every tick, and pushing its whole value each tick
- * holds the game and the interface up: the values shown are those of the pause, read again
- * once paused.
+ * A resource, collapsed until opened. Only an open one follows the game, through its own
+ * `Resource` topic: the game pushes it when its value changes, at a capped rate while playing,
+ * so a large resource such as the contact cache costs nothing until shown.
  */
-function useResources(editor: Editor, control: ControlClient) {
-  const [values, setValues] = useState<Values>({});
+function Resource(props: { editor: Editor; control: ControlClient; name: string; schema: TypeSchema; expanded: boolean; toggle(): void; edit: Edit; readOnly: boolean }) {
+  const { editor, control, name, schema, expanded, toggle, edit, readOnly } = props;
+  const [value, setValue] = useState<ComponentValue | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [version, setVersion] = useState(0);
-  const playing = editor.timeline((timeline) => timeline.playing);
 
   useEffect(() => {
-    if (playing) return;
-    let current = true;
-    control.request({ type: "get_resources" }).then(
-      (reply) => current && setValues(reply.resources),
-      (failure) => current && setError(errorText(failure)),
-    );
-    return () => {
-      current = false;
-    };
-  }, [control, version, playing]);
-
-  useEffect(() => {
-    if (playing) return;
-    const topic = { type: "resources" } as const;
+    setValue(null);
+    setError(null);
+    if (!expanded) return;
+    const topic = { type: "resource", name } as const;
+    const stop = control.on("resources_changed", ({ resources }) => {
+      const next = resources[name];
+      if (next) setValue(next);
+    });
     control.request({ type: "subscribe", topic }).catch((failure) => setError(errorText(failure)));
-    const stop = control.on("resources_changed", (event) => setValues((values) => ({ ...values, ...event.resources })));
     return () => {
       stop();
       control.request({ type: "unsubscribe", topic }).catch(() => {});
     };
-  }, [control, playing]);
+  }, [control, name, expanded]);
 
-  return { values, error, refresh: () => setVersion((version) => version + 1) };
+  const title = (
+    <button className="ludenea-resource-toggle" aria-expanded={expanded} onClick={toggle} title={name}>
+      {shortName(name)}
+    </button>
+  );
+  if (!expanded || !value) {
+    return (
+      <section aria-label={name} className="ludenea-component">
+        <h3>{title}</h3>
+        {error && <p className="ludenea-error">{error}</p>}
+      </section>
+    );
+  }
+  return <Section editor={editor} name={name} title={title} value={value} schema={schema} edit={edit} readOnly={readOnly} />;
 }
 
 interface SectionProps {
@@ -236,13 +244,15 @@ interface SectionProps {
   edit: Edit;
   /** Set for a component; a resource has none. */
   entity?: Entity;
+  /** What the heading shows instead of the short name. */
+  title?: ReactNode;
   state?: InspectorState;
   focused?: boolean;
   readOnly?: boolean;
 }
 
 /** One component or resource: its custom inspector, its schema-driven fields, or read-only text. */
-function Section({ editor, name, value, schema, edit, entity, state, focused = false, readOnly = false }: SectionProps) {
+function Section({ editor, name, title, value, schema, edit, entity, state, focused = false, readOnly = false }: SectionProps) {
   const [error, setError] = useState<string | null>(null);
   const Custom = entity ? editor.inspectors.get(name) : undefined;
   const run = (command: string) => {
@@ -254,7 +264,7 @@ function Section({ editor, name, value, schema, edit, entity, state, focused = f
   };
 
   let body;
-  if (value.type === "ron") body = <pre aria-label={`${name} as RON`}>{value.text}</pre>;
+  if (value.type === "ron") body = <RonText name={name} text={value.text} />;
   else if (Custom && entity) {
     const onChange = (path: PathSegment[], next: unknown) =>
       void edit(path, next as JsonValue).then(
@@ -267,8 +277,8 @@ function Section({ editor, name, value, schema, edit, entity, state, focused = f
 
   return (
     <section aria-label={name} aria-current={focused || undefined} className="ludenea-component" onFocus={() => state?.set({ focused: name })}>
-      <h3 tabIndex={0} title={name}>
-        {shortName(name)}
+      <h3 tabIndex={title ? undefined : 0} title={name}>
+        {title ?? shortName(name)}
         {state && (
           <>
             {" "}
@@ -280,6 +290,28 @@ function Section({ editor, name, value, schema, edit, entity, state, focused = f
       {body}
       {error && <p className="ludenea-error">{error}</p>}
     </section>
+  );
+}
+
+/**
+ * How much of a value's RON text the inspector lays out: a resource such as the contact cache
+ * holds hundreds of kilobytes, which take the browser a frame's budget many times over to lay
+ * out, again on every change while playing.
+ */
+const RON_SHOWN = 2000;
+
+function RonText({ name, text }: { name: string; text: string }) {
+  const [all, setAll] = useState(false);
+  const hidden = all ? 0 : text.length - RON_SHOWN;
+  return (
+    <>
+      <pre aria-label={`${name} as RON`}>{hidden > 0 ? `${text.slice(0, RON_SHOWN)}…` : text}</pre>
+      {hidden > 0 && (
+        <p className="ludenea-muted">
+          {hidden.toLocaleString("en")} more characters. <button onClick={() => setAll(true)}>Show all</button>
+        </p>
+      )}
+    </>
   );
 }
 

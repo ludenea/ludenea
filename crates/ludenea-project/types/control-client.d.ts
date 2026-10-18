@@ -139,7 +139,8 @@ type Topic = {
     "type": "entity";
     entity: Entity;
 } | {
-    "type": "resources";
+    "type": "resource";
+    name: string;
 } | {
     "type": "introspection";
 } | {

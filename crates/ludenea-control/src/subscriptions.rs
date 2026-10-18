@@ -1,6 +1,6 @@
 //! What the host reports without being asked: the changes of subscribed entities and
-//! resources, computed from per-component hashes, and the introspection record of the
-//! ticks run while `Introspection` is subscribed.
+//! resources, computed from per-component and per-resource hashes, and the introspection
+//! record of the ticks run while `Introspection` is subscribed.
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -17,6 +17,10 @@ use crate::values::{component_value, resource_value};
 /// How many of the ticks run while `Introspection` is subscribed stay recorded.
 pub const INTROSPECTION_TICKS: usize = 600;
 
+/// How often, at most, a subscribed resource is pushed while playing: a resource such as the
+/// contact cache changes every tick, and its whole value is converted and sent each push.
+pub const RESOURCE_PUSHES_PER_SECOND: u32 = 10;
+
 /// How many of the last recorded ticks the system timings average.
 const TIMED_TICKS: usize = 60;
 
@@ -29,7 +33,15 @@ type Hashes = BTreeMap<String, u64>;
 pub(crate) struct Subscriptions {
     entities: Vec<EntitiesWatch>,
     entity: Vec<EntityWatch>,
-    resources: Option<Hashes>,
+    resources: Vec<ResourceWatch>,
+    /// Seconds played since resources were last checked for changes.
+    since_resources: f64,
+}
+
+struct ResourceWatch {
+    name: String,
+    /// `None` until its value is first pushed.
+    hash: Option<u64>,
 }
 
 struct EntitiesWatch {
@@ -46,8 +58,8 @@ struct EntityWatch {
 }
 
 impl Subscriptions {
-    /// Starts watching `topic` from the current state, which is not pushed. Subscribing
-    /// again to a watched topic changes nothing.
+    /// Starts watching `topic` from the current state, which is not pushed (except for a
+    /// resource). Subscribing again to a watched topic changes nothing else.
     pub(crate) fn subscribe(&mut self, topic: &Topic, sim: &Simulation) -> Result<(), FilterError> {
         let world = sim.world();
         match topic {
@@ -70,8 +82,15 @@ impl Subscriptions {
                     });
                 }
             }
-            Topic::Resources => {
-                self.resources.get_or_insert_with(|| resource_hashes(world));
+            // Unlike the others, the current value is pushed, again on a second subscription.
+            Topic::Resource { name } => {
+                match self.resources.iter_mut().find(|watch| watch.name == *name) {
+                    Some(watch) => watch.hash = None,
+                    None => self.resources.push(ResourceWatch {
+                        name: name.clone(),
+                        hash: None,
+                    }),
+                }
             }
             Topic::Introspection | Topic::Ghost | Topic::Divergence => {}
         }
@@ -82,14 +101,21 @@ impl Subscriptions {
         match topic {
             Topic::Entities { filter } => self.entities.retain(|watch| watch.text != *filter),
             Topic::Entity { entity } => self.entity.retain(|watch| watch.entity != *entity),
-            Topic::Resources => self.resources = None,
+            Topic::Resource { name } => self.resources.retain(|watch| watch.name != *name),
             Topic::Introspection | Topic::Ghost | Topic::Divergence => {}
         }
     }
 
+    /// Counts `seconds` of play toward the next check of the subscribed resources.
+    pub(crate) fn played(&mut self, seconds: f64) {
+        self.since_resources += seconds;
+    }
+
     /// The events describing what changed since the last call, for every watched topic.
-    /// Only the values whose hash changed are converted.
-    pub(crate) fn deltas(&mut self, sim: &Simulation) -> Vec<Event> {
+    /// Only the values whose hash changed are converted. While `playing`, resources are
+    /// checked at most `RESOURCE_PUSHES_PER_SECOND` times a second of play; once paused, at
+    /// every call, so the last value played is pushed.
+    pub(crate) fn deltas(&mut self, sim: &Simulation, playing: bool) -> Vec<Event> {
         let mut events = Vec::new();
         let world = sim.world();
         for watch in &mut self.entities {
@@ -134,17 +160,21 @@ impl Subscriptions {
             }
             watch.hashes = now;
         }
-        if let Some(before) = &mut self.resources {
+        let due = !playing || self.since_resources >= 1.0 / f64::from(RESOURCE_PUSHES_PER_SECOND);
+        if due && !self.resources.is_empty() {
+            self.since_resources = 0.0;
             let now = resource_hashes(world);
-            let resources: BTreeMap<_, _> = now
-                .iter()
-                .filter(|(name, hash)| before.get(*name) != Some(hash))
-                .map(|(name, _)| (name.clone(), resource_value(sim, name)))
-                .collect();
+            let mut resources = BTreeMap::new();
+            for watch in &mut self.resources {
+                let hash = now.get(&watch.name).copied();
+                if hash.is_some() && hash != watch.hash {
+                    watch.hash = hash;
+                    resources.insert(watch.name.clone(), resource_value(sim, &watch.name));
+                }
+            }
             if !resources.is_empty() {
                 events.push(Event::ResourcesChanged { resources });
             }
-            *before = now;
         }
         events
     }

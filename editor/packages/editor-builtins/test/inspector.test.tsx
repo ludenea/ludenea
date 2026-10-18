@@ -49,21 +49,47 @@ function edit(label: string, value: string, inside = component("ludenea::Collide
 describe("inspector", () => {
   afterEach(cleanup);
 
-  it("resources_follow_the_game_while_paused_and_reload_on_pause", async () => {
+  /** The resource topics subscribed and unsubscribed, in order. */
+  const resourceTopics = (game: { sent: Command[] }) =>
+    game.sent.filter((command) => (command.type === "subscribe" || command.type === "unsubscribe") && (command.topic as { type: string }).type === "resource").map((command) => `${command.type} ${(command.topic as { name: string }).name}`);
+  const time = (tick: number) => ({ type: "resources_changed", resources: { "ludenea::Time": json({ tick }) } });
+  const expand = (name: string) => act(() => screen.getByRole("button", { name, expanded: false }).click());
+
+  it("a_resource_follows_the_game_only_while_expanded_even_while_playing", async () => {
     const { host, game } = await inspector();
-    const subscriptions = () =>
-      game.sent.filter((command) => (command.type === "subscribe" || command.type === "unsubscribe") && (command.topic as { type: string }).type === "resources").map((command) => command.type);
-    expect(subscriptions()).toEqual(["subscribe"]);
+    // Collapsed: nothing is subscribed, nothing shown.
+    expect(resourceTopics(game)).toEqual([]);
+    expect(component("ludenea::Time").queryByLabelText("tick")).toBeNull();
 
-    // Playing: every tick may change a resource, and pushing them all would hold the game up.
+    await expand("Time");
+    await settle();
+    expect(resourceTopics(game)).toEqual(["subscribe ludenea::Time"]);
+    act(() => game.push(time(3)));
+    expect((component("ludenea::Time").getByLabelText("tick") as HTMLInputElement).value).toBe("3");
+
     act(() => host.editor.timeline.setState({ playing: true }));
-    await settle();
-    expect(subscriptions()).toEqual(["subscribe", "unsubscribe"]);
+    act(() => game.push(time(9)));
+    expect((component("ludenea::Time").getByLabelText("tick") as HTMLInputElement).value).toBe("9");
+    expect(resourceTopics(game)).toEqual(["subscribe ludenea::Time"]);
 
-    game.sent.length = 0;
-    act(() => host.editor.timeline.setState({ playing: false }));
+    await act(() => screen.getByRole("button", { name: "Time", expanded: true }).click());
     await settle();
-    expect(game.sent.map((command) => command.type)).toEqual(expect.arrayContaining(["subscribe", "get_resources"]));
+    expect(resourceTopics(game)).toEqual(["subscribe ludenea::Time", "unsubscribe ludenea::Time"]);
+    expect(component("ludenea::Time").queryByLabelText("tick")).toBeNull();
+  });
+
+  it("an_expanded_resource_stays_expanded_when_the_panel_shows_again", async () => {
+    const { host, game } = await inspector();
+    await expand("Time");
+    await settle();
+
+    // The shell unmounts a panel while its tab is hidden.
+    cleanup();
+    renderPanel(host, "ludenea.inspector");
+    await settle();
+
+    expect(screen.getByRole("button", { name: "Time", expanded: true })).toBeTruthy();
+    expect(resourceTopics(game)).toEqual(["subscribe ludenea::Time", "unsubscribe ludenea::Time", "subscribe ludenea::Time"]);
   });
 
   it("editing_newtype_variant_field_sends_set_field_with_path", async () => {
@@ -115,8 +141,25 @@ describe("inspector", () => {
     expect(host.editor.selection.getState().entities).toEqual([]);
   });
 
+  it("a_large_ron_value_shows_its_start_until_asked_for_all", async () => {
+    const { game } = await inspector();
+    await expand("Time");
+    const text = `(pairs: {${"(1, 2): (touching: true), ".repeat(200)}})`;
+    act(() => game.push({ type: "resources_changed", resources: { "ludenea::Time": { type: "ron", text } } }));
+
+    const shown = component("ludenea::Time").getByLabelText("ludenea::Time as RON").textContent!;
+    expect(shown.length).toBeLessThan(text.length);
+    expect(text.startsWith(shown.slice(0, -1))).toBe(true);
+    expect(component("ludenea::Time").getByText(/more characters/)).toBeTruthy();
+
+    fireEvent.click(component("ludenea::Time").getByRole("button", { name: "Show all" }));
+    expect(component("ludenea::Time").getByLabelText("ludenea::Time as RON").textContent).toBe(text);
+  });
+
   it("time_resource_is_read_only", async () => {
-    await inspector();
+    const { game } = await inspector();
+    await expand("Time");
+    act(() => game.push(time(3)));
     expect((component("ludenea::Time").getByLabelText("tick") as HTMLInputElement).readOnly).toBe(true);
   });
 

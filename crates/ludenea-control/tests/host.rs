@@ -422,7 +422,9 @@ fn every_command_and_reply_round_trips_through_json() {
             topic: Topic::Entity { entity },
         },
         Command::Subscribe {
-            topic: Topic::Resources,
+            topic: Topic::Resource {
+                name: "ludenea::Time".into(),
+            },
         },
         Command::Unsubscribe {
             topic: Topic::Introspection,

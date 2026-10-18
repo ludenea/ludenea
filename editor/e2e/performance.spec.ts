@@ -1,6 +1,6 @@
 import { copyFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { button, collectErrors, expectTick, openScene, repository, seek, serveProject, timeline, waitForGame, type ServedProject } from "./project";
 
 declare global {
@@ -10,6 +10,8 @@ declare global {
     /** Each tick the timeline showed, with when it first showed it, sampled every frame. */
     __ticksShown?: { tick: number; at: number }[];
     __stopFrames?: () => void;
+    /** How many times the shown contact cache changed while frames were recorded. */
+    __cacheChanges?: number;
   }
 }
 
@@ -21,19 +23,25 @@ const strict = process.env.PERF_STRICT === "1";
 
 let served: ServedProject;
 
-test.beforeAll(async () => {
+// A project each: a stored session of the bench scene would bring its branches back.
+test.beforeEach(async () => {
   expect(existsSync(BENCH_SCENE), `${BENCH_SCENE} is missing: run cargo run -p boxes --bin editor-bench`).toBe(true);
   served = await serveProject("bench_game", 4314, (root) => copyFileSync(BENCH_SCENE, join(root, "scenes/bench.scene.ron")));
 });
 
-test.afterAll(() => served?.stop());
+test.afterEach(() => served?.stop());
 
 const percentile = (values: number[], fraction: number) => {
   const sorted = [...values].sort((a, b) => a - b);
   return sorted[Math.min(sorted.length - 1, Math.floor(fraction * sorted.length))] ?? Infinity;
 };
 
-test("the UI stays at 60 fps with 100,000 entities, a branch, and the ghost", async ({ page }) => {
+/**
+ * Opens the bench scene, selects a dynamic body in the inspector (as while editing), forks a
+ * branch by moving it at a past tick, shows the parent branch as the ghost, then plays for
+ * `PLAY_MS` while recording frame times. `beforePlay` runs just before Play.
+ */
+async function playWithBranchAndGhost(page: Page, beforePlay: () => Promise<void> = async () => {}) {
   const errors = collectErrors(page);
   const opened = Date.now();
   await page.goto(served.url);
@@ -68,6 +76,7 @@ test("the UI stays at 60 fps with 100,000 entities, a branch, and the ghost", as
   await compare.getByRole("button", { name: "Compare" }).click();
   await expect(lanes.nth(0)).toContainText("compare");
 
+  await beforePlay();
   const start = await timeline(page);
   await page.evaluate(() => {
     const times: number[] = [];
@@ -80,6 +89,11 @@ test("the UI stays at 60 fps with 100,000 entities, a branch, and the ghost", as
       }
       return undefined;
     };
+    // Counts the changes of the contact cache's section, when the inspector shows it.
+    window.__cacheChanges = 0;
+    const cache = document.querySelector('section[aria-label="ludenea::ContactCache"]');
+    const observer = new MutationObserver(() => window.__cacheChanges!++);
+    if (cache) observer.observe(cache, { childList: true, subtree: true, characterData: true });
     let last = performance.now();
     let running = true;
     const frame = (now: number) => {
@@ -98,13 +112,14 @@ test("the UI stays at 60 fps with 100,000 entities, a branch, and the ghost", as
     window.__ticksShown = ticks;
     window.__stopFrames = () => {
       running = false;
+      observer.disconnect();
     };
   });
   await button(page, "Play").click();
   await page.waitForTimeout(PLAY_MS);
-  const { frames, ticks } = await page.evaluate(() => {
+  const { frames, ticks, cacheChanges } = await page.evaluate(() => {
     window.__stopFrames!();
-    return { frames: window.__frameTimes!, ticks: window.__ticksShown! };
+    return { frames: window.__frameTimes!, ticks: window.__ticksShown!, cacheChanges: window.__cacheChanges! };
   });
   await button(page, "Pause").click();
   await expect(button(page, "Play")).toBeVisible();
@@ -121,8 +136,22 @@ test("the UI stays at 60 fps with 100,000 entities, a branch, and the ghost", as
 
   expect(frames.length).toBeGreaterThan(0);
   expect(errors).toEqual([]);
-  if (strict) {
-    expect(p95, report).toBeLessThanOrEqual(17);
-    expect(interactiveMs, report).toBeLessThan(2000);
-  }
+  if (strict) expect(p95, report).toBeLessThanOrEqual(17);
+  return { interactiveMs, report, cacheChanges };
+}
+
+test("the UI stays at 60 fps with 100,000 entities, a branch, and the ghost", async ({ page }) => {
+  const { interactiveMs, report } = await playWithBranchAndGhost(page);
+  if (strict) expect(interactiveMs, report).toBeLessThan(2000);
+});
+
+test("the UI stays at 60 fps while the inspector follows the contact cache", async ({ page }) => {
+  const cache = page.getByRole("region", { name: "ludenea::ContactCache" });
+  const { cacheChanges } = await playWithBranchAndGhost(page, async () => {
+    await page.getByRole("tab", { name: "Inspector" }).click();
+    await page.getByRole("button", { name: "ContactCache", expanded: false }).click();
+    await expect(cache.getByLabel("ludenea::ContactCache as RON")).toBeVisible();
+  });
+  // The shown values change while playing, not only once paused.
+  expect(cacheChanges).toBeGreaterThan(1);
 });

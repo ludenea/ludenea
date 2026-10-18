@@ -11,7 +11,8 @@ import { InspectorPanel } from "./InspectorPanel";
 export type AddDraft = { chosen: string; draft: { component: string; value: JsonValue } | null; error: string | null };
 
 /** What the inspector's commands and panel share; kept here while the panel is hidden. */
-export type InspectorState = Store<{ focused: string | null; adding: AddDraft | null }>;
+/** `expanded`: the resources whose section is open, the only ones that follow the game. */
+export type InspectorState = Store<{ focused: string | null; adding: AddDraft | null; expanded: string[] }>;
 
 /** Runs a request on the selection; `NoSuchEntity` (seeked before its spawn) clears the selection. */
 export async function onEntity<T>(editor: Editor, request: Promise<T>): Promise<T> {
@@ -26,7 +27,7 @@ export async function onEntity<T>(editor: Editor, request: Promise<T>): Promise<
 export const inspectorPlugin = definePlugin({
   name: "ludenea.inspector",
   activate(editor) {
-    const state: InspectorState = createStore({ focused: null as string | null, adding: null as AddDraft | null });
+    const state: InspectorState = createStore({ focused: null as string | null, adding: null as AddDraft | null, expanded: [] as string[] });
     const target = () => {
       const control = editor.control;
       if (!control) throw new Error("no game is running");

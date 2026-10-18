@@ -33,4 +33,4 @@ pub use protocol::{
     RecordedEvent, Reply, ServerMessage, SyncPoint, SystemRow, Topic,
 };
 pub use session::{Document, Resimulation, Session, SessionError, SessionExport, Timeline};
-pub use subscriptions::INTROSPECTION_TICKS;
+pub use subscriptions::{INTROSPECTION_TICKS, RESOURCE_PUSHES_PER_SECOND};

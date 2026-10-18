@@ -341,7 +341,21 @@ fn entity_subscription_pushes_only_changed_components() {
         [(vec![], vec!["boxes::Crate".to_string()])]
     );
 
-    subscribe(&mut host, Topic::Resources);
+    subscribe(
+        &mut host,
+        Topic::Resource {
+            name: "boxes::ContactStats".into(),
+        },
+    );
+    // Its value as subscribed, then nothing until it changes.
+    assert_eq!(
+        resource_changes(&host.advance(0.0)),
+        [vec!["boxes::ContactStats".to_string()]]
+    );
+    assert_eq!(
+        resource_changes(&host.advance(0.0)),
+        Vec::<Vec<String>>::new()
+    );
     ok(
         &mut host,
         Command::SetField {
@@ -367,6 +381,113 @@ fn entity_subscription_pushes_only_changed_components() {
         resources[0].keys().collect::<Vec<_>>(),
         ["boxes::ContactStats"]
     );
+}
+
+/// The names of the resources each `ResourcesChanged` among `events` carries.
+fn resource_changes(events: &[Event]) -> Vec<Vec<String>> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            Event::ResourcesChanged { resources } => Some(resources.keys().cloned().collect()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn resource_subscription_pushes_only_the_subscribed_resource() {
+    let mut host = loaded(20);
+    subscribe(
+        &mut host,
+        Topic::Resource {
+            name: "ludenea::Time".into(),
+        },
+    );
+    host.advance(0.0);
+
+    // Every tick changes `ludenea::Time` and the contact cache: only the first is pushed.
+    step(&mut host, 1);
+    assert_eq!(
+        resource_changes(&host.advance(0.0)),
+        [vec!["ludenea::Time".to_string()]]
+    );
+    // A second subscriber gets the current value too.
+    subscribe(
+        &mut host,
+        Topic::Resource {
+            name: "ludenea::Time".into(),
+        },
+    );
+    assert_eq!(
+        resource_changes(&host.advance(0.0)),
+        [vec!["ludenea::Time".to_string()]]
+    );
+
+    ok(
+        &mut host,
+        Command::Unsubscribe {
+            topic: Topic::Resource {
+                name: "ludenea::Time".into(),
+            },
+        },
+    );
+    step(&mut host, 1);
+    assert_eq!(
+        resource_changes(&host.advance(0.0)),
+        Vec::<Vec<String>>::new()
+    );
+}
+
+#[test]
+fn resource_subscription_to_an_unknown_resource_fails() {
+    let mut host = loaded(20);
+    let error = host
+        .handle(Command::Subscribe {
+            topic: Topic::Resource {
+                name: "boxes::Missing".into(),
+            },
+        })
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::UnknownResource);
+    assert!(
+        error.message.contains("boxes::Missing"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
+fn resource_pushes_are_capped_while_playing_and_catch_up_once_paused() {
+    let mut host = loaded(120);
+    subscribe(
+        &mut host,
+        Topic::Resource {
+            name: "ludenea::Time".into(),
+        },
+    );
+    host.advance(0.0);
+    ok(&mut host, Command::Play);
+    let mut pushes = 0;
+    for _ in 0..61 {
+        pushes += resource_changes(&host.advance(1.0 / 60.0)).len();
+    }
+    // One second of play: `ludenea::Time` changes every tick, pushed at most 10 times.
+    assert!(
+        (1..=RESOURCE_PUSHES_PER_SECOND as usize).contains(&pushes),
+        "{pushes} pushes"
+    );
+
+    ok(&mut host, Command::Pause);
+    let tick = host.tick();
+    let events = host.advance(0.0);
+    let pushed = events.iter().find_map(|event| match event {
+        Event::ResourcesChanged { resources } => resources.get("ludenea::Time").cloned(),
+        _ => None,
+    });
+    let Some(ComponentValue::Json { value }) = pushed else {
+        panic!("the last value is pushed once paused: {events:?}");
+    };
+    assert_eq!(value["tick"], json!(tick));
 }
 
 #[test]

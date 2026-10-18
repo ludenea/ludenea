@@ -436,8 +436,9 @@ pub enum Topic {
     Entities { filter: String },
     /// `EntityChanged` with the components that changed, `EntityDespawned` when it dies.
     Entity { entity: Entity },
-    /// `ResourcesChanged` with the resources that changed.
-    Resources,
+    /// `ResourcesChanged` with the resource `name`: its value as subscribed, then each time it
+    /// changes, at most `RESOURCE_PUSHES_PER_SECOND` times a second while playing.
+    Resource { name: String },
     /// Records the events, commands, and system timings of the ticks run while subscribed.
     Introspection,
     /// Runs the compare simulation toward the current tick; `GhostAdvanced` when it moves.
