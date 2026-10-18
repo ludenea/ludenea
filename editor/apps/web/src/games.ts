@@ -56,7 +56,10 @@ export function followWasmGames(project: ProjectClient, app: App, start: (glueUr
 /**
  * Desktop: connects to each native game process `GameReady` announces, over the fresh
  * control transport `connect` opens. On `GameRebuilt` the old game still runs: its session
- * is exported, then `RestartGame` swaps the processes, and the new game loads it.
+ * is exported, then `RestartGame` swaps the processes, and the new game loads it, losing
+ * nothing. Only when the old process already exited (the native host recovers from panics, so
+ * an abort or a kill) does the export fail: the new game then loads the guard's last export,
+ * up to one second of play old.
  */
 export function followNativeGames(project: ProjectClient, app: App, connect: () => Promise<MessageTransport>): void {
   let running: { control: ControlClient; guard: SessionGuard } | null = null;
