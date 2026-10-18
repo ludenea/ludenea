@@ -383,6 +383,7 @@ describe("data assets, replays, traces, and snapshots", () => {
 
   async function project(options: { current?: number; answer?: (command: { type: string; [key: string]: unknown }) => object | undefined } = {}) {
     const { current = 0, answer = () => undefined } = options;
+    const onDisk = { scene: "(scene)" };
     const game = await testGame(
       (command) => {
         const reply = answer(command);
@@ -417,7 +418,7 @@ describe("data assets, replays, traces, and snapshots", () => {
     );
     const host = await testEditor(builtinPlugins, (request) => {
       if (request.type === "list_files") return { type: "files", entries: files };
-      if (request.type === "read_text") return { type: "text", text: "(scene)" };
+      if (request.type === "read_text") return { type: "text", text: onDisk.scene };
       if (request.type === "read_binary") return { type: "bytes", bytes: "cmVwbGF5" };
       if (request.type === "read_asset_texts") return { type: "asset_texts", assets: disk, paths: [] };
       if (request.type === "load_stored_session") return { type: "stored_session", bytes: null };
@@ -428,7 +429,7 @@ describe("data assets, replays, traces, and snapshots", () => {
     act(() => host.setControl(game.client));
     renderPanel(host, "ludenea.assets");
     await settle();
-    return { host, game };
+    return { host, game, onDisk };
   }
 
   const newDataAsset = async (type: string, path: string) => {
@@ -646,5 +647,40 @@ describe("data assets, replays, traces, and snapshots", () => {
     expect(screen.queryByRole("alert")).toBeNull();
     expect(loadSessions(game.sent).at(-1)).toMatchObject({ assets: [[SETTINGS, "(session settings)"], [SWORD, "(disk sword)"]] });
     expect(host.editor.document.getState().unsavedAssets).toEqual([SETTINGS]);
+  });
+
+  it("a_scene_changed_on_disk_keeps_an_unsaved_asset_edit", async () => {
+    const { host, game, onDisk } = await unsavedEdits();
+    onDisk.scene = "(scene changed)";
+    act(() => host.project.push({ type: "files_changed", changes: [{ Changed: { path: SCENE, kind: "Scene" } }] }));
+    await settle();
+    await settle();
+
+    expect(game.sent.filter((command) => command.type === "replace_scene")).toEqual([
+      { type: "replace_scene", scene: "(scene changed)", assets: [[SETTINGS, "(session settings)"], [SWORD, "(session sword)"]] },
+    ]);
+    expect(host.editor.document.getState().unsavedAssets).toEqual([SETTINGS, SWORD]);
+    expect(screen.getByLabelText("unsaved changes")).toBeTruthy();
+  });
+
+  it("the_asset_section_refetches_on_changes_not_on_every_tick", async () => {
+    const { host, game } = await project({ current: 40 });
+    renderPanel(host, "ludenea.inspector");
+    fireEvent.click(screen.getByText("settings.ron"));
+    await settle();
+    const fetches = () => game.sent.filter((command) => command.type === "get_asset").length;
+    const before = fetches();
+
+    for (const tick of [41, 42, 43]) act(() => game.push({ type: "ticked", tick, hash: "00000000000000aa", pending: false, playing: true, effective_rate: 60 }));
+    await settle();
+    expect(fetches()).toBe(before);
+
+    act(() => game.push({ type: "timeline_changed", timeline: { ...timeline(43), undo_label: "Undo edit at tick 20", can_undo: true } }));
+    await settle();
+    expect(fetches()).toBe(before + 1);
+
+    act(() => game.push({ type: "timeline_changed", timeline: { ...timeline(43), undo_label: "Undo edit at tick 20", can_undo: true, branch: 1 } }));
+    await settle();
+    expect(fetches()).toBe(before + 2);
   });
 });

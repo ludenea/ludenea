@@ -181,6 +181,20 @@ export function createDocumentStore(options: {
     throw error;
   };
 
+  /**
+   * The project's `fresh` asset texts, with the `session`'s text of each unsaved asset instead,
+   * and `kept`, which filters a later unsaved list: an unsaved asset the session no longer holds
+   * has nothing left to save (one marked meanwhile stays).
+   */
+  const keepingUnsaved = (fresh: [AssetId, string][], session: [AssetId, string][]) => {
+    const unsaved = store.getState().unsavedAssets;
+    const texts = new Map(session.filter(([id]) => unsaved.includes(id)));
+    return {
+      assets: fresh.map(([id, text]): [AssetId, string] => [id, texts.get(id) ?? text]),
+      kept: (now: AssetId[]) => now.filter((id) => texts.has(id) || !unsaved.includes(id)),
+    };
+  };
+
   const readTexts = () => project.request({ type: "read_asset_texts" }).then(({ assets, paths }) => ({ assets, paths }));
   const load = (game: ControlClient, document: OpenDocument, text: string | null, source: { texts: typeof texts; replay: string }): Promise<Reply> => {
     const command: Command =
@@ -263,9 +277,12 @@ export function createDocumentStore(options: {
       serial(async () => {
         const fresh = await readTexts();
         const game = control();
-        const loaded = game && (await game.request({ type: "replace_scene", scene: text, assets: fresh.assets }).catch(locatedIn(fresh.paths)));
+        // The session's texts are only needed to keep those of unsaved assets.
+        const session = game && get().unsavedAssets.length > 0 ? (await exportSession(game)).load.assets : [];
+        const { assets, kept } = keepingUnsaved(fresh.assets, session);
+        const loaded = game && (await game.request({ type: "replace_scene", scene: text, assets }).catch(locatedIn(fresh.paths)));
         texts = fresh;
-        set({ text, error: null, ...(loaded && { loaded: loadedIn(loaded) }) });
+        set({ text, error: null, ...(loaded && { loaded: loadedIn(loaded) }), ...(game && { unsavedAssets: kept(get().unsavedAssets) }) });
       }).catch(reported("Cannot reload the scene")),
     reloadAssets: () => reloadAssets(),
     store: () => sessions.store(),
@@ -285,13 +302,10 @@ export function createDocumentStore(options: {
       let saved: SavedSession | null = null;
       if (document && game) {
         const exported = await exportSession(game);
-        const unsaved = store.getState().unsavedAssets;
-        const kept = new Map(exported.load.assets.filter(([id]) => unsaved.includes(id)));
-        const assets = fresh.assets.map(([id, text]): [AssetId, string] => [id, kept.get(id) ?? text]);
+        const { assets, kept } = keepingUnsaved(fresh.assets, exported.load.assets);
         saved = { ...exported, load: { ...exported.load, assets } };
         const loaded = loadedIn(await game.request(saved.load).catch(locatedIn(fresh.paths)));
-        // An unsaved asset the session no longer holds has nothing left to save.
-        store.setState({ loaded, unsavedAssets: store.getState().unsavedAssets.filter((id) => kept.has(id) || !unsaved.includes(id)), error: null });
+        store.setState({ loaded, unsavedAssets: kept(store.getState().unsavedAssets), error: null });
       }
       texts = fresh;
       return game && saved && { game, saved };
