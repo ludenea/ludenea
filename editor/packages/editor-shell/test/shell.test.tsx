@@ -1,6 +1,6 @@
 import { act, cleanup, render } from "@testing-library/react";
 import { useEffect } from "react";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { Shell } from "../src/app";
 import { testHost } from "./support";
 
@@ -16,7 +16,10 @@ beforeAll(() => {
 });
 
 describe("shell", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
 
   it("panel_in_a_hidden_tab_is_unmounted", async () => {
     const host = await testHost();
@@ -37,5 +40,20 @@ describe("shell", () => {
 
     await act(() => host.editor.commands.run("panels.open.first"));
     expect([...mounted]).toEqual(["first"]);
+  });
+
+  it("panel_whose_open_command_is_taken_is_reported_and_still_shown", async () => {
+    const host = await testHost();
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    host.editor.commands.register({ id: "panels.open.first", title: "Taken", run() {} });
+    render(<Shell host={host} />);
+    await act(() => Promise.resolve());
+    // Registered after the dock is ready: synced in a microtask.
+    host.editor.panels.register({ id: "first", title: "First", component: () => <p>first</p> });
+    host.editor.panels.register({ id: "second", title: "Second", component: () => <p>second</p> });
+    await act(() => Promise.resolve());
+
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('"panels.open.first"'));
+    expect(host.editor.commands.list().map(({ id }) => id)).toContain("panels.open.second");
   });
 });

@@ -88,7 +88,13 @@ export function Shell({ host }: { host: EditorHost }) {
           sync();
           api.getPanel(id)?.api.setActive();
         };
-        openCommands.set(id, { title, command: editor.commands.register({ id: `panels.open.${id}`, title: `Show ${title} panel`, run }) });
+        // Another plugin holding the id must not stop the sync (it runs in a microtask).
+        try {
+          openCommands.set(id, { title, command: editor.commands.register({ id: `panels.open.${id}`, title: `Show ${title} panel`, run }) });
+        } catch (error) {
+          openCommands.delete(id);
+          console.error(`panel "${id}" has no "panels.open.${id}" command: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
     };
     // A reload disposes and re-registers in one synchronous step; syncing after it keeps the layout.
