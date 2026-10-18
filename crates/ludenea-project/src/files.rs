@@ -227,7 +227,8 @@ impl Project {
     }
 
     /// Every prefab and data asset under `scenes/` and `assets/`, read like the CLI reads a
-    /// project (see [`read_assets`]).
+    /// project (see [`read_assets`]), except that a file whose meta is unreadable is left
+    /// out, so the others still load: [`Project::files`] reports it as `InvalidMeta`.
     pub fn asset_texts(&self) -> Result<Vec<FoundAsset>, ProjectError> {
         let mut files = Vec::new();
         for directory in ASSET_DIRECTORIES {
@@ -238,6 +239,10 @@ impl Project {
             .map(|path| {
                 let file = self.root.join(&path);
                 (path, file)
+            })
+            .filter(|(_, file)| {
+                let meta = meta_path(file);
+                !meta.is_file() || Meta::read(&meta).is_ok()
             })
             .collect();
         read_assets(files).map_err(ProjectError::Assets)
@@ -277,7 +282,8 @@ impl Project {
 
     /// Writes `bytes` to a synced temporary file in `.ludenea/` (unwatched, on the same file
     /// system), then puts it at `file` in one step: renamed over it when `replace`, else
-    /// linked there, which fails with `AlreadyExists` if `file` exists.
+    /// linked there, which fails with `AlreadyExists` if `file` exists. Where hard links are
+    /// not supported, a new file is created there and written instead.
     fn place(&self, file: &Path, bytes: &[u8], replace: bool) -> Result<(), ProjectError> {
         static WRITES: AtomicU64 = AtomicU64::new(0);
         let parent = file.parent().expect("a project file has a parent");
@@ -299,7 +305,19 @@ impl Project {
                 let placed = if replace {
                     fs::rename(&temporary, file)
                 } else {
-                    fs::hard_link(&temporary, file)
+                    fs::hard_link(&temporary, file).or_else(|error| match error.kind() {
+                        io::ErrorKind::AlreadyExists => Err(error),
+                        // ponytail: without hard links (FAT, some network shares) the new
+                        // file is written in place, so a crash mid-write can truncate it.
+                        _ => File::options()
+                            .write(true)
+                            .create_new(true)
+                            .open(file)
+                            .and_then(|mut created| {
+                                created.write_all(bytes)?;
+                                created.sync_all()
+                            }),
+                    })
                 };
                 placed.map_err(|error| match error.kind() {
                     io::ErrorKind::AlreadyExists => ProjectError::AlreadyExists(file.to_path_buf()),
@@ -381,8 +399,14 @@ impl Tracked {
         // Directories created in this batch, maybe after being removed in it too: their old
         // watch is gone even though they are still listed as watched.
         let mut recreated = BTreeSet::new();
+        // Files whose meta changed: the meta decides whether a file is a data asset.
+        let mut described = BTreeSet::new();
         for event in events {
             for path in &event.paths {
+                let file = path.file_name().and_then(|name| name.to_str());
+                if let Some(file) = file.and_then(|name| name.strip_suffix(".meta")) {
+                    described.extend(relative_path(&self.root, &path.with_file_name(file)));
+                }
                 touched.extend(relative_path(&self.root, path));
                 if matches!(event.kind, EventKind::Create(_)) {
                     recreated.insert(path.clone());
@@ -460,6 +484,22 @@ impl Tracked {
                 }
             };
             changes.push(change);
+        }
+        for relative in described {
+            let Some(known) = self.known.get_mut(&relative) else {
+                continue;
+            };
+            let kind = kind_on_disk(&self.root, &relative);
+            if *known != kind {
+                *known = kind.clone();
+                let stamp = stamp(&self.root.join(&relative));
+                self.reported
+                    .insert(relative.clone(), (kind.clone(), stamp));
+                changes.push(FileChange::Changed {
+                    path: relative,
+                    kind,
+                });
+            }
         }
         changes
     }
@@ -661,6 +701,36 @@ mod tests {
         assert_eq!(tracked.changes(&[modified()]), []);
         fs::write(&scene, "after again").unwrap();
         assert_eq!(tracked.changes(&[modified()]), [changed]);
+    }
+
+    /// A meta that makes a file a data asset changes the file's kind, once.
+    #[test]
+    fn a_meta_change_reports_its_file_with_the_new_kind() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let stats = dir.path().join("stats.ron");
+        fs::write(&stats, "(damage: 3)").unwrap();
+        let mut tracked = tracked(dir.path());
+        tracked.known.insert("stats.ron".into(), AssetKind::Other);
+        let meta = dir.path().join("stats.ron.meta");
+        fs::write(
+            &meta,
+            "Meta(version: 1, id: \"0000000000000000000000000000002a\", kind: Data(type: \"demo::Stats\"))",
+        )
+        .unwrap();
+        let modified =
+            || Event::new(EventKind::Modify(notify::event::ModifyKind::Any)).add_path(meta.clone());
+        let data = AssetKind::Data {
+            r#type: "demo::Stats".into(),
+        };
+        assert_eq!(
+            tracked.changes(&[modified()]),
+            [FileChange::Changed {
+                path: "stats.ron".into(),
+                kind: data.clone()
+            }]
+        );
+        assert_eq!(tracked.changes(&[modified()]), []);
+        assert_eq!(tracked.known["stats.ron"], data);
     }
 
     #[test]

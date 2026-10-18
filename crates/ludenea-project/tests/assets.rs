@@ -201,6 +201,25 @@ fn asset_texts_wrap_data_assets_with_their_type_in_path_order() {
 }
 
 #[test]
+fn an_unreadable_meta_leaves_out_only_its_own_asset() {
+    let dir = TempDir::new().unwrap();
+    let mut service = project(
+        &dir,
+        &[
+            ("assets/good.prefab.ron", "Prefab(version: 1)"),
+            ("assets/good.prefab.ron.meta", &meta(1, "Prefab")),
+            ("assets/broken.prefab.ron", "Prefab(version: 1)"),
+            ("assets/broken.prefab.ron.meta", "Meta("),
+        ],
+    );
+    let texts = asset_texts(&mut service).unwrap();
+    assert_eq!(
+        texts.assets,
+        [(AssetId(1), "Prefab(version: 1)".to_string())]
+    );
+}
+
+#[test]
 fn duplicate_identifiers_are_refused_naming_both_files() {
     let dir = TempDir::new().unwrap();
     let mut service = project(
@@ -315,6 +334,11 @@ fn broken_data_asset_is_refused_and_previous_value_kept() {
         (
             "(every_ticks: 60 impulse: (x: 4.0, y: 2.0))\n",
             "1:18: Expected comma",
+        ),
+        // Columns count characters, so a non-ASCII one before the error counts once.
+        (
+            "(/* é */ every_ticks: 60 impulse: (x: 4.0, y: 2.0))\n",
+            "1:26: Expected comma",
         ),
     ];
     for (text, position) in broken {
