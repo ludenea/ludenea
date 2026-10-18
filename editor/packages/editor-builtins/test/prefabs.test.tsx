@@ -5,17 +5,19 @@ import { builtinPlugins } from "../src";
 import { Field } from "../src/inspector/fields/Field";
 import { renderPanel, settle, testEditor, testGame } from "./support";
 
+// The project template's shape: `scenes/main.scene.ron` holds instances 4 and 5 of
+// `assets/ball.prefab.ron`, and instance 5 overrides its entity 0's `position.x`.
 const SCENE = "0000000000000000000000000000000a";
 const OTHER_SCENE = "0000000000000000000000000000000b";
-const CRATE = "38b36be4f8a140d695e5cdac24c82f90";
+const BALL = "6c90cde358504084bfb84f6d1d83c6d9";
 const STATS = "bef617c9e94d41c4b0e07882849cef18";
 const CREATED = "0000000000000000000000000000000c";
 const files = [
   { path: "scenes/main.scene.ron", id: SCENE, kind: "Scene" },
   { path: "scenes/other.scene.ron", id: OTHER_SCENE, kind: "Scene" },
-  { path: "assets/crate.prefab.ron", id: CRATE, kind: "Prefab" },
+  { path: "assets/ball.prefab.ron", id: BALL, kind: "Prefab" },
   { path: "assets/new.prefab.ron", id: "0000000000000000000000000000000d", kind: "Prefab" },
-  { path: "assets/spawner.ron", id: STATS, kind: { Data: { type: "boxes::SpawnerStats" } } },
+  { path: "assets/settings.ron", id: STATS, kind: { Data: { type: "my_game::Settings" } } },
   { path: "assets/logo.png", id: "0000000000000000000000000000000e", kind: "Other" },
 ];
 
@@ -23,32 +25,26 @@ const entity = (index: number) => ({ index, generation: 0 });
 const field = (name: string): PathSegment => ({ type: "field", name });
 const f32 = { kind: "f32" } as const;
 const vec2: TypeSchema = { kind: "struct", name: "ludenea_math::Vec2", fields: [{ name: "x", schema: f32 }, { name: "y", schema: f32 }] };
-const pose: TypeSchema = { kind: "struct", name: "ludenea::Pose", fields: [{ name: "position", schema: vec2 }] };
+const rotation: TypeSchema = { kind: "struct", name: "ludenea_math::Rot", fields: [{ name: "cos", schema: f32 }, { name: "sin", schema: f32 }] };
+const pose: TypeSchema = { kind: "struct", name: "ludenea::Pose", fields: [{ name: "position", schema: vec2 }, { name: "rotation", schema: rotation }] };
+const POSE = "ludenea::Pose";
 
-// Instance 5 of the crate prefab spawned entity 5; its override sets the position's `x`.
-const instances = [{ address: [5], prefab: CRATE, entities: [entity(5)] }];
-const loadAddresses = [
-  [entity(0), [0]],
-  [entity(5), [5, 0]],
-];
-const scene = `Scene(
-    version: 2,
-    next_id: 6,
-    entities: [
-    (id: 0, components: {"ludenea::Pose": (position:(x:0.0,y:0.0))}),
-    ],
-    instances: [
-    (id: 5, prefab: "${CRATE}", overrides: [(entity: [0], component: "ludenea::Pose", path: [(type: "field", name: "position"), (type: "field", name: "x")], value: 5.0)]),
-    ],
-)`;
-
+type Override = { entity: number[]; component: string; path: PathSegment[]; stale: boolean };
+const override = (...path: string[]): Override => ({ entity: [0], component: POSE, path: path.map(field), stale: false });
+const loadAddresses = [0, 1, 2, 3, 4, 5].map((index) => [entity(index), index < 4 ? [index] : [index, 0]]);
 beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, "offsetHeight", { configurable: true, get: () => 400 });
   Object.defineProperty(HTMLElement.prototype, "offsetWidth", { configurable: true, get: () => 300 });
 });
 
 /** The editor with every built-in plugin and a game that opened `main.scene.ron` with `warnings`. */
-async function editor(options: { warnings?: string[]; refuse?: (scene: string) => string | null } = {}) {
+async function editor(options: { warnings?: string[]; refuse?: (scene: string) => string | null; overrides?: Override[] } = {}) {
+  // What the host reports of instance 5's overrides; a field edit on its entity adds one.
+  const held = { overrides: options.overrides ?? [override("position", "x")] };
+  const instances = () => [
+    { address: [4], prefab: BALL, entities: [entity(4)], overrides: [] },
+    { address: [5], prefab: BALL, entities: [entity(5)], overrides: held.overrides },
+  ];
   const project = await testEditor(builtinPlugins, (request) => {
     if (request.type === "list_files") return { type: "files", entries: files };
     if (request.type === "read_text") return { type: "text", text: `(${request.path as string})` };
@@ -58,30 +54,33 @@ async function editor(options: { warnings?: string[]; refuse?: (scene: string) =
     if (request.type === "info") return undefined;
     return { type: "done" };
   });
-  const loaded = { type: "loaded", warnings: options.warnings ?? [], instances, load_addresses: loadAddresses };
+  const loaded = () => ({ type: "loaded", warnings: options.warnings ?? [], instances: instances(), load_addresses: loadAddresses });
   const game = await testGame(
     (command) => {
       if (command.type === "load_scene") {
         const message = options.refuse?.(command.scene as string);
-        return message ? { error: { code: "invalid_scene", message } } : loaded;
+        return message ? { error: { code: "invalid_scene", message } } : loaded();
       }
-      if (command.type === "get_instances") return { type: "instances", instances, load_addresses: loadAddresses };
-      if (command.type === "export_session") return { type: "session", scene, saved_scene: null, inputs: "", edits: "", undo: "", hashes: [], assets: [], branches: "", document: "Scene", keeps_assets: false };
+      if (command.type === "get_instances") return { type: "instances", instances: instances(), load_addresses: loadAddresses };
+      if (command.type === "set_field") {
+        const path = (command.path as PathSegment[]).map((segment) => (segment as { name: string }).name);
+        held.overrides = [...held.overrides, override(...path)];
+      }
       if (command.type === "get_timeline") return { type: "timeline", head: 0, simulated: 0, current: 0, checkpoints: [], edit_ticks: [], can_undo: false, can_redo: false, undo_label: null, redo_label: null, scene_dirty: false, resimulating: false, branch: 0, branches: [], compare: null };
-      if (command.type === "query_entities") return { type: "entities", total: 2, rows: [0, 5].map((index) => ({ entity: entity(index), hash: "0000000000000000" })) };
-      if (command.type === "get_entity") return { type: "entity", entity: command.entity, components: { "ludenea::Pose": { type: "json", value: { position: { x: 5, y: 0 } } } } };
+      if (command.type === "query_entities") return { type: "entities", total: 6, rows: [0, 1, 2, 3, 4, 5].map((index) => ({ entity: entity(index), hash: "0000000000000000" })) };
+      if (command.type === "get_entity") return { type: "entity", entity: command.entity, components: { [POSE]: { type: "json", value: { position: { x: -1.5, y: 3 }, rotation: { cos: 1, sin: 0 } } } } };
       if (command.type === "get_resources") return { type: "resources", resources: {} };
       if (command.type === "create_prefab") return { type: "text", text: "(new prefab)" };
       if (command.type === "apply_to_prefab") return { type: "text", text: "(applied)" };
       if (command.type === "place_instance" || command.type === "replace_with_instance") return { type: "placed", instance: 6 };
       return { type: "done" };
     },
-    { components: [{ name: "ludenea::Pose", schema: pose }] },
+    { components: [{ name: POSE, schema: pose }] },
   );
   act(() => project.setControl(game.client));
   await act(() => project.editor.document.getState().open(SCENE));
   await settle();
-  return { host: project, game };
+  return { host: project, game, held };
 }
 
 const sent = (game: { sent: { type: string }[] }, type: string) => game.sent.filter((command) => command.type === type);
@@ -90,7 +89,7 @@ async function inspectInstanceEntity(host: Awaited<ReturnType<typeof editor>>["h
   act(() => host.editor.selection.getState().select([entity(5)]));
   renderPanel(host, "ludenea.inspector");
   await settle();
-  return within(screen.getByRole("region", { name: "ludenea::Pose" }));
+  return within(screen.getByRole("region", { name: POSE }));
 }
 
 describe("prefabs", () => {
@@ -105,8 +104,9 @@ describe("prefabs", () => {
     renderPanel(host, "ludenea.scene-tree");
     await settle();
 
-    const group = screen.getByRole("group", { name: "crate.prefab.ron" });
-    fireEvent.click(within(group).getByRole("button", { name: "5v0" }));
+    const groups = screen.getAllByRole("group", { name: "ball.prefab.ron" });
+    expect(groups.map((group) => group.textContent)).toEqual(["ball.prefab.ron4v0", "ball.prefab.ron5v0"]);
+    fireEvent.click(within(groups[1]!).getByRole("button", { name: "5v0" }));
     expect(host.editor.selection.getState().entities).toEqual([entity(5)]);
   });
 
@@ -121,15 +121,51 @@ describe("prefabs", () => {
     expect(section.queryByRole("button", { name: "Revert position.y to prefab" })).toBeNull();
   });
 
+  it("fields_under_an_overridden_parent_or_component_are_marked", async () => {
+    const { host } = await editor({ overrides: [override("position")] });
+    let section = await inspectInstanceEntity(host);
+    // Marked under the override, the actions only where it targets.
+    expect(section.getByLabelText("position.y overridden")).toBeTruthy();
+    expect(section.queryByRole("button", { name: "Revert position.y to prefab" })).toBeNull();
+    expect(section.getByRole("button", { name: "Revert position to prefab" })).toBeTruthy();
+    expect(section.queryByLabelText("rotation.cos overridden")).toBeNull();
+    cleanup();
+
+    const whole = await editor({ overrides: [override()] });
+    section = await inspectInstanceEntity(whole.host);
+    expect(section.getByLabelText("rotation.cos overridden")).toBeTruthy();
+    expect(section.getByLabelText("position.x overridden")).toBeTruthy();
+  });
+
+  it("consecutive_field_edits_on_an_instance_are_all_marked", async () => {
+    const { host } = await editor();
+    const section = await inspectInstanceEntity(host);
+    const change = (name: string, value: string) => {
+      const input = section.getByRole("spinbutton", { name });
+      fireEvent.change(input, { target: { value } });
+      fireEvent.blur(input);
+    };
+
+    change("position.y", "4");
+    await settle();
+    change("rotation.sin", "0.5");
+    await settle();
+
+    for (const name of ["position.x", "position.y", "rotation.sin"]) expect(section.getByLabelText(`${name} overridden`)).toBeTruthy();
+  });
+
   it("revert_sends_revert_override", async () => {
     const { host, game } = await editor();
     const section = await inspectInstanceEntity(host);
 
+    const reads = sent(game, "get_instances").length;
     fireEvent.click(section.getByRole("button", { name: "Revert position.x to prefab" }));
     fireEvent.click(section.getByRole("button", { name: "Revert Pose to prefab" }));
     await settle();
 
-    const target = { instance: [5], entity: [0], component: "ludenea::Pose" };
+    // One read of the instances per revert.
+    expect(sent(game, "get_instances").length - reads).toBe(2);
+    const target = { instance: [5], entity: [0], component: POSE };
     expect(sent(game, "revert_override")).toEqual([
       { type: "revert_override", ...target, path: [field("position"), field("x")] },
       { type: "revert_override", ...target, path: [] },
@@ -143,8 +179,8 @@ describe("prefabs", () => {
     fireEvent.click(section.getByRole("button", { name: "Apply position.x to prefab" }));
     await settle();
 
-    expect(sent(game, "apply_to_prefab")).toEqual([{ type: "apply_to_prefab", instance: [5], entity: [0], component: "ludenea::Pose", path: [field("position"), field("x")] }]);
-    expect(host.project.sent).toContainEqual({ type: "write_text", path: "assets/crate.prefab.ron", text: "(applied)" });
+    expect(sent(game, "apply_to_prefab")).toEqual([{ type: "apply_to_prefab", instance: [5], entity: [0], component: POSE, path: [field("position"), field("x")] }]);
+    expect(host.project.sent).toContainEqual({ type: "write_text", path: "assets/ball.prefab.ron", text: "(applied)" });
   });
 
   it("place_prefab_sends_place_instance", async () => {
@@ -154,12 +190,12 @@ describe("prefabs", () => {
     await settle();
 
     const picker = screen.getByRole("combobox", { name: "Prefab" }) as HTMLSelectElement;
-    expect([...picker.options].map((option) => option.textContent)).toEqual(["assets/crate.prefab.ron", "assets/new.prefab.ron"]);
-    fireEvent.change(picker, { target: { value: CRATE } });
+    expect([...picker.options].map((option) => option.textContent)).toEqual(["assets/ball.prefab.ron", "assets/new.prefab.ron"]);
+    fireEvent.change(picker, { target: { value: BALL } });
     fireEvent.click(screen.getByRole("button", { name: "Place" }));
     await settle();
 
-    expect(sent(game, "place_instance")).toEqual([{ type: "place_instance", prefab: CRATE }]);
+    expect(sent(game, "place_instance")).toEqual([{ type: "place_instance", prefab: BALL }]);
     expect(screen.queryByRole("combobox", { name: "Prefab" })).toBeNull();
   });
 
@@ -176,7 +212,7 @@ describe("prefabs", () => {
   });
 
   it("missing_prefab_error_shows_on_tree", async () => {
-    const message = `instance 5 references asset ${CRATE}, which is not available; add it or fix the reference`;
+    const message = `instance 5 references asset ${BALL}, which is not available; add it or fix the reference`;
     const { host, game } = await editor({ refuse: (text) => (text.includes("other") ? message : null) });
     renderPanel(host, "ludenea.scene-tree");
     renderPanel(host, "ludenea.console");
@@ -194,8 +230,8 @@ describe("prefabs", () => {
 
   it("stale_override_warnings_reach_console", async () => {
     const warnings = [
-      `instance 5 of prefab assets/crate.prefab.ron: the override of \`ludenea::Pose\` at \`position.x\` on entity 3 targets nothing the prefab has; it is kept in the file and ignored`,
-      `instance 5 of prefab assets/crate.prefab.ron: the removal of \`ludenea::Body\` from entity 4 targets nothing the prefab has; it is kept in the file and ignored`,
+      `instance 5 of prefab assets/ball.prefab.ron: the override of \`ludenea::Pose\` at \`position.x\` on entity 3 targets nothing the prefab has; it is kept in the file and ignored`,
+      `instance 5 of prefab assets/ball.prefab.ron: the removal of \`ludenea::Body\` from entity 4 targets nothing the prefab has; it is kept in the file and ignored`,
     ];
     const { host } = await editor({ warnings });
     renderPanel(host, "ludenea.console");
@@ -208,14 +244,14 @@ describe("prefabs", () => {
     const { host } = await editor();
     const edit = vi.fn(async () => {});
     const show = (asset: string, name: string) =>
-      render(<Field schema={{ kind: "handle", asset }} value={CRATE} path={[field(name)]} edit={edit} readOnly={false} editor={host.editor} />);
+      render(<Field schema={{ kind: "handle", asset }} value={BALL} path={[field(name)]} edit={edit} readOnly={false} editor={host.editor} />);
     show("ludenea::Prefab", "bullet");
-    show("boxes::SpawnerStats", "stats");
+    show("my_game::Settings", "settings");
     await settle();
 
     const options = (name: string) => [...(screen.getByRole("combobox", { name }) as HTMLSelectElement).options].map((option) => option.textContent);
-    expect(options("bullet")).toEqual(["assets/crate.prefab.ron", "assets/new.prefab.ron"]);
+    expect(options("bullet")).toEqual(["assets/ball.prefab.ron", "assets/new.prefab.ron"]);
     // The current value stays shown even when it is not of the type.
-    expect(options("stats")).toEqual([CRATE, "assets/spawner.ron"]);
+    expect(options("settings")).toEqual([BALL, "assets/settings.ron"]);
   });
 });

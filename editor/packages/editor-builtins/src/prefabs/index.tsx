@@ -1,25 +1,16 @@
-import type { ControlClient, Entity, FileEntry, InstanceInfo, PathSegment } from "@ludenea/control-client";
+import type { ControlClient, Entity, FileEntry, InstanceInfo, OverrideInfo, PathSegment } from "@ludenea/control-client";
 import { definePlugin, type Editor, type Loaded, type TimelineState } from "@ludenea/editor-shell";
 import { logToConsole } from "../console";
 import { createStore, errorText, showPanel, type Store } from "../shared";
 import { entityKey } from "../shared/EntityList";
-import { assertEditable, edit } from "../timeline/editing";
+import { assertEditable, edit, onEdited } from "../timeline/editing";
 import { OverrideMark } from "./OverrideMark";
 
-/** A field override the open scene gives entity `entity` (a path of local identifiers) of its instance `instance`. */
-export interface Override {
-  instance: number;
-  entity: number[];
-  component: string;
-  path: PathSegment[];
-}
-
 export interface PrefabsState {
-  /** Every instance of the loaded scene, nested ones included, parents first. */
+  /** Every instance of the loaded scene, nested ones included, parents first, with the overrides of the scene's own. */
   instances: InstanceInfo[];
   /** Each loaded entity's load address, by `entityKey`. */
   addresses: Map<string, number[]>;
-  overrides: Override[];
   /** The project's prefab files. */
   prefabs: FileEntry[];
   /** The "Place prefab" picker shows. */
@@ -54,37 +45,12 @@ export function instanceTarget(state: PrefabsState, entity: Entity): { instance:
   return { instance: address.slice(0, 1), entity: address.slice(1) };
 }
 
-const segment = (text: string): PathSegment | null => {
-  const name = /name\s*:\s*"([^"]*)"/.exec(text);
-  const index = /index\s*:\s*(\d+)/.exec(text);
-  if (/type\s*:\s*"field"/.test(text) && name) return { type: "field", name: name[1]! };
-  if (/type\s*:\s*"index"/.test(text) && index) return { type: "index", index: Number(index[1]) };
-  return null;
-};
-
-const INSTANCE = /\(\s*id\s*:\s*(\d+)\s*,\s*prefab\s*:/g;
-const OVERRIDE = /\(\s*entity\s*:\s*\[([\d\s,]*)\]\s*,\s*component\s*:\s*"([^"]*)"\s*,\s*path\s*:\s*\[([^\]]*)\]/g;
-
-/**
- * The field overrides of a scene or prefab file's instances, read from its text: the host
- * reports none. Added and removed components have no path and are not overrides.
- */
-// ponytail: pattern matching on the host's own layout of `instances` (written last, entries as
-// `(id: N, prefab: ...)`); a component field named `instances` after them would confuse it.
-export function overridesIn(file: string): Override[] {
-  const start = [...file.matchAll(/\binstances\s*:\s*\[/g)].at(-1)?.index;
-  if (start === undefined) return [];
-  const text = file.slice(start);
-  const starts = [...text.matchAll(INSTANCE)];
-  return starts.flatMap((match, position) => {
-    const entry = text.slice(match.index, starts[position + 1]?.index);
-    return [...entry.matchAll(OVERRIDE)].map(([, entity, component, path]) => ({
-      instance: Number(match[1]),
-      entity: entity!.split(",").filter((id) => id.trim() !== "").map(Number),
-      component: component!,
-      path: [...path!.matchAll(/\(([^()]*)\)/g)].map(([, inner]) => segment(inner!)).filter((part) => part !== null),
-    }));
-  });
+/** The overrides the scene gives `component` of `entity`, when the entity belongs to an instance. */
+export function overridesOf(state: PrefabsState, entity: Entity, component: string): OverrideInfo[] {
+  const target = instanceTarget(state, entity);
+  if (!target) return [];
+  const instance = state.instances.find((candidate) => candidate.address.join() === target.instance.join());
+  return (instance?.overrides ?? []).filter((override) => override.component === component && override.entity.join() === target.entity.join());
 }
 
 const addressMap = (addresses: Loaded["load_addresses"]) => new Map(addresses.map(([entity, address]) => [entityKey(entity), address]));
@@ -100,13 +66,13 @@ function freePath(files: FileEntry[]): string {
 export const prefabsPlugin = definePlugin({
   name: "ludenea.prefabs",
   activate(editor) {
-    const state = createStore<PrefabsState>({ instances: [], addresses: new Map(), overrides: [], prefabs: [], placing: false, error: null });
+    const state = createStore<PrefabsState>({ instances: [], addresses: new Map(), prefabs: [], placing: false, error: null });
     const game = (): ControlClient => {
       if (!editor.control) throw new Error("no game is running");
       return editor.control;
     };
     const report = (error: unknown) => state.set({ error: errorText(error) });
-    const clear = () => state.set({ instances: [], addresses: new Map(), overrides: [] });
+    const clear = () => state.set({ instances: [], addresses: new Map() });
     const editing = () => {
       const kind = editor.document.getState().current?.kind;
       return kind === "scene" || kind === "prefab";
@@ -117,24 +83,18 @@ export const prefabsPlugin = definePlugin({
         ({ entries }) => state.set({ prefabs: entries.filter((file) => file.kind === "Prefab") }),
         report,
       );
-    // Overrides live in the session's scene text, unsaved edits included.
-    const readOverrides = async (control: ControlClient) => {
-      const { scene } = await control.request({ type: "export_session" });
-      state.set({ overrides: overridesIn(scene), error: null });
-    };
-    /** Reads the instances, load addresses, and overrides of the scene as the session holds it now. */
+    /** Reads the instances, their overrides, and the load addresses of the scene as the session holds it now. */
     const refresh = async () => {
       const control = editor.control;
       if (!control || !editing()) return clear();
-      const [{ instances, load_addresses }] = await Promise.all([control.request({ type: "get_instances" }), readOverrides(control)]);
-      state.set({ instances, addresses: addressMap(load_addresses) });
+      const { instances, load_addresses } = await control.request({ type: "get_instances" });
+      state.set({ instances, addresses: addressMap(load_addresses), error: null });
     };
     const onLoaded = (loaded: Loaded | null) => {
       if (!loaded) return clear();
       for (const warning of loaded.warnings) logToConsole(editor, "warning", warning);
       state.set({ instances: loaded.instances, addresses: addressMap(loaded.load_addresses) });
       void listPrefabs();
-      if (editor.control) readOverrides(editor.control).catch(report);
     };
     const targetOf = ({ entity }: Target) => {
       const target = instanceTarget(state.get(), entity);
@@ -147,11 +107,9 @@ export const prefabsPlugin = definePlugin({
       async place(prefab) {
         await edit(editor, game(), { type: "place_instance", prefab });
         state.set({ placing: false });
-        await refresh();
       },
       async revert(target) {
         await edit(editor, game(), { type: "revert_override", ...targetOf(target), component: target.component, path: target.path });
-        await refresh();
       },
       async apply(target) {
         const located = targetOf(target);
@@ -197,7 +155,6 @@ export const prefabsPlugin = definePlugin({
           throw error;
         }
         editor.selection.getState().clear();
-        await refresh();
       },
     });
     editor.commands.register({
@@ -214,16 +171,15 @@ export const prefabsPlugin = definePlugin({
     });
     editor.inspectors.decorate({ id: "ludenea.prefabs.overrides", render: (props) => <OverrideMark {...props} prefabs={prefabs} /> });
 
-    // ponytail: refreshes when an edit, undo, redo, or branch switch changes the timeline's
-    // labels; a scene change that leaves them as they were is read on the next load.
-    const editsOf = (timeline: TimelineState["timeline"]) =>
-      timeline && [timeline.undo_label, timeline.redo_label, timeline.scene_dirty, timeline.branch].join("|");
+    // Every edit, undo, and redo the editor sends may change the scene, and so may a branch switch.
+    const branchOf = (timeline: TimelineState["timeline"]) => timeline?.branch;
     const stops = [
+      onEdited(editor, () => void refresh().catch(report)),
       editor.document.subscribe((current, previous) => {
         if (current.loaded !== previous.loaded) onLoaded(current.loaded);
       }),
       editor.timeline.subscribe((current, previous) => {
-        if (editsOf(current.timeline) !== editsOf(previous.timeline)) refresh().catch(report);
+        if (branchOf(current.timeline) !== branchOf(previous.timeline)) refresh().catch(report);
       }),
     ];
     editor.onGameChanged((control) => {

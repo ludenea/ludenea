@@ -32,6 +32,8 @@ pub struct Resolved {
     pub(crate) checked: bool,
     /// Every instance, nested ones included, parents first.
     pub(crate) instances: Instances,
+    /// The field overrides of the file's own instances, by instance address.
+    pub(crate) overrides: BTreeMap<LoadAddress, Vec<OverrideInfo>>,
 }
 
 /// One entity of a resolved scene and its components' RON, by stable name.
@@ -49,6 +51,23 @@ pub struct InstanceInfo {
     pub address: LoadAddress,
     pub prefab: AssetId,
     pub entities: Vec<Entity>,
+    /// The instance's field overrides, as its entry in the loaded file gives them; empty for
+    /// a nested instance, whose overrides belong to its prefab file.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(optional = false))]
+    pub overrides: Vec<OverrideInfo>,
+}
+
+/// A field override of an instance: `path` of `component` on its entity `entity` (a path of
+/// local identifiers). `stale` when the prefab no longer has that target, so the load
+/// ignored it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct OverrideInfo {
+    pub entity: Vec<u32>,
+    pub component: String,
+    pub path: Vec<PathSegment>,
+    pub stale: bool,
 }
 
 /// An instance as loaded, with each entity's components then, to tell whether it changed.
@@ -130,6 +149,7 @@ pub fn resolve(file: &str, assets: &dyn AssetSource) -> Result<Resolved, SceneEr
         next_id: scene.next_id,
         checked: scene.checked,
         instances: resolver.instances,
+        overrides: resolver.overrides,
     })
 }
 
@@ -204,6 +224,7 @@ struct Resolver<'a> {
     stack: Vec<AssetId>,
     warnings: Vec<String>,
     instances: Instances,
+    overrides: BTreeMap<LoadAddress, Vec<OverrideInfo>>,
 }
 
 impl<'a> Resolver<'a> {
@@ -213,6 +234,7 @@ impl<'a> Resolver<'a> {
             stack: Vec::new(),
             warnings: Vec::new(),
             instances: Vec::new(),
+            overrides: BTreeMap::new(),
         }
     }
 
@@ -274,6 +296,7 @@ impl<'a> Resolver<'a> {
                 )),
             }
         }
+        let mut overrides = Vec::new();
         for change in instance.overrides {
             let value = change.value.get_ron().trim();
             let found = find(entities, &change.entity).and_then(|position| {
@@ -292,6 +315,15 @@ impl<'a> Resolver<'a> {
                     address_text(&change.entity)
                 ));
             }
+            overrides.push(OverrideInfo {
+                entity: change.entity,
+                component: change.component,
+                path: change.path,
+                stale: found.is_none(),
+            });
+        }
+        if prefix.is_empty() {
+            self.overrides.insert(address.clone(), overrides);
         }
 
         let prefab = self.name(instance.prefab);

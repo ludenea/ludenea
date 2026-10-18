@@ -771,6 +771,18 @@ type HashTree = {
 };
 
 /**
+ * A field override of an instance: `path` of `component` on its entity `entity` (a path of
+ * local identifiers). `stale` when the prefab no longer has that target, so the load
+ * ignored it.
+ */
+type OverrideInfo = {
+    entity: Array<number>;
+    component: string;
+    path: Array<PathSegment>;
+    stale: boolean;
+};
+
+/**
  * A prefab instance of the last loaded scene and the entities it spawned, nested
  * instances' included.
  */
@@ -778,6 +790,11 @@ type InstanceInfo = {
     address: Array<number>;
     prefab: AssetId;
     entities: Array<Entity>;
+    /**
+     * The instance's field overrides, as its entry in the loaded file gives them; empty for
+     * a nested instance, whose overrides belong to its prefab file.
+     */
+    overrides: Array<OverrideInfo>;
 };
 
 type ProtocolError = {
@@ -1540,5 +1557,5 @@ function startWorkerGame(options: {
 }): WorkerGame;
 
 export { ControlClient, PROJECT_PROTOCOL_VERSION, PROTOCOL_VERSION, ProjectClient, ProtocolFailure, RequestTracker, fakeTransport, handshake, parseFrame, postMessageTransport, startWorkerGame, tauriTransport, unwrap, webSocketTransport };
-export type { AssetId, AssetKind, AssetTexts, BranchId, BranchInfo, BuildEvent, Bytes, Cause, ClientMessage, Color, Command, ComponentValue, ConsoleLevel, DebugDrawFrame, Diagnostic, Difference, DivergenceKind, DivergenceReport, Document, Entity, EntityDivergence, EntityHash, EntityRow, ErrorCode, Event, FailureCode, FieldSchema, FieldTarget, FileChange, FileEntry, GameInfo, GameOutput, Hash64, HashTree, InstanceInfo, Item, JsonValue, MessageTransport, NamedHash, NamedSchema, Outcome, OutputStream, PathSegment, PauseReason, PluginBundle, PluginSource, Primitive, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo, ProjectOutcome, ProjectReply, ProjectReplyFor, ProjectRequest, ProjectServerMessage, ProtocolError, RawGamepad, RawInput, RecordedEvent, Reply, ReplyFor, RootCause, RootCauseKind, ServerMessage, ServiceMode, SyncPoint, SystemRow, Timeline, Topic, TraceComparison, TypeSchema, VariantFields, VariantSchema, Vec2, WorkerCrash, WorkerGame };
+export type { AssetId, AssetKind, AssetTexts, BranchId, BranchInfo, BuildEvent, Bytes, Cause, ClientMessage, Color, Command, ComponentValue, ConsoleLevel, DebugDrawFrame, Diagnostic, Difference, DivergenceKind, DivergenceReport, Document, Entity, EntityDivergence, EntityHash, EntityRow, ErrorCode, Event, FailureCode, FieldSchema, FieldTarget, FileChange, FileEntry, GameInfo, GameOutput, Hash64, HashTree, InstanceInfo, Item, JsonValue, MessageTransport, NamedHash, NamedSchema, Outcome, OutputStream, OverrideInfo, PathSegment, PauseReason, PluginBundle, PluginSource, Primitive, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo, ProjectOutcome, ProjectReply, ProjectReplyFor, ProjectRequest, ProjectServerMessage, ProtocolError, RawGamepad, RawInput, RecordedEvent, Reply, ReplyFor, RootCause, RootCauseKind, ServerMessage, ServiceMode, SyncPoint, SystemRow, Timeline, Topic, TraceComparison, TypeSchema, VariantFields, VariantSchema, Vec2, WorkerCrash, WorkerGame };
 }

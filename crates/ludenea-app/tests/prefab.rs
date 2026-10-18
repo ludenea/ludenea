@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 use std::fs;
 
 use ludenea::cli::Trace;
-use ludenea_app::prefab::{InstanceInfo, resolve};
+use ludenea_app::path::PathSegment;
+use ludenea_app::prefab::{InstanceInfo, OverrideInfo, resolve};
 use ludenea_app::{App, AssetTexts, NamedAssetTexts, NoAssets, SceneError, Simulation};
 use ludenea_ecs::{Asset, AssetId, Component, Entity, Handle, Prefab};
 use serde::{Deserialize, Serialize};
@@ -171,11 +172,13 @@ fn instance_expands_after_scene_entities_in_prefab_order() {
                 address: vec![1],
                 prefab: AssetId(A),
                 entities: order[1..3].to_vec(),
+                overrides: vec![],
             },
             InstanceInfo {
                 address: vec![3],
                 prefab: AssetId(A),
                 entities: order[3..5].to_vec(),
+                overrides: vec![],
             },
         ]
     );
@@ -214,6 +217,58 @@ fn added_and_removed_components_apply() {
     let world = simulation.world();
     assert!(world.get::<Pos>(entity).is_none());
     assert_eq!(*world.get::<Shape>(entity).unwrap(), Shape::Square(2.0));
+}
+
+#[test]
+fn instances_report_their_overrides_stale_ones_flagged() {
+    let mut simulation = simulation();
+    let pos = "\"prefab::Pos\": (x: 1.0, y: 2.0)";
+    let assets = texts(&[
+        (B, prefab(2, &[(1, pos)], "")),
+        (
+            A,
+            prefab(
+                4,
+                &[(0, pos)],
+                &instance(
+                    3,
+                    B,
+                    "(entity: [1], component: \"prefab::Pos\", path: [], value: (x: 0.0, y: 0.0)),",
+                    "",
+                    "",
+                ),
+            ),
+        ),
+    ]);
+    // Comments between fields, as hand-edited files keep them.
+    let overrides = "(entity: [0], /* own */ component: \"prefab::Pos\", // x only\n path: [(type: \"field\", name: \"x\")], value: 5.0),\
+        (entity: [3, 1], component: \"prefab::Pos\", path: [(type: \"field\", name: \"y\")], value: 6.0),\
+        (entity: [9], component: \"prefab::Pos\", path: [], value: (x: 0.0, y: 0.0)),";
+    let file = scene(8, &[], &instance(7, A, overrides, "", ""));
+    let load = simulation.load_scene_with(&file, &assets).unwrap();
+    assert_eq!(load.warnings.len(), 1, "{:?}", load.warnings);
+
+    let field = |name: &str| PathSegment::Field {
+        name: name.to_string(),
+    };
+    let target = |entity: Vec<u32>, path: Vec<PathSegment>, stale: bool| OverrideInfo {
+        entity,
+        component: "prefab::Pos".to_string(),
+        path,
+        stale,
+    };
+    let instances = simulation.instances();
+    assert_eq!(
+        instances[0].overrides,
+        [
+            target(vec![0], vec![field("x")], false),
+            target(vec![3, 1], vec![field("y")], false),
+            target(vec![9], vec![], true),
+        ]
+    );
+    // The nested instance's own override belongs to the prefab file, not to the scene.
+    assert_eq!(instances[1].address, [7, 3]);
+    assert!(instances[1].overrides.is_empty());
 }
 
 #[test]

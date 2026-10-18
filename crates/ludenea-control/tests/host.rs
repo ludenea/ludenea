@@ -521,6 +521,7 @@ fn every_command_and_reply_round_trips_through_json() {
                 address: vec![5],
                 prefab: AssetId(7),
                 entities: vec![entity],
+                overrides: vec![],
             }],
             load_addresses: vec![(entity, vec![5, 0])],
         },

@@ -515,6 +515,7 @@ impl Simulation {
                 .insert_resource_boxed(&name, value)
                 .expect("decoded against the registry");
         }
+        let mut overrides = resolved.overrides;
         self.instances = resolved
             .instances
             .into_iter()
@@ -530,6 +531,7 @@ impl Simulation {
                     .collect();
                 LoadedInstance {
                     info: InstanceInfo {
+                        overrides: overrides.remove(&address).unwrap_or_default(),
                         address,
                         prefab,
                         entities,

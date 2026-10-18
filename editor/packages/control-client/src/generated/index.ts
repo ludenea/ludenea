@@ -29,6 +29,7 @@ export * from "./Item";
 export * from "./NamedHash";
 export * from "./NamedSchema";
 export * from "./Outcome";
+export * from "./OverrideInfo";
 export * from "./PathSegment";
 export * from "./PauseReason";
 export * from "./Primitive";
