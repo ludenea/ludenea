@@ -165,3 +165,24 @@ fn typed<T: 'static>(value: &dyn Any) -> &T {
         .downcast_ref::<T>()
         .unwrap_or_else(|| panic!("codec of {} received another type", type_name::<T>()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A decode that panics while replacing entities leaves no remap behind: a later plain
+    /// decode on this thread keeps its entity.
+    #[test]
+    fn a_panic_while_replacing_clears_the_remap() {
+        let other: Entity = postcard::from_bytes(&[9, 0]).unwrap();
+        // (Entity 1v0, 7), then a trailing byte that fails the exact decode.
+        let bytes = [1, 0, 7, 0];
+        let panicked = std::panic::catch_unwind(|| {
+            decode_remapping::<(Entity, u8)>(&bytes, Remap::Replace(vec![other].into_iter()))
+        });
+        assert!(panicked.is_err());
+        assert!(REMAP.with_borrow(Option::is_none));
+        let plain: (Entity, u8) = postcard::from_bytes(&bytes[..3]).unwrap();
+        assert_eq!((plain.0.index(), plain.1), (1, 7));
+    }
+}

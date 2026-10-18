@@ -208,7 +208,8 @@ impl World {
             .insert(TypeId::of::<T>(), Box::new(RefCell::new(value)));
     }
 
-    /// Registers the event type `T`; registering it again is a no-op.
+    /// Registers the event type `T`; registering it again is a no-op. Fails with
+    /// `EcsError::DuplicateName` when another type already has `T::NAME`.
     pub fn register_event<T: Event>(&mut self) -> Result<(), EcsError> {
         if let Some(queue) = self.events.get(T::NAME) {
             let (type_id, type_name) = queue.event_type();
