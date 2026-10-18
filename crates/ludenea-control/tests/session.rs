@@ -4,7 +4,7 @@ use boxes::{BoxesInput, Crate};
 use ludenea::cli::Trace;
 use ludenea::control::{Resimulation, Session, SessionError, SessionExport};
 use ludenea::prelude::*;
-use ludenea_app::ValueKind;
+use ludenea_app::{EntityRef, ValueKind};
 use serde_json::json;
 
 const SCENE: &str = concat!(
@@ -280,7 +280,12 @@ fn tick_zero_despawn_reloads_scene_with_matching_indices() {
     let mut session = Session::start(&mut sim, small_scene()).unwrap();
     let victim = sim.world().entities().nth(5).unwrap();
     session
-        .edit(&mut sim, Edit::Despawn { entity: victim })
+        .edit(
+            &mut sim,
+            Edit::Despawn {
+                entity: EntityRef::Runtime(victim),
+            },
+        )
         .unwrap();
     let mut fresh = simulation();
     fresh.load_scene(session.scene()).unwrap();
@@ -376,13 +381,18 @@ fn failed_recorded_edit_is_dropped_during_resimulation() {
     play(&mut session, &mut sim, 100);
     let target = last_entity(&sim);
     let remove = Edit::Remove {
-        entity: target,
+        entity: EntityRef::Runtime(target),
         component: "boxes::Crate".to_string(),
     };
     session.edit(&mut sim, remove).unwrap();
     session.seek(&mut sim, 0).unwrap();
     session
-        .edit(&mut sim, Edit::Despawn { entity: target })
+        .edit(
+            &mut sim,
+            Edit::Despawn {
+                entity: EntityRef::Runtime(target),
+            },
+        )
         .unwrap();
     let reports = resimulate_all(&mut session, &mut sim);
     assert!(
@@ -403,7 +413,14 @@ fn export_then_fresh_replay_matches() {
     let edit = stats_edit(&sim, 1_000);
     session.edit(&mut sim, edit).unwrap();
     let entity = last_entity(&sim);
-    session.edit(&mut sim, Edit::Despawn { entity }).unwrap();
+    session
+        .edit(
+            &mut sim,
+            Edit::Despawn {
+                entity: EntityRef::Runtime(entity),
+            },
+        )
+        .unwrap();
     for tick in 0..80 {
         let live = (tick % 20 == 0).then(|| spawn_input(-4.0));
         session.step(&mut sim, live.as_deref()).unwrap();
@@ -452,7 +469,12 @@ fn load_edits_drops_recorded_edits_that_fail() {
     let good = stats_edit(&sim, 1_000);
     let mut log = EditLog::new();
     log.edits = vec![
-        at(0, Edit::Despawn { entity: target }),
+        at(
+            0,
+            Edit::Despawn {
+                entity: EntityRef::Runtime(target),
+            },
+        ),
         at(
             0,
             Edit::SetResource {
@@ -463,7 +485,7 @@ fn load_edits_drops_recorded_edits_that_fail() {
         at(
             50,
             Edit::Remove {
-                entity: target,
+                entity: EntityRef::Runtime(target),
                 component: "boxes::Crate".to_string(),
             },
         ),

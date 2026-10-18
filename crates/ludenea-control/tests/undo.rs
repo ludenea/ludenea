@@ -1,6 +1,6 @@
 use ludenea::control::{Resimulation, Session, SessionError};
 use ludenea::prelude::*;
-use ludenea_app::ValueKind;
+use ludenea_app::{EntityRef, ValueKind};
 use serde_json::json;
 
 fn simulation() -> Simulation {
@@ -118,7 +118,12 @@ fn undo_scene_edit_restores_scene_text() {
     let original_hash = sim.hash();
     let victim = sim.world().entities().nth(5).unwrap();
     session
-        .edit(&mut sim, Edit::Despawn { entity: victim })
+        .edit(
+            &mut sim,
+            Edit::Despawn {
+                entity: EntityRef::Runtime(victim),
+            },
+        )
         .unwrap();
     let edited = session.scene().to_string();
     let edited_hash = sim.hash();
@@ -210,7 +215,12 @@ fn scene_dirty_until_saved() {
     assert!(!session.timeline().scene_dirty);
     let victim = sim.world().entities().nth(5).unwrap();
     session
-        .edit(&mut sim, Edit::Despawn { entity: victim })
+        .edit(
+            &mut sim,
+            Edit::Despawn {
+                entity: EntityRef::Runtime(victim),
+            },
+        )
         .unwrap();
     assert!(session.timeline().scene_dirty);
     session.mark_scene_saved();
@@ -230,14 +240,19 @@ fn edit_dropped_by_resimulation_leaves_undo_history() {
     play(&mut session, &mut sim, 100);
     let target = sim.world().entities().last().unwrap();
     let remove = Edit::Remove {
-        entity: target,
+        entity: EntityRef::Runtime(target),
         component: "boxes::Crate".to_string(),
     };
     session.edit(&mut sim, remove).unwrap();
     session.seek(&mut sim, 0).unwrap();
     let original = session.scene().to_string();
     session
-        .edit(&mut sim, Edit::Despawn { entity: target })
+        .edit(
+            &mut sim,
+            Edit::Despawn {
+                entity: EntityRef::Runtime(target),
+            },
+        )
         .unwrap();
     resimulate_all(&mut session, &mut sim);
     assert!(edits(&session).is_empty());
@@ -293,7 +308,12 @@ fn unsaved_scene_edits_stay_unsaved_across_export_and_resume() {
     let saved = session.scene().to_string();
     let victim = sim.world().entities().nth(5).unwrap();
     session
-        .edit(&mut sim, Edit::Despawn { entity: victim })
+        .edit(
+            &mut sim,
+            Edit::Despawn {
+                entity: EntityRef::Runtime(victim),
+            },
+        )
         .unwrap();
     let export = session.export().unwrap();
     assert_eq!(export.saved_scene.as_deref(), Some(saved.as_str()));
@@ -357,4 +377,60 @@ fn replace_scene_clears_redo() {
         .replace_scene(&mut sim, boxes::generate_scene(31, 8))
         .unwrap();
     assert!(!session.timeline().can_redo);
+}
+
+#[test]
+fn session_export_from_2a_with_undo_history_resumes() {
+    use ludenea::control::{Command, Host, Reply};
+
+    let fixture = include_str!("fixtures/session-2a.json");
+    let Reply::Session {
+        scene,
+        saved_scene,
+        inputs,
+        edits,
+        undo,
+        hashes,
+    } = serde_json::from_str(fixture).unwrap()
+    else {
+        panic!("the fixture is a session export");
+    };
+    let log = EditLog::decode(&edits.0).unwrap();
+    assert!(matches!(
+        &log.edits[..],
+        [TimedEdit {
+            tick: 60,
+            edit: Edit::Despawn {
+                entity: EntityRef::Runtime(_)
+            }
+        }]
+    ));
+
+    let mut host = Host::new(boxes::app()).unwrap();
+    host.handle(Command::LoadSession {
+        scene,
+        saved_scene,
+        inputs,
+        edits,
+        undo,
+        expected: hashes,
+    })
+    .unwrap();
+    let timeline = |host: &mut Host| match host.handle(Command::GetTimeline).unwrap() {
+        Reply::Timeline(timeline) => timeline,
+        other => panic!("{other:?}"),
+    };
+    while timeline(&mut host).resimulating {
+        host.advance(0.0);
+    }
+    assert!(timeline(&mut host).can_undo);
+    // The run edit at tick 60, then the scene edit at tick 0.
+    host.handle(Command::Undo).unwrap();
+    let Reply::Session { edits, .. } = host.handle(Command::ExportSession).unwrap() else {
+        panic!("a session export");
+    };
+    assert!(EditLog::decode(&edits.0).unwrap().edits.is_empty());
+    host.handle(Command::Undo).unwrap();
+    assert!(!timeline(&mut host).scene_dirty);
+    assert!(!timeline(&mut host).can_undo);
 }

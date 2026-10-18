@@ -1,7 +1,11 @@
 //! The undo and redo history of an editor session.
 
 use ludenea_app::TimedEdit;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+
+/// The version `UndoHistory::encode` writes first. Milestone 2a wrote no version.
+pub const UNDO_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) enum UndoEntry {
@@ -85,10 +89,60 @@ impl UndoHistory {
     }
 
     pub fn encode(&self) -> Vec<u8> {
-        postcard::to_allocvec(self).expect("an undo history always encodes")
+        postcard::to_allocvec(&(UNDO_VERSION, self)).expect("an undo history always encodes")
     }
 
+    /// Decodes the current version, or the unversioned 2a form with every edit target as
+    /// `EntityRef::Runtime`. Both start with a varint, so the current version is tried
+    /// first and must use every byte.
     pub fn decode(bytes: &[u8]) -> Result<UndoHistory, postcard::Error> {
-        postcard::from_bytes(bytes)
+        match decode_exact::<(u32, UndoHistory)>(bytes) {
+            Ok((UNDO_VERSION, history)) => Ok(history),
+            _ => decode_exact::<version_2a::UndoHistory>(bytes).map(Into::into),
+        }
+    }
+}
+
+fn decode_exact<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, postcard::Error> {
+    match postcard::take_from_bytes(bytes)? {
+        (value, []) => Ok(value),
+        _ => Err(postcard::Error::DeserializeBadEncoding),
+    }
+}
+
+/// The undo history milestone 2a wrote: no version, edits of edit log version 1.
+mod version_2a {
+    use ludenea_app::edit::version_1;
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    enum UndoEntry {
+        Scene { before: String, after: String },
+        Run { edit: version_1::TimedEdit },
+    }
+
+    #[derive(Deserialize)]
+    pub(super) struct UndoHistory {
+        undo: Vec<UndoEntry>,
+        redo: Vec<UndoEntry>,
+    }
+
+    impl From<UndoEntry> for super::UndoEntry {
+        fn from(entry: UndoEntry) -> Self {
+            match entry {
+                UndoEntry::Scene { before, after } => super::UndoEntry::Scene { before, after },
+                UndoEntry::Run { edit } => super::UndoEntry::Run { edit: edit.into() },
+            }
+        }
+    }
+
+    impl From<UndoHistory> for super::UndoHistory {
+        fn from(history: UndoHistory) -> Self {
+            let entries = |entries: Vec<UndoEntry>| entries.into_iter().map(Into::into).collect();
+            super::UndoHistory {
+                undo: entries(history.undo),
+                redo: entries(history.redo),
+            }
+        }
     }
 }

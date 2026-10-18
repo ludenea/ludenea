@@ -364,7 +364,7 @@ impl Session {
             return Ok(());
         }
         let edit = Edit::Insert {
-            entity,
+            entity: sim.entity_ref(entity),
             component: component.to_string(),
             value,
         };

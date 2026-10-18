@@ -76,6 +76,11 @@ impl World {
             .collect()
     }
 
+    /// The codec of the asset type `type_name`.
+    pub fn asset_codec(&self, type_name: &str) -> Option<Codec> {
+        self.asset_types.get(type_name).map(|entry| entry.codec)
+    }
+
     /// The default value of the asset type `type_name` as a RON string.
     pub fn default_asset_ron(&self, type_name: &str) -> Result<String, EcsError> {
         let entry = self.asset_type(type_name)?;

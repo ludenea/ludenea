@@ -293,10 +293,10 @@ enum Pending {
 }
 
 /// A handle found in the scene or in a loaded asset.
-struct Reference {
-    id: AssetId,
-    asset: String,
-    referenced_by: String,
+pub(crate) struct Reference {
+    pub(crate) id: AssetId,
+    pub(crate) asset: String,
+    pub(crate) referenced_by: String,
 }
 
 /// Decodes scene values, collecting the handles they hold and checking their local
@@ -455,7 +455,7 @@ impl Simulation {
             asset: Prefab::NAME.to_string(),
             referenced_by: format!("instance {}", address_text(address)),
         }));
-        let loaded = self.resolve_assets(references, assets)?;
+        let loaded = self.resolve_assets(references, assets, &BTreeSet::new())?;
 
         let backup = (!loaded.is_empty()).then(|| self.world.snapshot());
         let initial = self.initial.clone();
@@ -779,11 +779,13 @@ impl Simulation {
             .expect("remapped bytes decode")
     }
 
-    /// Reads every asset reachable from `references`, by identifier.
-    fn resolve_assets(
+    /// Reads every asset reachable from `references`, by identifier, except the `known`
+    /// ones and what only they reach.
+    pub(crate) fn resolve_assets(
         &self,
         references: Vec<Reference>,
         assets: &dyn AssetSource,
+        known: &BTreeSet<AssetId>,
     ) -> Result<BTreeMap<AssetId, (String, LoadedValue)>, SceneError> {
         let schemas: BTreeMap<&str, TypeSchema> = self.world.asset_schemas().into_iter().collect();
         let mut loaded: BTreeMap<AssetId, (String, LoadedValue)> = BTreeMap::new();
@@ -795,6 +797,9 @@ impl Simulation {
             referenced_by,
         }) = pending.pop()
         {
+            if known.contains(&id) {
+                continue;
+            }
             let path = || assets.path(id).map(str::to_string);
             let wrong_type = |found: &str| SceneError::WrongAssetType {
                 id,
@@ -990,7 +995,7 @@ impl Simulation {
 }
 
 /// An asset to insert: RON of a data asset, or the canonical bytes of a flattened prefab.
-enum LoadedValue {
+pub(crate) enum LoadedValue {
     Ron(String),
     Bytes(Vec<u8>),
 }

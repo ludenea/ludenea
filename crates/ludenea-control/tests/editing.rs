@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use boxes::BoxesInput;
 use ludenea::control::*;
 use ludenea::prelude::*;
+use ludenea_app::EntityRef;
 use serde_json::{Value, json};
 
 fn scene() -> String {
@@ -150,7 +151,7 @@ fn set_field_on_pose_position_records_insert_edit() {
     assert_eq!(edits.edits[0].tick, 10);
     assert!(matches!(
         &edits.edits[0].edit,
-        Edit::Insert { entity: e, component, .. } if *e == entity && component == "ludenea::Pose"
+        Edit::Insert { entity: EntityRef::Loaded(_), component, .. } if component == "ludenea::Pose"
     ));
     assert_eq!(timeline(&mut host).edit_ticks, vec![10]);
 }

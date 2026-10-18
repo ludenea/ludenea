@@ -822,7 +822,7 @@ fn step_hashes_exclude_the_edits_get_hash_includes() {
     let insert = |tick, score: u32| ludenea_app::TimedEdit {
         tick,
         edit: ludenea_app::Edit::Insert {
-            entity,
+            entity: ludenea_app::EntityRef::Runtime(entity),
             component: "host::Score".to_string(),
             value: postcard::to_allocvec(&Score(score)).unwrap(),
         },

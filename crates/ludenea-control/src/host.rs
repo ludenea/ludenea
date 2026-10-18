@@ -242,7 +242,11 @@ impl Host {
                 })
             }
             Command::Despawn { entity } => {
-                self.edit(Edit::Despawn { entity }, &format!("entity {entity}"))?;
+                let target = sim.entity_ref(entity);
+                self.edit(
+                    Edit::Despawn { entity: target },
+                    &format!("entity {entity}"),
+                )?;
                 Ok(Reply::Done)
             }
             Command::InsertComponent {
@@ -261,7 +265,7 @@ impl Host {
                 let value = encode_value(sim, ValueKind::Component, &component, value)
                     .map_err(|e| in_context(edit_error(&e), &context))?;
                 let edit = Edit::Insert {
-                    entity,
+                    entity: sim.entity_ref(entity),
                     component,
                     value,
                 };
@@ -270,7 +274,12 @@ impl Host {
             }
             Command::RemoveComponent { entity, component } => {
                 let context = format!("entity {entity}, component `{component}`");
-                self.edit(Edit::Remove { entity, component }, &context)?;
+                let target = sim.entity_ref(entity);
+                let edit = Edit::Remove {
+                    entity: target,
+                    component,
+                };
+                self.edit(edit, &context)?;
                 Ok(Reply::Done)
             }
             Command::SetField {
@@ -529,7 +538,7 @@ impl Host {
             encode_value(&self.simulation, kind, name, whole).map_err(|e| edit_error(&e))?;
         let edit = match target {
             FieldTarget::Component { entity, component } => Edit::Insert {
-                entity,
+                entity: self.simulation.entity_ref(entity),
                 component,
                 value,
             },
@@ -763,10 +772,12 @@ fn session_error(error: &SessionError) -> ProtocolError {
 
 fn edit_error(error: &EditError) -> ProtocolError {
     let code = match error {
-        EditError::NoSuchEntity(_) => ErrorCode::NoSuchEntity,
+        EditError::NoSuchEntity(_) | EditError::NoSuchAddress(_) => ErrorCode::NoSuchEntity,
         EditError::UnknownComponent(_) => ErrorCode::UnknownComponent,
         EditError::UnknownResource(_) => ErrorCode::UnknownResource,
-        EditError::ReadOnly(_) | EditError::InvalidValue { .. } => ErrorCode::InvalidEdit,
+        EditError::ReadOnly(_) | EditError::InvalidValue { .. } | EditError::MissingAsset(_) => {
+            ErrorCode::InvalidEdit
+        }
     };
     ProtocolError::new(code, error)
 }
