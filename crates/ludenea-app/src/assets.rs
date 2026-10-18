@@ -63,7 +63,7 @@ struct AssetFile<'a> {
 }
 
 /// Writes an asset in file form.
-pub(crate) fn asset_file(type_name: &str, value_ron: &str) -> String {
+pub fn asset_file(type_name: &str, value_ron: &str) -> String {
     format!("AssetFile(type: {type_name:?}, value: {value_ron})")
 }
 

@@ -6,6 +6,7 @@ pub mod assets;
 pub mod edit;
 pub mod input;
 pub mod input_log;
+pub mod meta;
 pub mod parallel;
 pub mod path;
 pub mod prefab;
@@ -15,6 +16,7 @@ pub mod rng;
 pub mod scene;
 pub mod simulation;
 pub mod time;
+pub mod trace;
 
 pub use app::{App, AppError, Plugin, Sim};
 pub use assets::{AssetSource, AssetTexts, NamedAssetTexts, NoAssets};

@@ -64,7 +64,7 @@ impl Project {
         for path in all.iter().filter(|path| !path.ends_with(".meta")) {
             let kind = AssetKind::of(path);
             let meta_file = meta_path(&self.root.join(path));
-            let id = match Meta::load_or_create(&meta_file, kind) {
+            let id = match Meta::load_or_create(&meta_file, kind.clone()) {
                 Ok(meta) => {
                     valid.push(format!("{path}.meta"));
                     meta.id

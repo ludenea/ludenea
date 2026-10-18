@@ -657,9 +657,13 @@ type ServerMessage = {
 };
 
 /**
- * What an asset is, as far as the editor cares.
+ * What a project file is. Only a meta makes a `.ron` file a data asset.
  */
-type AssetKind = "Scene" | "Other";
+type AssetKind = "Scene" | "Prefab" | {
+    "Data": {
+        type: string;
+    };
+} | "Replay" | "Trace" | "Snapshot" | "Other";
 
 type Diagnostic = {
     /**

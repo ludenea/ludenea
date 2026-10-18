@@ -16,11 +16,15 @@ thiserror.workspace = true
 postcard.workspace = true
 ron.workspace = true
 serde_json.workspace = true
+xxhash-rust.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 rayon.workspace = true
+# Creating metas needs a random source, which the browser target lacks.
+uuid.workspace = true
 
 [dev-dependencies]
 boxes = { path = "../../examples/boxes" }
 ludenea.workspace = true
 ludenea-physics.workspace = true
+tempfile.workspace = true

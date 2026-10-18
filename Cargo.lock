@@ -1586,8 +1586,11 @@ dependencies = [
  "ron",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
  "ts-rs",
+ "uuid",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -1598,7 +1601,6 @@ dependencies = [
  "ludenea-app",
  "ludenea-control",
  "ludenea-ecs",
- "postcard",
  "serde",
  "serde_json",
  "xxhash-rust",
@@ -1693,6 +1695,7 @@ version = "0.1.0"
 dependencies = [
  "cargo_metadata",
  "libc",
+ "ludenea-app",
  "ludenea-control",
  "ludenea-ecs",
  "ludenea-project",
@@ -1711,7 +1714,6 @@ dependencies = [
  "tokio",
  "toml",
  "ts-rs",
- "uuid",
  "wasm-bindgen-cli-support",
  "xxhash-rust",
 ]

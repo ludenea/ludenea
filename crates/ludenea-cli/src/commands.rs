@@ -3,123 +3,131 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use ludenea_app::App;
+use ludenea_app::replay::{Replay, ReplayOutcome, play_replay, record_replay};
+use ludenea_app::trace::{TRACE_VERSION, Trace, inputs_hash, scene_hash};
+use ludenea_app::{App, EditLog, InputLog, NamedAssetTexts, Simulation};
 use ludenea_control::{Bytes, Command, Host, InProcess, PROTOCOL_VERSION, Reply, Transport};
-use xxhash_rust::xxh3::xxh3_64;
 
-use crate::trace::{TRACE_VERSION, Trace};
+use crate::assets::project_assets;
 
 pub type Outcome = Result<i32, String>;
 
-/// The files of a run, read once, with the hashes a trace records of them.
-struct Recording {
-    ron: String,
-    inputs: Option<Vec<u8>>,
-    edits: Option<Vec<u8>>,
+/// A run definition read from files, with the scene loaded into a simulation and the
+/// hashes a trace records of it.
+struct Run {
+    sim: Simulation,
+    scene: String,
+    assets: NamedAssetTexts,
+    inputs: InputLog,
+    edits: EditLog,
     scene_hash: u64,
     inputs_hash: u64,
 }
 
-impl Recording {
-    fn read(scene: &Path, inputs: Option<&Path>, edits: Option<&Path>) -> Result<Self, String> {
-        let scene_bytes = read(scene)?;
-        let scene_hash = xxh3_64(&scene_bytes);
-        let ron = String::from_utf8(scene_bytes)
-            .map_err(|_| format!("{} is not valid UTF-8", scene.display()))?;
+impl Run {
+    fn read(
+        app: fn() -> App,
+        files: &RunFiles,
+        inputs: Option<&Path>,
+        threads: Option<u32>,
+    ) -> Result<Run, String> {
+        let scene_bytes = read(&files.scene)?;
+        let scene = String::from_utf8(scene_bytes.clone())
+            .map_err(|_| format!("{} is not valid UTF-8", files.scene.display()))?;
+        let assets = project_assets(&files.scene, files.project.as_deref())?;
+        let mut sim = simulation(app, threads)?;
+        sim.load_scene_with(&scene, &assets)
+            .map_err(|error| format!("cannot load {}: {error}", files.scene.display()))?;
+        let scene_hash = scene_hash(&scene_bytes, &sim);
         let inputs = inputs.map(read).transpose()?;
-        let edits = edits.map(read).transpose()?;
+        let edits = files.edits.as_deref().map(read).transpose()?;
         let inputs_hash = inputs_hash(inputs.as_deref(), edits.as_deref());
-        Ok(Recording {
-            ron,
+        let inputs = match inputs {
+            Some(bytes) => InputLog::decode(&bytes).map_err(|error| error.to_string())?,
+            None => InputLog::new(1),
+        };
+        let edits = match edits {
+            Some(bytes) => EditLog::decode(&bytes).map_err(|error| error.to_string())?,
+            None => EditLog::new(),
+        };
+        Ok(Run {
+            sim,
+            scene,
+            assets,
             inputs,
             edits,
             scene_hash,
             inputs_hash,
         })
     }
-}
 
-/// A connected client with the scene loaded and the inputs and thread count applied.
-struct Session {
-    client: InProcess,
-    scene_hash: u64,
-    inputs_hash: u64,
-}
-
-impl Session {
-    fn open(
-        app: fn() -> App,
-        recording: Recording,
-        threads: Option<u32>,
-    ) -> Result<Session, String> {
-        let host = Host::new(app()).map_err(|error| error.to_string())?;
-        let mut client =
-            InProcess::connect(host, PROTOCOL_VERSION).map_err(|error| error.message)?;
-        if let Some(threads) = threads {
-            send(&mut client, Command::SetThreads { threads })?;
-        }
-        send(&mut client, Command::LoadScene { ron: recording.ron })?;
-        if let Some(log) = recording.inputs {
-            send(&mut client, Command::LoadInputs { log: Bytes(log) })?;
-        }
-        if let Some(log) = recording.edits {
-            send(&mut client, Command::LoadEdits { log: Bytes(log) })?;
-            settle(&mut client)?;
-        }
-        Ok(Session {
-            client,
-            scene_hash: recording.scene_hash,
-            inputs_hash: recording.inputs_hash,
-        })
-    }
-
-    fn hash(&mut self) -> Result<u64, String> {
-        match send(&mut self.client, Command::GetHash)? {
-            Reply::Hash { hash, .. } => Ok(hash.0),
-            _ => Err("unexpected reply to GetHash".into()),
-        }
-    }
-
-    /// Runs `ticks` ticks and returns the hash after each.
-    fn step(&mut self, ticks: u32) -> Result<Vec<u64>, String> {
-        let command = Command::Step {
+    /// Runs `ticks` ticks from the scene load, recording them as a replay.
+    fn record(&mut self, ticks: u64) -> Result<Replay, String> {
+        record_replay(
+            &mut self.sim,
+            &self.scene,
+            &self.assets,
+            &self.inputs,
+            &self.edits,
             ticks,
-            record_hashes: true,
-        };
-        match send(&mut self.client, command)? {
-            Reply::Stepped { hashes, .. } => Ok(hashes.into_iter().map(|hash| hash.0).collect()),
-            _ => Err("unexpected reply to Step".into()),
-        }
-    }
-
-    fn snapshot(&mut self) -> Result<Vec<u8>, String> {
-        match send(&mut self.client, Command::TakeSnapshot)? {
-            Reply::Snapshot { snapshot, .. } => Ok(snapshot.0),
-            _ => Err("unexpected reply to TakeSnapshot".into()),
-        }
+        )
+        .map_err(|error| error.to_string())
     }
 }
 
-/// xxh3 of the input log followed by the edit log; 0 when there is neither.
-fn inputs_hash(inputs: Option<&[u8]>, edits: Option<&[u8]>) -> u64 {
-    match (inputs, edits) {
-        (None, None) => 0,
-        (inputs, edits) => {
-            xxh3_64(&[inputs.unwrap_or_default(), edits.unwrap_or_default()].concat())
-        }
+fn simulation(app: fn() -> App, threads: Option<u32>) -> Result<Simulation, String> {
+    let mut sim = app().build().map_err(|error| error.to_string())?;
+    if let Some(threads) = threads {
+        sim.set_threads(threads as usize);
     }
+    Ok(sim)
 }
 
-/// Lets the host finish resimulating after the recorded edits were loaded.
-fn settle(client: &mut InProcess) -> Result<(), String> {
-    loop {
-        client.advance(0.0);
-        match send(client, Command::GetTimeline)? {
-            Reply::Timeline(timeline) if !timeline.resimulating => return Ok(()),
-            Reply::Timeline(_) => {}
-            _ => return Err("unexpected reply to GetTimeline".into()),
-        }
+/// Plays `replay` against its hashes; on the first mismatch writes the snapshots of that
+/// tick and the one before into `dump_dir`.
+fn play(
+    app: fn() -> App,
+    replay: &Replay,
+    threads: Option<u32>,
+    dump_dir: &Path,
+    out: &mut dyn Write,
+) -> Outcome {
+    let mut sim = simulation(app, threads)?;
+    let report = play_replay(&mut sim, replay, |_, _| {}).map_err(|error| error.to_string())?;
+    if report.fingerprint_differs {
+        say(out, "note: recorded by a build with other game types")?;
     }
+    let ReplayOutcome::Diverged {
+        tick,
+        expected,
+        got,
+    } = report.outcome
+    else {
+        return say(
+            out,
+            format_args!("ok: {} hashes match", replay.hashes.len()),
+        )
+        .map(|()| 0);
+    };
+    say(
+        out,
+        format_args!("mismatch at tick {tick}: expected {expected:016x}, got {got:016x}"),
+    )?;
+    let (previous, current) = report
+        .diverged_snapshots
+        .expect("a divergence has its snapshots");
+    let dumps = previous
+        .map(|bytes| (tick - 1, bytes))
+        .into_iter()
+        .chain([(tick, current)]);
+    let mut paths = Vec::new();
+    for (dumped_tick, bytes) in dumps {
+        let path = dump_dir.join(format!("tick-{dumped_tick}.snap"));
+        write(&path, &bytes)?;
+        paths.push(path.display().to_string());
+    }
+    say(out, format_args!("wrote {}", paths.join(" and ")))?;
+    Ok(1)
 }
 
 /// Sends `command`; the events it queues are dropped, since nothing here shows them.
@@ -145,14 +153,25 @@ fn say(out: &mut dyn Write, line: impl std::fmt::Display) -> Result<(), String> 
     writeln!(out, "{line}").map_err(|error| error.to_string())
 }
 
+/// The scene of a run, where its assets are, and its edits.
 #[derive(Args)]
-pub struct RunArgs {
+pub struct RunFiles {
     scene: PathBuf,
+    /// The project folder whose prefabs and data assets the scene loads; defaults to the
+    /// nearest folder above the scene holding `ludenea.toml`, else the scene's folder.
     #[arg(long)]
-    inputs: Option<PathBuf>,
+    project: Option<PathBuf>,
     /// The edit log of an editor session, replayed with the inputs.
     #[arg(long)]
     edits: Option<PathBuf>,
+}
+
+#[derive(Args)]
+pub struct RunArgs {
+    #[command(flatten)]
+    files: RunFiles,
+    #[arg(long)]
+    inputs: Option<PathBuf>,
     #[arg(long)]
     ticks: u32,
     #[arg(long)]
@@ -163,18 +182,20 @@ pub struct RunArgs {
     /// Write the per-tick hashes to this file.
     #[arg(long)]
     trace: Option<PathBuf>,
+    /// Write the run as a self-contained replay to this file.
+    #[arg(long)]
+    replay: Option<PathBuf>,
 }
 
 #[derive(Args)]
 pub struct VerifyArgs {
-    scene: PathBuf,
+    /// A scene verified against `--golden`, or a `.replay` verified against its own hashes.
+    #[command(flatten)]
+    files: RunFiles,
     #[arg(long)]
-    inputs: PathBuf,
-    /// The edit log of an editor session, replayed with the inputs.
+    inputs: Option<PathBuf>,
     #[arg(long)]
-    edits: Option<PathBuf>,
-    #[arg(long)]
-    golden: PathBuf,
+    golden: Option<PathBuf>,
     #[arg(long)]
     threads: Option<u32>,
     /// Where to write the snapshots around the first mismatch.
@@ -189,93 +210,67 @@ pub struct DiffArgs {
 }
 
 pub fn run(app: fn() -> App, args: &RunArgs, out: &mut dyn Write) -> Outcome {
-    let RunArgs {
-        scene,
-        inputs,
-        edits,
-        ticks,
-        threads,
-        hash: print_hash,
-        trace,
-    } = args;
-    let ticks = *ticks;
-    let recording = Recording::read(scene, inputs.as_deref(), edits.as_deref())?;
-    let mut session = Session::open(app, recording, *threads)?;
-    let mut hashes = vec![session.hash()?];
-    hashes.extend(session.step(ticks)?);
-    let last = hashes[hashes.len() - 1];
-    if let Some(path) = trace {
+    let mut run = Run::read(app, &args.files, args.inputs.as_deref(), args.threads)?;
+    let replay = run.record(u64::from(args.ticks))?;
+    if let Some(path) = &args.trace {
         let trace = Trace {
             version: TRACE_VERSION,
-            scene_hash: session.scene_hash,
-            inputs_hash: session.inputs_hash,
-            hashes,
+            scene_hash: run.scene_hash,
+            inputs_hash: run.inputs_hash,
+            hashes: replay.hashes.clone(),
         };
         write(path, &trace.encode())?;
     }
-    if *print_hash {
-        say(out, format_args!("tick {ticks} hash {last:016x}"))?;
+    if let Some(path) = &args.replay {
+        write(path, &replay.encode())?;
+    }
+    if args.hash {
+        let last = replay.hashes[replay.hashes.len() - 1];
+        say(out, format_args!("tick {} hash {last:016x}", args.ticks))?;
     }
     Ok(0)
 }
 
 pub fn verify(app: fn() -> App, args: &VerifyArgs, out: &mut dyn Write) -> Outcome {
     let VerifyArgs {
-        scene,
+        files,
         inputs,
-        edits,
         golden,
         threads,
         dump_dir,
     } = args;
-    let threads = *threads;
+    if files
+        .scene
+        .extension()
+        .is_some_and(|extension| extension == "replay")
+    {
+        let replay = Replay::decode(&read(&files.scene)?).map_err(|error| error.to_string())?;
+        return play(app, &replay, *threads, dump_dir, out);
+    }
+    let (Some(inputs), Some(golden)) = (inputs, golden) else {
+        return Err("verifying a scene needs --inputs and --golden".into());
+    };
     let golden = Trace::decode(&read(golden)?)?;
-    let recording = Recording::read(scene, Some(inputs), edits.as_deref())?;
-    if (recording.scene_hash, recording.inputs_hash) != (golden.scene_hash, golden.inputs_hash) {
+    let mut run = Run::read(app, files, Some(inputs), *threads)?;
+    if (run.scene_hash, run.inputs_hash) != (golden.scene_hash, golden.inputs_hash) {
         say(
             out,
             "golden trace was recorded for a different scene or input log",
         )?;
         return Ok(2);
     }
-    let mut session = Session::open(app, recording, threads)?;
-    // The snapshot after the previous tick stays available for the dump.
-    let mut previous = session.snapshot()?;
-    for (tick, expected) in golden.hashes.iter().enumerate() {
-        let got = if tick == 0 {
-            session.hash()?
-        } else {
-            session.step(1)?[0]
-        };
-        if got == *expected {
-            if tick + 1 < golden.hashes.len() {
-                previous = session.snapshot()?;
-            }
-            continue;
-        }
+    let ticks = golden.hashes.len().saturating_sub(1) as u64;
+    let mut replay = run.record(ticks)?;
+    if replay.hashes == golden.hashes {
         say(
             out,
-            format_args!("mismatch at tick {tick}: expected {expected:016x}, got {got:016x}"),
+            format_args!("ok: {} hashes match", golden.hashes.len()),
         )?;
-        let mut dumps = Vec::new();
-        if tick > 0 {
-            dumps.push((tick - 1, previous));
-        }
-        dumps.push((tick, session.snapshot()?));
-        let mut paths = Vec::new();
-        for (dumped_tick, bytes) in dumps {
-            let path = dump_dir.join(format!("tick-{dumped_tick}.snap"));
-            write(&path, &bytes)?;
-            paths.push(path.display().to_string());
-        }
-        say(out, format_args!("wrote {}", paths.join(" and ")))?;
-        return Ok(1);
+        return Ok(0);
     }
-    say(
-        out,
-        format_args!("ok: {} hashes match", golden.hashes.len()),
-    )?;
-    Ok(0)
+    // Played again against the golden hashes, to stop at the first mismatch with dumps.
+    replay.hashes = golden.hashes;
+    play(app, &replay, *threads, dump_dir, out)
 }
 
 pub fn diff(app: fn() -> App, args: &DiffArgs, out: &mut dyn Write) -> Outcome {

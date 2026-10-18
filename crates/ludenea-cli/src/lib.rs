@@ -1,6 +1,7 @@
 //! The `ludenea` command line: `run`, `verify`, `diff`, and `host`. A game provides its own
 //! `main` and passes its app constructor to [`main`].
 
+pub mod assets;
 mod commands;
 mod trace;
 
@@ -23,7 +24,7 @@ struct Cli {
 enum Cmd {
     /// Run a scene for a number of ticks.
     Run(commands::RunArgs),
-    /// Replay a run and compare its hashes with a golden trace.
+    /// Replay a run and compare its hashes with a golden trace, or verify a replay.
     Verify(commands::VerifyArgs),
     /// List the differences between two snapshots.
     Diff(commands::DiffArgs),

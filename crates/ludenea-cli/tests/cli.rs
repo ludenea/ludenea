@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use ludenea_app::replay::Replay;
 use ludenea_app::{App, InputLog, Rng, Sim};
 use ludenea_cli::{Trace, run};
 use ludenea_control::{Bytes, Command, Host, InProcess, PROTOCOL_VERSION, Reply, Transport};
@@ -323,4 +324,71 @@ fn golden_trace_still_verifies_without_edits() {
         trace.inputs_hash,
         xxhash_rust::xxh3::xxh3_64(&fs::read(dir.join("inputs.bin")).unwrap())
     );
+}
+
+fn record_replay(dir: &Path) {
+    let (code, out) = cli(
+        dir,
+        &[
+            "run",
+            "{}/scene.ron",
+            "--inputs",
+            "{}/inputs.bin",
+            "--ticks",
+            "20",
+            "--trace",
+            "{}/golden.bin",
+            "--replay",
+            "{}/run.replay",
+        ],
+    );
+    assert_eq!(code, 0, "{out}");
+}
+
+fn verify_replay(dir: &Path, threads: &str) -> (i32, String) {
+    cli(
+        dir,
+        &[
+            "verify",
+            "{}/run.replay",
+            "--threads",
+            threads,
+            "--dump-dir",
+            "{}/dump",
+        ],
+    )
+}
+
+#[test]
+fn run_writes_a_replay_that_verifies() {
+    let dir = dir("replay_verifies");
+    record_replay(&dir);
+    let replay = Replay::decode(&fs::read(dir.join("run.replay")).unwrap()).unwrap();
+    assert_eq!(replay.hashes, golden_hashes(&dir));
+    for threads in ["1", "2"] {
+        assert_eq!(
+            verify_replay(&dir, threads),
+            (0, "ok: 21 hashes match\n".to_string())
+        );
+    }
+}
+
+#[test]
+fn verify_replay_fails_on_altered_hash_and_dumps_snapshots() {
+    let dir = dir("replay_altered");
+    record_replay(&dir);
+    let path = dir.join("run.replay");
+    let mut replay = Replay::decode(&fs::read(&path).unwrap()).unwrap();
+    let expected = replay.hashes.clone();
+    replay.hashes[7] ^= 1;
+    fs::write(&path, replay.encode()).unwrap();
+    let (code, out) = verify_replay(&dir, "1");
+    assert_eq!(code, 1);
+    assert!(out.contains("mismatch at tick 7"), "{out}");
+    assert!(
+        out.contains("tick-6.snap and ") && out.contains("tick-7.snap"),
+        "{out}"
+    );
+    assert_eq!(snapshot_hash(&dir.join("dump/tick-6.snap")), expected[6]);
+    assert_eq!(snapshot_hash(&dir.join("dump/tick-7.snap")), expected[7]);
 }

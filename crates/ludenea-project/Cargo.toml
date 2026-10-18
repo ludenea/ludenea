@@ -5,10 +5,11 @@ edition.workspace = true
 
 [features]
 # TypeScript bindings of the project protocol; off by default.
-ts = ["dep:ts-rs", "ludenea-control/ts", "ludenea-ecs/ts"]
+ts = ["dep:ts-rs", "ludenea-app/ts", "ludenea-control/ts", "ludenea-ecs/ts"]
 
 [dependencies]
 cargo_metadata.workspace = true
+ludenea-app.workspace = true
 ludenea-control.workspace = true
 ludenea-ecs.workspace = true
 ludenea-schema.workspace = true
@@ -25,7 +26,6 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 toml.workspace = true
 ts-rs = { workspace = true, optional = true }
-uuid.workspace = true
 wasm-bindgen-cli-support.workspace = true
 xxhash-rust.workspace = true
 

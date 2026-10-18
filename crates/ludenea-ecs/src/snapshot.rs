@@ -55,6 +55,10 @@ pub enum SnapshotError {
     MissingResource(String),
     #[error("cannot decode `{name}` from the snapshot: {reason}")]
     Decode { name: String, reason: String },
+    #[error(
+        "the snapshots were recorded by different game builds (schema fingerprints {left:016x} and {right:016x}); compare snapshots of one build"
+    )]
+    Fingerprint { left: u64, right: u64 },
 }
 
 impl Snapshot {

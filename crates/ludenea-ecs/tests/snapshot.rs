@@ -2,8 +2,8 @@ use std::panic::AssertUnwindSafe;
 
 use ludenea_ecs::schema::Schema;
 use ludenea_ecs::{
-    Commands, Component, EcsError, Entity, Event, EventWriter, Events, ResMut, Resource,
-    SNAPSHOT_VERSION, ScheduleBuilder, Snapshot, SnapshotError, World, hash_value,
+    Commands, Component, Difference, EcsError, Entity, Event, EventWriter, Events, ResMut,
+    Resource, SNAPSHOT_VERSION, ScheduleBuilder, Snapshot, SnapshotError, World, hash_value,
 };
 use serde::{Deserialize, Serialize};
 
@@ -230,9 +230,16 @@ fn diff_reports_entity_component_and_field_path() {
     let difference = &differences[0];
     assert_eq!(difference.subject, format!("entity {}", entities[0]));
     assert_eq!(difference.component, Health::NAME);
-    assert_eq!(difference.path, ".hp");
-    assert_eq!(difference.left, "10");
-    assert_eq!(difference.right, "9");
+    assert_eq!(difference.path, ["hp"]);
+    assert_eq!(difference.left, Some(serde_json::json!(10)));
+    assert_eq!(difference.right, Some(serde_json::json!(9)));
+    assert_eq!(
+        (
+            difference.left_text.as_str(),
+            difference.right_text.as_str()
+        ),
+        ("10", "9")
+    );
     assert_eq!(
         difference.to_string(),
         format!("entity 0v0 {} .hp: 10 != 9", Health::NAME)
@@ -248,7 +255,14 @@ fn diff_reports_enum_variant_change() {
     let differences = world.diff_snapshots(&left, &right).unwrap();
     assert_eq!(differences.len(), 1);
     assert_eq!(differences[0].component, Body::NAME);
-    assert_ne!(differences[0].left, differences[0].right);
+    assert_eq!(differences[0].path, ["kind"]);
+    assert_eq!(
+        (
+            differences[0].left_text.as_str(),
+            differences[0].right_text.as_str()
+        ),
+        ("Static", "Dynamic")
+    );
 }
 
 #[derive(Serialize)]
@@ -385,4 +399,153 @@ fn restore_clears_queued_commands_and_events() {
         before.entities,
         "a stale command was applied"
     );
+}
+
+#[test]
+fn diff_output_lines_unchanged() {
+    let (mut world, entities) = populated_world();
+    let left = world.snapshot();
+    world.get_mut::<Health>(entities[0]).unwrap().hp = 9;
+    world.insert(entities[1], Speed(2.5)).unwrap();
+    world.resource_mut::<Score>().unwrap().0 = 8;
+    world.spawn();
+    let right = world.snapshot();
+    let lines: Vec<String> = world
+        .diff_snapshots(&left, &right)
+        .unwrap()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "entities ludenea::Entities .alive[1]: false != true",
+            "entities ludenea::Entities .free[0]: 1 != absent",
+            "resource snapshot::Score [0]: 7 != 8",
+            "entity 0v0 snapshot::Health .hp: 10 != 9",
+            "entity 2v0 snapshot::Speed : absent != (2.5)",
+        ]
+    );
+}
+
+#[derive(Serialize, Deserialize, Schema, Debug, PartialEq, Clone)]
+enum Shape {
+    Circle { radius: u32 },
+    Square(u32),
+}
+
+#[derive(Component, Serialize, Deserialize, Debug, PartialEq, Clone)]
+struct Outline {
+    shape: Shape,
+    kind: BodyKind,
+}
+
+#[test]
+fn structured_difference_reports_variant_names() {
+    let mut world = World::new();
+    world.register_component::<Outline>().unwrap();
+    let entity = world.spawn();
+    let outline = |shape, kind| Outline { shape, kind };
+    world
+        .insert(
+            entity,
+            outline(Shape::Circle { radius: 1 }, BodyKind::Static),
+        )
+        .unwrap();
+    let left = world.snapshot();
+    world
+        .insert(entity, outline(Shape::Square(2), BodyKind::Dynamic))
+        .unwrap();
+    let right = world.snapshot();
+    let differences = world.diff_snapshots(&left, &right).unwrap();
+    let difference = |path: &str, left: &str, right: &str| Difference {
+        subject: "entity 0v0".to_string(),
+        component: Outline::NAME.to_string(),
+        path: vec![path.to_string()],
+        left: Some(serde_json::json!(left)),
+        right: Some(serde_json::json!(right)),
+        left_text: left.to_string(),
+        right_text: right.to_string(),
+    };
+    assert_eq!(
+        differences,
+        [
+            difference("kind", "Static", "Dynamic"),
+            difference("shape", "Circle", "Square"),
+        ]
+    );
+    assert_eq!(
+        differences[0].to_string(),
+        format!("entity 0v0 {} .kind: Static != Dynamic", Outline::NAME)
+    );
+
+    // Within one variant, the walk goes on into its fields.
+    world
+        .insert(
+            entity,
+            outline(Shape::Circle { radius: 3 }, BodyKind::Static),
+        )
+        .unwrap();
+    let differences = world.diff_snapshots(&left, &world.snapshot()).unwrap();
+    assert_eq!(differences.len(), 1);
+    assert_eq!(differences[0].path, ["shape", "radius"]);
+    assert_eq!(
+        (differences[0].left.clone(), differences[0].right.clone()),
+        (Some(serde_json::json!(1)), Some(serde_json::json!(3)))
+    );
+}
+
+#[derive(ludenea_ecs::Asset, Serialize, Deserialize, Debug, PartialEq)]
+#[asset(name = "test::Stats")]
+struct Stats {
+    damage: u32,
+}
+
+#[test]
+fn asset_only_divergence_is_listed() {
+    let mut world = base_world();
+    world.register_asset::<Stats>().unwrap();
+    let id = ludenea_ecs::AssetId(7);
+    world
+        .insert_asset_ron(id, "test::Stats", "(damage: 1)")
+        .unwrap();
+    let left = world.snapshot();
+    world
+        .insert_asset_ron(id, "test::Stats", "(damage: 2)")
+        .unwrap();
+    let right = world.snapshot();
+    let lines: Vec<String> = world
+        .diff_snapshots(&left, &right)
+        .unwrap()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(lines, [format!("asset {id} test::Stats .damage: 1 != 2")]);
+
+    world.clear_assets();
+    let lines: Vec<String> = world
+        .diff_snapshots(&left, &world.snapshot())
+        .unwrap()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(
+        lines,
+        [format!("asset {id} test::Stats : (damage:1) != absent")]
+    );
+}
+
+#[test]
+fn snapshots_with_other_fingerprints_are_refused() {
+    let (world, _) = populated_world();
+    let mut left = world.snapshot();
+    let mut right = world.snapshot();
+    (left.fingerprint, right.fingerprint) = (1, 2);
+    assert!(matches!(
+        world.diff_snapshots(&left, &right),
+        Err(SnapshotError::Fingerprint { left: 1, right: 2 })
+    ));
+    // An unknown fingerprint (0) compares with any.
+    right.fingerprint = 0;
+    assert!(world.diff_snapshots(&left, &right).unwrap().is_empty());
 }

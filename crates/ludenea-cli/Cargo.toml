@@ -7,10 +7,9 @@ edition.workspace = true
 clap.workspace = true
 ludenea-app.workspace = true
 ludenea-control.workspace = true
-postcard.workspace = true
-serde.workspace = true
-xxhash-rust.workspace = true
 
 [dev-dependencies]
 ludenea-ecs.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+xxhash-rust.workspace = true
