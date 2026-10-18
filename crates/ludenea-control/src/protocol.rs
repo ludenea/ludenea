@@ -316,7 +316,8 @@ pub enum Command {
         branch: BranchId,
         name: String,
     },
-    /// Deletes a branch and its descendants; replies `Deleted` with all of them.
+    /// Deletes a branch and its descendants, switching to its parent when the current
+    /// branch is among them; replies `Deleted`.
     DeleteBranch {
         branch: BranchId,
     },
@@ -438,6 +439,7 @@ pub enum Reply {
     Text {
         text: String,
     },
+    /// The deleted branch first, then its descendants.
     Deleted {
         branches: Vec<BranchId>,
     },

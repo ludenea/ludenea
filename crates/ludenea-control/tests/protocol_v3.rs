@@ -4,17 +4,21 @@ use std::path::Path;
 use boxes::SpawnerStats;
 use ludenea::cli::assets::project_assets;
 use ludenea::control::{
-    BranchId, Command, ComponentValue, Document, ErrorCode, Host, InProcess, PROTOCOL_VERSION,
-    PathSegment, ProtocolError, Reply, Timeline,
+    BranchId, Bytes, Command, ComponentValue, Document, ErrorCode, Hash64, Host, InProcess,
+    PROTOCOL_VERSION, PathSegment, ProtocolError, Reply, Timeline,
 };
 use ludenea::ecs::{Asset, AssetId};
-use ludenea::prelude::{App, Edit, EditLog};
+use ludenea::prelude::{App, Edit, EditLog, InputLog};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 const SPAWNER_SCENE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../examples/boxes/assets/spawner.scene.ron"
+);
+const CRATE_PREFAB: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../examples/boxes/assets/crate.prefab.ron"
 );
 /// The identifiers in `crate.prefab.ron.meta` and `spawner.ron.meta`.
 const PREFAB: AssetId = AssetId(0x38b3_6be4_f8a1_40d6_95e5_cdac_24c8_2f90);
@@ -308,4 +312,204 @@ fn session_export_from_2a_loads() {
     assert_eq!(loaded.branch, BranchId::ROOT);
     assert_eq!(loaded.branches.len(), 1);
     assert!(loaded.head > 0);
+}
+
+fn spawn_crate(host: &mut Host) {
+    ok(
+        host,
+        Command::Spawn {
+            components: [("boxes::Crate".to_string(), json!(null))].into(),
+        },
+    );
+}
+
+fn hash(host: &mut Host) -> Hash64 {
+    match ok(host, Command::GetHash) {
+        Reply::Hash { hash, .. } => hash,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// The branches without their stale flag, which a resume sets on the other branches.
+fn branches(timeline: &Timeline) -> Vec<(BranchId, String, Option<BranchId>, u64, u64)> {
+    timeline
+        .branches
+        .iter()
+        .map(|b| (b.id, b.name.clone(), b.parent, b.fork_tick, b.head))
+        .collect()
+}
+
+#[test]
+fn export_and_load_session_round_trips_assets_branches_and_document() {
+    let mut host = Host::new(boxes::app()).unwrap();
+    ok(
+        &mut host,
+        Command::LoadScene {
+            scene: fs::read_to_string(CRATE_PREFAB).unwrap(),
+            assets: assets(),
+            document: Document::Prefab,
+        },
+    );
+    step(&mut host, 5);
+    spawn_crate(&mut host);
+    step(&mut host, 15);
+    ok(&mut host, Command::Seek { tick: 10 });
+    spawn_crate(&mut host);
+    let b = timeline(&mut host).branch;
+    // Below B's fork tick: C inherits the root's edit at tick 5.
+    ok(&mut host, Command::Seek { tick: 5 });
+    spawn_crate(&mut host);
+    step(&mut host, 3);
+    ok(
+        &mut host,
+        Command::RenameBranch {
+            branch: b,
+            name: "B".to_string(),
+        },
+    );
+    let before = timeline(&mut host);
+    let c = before.branch;
+    assert_eq!(before.branches.len(), 3);
+    let fork = before
+        .branches
+        .iter()
+        .find(|branch| branch.id == c)
+        .unwrap();
+    assert_eq!((fork.parent, fork.fork_tick), (Some(b), 5));
+    let expected = hash(&mut host);
+    let Reply::Session {
+        scene,
+        saved_scene,
+        inputs,
+        edits,
+        undo,
+        hashes,
+        assets,
+        branches: tree,
+        document,
+    } = ok(&mut host, Command::ExportSession)
+    else {
+        panic!("export_session replies session");
+    };
+    assert_eq!(document, Document::Prefab);
+    assert!(!assets.is_empty() && !tree.0.is_empty());
+
+    let mut loaded = Host::new(boxes::app()).unwrap();
+    ok(
+        &mut loaded,
+        Command::LoadSession {
+            scene,
+            saved_scene,
+            inputs,
+            edits,
+            undo,
+            expected: hashes.clone(),
+            assets: assets.clone(),
+            branches: tree,
+            document,
+        },
+    );
+    while timeline(&mut loaded).resimulating {
+        loaded.advance(0.0);
+    }
+    ok(
+        &mut loaded,
+        Command::Seek {
+            tick: before.current,
+        },
+    );
+    let after = timeline(&mut loaded);
+    assert_eq!(after.branch, c);
+    assert_eq!(after.current, before.current);
+    assert_eq!(branches(&after), branches(&before));
+    assert_eq!(hash(&mut loaded), expected);
+    let Reply::Session {
+        hashes: reloaded,
+        assets: reloaded_assets,
+        document,
+        ..
+    } = ok(&mut loaded, Command::ExportSession)
+    else {
+        panic!("export_session replies session");
+    };
+    assert_eq!(reloaded, hashes);
+    assert_eq!(reloaded_assets, assets);
+    assert_eq!(document, Document::Prefab);
+
+    // Deleting B deletes C, its descendant, too.
+    assert_eq!(
+        ok(&mut loaded, Command::DeleteBranch { branch: b }),
+        Reply::Deleted {
+            branches: vec![b, c]
+        }
+    );
+    assert_eq!(timeline(&mut loaded).branch, BranchId::ROOT);
+}
+
+#[derive(Serialize)]
+struct HostileTree {
+    current: BranchId,
+    next: u32,
+    branches: Vec<HostileBranch>,
+}
+
+/// The stored branch layout of a session export.
+#[derive(Serialize)]
+struct HostileBranch {
+    id: BranchId,
+    name: String,
+    parent: Option<BranchId>,
+    fork_tick: u64,
+    fork_edits: u64,
+    stale: bool,
+    inputs: Vec<u8>,
+    edits: Vec<u8>,
+    hashes: Vec<u64>,
+}
+
+#[test]
+fn load_session_refuses_a_hostile_branch_tree() {
+    let branch = |id, parent, fork_tick| HostileBranch {
+        id: BranchId(id),
+        name: String::new(),
+        parent,
+        fork_tick,
+        fork_edits: 0,
+        stale: false,
+        inputs: InputLog::new(1).encode(),
+        edits: EditLog::new().encode(),
+        hashes: Vec::new(),
+    };
+    let far_fork = postcard::to_allocvec(&HostileTree {
+        current: BranchId::ROOT,
+        next: 2,
+        branches: vec![
+            branch(0, None, 0),
+            branch(1, Some(BranchId::ROOT), u64::MAX),
+        ],
+    })
+    .unwrap();
+    for tree in [far_fork, vec![0xff; 16]] {
+        let mut host = Host::new(boxes::app()).unwrap();
+        let error = host
+            .handle(Command::LoadSession {
+                scene: boxes::generate_scene(30, 7),
+                saved_scene: None,
+                inputs: Bytes(Vec::new()),
+                edits: Bytes(Vec::new()),
+                undo: Bytes(Vec::new()),
+                expected: Vec::new(),
+                assets: Vec::new(),
+                branches: Bytes(tree),
+                document: Document::Scene,
+            })
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidCommand);
+        assert!(
+            error
+                .message
+                .starts_with("the branch tree cannot be decoded"),
+            "{error:?}"
+        );
+    }
 }

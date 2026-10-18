@@ -830,3 +830,29 @@ fn dropped_edit_is_reported_per_branch() {
     reports_until_done(&mut session, &mut sim);
     assert!(edits(&session).is_empty());
 }
+
+#[test]
+fn fork_below_the_parent_fork_inherits_ancestor_edits_and_resumes() {
+    let mut sim = simulation();
+    let mut session =
+        Session::start(&mut sim, small_scene(), AssetTexts::new(), Document::Scene).unwrap();
+    play(&mut session, &mut sim, 5);
+    let edit = stats_edit(&sim, 1);
+    session.edit(&mut sim, edit).unwrap();
+    play(&mut session, &mut sim, 15);
+    edit_at(&mut session, &mut sim, 10, 2);
+    let b = session.current_branch();
+    // Below B's own fork: the edit of the root at tick 5 is inherited.
+    edit_at(&mut session, &mut sim, 5, 3);
+    let c = session.current_branch();
+    assert_eq!(branch(&session, c).parent, Some(b));
+    assert_eq!(branch(&session, c).fork_tick, 5);
+    play(&mut session, &mut sim, 3);
+
+    let export = session.export().unwrap();
+    let mut resumed_sim = simulation();
+    let mut resumed = Session::resume(&mut resumed_sim, export, Document::Scene).unwrap();
+    resimulate_all(&mut resumed, &mut resumed_sim);
+    assert_eq!(resumed.current_branch(), c);
+    assert_eq!(hashes(&resumed), hashes(&session));
+}

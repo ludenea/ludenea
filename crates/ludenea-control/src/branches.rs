@@ -443,38 +443,50 @@ impl BranchTree {
     }
 
     /// Refuses a fork point past its parent's head or inheriting more edits than the
-    /// parent records at the fork tick: replaying it would pad the run without bound.
-    /// Parents come first in identifier order, so each parent's fork is checked before
-    /// its head is computed from it.
+    /// parent's run records at the fork tick: replaying it would pad the run without bound.
+    /// Parents come first in identifier order, so every fork point `edits_at` reads on the
+    /// way is checked before.
     fn check_forks(&self, current_edits: &EditLog, current_head: u64) -> Result<(), BranchesError> {
         for branch in self.branches.values() {
-            let Some(parent) = branch.parent.map(|id| &self.branches[&id]) else {
+            let Some(parent) = branch.parent else {
                 if branch.fork() != (0, 0) {
                     return Err(BranchesError::Fork);
                 }
                 continue;
             };
-            let (head, edits_at_fork) = match &parent.segment {
-                None => (current_head, current_edits.at(branch.fork_tick).len()),
-                Some(segment) => {
-                    let own = segment
-                        .edits
-                        .iter()
-                        .filter(|edit| edit.tick == branch.fork_tick)
-                        .count();
-                    let inherited = if branch.fork_tick == parent.fork_tick {
-                        parent.fork_edits
-                    } else {
-                        0
-                    };
-                    (segment.head(parent.fork_tick), own + inherited)
-                }
+            let head = match &self.branches[&parent].segment {
+                None => current_head,
+                Some(segment) => segment.head(self.branches[&parent].fork_tick),
             };
-            if branch.fork_tick > head || branch.fork_edits > edits_at_fork {
+            let edits = self.edits_at(parent, branch.fork_tick, current_edits);
+            if branch.fork_tick > head || branch.fork_edits > edits {
                 return Err(BranchesError::Fork);
             }
         }
         Ok(())
+    }
+
+    /// How many edits the run of `id` records at `tick`: a branch forked after `tick` shares
+    /// its parent's, and the current branch's run is `current_edits`.
+    fn edits_at(&self, mut id: BranchId, tick: u64, current_edits: &EditLog) -> usize {
+        loop {
+            let branch = &self.branches[&id];
+            let Some(segment) = &branch.segment else {
+                return current_edits.at(tick).len();
+            };
+            match (tick.cmp(&branch.fork_tick), branch.parent) {
+                (std::cmp::Ordering::Less, Some(parent)) => id = parent,
+                (order, _) => {
+                    let own = segment
+                        .edits
+                        .iter()
+                        .filter(|edit| edit.tick == tick)
+                        .count();
+                    let inherited = if order.is_eq() { branch.fork_edits } else { 0 };
+                    return own + inherited;
+                }
+            }
+        }
     }
 }
 
