@@ -33,8 +33,10 @@ export interface Editor {
   /** `key` such as `Mod+S` (Cmd on macOS, Ctrl elsewhere), `Ctrl+Shift+Z`, `F5`, `Delete`, or `.`; runs `command` unless a text field has focus. */
   shortcuts: {
     register(shortcut: { key: string; command: string }): Disposable;
-    /** Set while the game captures live input: then only `F5` and `Mod` combinations run shortcuts. */
-    captured: boolean;
+    /** Whether the game captures live input: then only `F5` and `Mod` combinations run shortcuts. */
+    readonly captured: boolean;
+    /** Captures live input until the returned disposable is disposed; captures may overlap. */
+    capture(): Disposable;
   };
   overlays: { register(overlay: ViewportOverlay): Disposable; list(): ViewportOverlay[] };
   settings: {
@@ -52,7 +54,7 @@ export interface EditorHost {
   editor: Editor;
   registry: Registry;
   loader: PluginLoader;
-  /** Switches to another game (or none): plugins hear it through `onGameChanged`. */
+  /** Switches to another game (or none): plugins hear it through `onGameChanged`. The same game again changes nothing. */
   setControl(control: ControlClient | null): void;
 }
 
@@ -90,6 +92,7 @@ export function createEditor(options: {
   };
 
   let control = options.control ?? null;
+  let captures = 0;
   const editor: Editor = {
     get control() {
       return control;
@@ -114,7 +117,16 @@ export function createEditor(options: {
       },
       list: () => commands.values(),
     },
-    shortcuts: { register: ({ key, command }) => registry.shortcuts.register(normalizeShortcut(key), command), captured: false },
+    shortcuts: {
+      register: ({ key, command }) => registry.shortcuts.register(normalizeShortcut(key), command),
+      get captured() {
+        return captures > 0;
+      },
+      capture() {
+        captures++;
+        return registry.own(() => void captures--);
+      },
+    },
     overlays: { register: (overlay) => overlays.register(overlay.id, overlay), list: () => overlays.values() },
     settings: {
       register: (definition) => settings.register(definition.id, definition),
@@ -145,6 +157,7 @@ export function createEditor(options: {
 
   let stopTimeline = feedTimeline(control, editor.timeline);
   const setControl = (next: ControlClient | null) => {
+    if (next === control) return;
     stopTimeline();
     control = next;
     stopTimeline = feedTimeline(next, editor.timeline);

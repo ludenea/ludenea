@@ -40,4 +40,40 @@ describe("live input capture", () => {
     expect(host.editor.shortcuts.captured).toBe(false);
     stop();
   });
+
+  it("editor_keys_stay_out_of_the_live_input", async () => {
+    const host = await testEditor([]);
+    const game = await testGame(undefined, { input: { kind: "unit" } });
+    act(() => host.setControl(game.client));
+    const element = document.body.appendChild(document.createElement("div"));
+    element.tabIndex = 0;
+    const stop = captureInput(host.editor, element);
+    const live = () => game.sent.filter((command) => command.type === "set_live_input");
+    element.focus();
+    act(() => host.editor.timeline.setState({ playing: true }));
+
+    fireEvent.keyDown(element, { code: "F5", key: "F5" });
+    fireEvent.keyDown(element, { code: "KeyZ", key: "z", ctrlKey: true, metaKey: true });
+    fireEvent.keyDown(element, { code: "KeyD", key: "d" });
+    await waitFor(() => expect(live().at(-1)).toEqual({ type: "set_live_input", players: [{ keys: ["KeyD"], gamepads: [] }] }));
+    stop();
+  });
+
+  it("a_game_without_an_input_type_captures_nothing", async () => {
+    const host = await testEditor([]);
+    const game = await testGame();
+    act(() => host.setControl(game.client));
+    const element = document.body.appendChild(document.createElement("div"));
+    element.tabIndex = 0;
+    const stop = captureInput(host.editor, element);
+    element.focus();
+    act(() => host.editor.timeline.setState({ playing: true }));
+
+    fireEvent.keyDown(element, { code: "KeyD", key: "d" });
+    await settle();
+    await settle();
+    expect(host.editor.shortcuts.captured).toBe(false);
+    expect(game.sent.filter((command) => command.type === "set_live_input")).toEqual([]);
+    stop();
+  });
 });

@@ -75,6 +75,11 @@ export function shortcutOf(event: KeyboardEvent): string {
   return canonical(modifiers, key, key.length === 1 ? key.toUpperCase() : (NAMED_KEYS.get(key.toLowerCase()) ?? key));
 }
 
+/** `F5` and `Mod` combinations: the editor's even while the game captures live input. */
+export function isEditorKey(event: KeyboardEvent): boolean {
+  return event.key === "F5" || (isMac() ? event.metaKey : event.ctrlKey);
+}
+
 const NON_TEXT_INPUTS = new Set(["button", "checkbox", "color", "file", "image", "radio", "range", "reset", "submit"]);
 
 export function isTextField(target: EventTarget | null): boolean {
@@ -91,7 +96,7 @@ export function installShortcuts(editor: Editor, registry: Registry, target: Win
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.defaultPrevented || isTextField(event.target)) return;
     const shortcut = shortcutOf(event);
-    if (editor.shortcuts.captured && shortcut !== "F5" && !(isMac() ? event.metaKey : event.ctrlKey)) return;
+    if (editor.shortcuts.captured && !isEditorKey(event)) return;
     const command = registry.shortcuts.get(shortcut);
     if (!command) return;
     event.preventDefault();

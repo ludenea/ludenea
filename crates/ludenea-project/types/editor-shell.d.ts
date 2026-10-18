@@ -224,8 +224,10 @@ interface Editor {
             key: string;
             command: string;
         }): Disposable;
-        /** Set while the game captures live input: then only `F5` and `Mod` combinations run shortcuts. */
-        captured: boolean;
+        /** Whether the game captures live input: then only `F5` and `Mod` combinations run shortcuts. */
+        readonly captured: boolean;
+        /** Captures live input until the returned disposable is disposed; captures may overlap. */
+        capture(): Disposable;
     };
     overlays: {
         register(overlay: ViewportOverlay): Disposable;
@@ -245,7 +247,7 @@ interface EditorHost {
     editor: Editor;
     registry: Registry;
     loader: PluginLoader;
-    /** Switches to another game (or none): plugins hear it through `onGameChanged`. */
+    /** Switches to another game (or none): plugins hear it through `onGameChanged`. The same game again changes nothing. */
     setControl(control: ControlClient | null): void;
 }
 function createEditor(options: {
@@ -277,6 +279,8 @@ function CommandPalette({ editor, registry }: {
 
 /** `shift+ctrl+z`, `Ctrl+Shift+Z`, and `Control+Shift+z` all become `Ctrl+Shift+Z`; `Mod+S` becomes `Cmd+S` on macOS. */
 function normalizeShortcut(shortcut: string, mac?: boolean): string;
+/** `F5` and `Mod` combinations: the editor's even while the game captures live input. */
+function isEditorKey(event: KeyboardEvent): boolean;
 function isTextField(target: EventTarget | null): boolean;
 /**
  * Runs registered shortcuts on key presses in `target`, except while a text field has focus.
@@ -284,6 +288,6 @@ function isTextField(target: EventTarget | null): boolean;
  */
 function installShortcuts(editor: Editor, registry: Registry, target?: Window): () => void;
 
-export { CommandPalette, DuplicateRegistration, PluginLoader, Registry, Shell, createEditor, definePlugin, installShortcuts, isTextField, mountShell, normalizeShortcut };
+export { CommandPalette, DuplicateRegistration, PluginLoader, Registry, Shell, createEditor, definePlugin, installShortcuts, isEditorKey, isTextField, mountShell, normalizeShortcut };
 export type { CommandDefinition, ComponentTypes, Disposable, Editor, EditorHost, EntityAccess, InspectorComponent, OverlayContext, PanelDefinition, PluginDefinition, SelectionState, SelectionStore, SettingDefinition, TimelineState, TimelineStore, ViewportOverlay };
 }

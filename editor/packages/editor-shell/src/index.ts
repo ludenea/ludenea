@@ -16,6 +16,6 @@ export {
   type ViewportOverlay,
 } from "./plugin";
 export { DuplicateRegistration, type Registry } from "./registry";
-export { installShortcuts, isTextField, normalizeShortcut } from "./shortcuts";
+export { installShortcuts, isEditorKey, isTextField, normalizeShortcut } from "./shortcuts";
 export type { SelectionState, SelectionStore } from "./stores/selection";
 export type { TimelineState, TimelineStore } from "./stores/timeline";

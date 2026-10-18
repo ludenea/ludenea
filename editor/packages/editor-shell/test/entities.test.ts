@@ -74,6 +74,20 @@ describe("entities", () => {
     ]);
   });
 
+  it("setting_the_same_game_again_changes_nothing", async () => {
+    const { editor, setControl } = await testHost();
+    const game = await testGame(() => ({ type: "done" }));
+    setControl(game.control);
+    const changed = vi.fn();
+    editor.onGameChanged(changed);
+    editor.entities.watch(entity, () => {});
+
+    setControl(game.control);
+
+    expect(changed).not.toHaveBeenCalled();
+    expect(own(game.sent)).toEqual([{ type: "subscribe", topic: { type: "entity", entity } }]);
+  });
+
   it("entities_need_a_game", async () => {
     const { editor } = await testHost();
     await expect(editor.entities.get(entity, "ludenea::Pose")).rejects.toThrow("no game");

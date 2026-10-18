@@ -134,11 +134,21 @@ describe("command palette and shortcuts", () => {
       fireEvent.keyDown(document.body, { key: "ArrowLeft", shiftKey: true });
     };
 
-    editor.shortcuts.captured = true;
+    // Only the shell changes it.
+    expect(() => {
+      // @ts-expect-error `captured` is read-only
+      editor.shortcuts.captured = true;
+    }).toThrow(TypeError);
+    const first = editor.shortcuts.capture();
+    const second = editor.shortcuts.capture();
+    first.dispose();
+    first.dispose();
+    expect(editor.shortcuts.captured).toBe(true);
     press();
     expect(ran).toEqual(["play", "undo"]);
 
-    editor.shortcuts.captured = false;
+    second.dispose();
+    expect(editor.shortcuts.captured).toBe(false);
     ran.length = 0;
     press();
     expect(ran).toEqual(["play", "undo", "frame", "step", "pan"]);

@@ -1,5 +1,5 @@
 import type { RawGamepad, RawInput } from "@ludenea/control-client";
-import type { Editor } from "@ludenea/editor-shell";
+import { isEditorKey, type Disposable, type Editor } from "@ludenea/editor-shell";
 
 const IDLE: RawInput = { keys: [], gamepads: [] };
 
@@ -10,14 +10,16 @@ function firstGamepad(): RawGamepad[] {
 }
 
 /**
- * While the game plays and `element` has focus, sends what player 0 holds down
- * (`KeyboardEvent.code` values and the first gamepad) with `SetLiveInput`, at most once per
- * animation frame and only when it changed, and marks shortcuts as captured. Losing focus,
- * pausing, or the returned stop function sends an idle state. One player for now.
+ * While a game with an input type plays and `element` has focus, sends what player 0 holds
+ * down (`KeyboardEvent.code` values and the first gamepad) with `SetLiveInput`, at most once
+ * per animation frame and only when it changed, and captures shortcuts. Keys the editor keeps
+ * (`F5`, `Mod` combinations) are not sent. Losing focus, pausing, or the returned stop
+ * function sends an idle state. One player for now.
  */
 export function captureInput(editor: Editor, element: HTMLElement): () => void {
   const pressed = new Set<string>();
   let sent: string | null = null;
+  let capture: Disposable | null = null;
 
   const send = (input: RawInput) => {
     const control = editor.control;
@@ -29,20 +31,23 @@ export function captureInput(editor: Editor, element: HTMLElement): () => void {
     control.request({ type: "set_live_input", players: [input] }).catch((error) => console.error("live input not sent:", error));
   };
   const release = () => {
-    editor.shortcuts.captured = false;
+    capture?.dispose();
+    capture = null;
     if (sent !== null) send(IDLE);
     sent = null;
   };
 
   let frame = requestAnimationFrame(function loop() {
-    if (editor.timeline.getState().playing && document.activeElement === element) {
-      editor.shortcuts.captured = true;
+    if (editor.timeline.getState().playing && document.activeElement === element && editor.control?.game.input) {
+      capture ??= editor.shortcuts.capture();
       send({ keys: [...pressed], gamepads: firstGamepad() });
-    } else if (editor.shortcuts.captured) release();
+    } else if (capture) release();
     frame = requestAnimationFrame(loop);
   });
 
-  const onKeyDown = (event: KeyboardEvent) => void pressed.add(event.code);
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (!isEditorKey(event)) pressed.add(event.code);
+  };
   const onKeyUp = (event: KeyboardEvent) => void pressed.delete(event.code);
   const onBlur = () => {
     pressed.clear();
