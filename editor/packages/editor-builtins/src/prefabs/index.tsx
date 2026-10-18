@@ -72,7 +72,12 @@ export const prefabsPlugin = definePlugin({
       return editor.control;
     };
     const report = (error: unknown) => state.set({ error: errorText(error) });
-    const clear = () => state.set({ instances: [], addresses: new Map() });
+    // Bumped by every refresh and load: an answer to an older refresh is stale.
+    let version = 0;
+    const clear = () => {
+      version++;
+      state.set({ instances: [], addresses: new Map() });
+    };
     const editing = () => {
       const kind = editor.document.getState().current?.kind;
       return kind === "scene" || kind === "prefab";
@@ -87,12 +92,14 @@ export const prefabsPlugin = definePlugin({
     const refresh = async () => {
       const control = editor.control;
       if (!control || !editing()) return clear();
+      const asked = ++version;
       const { instances, load_addresses } = await control.request({ type: "get_instances" });
-      state.set({ instances, addresses: addressMap(load_addresses), error: null });
+      if (asked === version) state.set({ instances, addresses: addressMap(load_addresses), error: null });
     };
     const onLoaded = (loaded: Loaded | null) => {
       if (!loaded) return clear();
       for (const warning of loaded.warnings) logToConsole(editor, "warning", warning);
+      version++;
       state.set({ instances: loaded.instances, addresses: addressMap(loaded.load_addresses) });
       void listPrefabs();
     };

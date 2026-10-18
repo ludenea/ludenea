@@ -5,6 +5,7 @@ import { act, render } from "@testing-library/react";
 import { logToConsole } from "../src";
 
 type Message = { type: string; [key: string]: unknown };
+/** A reply, `{ error }` to fail, a promise of either to answer later (out of order), or nothing when undefined. */
 type Answer = (message: Message) => object | undefined;
 
 const game: GameInfo = { components: [], resources: [], assets: [], events: [], fingerprint: "0000000000000000", input: null, tick_rate: 60, debug_layers: [] };
@@ -21,10 +22,14 @@ async function fake<C>(
     const message = JSON.parse(raw);
     if (message.type === "hello") return [JSON.stringify(welcome)];
     sent.push(message[field]);
-    const reply = answer(message[field]);
     // `{ error: { code, message } }` answers with a failure.
-    const result = reply && "error" in reply ? reply : { ok: reply };
-    return reply ? [JSON.stringify({ type: "response", id: message.id, result })] : [];
+    const response = (reply: object) => JSON.stringify({ type: "response", id: message.id, result: "error" in reply ? reply : { ok: reply } });
+    const reply = answer(message[field]);
+    if (reply instanceof Promise) {
+      void reply.then((later: object) => transport.push(response(later)));
+      return [];
+    }
+    return reply ? [response(reply)] : [];
   });
   const client = await connect(transport);
   return { client, sent, push: (event: object) => transport.push(JSON.stringify({ type: "event", event })) };

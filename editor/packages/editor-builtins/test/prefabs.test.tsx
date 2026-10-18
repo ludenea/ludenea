@@ -3,6 +3,8 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { builtinPlugins } from "../src";
 import { Field } from "../src/inspector/fields/Field";
+import { prefabsOf } from "../src/prefabs";
+import { edit } from "../src/timeline/editing";
 import { renderPanel, settle, testEditor, testGame } from "./support";
 
 // The project template's shape: `scenes/main.scene.ron` holds instances 4 and 5 of
@@ -242,6 +244,31 @@ describe("prefabs", () => {
     expect(screen.getByText("Cannot remove assets/new-2.prefab.ron, created for the refused prefab: read-only")).toBeTruthy();
   });
 
+  it("an_older_instances_answer_arriving_last_is_ignored", async () => {
+    let answerFirst: (reply: object) => void = () => {};
+    let refreshes = 0;
+    const answer = (instances: object[]) => ({ type: "instances", instances, load_addresses: loadAddresses });
+    const older = [{ address: [4], prefab: BALL, entities: [entity(4)], overrides: [] }];
+    const newer = [{ address: [7], prefab: BALL, entities: [entity(7)], overrides: [] }];
+    const { host } = await editor({
+      game: (command) => {
+        if (command.type !== "get_instances") return undefined;
+        // The first refresh is answered after the second.
+        return refreshes++ === 0 ? new Promise<object>((resolve) => (answerFirst = resolve)) : answer(newer);
+      },
+    });
+    const control = host.editor.control!;
+
+    await act(() => edit(host.editor, control, { type: "despawn", entity: entity(0) }));
+    await act(() => edit(host.editor, control, { type: "despawn", entity: entity(1) }));
+    await settle();
+    expect(prefabsOf(host.editor)!.state.get().instances).toEqual(newer);
+    answerFirst(answer(older));
+    await settle();
+
+    expect(prefabsOf(host.editor)!.state.get().instances).toEqual(newer);
+  });
+
   it("missing_prefab_error_shows_on_tree", async () => {
     const message = `instance 5 references asset ${BALL}, which is not available; add it or fix the reference`;
     const { host, game } = await editor({ refuse: (text) => (text.includes("other") ? message : null) });
@@ -257,6 +284,9 @@ describe("prefabs", () => {
     // The previous document and its session stay.
     expect(host.editor.document.getState().current?.id).toBe(SCENE);
     expect(sent(game, "load_session")).toEqual([]);
+
+    fireEvent.click(within(tree).getByRole("button", { name: "Dismiss" }));
+    expect(within(tree).queryByRole("alert")).toBeNull();
   });
 
   it("stale_override_warnings_reach_console", async () => {

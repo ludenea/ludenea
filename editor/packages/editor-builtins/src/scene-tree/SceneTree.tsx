@@ -22,7 +22,8 @@ function Entities({ editor, control, scroll }: { editor: Editor; control: Contro
   const labels = useMemo(() => new Map<string, Cached>(), [control]);
   const playing = editor.timeline((state) => state.playing);
   const [error, setError] = useState<string | null>(null);
-  // A refused scene load (a missing prefab): the previous session stays, and so does this list.
+  // A refused scene load (a missing prefab): the previous session stays, and so does this list,
+  // until a load succeeds or the user dismisses it.
   const loadError = editor.document((state) => state.error);
   // Delete despawns here and in the viewport only: elsewhere (the asset browser) it means something else.
   const onKeyDown = (event: KeyboardEvent) => {
@@ -38,7 +39,7 @@ function Entities({ editor, control, scroll }: { editor: Editor; control: Contro
       <ResimulatingNotice editor={editor} />
       {loadError && (
         <p role="alert" className="ludenea-error">
-          {loadError}
+          {loadError} <button onClick={() => editor.document.setState({ error: null })}>Dismiss</button>
         </p>
       )}
       {error && <p className="ludenea-error">{error}</p>}
