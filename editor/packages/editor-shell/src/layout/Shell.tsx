@@ -69,6 +69,8 @@ export function Shell({ host }: { host: EditorHost }) {
     const { editor, registry } = host;
     const closed = new Set<string>();
     const openCommands = new Map<string, { title: string; command: Disposable }>();
+    // Panels whose open command another plugin holds, reported once each.
+    const taken = new Set<string>();
     const sync = () => {
       // A panel unregistered while closed opens again if a plugin registers it later.
       for (const id of closed) if (!registry.panels.get(id)) closed.delete(id);
@@ -93,6 +95,8 @@ export function Shell({ host }: { host: EditorHost }) {
           openCommands.set(id, { title, command: editor.commands.register({ id: `panels.open.${id}`, title: `Show ${title} panel`, run }) });
         } catch (error) {
           openCommands.delete(id);
+          if (taken.has(id)) continue;
+          taken.add(id);
           console.error(`panel "${id}" has no "panels.open.${id}" command: ${error instanceof Error ? error.message : String(error)}`);
         }
       }

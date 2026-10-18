@@ -55,5 +55,10 @@ describe("shell", () => {
 
     expect(error).toHaveBeenCalledWith(expect.stringContaining('"panels.open.first"'));
     expect(host.editor.commands.list().map(({ id }) => id)).toContain("panels.open.second");
+
+    // Later syncs try again, without repeating the report.
+    host.editor.panels.register({ id: "third", title: "Third", component: () => <p>third</p> });
+    await act(() => Promise.resolve());
+    expect(error).toHaveBeenCalledTimes(1);
   });
 });
