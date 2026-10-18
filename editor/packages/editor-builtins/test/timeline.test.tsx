@@ -205,4 +205,25 @@ describe("timeline", () => {
     expect(notices).toHaveLength(2);
     for (const notice of notices) expect(notice).toContain("Resimulating (tick 60 of 100)");
   });
+
+  it("scrubber_shows_where_the_last_seek_landed", async () => {
+    let current = 40;
+    let push: (event: object) => void = () => {};
+    const { host, game } = await editorWith((command) => {
+      if (command.type === "get_timeline") return { type: "timeline", ...timeline({ current }) };
+      if (command.type === "seek") {
+        // The host stops short of the tick asked for, and reports the tick before answering.
+        current = Math.min(command.tick as number, 30);
+        push({ type: "ticked", tick: current, hash: "00000000000000aa", pending: false, playing: false, effective_rate: 0 });
+      }
+      return undefined;
+    });
+    push = game.push;
+    renderPanel(host, "ludenea.timeline");
+    await settle();
+    const scrubber = screen.getByRole("slider", { name: "Tick" }) as HTMLInputElement;
+    act(() => void fireEvent.change(scrubber, { target: { value: "50" } }));
+    await settle();
+    expect(scrubber.value).toBe("30");
+  });
 });

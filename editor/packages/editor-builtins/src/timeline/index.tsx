@@ -15,12 +15,12 @@ function game(editor: Editor) {
   return editor.control;
 }
 
-/** Moves the game to `tick` and shows what it holds there. */
+/** Moves the game to `tick` and shows what it holds there, once the timeline reports it. */
 export async function seek(editor: Editor, tick: number): Promise<void> {
   try {
     await game(editor).request({ type: "seek", tick });
   } finally {
-    void editor.timeline.getState().refresh();
+    await editor.timeline.getState().refresh();
   }
 }
 

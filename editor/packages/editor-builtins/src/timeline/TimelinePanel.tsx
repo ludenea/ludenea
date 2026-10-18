@@ -1,10 +1,10 @@
 import type { Editor } from "@ludenea/editor-shell";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { errorText, useGame, useStore } from "../shared";
 import { seek, type SpeedState } from "./index";
 
-/** Seeks to the latest position asked for, with one `Seek` in flight at most; `busy` until the last lands. */
-function createScrubber(editor: Editor, onError: (error: unknown) => void) {
+/** Seeks to the latest position asked for, with one `Seek` in flight at most; `onIdle` once the last lands. */
+function createScrubber(editor: Editor, onError: (error: unknown) => void, onIdle: () => void) {
   let inFlight = false;
   let queued: number | null = null;
   const run = (tick: number) => {
@@ -16,13 +16,13 @@ function createScrubber(editor: Editor, onError: (error: unknown) => void) {
         const next = queued;
         queued = null;
         if (next !== null) run(next);
+        else onIdle();
       });
   };
-  const scrub = (tick: number) => {
+  return (tick: number) => {
     if (inFlight) queued = tick;
     else run(tick);
   };
-  return Object.assign(scrub, { busy: () => inFlight });
 }
 
 const at = (tick: number, head: number) => `${head > 0 ? (tick / head) * 100 : 0}%`;
@@ -33,20 +33,18 @@ export function TimelinePanel({ editor, speed }: { editor: Editor; speed: SpeedS
   const { timeline, hash, pending, playing, effectiveRate, divergence } = editor.timeline();
   const { speed: current } = useStore(speed);
   const [error, setError] = useState<string | null>(null);
-  // The dragged position shows until the last seek it asked for lands: the ticks of the seeks
-  // before it would make the thumb jump back.
+  // The dragged position shows until the last seek it asked for lands (and the timeline shows
+  // where): the ticks of the seeks before it would make the thumb jump back.
   const [dragged, setDragged] = useState<number | null>(null);
   const scrub = useMemo(
     () =>
-      createScrubber(editor, (failure) => {
-        setError(errorText(failure));
-        setDragged(null);
-      }),
+      createScrubber(
+        editor,
+        (failure) => setError(errorText(failure)),
+        () => setDragged(null),
+      ),
     [editor],
   );
-  useEffect(() => {
-    if (!scrub.busy()) setDragged(null);
-  }, [scrub, timeline?.current]);
 
   if (!control) return <p className="ludenea-muted">No game is running.</p>;
   if (!timeline) return <p className="ludenea-muted">Loading the timeline...</p>;
