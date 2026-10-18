@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { errorText, useGame, useStore } from "../shared";
 import { seek, type SpeedState } from "./index";
 
-/** Seeks to the latest position asked for, with one `Seek` in flight at most. */
+/** Seeks to the latest position asked for, with one `Seek` in flight at most; `busy` until the last lands. */
 function createScrubber(editor: Editor, onError: (error: unknown) => void) {
   let inFlight = false;
   let queued: number | null = null;
@@ -18,10 +18,11 @@ function createScrubber(editor: Editor, onError: (error: unknown) => void) {
         if (next !== null) run(next);
       });
   };
-  return (tick: number) => {
+  const scrub = (tick: number) => {
     if (inFlight) queued = tick;
     else run(tick);
   };
+  return Object.assign(scrub, { busy: () => inFlight });
 }
 
 const at = (tick: number, head: number) => `${head > 0 ? (tick / head) * 100 : 0}%`;
@@ -32,10 +33,20 @@ export function TimelinePanel({ editor, speed }: { editor: Editor; speed: SpeedS
   const { timeline, hash, pending, playing, effectiveRate, divergence } = editor.timeline();
   const { speed: current } = useStore(speed);
   const [error, setError] = useState<string | null>(null);
-  // The dragged position shows until the seek it asked for lands.
+  // The dragged position shows until the last seek it asked for lands: the ticks of the seeks
+  // before it would make the thumb jump back.
   const [dragged, setDragged] = useState<number | null>(null);
-  const scrub = useMemo(() => createScrubber(editor, (failure) => setError(errorText(failure))), [editor]);
-  useEffect(() => setDragged(null), [timeline?.current]);
+  const scrub = useMemo(
+    () =>
+      createScrubber(editor, (failure) => {
+        setError(errorText(failure));
+        setDragged(null);
+      }),
+    [editor],
+  );
+  useEffect(() => {
+    if (!scrub.busy()) setDragged(null);
+  }, [scrub, timeline?.current]);
 
   if (!control) return <p className="ludenea-muted">No game is running.</p>;
   if (!timeline) return <p className="ludenea-muted">Loading the timeline...</p>;

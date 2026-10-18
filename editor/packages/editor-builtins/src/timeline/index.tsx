@@ -6,7 +6,8 @@ import { TimelinePanel } from "./TimelinePanel";
 /** The speed last asked of the host, which no reply reports back; the host clamps it to [0.1, 8]. */
 export type SpeedState = Store<{ speed: number }>;
 
-const MIN_SPEED = 0.1;
+// Powers of two from 1, so slowing down and speeding up retrace the same steps.
+const MIN_SPEED = 0.125;
 const MAX_SPEED = 8;
 
 function game(editor: Editor) {

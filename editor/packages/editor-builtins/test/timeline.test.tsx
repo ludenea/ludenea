@@ -24,12 +24,13 @@ const timeline = (patch: Partial<Timeline> = {}): Timeline => ({
 });
 const mod = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? { metaKey: true } : { ctrlKey: true };
 
-async function editorWith(answer: (command: Command) => object | undefined = () => undefined) {
+/** `answer` replies to a command first; `null` leaves it unanswered. */
+async function editorWith(answer: (command: Command) => object | null | undefined = () => undefined) {
   const host = await testEditor(builtinPlugins);
   const game = await testGame(
     (command) => {
       const reply = answer(command);
-      if (reply) return reply;
+      if (reply !== undefined) return reply ?? undefined;
       if (command.type === "get_timeline") return { type: "timeline", ...timeline() };
       if (command.type === "get_hash") return { type: "hash", tick: 40, hash: "00000000000000aa", pending: false };
       if (command.type === "get_entity") return { type: "entity", entity, components: { "ludenea::Collider": { type: "json", value: { shape: { Circle: { center: { x: 0, y: 0 }, radius: 1 } }, density: 1 } } } };
@@ -157,5 +158,51 @@ describe("timeline", () => {
     act(() => host.editor.timeline.setState({ timeline: timeline({ resimulating: true, simulated: 60 }) }));
     expect(screen.getByRole("status").textContent).toContain("tick 60 of 100");
     expect(renders).toBe(1);
+  });
+
+  it("speed_steps_by_powers_of_two", async () => {
+    const { host, game } = await editorWith();
+    for (const command of ["timeline.speed-down", "timeline.speed-down", "timeline.speed-down", "timeline.speed-down", "timeline.speed-up"]) {
+      await host.editor.commands.run(command);
+    }
+    expect(sentOf(game.sent, "set_speed").map((command) => command.speed)).toEqual([0.5, 0.25, 0.125, 0.125, 0.25]);
+  });
+
+  it("scrubber_keeps_the_dragged_position_while_a_seek_is_queued", async () => {
+    let current = 40;
+    const { host } = await editorWith((command) => {
+      if (command.type === "get_timeline") return { type: "timeline", ...timeline({ current }) };
+      if (command.type !== "seek") return undefined;
+      // The first seek lands; the one queued behind it stays in flight.
+      if (command.tick === 20) return null;
+      current = command.tick as number;
+      return { type: "done" };
+    });
+    renderPanel(host, "ludenea.timeline");
+    await settle();
+    const scrubber = screen.getByRole("slider", { name: "Tick" }) as HTMLInputElement;
+
+    act(() => {
+      fireEvent.change(scrubber, { target: { value: "10" } });
+      fireEvent.change(scrubber, { target: { value: "20" } });
+    });
+    await settle();
+    expect(host.editor.timeline.getState().timeline?.current).toBe(10);
+    expect(scrubber.value).toBe("20");
+  });
+
+  it("scene_tree_and_viewport_show_the_resimulating_notice", async () => {
+    const { host } = await editorWith((command) => {
+      if (command.type === "get_timeline") return { type: "timeline", ...timeline({ resimulating: true, simulated: 60 }) };
+      if (command.type === "query_entities") return { type: "entities", total: 0, rows: [] };
+      if (command.type === "get_debug_draw") return { type: "debug_draw", tick: 40, frame: { layers: {} } };
+      return undefined;
+    });
+    renderPanel(host, "ludenea.scene-tree");
+    renderPanel(host, "ludenea.viewport");
+    await settle();
+    const notices = screen.getAllByRole("status").map((status) => status.textContent);
+    expect(notices).toHaveLength(2);
+    for (const notice of notices) expect(notice).toContain("Resimulating (tick 60 of 100)");
   });
 });
