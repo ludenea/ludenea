@@ -29,7 +29,7 @@ function grouped(files: FileEntry[], filter: string, kind: KindName | null): [st
 }
 
 export function AssetsPanel({ editor, assets }: { editor: Editor; assets: Assets }) {
-  const { files, filter, kind, selected, action, menu, creating, banner, error, listError } = useStore(assets.state);
+  const { files, filter, kind, selected, action, menu, creating, banners, error, listError } = useStore(assets.state);
   const openScene = editor.document((state) => state.current?.path ?? null);
   const unsaved = editor.timeline((state) => state.timeline?.scene_dirty ?? false);
   const dragged = useRef<string | null>(null);
@@ -62,13 +62,13 @@ export function AssetsPanel({ editor, assets }: { editor: Editor; assets: Assets
         <button onClick={() => void editor.commands.run("assets.new-data")}>New data asset</button>
       </div>
       {creating && <NewDataForm editor={editor} creating={creating} assets={assets} attempt={attempt} />}
-      {banner && (
-        <div role="alert" className="ludenea-banner">
+      {banners.map((banner) => (
+        <div key={banner.path} role="alert" className="ludenea-banner">
           {banner.path} changed on disk.
-          <button onClick={() => attempt(assets.reload())}>Reload</button>
-          <button onClick={assets.keepMine}>Keep mine</button>
+          <button onClick={() => attempt(assets.reload(banner))}>Reload</button>
+          <button onClick={() => assets.keepMine(banner)}>Keep mine</button>
         </div>
-      )}
+      ))}
       {error && <p className="ludenea-error">{error}</p>}
       {listError && <p className="ludenea-error">{listError}</p>}
       {action && <ActionForm action={action} assets={assets} attempt={attempt} />}

@@ -6,10 +6,10 @@ export function assertEditable(editor: Editor): void {
   if (editor.timeline.getState().timeline?.resimulating) throw new Error("the game is resimulating; edit once it finishes");
 }
 
-const edited = new WeakMap<Editor, Set<() => void>>();
+const edited = new WeakMap<Editor, Set<(command: Command) => void>>();
 
-/** Calls `listener` after each editing command `edit` sends succeeds; returns the unsubscribe. */
-export function onEdited(editor: Editor, listener: () => void): () => void {
+/** Calls `listener` with each editing command `edit` sends, once it succeeds; returns the unsubscribe. */
+export function onEdited(editor: Editor, listener: (command: Command) => void): () => void {
   let listeners = edited.get(editor);
   if (!listeners) edited.set(editor, (listeners = new Set()));
   listeners.add(listener);
@@ -21,7 +21,7 @@ export async function edit<C extends Command>(editor: Editor, control: ControlCl
   assertEditable(editor);
   try {
     const reply = await control.request(command);
-    for (const listener of [...(edited.get(editor) ?? [])]) listener();
+    for (const listener of [...(edited.get(editor) ?? [])]) listener(command);
     return reply;
   } finally {
     void editor.timeline.getState().refresh();

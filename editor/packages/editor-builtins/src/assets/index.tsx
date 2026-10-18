@@ -6,6 +6,9 @@ import { emptyValue, toRon } from "./value";
 
 export type Action = { kind: "rename" | "move" | "delete"; path: string };
 
+/** A file changed on disk while the editor held unsaved edits of it: the open document (its new text) or a data asset. */
+export type Banner = { path: string; text: string } | { path: string; asset: AssetId };
+
 /** A file kind without its data type: what the browser shows and filters by. */
 export type KindName = "Scene" | "Prefab" | "Data" | "Replay" | "Trace" | "Snapshot" | "Other";
 export const kindName = (kind: AssetKind): KindName => (typeof kind === "string" ? kind : "Data");
@@ -26,8 +29,8 @@ export interface AssetsState {
   action: Action | null;
   menu: string | null;
   creating: NewData | null;
-  /** The open document, or a data asset, changed on disk while it had unsaved edits. */
-  banner: { path: string; text: string } | { path: string; asset: AssetId } | null;
+  /** The open document, and data assets, changed on disk while they had unsaved edits: one banner each. */
+  banners: Banner[];
   error: string | null;
   /** Why the files could not be listed. */
   listError: string | null;
@@ -46,8 +49,10 @@ export interface Assets {
   rename(from: string, to: string): Promise<void>;
   move(path: string, folder: string): Promise<void>;
   remove(path: string): Promise<void>;
-  reload(): Promise<void>;
-  keepMine(): void;
+  /** Takes the disk's version of the file `banner` names. */
+  reload(banner: Banner): Promise<void>;
+  /** Keeps the editor's version of the file `banner` names. */
+  keepMine(banner: Banner): void;
 }
 
 const changedPath = (change: FileChange) => ("Changed" in change ? change.Changed.path : "Created" in change ? change.Created.path : null);
@@ -66,10 +71,13 @@ export const assetsPlugin = definePlugin({
       action: null,
       menu: null,
       creating: null,
-      banner: null,
+      banners: [],
       error: null,
       listError: null,
     });
+    // A newer change of the same file replaces its banner.
+    const showBanner = (banner: Banner) => state.set({ banners: [...withoutBanner(banner.path), banner] });
+    const withoutBanner = (path: string) => state.get().banners.filter((other) => other.path !== path);
     const report = (error: unknown) => state.set({ error: errorText(error) });
     const refresh = () =>
       editor.project.request({ type: "list_files" }).then(
@@ -99,7 +107,7 @@ export const assetsPlugin = definePlugin({
         if (kind !== "Scene" && kind !== "Prefab" && kind !== "Replay") throw new Error(`${path} is not a scene, a prefab, a replay, a trace, a snapshot, or a data asset`);
         // Documents are usable before the build: the document is remembered and loaded into each game.
         await documents.getState().open(entry.id);
-        state.set({ banner: null, error: null });
+        state.set({ banners: state.get().banners.filter((banner) => !("text" in banner)), error: null });
       },
       newDataAsset() {
         const type = editor.control?.game.assets[0]?.name;
@@ -143,16 +151,14 @@ export const assetsPlugin = definePlugin({
         if (documents.getState().current?.path === path) documents.setState({ current: null, text: null });
         await refresh();
       },
-      async reload() {
-        const { banner } = state.get();
-        state.set({ banner: null });
-        if (!banner) return;
+      async reload(banner) {
+        state.set({ banners: withoutBanner(banner.path) });
         if ("text" in banner) return replace(banner.text);
         const { unsavedAssets } = documents.getState();
         documents.setState({ unsavedAssets: unsavedAssets.filter((id) => id !== banner.asset) });
         await documents.getState().reloadAssets();
       },
-      keepMine: () => state.set({ banner: null }),
+      keepMine: (banner) => state.set({ banners: withoutBanner(banner.path) }),
     };
 
     // A change to the open scene or prefab reloads it, unless the editor holds unsaved edits.
@@ -160,7 +166,7 @@ export const assetsPlugin = definePlugin({
       const { text } = await editor.project.request({ type: "read_text", path });
       const { current, text: loaded } = documents.getState();
       if (current?.path !== path || current.kind === "replay" || text === loaded) return;
-      if (editor.timeline.getState().timeline?.scene_dirty) state.set({ banner: { path, text } });
+      if (editor.timeline.getState().timeline?.scene_dirty) showBanner({ path, text });
       else await replace(text);
     };
     let info = project.get().info;
@@ -170,7 +176,7 @@ export const assetsPlugin = definePlugin({
         const { unsavedAssets } = documents.getState();
         for (const change of changes) {
           const id = state.get().files.find((file) => file.path === changedPath(change))?.id;
-          if (id && unsavedAssets.includes(id)) state.set({ banner: { path: changedPath(change)!, asset: id } });
+          if (id && unsavedAssets.includes(id)) showBanner({ path: changedPath(change)!, asset: id });
         }
         void refresh();
         const open = documents.getState().current?.path;
@@ -178,7 +184,7 @@ export const assetsPlugin = definePlugin({
         // Removed or renamed outside the editor: nothing on disk to save the game's document to any more.
         if (!renaming.has(open) && changes.some((change) => removedPath(change) === open)) {
           documents.setState({ current: null, text: null });
-          if (state.get().banner?.path === open) state.set({ banner: null });
+          state.set({ banners: withoutBanner(open) });
         } else if (changes.some((change) => changedPath(change) === open)) onDiskChange(open).catch(report);
       }),
       project.subscribe(() => {

@@ -384,7 +384,7 @@ describe("data assets, replays, traces, and snapshots", () => {
 
   async function project(options: { current?: number; answer?: (command: { type: string; [key: string]: unknown }) => object | undefined } = {}) {
     const { current = 0, answer = () => undefined } = options;
-    const onDisk = { scene: "(scene)" };
+    const onDisk = { scene: "(scene)", files: {} as { [path: string]: string } };
     const game = await testGame(
       (command) => {
         const reply = answer(command);
@@ -419,7 +419,7 @@ describe("data assets, replays, traces, and snapshots", () => {
     );
     const host = await testEditor(builtinPlugins, (request) => {
       if (request.type === "list_files") return { type: "files", entries: files };
-      if (request.type === "read_text") return { type: "text", text: onDisk.scene };
+      if (request.type === "read_text") return { type: "text", text: onDisk.files[request.path as string] ?? onDisk.scene };
       if (request.type === "read_binary") return { type: "bytes", bytes: "cmVwbGF5" };
       if (request.type === "read_asset_texts") return { type: "asset_texts", assets: disk, paths: [] };
       if (request.type === "load_stored_session") return { type: "stored_session", bytes: null };
@@ -487,6 +487,22 @@ describe("data assets, replays, traces, and snapshots", () => {
     expect(host.editor.document.getState().current).toEqual({ id: RUN, kind: "replay", path: "assets/run.replay" });
   });
 
+  it("a_replay_keeps_its_data_assets_to_itself", async () => {
+    const { host, game } = await project();
+    fireEvent.doubleClick(screen.getByText("run.replay"));
+    await settle();
+    renderPanel(host, "ludenea.inspector");
+    fireEvent.click(screen.getByText("settings.ron"));
+    await settle();
+
+    // A tick 0 edit changes the replay's asset, not the project's file.
+    type("gravity_scale", "2");
+    await settle();
+    expect(host.editor.document.getState().unsavedAssets).toEqual([]);
+    await expect(host.editor.commands.run("inspector.save-asset")).rejects.toThrow("assets/run.replay is a replay");
+    expect(host.project.sent.filter((request) => request.type === "write_text")).toEqual([]);
+  });
+
   it("opening_trace_runs_divergence_command", async () => {
     const { host } = await project();
     fireEvent.doubleClick(screen.getByText("run.trace"));
@@ -524,6 +540,30 @@ describe("data assets, replays, traces, and snapshots", () => {
     expect(game.sent).toContainEqual({ type: "save_asset", id: SETTINGS });
     expect(host.project.sent).toContainEqual({ type: "write_text", path: "assets/settings.ron", text: "(gravity_scale: 2.0)" });
     expect(screen.queryByLabelText("unsaved changes")).toBeNull();
+  });
+
+  it("undoing_a_tick_0_asset_edit_clears_its_unsaved_marker_and_redo_marks_it_again", async () => {
+    // What the session holds of each asset, as `SaveAsset` gives it.
+    const held: { [id: string]: string } = { [SETTINGS]: "(gravity_scale: 0.5)", [SWORD]: "(damage: 1)" };
+    const { host, onDisk } = await project({ answer: (command) => (command.type === "save_asset" ? { type: "text", text: held[command.id as string] } : undefined) });
+    onDisk.files = { "assets/settings.ron": "(gravity_scale: 0.5)\n", "assets/sword.ron": "(damage: 1)\n" };
+    renderPanel(host, "ludenea.inspector");
+    fireEvent.click(screen.getByText("settings.ron"));
+    await settle();
+    type("gravity_scale", "2");
+    await settle();
+    expect(host.editor.document.getState().unsavedAssets).toEqual([SETTINGS]);
+
+    held[SETTINGS] = "(gravity_scale: 0.5)";
+    await act(() => host.editor.commands.run("edit.undo"));
+    await settle();
+    expect(host.editor.document.getState().unsavedAssets).toEqual([]);
+    expect(screen.queryByLabelText("unsaved changes")).toBeNull();
+
+    held[SETTINGS] = "(gravity_scale: 2.0)";
+    await act(() => host.editor.commands.run("edit.redo"));
+    await settle();
+    expect(host.editor.document.getState().unsavedAssets).toEqual([SETTINGS]);
   });
 
   it("apply_to_asset_shown_past_tick_0", async () => {
@@ -647,6 +687,30 @@ describe("data assets, replays, traces, and snapshots", () => {
     expect(screen.queryByRole("alert")).toBeNull();
     expect(loadSessions(game.sent).at(-1)).toMatchObject({ assets: [[SETTINGS, "(session settings)"], [SWORD, "(disk sword)"]] });
     expect(host.editor.document.getState().unsavedAssets).toEqual([SETTINGS]);
+  });
+
+  it("a_scene_and_an_asset_changed_together_each_show_a_banner", async () => {
+    const { host, game, onDisk } = await unsavedEdits();
+    setSceneDirty(host, true);
+    onDisk.scene = "(scene changed)";
+    act(() =>
+      host.project.push({
+        type: "files_changed",
+        changes: [{ Changed: { path: SCENE, kind: "Scene" } }, { Changed: { path: "assets/sword.ron", kind: { Data: { type: "demo::Weapon" } } } }],
+      }),
+    );
+    await settle();
+    await settle();
+
+    const banners = () => screen.getAllByRole("alert").map((banner) => banner.textContent);
+    expect(banners()).toEqual([expect.stringContaining("assets/sword.ron changed on disk"), expect.stringContaining(`${SCENE} changed on disk`)]);
+    // Keeping my sword leaves the scene's banner.
+    fireEvent.click(within(screen.getAllByRole("alert")[0]!).getByRole("button", { name: "Keep mine" }));
+    expect(banners()).toEqual([expect.stringContaining(`${SCENE} changed on disk`)]);
+    fireEvent.click(within(screen.getByRole("alert")).getByRole("button", { name: "Reload" }));
+    await settle();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(game.sent.filter((command) => command.type === "replace_scene").at(-1)).toMatchObject({ scene: "(scene changed)" });
   });
 
   it("a_scene_changed_on_disk_keeps_an_unsaved_asset_edit", async () => {

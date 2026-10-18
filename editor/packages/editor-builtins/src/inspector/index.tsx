@@ -1,7 +1,7 @@
 import { ProtocolFailure, type AssetId, type JsonValue } from "@ludenea/control-client";
 import { definePlugin, type Editor } from "@ludenea/editor-shell";
 import { createStore, showPanel, type Store } from "../shared";
-import { assertEditable, edit } from "../timeline/editing";
+import { assertEditable, edit, onEdited } from "../timeline/editing";
 import { InspectorPanel } from "./InspectorPanel";
 
 /**
@@ -89,6 +89,8 @@ export const inspectorPlugin = definePlugin({
       title: "Save the selected data asset",
       async run() {
         const { control, id } = selectedAsset();
+        const open = editor.document.getState().current;
+        if (open?.kind === "replay") throw new Error(`${open.path} is a replay: its data assets are its own, never written to the project's files`);
         const { text } = await control.request({ type: "save_asset", id });
         const { entries } = await editor.project.request({ type: "list_files" });
         const path = entries.find((file) => file.id === id)?.path;
@@ -104,6 +106,10 @@ export const inspectorPlugin = definePlugin({
         }
       },
     });
+    // Undo and redo may take a tick 0 asset edit back or bring it again.
+    onEdited(editor, (command) => {
+      if (command.type === "undo" || command.type === "redo") void markDiffering(editor);
+    });
     editor.panels.register({
       id: "ludenea.inspector",
       title: "Inspector",
@@ -113,8 +119,33 @@ export const inspectorPlugin = definePlugin({
   },
 });
 
-/** Marks the data asset `id` as differing from its file, or not. */
+/**
+ * Marks each data asset unsaved whose text in the session differs from its file. A replay's
+ * assets are its own: they are left as they are.
+ */
+async function markDiffering(editor: Editor): Promise<void> {
+  const control = editor.control;
+  if (!control || editor.document.getState().current?.kind === "replay") return;
+  try {
+    const { entries } = await editor.project.request({ type: "list_files" });
+    const data = entries.filter((file) => typeof file.kind === "object" && "Data" in file.kind);
+    await Promise.all(
+      data.map(async ({ id, path }) => {
+        // An asset the session does not hold has nothing unsaved.
+        const session = await control.request({ type: "save_asset", id }).catch(() => null);
+        if (!session) return;
+        const { text } = await editor.project.request({ type: "read_text", path });
+        markUnsaved(editor, id, session.text.trim() !== text.trim());
+      }),
+    );
+  } catch (error) {
+    console.warn(`unsaved data assets not checked: ${String(error)}`);
+  }
+}
+
+/** Marks the data asset `id` as differing from its file, or not; never in a replay, whose assets are its own. */
 export function markUnsaved(editor: Editor, id: AssetId, unsaved: boolean): void {
+  if (unsaved && editor.document.getState().current?.kind === "replay") return;
   const { unsavedAssets } = editor.document.getState();
   const others = unsavedAssets.filter((other) => other !== id);
   editor.document.setState({ unsavedAssets: unsaved ? [...others, id] : others });
