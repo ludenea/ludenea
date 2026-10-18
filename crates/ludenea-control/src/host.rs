@@ -770,7 +770,8 @@ fn session_error(error: &SessionError) -> ProtocolError {
         SessionError::UndoDecode(_)
         | SessionError::BranchesDecode(_)
         | SessionError::NoSuchBranch(_)
-        | SessionError::RootBranch => ErrorCode::InvalidCommand,
+        | SessionError::RootBranch
+        | SessionError::NotOnBranch { .. } => ErrorCode::InvalidCommand,
         SessionError::Edit(error) => return edit_error(error),
         SessionError::MissingComponent { .. } => ErrorCode::InvalidEdit,
         SessionError::NotInScene(_) => ErrorCode::NoSuchEntity,

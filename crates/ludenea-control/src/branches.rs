@@ -60,8 +60,9 @@ impl Segment {
         checkpoints: &Checkpoints,
     ) -> Segment {
         let at = |tick: u64| usize::try_from(tick).expect("tick fits in memory");
-        let first =
-            (log.edits.partition_point(|edit| edit.tick < tick) + edits).min(log.edits.len());
+        // Clamped to the fork tick's edits: a wrong count never swallows later edits.
+        let end = log.edits.partition_point(|edit| edit.tick <= tick);
+        let first = (log.edits.partition_point(|edit| edit.tick < tick) + edits).min(end);
         Segment {
             inputs: inputs.ticks.get(at(tick)..).unwrap_or_default().to_vec(),
             edits: log.edits[first..].to_vec(),
@@ -222,6 +223,18 @@ impl BranchTree {
     pub fn remove(&mut self, ids: &[BranchId]) {
         for id in ids {
             self.branches.remove(id);
+        }
+    }
+
+    /// After `count` edits were removed at `tick` from the front of that tick's edits in
+    /// the current run: the current branch inherits that many fewer at its fork tick.
+    pub fn edits_dropped_at(&mut self, tick: u64, count: usize) {
+        let branch = self
+            .branches
+            .get_mut(&self.current)
+            .expect("current branch");
+        if branch.parent.is_some() && branch.fork_tick == tick {
+            branch.fork_edits = branch.fork_edits.saturating_sub(count);
         }
     }
 

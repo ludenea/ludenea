@@ -435,6 +435,60 @@ fn pinned_checkpoints_are_never_evicted() {
     );
 }
 
+#[test]
+fn undo_of_an_edit_on_another_branch_is_refused_and_keeps_the_timeline() {
+    let (mut sim, mut session) = played(400, 300);
+    edit_at(&mut session, &mut sim, 150, 1_000);
+    session.switch_branch(&mut sim, ROOT).unwrap();
+    let before = hashes(&session);
+    assert!(matches!(
+        session.undo(&mut sim),
+        Err(SessionError::NotOnBranch { tick: 150 })
+    ));
+    assert_eq!(session.timeline().head, 399);
+    assert_eq!(hashes(&session), before);
+    assert!(session.timeline().can_undo, "the entry stays");
+
+    session.switch_branch(&mut sim, BranchId(1)).unwrap();
+    assert_eq!(edits(&session).len(), 1);
+    session.delete_branch(&mut sim, BranchId(1)).unwrap();
+    assert!(matches!(
+        session.undo(&mut sim),
+        Err(SessionError::NotOnBranch { .. })
+    ));
+    assert_eq!(session.timeline().head, 399);
+    assert_eq!(hashes(&session), before);
+}
+
+#[test]
+fn restore_at_the_fork_tick_keeps_the_branch_own_later_edits() {
+    let (mut sim, mut session) = played(400, 300);
+    // The root records A at 200 (forking branch 1), then B at 200 forks branch 2 at
+    // (200, 1), which records D at 220.
+    edit_at(&mut session, &mut sim, 200, 1);
+    play(&mut session, &mut sim, 20);
+    edit_at(&mut session, &mut sim, 200, 2);
+    play(&mut session, &mut sim, 20);
+    let edit = stats_edit(&sim, 4);
+    session.edit(&mut sim, edit).unwrap();
+    let nested = edits(&session);
+    assert_eq!(
+        nested.iter().map(|e| e.tick).collect::<Vec<_>>(),
+        [200, 200, 220]
+    );
+
+    let mut other = simulation();
+    let mut elsewhere = Session::start(&mut other, boxes::generate_scene(12, 3)).unwrap();
+    play(&mut elsewhere, &mut other, 200);
+    session.restore(&mut sim, &other.snapshot()).unwrap();
+    assert_eq!(edits(&session), [nested[2].clone()]);
+
+    session.switch_branch(&mut sim, ROOT).unwrap();
+    session.switch_branch(&mut sim, BranchId(2)).unwrap();
+    // The branch no longer inherits A: the edits stay as the restore left them.
+    assert_eq!(edits(&session), [nested[2].clone()]);
+}
+
 /// The export of a session forked twice, nested, with the nested branch current.
 fn branched_export() -> (Vec<Vec<u64>>, Vec<BranchInfo>, SessionExport) {
     let (mut sim, mut session) = played(400, 300);

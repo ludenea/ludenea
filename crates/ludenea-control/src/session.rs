@@ -61,6 +61,8 @@ pub enum SessionError {
     Snapshot(#[from] SnapshotError),
     #[error("there is no branch {}", .0.0)]
     NoSuchBranch(BranchId),
+    #[error("the edit to undo, at tick {tick}, was recorded on another branch; switch to it first")]
+    NotOnBranch { tick: u64 },
     #[error("the root branch cannot be deleted")]
     RootBranch,
     #[error("the branch tree cannot be decoded: {0}")]
@@ -321,9 +323,13 @@ impl Session {
             }
             UndoEntry::Run { edit } => {
                 let tick = edit.tick;
-                if let Some(index) = self.edits.edits.iter().rposition(|e| e == edit) {
-                    self.edits.edits.remove(index);
-                }
+                // An edit recorded on another branch is refused, leaving the timeline and
+                // the entry as they are: discarding here would cut this branch's future.
+                let Some(index) = self.edits.edits.iter().rposition(|e| e == edit) else {
+                    self.history.undone(entry, false);
+                    return Err(SessionError::NotOnBranch { tick });
+                };
+                self.remove_edit(index);
                 self.discard_after(tick);
                 self.history.undone(entry, true);
                 // The ticks up to the edit ran before with these same inputs and edits.
@@ -495,6 +501,12 @@ impl Session {
             let first = self.edits.edits.partition_point(|edit| edit.tick < tick);
             let end = self.edits.edits.partition_point(|edit| edit.tick <= tick);
             let dropped: Vec<TimedEdit> = self.edits.edits.drain(first..end).collect();
+            // ponytail: at the fork tick the branch stops inheriting the dropped edits, but
+            // the restored state and its hash sit in the prefix, which switching away and
+            // back recomposes from the parent, undoing the restore (before the fork tick,
+            // the dropped edits come back too). Store the restored state in the branch if
+            // it must survive switching.
+            self.tree.edits_dropped_at(tick, dropped.len());
             for edit in &dropped {
                 self.history.forget(edit);
             }
@@ -749,6 +761,21 @@ impl Session {
         self.update_head();
     }
 
+    /// Removes an edit from the run, keeping the count of edits the current branch inherits
+    /// at its fork tick.
+    fn remove_edit(&mut self, index: usize) -> TimedEdit {
+        let removed = self.edits.edits.remove(index);
+        let first = self
+            .edits
+            .edits
+            .partition_point(|edit| edit.tick < removed.tick);
+        let branch = self.tree.current_branch();
+        if removed.tick == branch.fork_tick && index - first < branch.fork_edits {
+            self.tree.edits_dropped_at(removed.tick, 1);
+        }
+        removed
+    }
+
     /// Whether `edit` created the current branch: its first own edit at its fork tick.
     fn is_forking_edit(&self, edit: &TimedEdit) -> bool {
         let branch = self.tree.current_branch();
@@ -904,7 +931,7 @@ impl Session {
             match sim.apply_edit(&self.edits.edits[index].edit) {
                 Ok(_) => index += 1,
                 Err(error) => {
-                    let dropped = self.edits.edits.remove(index);
+                    let dropped = self.remove_edit(index);
                     self.history.forget(&dropped);
                     self.reports.push_back(Resimulation::EditDropped {
                         tick,
