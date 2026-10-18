@@ -679,3 +679,41 @@ fn a_panicking_debug_drawer_fails_the_draw_and_stops_the_ghost_only() {
     step(&mut host, 5);
     draw(&mut host);
 }
+
+fn pick_panics(_: &ludenea::ecs::World, _: ludenea::prelude::Vec2) -> Vec<Entity> {
+    panic!("boom in the picker");
+}
+
+fn pick_panics_app() -> App {
+    let mut app = boxes::app();
+    app.picker(pick_panics);
+    app
+}
+
+#[test]
+fn a_panicking_picker_fails_the_pick_and_keeps_the_session() {
+    let mut host = Host::new(pick_panics_app).unwrap();
+    ok(
+        &mut host,
+        Command::LoadScene {
+            scene: boxes::generate_scene(10, 3),
+            assets: Vec::new(),
+            document: Document::Scene,
+        },
+    );
+    step(&mut host, 5);
+
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let picked = host.handle(Command::Pick {
+        point: serde_json::from_value(json!({ "x": 0.0, "y": 0.0 })).unwrap(),
+    });
+    std::panic::set_hook(hook);
+
+    let error = picked.unwrap_err();
+    assert_eq!(error.code, ludenea::control::ErrorCode::SystemPanicked);
+    assert!(error.message.contains("boom in the picker"), "{error:?}");
+    // The session goes on.
+    step(&mut host, 5);
+    draw(&mut host);
+}

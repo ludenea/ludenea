@@ -1,3 +1,5 @@
+use std::panic::{AssertUnwindSafe, catch_unwind};
+
 use ludenea_app::prefab;
 use ludenea_app::replay::Replay;
 use ludenea_app::trace::{Trace, compare_traces};
@@ -19,7 +21,9 @@ use crate::protocol::{
     Bytes, Command, ComponentValue, ConsoleLevel, EntityRow, ErrorCode, Event, FieldTarget,
     GameInfo, Hash64, NamedSchema, PauseReason, ProtocolError, Reply, SyncPoint, SystemRow, Topic,
 };
-use crate::session::{Document, Resimulation, Session, SessionError, SessionExport, Timeline};
+use crate::session::{
+    Document, Resimulation, Session, SessionError, SessionExport, Timeline, panic_message,
+};
 use crate::subscriptions::{INTROSPECTION_TICKS, Subscriptions, TickRecord};
 use crate::values::{asset_json, asset_value, entity_values, resource_values, value_schema};
 
@@ -833,7 +837,17 @@ impl Host {
                     .map_err(|message| ProtocolError::new(ErrorCode::SystemPanicked, message))?,
             }),
             Command::Pick { point } => Ok(Reply::Picked {
-                entities: sim.pick(point),
+                entities: catch_unwind(AssertUnwindSafe(|| sim.pick(point))).map_err(
+                    |payload| {
+                        ProtocolError::new(
+                            ErrorCode::SystemPanicked,
+                            format!(
+                                "the game panicked while picking: {}",
+                                panic_message(&*payload)
+                            ),
+                        )
+                    },
+                )?,
             }),
             Command::SetCompareBranch { branch } => {
                 self.session
