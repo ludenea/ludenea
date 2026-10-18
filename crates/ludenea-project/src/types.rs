@@ -18,8 +18,10 @@ const SHARED_DECLARATIONS: [(&str, &str); 3] = [
 ];
 
 impl Project {
-    /// Writes `.ludenea/types/`: the game's component types, which plugins see through
-    /// `@ludenea/editor-shell`, next to the declarations of the modules plugins import.
+    /// Writes `.ludenea/types/`: the game's types, next to the declarations of the modules
+    /// plugins import. The game's types live in the type-only module `@ludenea/game`, so one
+    /// named like an editor export (`Editor`) clashes with nothing; `@ludenea/editor-shell`
+    /// only learns the stable name of each component through `ComponentTypes`.
     pub fn write_game_types(&self, info: &GameInfo) -> Result<(), ProjectError> {
         let directory = self.root.join(".ludenea/types");
         fs::create_dir_all(&directory).map_err(|error| io_error(&directory, error))?;
@@ -33,7 +35,12 @@ impl Project {
             .lines()
             .map(|line| format!("  {line}\n"))
             .collect();
-        let game = format!("declare module \"@ludenea/editor-shell\" {{\n{indented}}}\n");
+        let game = format!(
+            "declare module \"@ludenea/game\" {{\n{indented}}}\n\n\
+             declare module \"@ludenea/editor-shell\" {{\n  \
+             import type {{ ComponentTypes as GameComponentTypes }} from \"@ludenea/game\";\n  \
+             interface ComponentTypes extends GameComponentTypes {{}}\n}}\n"
+        );
         let files = SHARED_DECLARATIONS
             .into_iter()
             .chain([("game.d.ts", game.as_str())]);

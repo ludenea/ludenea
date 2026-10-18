@@ -554,9 +554,8 @@ mod tests {
             directory: PathBuf::from("/project/editor"),
         }];
         let source = PathBuf::from("/project/editor/index.ts");
-        let closed = |mode| {
-            Event::new(EventKind::Access(AccessKind::Close(mode))).add_path(source.clone())
-        };
+        let closed =
+            |mode| Event::new(EventKind::Access(AccessKind::Close(mode))).add_path(source.clone());
         let read = closed(AccessMode::Read);
         assert_eq!(changed_entries(&entries, [&read]).count(), 0);
         let written = closed(AccessMode::Write);

@@ -6,10 +6,11 @@ use std::sync::OnceLock;
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
-use ludenea_control::{GameInfo, ServerMessage};
+use ludenea_control::{GameInfo, NamedSchema, ServerMessage};
 use ludenea_project::{
     BuildArtifact, BuildError, BuildEvent, BuildTarget, GameProcess, OutputStream, Project,
 };
+use ludenea_schema::{FieldSchema, TypeSchema};
 use tempfile::TempDir;
 
 const TIMEOUT: Duration = Duration::from_secs(60);
@@ -187,6 +188,7 @@ fn game_types_declare_template_components() {
     project.write_game_types(&info).unwrap();
     let types = dir.path().join("demo/.ludenea/types");
     let declarations = std::fs::read_to_string(types.join("game.d.ts")).unwrap();
+    assert!(declarations.contains("declare module \"@ludenea/game\""));
     assert!(declarations.contains("declare module \"@ludenea/editor-shell\""));
     assert!(declarations.contains("interface ComponentTypes"));
     let component = info.components[0].name.rsplit("::").next().unwrap();
@@ -198,7 +200,9 @@ fn game_types_declare_template_components() {
 
 /// Type-checks against the template's own types, so `@ts-expect-error` fails the check if an
 /// unknown component name is ever accepted.
-const TYPE_PROBE: &str = r#"import type { Editor, Pose } from "@ludenea/editor-shell";
+/// A game component named like an editor export (`demo::Editor`) must not clash with it.
+const TYPE_PROBE: &str = r#"import type { Editor } from "@ludenea/editor-shell";
+import type { Editor as GameEditor, Pose } from "@ludenea/game";
 import type { Entity } from "@ludenea/control-client";
 
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
@@ -206,9 +210,11 @@ type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 export async function probe(editor: Editor, entity: Entity): Promise<number | undefined> {
   const pose = await editor.entities.get(entity, "ludenea::Pose");
   const exact: Same<typeof pose, Pose | undefined> = true;
+  const named = await editor.entities.get(entity, "demo::Editor");
+  const game: Same<typeof named, GameEditor | undefined> = true;
   // @ts-expect-error: not a component of this game
   await editor.entities.get(entity, "ludenea::Nothing");
-  return exact ? pose?.position.x : undefined;
+  return exact && game ? pose?.position.x : named?.title.length;
 }
 "#;
 
@@ -218,8 +224,18 @@ export async function probe(editor: Editor, entity: Entity): Promise<number | un
 fn generated_game_types_type_check_project_plugins() {
     let mut game = GameProcess::start(game_binary()).unwrap();
     let messages = game.take_messages().unwrap();
-    let info = handshake(&mut game, &messages);
+    let mut info = handshake(&mut game, &messages);
     game.stop();
+    info.components.push(NamedSchema {
+        name: "demo::Editor".to_string(),
+        schema: TypeSchema::Struct {
+            name: "demo::Editor".to_string(),
+            fields: vec![FieldSchema {
+                name: "title".to_string(),
+                schema: TypeSchema::String,
+            }],
+        },
+    });
     let dir = TempDir::new().unwrap();
     let mut project = new_project(&dir);
     project.write_game_types(&info).unwrap();
