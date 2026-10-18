@@ -2,7 +2,7 @@ import type { ControlClient } from "@ludenea/control-client";
 import type { Editor } from "@ludenea/editor-shell";
 import { useState } from "react";
 import { useGame, useStore, type Store } from "../shared";
-import { EntityList, entityKey } from "./EntityList";
+import { EntityList, entityKey } from "../shared/EntityList";
 import { Introspection, type IntrospectionTab } from "./Introspection";
 
 const TABS = ["Entities", "Schedule", "Events", "Commands"] as const;

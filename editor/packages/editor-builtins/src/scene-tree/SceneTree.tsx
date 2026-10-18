@@ -1,7 +1,7 @@
 import type { ControlClient, Entity } from "@ludenea/control-client";
 import type { Editor } from "@ludenea/editor-shell";
 import { useEffect, useMemo, useState } from "react";
-import { EntityList, entityKey } from "../explorer/EntityList";
+import { EntityList, entityKey } from "../shared/EntityList";
 import { shared, useGame, useStore } from "../shared";
 import { ResimulatingNotice } from "../timeline/editing";
 

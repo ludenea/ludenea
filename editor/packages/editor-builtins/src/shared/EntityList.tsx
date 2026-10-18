@@ -2,7 +2,7 @@ import type { ControlClient, Entity, EntityRow } from "@ludenea/control-client";
 import type { Editor } from "@ludenea/editor-shell";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
-import { errorText } from "../shared";
+import { errorText } from ".";
 
 const PAGE = 200;
 const ROW_HEIGHT = 22;
