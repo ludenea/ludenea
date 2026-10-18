@@ -37,17 +37,29 @@ pub(crate) struct Meta {
 
 /// How long a lister waits for another one to finish writing a meta it just created.
 const CREATION_GRACE: Duration = Duration::from_millis(50);
+/// An empty meta modified longer ago than this is not being written: it is just empty.
+const CREATION_WINDOW: Duration = Duration::from_secs(1);
+
+/// Whether the meta at `path` was modified so recently that another lister may still be
+/// writing it.
+fn may_be_being_written(path: &Path) -> bool {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_none_or(|age| age < CREATION_WINDOW)
+}
 
 impl Meta {
-    /// Reads the meta. An empty one is read once more after a moment: another lister may have
-    /// created it and not written it yet.
+    /// Reads the meta. An empty one just created is read once more after a moment: another
+    /// lister may have created it and not written it yet.
     pub fn read(path: &Path) -> Result<Meta, String> {
         let text = fs::read_to_string(path).map_err(|error| error.to_string())?;
         Self::parse(path, text)
     }
 
     fn parse(path: &Path, text: String) -> Result<Meta, String> {
-        let text = if text.is_empty() {
+        let text = if text.is_empty() && may_be_being_written(path) {
             thread::sleep(CREATION_GRACE);
             fs::read_to_string(path).map_err(|error| error.to_string())?
         } else {
@@ -87,6 +99,23 @@ impl Meta {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An empty meta left on disk long ago is not waited for at every listing.
+    #[test]
+    fn only_a_recently_created_empty_meta_may_still_be_written() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("main.scene.ron.meta");
+        fs::write(&path, "").unwrap();
+        assert!(may_be_being_written(&path));
+        let long_ago = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(long_ago)
+            .unwrap();
+        assert!(!may_be_being_written(&path));
+    }
 
     /// Another lister created the meta and writes it a moment later.
     #[test]
