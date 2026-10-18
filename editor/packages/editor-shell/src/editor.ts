@@ -35,7 +35,7 @@ export interface Editor {
   explorer: { columns: Observed<ExplorerColumn> & { register(column: ExplorerColumn): Disposable } };
   commands: {
     register(command: CommandDefinition): Disposable;
-    run(id: string): Promise<void>;
+    run(id: string, ...args: unknown[]): Promise<void>;
     list(): CommandDefinition[];
   };
   /** `key` such as `Mod+S` (Cmd on macOS, Ctrl elsewhere), `Ctrl+Shift+Z`, `F5`, `Delete`, or `.`; runs `command` unless a text field has focus. */
@@ -144,10 +144,10 @@ export function createEditor(options: {
     explorer: { columns: { register: (column) => columns.register(column.id, column), list: columns.values, subscribe: columns.subscribe } },
     commands: {
       register: (command) => commands.register(command.id, command),
-      async run(id) {
+      async run(id, ...args) {
         const command = commands.get(id);
         if (!command) throw new Error(`no command "${id}" is registered`);
-        await command.run(editor);
+        await command.run(editor, ...args);
       },
       list: () => commands.values(),
     },
@@ -192,6 +192,10 @@ export function createEditor(options: {
     },
   };
 
+  // A divergence the game reported belongs to the document open then.
+  documents.store.subscribe((state, previous) => {
+    if (state.current?.id !== previous.current?.id) timeline.setState({ divergence: null });
+  });
   let stopTimeline = feedTimeline(control, editor.timeline);
   const setControl = (next: ControlClient | null) => {
     if (next === control) return;

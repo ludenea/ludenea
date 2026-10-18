@@ -32,6 +32,7 @@ export function TimelinePanel({ editor, speed }: { editor: Editor; speed: SpeedS
   const control = useGame(editor);
   const { timeline, hash, pending, playing, effectiveRate, divergence } = editor.timeline();
   const { speed: current } = useStore(speed);
+  const otherTypes = editor.document((state) => state.current?.kind === "replay" && state.fingerprintDiffers);
   const [error, setError] = useState<string | null>(null);
   // The dragged position shows until the last seek it asked for lands (and the timeline shows
   // where): the ticks of the seeks before it would make the thumb jump back.
@@ -86,6 +87,12 @@ export function TimelinePanel({ editor, speed }: { editor: Editor; speed: SpeedS
           </span>
         )}
       </p>
+      {otherTypes && (
+        <p role="status" aria-label="Replay" className="ludenea-warning">
+          This replay was recorded with other game types:{" "}
+          {divergence ? `first divergent tick ${divergence.tick} against its recorded hashes.` : "it matches its recorded hashes so far."}
+        </p>
+      )}
       {timeline.resimulating && (
         <progress aria-label="Resimulation" max={head} value={timeline.simulated}>
           {timeline.simulated} of {head}

@@ -1,4 +1,4 @@
-import type { JsonValue, TypeSchema, VariantSchema } from "@ludenea/control-client";
+import type { JsonValue, PathSegment, TypeSchema, VariantSchema } from "@ludenea/control-client";
 
 const ZERO_ASSET = "0".repeat(32);
 
@@ -55,4 +55,17 @@ export function variantValue(variant: VariantSchema): JsonValue {
     case "struct":
       return { [variant.name]: Object.fromEntries(fields.fields.map((field) => [field.name, defaultValue(field.schema)])) };
   }
+}
+
+/** `root` with the value at `path` replaced, in the host's path semantics. */
+export function setAt(root: JsonValue, path: PathSegment[], value: JsonValue): JsonValue {
+  const [first, ...rest] = path;
+  if (!first) return value;
+  if (first.type === "index") {
+    const items = [...(root as JsonValue[])];
+    items[first.index] = setAt(items[first.index] ?? null, rest, value);
+    return items;
+  }
+  const object = root as { [name: string]: JsonValue };
+  return { ...object, [first.name]: setAt(object[first.name] ?? null, rest, value) };
 }

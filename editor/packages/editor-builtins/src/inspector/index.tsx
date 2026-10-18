@@ -1,4 +1,4 @@
-import { ProtocolFailure, type JsonValue } from "@ludenea/control-client";
+import { ProtocolFailure, type AssetId, type JsonValue } from "@ludenea/control-client";
 import { definePlugin, type Editor } from "@ludenea/editor-shell";
 import { createStore, showPanel, type Store } from "../shared";
 import { assertEditable, edit } from "../timeline/editing";
@@ -10,8 +10,11 @@ import { InspectorPanel } from "./InspectorPanel";
  */
 export type AddDraft = { chosen: string; draft: { component: string; value: JsonValue } | null; error: string | null };
 
-/** What the inspector's commands and panel share; kept here while the panel is hidden. */
-export type InspectorState = Store<{ focused: string | null; adding: AddDraft | null }>;
+/**
+ * What the inspector's commands and panel share; kept here while the panel is hidden.
+ * `unsaved`: the data assets whose text the session changed (a tick 0 edit, "Apply to asset") since saved.
+ */
+export type InspectorState = Store<{ focused: string | null; adding: AddDraft | null; unsaved: AssetId[] }>;
 
 /** Runs a request on the selection; `NoSuchEntity` (seeked before its spawn) clears the selection. */
 export async function onEntity<T>(editor: Editor, request: Promise<T>): Promise<T> {
@@ -26,7 +29,7 @@ export async function onEntity<T>(editor: Editor, request: Promise<T>): Promise<
 export const inspectorPlugin = definePlugin({
   name: "ludenea.inspector",
   activate(editor) {
-    const state: InspectorState = createStore({ focused: null as string | null, adding: null as AddDraft | null });
+    const state: InspectorState = createStore({ focused: null as string | null, adding: null as AddDraft | null, unsaved: [] as AssetId[] });
     const target = () => {
       const control = editor.control;
       if (!control) throw new Error("no game is running");
@@ -67,6 +70,36 @@ export const inspectorPlugin = definePlugin({
         await onEntity(editor, edit(editor, control, { type: "apply_to_scene", entity, component }));
       },
     });
+    const selectedAsset = () => {
+      const control = editor.control;
+      if (!control) throw new Error("no game is running");
+      const id = editor.selection.getState().asset;
+      if (!id) throw new Error("select a data asset first");
+      return { control, id };
+    };
+    editor.commands.register({
+      id: "inspector.apply-to-asset",
+      title: "Apply the selected data asset's current value to the asset",
+      async run() {
+        const { control, id } = selectedAsset();
+        await edit(editor, control, { type: "apply_to_asset", id });
+        markUnsaved(state, id);
+      },
+    });
+    editor.commands.register({
+      id: "inspector.save-asset",
+      title: "Save the selected data asset",
+      async run() {
+        const { control, id } = selectedAsset();
+        const { text } = await control.request({ type: "save_asset", id });
+        const { entries } = await editor.project.request({ type: "list_files" });
+        const path = entries.find((file) => file.id === id)?.path;
+        if (!path) throw new Error(`no project file has the identifier ${id}`);
+        // The shell reloads the session's assets from the written file.
+        await editor.project.request({ type: "write_text", path, text });
+        state.set({ unsaved: state.get().unsaved.filter((other) => other !== id) });
+      },
+    });
     editor.panels.register({
       id: "ludenea.inspector",
       title: "Inspector",
@@ -75,3 +108,8 @@ export const inspectorPlugin = definePlugin({
     });
   },
 });
+
+export function markUnsaved(state: InspectorState, id: AssetId): void {
+  const { unsaved } = state.get();
+  if (!unsaved.includes(id)) state.set({ unsaved: [...unsaved, id] });
+}

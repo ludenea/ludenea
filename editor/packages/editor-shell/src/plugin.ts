@@ -33,7 +33,8 @@ export interface PanelDefinition {
 export interface CommandDefinition {
   id: string;
   title: string;
-  run(editor: Editor): void | Promise<void>;
+  /** `args` are what the caller passed to `commands.run` after the identifier; the palette and shortcuts pass none. */
+  run(editor: Editor, ...args: unknown[]): void | Promise<void>;
 }
 
 /** Replaces the generic inspector for one component. */

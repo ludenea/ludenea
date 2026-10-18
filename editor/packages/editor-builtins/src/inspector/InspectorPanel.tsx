@@ -1,12 +1,12 @@
-import { ProtocolFailure, type ComponentValue, type ControlClient, type Entity, type FieldTarget, type JsonValue, type PathSegment, type TypeSchema } from "@ludenea/control-client";
+import { ProtocolFailure, type AssetId, type ComponentValue, type ControlClient, type Entity, type FieldTarget, type JsonValue, type PathSegment, type TypeSchema } from "@ludenea/control-client";
 import type { Editor } from "@ludenea/editor-shell";
 import { useEffect, useMemo, useState } from "react";
 import { errorText, useGame, useStore } from "../shared";
 import { edit, ResimulatingNotice, useResimulating } from "../timeline/editing";
-import { defaultValue } from "./default-value";
+import { defaultValue, setAt } from "./default-value";
 import { Field } from "./fields/Field";
 import type { Edit } from "./fields/inputs";
-import { onEntity, type AddDraft, type InspectorState } from "./index";
+import { markUnsaved, onEntity, type AddDraft, type InspectorState } from "./index";
 
 type Values = { [name: string]: ComponentValue };
 
@@ -24,6 +24,7 @@ export function InspectorPanel({ editor, state }: { editor: Editor; state: Inspe
 
 function Inspector({ editor, control, state }: { editor: Editor; control: ControlClient; state: InspectorState }) {
   const entity = editor.selection((selection) => selection.entities[0]);
+  const asset = editor.selection((selection) => selection.asset);
   const { adding, focused } = useStore(state);
   const components = useMemo(() => schemaMap(control.game.components), [control]);
   const resourceSchemas = useMemo(() => schemaMap(control.game.resources), [control]);
@@ -39,6 +40,7 @@ function Inspector({ editor, control, state }: { editor: Editor; control: Contro
   return (
     <div className="ludenea-inspector">
       <ResimulatingNotice editor={editor} />
+      {asset && <DataAsset editor={editor} control={control} id={asset} state={state} />}
       {entity && (
         <>
           <h2>
@@ -77,6 +79,65 @@ function Inspector({ editor, control, state }: { editor: Editor; control: Contro
         />
       ))}
     </div>
+  );
+}
+
+/**
+ * The selected data asset, edited through its schema. At tick 0 an edit changes the asset's
+ * text, to save explicitly; later it is a recorded edit, which "Apply to asset" copies back.
+ */
+function DataAsset({ editor, control, id, state }: { editor: Editor; control: ControlClient; id: AssetId; state: InspectorState }) {
+  const tick = editor.timeline((timeline) => timeline.timeline?.current ?? 0);
+  const unsaved = useStore(state).unsaved.includes(id);
+  const resimulating = useResimulating(editor);
+  const [asset, setAsset] = useState<{ asset: string; value: ComponentValue } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [version, setVersion] = useState(0);
+
+  // Past tick 0 the value is the one at the current tick.
+  useEffect(() => {
+    let current = true;
+    control.request({ type: "get_asset", id }).then(
+      (reply) => {
+        if (!current) return;
+        setAsset(reply);
+        setError(null);
+      },
+      (failure) => current && setError(errorText(failure)),
+    );
+    return () => {
+      current = false;
+    };
+  }, [control, id, tick, version]);
+
+  const setField: Edit = async (path, value) => {
+    const atStart = (editor.timeline.getState().timeline?.current ?? 0) === 0;
+    await edit(editor, control, { type: "set_asset_field", id, path, value });
+    if (atStart) markUnsaved(state, id);
+    setVersion((version) => version + 1);
+  };
+  const run = (command: string) => () =>
+    void editor.commands.run(command).then(
+      () => setError(null),
+      (failure) => setError(errorText(failure)),
+    );
+  const schema = asset && control.game.assets.find(({ name }) => name === asset.asset)?.schema;
+
+  return (
+    <>
+      <h2>
+        Data asset {asset && shortName(asset.asset)}
+        {unsaved && <span aria-label="unsaved changes"> ●</span>}{" "}
+        {unsaved && <button onClick={run("inspector.save-asset")}>Save asset</button>}
+        {tick > 0 && (
+          <button disabled={resimulating} onClick={run("inspector.apply-to-asset")}>
+            Apply to asset
+          </button>
+        )}
+      </h2>
+      {error && <p className="ludenea-error">{error}</p>}
+      {asset && <Section editor={editor} name={asset.asset} value={asset.value} schema={schema ?? undefined} edit={setField} readOnly={resimulating} />}
+    </>
   );
 }
 
@@ -255,17 +316,4 @@ function AddComponent(props: {
       <button onClick={() => state.set({ adding: null })}>Cancel</button>
     </div>
   );
-}
-
-/** `root` with the value at `path` replaced, in the host's path semantics. */
-function setAt(root: JsonValue, path: PathSegment[], value: JsonValue): JsonValue {
-  const [first, ...rest] = path;
-  if (!first) return value;
-  if (first.type === "index") {
-    const items = [...(root as JsonValue[])];
-    items[first.index] = setAt(items[first.index] ?? null, rest, value);
-    return items;
-  }
-  const object = root as { [name: string]: JsonValue };
-  return { ...object, [first.name]: setAt(object[first.name] ?? null, rest, value) };
 }

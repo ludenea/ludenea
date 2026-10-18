@@ -61,7 +61,8 @@ interface PanelDefinition {
 interface CommandDefinition {
     id: string;
     title: string;
-    run(editor: Editor): void | Promise<void>;
+    /** `args` are what the caller passed to `commands.run` after the identifier; the palette and shortcuts pass none. */
+    run(editor: Editor, ...args: unknown[]): void | Promise<void>;
 }
 /** Replaces the generic inspector for one component. */
 type InspectorComponent<T> = ComponentType<{
@@ -206,6 +207,8 @@ interface DocumentState {
     text: string | null;
     /** What the game's last load of the open scene or prefab reported; null for a replay or without a game. */
     loaded: Loaded | null;
+    /** The open replay was recorded with other game types (its schema fingerprint differs); false for a scene or prefab. */
+    fingerprintDiffers: boolean;
     /** Why the last open, reload, or load into a new game was refused (the previous document and session stay); null once one succeeds. */
     error: string | null;
     /**
@@ -224,8 +227,11 @@ type DocumentStore = UseBoundStore<StoreApi<DocumentState>>;
 
 interface SelectionState {
     entities: Entity[];
+    /** The data asset the inspector edits; selecting entities clears it, and selecting it clears them. */
+    asset: AssetId | null;
     select(entities: Entity[]): void;
     add(entity: Entity): void;
+    selectAsset(id: AssetId): void;
     clear(): void;
 }
 /** A Zustand store: call it as a React hook with a selector, or use `getState`/`subscribe`. */
@@ -253,7 +259,7 @@ interface Editor {
     };
     commands: {
         register(command: CommandDefinition): Disposable;
-        run(id: string): Promise<void>;
+        run(id: string, ...args: unknown[]): Promise<void>;
         list(): CommandDefinition[];
     };
     /** `key` such as `Mod+S` (Cmd on macOS, Ctrl elsewhere), `Ctrl+Shift+Z`, `F5`, `Delete`, or `.`; runs `command` unless a text field has focus. */

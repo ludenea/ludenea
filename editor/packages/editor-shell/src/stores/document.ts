@@ -7,6 +7,7 @@ export type Loaded = Extract<Reply, { type: "loaded" }>;
 
 // A host that answers something else (a test double) reports nothing.
 const loadedIn = (reply: Reply): Loaded | null => (reply.type === "loaded" ? reply : null);
+const differs = (reply: Reply | null): boolean => reply?.type === "replay_loaded" && reply.fingerprint_differs;
 
 /** The file the game's session edits or plays. */
 export interface OpenDocument {
@@ -22,6 +23,8 @@ export interface DocumentState {
   text: string | null;
   /** What the game's last load of the open scene or prefab reported; null for a replay or without a game. */
   loaded: Loaded | null;
+  /** The open replay was recorded with other game types (its schema fingerprint differs); false for a scene or prefab. */
+  fingerprintDiffers: boolean;
   /** Why the last open, reload, or load into a new game was refused (the previous document and session stay); null once one succeeds. */
   error: string | null;
   /**
@@ -170,13 +173,12 @@ export function createDocumentStore(options: {
   };
 
   const readTexts = () => project.request({ type: "read_asset_texts" }).then(({ assets, paths }) => ({ assets, paths }));
-  // A replay's load reports no scene load: null.
-  const load = (game: ControlClient, document: OpenDocument, text: string | null, source: { texts: typeof texts; replay: string }): Promise<Loaded | null> => {
+  const load = (game: ControlClient, document: OpenDocument, text: string | null, source: { texts: typeof texts; replay: string }): Promise<Reply> => {
     const command: Command =
       document.kind === "replay"
         ? { type: "load_replay", replay: source.replay }
         : { type: "load_scene", scene: text!, assets: source.texts.assets, document: document.kind === "prefab" ? "Prefab" : "Scene" };
-    return game.request(command).then(loadedIn, locatedIn(source.texts.paths));
+    return game.request(command).catch(locatedIn(source.texts.paths));
   };
   const storeIn = (document: OpenDocument, saved: SavedSession) =>
     project.request({ type: "store_session", document: document.id, bytes: encode(saved) }).then(() => {});
@@ -206,6 +208,7 @@ export function createDocumentStore(options: {
     current: null,
     text: null,
     loaded: null,
+    fingerprintDiffers: false,
     error: null,
     open: (id) => {
       // The file once known, for the console.
@@ -230,12 +233,13 @@ export function createDocumentStore(options: {
           else ({ text } = await project.request({ type: "read_text", path: entry.path }));
           const saved = await stored(document);
           const restoring = saved && refreshed(saved, text, fresh.assets);
-          const loaded = game ? await load(game, document, text, { texts: fresh, replay: bytes }) : null;
+          const reply = game ? await load(game, document, text, { texts: fresh, replay: bytes }) : null;
+          const loaded = reply && loadedIn(reply);
           // Only what the game accepted is kept: a refused document leaves the previous one.
           texts = fresh;
           replay = bytes;
           // A stored session's load reports what stays loaded: the scene load's report is not kept.
-          set({ current: document, text, loaded: game && restoring ? null : loaded, error: null });
+          set({ current: document, text, loaded: game && restoring ? null : loaded, fingerprintDiffers: differs(reply), error: null });
           pending = game ? null : restoring;
           if (!game) return;
           if (restoring) set({ loaded: await restoreSession(game, restoring).catch(locatedIn(texts.paths)) });
@@ -302,7 +306,7 @@ export function createDocumentStore(options: {
     const restored = saved ? restoreSession(game, saved).catch(locatedIn(texts.paths)) : null;
     Promise.all([loaded, restored])
       .then(([first, second]) => {
-        store.setState({ loaded: second ?? first, error: null });
+        store.setState({ loaded: second ?? loadedIn(first), fingerprintDiffers: differs(first), error: null });
         return nameRoot(game, document);
       })
       .catch(reported(`Cannot load ${document.path} into the game`))

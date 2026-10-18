@@ -1,4 +1,5 @@
-import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import type { TypeSchema } from "@ludenea/control-client";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { builtinPlugins } from "../src";
 import { renderPanel, setSceneDirty, settle, testEditor, testGame } from "./support";
@@ -328,5 +329,215 @@ describe("assets", () => {
     cleanup();
     renderPanel(host, "ludenea.assets");
     expect(panel().scrollTop).toBe(120);
+  });
+});
+
+describe("data assets, replays, traces, and snapshots", () => {
+  beforeEach(() => localStorage.clear());
+  afterEach(cleanup);
+
+  const SWORD = "00000000000000000000000000000020";
+  const RUN = "00000000000000000000000000000021";
+  const settingsSchema: TypeSchema = { kind: "struct", name: "demo::Settings", fields: [{ name: "gravity_scale", schema: { kind: "f32" } }] };
+  const weaponSchema: TypeSchema = {
+    kind: "struct",
+    name: "demo::Weapon",
+    fields: [
+      { name: "damage", schema: { kind: "u32" } },
+      { name: "cooldown_ticks", schema: { kind: "u32" } },
+    ],
+  };
+  const files = [
+    ...entries,
+    { path: "assets/settings.ron", id: SETTINGS, kind: { Data: { type: "demo::Settings" } } },
+    { path: "assets/run.replay", id: RUN, kind: "Replay" },
+    { path: "assets/run.trace", id: "00000000000000000000000000000022", kind: "Trace" },
+    { path: "assets/tick.snap", id: "00000000000000000000000000000023", kind: "Snapshot" },
+  ];
+  const timeline = (current: number) => ({ head: 100, simulated: 100, current, checkpoints: [], edit_ticks: [], can_undo: false, can_redo: false, undo_label: null, redo_label: null, scene_dirty: false, resimulating: false, branch: 0, branches: [], compare: null });
+
+  /** The asset browser over `files`, with a game whose asset types are Settings (with a default) and Weapon (without). */
+  async function project(options: { current?: number; answer?: (command: { type: string; [key: string]: unknown }) => object | undefined } = {}) {
+    const { current = 0, answer = () => undefined } = options;
+    const game = await testGame(
+      (command) => {
+        const reply = answer(command);
+        if (reply) return reply;
+        if (command.type === "get_timeline") return { type: "timeline", ...timeline(current) };
+        if (command.type === "get_hash") return { type: "hash", tick: current, hash: "00000000000000aa", pending: false };
+        if (command.type === "get_resources") return { type: "resources", resources: {} };
+        if (command.type === "get_asset") return { type: "asset", asset: "demo::Settings", value: { type: "json", value: { gravity_scale: 0.5 } } };
+        if (command.type === "save_asset") return { type: "text", text: "(gravity_scale: 2.0)" };
+        if (command.type === "load_replay") return { type: "replay_loaded", fingerprint_differs: false };
+        if (command.type === "new_asset_value") {
+          if (command.asset === "demo::Weapon") return { error: { code: "invalid_command", message: "asset type `demo::Weapon` has no default value; register it with `World::register_asset_with_default`" } };
+          return { type: "text", text: "(gravity_scale: 1.0)" };
+        }
+        return { type: "done" };
+      },
+      {
+        assets: [
+          { name: "demo::Settings", schema: settingsSchema },
+          { name: "demo::Weapon", schema: weaponSchema },
+        ],
+      },
+    );
+    const host = await testEditor(builtinPlugins, (request) => {
+      if (request.type === "list_files") return { type: "files", entries: files };
+      if (request.type === "read_text") return { type: "text", text: "(scene)" };
+      if (request.type === "read_binary") return { type: "bytes", bytes: "cmVwbGF5" };
+      if (request.type === "read_asset_texts") return { type: "asset_texts", assets: [], paths: [] };
+      if (request.type === "load_stored_session") return { type: "stored_session", bytes: null };
+      if (request.type === "create_asset") return { type: "file", path: request.path, id: SWORD, kind: request.kind };
+      if (request.type === "info") return undefined;
+      return { type: "done" };
+    });
+    act(() => host.setControl(game.client));
+    renderPanel(host, "ludenea.assets");
+    await settle();
+    return { host, game };
+  }
+
+  const newDataAsset = async (type: string, path: string) => {
+    fireEvent.click(screen.getByRole("button", { name: "New data asset" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Asset type" }), { target: { value: type } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Path" }), { target: { value: path } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await settle();
+  };
+  const type = (label: string, value: string) => {
+    const input = screen.getByLabelText(label);
+    fireEvent.change(input, { target: { value } });
+    fireEvent.blur(input);
+  };
+
+  it("new_data_asset_lists_game_asset_types", async () => {
+    const { host, game } = await project();
+    fireEvent.click(screen.getByRole("button", { name: "New data asset" }));
+    const options = within(screen.getByRole("combobox", { name: "Asset type" })).getAllByRole("option");
+    expect(options.map((option) => option.textContent)).toEqual(["demo::Settings", "demo::Weapon"]);
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Path" }), { target: { value: "assets/moon.ron" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await settle();
+    expect(game.sent).toContainEqual({ type: "new_asset_value", asset: "demo::Settings" });
+    expect(host.project.sent).toContainEqual({ type: "create_asset", path: "assets/moon.ron", kind: { Data: { type: "demo::Settings" } }, text: "(gravity_scale: 1.0)" });
+  });
+
+  it("new_data_asset_without_default_requires_every_field", async () => {
+    const { host } = await project();
+    await newDataAsset("demo::Weapon", "assets/sword.ron");
+
+    const create = () => screen.getByRole("button", { name: "Create assets/sword.ron" }) as HTMLButtonElement;
+    expect(create().disabled).toBe(true);
+    type("damage", "5");
+    expect(create().disabled).toBe(true);
+    type("cooldown_ticks", "30");
+    expect(create().disabled).toBe(false);
+    expect(host.project.sent.filter((request) => request.type === "create_asset")).toEqual([]);
+
+    fireEvent.click(create());
+    await settle();
+    expect(host.project.sent).toContainEqual({ type: "create_asset", path: "assets/sword.ron", kind: { Data: { type: "demo::Weapon" } }, text: "(damage: 5, cooldown_ticks: 30)" });
+    expect(screen.queryByRole("button", { name: "Create assets/sword.ron" })).toBeNull();
+  });
+
+  it("opening_replay_uses_document_store", async () => {
+    const { host, game } = await project();
+    fireEvent.doubleClick(screen.getByText("run.replay"));
+    await settle();
+
+    expect(host.project.sent).toContainEqual({ type: "read_binary", path: "assets/run.replay" });
+    expect(game.sent).toContainEqual({ type: "load_replay", replay: "cmVwbGF5" });
+    expect(host.editor.document.getState().current).toEqual({ id: RUN, kind: "replay", path: "assets/run.replay" });
+  });
+
+  it("opening_trace_runs_divergence_command", async () => {
+    const { host } = await project();
+    const opened: unknown[] = [];
+    host.editor.commands.register({ id: "divergence.open-file", title: "Open a trace or snapshot", run: (_, path) => void opened.push(path) });
+
+    fireEvent.doubleClick(screen.getByText("run.trace"));
+    fireEvent.keyDown(screen.getByText("tick.snap").closest("[role=treeitem]")!, { key: "Enter" });
+    await settle();
+
+    expect(opened).toEqual(["assets/run.trace", "assets/tick.snap"]);
+    expect(host.editor.document.getState().current).toBeNull();
+  });
+
+  it("kind_filter_shows_only_that_kind", async () => {
+    await project();
+    fireEvent.change(screen.getByRole("combobox", { name: "Kind" }), { target: { value: "Data" } });
+    expect(screen.getAllByRole("treeitem").map((item) => item.textContent)).toEqual([expect.stringContaining("settings.ron")]);
+  });
+
+  it("inspector_edits_selected_data_asset", async () => {
+    const { host, game } = await project();
+    renderPanel(host, "ludenea.inspector");
+    fireEvent.click(screen.getByText("settings.ron"));
+    await settle();
+    expect(host.editor.selection.getState().asset).toBe(SETTINGS);
+    expect(screen.queryByLabelText("unsaved changes")).toBeNull();
+
+    type("gravity_scale", "2");
+    await settle();
+    expect(game.sent).toContainEqual({ type: "set_asset_field", id: SETTINGS, path: [{ type: "field", name: "gravity_scale" }], value: 2 });
+    expect(screen.getByLabelText("unsaved changes")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Apply to asset" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save asset" }));
+    await settle();
+    expect(game.sent).toContainEqual({ type: "save_asset", id: SETTINGS });
+    expect(host.project.sent).toContainEqual({ type: "write_text", path: "assets/settings.ron", text: "(gravity_scale: 2.0)" });
+    expect(screen.queryByLabelText("unsaved changes")).toBeNull();
+  });
+
+  it("apply_to_asset_shown_past_tick_0", async () => {
+    const { host, game } = await project({ current: 40 });
+    renderPanel(host, "ludenea.inspector");
+    fireEvent.click(screen.getByText("settings.ron"));
+    await settle();
+
+    type("gravity_scale", "2");
+    await settle();
+    expect(game.sent).toContainEqual({ type: "set_asset_field", id: SETTINGS, path: [{ type: "field", name: "gravity_scale" }], value: 2 });
+    // Past tick 0 the edit is recorded, the file's text is unchanged.
+    expect(screen.queryByLabelText("unsaved changes")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply to asset" }));
+    await settle();
+    expect(game.sent).toContainEqual({ type: "apply_to_asset", id: SETTINGS });
+    expect(screen.getByLabelText("unsaved changes")).toBeTruthy();
+  });
+
+  it("replay_with_other_types_shows_banner_and_divergence", async () => {
+    const { host, game } = await project({ answer: (command) => (command.type === "load_replay" ? { type: "replay_loaded", fingerprint_differs: true } : undefined) });
+    renderPanel(host, "ludenea.timeline");
+    // A divergence reported for the previous document is not the replay's.
+    act(() => host.editor.timeline.setState({ divergence: { tick: 3 } }));
+    fireEvent.doubleClick(screen.getByText("run.replay"));
+    await settle();
+
+    const banner = screen.getByRole("status", { name: "Replay" });
+    expect(banner.textContent).toContain("recorded with other game types");
+    expect(banner.textContent).not.toContain("tick 3");
+
+    act(() => game.push({ type: "diverged", tick: 12, expected: "0000000000000001", got: "0000000000000002" }));
+    await settle();
+    expect(screen.getByRole("status", { name: "Replay" }).textContent).toContain("first divergent tick 12");
+  });
+
+  it("replay_that_fails_to_decode_names_the_value", async () => {
+    const message = "cannot decode the input of tick 7 of the replay: invalid type; was it recorded with other game types?";
+    const { host } = await project({ answer: (command) => (command.type === "load_replay" ? { error: { code: "invalid_replay", message } } : undefined) });
+    renderPanel(host, "ludenea.console");
+    renderPanel(host, "ludenea.timeline");
+    fireEvent.doubleClick(screen.getByText("run.replay"));
+    await settle();
+
+    expect(screen.getByText(message)).toBeTruthy();
+    expect(screen.getByRole("list", { name: "Console" }).textContent).toContain(`Cannot open assets/run.replay: ${message}`);
+    expect(host.editor.document.getState().current).toBeNull();
+    expect(screen.queryByRole("status", { name: "Replay" })).toBeNull();
   });
 });

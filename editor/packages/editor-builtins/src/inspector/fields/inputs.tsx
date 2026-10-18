@@ -43,6 +43,9 @@ export function FieldRow({ path, error, children }: { path: PathSegment[]; error
   );
 }
 
+// A value not given yet (a new data asset's form) shows empty.
+const shown = (value: JsonValue) => (value === null ? "" : String(value));
+
 /** An input committing its text on blur or Enter, and only when the text changed. */
 function TextInput(props: { text: string; path: PathSegment[]; readOnly: boolean; type?: "text" | "number"; step?: number | "any"; onCommit(text: string): void }) {
   const { text, path, readOnly, type = "text", step, onCommit } = props;
@@ -74,7 +77,7 @@ export function NumberField({ value, path, edit, readOnly, integer }: LeafProps 
   };
   return (
     <FieldRow path={path} error={error}>
-      <TextInput type="number" step={integer ? 1 : "any"} text={String(value)} path={path} readOnly={readOnly} onCommit={onCommit} />
+      <TextInput type="number" step={integer ? 1 : "any"} text={shown(value)} path={path} readOnly={readOnly} onCommit={onCommit} />
     </FieldRow>
   );
 }
@@ -84,7 +87,7 @@ export function LargeIntegerField({ value, path, edit, readOnly }: LeafProps) {
   const { error, commit } = useCommit(edit, path);
   return (
     <FieldRow path={path} error={error}>
-      <TextInput text={String(value)} path={path} readOnly={readOnly} onCommit={(next) => commit(next.trim())} />
+      <TextInput text={shown(value)} path={path} readOnly={readOnly} onCommit={(next) => commit(next.trim())} />
     </FieldRow>
   );
 }
@@ -93,7 +96,7 @@ export function StringField({ value, path, edit, readOnly }: LeafProps) {
   const { error, commit } = useCommit(edit, path);
   return (
     <FieldRow path={path} error={error}>
-      <TextInput text={String(value)} path={path} readOnly={readOnly} onCommit={commit} />
+      <TextInput text={shown(value)} path={path} readOnly={readOnly} onCommit={commit} />
     </FieldRow>
   );
 }
@@ -139,8 +142,8 @@ export function AssetField({ value, path, edit, readOnly, editor, asset }: LeafP
   const known = files.some((file) => file.id === value);
   return (
     <FieldRow path={path} error={error}>
-      <select aria-label={pathText(path)} value={String(value)} disabled={readOnly} onChange={(event) => commit(event.target.value)}>
-        {!known && <option value={String(value)}>{String(value)}</option>}
+      <select aria-label={pathText(path)} value={shown(value)} disabled={readOnly} onChange={(event) => commit(event.target.value)}>
+        {!known && <option value={shown(value)}>{shown(value)}</option>}
         {files.map((file) => (
           <option key={file.id} value={file.id}>
             {file.path}

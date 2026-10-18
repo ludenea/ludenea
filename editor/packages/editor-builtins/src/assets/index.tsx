@@ -1,17 +1,31 @@
-import type { FileChange, FileEntry } from "@ludenea/control-client";
+import type { AssetKind, FileChange, FileEntry, JsonValue, TypeSchema } from "@ludenea/control-client";
 import { definePlugin, type Editor } from "@ludenea/editor-shell";
-import { createStore, errorText, shared, type Scroll, type Store } from "../shared";
+import { createStore, errorText, shared, showPanel, type Scroll, type Store } from "../shared";
 import { AssetsPanel, baseName } from "./AssetsPanel";
+import { emptyValue, toRon } from "./value";
 
 export type Action = { kind: "rename" | "move" | "delete"; path: string };
+
+/** A file kind without its data type: what the browser shows and filters by. */
+export type KindName = "Scene" | "Prefab" | "Data" | "Replay" | "Trace" | "Snapshot" | "Other";
+export const kindName = (kind: AssetKind): KindName => (typeof kind === "string" ? kind : "Data");
+
+/**
+ * The data asset being created: its type and path, then, for a type without a default value,
+ * the value the user fills from the schema.
+ */
+export type NewData = { type: string; path: string; value: { schema: TypeSchema; draft: JsonValue } | null };
 
 export interface AssetsState {
   files: FileEntry[];
   filter: string;
+  /** Only files of this kind; null for every kind. */
+  kind: KindName | null;
   selected: string | null;
   /** The inline form (rename, move) or confirmation (delete) the panel shows. */
   action: Action | null;
   menu: string | null;
+  creating: NewData | null;
   /** The open document changed on disk while it had unsaved edits. */
   banner: { path: string; text: string } | null;
   error: string | null;
@@ -23,7 +37,12 @@ export interface Assets {
   state: Store<AssetsState>;
   /** Kept here, not in the panel: the shell unmounts a panel while its tab is hidden. */
   scroll: Scroll;
+  /** Opens a scene, prefab, or replay as the document, a trace or snapshot in the divergence viewer, and a data asset in the inspector. */
   open(path: string): Promise<void>;
+  /** Starts the "New data asset" form, for the game's asset types. */
+  newDataAsset(): void;
+  /** Creates the data asset the form describes: from its type's default value, else from the value filled in. */
+  create(): Promise<void>;
   rename(from: string, to: string): Promise<void>;
   move(path: string, folder: string): Promise<void>;
   remove(path: string): Promise<void>;
@@ -42,9 +61,11 @@ export const assetsPlugin = definePlugin({
     const state = createStore<AssetsState>({
       files: [],
       filter: "",
+      kind: null,
       selected: null,
       action: null,
       menu: null,
+      creating: null,
       banner: null,
       error: null,
       listError: null,
@@ -67,10 +88,40 @@ export const assetsPlugin = definePlugin({
       async open(path) {
         state.set({ selected: path });
         const entry = state.get().files.find((file) => file.path === path);
-        if (entry?.kind !== "Scene" && entry?.kind !== "Prefab" && entry?.kind !== "Replay") throw new Error(`${path} is not a scene, a prefab, or a replay`);
+        if (!entry) throw new Error(`no project file is at ${path}`);
+        const kind = kindName(entry.kind);
+        // Registered by the divergence viewer.
+        if (kind === "Trace" || kind === "Snapshot") return editor.commands.run("divergence.open-file", path);
+        if (kind === "Data") {
+          editor.selection.getState().selectAsset(entry.id);
+          return showPanel(editor, "ludenea.inspector");
+        }
+        if (kind !== "Scene" && kind !== "Prefab" && kind !== "Replay") throw new Error(`${path} is not a scene, a prefab, a replay, a trace, a snapshot, or a data asset`);
         // Documents are usable before the build: the document is remembered and loaded into each game.
         await documents.getState().open(entry.id);
         state.set({ banner: null, error: null });
+      },
+      newDataAsset() {
+        const type = editor.control?.game.assets[0]?.name;
+        if (!type) throw new Error(editor.control ? "the game registers no asset type" : "no game is running");
+        state.set({ creating: { type, path: "", value: null }, action: null, menu: null });
+      },
+      async create() {
+        const creating = state.get().creating;
+        if (!creating) return;
+        const { type, path, value } = creating;
+        if (!path.trim()) throw new Error("enter the new asset's path");
+        if (value) {
+          await editor.project.request({ type: "create_asset", path, kind: { Data: { type } }, text: toRon(value.schema, value.draft) });
+        } else {
+          const created = await editor.assets.create(type, path);
+          if (created.kind === "needs-value") {
+            state.set({ creating: { ...creating, value: { schema: created.schema, draft: emptyValue(created.schema) } } });
+            return;
+          }
+        }
+        state.set({ creating: null, selected: path });
+        await refresh();
       },
       async rename(from, to) {
         state.set({ action: null });
@@ -145,6 +196,17 @@ export const assetsPlugin = definePlugin({
     };
     const ask = (kind: Action["kind"]) => onSelected((path) => state.set({ action: { kind, path }, menu: null }));
     editor.commands.register({ id: "assets.open", title: "Open asset", run: onSelected(assets.open) });
+    editor.commands.register({
+      id: "assets.new-data",
+      title: "New data asset",
+      run: () => {
+        try {
+          assets.newDataAsset();
+        } catch (error) {
+          report(error);
+        }
+      },
+    });
     editor.commands.register({ id: "assets.rename", title: "Rename asset", run: ask("rename") });
     editor.commands.register({ id: "assets.move", title: "Move asset", run: ask("move") });
     editor.commands.register({ id: "assets.delete", title: "Delete asset", run: ask("delete") });
