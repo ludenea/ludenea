@@ -162,16 +162,23 @@ impl Project {
                     if in_editor
                         && path.is_dir()
                         && path.file_name().is_some_and(|name| name != "node_modules")
-                        && watched.insert(path.clone())
+                        && !watched.contains(path)
+                        && debouncer.watch(path, RecursiveMode::Recursive).is_ok()
                     {
-                        let _ = debouncer.watch(path, RecursiveMode::Recursive);
+                        watched.insert(path.clone());
                     }
                 }
                 for entry in changed_entries(&entries, events.iter().map(|event| &event.event)) {
-                    // An `editor/` created after watching started, or deleted.
-                    if !entry.directory.is_dir() {
+                    // An `editor/` created after watching started, deleted, or deleted and
+                    // created again within the batch (its old watch went with it).
+                    let recreated = events.iter().any(|event| {
+                        matches!(event.kind, EventKind::Create(_))
+                            && event.paths.contains(&entry.directory)
+                    });
+                    if !entry.directory.is_dir() || recreated {
                         unwatch_below(&mut debouncer, &entry.directory, &mut watched);
-                    } else if !watched.contains(&entry.directory) {
+                    }
+                    if entry.directory.is_dir() && !watched.contains(&entry.directory) {
                         let _ =
                             watch_except_packages(&mut debouncer, &entry.directory, &mut watched);
                     }

@@ -8,7 +8,7 @@ use std::thread;
 use std::time::Duration;
 
 use ludenea_ecs::AssetId;
-use notify::{RecommendedWatcher, RecursiveMode};
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{Debouncer, RecommendedCache, new_debouncer};
 use serde::{Deserialize, Serialize};
 
@@ -210,67 +210,19 @@ impl Project {
             }
         }
         let (watch, sender, dropped) = Watch::new();
-        let root = self.root.clone();
         let mut known = BTreeSet::new();
-        list_files(&root, &root, &mut known);
+        list_files(&self.root, &self.root, &mut known);
+        let mut tracked = Tracked {
+            root: self.root.clone(),
+            known,
+            watched,
+            debouncer,
+        };
         // The thread owns the debouncer, which stops watching when it is dropped.
         thread::spawn(move || {
-            let mut debouncer = debouncer;
             while let Some(batch) = next_raw(&raw_receiver, &dropped) {
                 let Ok(events) = batch else { continue };
-                let mut touched = BTreeSet::new();
-                for path in events.iter().flat_map(|event| &event.paths) {
-                    touched.extend(relative_path(&root, path));
-                }
-                let mut changes = Vec::new();
-                // Created in this batch: a file found in a new directory may have its own
-                // event in the same batch, which is not a change.
-                let mut created = BTreeSet::new();
-                for relative in touched {
-                    let file = root.join(&relative);
-                    // Top-level directories are watched alone, and the directories in them
-                    // recursively (see `watch_except_packages`).
-                    let depth = relative.split('/').count();
-                    if depth <= 2 && file.is_dir() && !watched.contains(&file) {
-                        // A new directory: watch it, and report what it already holds.
-                        let watching = if depth == 1 {
-                            watch_except_packages(&mut debouncer, &file, &mut watched)
-                        } else {
-                            watched.insert(file.clone());
-                            debouncer.watch(&file, RecursiveMode::Recursive)
-                        };
-                        if watching.is_ok() {
-                            let mut inside = BTreeSet::new();
-                            list_files(&root, &file, &mut inside);
-                            for relative in inside {
-                                if known.insert(relative.clone()) {
-                                    created.insert(relative.clone());
-                                    changes.push(FileChange::Created(relative));
-                                }
-                            }
-                        }
-                        continue;
-                    }
-                    // The event kinds are not reliable across platforms (an atomic save can
-                    // look like a creation), so compare with the files known to exist.
-                    let change = if file.is_dir() {
-                        continue;
-                    } else if !file.exists() {
-                        unwatch_below(&mut debouncer, &file, &mut watched);
-                        if !known.remove(&relative) {
-                            continue;
-                        }
-                        FileChange::Removed(relative)
-                    } else if known.insert(relative.clone()) {
-                        FileChange::Created(relative)
-                    } else if created.contains(&relative) {
-                        continue;
-                    } else {
-                        FileChange::Changed(relative)
-                    };
-                    changes.push(change);
-                }
-                for change in changes {
+                for change in tracked.changes(events.iter().map(|event| &event.event)) {
                     if sender.send(change).is_err() {
                         return;
                     }
@@ -278,6 +230,88 @@ impl Project {
             }
         });
         Ok(watch)
+    }
+}
+
+/// What the file watcher knows: the files that exist and the directories it watches.
+struct Tracked {
+    root: PathBuf,
+    known: BTreeSet<String>,
+    watched: BTreeSet<PathBuf>,
+    debouncer: Debouncer<RecommendedWatcher, RecommendedCache>,
+}
+
+impl Tracked {
+    /// The changes a batch of events makes, watching the directories it creates.
+    fn changes<'a>(&mut self, events: impl IntoIterator<Item = &'a Event>) -> Vec<FileChange> {
+        let mut touched = BTreeSet::new();
+        // Directories created in this batch, maybe after being removed in it too: their old
+        // watch is gone even though they are still listed as watched.
+        let mut recreated = BTreeSet::new();
+        for event in events {
+            for path in &event.paths {
+                touched.extend(relative_path(&self.root, path));
+                if matches!(event.kind, EventKind::Create(_)) {
+                    recreated.insert(path.clone());
+                }
+            }
+        }
+        let mut changes = Vec::new();
+        // Created in this batch: a file found in a new directory may have its own event in
+        // the same batch, which is not a change.
+        let mut created = BTreeSet::new();
+        for relative in touched {
+            let file = self.root.join(&relative);
+            // Top-level directories are watched alone, and the directories in them
+            // recursively (see `watch_except_packages`).
+            let depth = relative.split('/').count();
+            if depth <= 2
+                && file.is_dir()
+                && (!self.watched.contains(&file) || recreated.contains(&file))
+            {
+                // A new directory: watch it, and report what it already holds.
+                unwatch_below(&mut self.debouncer, &file, &mut self.watched);
+                let watching = if depth == 1 {
+                    watch_except_packages(&mut self.debouncer, &file, &mut self.watched)
+                } else {
+                    let watching = self.debouncer.watch(&file, RecursiveMode::Recursive);
+                    if watching.is_ok() {
+                        self.watched.insert(file.clone());
+                    }
+                    watching
+                };
+                if watching.is_ok() {
+                    let mut inside = BTreeSet::new();
+                    list_files(&self.root, &file, &mut inside);
+                    for relative in inside {
+                        if self.known.insert(relative.clone()) {
+                            created.insert(relative.clone());
+                            changes.push(FileChange::Created(relative));
+                        }
+                    }
+                }
+                continue;
+            }
+            // The event kinds are not reliable across platforms (an atomic save can look like
+            // a creation), so compare with the files known to exist.
+            let change = if file.is_dir() {
+                continue;
+            } else if !file.exists() {
+                unwatch_below(&mut self.debouncer, &file, &mut self.watched);
+                if !self.known.remove(&relative) {
+                    continue;
+                }
+                FileChange::Removed(relative)
+            } else if self.known.insert(relative.clone()) {
+                FileChange::Created(relative)
+            } else if created.contains(&relative) {
+                continue;
+            } else {
+                FileChange::Changed(relative)
+            };
+            changes.push(change);
+        }
+        changes
     }
 }
 
@@ -297,8 +331,9 @@ pub(crate) fn watch_except_packages(
         .flatten()
     {
         let path = entry.path();
-        if path.is_dir() && entry.file_name() != "node_modules" && watched.insert(path.clone()) {
+        if path.is_dir() && entry.file_name() != "node_modules" && !watched.contains(&path) {
             debouncer.watch(&path, RecursiveMode::Recursive)?;
+            watched.insert(path);
         }
     }
     Ok(())
@@ -376,6 +411,59 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
+
+    fn tracked(root: &Path) -> Tracked {
+        Tracked {
+            root: root.to_path_buf(),
+            known: BTreeSet::new(),
+            watched: BTreeSet::new(),
+            debouncer: new_debouncer(WATCH_DEBOUNCE, None, |_| {}).unwrap(),
+        }
+    }
+
+    fn created(path: PathBuf) -> Event {
+        Event::new(EventKind::Create(notify::event::CreateKind::Any)).add_path(path)
+    }
+
+    /// A new directory and a file written in it, in one batch: one creation, not a creation
+    /// followed by a change.
+    #[test]
+    fn a_new_directory_with_a_file_in_one_batch_reports_the_file_once() {
+        let dir = tempfile::TempDir::new().unwrap();
+        fs::create_dir(dir.path().join("levels")).unwrap();
+        fs::write(dir.path().join("levels/a.txt"), "a").unwrap();
+        let mut tracked = tracked(dir.path());
+        let batch = [
+            created(dir.path().join("levels")),
+            created(dir.path().join("levels/a.txt")),
+        ];
+        assert_eq!(
+            tracked.changes(&batch),
+            [FileChange::Created("levels/a.txt".into())]
+        );
+        assert!(tracked.watched.contains(&dir.path().join("levels")));
+    }
+
+    /// A watched directory removed and created again in one batch is watched again: its old
+    /// watch went with the removed directory.
+    #[test]
+    fn a_directory_recreated_in_one_batch_is_watched_again() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let levels = dir.path().join("levels");
+        fs::create_dir(&levels).unwrap();
+        let mut tracked = tracked(dir.path());
+        watch_except_packages(&mut tracked.debouncer, &levels, &mut tracked.watched).unwrap();
+        fs::remove_dir(&levels).unwrap();
+        fs::create_dir_all(levels.join("one")).unwrap();
+        fs::write(levels.join("one/a.txt"), "a").unwrap();
+        let removed = Event::new(EventKind::Remove(notify::event::RemoveKind::Folder))
+            .add_path(levels.clone());
+        assert_eq!(
+            tracked.changes(&[removed, created(levels.clone())]),
+            [FileChange::Created("levels/one/a.txt".into())]
+        );
+        assert!(tracked.watched.contains(&levels.join("one")));
+    }
 
     #[test]
     fn installed_packages_are_not_watched() {
