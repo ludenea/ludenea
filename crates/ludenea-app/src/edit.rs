@@ -2,7 +2,7 @@
 //! simulation.
 
 use std::any::Any;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ludenea_ecs::{AssetId, Codec, Entity};
 use serde::{Deserialize, Serialize};
@@ -435,6 +435,44 @@ impl Simulation {
         };
         let value = (codec.from_json)(value).map_err(|reason| invalid(name, reason))?;
         Ok((codec.encode)(&*value))
+    }
+
+    /// Checks that every value `edit` carries decodes with this app's types, without
+    /// touching the world. `asset_types` names the type of each asset a `SetAsset` may
+    /// target; a `LoadAsset` adds its own.
+    pub(crate) fn check_edit_values(
+        &self,
+        edit: &Edit,
+        asset_types: &mut BTreeMap<AssetId, String>,
+    ) -> Result<(), EditError> {
+        match edit {
+            Edit::Spawn { components } => {
+                for (name, bytes) in components {
+                    self.decode_component(name, bytes)?;
+                }
+            }
+            Edit::Despawn { .. } => {}
+            Edit::Insert {
+                component, value, ..
+            } => {
+                self.decode_component(component, value)?;
+            }
+            Edit::Remove { component, .. } => {
+                self.component_codec(component)?;
+            }
+            Edit::SetResource { resource, value } => {
+                decode(&self.resource_codec(resource)?, resource, value)?;
+            }
+            Edit::SetAsset { id, value } => {
+                let asset = asset_types.get(id).ok_or(EditError::MissingAsset(*id))?;
+                decode(&self.asset_codec(asset)?, asset, value)?;
+            }
+            Edit::LoadAsset { id, asset, value } => {
+                decode(&self.asset_codec(asset)?, asset, value)?;
+                asset_types.insert(*id, asset.clone());
+            }
+        }
+        Ok(())
     }
 
     fn load_asset(

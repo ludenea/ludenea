@@ -45,6 +45,8 @@ pub(crate) struct InputType {
     /// Decodes a postcard `Vec<I>`, rejecting leftover bytes, then writes it.
     /// Also rejects a `Vec` that does not hold exactly the given number of players.
     pub(crate) write_encoded: fn(&mut World, &[u8], usize) -> Result<(), SimError>,
+    /// Like `write_encoded` without writing.
+    pub(crate) check_encoded: fn(&[u8], usize) -> Result<(), SimError>,
     pub(crate) schema: fn() -> TypeSchema,
 }
 
@@ -62,6 +64,10 @@ impl InputType {
                 check_player_count(expected, players.len())?;
                 write(world, players);
                 Ok(())
+            },
+            check_encoded: |bytes, expected| {
+                let players = decode_exact::<Vec<I>>(bytes)?;
+                check_player_count(expected, players.len())
             },
             schema: I::schema,
         }

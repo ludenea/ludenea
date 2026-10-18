@@ -388,20 +388,102 @@ fn added_optional_component_field_still_plays_and_flags_fingerprint() {
         report.outcome,
         ReplayOutcome::Diverged { tick: 0, .. }
     ));
-    assert_eq!(sim.tick(), 60);
+    assert_eq!(sim.tick(), 0);
+    assert!(matches!(report.diverged_snapshots, Some((None, _))));
     let entity = sim.entity_at_address(&[3]).unwrap();
-    let counter = sim
-        .world()
-        .get::<added_field::Counter>(entity)
-        .unwrap()
-        .clone();
-    assert_eq!(counter.bonus, None);
-    let mut original = game::simulation();
-    play_replay(&mut original, &replay, |_, _| {}).unwrap();
-    let entity = original.entity_at_address(&[3]).unwrap();
     assert_eq!(
-        original.world().get::<Counter>(entity).unwrap().value,
-        counter.value
+        sim.world()
+            .get::<added_field::Counter>(entity)
+            .map(|counter| counter.clone()),
+        Some(added_field::Counter {
+            value: 0,
+            bonus: None
+        })
+    );
+}
+
+#[test]
+fn changed_component_fails_with_decode_naming_the_edit() {
+    let edits = EditLog {
+        edits: vec![TimedEdit {
+            tick: 30,
+            edit: Edit::Insert {
+                entity: EntityRef::Loaded(vec![3]),
+                component: "replay::Counter".to_string(),
+                value: counter_bytes(7),
+            },
+        }],
+        ..EditLog::new()
+    };
+    let replay = recorded(60, &edits);
+    let error = play_replay(&mut added_field::simulation(), &replay, |_, _| {}).unwrap_err();
+    assert!(
+        matches!(&error, ReplayError::Decode { what, .. } if what == "edit of tick 30"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn broken_asset_fails_with_decode_naming_the_asset() {
+    let mut replay = recorded(10, &EditLog::new());
+    replay.assets[0].1 = "AssetFile(type: \"ludenea::Prefab\", value: (entities: 3))".to_string();
+    let error = play_replay(&mut game::simulation(), &replay, |_, _| {}).unwrap_err();
+    let expected = format!("asset {}", AssetId(A));
+    assert!(
+        matches!(&error, ReplayError::Decode { what, .. } if *what == expected),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn divergence_stops_there_with_both_snapshots() {
+    let mut replay = recorded(REPLAY_CHECKPOINT_INTERVAL + 40, &EditLog::new());
+    for diverged in [30, REPLAY_CHECKPOINT_INTERVAL + 20] {
+        let mut altered = replay.clone();
+        altered.hashes[diverged as usize] ^= 1;
+        let mut sim = game::simulation();
+        let report = play_replay(&mut sim, &altered, |_, _| {}).unwrap();
+        assert!(matches!(
+            report.outcome,
+            ReplayOutcome::Diverged { tick, .. } if tick == diverged
+        ));
+        assert_eq!(sim.tick(), diverged);
+        let (previous, at) = report.diverged_snapshots.unwrap();
+        assert_eq!(at, sim.snapshot().encode());
+        let mut fresh = game::simulation();
+        fresh
+            .restore(&Snapshot::decode(&previous.unwrap()).unwrap())
+            .unwrap();
+        assert_eq!(fresh.tick(), diverged - 1);
+        assert_eq!(fresh.hash(), replay.hashes[diverged as usize - 1]);
+    }
+    replay.hashes.truncate(5);
+    let report = play(&replay);
+    assert_eq!(report.outcome, ReplayOutcome::Matched);
+    assert_eq!(report.diverged_snapshots, None);
+}
+
+#[test]
+fn edit_that_no_longer_applies_is_an_edit_error() {
+    let edits = EditLog {
+        edits: vec![TimedEdit {
+            tick: 5,
+            edit: Edit::Despawn {
+                entity: EntityRef::Loaded(vec![5, 1]),
+            },
+        }],
+        ..EditLog::new()
+    };
+    let mut replay = recorded(20, &edits);
+    let mut log = EditLog::decode(&replay.edits).unwrap();
+    let mut again = log.edits[0].clone();
+    again.tick = 6;
+    log.edits.push(again);
+    replay.edits = log.encode();
+    let error = play_replay(&mut game::simulation(), &replay, |_, _| {}).unwrap_err();
+    assert!(
+        matches!(error, ReplayError::Edit { tick: 6, .. }),
+        "{error:?}"
     );
 }
 

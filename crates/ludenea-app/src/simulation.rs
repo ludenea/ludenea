@@ -283,6 +283,12 @@ impl Simulation {
         (input.write_encoded)(&mut self.world, bytes, self.players)
     }
 
+    /// Checks that `step_encoded(Some(inputs))` would accept `inputs`, without stepping.
+    pub(crate) fn check_encoded_inputs(&self, inputs: &[u8]) -> Result<(), SimError> {
+        let input = self.input.as_ref().ok_or(SimError::NoInputType)?;
+        (input.check_encoded)(inputs, self.players)
+    }
+
     /// Runs the schedule on the inputs already written, then ends the tick.
     fn advance(&mut self, observer: Option<&mut dyn ScheduleObserver>) {
         match observer {

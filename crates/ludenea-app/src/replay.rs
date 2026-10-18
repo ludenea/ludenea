@@ -1,11 +1,13 @@
 //! Replays: a self-contained, verifiable run definition (resolved scene, assets, input and
 //! edit logs) with the hash of every tick and sparse checkpoints.
 
+use std::collections::BTreeMap;
+
 use ludenea_ecs::{AssetId, Snapshot};
 use serde::{Deserialize, Serialize};
 
 use crate::assets::{AssetSource, AssetTexts, parse_asset_file};
-use crate::edit::{Edit, EditLog, EntityRef, TimedEdit};
+use crate::edit::{Edit, EditError, EditLog, EntityRef, TimedEdit};
 use crate::{InputLog, Simulation, resolve};
 
 pub const REPLAY_VERSION: u32 = 1;
@@ -44,6 +46,12 @@ pub enum ReplayError {
         "cannot decode the {what} of the replay: {reason}; was it recorded with other game types?"
     )]
     Decode { what: String, reason: String },
+    /// A recorded edit no longer applies to the world it was recorded on, before any
+    /// divergence: the replay is inconsistent.
+    #[error("the edit of tick {tick} does not apply: {reason}; record the replay again")]
+    Edit { tick: u64, reason: String },
+    #[error("cannot record the replay: the {what} fails: {reason}; fix it and record again")]
+    Record { what: String, reason: String },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -54,6 +62,9 @@ pub struct ReplayReport {
     /// The replay's checkpoints up to where it was played, missing or invalid ones
     /// regenerated.
     pub checkpoints: Vec<(u64, Vec<u8>)>,
+    /// On divergence, the encoded snapshots of the tick before it (none at tick 0) and of
+    /// the divergent tick.
+    pub diverged_snapshots: Option<(Option<Vec<u8>>, Vec<u8>)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -103,9 +114,9 @@ pub fn record_replay(
     edits: &EditLog,
     ticks: u64,
 ) -> Result<Replay, ReplayError> {
-    let resolved = resolve(scene, assets).map_err(decode_error("scene"))?;
+    let resolved = resolve(scene, assets).map_err(record_error("scene"))?;
     sim.load_scene_with(scene, assets)
-        .map_err(decode_error("scene"))?;
+        .map_err(record_error("scene"))?;
     sim.set_players(usize::from(inputs.players));
     let mut replay = Replay {
         version: REPLAY_VERSION,
@@ -120,13 +131,14 @@ pub fn record_replay(
     };
     let mut recorded = EditLog::new();
     for tick in 0..ticks {
+        let what = format!("edit of tick {tick}");
         for timed in edits.at(tick) {
-            let edit = with_runtime_target(sim, &timed.edit).map_err(edit_error(tick))?;
-            sim.apply_edit(&edit).map_err(edit_error(tick))?;
+            let edit = with_runtime_target(sim, &timed.edit).map_err(record_error(&what))?;
+            sim.apply_edit(&edit).map_err(record_error(&what))?;
             recorded.edits.push(TimedEdit { tick, edit });
         }
         sim.step_encoded(inputs.tick(tick))
-            .map_err(decode_error(&format!("input of tick {tick}")))?;
+            .map_err(record_error(&format!("input of tick {tick}")))?;
         replay.hashes.push(sim.hash());
         if (tick + 1) % REPLAY_CHECKPOINT_INTERVAL == 0 {
             replay.checkpoints.push((tick + 1, sim.snapshot().encode()));
@@ -136,34 +148,14 @@ pub fn record_replay(
     Ok(replay)
 }
 
-/// Loads the replay's scene and assets into `sim`, then plays all of it against its hashes,
-/// so that a value failing to decode is found even past the first divergence. Calls
-/// `on_tick(tick, total)` after each tick.
+/// Loads the replay's scene and assets into `sim` and checks that every recorded value
+/// decodes, then plays it against its hashes, calling `on_tick(tick, total)` after each
+/// tick. Stops at the first divergent tick, leaving `sim` there.
 pub fn play_replay(
     sim: &mut Simulation,
     replay: &Replay,
     mut on_tick: impl FnMut(u64, u64),
 ) -> Result<ReplayReport, ReplayError> {
-    let assets: AssetTexts = replay.assets.iter().cloned().collect();
-    sim.load_scene_with(&replay.scene, &assets)
-        .map_err(decode_error("scene"))?;
-    // The scene load keeps only the assets its handles reach; the replay holds them all.
-    for (id, text) in &replay.assets {
-        let what = format!("asset {id}");
-        let (type_name, value) = parse_asset_file(text).map_err(decode_error(&what))?;
-        sim.world_mut()
-            .insert_asset_ron(*id, &type_name, &value)
-            .map_err(decode_error(&what))?;
-    }
-    let inputs = InputLog::decode(&replay.inputs).map_err(decode_error("input log"))?;
-    let edits = EditLog::decode(&replay.edits).map_err(decode_error("edit log"))?;
-    sim.set_players(usize::from(inputs.players));
-
-    let mut report = ReplayReport {
-        outcome: ReplayOutcome::Matched,
-        fingerprint_differs: replay.fingerprint != sim.schema_fingerprint(),
-        checkpoints: Vec::new(),
-    };
     if replay.hashes.is_empty() {
         return Err(decode(
             "hashes",
@@ -171,15 +163,31 @@ pub fn play_replay(
         ));
     }
     let total = replay.hashes.len() as u64 - 1;
+    let (inputs, edits) = load(sim, replay, total)?;
+
+    let mut report = ReplayReport {
+        outcome: ReplayOutcome::Matched,
+        fingerprint_differs: replay.fingerprint != sim.schema_fingerprint(),
+        checkpoints: Vec::new(),
+        diverged_snapshots: None,
+    };
+    // The latest snapshot of this run, to re-simulate the tick before a divergence from.
+    let mut held = (0, sim.snapshot());
     let mut tick = 0;
     loop {
         let (expected, got) = (replay.hashes[tick as usize], sim.hash());
-        if expected != got && report.outcome == ReplayOutcome::Matched {
+        if expected != got {
             report.outcome = ReplayOutcome::Diverged {
                 tick,
                 expected,
                 got,
             };
+            let previous = match tick {
+                0 => None,
+                _ => Some(snapshot_before(sim, &held, &inputs, &edits)?),
+            };
+            report.diverged_snapshots = Some((previous, sim.snapshot().encode()));
+            break;
         }
         if tick > 0 && tick % REPLAY_CHECKPOINT_INTERVAL == 0 {
             let recorded = replay
@@ -190,19 +198,112 @@ pub fn play_replay(
             report
                 .checkpoints
                 .push((tick, checkpoint(sim, recorded, expected)));
+            held = (tick, sim.snapshot());
         }
         if tick == total {
             break;
         }
-        for timed in edits.at(tick) {
-            sim.apply_edit(&timed.edit).map_err(edit_error(tick))?;
-        }
-        sim.step_encoded(inputs.tick(tick))
-            .map_err(decode_error(&format!("input of tick {tick}")))?;
+        step(sim, &inputs, &edits, tick)?;
         tick += 1;
         on_tick(tick, total);
     }
     Ok(report)
+}
+
+/// Loads the scene and assets, sets the players, and checks that every value played up to
+/// `total` decodes, in file order: assets, scene, inputs and edits by tick.
+fn load(
+    sim: &mut Simulation,
+    replay: &Replay,
+    total: u64,
+) -> Result<(InputLog, EditLog), ReplayError> {
+    let mut parsed = Vec::with_capacity(replay.assets.len());
+    for (id, text) in &replay.assets {
+        let what = format!("asset {id}");
+        let (type_name, value) = parse_asset_file(text).map_err(decode_error(&what))?;
+        let codec = sim
+            .world()
+            .asset_codec(&type_name)
+            .ok_or_else(|| decode(&what, format!("asset type `{type_name}` is not registered")))?;
+        (codec.decode_ron)(&value).map_err(decode_error(&what))?;
+        parsed.push((*id, type_name, value));
+    }
+    let assets: AssetTexts = replay.assets.iter().cloned().collect();
+    sim.load_scene_with(&replay.scene, &assets)
+        .map_err(decode_error("scene"))?;
+    // The scene load keeps only the assets its handles reach; the replay holds them all.
+    for (id, type_name, value) in &parsed {
+        sim.world_mut()
+            .insert_asset_ron(*id, type_name, value)
+            .map_err(decode_error(&format!("asset {id}")))?;
+    }
+    let inputs = InputLog::decode(&replay.inputs).map_err(decode_error("input log"))?;
+    let edits = EditLog::decode(&replay.edits).map_err(decode_error("edit log"))?;
+    sim.set_players(usize::from(inputs.players));
+
+    let mut asset_types: BTreeMap<AssetId, String> = parsed
+        .into_iter()
+        .map(|(id, type_name, _)| (id, type_name))
+        .collect();
+    for tick in 0..total {
+        for timed in edits.at(tick) {
+            sim.check_edit_values(&timed.edit, &mut asset_types)
+                .map_err(decode_error(&format!("edit of tick {tick}")))?;
+        }
+        if let Some(bytes) = inputs.tick(tick) {
+            sim.check_encoded_inputs(bytes)
+                .map_err(decode_error(&format!("input of tick {tick}")))?;
+        }
+    }
+    Ok((inputs, edits))
+}
+
+/// Applies the edits of `tick`, then steps with its inputs.
+fn step(
+    sim: &mut Simulation,
+    inputs: &InputLog,
+    edits: &EditLog,
+    tick: u64,
+) -> Result<(), ReplayError> {
+    for timed in edits.at(tick) {
+        sim.apply_edit(&timed.edit).map_err(|error| match error {
+            EditError::UnknownComponent(_)
+            | EditError::UnknownResource(_)
+            | EditError::InvalidValue { .. } => {
+                decode(&format!("edit of tick {tick}"), error.to_string())
+            }
+            EditError::NoSuchEntity(_)
+            | EditError::NoSuchAddress(_)
+            | EditError::MissingAsset(_)
+            | EditError::ReadOnly(_) => ReplayError::Edit {
+                tick,
+                reason: error.to_string(),
+            },
+        })?;
+    }
+    sim.step_encoded(inputs.tick(tick))
+        .map_err(decode_error(&format!("input of tick {tick}")))
+}
+
+/// The encoded snapshot of the tick before the current one, re-simulated from `held`;
+/// leaves `sim` as it was.
+fn snapshot_before(
+    sim: &mut Simulation,
+    held: &(u64, Snapshot),
+    inputs: &InputLog,
+    edits: &EditLog,
+) -> Result<Vec<u8>, ReplayError> {
+    let current = sim.snapshot();
+    let before = sim.tick() - 1;
+    sim.restore(&held.1)
+        .expect("a snapshot restores into its own world");
+    for tick in held.0..before {
+        step(sim, inputs, edits, tick)?;
+    }
+    let snapshot = sim.snapshot().encode();
+    sim.restore(&current)
+        .expect("a snapshot restores into its own world");
+    Ok(snapshot)
 }
 
 /// The recorded checkpoint of the current tick when it restores to `expected`, leaving the
@@ -224,7 +325,7 @@ fn checkpoint(sim: &mut Simulation, recorded: Option<&[u8]>, expected: u64) -> V
 }
 
 /// `edit` with its target named by the entity it resolves to now.
-fn with_runtime_target(sim: &Simulation, edit: &Edit) -> Result<Edit, crate::EditError> {
+fn with_runtime_target(sim: &Simulation, edit: &Edit) -> Result<Edit, EditError> {
     let runtime = |target: &EntityRef| sim.resolve_ref(target).map(EntityRef::Runtime);
     Ok(match edit {
         Edit::Despawn { entity } => Edit::Despawn {
@@ -243,7 +344,10 @@ fn with_runtime_target(sim: &Simulation, edit: &Edit) -> Result<Edit, crate::Edi
             entity: runtime(entity)?,
             component: component.clone(),
         },
-        other => other.clone(),
+        Edit::Spawn { .. }
+        | Edit::SetResource { .. }
+        | Edit::SetAsset { .. }
+        | Edit::LoadAsset { .. } => edit.clone(),
     })
 }
 
@@ -258,6 +362,9 @@ fn decode_error<E: ToString>(what: &str) -> impl FnOnce(E) -> ReplayError + '_ {
     move |error| decode(what, error.to_string())
 }
 
-fn edit_error<E: ToString>(tick: u64) -> impl FnOnce(E) -> ReplayError {
-    move |error| decode(&format!("edit of tick {tick}"), error.to_string())
+fn record_error<E: ToString>(what: &str) -> impl FnOnce(E) -> ReplayError + '_ {
+    move |error| ReplayError::Record {
+        what: what.to_string(),
+        reason: error.to_string(),
+    }
 }
