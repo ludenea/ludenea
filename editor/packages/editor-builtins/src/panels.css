@@ -469,6 +469,60 @@
   background: var(--color-danger);
 }
 
+.ludenea-dock .dv-content-container .ludenea-lanes {
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ludenea-dock .dv-content-container .ludenea-lanes button {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  border: 1px solid transparent;
+  background: none;
+  text-align: left;
+}
+
+.ludenea-dock .dv-content-container .ludenea-lanes button[aria-current="true"] {
+  border-color: var(--color-accent);
+}
+
+.ludenea-dock .dv-content-container .ludenea-lane-name {
+  flex: 0 0 8em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ludenea-dock .dv-content-container .ludenea-lane-track {
+  position: relative;
+  flex: 1;
+  height: 12px;
+}
+
+.ludenea-dock .dv-content-container .ludenea-lane-track > span {
+  position: absolute;
+  top: 0;
+  height: 100%;
+}
+
+.ludenea-dock .dv-content-container .ludenea-lane-track > .ludenea-lane-span {
+  top: 25%;
+  height: 50%;
+  background: var(--color-muted);
+}
+
+.ludenea-dock .dv-content-container .ludenea-lane-track > .ludenea-mark-fork,
+.ludenea-dock .dv-content-container .ludenea-lane-track > .ludenea-mark-edit {
+  width: 2px;
+}
+
+.ludenea-dock .dv-content-container .ludenea-mark-fork {
+  background: var(--color-accent);
+}
+
 /* Inspector */
 .ludenea-dock .dv-content-container .ludenea-component {
   margin-bottom: var(--space-3);

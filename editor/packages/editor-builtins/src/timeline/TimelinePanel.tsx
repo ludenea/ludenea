@@ -1,6 +1,7 @@
 import type { Editor } from "@ludenea/editor-shell";
 import { useMemo, useState } from "react";
 import { errorText, useGame, useStore } from "../shared";
+import { BranchForm, BranchLanes, type BranchForms } from "./BranchLanes";
 import { seek, type SpeedState } from "./index";
 
 /** Seeks to the latest position asked for, with one `Seek` in flight at most; `onIdle` once the last lands. */
@@ -28,7 +29,7 @@ function createScrubber(editor: Editor, onError: (error: unknown) => void, onIdl
 const at = (tick: number, head: number) => `${head > 0 ? (tick / head) * 100 : 0}%`;
 const mark = (left: string) => ({ left }) as const;
 
-export function TimelinePanel({ editor, speed }: { editor: Editor; speed: SpeedState }) {
+export function TimelinePanel({ editor, speed, forms }: { editor: Editor; speed: SpeedState; forms: BranchForms }) {
   const control = useGame(editor);
   const { timeline, hash, pending, playing, effectiveRate, divergence } = editor.timeline();
   const { speed: current } = useStore(speed);
@@ -70,10 +71,10 @@ export function TimelinePanel({ editor, speed }: { editor: Editor; speed: SpeedS
         <button onClick={run("timeline.speed-down")}>Slower</button>
         <span>{current}x</span>
         <button onClick={run("timeline.speed-up")}>Faster</button>
-        <button onClick={run("edit.undo")} disabled={!timeline.can_undo}>
+        <button onClick={run("edit.undo")} disabled={!timeline.can_undo} title={timeline.undo_label ?? undefined}>
           Undo
         </button>
-        <button onClick={run("edit.redo")} disabled={!timeline.can_redo}>
+        <button onClick={run("edit.redo")} disabled={!timeline.can_redo} title={timeline.redo_label ?? undefined}>
           Redo
         </button>
       </div>
@@ -124,6 +125,15 @@ export function TimelinePanel({ editor, speed }: { editor: Editor; speed: SpeedS
           }}
         />
       </div>
+      <div className="ludenea-toolbar">
+        <button onClick={run("timeline.switch-branch")}>Switch branch</button>
+        <button onClick={run("timeline.set-compare-branch")}>Compare with</button>
+        <button onClick={run("timeline.rename-branch")}>Rename branch</button>
+        <button onClick={run("timeline.delete-branch")}>Delete branch</button>
+        <button onClick={run("timeline.save-replay")}>Save as replay</button>
+      </div>
+      <BranchForm editor={editor} forms={forms} />
+      <BranchLanes editor={editor} onError={setError} />
       {error && <p className="ludenea-error">{error}</p>}
     </div>
   );
