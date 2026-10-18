@@ -143,6 +143,25 @@ describe("scene tree", () => {
     expect(screen.getByText("Collider")).toBeTruthy();
   });
 
+  it("a_failed_label_read_waits_for_a_pause_to_retry_while_playing", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const held = { ...world(), failing: true };
+    const { host, game } = await sceneTree(undefined, held);
+    const labelReads = () => game.sent.filter((command) => command.type === "get_entity" && (command.entity as { index: number }).index === 1).length;
+    act(() => host.editor.timeline.setState({ playing: true }));
+    for (const hash of ["00000000000000b1", "00000000000000c1", "00000000000000d1"]) {
+      held.hash = hash;
+      act(() => game.push({ type: "entities_changed", filter: "", total: 2 }));
+      await nextFrame();
+      await settle();
+    }
+    expect(labelReads()).toBe(1);
+    held.failing = false;
+    act(() => host.editor.timeline.setState({ playing: false }));
+    await settle();
+    expect(screen.getByText("Collider")).toBeTruthy();
+  });
+
   it("a_new_game_starts_from_an_empty_list", async () => {
     const { host } = await sceneTree();
     expect(screen.getAllByRole("option")).toHaveLength(2);

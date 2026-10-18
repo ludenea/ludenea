@@ -64,8 +64,9 @@ function Label({ control, row, labels, playing }: { control: ControlClient; row:
   // A component added or removed changes the hash. So does every tick of a moving entity:
   // while playing the label is read once, and read again once paused.
   // What the read is keyed on: the first read whatever the hash (one in flight is not sent again
-  // as ticks change it), then the hash shown once paused. After a failed read, the next hash.
-  const unread = failedAt === null ? "first" : failedAt !== hash ? hash : null;
+  // as ticks change it), then the hash shown once paused. After a failed read, the next hash
+  // shown while paused.
+  const unread = failedAt === null ? "first" : !playing && failedAt !== hash ? hash : null;
   const wanted = !cached ? unread : !playing && cached.hash !== hash ? hash : null;
   useEffect(() => {
     if (wanted === null) return;
