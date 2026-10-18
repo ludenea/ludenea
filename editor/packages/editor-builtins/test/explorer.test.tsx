@@ -92,6 +92,9 @@ describe("explorer", () => {
     renderPanel(host, "ludenea.explorer");
     await settle();
     expect(list().scrollTop).toBe(2200);
+    // A browser reports the restored position with a scroll event; jsdom does not.
+    fireEvent.scroll(list());
+    await settle();
     // Row 100 is at the top, after ten rows of overscan.
     expect(screen.getAllByRole("option")[0]!.textContent).toMatch(/^90v0 /);
   });

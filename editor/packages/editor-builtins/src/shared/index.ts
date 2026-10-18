@@ -1,6 +1,6 @@
 import type { ControlClient, ProjectInfo } from "@ludenea/control-client";
 import type { Editor } from "@ludenea/editor-shell";
-import { useSyncExternalStore } from "react";
+import { useLayoutEffect, useRef, useSyncExternalStore, type UIEvent } from "react";
 
 /** The project folders the asset browser lists. */
 export const ASSET_FOLDERS = ["assets", "scenes"];
@@ -29,6 +29,27 @@ export function createStore<T extends object>(initial: T): Store<T> {
 }
 
 export const useStore = <T>(store: Store<T>): T => useSyncExternalStore(store.subscribe, store.get);
+
+/** A scroll position a plugin keeps across the shell unmounting its hidden panel. */
+export type Scroll = { top: number };
+
+/**
+ * Keeps the scroll position of the element given `ref` in `scroll`, and restores it once on
+ * mount, as soon as `ready` (the content is tall enough: a browser clamps it otherwise).
+ */
+export function useKeptScroll<E extends HTMLElement>(scroll: Scroll, ready = true) {
+  const ref = useRef<E>(null);
+  const restored = useRef(false);
+  useLayoutEffect(() => {
+    if (restored.current || !ready || !ref.current) return;
+    restored.current = true;
+    ref.current.scrollTop = scroll.top;
+  }, [scroll, ready]);
+  const onScroll = (event: UIEvent<E>) => {
+    scroll.top = event.currentTarget.scrollTop;
+  };
+  return { ref, onScroll };
+}
 
 /** The connected game, re-rendering when it changes. */
 export function useGame(editor: Editor): ControlClient | null {

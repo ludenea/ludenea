@@ -1,8 +1,8 @@
 import type { ControlClient, Entity, EntityRow } from "@ludenea/control-client";
 import type { Editor } from "@ludenea/editor-shell";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
-import { errorText } from ".";
+import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { errorText, useKeptScroll, type Scroll } from ".";
 
 const PAGE = 200;
 const ROW_HEIGHT = 22;
@@ -22,21 +22,19 @@ export function EntityList(props: {
   label: string;
   row(row: EntityRow): ReactNode;
   onError(error: string | null): void;
-  scroll: { top: number };
+  scroll: Scroll;
 }) {
   const { editor, control, filter, label, row: content, onError, scroll } = props;
   const [total, setTotal] = useState(0);
   const [version, setVersion] = useState(0);
   const [rows, setRows] = useState(() => new Map<number, EntityRow>());
-  const scroller = useRef<HTMLDivElement>(null);
+  // Rows arrive after mounting: the position is restored once the list has its height.
+  const { ref: scroller, onScroll } = useKeptScroll<HTMLDivElement>(scroll, total > 0);
   const report = useRef(onError);
   report.current = onError;
   const selection = editor.selection((state) => state.entities);
-  const virtualizer = useVirtualizer({ count: total, getScrollElement: () => scroller.current, estimateSize: () => ROW_HEIGHT, overscan: 10, initialOffset: scroll.top });
+  const virtualizer = useVirtualizer({ count: total, getScrollElement: () => scroller.current, estimateSize: () => ROW_HEIGHT, overscan: 10 });
   const items = virtualizer.getVirtualItems();
-  useLayoutEffect(() => {
-    scroller.current!.scrollTop = scroll.top;
-  }, [scroll]);
   const firstPage = Math.floor((items[0]?.index ?? 0) / PAGE);
   const lastPage = Math.floor((items.at(-1)?.index ?? 0) / PAGE);
 
@@ -92,7 +90,7 @@ export function EntityList(props: {
   };
 
   return (
-    <div ref={scroller} className="ludenea-entity-list" style={{ height: "100%", overflow: "auto" }} onScroll={(event) => (scroll.top = event.currentTarget.scrollTop)}>
+    <div ref={scroller} className="ludenea-entity-list" style={{ height: "100%", overflow: "auto" }} onScroll={onScroll}>
       <ul role="listbox" aria-label={label} aria-multiselectable style={{ height: virtualizer.getTotalSize(), position: "relative", margin: 0, padding: 0 }}>
         {items.map((item) => {
           const row = rows.get(item.index);
