@@ -147,7 +147,8 @@ function OptionField(props: FieldProps & { item: TypeSchema }) {
 function EnumField(props: FieldProps & { schema: Extract<TypeSchema, { kind: "enum" }> }) {
   const { schema, value, path, edit, readOnly } = props;
   const { error, commit } = useCommit(edit, path);
-  const name = typeof value === "string" ? value : Object.keys(value as object)[0];
+  // A unit variant is its name; any other is `{ name: content }`; anything else picks none.
+  const name = typeof value === "string" ? value : typeof value === "object" && value !== null ? Object.keys(value)[0] : undefined;
   const variant = schema.variants.find((candidate) => candidate.name === name);
   const content = typeof value === "object" && value !== null && name ? (value as Record<string, JsonValue>)[name]! : null;
   const inner = [...path, field(name ?? "")];
@@ -157,7 +158,7 @@ function EnumField(props: FieldProps & { schema: Extract<TypeSchema, { kind: "en
       <FieldRow path={path} error={error}>
         <select
           aria-label={pathText(path)}
-          value={name}
+          value={name ?? ""}
           disabled={readOnly}
           onChange={(event) => {
             const next = schema.variants.find((candidate) => candidate.name === event.target.value);
