@@ -58,12 +58,15 @@ function Label({ control, row, labels, playing }: { control: ControlClient; row:
   const { entity, hash } = row;
   const key = entityKey(entity);
   const [, setRead] = useState(0);
+  // The hash at which the last read failed, if it did.
+  const [failedAt, setFailedAt] = useState<string | null>(null);
   const cached = labels.get(key);
   // A component added or removed changes the hash. So does every tick of a moving entity:
   // while playing the label is read once, and read again once paused.
   // What the read is keyed on: the first read whatever the hash (one in flight is not sent again
-  // as ticks change it), then the hash shown once paused.
-  const wanted = !cached ? "first" : !playing && cached.hash !== hash ? hash : null;
+  // as ticks change it), then the hash shown once paused. After a failed read, the next hash.
+  const unread = failedAt === null ? "first" : failedAt !== hash ? hash : null;
+  const wanted = !cached ? unread : !playing && cached.hash !== hash ? hash : null;
   useEffect(() => {
     if (wanted === null) return;
     let current = true;
@@ -73,7 +76,10 @@ function Label({ control, row, labels, playing }: { control: ControlClient; row:
         labels.set(key, { hash, label: names.join(", ") || "(no components)" });
         if (current) setRead((read) => read + 1);
       },
-      (error) => console.warn(`entity ${key}: ${String(error)}`),
+      (error) => {
+        console.warn(`entity ${key}: ${String(error)}`);
+        if (current) setFailedAt(hash);
+      },
     );
     return () => {
       current = false;

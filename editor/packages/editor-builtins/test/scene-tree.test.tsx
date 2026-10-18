@@ -13,7 +13,7 @@ beforeAll(() => {
 });
 
 /** What the fake game holds: entity 1's components and hash can change. */
-const world = () => ({ collider: { "ludenea::Collider": json({}) } as Record<string, unknown>, hash: "00000000000000a1", silent: false });
+const world = () => ({ collider: { "ludenea::Collider": json({}) } as Record<string, unknown>, hash: "00000000000000a1", silent: false, failing: false });
 
 async function sceneTree(project: (request: { type: string }) => object | undefined = () => ({ type: "done" }), held = world()) {
   const host = await testEditor(builtinPlugins, project);
@@ -25,6 +25,7 @@ async function sceneTree(project: (request: { type: string }) => object | undefi
       const { index } = command.entity as { index: number };
       // Left unanswered: the label stays in flight.
       if (held.silent && index === 1) return undefined;
+      if (held.failing && index === 1) return { error: { code: "no_such_entity", message: "not alive" } };
       const components = index === 0 ? { "ludenea::Pose": json({}), "ludenea::Body": json({}), "my_game::Player": json({}) } : held.collider;
       return { type: "entity", entity: command.entity, components };
     }
@@ -128,6 +129,18 @@ describe("scene tree", () => {
     await nextFrame();
     await settle();
     expect(screen.getByText("Collider, Health")).toBeTruthy();
+  });
+
+  it("a_failed_label_read_is_retried_on_the_next_hash_change", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { game, held } = await sceneTree(undefined, { ...world(), failing: true });
+    expect(screen.queryByText("Collider")).toBeNull();
+    held.failing = false;
+    held.hash = "00000000000000b1";
+    act(() => game.push({ type: "entities_changed", filter: "", total: 2 }));
+    await nextFrame();
+    await settle();
+    expect(screen.getByText("Collider")).toBeTruthy();
   });
 
   it("a_new_game_starts_from_an_empty_list", async () => {
