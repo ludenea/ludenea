@@ -55,7 +55,12 @@ describe("live input capture", () => {
     fireEvent.keyDown(element, { code: "F5", key: "F5" });
     fireEvent.keyDown(element, { code: "KeyZ", key: "z", ctrlKey: true, metaKey: true });
     fireEvent.keyDown(element, { code: "KeyD", key: "d" });
-    await waitFor(() => expect(live().at(-1)).toEqual({ type: "set_live_input", players: [{ keys: ["KeyD"], gamepads: [] }] }));
+    // A modifier pressed alone is the game's: browsers set its own flag on its keydown.
+    fireEvent.keyDown(element, { code: "ControlLeft", key: "Control", ctrlKey: true });
+    fireEvent.keyDown(element, { code: "MetaLeft", key: "Meta", metaKey: true });
+    await waitFor(() =>
+      expect(live().at(-1)).toEqual({ type: "set_live_input", players: [{ keys: ["KeyD", "ControlLeft", "MetaLeft"], gamepads: [] }] }),
+    );
     stop();
   });
 

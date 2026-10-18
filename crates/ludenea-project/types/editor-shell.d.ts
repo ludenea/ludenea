@@ -178,7 +178,10 @@ interface Editor {
 
 /** `shift+ctrl+z`, `Ctrl+Shift+Z`, and `Control+Shift+z` all become `Ctrl+Shift+Z`; `Mod+S` becomes `Cmd+S` on macOS. */
 function normalizeShortcut(shortcut: string, mac?: boolean): string;
-/** `F5` and `Mod` combinations: the editor's even while the game captures live input. */
+/**
+ * `F5` and `Mod` combinations: the editor's even while the game captures live input. The
+ * `Mod` key pressed alone (its own keydown sets its flag) is no combination: it stays the game's.
+ */
 function isEditorKey(event: KeyboardEvent): boolean;
 function isTextField(target: EventTarget | null): boolean;
 

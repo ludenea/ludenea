@@ -75,9 +75,13 @@ export function shortcutOf(event: KeyboardEvent): string {
   return canonical(modifiers, key, key.length === 1 ? key.toUpperCase() : (NAMED_KEYS.get(key.toLowerCase()) ?? key));
 }
 
-/** `F5` and `Mod` combinations: the editor's even while the game captures live input. */
+/**
+ * `F5` and `Mod` combinations: the editor's even while the game captures live input. The
+ * `Mod` key pressed alone (its own keydown sets its flag) is no combination: it stays the game's.
+ */
 export function isEditorKey(event: KeyboardEvent): boolean {
-  return event.key === "F5" || (isMac() ? event.metaKey : event.ctrlKey);
+  if (event.key === "F5") return true;
+  return isMac() ? event.metaKey && event.key !== "Meta" : event.ctrlKey && event.key !== "Control";
 }
 
 const NON_TEXT_INPUTS = new Set(["button", "checkbox", "color", "file", "image", "radio", "range", "reset", "submit"]);
