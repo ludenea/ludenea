@@ -8,6 +8,13 @@ const COLLISION = "ludenea_physics::events::Collision";
 const PAGE = 1000;
 const INTROSPECTION = { type: "introspection" } as const;
 
+// The fields this panel reads; a game's generated types describe the whole component.
+declare module "@ludenea/editor-shell" {
+  interface ComponentTypes {
+    "ludenea::Body": { kind: string };
+  }
+}
+
 type Contact = { kind: string; a: Entity; b: Entity };
 type Physics = { counts: [string, number][]; contacts: Contact[]; note: string | null };
 
@@ -23,7 +30,7 @@ async function read(editor: Editor, control: ControlClient, tick: number | null)
     const page = await control.request({ type: "query_entities", filter: `With<${BODY}>`, offset, limit: PAGE });
     if (page.rows.length === 0) break;
     total = page.total;
-    const bodies = await Promise.all(page.rows.map((row) => editor.entities.get(row.entity, BODY) as Promise<{ kind: string } | undefined>));
+    const bodies = await Promise.all(page.rows.map((row) => editor.entities.get(row.entity, BODY)));
     for (const body of bodies) if (body) counts.set(body.kind, (counts.get(body.kind) ?? 0) + 1);
   }
   if (tick === null) return { counts: [...counts], contacts: [], note: null };

@@ -7,6 +7,7 @@
     { "path": "shared" },
     { "path": "apps/web" },
     { "path": "apps/desktop" },
-    { "path": "e2e" }
+    { "path": "e2e" },
+    { "path": "tsconfig.engine-plugins.json" }
   ]
 }
