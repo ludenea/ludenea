@@ -61,9 +61,11 @@ function Label({ control, row, labels, playing }: { control: ControlClient; row:
   const cached = labels.get(key);
   // A component added or removed changes the hash. So does every tick of a moving entity:
   // while playing the label is read once, and read again once paused.
-  const stale = !cached || (!playing && cached.hash !== hash);
+  // What the read is keyed on: the first read whatever the hash (one in flight is not sent again
+  // as ticks change it), then the hash shown once paused.
+  const wanted = !cached ? "first" : !playing && cached.hash !== hash ? hash : null;
   useEffect(() => {
-    if (!stale) return;
+    if (wanted === null) return;
     let current = true;
     control.request({ type: "get_entity", entity: { index: entity.index, generation: entity.generation } }).then(
       (reply) => {
@@ -76,6 +78,7 @@ function Label({ control, row, labels, playing }: { control: ControlClient; row:
     return () => {
       current = false;
     };
-  }, [control, key, hash, stale, labels, entity.index, entity.generation]);
+    // `hash` is read through `wanted`: a change while playing must not send the read again.
+  }, [control, key, wanted, labels, entity.index, entity.generation]);
   return <span>{cached?.label ?? ""}</span>;
 }

@@ -13,7 +13,7 @@ beforeAll(() => {
 });
 
 /** What the fake game holds: entity 1's components and hash can change. */
-const world = () => ({ collider: { "ludenea::Collider": json({}) } as Record<string, unknown>, hash: "00000000000000a1" });
+const world = () => ({ collider: { "ludenea::Collider": json({}) } as Record<string, unknown>, hash: "00000000000000a1", silent: false });
 
 async function sceneTree(project: (request: { type: string }) => object | undefined = () => ({ type: "done" }), held = world()) {
   const host = await testEditor(builtinPlugins, project);
@@ -23,6 +23,8 @@ async function sceneTree(project: (request: { type: string }) => object | undefi
     }
     if (command.type === "get_entity") {
       const { index } = command.entity as { index: number };
+      // Left unanswered: the label stays in flight.
+      if (held.silent && index === 1) return undefined;
       const components = index === 0 ? { "ludenea::Pose": json({}), "ludenea::Body": json({}), "my_game::Player": json({}) } : held.collider;
       return { type: "entity", entity: command.entity, components };
     }
@@ -165,5 +167,19 @@ describe("scene tree", () => {
     renderPanel(host, "ludenea.scene-tree");
     await settle();
     expect(list().scrollTop).toBe(440);
+  });
+
+  it("a_label_in_flight_is_not_requested_again_while_playing", async () => {
+    const held = { ...world(), silent: true };
+    const { host, game } = await sceneTree(undefined, held);
+    act(() => host.editor.timeline.setState({ playing: true }));
+    for (const hash of ["00000000000000b1", "00000000000000c1", "00000000000000d1"]) {
+      held.hash = hash;
+      act(() => game.push({ type: "entities_changed", filter: "", total: 2 }));
+      await nextFrame();
+      await settle();
+    }
+    const labelRequests = game.sent.filter((command) => command.type === "get_entity" && (command.entity as { index: number }).index === 1);
+    expect(labelRequests).toHaveLength(1);
   });
 });
