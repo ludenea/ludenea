@@ -1,7 +1,7 @@
 import type { ControlClient } from "@ludenea/control-client";
 import type { Editor } from "@ludenea/editor-shell";
 import { useEffect, useState } from "react";
-import { errorText } from "../shared";
+import { errorText, shared, useStore } from "../shared";
 
 export type IntrospectionTab = "Schedule" | "Events" | "Commands";
 
@@ -12,16 +12,30 @@ const TOPIC = { type: "introspection" } as const;
  * `Introspection` topic is subscribed, so this subscribes for as long as one of them shows.
  */
 export function Introspection({ editor, control, tab }: { editor: Editor; control: ControlClient; tab: IntrospectionTab }) {
+  const [unrecorded, setUnrecorded] = useState<string | null>(null);
   useEffect(() => {
-    control.request({ type: "subscribe", topic: TOPIC }).catch((error) => console.warn(`subscribe to introspection: ${String(error)}`));
+    setUnrecorded(null);
+    control.request({ type: "subscribe", topic: TOPIC }).catch((error) => setUnrecorded(`Ticks are not recorded: ${errorText(error)}`));
     return () => void control.request({ type: "unsubscribe", topic: TOPIC }).catch(() => {});
   }, [control]);
   // Every tick and every seek changes the hash: refetch then.
   const hash = editor.timeline((state) => state.hash);
   const tick = editor.timeline((state) => state.timeline?.current ?? null);
-  if (tab === "Schedule") return <Schedule control={control} hash={hash} />;
-  if (tick === null) return <p className="ludenea-muted">No tick is selected.</p>;
-  return tab === "Events" ? <Events control={control} tick={tick} hash={hash} /> : <Commands control={control} tick={tick} hash={hash} />;
+  const browser = useStore(shared(editor).project).info?.mode === "browser";
+  let content;
+  if (tab === "Schedule") content = <Schedule control={control} hash={hash} browser={browser} />;
+  else if (tick === null) content = <p className="ludenea-muted">No tick is selected.</p>;
+  else content = tab === "Events" ? <Events control={control} tick={tick} hash={hash} /> : <Commands control={control} tick={tick} hash={hash} />;
+  return (
+    <>
+      {unrecorded && (
+        <p role="alert" className="ludenea-error">
+          {unrecorded}
+        </p>
+      )}
+      {content}
+    </>
+  );
 }
 
 /** The latest reply to `request`, sent again whenever `key` changes. */
@@ -41,7 +55,7 @@ function useReply<T>(request: () => Promise<T>, key: unknown[]): { reply: T | nu
   return state;
 }
 
-function Schedule({ control, hash }: { control: ControlClient; hash: string | null }) {
+function Schedule({ control, hash, browser }: { control: ControlClient; hash: string | null; browser: boolean }) {
   const { reply, error } = useReply(() => control.request({ type: "get_schedule" }), [control, hash]);
   if (error) return <p className="ludenea-error">{error}</p>;
   return (
@@ -60,7 +74,7 @@ function Schedule({ control, hash }: { control: ControlClient; hash: string | nu
             <td>{system.name}</td>
             <td>{system.reads.join(", ")}</td>
             <td>{system.writes.join(", ")}</td>
-            <td>{system.micros === null ? "not measured in the browser" : system.micros.toFixed(1)}</td>
+            <td>{system.micros !== null ? system.micros.toFixed(1) : browser ? "not measured in the browser" : "not measured"}</td>
           </tr>
         ))}
       </tbody>

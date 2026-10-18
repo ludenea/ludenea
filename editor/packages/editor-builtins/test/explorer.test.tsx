@@ -12,9 +12,10 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, "offsetWidth", { configurable: true, get: () => 300 });
 });
 
-async function explorer(total = 3) {
-  const host = await testEditor(builtinPlugins);
+async function explorer(total = 3, project?: (request: { type: string }) => object | undefined, failSubscribe = false) {
+  const host = await testEditor(builtinPlugins, project);
   const game = await testGame((command) => {
+    if (failSubscribe && command.type === "subscribe") return { error: { code: "unknown_topic", message: "introspection is off" } };
     const filter = (command.filter ?? (command.topic as { filter?: string } | undefined)?.filter) as string | undefined;
     if (filter === "With<Bdy>") return { error: { code: "invalid_filter", message: UNKNOWN } };
     if (command.type === "query_entities") {
@@ -69,7 +70,7 @@ describe("explorer", () => {
     await settle();
     expect(sent()).toEqual(["subscribe"]);
     expect(screen.getByText("physics_step")).toBeTruthy();
-    expect(screen.getByText("not measured in the browser")).toBeTruthy();
+    expect(screen.getByText("not measured")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("tab", { name: "Events" }));
     await settle();
@@ -93,5 +94,20 @@ describe("explorer", () => {
     expect(list().scrollTop).toBe(2200);
     // Row 100 is at the top, after ten rows of overscan.
     expect(screen.getAllByRole("option")[0]!.textContent).toMatch(/^90v0 /);
+  });
+
+  it("timings_say_why_the_browser_has_none", async () => {
+    const info = { type: "info", name: "demo", root: "/demo", default_scene: null, mode: "browser" };
+    await explorer(3, (request) => (request.type === "info" ? info : undefined));
+    fireEvent.click(screen.getByRole("tab", { name: "Schedule" }));
+    await settle();
+    expect(screen.getByText("not measured in the browser")).toBeTruthy();
+  });
+
+  it("introspection_subscribe_failure_is_shown", async () => {
+    await explorer(3, undefined, true);
+    fireEvent.click(screen.getByRole("tab", { name: "Schedule" }));
+    await settle();
+    expect(screen.getByRole("alert").textContent).toContain("introspection is off");
   });
 });
