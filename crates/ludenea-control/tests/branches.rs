@@ -491,6 +491,11 @@ fn restore_at_the_fork_tick_keeps_the_branch_own_later_edits() {
     session.switch_branch(&mut sim, BranchId(2)).unwrap();
     // The branch no longer inherits A: the edits stay as the restore left them.
     assert_eq!(edits(&session), [nested[2].clone()]);
+    // Every entry still undoes, the forks with their branches.
+    while session.timeline().can_undo {
+        session.undo(&mut sim).unwrap();
+    }
+    assert_eq!(session.branches().len(), 1);
 }
 
 /// The export of a session forked twice, nested, with the nested branch current.
@@ -801,6 +806,42 @@ fn stale_ancestor_resimulates_first() {
     assert_replays(&session);
     session.switch_branch(&mut sim, BranchId(2)).unwrap();
     assert!(!session.timeline().resimulating, "Branch 2 stays fresh");
+    assert_replays(&session);
+}
+
+#[test]
+fn seeking_while_stale_ancestors_resimulate_is_where_the_switch_ends() {
+    let (mut sim, mut session) = played(400, 300);
+    edit_at(&mut session, &mut sim, 100, 1_000);
+    play(&mut session, &mut sim, 150);
+    edit_at(&mut session, &mut sim, 200, 2_000);
+    play(&mut session, &mut sim, 80);
+    session.switch_branch(&mut sim, ROOT).unwrap();
+    scene_edit(&mut session, &mut sim, 5);
+    resimulate_all(&mut session, &mut sim);
+    session.seek(&mut sim, 250).unwrap();
+    session.switch_branch(&mut sim, BranchId(2)).unwrap();
+
+    // The timeline shows Branch 2 as far as it shares Branch 1's run.
+    let timeline = session.timeline();
+    assert_eq!(timeline.branch, BranchId(2));
+    assert_eq!(timeline.head, branch(&session, BranchId(2)).head);
+    let shown = timeline.simulated;
+    assert!(shown < 200, "{timeline:?}");
+    assert!(
+        timeline.checkpoints.iter().all(|&tick| tick <= shown),
+        "{timeline:?}"
+    );
+    assert!(
+        timeline.edit_ticks.iter().all(|&tick| tick <= shown),
+        "{timeline:?}"
+    );
+
+    session.resimulate(&mut sim, 64).unwrap();
+    session.seek(&mut sim, 150).unwrap();
+    reports_until_done(&mut session, &mut sim);
+    assert_eq!(session.current_branch(), BranchId(2));
+    assert_eq!(session.timeline().current, 150);
     assert_replays(&session);
 }
 

@@ -942,6 +942,10 @@ impl Session {
         self.replay_to(sim, tick)?;
         self.current = tick;
         self.return_to = None;
+        // A switch whose ancestors resimulate ends where the session was sought to.
+        if let Some((_, at)) = &mut self.switching {
+            *at = tick;
+        }
         Ok(())
     }
 
@@ -1285,14 +1289,34 @@ impl Session {
         })
     }
 
+    /// While a switch resimulates stale ancestors, the target branch as far as it shares
+    /// the run of the ancestor resimulating, with the target's head.
     pub fn timeline(&self) -> Timeline {
-        let mut edit_ticks: Vec<u64> = self.edits.edits.iter().map(|edit| edit.tick).collect();
+        let cap = self.chain_cap().unwrap_or(u64::MAX);
+        let mut edit_ticks: Vec<u64> = self
+            .edits
+            .edits
+            .iter()
+            .map(|edit| edit.tick)
+            .take_while(|&tick| tick <= cap)
+            .collect();
         edit_ticks.dedup();
+        let mut checkpoints = self.checkpoints.ticks();
+        checkpoints.retain(|&tick| tick <= cap);
+        let branches = self.branches();
+        let branch = self.current_branch();
+        let head = match self.switching {
+            Some(_) => branches
+                .iter()
+                .find(|info| info.id == branch)
+                .map(|info| info.head),
+            None => None,
+        };
         Timeline {
-            head: self.head,
-            simulated: self.simulated().min(self.chain_cap().unwrap_or(u64::MAX)),
+            head: head.unwrap_or(self.head),
+            simulated: self.simulated().min(cap),
             current: self.current,
-            checkpoints: self.checkpoints.ticks(),
+            checkpoints,
             edit_ticks,
             can_undo: self.history.can_undo(),
             can_redo: self.history.can_redo(),
@@ -1300,8 +1324,8 @@ impl Session {
             redo_label: self.redo_label(),
             scene_dirty: self.scene_dirty,
             resimulating: self.resimulating.is_some(),
-            branch: self.current_branch(),
-            branches: self.branches(),
+            branch,
+            branches,
             compare: self.compare_branch(),
         }
     }

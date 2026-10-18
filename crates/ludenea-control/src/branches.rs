@@ -72,7 +72,8 @@ impl Segment {
     }
 
     /// Cuts the run of the parent at the fork point `(tick, edits)` and appends this
-    /// segment. A gap before the segment's inputs is padded with `defaults`.
+    /// segment. A gap before the segment's inputs is padded with `defaults`; without them
+    /// the game has no input type and any recorded input fails to step, padded or not.
     pub fn append_to(
         &self,
         (tick, edits): (u64, usize),
@@ -284,17 +285,20 @@ impl BranchTree {
             .collect()
     }
 
-    /// Puts back branches `take` took, parents first.
+    /// Puts back branches `take` took, parents first: all of them, or none on an error.
     pub fn put_back(&mut self, branches: Vec<StoredBranch>) -> Result<(), BranchesError> {
+        let mut back: Vec<(BranchId, Branch)> = Vec::new();
         for stored in branches {
             let id = stored.id;
             let branch = stored.into_branch(true)?;
             let parent = branch.parent.ok_or(BranchesError::Tree)?;
-            if !self.branches.contains_key(&parent) || self.branches.contains_key(&id) {
+            let known = |id| self.branches.contains_key(&id) || back.iter().any(|(b, _)| *b == id);
+            if !known(parent) || known(id) {
                 return Err(BranchesError::Tree);
             }
-            self.branches.insert(id, branch);
+            back.push((id, branch));
         }
+        self.branches.extend(back);
         Ok(())
     }
 
@@ -311,15 +315,22 @@ impl BranchTree {
     }
 
     /// After the edit at `position` among the edits of `tick` was removed from the current
-    /// run: the current branch, and its stored children, forked at `tick` that inherited it
-    /// inherit one edit fewer.
+    /// run: the current branch, and its stored descendants, forked at `tick` that inherited
+    /// it inherit one edit fewer. An inherited edit keeps its position in the child's run.
     pub fn edit_removed_at(&mut self, tick: u64, position: usize) {
         let current = self.current;
+        let mut inheriting = vec![current];
+        // Parents come first in identifier order.
         for (&id, branch) in &mut self.branches {
-            let inherits =
-                (id == current && branch.parent.is_some()) || branch.parent == Some(current);
+            let below = branch
+                .parent
+                .is_some_and(|parent| inheriting.contains(&parent));
+            let inherits = (id == current && branch.parent.is_some()) || below;
             if inherits && branch.fork_tick == tick && position < branch.fork_edits {
                 branch.fork_edits -= 1;
+                if below {
+                    inheriting.push(id);
+                }
             }
         }
     }
@@ -670,5 +681,47 @@ mod tests {
             decode(vec![stored(0, None, (3, 0))], 50),
             Err(BranchesError::Fork)
         ));
+    }
+
+    #[test]
+    fn put_back_puts_back_nothing_when_one_branch_does_not_fit() {
+        let mut tree = BranchTree::default();
+        let branches = vec![stored(1, Some(0), (0, 0)), stored(2, Some(9), (0, 0))];
+        assert!(matches!(tree.put_back(branches), Err(BranchesError::Tree)));
+        assert!(tree.get(BranchId(1)).is_none());
+        tree.put_back(vec![stored(1, Some(0), (0, 0)), stored(2, Some(1), (0, 0))])
+            .unwrap();
+        assert!(tree.get(BranchId(2)).is_some());
+    }
+
+    #[test]
+    fn removing_an_inherited_edit_updates_every_branch_that_inherits_it() {
+        let edit = |tick| TimedEdit {
+            tick,
+            edit: ludenea_app::Edit::SetResource {
+                resource: "r".to_string(),
+                value: Vec::new(),
+            },
+        };
+        let mut run = EditLog::new();
+        run.edits = vec![edit(5), edit(5)];
+        let bytes = postcard::to_allocvec(&StoredTree {
+            current: BranchId::ROOT,
+            next: 4,
+            branches: vec![
+                stored(0, None, (0, 0)),
+                stored(1, Some(0), (5, 2)),
+                stored(2, Some(1), (5, 2)),
+                // Inherits only the first edit of tick 5.
+                stored(3, Some(1), (5, 1)),
+            ],
+        })
+        .unwrap();
+        let mut tree = BranchTree::decode(&bytes, &run, 5).unwrap();
+        tree.edit_removed_at(5, 1);
+        let forks: Vec<usize> = (1..4)
+            .map(|id| tree.get(BranchId(id)).unwrap().fork_edits)
+            .collect();
+        assert_eq!(forks, [1, 1, 1]);
     }
 }
