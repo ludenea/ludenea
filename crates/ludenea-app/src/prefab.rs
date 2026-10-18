@@ -1179,7 +1179,7 @@ impl<'a> Parser<'a> {
             b'\'' => {
                 self.at += 1;
                 while self.peek()? != b'\'' {
-                    self.at += if self.peek()? == b'\\' { 2 } else { 1 };
+                    self.char_at();
                 }
                 self.at += 1;
                 Kind::Atom
@@ -1278,13 +1278,20 @@ impl<'a> Parser<'a> {
         self.at += 1;
         loop {
             match self.peek()? {
-                b'\\' => self.at += 2,
                 b'"' => {
                     self.at += 1;
                     return Some(());
                 }
-                _ => self.at += 1,
+                _ => self.char_at(),
             }
+        }
+    }
+
+    /// Steps over the character at `at`, and the one it escapes, whole.
+    fn char_at(&mut self) {
+        let escaped = self.peek() == Some(b'\\');
+        for _ in 0..=usize::from(escaped) {
+            self.at += self.rest().chars().next().map_or(1, char::len_utf8);
         }
     }
 

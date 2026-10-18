@@ -643,5 +643,8 @@ fn flattened_prefab_in_file_form_reaches_its_assets_and_is_validated() {
     let error = simulation
         .load_scene_with(&file, &texts(&[(A, broken)]))
         .unwrap_err();
-    assert!(matches!(error, SceneError::InvalidAsset { .. }), "{error:?}");
+    assert!(
+        matches!(error, SceneError::InvalidAsset { .. }),
+        "{error:?}"
+    );
 }
