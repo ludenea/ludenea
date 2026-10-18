@@ -1,7 +1,7 @@
 import { ControlClient, ProjectClient, fakeTransport, type GameInfo, type WorkerCrash, type WorkerGame } from "@ludenea/control-client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { followNativeGames, followWasmGames } from "../src/games";
-import { exportSession, type SavedSession } from "../src/session-guard";
+import { exportSession, restoreSession, type SavedSession } from "../src/session-guard";
 
 type Message = { type: string; [key: string]: unknown };
 
@@ -43,7 +43,11 @@ async function fakeProject(answer: (request: Message) => object) {
 }
 
 // No document is open: every session is the editor's own.
-const app = () => ({ connectGame: vi.fn(), log: vi.fn(), sessions: { export: exportSession, store: vi.fn(async () => {}), own: async (saved: SavedSession | null) => saved } });
+const app = () => ({
+  connectGame: vi.fn(),
+  log: vi.fn(),
+  sessions: { export: exportSession, store: vi.fn(async () => {}), own: async (saved: SavedSession | null) => saved, restore: vi.fn(restoreSession) },
+});
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 afterEach(() => {
@@ -65,7 +69,8 @@ describe("followWasmGames", () => {
       hosts.set(glueUrl, host);
       return { transport: host, onCrashed: (_: (crash: WorkerCrash) => void) => () => {}, terminate: () => host.close() };
     });
-    followWasmGames(project, app(), start);
+    const editor = app();
+    followWasmGames(project, editor, start);
     await settle();
     expect(start).toHaveBeenLastCalledWith(builds[0]);
 
@@ -74,6 +79,8 @@ describe("followWasmGames", () => {
     await settle();
     expect(start).toHaveBeenLastCalledWith(builds[1]);
     expect(log).toContain(`${builds[1]}:load_session`);
+    // Through the document sessions, which mark the restored session's unsaved assets again.
+    expect(editor.sessions.restore).toHaveBeenCalledTimes(1);
     // The rebuilt game dies while resimulating the restored session.
     hosts.get(builds[1])!.drop("the game crashed");
     await settle();
@@ -190,7 +197,8 @@ describe("followNativeGames", () => {
       if (request.type === "restart_game") restarted = true;
       return { ok: { type: "done" } };
     });
-    followNativeGames(project, app(), async () => games[restarted ? 1 : 0]!);
+    const editor = app();
+    followNativeGames(project, editor, async () => games[restarted ? 1 : 0]!);
     push({ type: "game_ready" });
     await settle();
     log = [];
@@ -204,6 +212,7 @@ describe("followNativeGames", () => {
     expect(log).toContain("new:load_session");
     const loaded = log.indexOf("new:load_session");
     expect(log.slice(loaded)).toEqual(["new:load_session", "new:get_timeline", "new:seek"]);
+    expect(editor.sessions.restore).toHaveBeenCalledTimes(1);
   });
 
   it("a_second_rebuild_before_the_swap_keeps_the_first_export", async () => {

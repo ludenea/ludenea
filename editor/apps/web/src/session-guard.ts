@@ -23,7 +23,7 @@ const devtools: Log = (level, text) => (level === "error" ? console.error(text) 
 
 /** `saved` without its recorded future: its scene (unsaved edits included) at tick 0. */
 function sceneOf(saved: SavedSession): SavedSession {
-  return { load: { ...saved.load, inputs: withoutTicks(saved.load.inputs), edits: "", undo: "", branches: "", expected: [] }, tick: 0 };
+  return { ...saved, load: { ...saved.load, inputs: withoutTicks(saved.load.inputs), edits: "", undo: "", branches: "", expected: [] }, tick: 0 };
 }
 
 /**
@@ -117,7 +117,7 @@ export function guardSession(
           log("warning", "The game crashed while restoring the session: only its scene was reloaded, without its recorded inputs and edits.");
         }
         const next = await restart(saved);
-        if (next && saved) await restoreSession(next, saved, tick);
+        if (next && saved) await (options.sessions?.restore ?? restoreSession)(next, saved, tick);
       } catch (error) {
         log("error", `Cannot restore the session after the crash: ${error instanceof Error ? error.message : String(error)}`);
       }

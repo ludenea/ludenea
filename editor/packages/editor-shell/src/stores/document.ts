@@ -28,8 +28,9 @@ export interface DocumentState {
   /**
    * The data assets whose text in the session differs from their file (a tick 0 edit, "Apply
    * to asset"): plugins add an asset when they change it and remove it when they save it.
-   * Reloading changed assets keeps their session text. Emptied when a document opens or loads
-   * into a new game (both load the files' texts).
+   * Reloading changed assets keeps their session text. Stored sessions carry it: a document
+   * that opens, or a new game, starts from the files' texts and marks those of the session it
+   * restores again.
    */
   unsavedAssets: AssetId[];
   /** Why the last open, reload, or load into a new game was refused (the previous document and session stay); null once one succeeds. */
@@ -56,6 +57,8 @@ export interface DocumentSessions {
   store(saved?: SavedSession): Promise<void>;
   /** `saved` when it belongs to the open document, else the open document's stored session, if any. */
   own(saved: SavedSession | null): Promise<SavedSession | null>;
+  /** `restoreSession` that also marks the session's unsaved assets unsaved again. */
+  restore(control: ControlClient, saved: SavedSession, tick?: number): Promise<Loaded | null>;
 }
 
 /** Where the store reports failures: the editor's console, at the asset's file when known. */
@@ -70,6 +73,8 @@ export interface SavedSession {
   tick: number;
   /** The document open when it was exported; null while one was opening or none was open. */
   document?: AssetId | null;
+  /** The data assets unsaved when it was exported: its text of each differs from the file. */
+  unsavedAssets?: AssetId[];
 }
 
 export async function exportSession(control: ControlClient): Promise<SavedSession> {
@@ -122,8 +127,9 @@ function simulated(control: ControlClient, tick: number): Promise<void> {
  * it resimulates. Send it after the game's `LoadScene` (which the document store sends to
  * every new game), so the restored session is what stays loaded.
  */
-export async function restoreSession(control: ControlClient, saved: SavedSession, tick = saved.tick): Promise<Loaded | null> {
+export async function restoreSession(control: ControlClient, saved: SavedSession, tick = saved.tick, onLoaded = () => {}): Promise<Loaded | null> {
   const loaded = await control.request(saved.load);
+  onLoaded();
   await returnTo(control, saved, tick);
   return loadedIn(loaded);
 }
@@ -146,6 +152,15 @@ const decode = (bytes: string): SavedSession => JSON.parse(new TextDecoder().dec
 const KINDS: { [kind: string]: OpenDocument["kind"] } = { Scene: "scene", Prefab: "prefab", Replay: "replay" };
 /** How the session names its root branch until the editor renames it after the document. */
 const ROOT_NAME = "Branch 1";
+
+/** The `fresh` asset texts, with the `session`'s text of each `unsaved` asset instead. */
+const withUnsaved = (fresh: [AssetId, string][], session: [AssetId, string][], unsaved: AssetId[]) => {
+  const texts = new Map(session.filter(([id]) => unsaved.includes(id)));
+  return { assets: fresh.map(([id, text]): [AssetId, string] => [id, texts.get(id) ?? text]), texts };
+};
+/** The unsaved assets of `saved` it still holds. */
+const unsavedIn = (saved: SavedSession | null): AssetId[] =>
+  saved ? (saved.unsavedAssets ?? []).filter((id) => saved.load.assets.some(([asset]) => asset === id)) : [];
 
 const assetKind = (change: FileChange) => Object.values(change)[0]!.kind;
 const changedPath = (change: FileChange) => Object.values(change)[0]!.path;
@@ -189,9 +204,9 @@ export function createDocumentStore(options: {
    */
   const keepingUnsaved = (fresh: [AssetId, string][], session: [AssetId, string][]) => {
     const unsaved = store.getState().unsavedAssets;
-    const texts = new Map(session.filter(([id]) => unsaved.includes(id)));
+    const { assets, texts } = withUnsaved(fresh, session, unsaved);
     return {
-      assets: fresh.map(([id, text]): [AssetId, string] => [id, texts.get(id) ?? text]),
+      assets,
       kept: (now: AssetId[]) => now.filter((id) => texts.has(id) || !unsaved.includes(id)),
     };
   };
@@ -210,12 +225,16 @@ export function createDocumentStore(options: {
     const { bytes } = await project.request({ type: "load_stored_session", document: document.id });
     return bytes ? decode(bytes) : null;
   };
-  // The scene and assets on disk now, so a stored session whose files changed replays against them.
-  const refreshed = (saved: SavedSession, text: string | null, assets: [AssetId, string][]): SavedSession => {
+  // The scene and assets on disk now, so a stored session whose files changed replays against
+  // them, except its unsaved assets, which keep the session's text (an asset gone from disk is dropped).
+  const refreshed = (saved: SavedSession, text: string | null, fresh: [AssetId, string][]): SavedSession => {
     if (saved.load.keeps_assets) return saved;
     const scene = saved.load.saved_scene === null && text !== null ? text : saved.load.scene;
+    const { assets } = withUnsaved(fresh, saved.load.assets, saved.unsavedAssets ?? []);
     return { ...saved, load: { ...saved.load, scene, assets } };
   };
+  const restore = (game: ControlClient, saved: SavedSession, tick = saved.tick) =>
+    restoreSession(game, saved, tick, () => store.setState({ unsavedAssets: unsavedIn(saved) }));
   const nameRoot = async (game: ControlClient, document: OpenDocument) => {
     const timeline = await game.request({ type: "get_timeline" });
     // A host that answers something else (a test double) keeps its names.
@@ -225,7 +244,8 @@ export function createDocumentStore(options: {
   };
   const tagged = async (game: ControlClient): Promise<SavedSession> => {
     const document = opening ? null : (store.getState().current?.id ?? null);
-    return { ...(await exportSession(game)), document };
+    const saved = await exportSession(game);
+    return { ...saved, document, unsavedAssets: store.getState().unsavedAssets };
   };
 
   const store: DocumentStore = create<DocumentState>()((set, get) => ({
@@ -264,10 +284,10 @@ export function createDocumentStore(options: {
           texts = fresh;
           replay = bytes;
           // A stored session's load reports what stays loaded: the scene load's report is not kept.
-          set({ current: document, text, loaded: game && restoring ? null : loaded, fingerprintDiffers: differs(reply), unsavedAssets: [], error: null });
+          set({ current: document, text, loaded: game && restoring ? null : loaded, fingerprintDiffers: differs(reply), unsavedAssets: unsavedIn(restoring), error: null });
           pending = game ? null : restoring;
           if (!game) return;
-          if (restoring) set({ loaded: await restoreSession(game, restoring).catch(locatedIn(texts.paths)) });
+          if (restoring) set({ loaded: await restore(game, restoring).catch(locatedIn(texts.paths)) });
           await nameRoot(game, document);
         } finally {
           opening = false;
@@ -332,13 +352,15 @@ export function createDocumentStore(options: {
     if (!game || !document) return;
     const saved = pending;
     pending = null;
+    // The game holds the files' texts until a session is restored into it.
+    store.setState({ unsavedAssets: [] });
     // Both sent at once: a session the application restores into this game, and its first
     // export, come after them.
     const loaded = load(game, document, store.getState().text, { texts, replay });
-    const restored = saved ? restoreSession(game, saved).catch(locatedIn(texts.paths)) : null;
+    const restored = saved ? restore(game, saved).catch(locatedIn(texts.paths)) : null;
     Promise.all([loaded, restored])
       .then(([first, second]) => {
-        store.setState({ loaded: second ?? loadedIn(first), fingerprintDiffers: differs(first), unsavedAssets: [], error: null });
+        store.setState({ loaded: second ?? loadedIn(first), fingerprintDiffers: differs(first), error: null });
         return nameRoot(game, document);
       })
       .catch(reported(`Cannot load ${document.path} into the game`))
@@ -359,6 +381,7 @@ export function createDocumentStore(options: {
       if ((saved?.document ?? null) === (document?.id ?? null)) return saved;
       return document && stored(document);
     },
+    restore,
   };
   return { store, sessions };
 }

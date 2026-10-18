@@ -212,8 +212,9 @@ interface DocumentState {
     /**
      * The data assets whose text in the session differs from their file (a tick 0 edit, "Apply
      * to asset"): plugins add an asset when they change it and remove it when they save it.
-     * Reloading changed assets keeps their session text. Emptied when a document opens or loads
-     * into a new game (both load the files' texts).
+     * Reloading changed assets keeps their session text. Stored sessions carry it: a document
+     * that opens, or a new game, starts from the files' texts and marks those of the session it
+     * restores again.
      */
     unsavedAssets: AssetId[];
     /** Why the last open, reload, or load into a new game was refused (the previous document and session stay); null once one succeeds. */

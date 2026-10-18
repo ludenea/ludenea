@@ -1,7 +1,7 @@
 import { ControlClient, ProjectClient, fakeTransport, type GameInfo, type WorkerCrash } from "@ludenea/control-client";
 import { createEditor } from "@ludenea/editor-shell/app";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { EXPORT_COALESCE_MS, exportSession, guardSession, restoreSession } from "../src/session-guard";
+import { EXPORT_COALESCE_MS, exportSession, guardSession, restoreSession, type SavedSession } from "../src/session-guard";
 
 type Command = { type: string; [key: string]: unknown };
 
@@ -132,7 +132,7 @@ describe("guardSession", () => {
     vi.useFakeTimers();
     const game = await fakeGame((command) => (command.type === "export_session" ? session("scene") : command.type === "get_timeline" ? { type: "timeline", ...timeline } : { type: "done" }));
     const store = vi.fn(async () => {});
-    const sessions = { export: exportSession, store, own: async () => null };
+    const sessions = { export: exportSession, store, own: async () => null, restore: restoreSession };
     guardSession(game.control, fakeWorker(), async () => game.control, { sessions });
     await vi.advanceTimersByTimeAsync(0);
     expect(store).toHaveBeenCalledTimes(1);
@@ -263,6 +263,26 @@ describe("guardSession", () => {
 });
 
 describe("guardSession with documents", () => {
+  it("a_crash_restores_through_the_document_sessions", async () => {
+    const first = await fakeGame((command) => (command.type === "export_session" ? session("edited") : command.type === "get_timeline" ? { type: "timeline", ...timeline } : { type: "done" }));
+    const worker = fakeWorker();
+    const second = await fakeGame();
+    const sessions = {
+      export: async (control: ControlClient) => ({ ...(await exportSession(control)), document: null, unsavedAssets: ["3".padStart(32, "0")] }),
+      store: async () => {},
+      own: async (saved: SavedSession | null) => saved,
+      // Marks the session's unsaved assets again.
+      restore: vi.fn(async () => null),
+    };
+    guardSession(first.control, worker, async () => second.control, { sessions, log: () => {} });
+    await settle();
+
+    worker.crash({ tick: 4, message: "boom" });
+    await settle();
+
+    expect(sessions.restore).toHaveBeenCalledWith(second.control, expect.objectContaining({ unsavedAssets: ["3".padStart(32, "0")] }), 4);
+  });
+
   it("a_crash_after_a_document_switch_restores_only_the_open_document", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const files = { "scenes/a.scene.ron": "(A)", "scenes/b.scene.ron": "(B)" };

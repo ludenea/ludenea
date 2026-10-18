@@ -177,6 +177,88 @@ describe("document store", () => {
     expect((failure as Error).message).toContain(`asset ${ids.ball} (assets/ball.prefab.ron) is a`);
   });
 
+  // The session's text of the data asset after a tick 0 edit, which "Save asset" has not written.
+  const edited = `AssetFile(type: "demo::Settings", value: (gravity_scale: 2.0))`;
+
+  it("an_unsaved_asset_survives_switching_documents", async () => {
+    const project = fakeProject();
+    const host = await testHost(undefined, project.answer);
+    const game = await gameWithSession(session("(main)", { assets: [[ids.ball, "(ball)"], [ids.settings, edited]] }));
+    host.setControl(game.control);
+    const { open } = host.editor.document.getState();
+    await open(ids.main);
+    host.editor.document.setState({ unsavedAssets: [ids.settings] });
+
+    await open(ids.ball);
+    expect(host.editor.document.getState().unsavedAssets).toEqual([]);
+    game.sent.length = 0;
+    await open(ids.main);
+
+    const restored = game.sent.find((command) => command.type === "load_session")!;
+    expect(restored.assets).toEqual([
+      [ids.ball, "(ball)"],
+      [ids.settings, edited],
+    ]);
+    expect(host.editor.document.getState().unsavedAssets).toEqual([ids.settings]);
+  });
+
+  it("an_unsaved_asset_survives_closing_and_reopening_the_editor", async () => {
+    const project = fakeProject();
+    const host = await testHost(undefined, project.answer);
+    const game = await gameWithSession(session("(main)", { assets: [[ids.ball, "(ball)"], [ids.settings, edited]] }));
+    host.setControl(game.control);
+    await host.editor.document.getState().open(ids.main);
+    host.editor.document.setState({ unsavedAssets: [ids.settings] });
+    // As closing the editor does.
+    await host.sessions.store();
+
+    const reopened = await testHost(undefined, project.answer);
+    await reopened.editor.document.getState().open(ids.main);
+    expect(reopened.editor.document.getState().unsavedAssets).toEqual([ids.settings]);
+    const next = await gameWithSession(session("(main)"));
+    reopened.setControl(next.control);
+    await vi.waitFor(() => expect(next.sent).toContainEqual({ type: "seek", tick: 2 }));
+
+    expect(next.sent.find((command) => command.type === "load_session")?.assets).toContainEqual([ids.settings, edited]);
+    expect(reopened.editor.document.getState().unsavedAssets).toEqual([ids.settings]);
+  });
+
+  it("an_unsaved_asset_the_disk_lost_is_no_longer_unsaved", async () => {
+    const project = fakeProject();
+    const host = await testHost(undefined, project.answer);
+    project.store(ids.main, {
+      load: { ...session("(main)", { assets: [[ids.created, "(gone)"]] }), type: "load_session", expected: [] },
+      tick: 0,
+      document: ids.main,
+      unsavedAssets: [ids.created],
+    });
+
+    await host.editor.document.getState().open(ids.main);
+
+    expect(host.editor.document.getState().unsavedAssets).toEqual([]);
+  });
+
+  it("a_restored_session_marks_its_unsaved_assets_again", async () => {
+    const project = fakeProject();
+    const host = await testHost(undefined, project.answer);
+    const game = await gameWithSession(session("(main)", { assets: [[ids.ball, "(ball)"], [ids.settings, edited]] }));
+    host.setControl(game.control);
+    await host.editor.document.getState().open(ids.main);
+    host.editor.document.setState({ unsavedAssets: [ids.settings] });
+
+    // A rebuild or a crash: the session exported from the old game goes into a new one.
+    const saved = await host.sessions.export(game.control);
+    expect(saved.unsavedAssets).toEqual([ids.settings]);
+    const next = await gameWithSession(session("(main)"));
+    host.setControl(next.control);
+    expect(host.editor.document.getState().unsavedAssets).toEqual([]);
+    await settle();
+    await host.sessions.restore(next.control, saved);
+
+    expect(next.sent.find((command) => command.type === "load_session")?.assets).toContainEqual([ids.settings, edited]);
+    expect(host.editor.document.getState().unsavedAssets).toEqual([ids.settings]);
+  });
+
   it("broken_asset_error_names_path_line_and_column", async () => {
     const project = fakeProject();
     const log = vi.fn();
