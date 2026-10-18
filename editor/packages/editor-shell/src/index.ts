@@ -19,6 +19,6 @@ export {
 export { DuplicateRegistration } from "./registry";
 export { isEditorKey, isTextField, normalizeShortcut } from "./shortcuts";
 export type { BranchState, BranchStore } from "./stores/branches";
-export type { DocumentState, DocumentStore, OpenDocument } from "./stores/document";
+export type { DocumentState, DocumentStore, Loaded, OpenDocument } from "./stores/document";
 export type { SelectionState, SelectionStore } from "./stores/selection";
 export type { TimelineState, TimelineStore } from "./stores/timeline";

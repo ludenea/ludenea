@@ -66,8 +66,9 @@ function Value(props: FieldProps) {
     case "entity":
       return <EntityField {...props} />;
     case "asset_id":
-    case "handle":
       return <AssetField {...props} />;
+    case "handle":
+      return <AssetField {...props} asset={schema.asset} />;
     case "unit":
     case "unit_struct":
       return null;

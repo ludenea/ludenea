@@ -604,7 +604,7 @@ impl Host {
                 };
                 let session = Session::resume(sim, export, document).map_err(|e| self.fail(e))?;
                 self.load(session);
-                Ok(Reply::Done)
+                Ok(self.loaded())
             }
             Command::GetAsset { id } => {
                 let (asset, value) = asset_value(sim, id).ok_or_else(|| missing_asset(id))?;
@@ -742,6 +742,7 @@ impl Host {
             }
             Command::GetInstances => Ok(Reply::Instances {
                 instances: sim.instances(),
+                load_addresses: load_addresses(sim),
             }),
             Command::ExportReplay { branch } => {
                 let replay = self
@@ -1069,17 +1070,13 @@ impl Host {
         }
     }
 
-    /// What the last scene load of the session reports.
+    /// What the last scene load of the session reports: `LoadScene`, `ReplaceScene`, and
+    /// `LoadSession` answer it.
     fn loaded(&self) -> Reply {
         Reply::Loaded {
             warnings: self.session.warnings().to_vec(),
             instances: self.simulation.instances(),
-            load_addresses: self
-                .simulation
-                .load_addresses()
-                .iter()
-                .map(|(&entity, address)| (entity, address.clone()))
-                .collect(),
+            load_addresses: load_addresses(&self.simulation),
         }
     }
 
@@ -1318,6 +1315,14 @@ fn edit_error(error: &EditError) -> ProtocolError {
 
 fn scene_error(error: SceneError) -> ProtocolError {
     session_error(&error.into())
+}
+
+/// Where each entity of the last scene load came from.
+fn load_addresses(sim: &Simulation) -> Vec<(Entity, Vec<u32>)> {
+    sim.load_addresses()
+        .iter()
+        .map(|(&entity, address)| (entity, address.clone()))
+        .collect()
 }
 
 fn missing_asset(id: AssetId) -> ProtocolError {

@@ -67,6 +67,18 @@
   min-height: 0;
 }
 
+/* Prefab instance groups above the scene tree's entities, never crowding them out. */
+.ludenea-dock .dv-content-container .ludenea-instances {
+  flex: none;
+  max-height: 40%;
+  overflow: auto;
+  padding: 0 var(--space-3);
+}
+
+.ludenea-dock .dv-content-container .ludenea-instances details details {
+  padding-left: var(--space-3);
+}
+
 .ludenea-dock .dv-content-container p {
   margin: var(--space-2) 0;
 }

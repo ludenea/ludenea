@@ -1,4 +1,4 @@
-import type { Entity, FileEntry, JsonValue, PathSegment } from "@ludenea/control-client";
+import type { AssetKind, Entity, FileEntry, JsonValue, PathSegment } from "@ludenea/control-client";
 import type { Editor } from "@ludenea/editor-shell";
 import { useEffect, useState, type ReactNode } from "react";
 import { errorText } from "../../shared";
@@ -119,20 +119,23 @@ export function EntityField({ value, path, editor }: LeafProps & { editor: Edito
   );
 }
 
-/** An asset identifier, picked among the project's files. */
-export function AssetField({ value, path, edit, readOnly, editor }: LeafProps & { editor: Editor }) {
+/** Whether a file of `kind` holds an asset of the type named `asset`. */
+const holds = (kind: AssetKind, asset: string) => (asset === "ludenea::Prefab" ? kind === "Prefab" : typeof kind === "object" && "Data" in kind && kind.Data.type === asset);
+
+/** An asset identifier, picked among the project's files: those holding an `asset` for a handle. */
+export function AssetField({ value, path, edit, readOnly, editor, asset }: LeafProps & { editor: Editor; asset?: string }) {
   const { error, setError, commit } = useCommit(edit, path);
   const [files, setFiles] = useState<FileEntry[]>([]);
   useEffect(() => {
     let current = true;
     editor.project.request({ type: "list_files" }).then(
-      (reply) => current && setFiles(reply.entries),
+      (reply) => current && setFiles(asset === undefined ? reply.entries : reply.entries.filter((file) => holds(file.kind, asset))),
       (failure) => current && setError(errorText(failure)),
     );
     return () => {
       current = false;
     };
-  }, [editor, setError]);
+  }, [editor, setError, asset]);
   const known = files.some((file) => file.id === value);
   return (
     <FieldRow path={path} error={error}>

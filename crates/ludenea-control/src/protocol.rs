@@ -533,8 +533,11 @@ pub enum Reply {
     Placed {
         instance: u32,
     },
+    /// The prefab instances of the scene as it is now, and where each of its entities came
+    /// from.
     Instances {
         instances: Vec<InstanceInfo>,
+        load_addresses: Vec<(Entity, Vec<u32>)>,
     },
     Replay {
         replay: Bytes,

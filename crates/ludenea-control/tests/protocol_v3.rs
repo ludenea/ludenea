@@ -597,9 +597,46 @@ fn text(reply: Reply) -> String {
     }
 }
 
+#[test]
+fn load_session_replies_what_the_scene_load_reports() {
+    let (mut host, loaded) = spawner_host(fs::read_to_string(SPAWNER_SCENE).unwrap());
+    let Reply::Session {
+        scene,
+        saved_scene,
+        inputs,
+        edits,
+        undo,
+        hashes,
+        assets,
+        branches,
+        document,
+        keeps_assets,
+    } = ok(&mut host, Command::ExportSession)
+    else {
+        panic!("export_session replies session");
+    };
+    let mut resumed = Host::new(boxes::app).unwrap();
+    let reply = ok(
+        &mut resumed,
+        Command::LoadSession {
+            scene,
+            saved_scene,
+            inputs,
+            edits,
+            undo,
+            expected: hashes,
+            assets,
+            branches,
+            document,
+            keeps_assets,
+        },
+    );
+    assert_eq!(reply, loaded);
+}
+
 fn instances(host: &mut Host) -> Vec<InstanceInfo> {
     match ok(host, Command::GetInstances) {
-        Reply::Instances { instances } => instances,
+        Reply::Instances { instances, .. } => instances,
         other => panic!("{other:?}"),
     }
 }
@@ -670,6 +707,11 @@ fn place_instance_over_protocol() {
             .any(|info| info.address == [7] && info.prefab == PREFAB)
     );
     assert!(scene_text(&mut host).contains("(id: 7, prefab: \"38b36be4f8a140d695e5cdac24c82f90\""));
+    // The new instance's entities have load addresses at once, without another scene load.
+    let Reply::Instances { load_addresses, .. } = ok(&mut host, Command::GetInstances) else {
+        panic!("get_instances replies instances");
+    };
+    assert!(load_addresses.iter().any(|(_, address)| address == &[7, 0]));
 
     // Instance entities are refused as the entities of a new prefab instance.
     let entity = instance_entity(&mut host, 7);

@@ -919,6 +919,7 @@ type Reply = {
 } | {
     "type": "instances";
     instances: Array<InstanceInfo>;
+    load_addresses: Array<[Entity, Array<number>]>;
 } | {
     "type": "replay";
     replay: Bytes;
@@ -1346,7 +1347,7 @@ type ReplyFor<C extends Command> = C extends {
 } ? Extract<Reply, {
     type: "picked";
 }> : C extends {
-    type: "load_scene" | "replace_scene";
+    type: "load_scene" | "replace_scene" | "load_session";
 } ? Extract<Reply, {
     type: "loaded";
 }> : C extends {
@@ -1354,7 +1355,7 @@ type ReplyFor<C extends Command> = C extends {
 } ? Extract<Reply, {
     type: "asset";
 }> : C extends {
-    type: "save_asset" | "new_asset_value";
+    type: "save_asset" | "new_asset_value" | "create_prefab" | "apply_to_prefab";
 } ? Extract<Reply, {
     type: "text";
 }> : C extends {
@@ -1374,7 +1375,7 @@ type ReplyFor<C extends Command> = C extends {
 } ? Extract<Reply, {
     type: "instances";
 }> : C extends {
-    type: "place_instance";
+    type: "place_instance" | "replace_with_instance";
 } ? Extract<Reply, {
     type: "placed";
 }> : C extends {

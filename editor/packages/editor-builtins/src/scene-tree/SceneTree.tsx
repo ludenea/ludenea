@@ -1,6 +1,7 @@
 import type { ControlClient, EntityRow } from "@ludenea/control-client";
 import { isTextField, type Editor } from "@ludenea/editor-shell";
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { InstanceGroups } from "../prefabs/InstanceGroups";
 import { EntityList, entityKey } from "../shared/EntityList";
 import { errorText, shared, useGame, useStore } from "../shared";
 import { ResimulatingNotice } from "../timeline/editing";
@@ -21,6 +22,8 @@ function Entities({ editor, control, scroll }: { editor: Editor; control: Contro
   const labels = useMemo(() => new Map<string, Cached>(), [control]);
   const playing = editor.timeline((state) => state.playing);
   const [error, setError] = useState<string | null>(null);
+  // A refused scene load (a missing prefab): the previous session stays, and so does this list.
+  const loadError = editor.document((state) => state.error);
   // Delete despawns here and in the viewport only: elsewhere (the asset browser) it means something else.
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key !== "Delete" || isTextField(event.target)) return;
@@ -33,7 +36,13 @@ function Entities({ editor, control, scroll }: { editor: Editor; control: Contro
   return (
     <div className="ludenea-scene-tree" onKeyDown={onKeyDown}>
       <ResimulatingNotice editor={editor} />
+      {loadError && (
+        <p role="alert" className="ludenea-error">
+          {loadError}
+        </p>
+      )}
       {error && <p className="ludenea-error">{error}</p>}
+      <InstanceGroups editor={editor} />
       <EntityList
         editor={editor}
         control={control}

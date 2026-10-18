@@ -68,11 +68,11 @@ export type ReplyFor<C extends Command> = C extends { type: "get_hash" }
                                   ? Extract<Reply, { type: "ghost_draw" }>
                                 : C extends { type: "pick" }
                                   ? Extract<Reply, { type: "picked" }>
-                                  : C extends { type: "load_scene" | "replace_scene" }
+                                  : C extends { type: "load_scene" | "replace_scene" | "load_session" }
                                     ? Extract<Reply, { type: "loaded" }>
                                     : C extends { type: "get_asset" }
                                       ? Extract<Reply, { type: "asset" }>
-                                      : C extends { type: "save_asset" | "new_asset_value" }
+                                      : C extends { type: "save_asset" | "new_asset_value" | "create_prefab" | "apply_to_prefab" }
                                         ? Extract<Reply, { type: "text" }>
                                         : C extends { type: "delete_branch" }
                                           ? Extract<Reply, { type: "deleted" }>
@@ -82,7 +82,7 @@ export type ReplyFor<C extends Command> = C extends { type: "get_hash" }
                                               ? Extract<Reply, { type: "replay" }>
                                               : C extends { type: "get_instances" }
                                                 ? Extract<Reply, { type: "instances" }>
-                                                : C extends { type: "place_instance" }
+                                                : C extends { type: "place_instance" | "replace_with_instance" }
                                                   ? Extract<Reply, { type: "placed" }>
                                                   : C extends { type: "get_divergence" }
                                                     ? Extract<Reply, { type: "divergence" }>

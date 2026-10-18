@@ -1,6 +1,12 @@
-import type { AssetId, Command, ConsoleLevel, ControlClient, FileChange, ProjectClient } from "@ludenea/control-client";
+import type { AssetId, Command, ConsoleLevel, ControlClient, FileChange, ProjectClient, Reply } from "@ludenea/control-client";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import { AssetFailure, locateAssetError } from "../assets";
+
+/** What the game reports about the scene it loaded: stale override warnings, prefab instances, and load addresses. */
+export type Loaded = Extract<Reply, { type: "loaded" }>;
+
+// A host that answers something else (a test double) reports nothing.
+const loadedIn = (reply: Reply): Loaded | null => (reply.type === "loaded" ? reply : null);
 
 /** The file the game's session edits or plays. */
 export interface OpenDocument {
@@ -14,6 +20,10 @@ export interface DocumentState {
   current: OpenDocument | null;
   /** The open scene or prefab as last loaded, replaced, or saved: what each new game loads. Null for a replay. */
   text: string | null;
+  /** What the game's last load of the open scene or prefab reported; null for a replay or without a game. */
+  loaded: Loaded | null;
+  /** Why the last open, reload, or load into a new game was refused (the previous document and session stay); null once one succeeds. */
+  error: string | null;
   /**
    * Stores the current session under `.ludenea/`, then loads the document `id` with the
    * project's asset texts and restores its stored session, if any. Without a game, the next
@@ -99,9 +109,10 @@ function simulated(control: ControlClient, tick: number): Promise<void> {
  * it resimulates. Send it after the game's `LoadScene` (which the document store sends to
  * every new game), so the restored session is what stays loaded.
  */
-export async function restoreSession(control: ControlClient, saved: SavedSession, tick = saved.tick): Promise<void> {
-  await control.request(saved.load);
+export async function restoreSession(control: ControlClient, saved: SavedSession, tick = saved.tick): Promise<Loaded | null> {
+  const loaded = await control.request(saved.load);
   await returnTo(control, saved, tick);
+  return loadedIn(loaded);
 }
 
 /** Seeks back to `tick` once the loaded `saved` is resimulated that far, within what it recorded. */
@@ -153,17 +164,19 @@ export function createDocumentStore(options: {
   /** Logs `error` in the console, located in the asset at fault, and rethrows it. */
   const reported = (what: string) => (error: unknown) => {
     const text = `${what}: ${error instanceof Error ? error.message : String(error)}`;
+    store.setState({ error: text });
     log("error", text, error instanceof AssetFailure ? { file: error.path, line: error.line, column: error.column } : undefined);
     throw error;
   };
 
   const readTexts = () => project.request({ type: "read_asset_texts" }).then(({ assets, paths }) => ({ assets, paths }));
-  const load = (game: ControlClient, document: OpenDocument, text: string | null, source: { texts: typeof texts; replay: string }): Promise<unknown> => {
+  // A replay's load reports no scene load: null.
+  const load = (game: ControlClient, document: OpenDocument, text: string | null, source: { texts: typeof texts; replay: string }): Promise<Loaded | null> => {
     const command: Command =
       document.kind === "replay"
         ? { type: "load_replay", replay: source.replay }
         : { type: "load_scene", scene: text!, assets: source.texts.assets, document: document.kind === "prefab" ? "Prefab" : "Scene" };
-    return game.request(command).catch(locatedIn(source.texts.paths));
+    return game.request(command).then(loadedIn, locatedIn(source.texts.paths));
   };
   const storeIn = (document: OpenDocument, saved: SavedSession) =>
     project.request({ type: "store_session", document: document.id, bytes: encode(saved) }).then(() => {});
@@ -192,6 +205,8 @@ export function createDocumentStore(options: {
   const store: DocumentStore = create<DocumentState>()((set, get) => ({
     current: null,
     text: null,
+    loaded: null,
+    error: null,
     open: (id) => {
       // The file once known, for the console.
       let name = `the document ${id}`;
@@ -215,14 +230,15 @@ export function createDocumentStore(options: {
           else ({ text } = await project.request({ type: "read_text", path: entry.path }));
           const saved = await stored(document);
           const restoring = saved && refreshed(saved, text, fresh.assets);
-          if (game) await load(game, document, text, { texts: fresh, replay: bytes });
+          const loaded = game ? await load(game, document, text, { texts: fresh, replay: bytes }) : null;
           // Only what the game accepted is kept: a refused document leaves the previous one.
           texts = fresh;
           replay = bytes;
-          set({ current: document, text });
+          // A stored session's load reports what stays loaded: the scene load's report is not kept.
+          set({ current: document, text, loaded: game && restoring ? null : loaded, error: null });
           pending = game ? null : restoring;
           if (!game) return;
-          if (restoring) await restoreSession(game, restoring).catch(locatedIn(texts.paths));
+          if (restoring) set({ loaded: await restoreSession(game, restoring).catch(locatedIn(texts.paths)) });
           await nameRoot(game, document);
         } finally {
           opening = false;
@@ -232,9 +248,10 @@ export function createDocumentStore(options: {
     replace: (text) =>
       serial(async () => {
         const fresh = await readTexts();
-        await control()?.request({ type: "replace_scene", scene: text, assets: fresh.assets }).catch(locatedIn(fresh.paths));
+        const game = control();
+        const loaded = game && (await game.request({ type: "replace_scene", scene: text, assets: fresh.assets }).catch(locatedIn(fresh.paths)));
         texts = fresh;
-        set({ text });
+        set({ text, error: null, ...(loaded && { loaded: loadedIn(loaded) }) });
       }).catch(reported("Cannot reload the scene")),
     store: () => sessions.store(),
   }));
@@ -253,7 +270,7 @@ export function createDocumentStore(options: {
       if (document && game) {
         const exported = await exportSession(game);
         saved = { ...exported, load: { ...exported.load, assets: fresh.assets } };
-        await game.request(saved.load).catch(locatedIn(fresh.paths));
+        store.setState({ loaded: loadedIn(await game.request(saved.load).catch(locatedIn(fresh.paths))), error: null });
       }
       texts = fresh;
       return game && saved && { game, saved };
@@ -284,7 +301,10 @@ export function createDocumentStore(options: {
     const loaded = load(game, document, store.getState().text, { texts, replay });
     const restored = saved ? restoreSession(game, saved).catch(locatedIn(texts.paths)) : null;
     Promise.all([loaded, restored])
-      .then(() => nameRoot(game, document))
+      .then(([first, second]) => {
+        store.setState({ loaded: second ?? first, error: null });
+        return nameRoot(game, document);
+      })
       .catch(reported(`Cannot load ${document.path} into the game`))
       .catch(() => {});
   });
