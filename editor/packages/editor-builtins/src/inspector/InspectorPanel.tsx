@@ -1,4 +1,4 @@
-import { ProtocolFailure, type AssetId, type ComponentValue, type ControlClient, type Entity, type FieldTarget, type JsonValue, type PathSegment, type TypeSchema } from "@ludenea/control-client";
+import { ProtocolFailure, type AssetId, type ComponentValue, type ControlClient, type Entity, type FieldTarget, type JsonValue, type PathSegment, type Timeline, type TypeSchema } from "@ludenea/control-client";
 import type { Editor } from "@ludenea/editor-shell";
 import { useEffect, useMemo, useState } from "react";
 import { errorText, useGame, useStore } from "../shared";
@@ -40,7 +40,7 @@ function Inspector({ editor, control, state }: { editor: Editor; control: Contro
   return (
     <div className="ludenea-inspector">
       <ResimulatingNotice editor={editor} />
-      {asset && <DataAsset editor={editor} control={control} id={asset} state={state} />}
+      {asset && <DataAsset editor={editor} control={control} id={asset} />}
       {entity && (
         <>
           <h2>
@@ -86,15 +86,18 @@ function Inspector({ editor, control, state }: { editor: Editor; control: Contro
  * The selected data asset, edited through its schema. At tick 0 an edit changes the asset's
  * text, to save explicitly; later it is a recorded edit, which "Apply to asset" copies back.
  */
-function DataAsset({ editor, control, id, state }: { editor: Editor; control: ControlClient; id: AssetId; state: InspectorState }) {
+function DataAsset({ editor, control, id }: { editor: Editor; control: ControlClient; id: AssetId }) {
   const tick = editor.timeline((timeline) => timeline.timeline?.current ?? 0);
-  const unsaved = useStore(state).unsaved.includes(id);
+  const changes = editor.timeline(({ timeline }) => assetChanges(timeline));
+  const reloaded = editor.document((document) => document.loaded);
+  const unsaved = editor.document((document) => document.unsavedAssets.includes(id));
   const resimulating = useResimulating(editor);
   const [asset, setAsset] = useState<{ asset: string; value: ComponentValue } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
 
-  // Past tick 0 the value is the one at the current tick.
+  // What may change the value: an edit, undo or redo, a branch switch, a seek across an edit
+  // tick, or a reload of the session; not every tick played.
   useEffect(() => {
     let current = true;
     control.request({ type: "get_asset", id }).then(
@@ -108,12 +111,12 @@ function DataAsset({ editor, control, id, state }: { editor: Editor; control: Co
     return () => {
       current = false;
     };
-  }, [control, id, tick, version]);
+  }, [control, id, changes, reloaded, version]);
 
   const setField: Edit = async (path, value) => {
     const atStart = (editor.timeline.getState().timeline?.current ?? 0) === 0;
     await edit(editor, control, { type: "set_asset_field", id, path, value });
-    if (atStart) markUnsaved(state, id);
+    if (atStart) markUnsaved(editor, id, true);
     setVersion((version) => version + 1);
   };
   const run = (command: string) => () =>
@@ -139,6 +142,19 @@ function DataAsset({ editor, control, id, state }: { editor: Editor; control: Co
       {asset && <Section editor={editor} name={asset.asset} value={asset.value} schema={schema ?? undefined} edit={setField} readOnly={resimulating} />}
     </>
   );
+}
+
+/**
+ * A text that changes with what the timeline reports that can change a data asset's value at
+ * the current tick: the edits before it (an edit applies at the start of the next tick, so
+ * both sides of each edit tick count), undo and redo, and the branch.
+ */
+function assetChanges(timeline: Timeline | null): string {
+  if (!timeline) return "";
+  const { current, edit_ticks, undo_label, redo_label, branch } = timeline;
+  const before = edit_ticks.filter((tick) => tick < current).length;
+  const upTo = edit_ticks.filter((tick) => tick <= current).length;
+  return JSON.stringify([current === 0, before, upTo, edit_ticks, undo_label, redo_label, branch]);
 }
 
 /** The selected entity's components, reloaded when the host reports a change. */

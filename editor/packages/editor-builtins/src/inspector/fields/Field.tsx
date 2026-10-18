@@ -13,6 +13,8 @@ export interface FieldProps {
   editor: Editor;
   /** The component the value belongs to; only its fields get the plugins' decorations. */
   owner?: { entity: Entity; component: string };
+  /** The value a new list item, a set option, or a chosen variant's content starts from; the type's default value by default. */
+  seed?: (schema: TypeSchema) => JsonValue;
 }
 
 const field = (name: string): PathSegment => ({ type: "field", name });
@@ -127,7 +129,7 @@ function Items(props: FieldProps & { schemas: TypeSchema[] }) {
 
 /** Indexed rows, plus adding and removing elements by sending the whole list. */
 function ListField(props: FieldProps & { item: TypeSchema }) {
-  const { path, edit, readOnly, item } = props;
+  const { path, edit, readOnly, item, seed = defaultValue } = props;
   const items = props.value as JsonValue[];
   const { error, commit } = useCommit(edit, path);
   return (
@@ -142,19 +144,20 @@ function ListField(props: FieldProps & { item: TypeSchema }) {
           )}
         </div>
       ))}
-      {!readOnly && <button onClick={() => commit([...items, defaultValue(item)])}>Add item</button>}
+      {!readOnly && <button onClick={() => commit([...items, seed(item)])}>Add item</button>}
       {error && <p className="ludenea-error">{error}</p>}
     </Group>
   );
 }
 
+// `Some` of an unset value would read as `None`: an option of a plain value is set to its default.
 function OptionField(props: FieldProps & { item: TypeSchema }) {
-  const { value, path, edit, readOnly, item } = props;
+  const { value, path, edit, readOnly, item, seed = defaultValue } = props;
   const { error, commit } = useCommit(edit, path);
   if (value === null) {
     return (
       <FieldRow path={path} error={error}>
-        <span className="ludenea-muted">None</span> {!readOnly && <button onClick={() => commit(defaultValue(item))}>Set</button>}
+        <span className="ludenea-muted">None</span> {!readOnly && <button onClick={() => commit(seed(item) ?? defaultValue(item))}>Set</button>}
       </FieldRow>
     );
   }
@@ -173,7 +176,7 @@ function OptionField(props: FieldProps & { item: TypeSchema }) {
 
 /** A variant select, then the variant's content under the field named after it. */
 function EnumField(props: FieldProps & { schema: Extract<TypeSchema, { kind: "enum" }> }) {
-  const { schema, value, path, edit, readOnly } = props;
+  const { schema, value, path, edit, readOnly, seed } = props;
   const { error, commit } = useCommit(edit, path);
   // A unit variant is its name; any other is `{ name: content }`; anything else picks none.
   const name = typeof value === "string" ? value : typeof value === "object" && value !== null ? Object.keys(value)[0] : undefined;
@@ -190,7 +193,7 @@ function EnumField(props: FieldProps & { schema: Extract<TypeSchema, { kind: "en
           disabled={readOnly}
           onChange={(event) => {
             const next = schema.variants.find((candidate) => candidate.name === event.target.value);
-            if (next) commit(variantValue(next));
+            if (next) commit(variantValue(next, seed));
           }}
         >
           {name === undefined && (

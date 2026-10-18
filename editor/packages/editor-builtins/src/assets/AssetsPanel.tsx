@@ -5,7 +5,7 @@ import { setAt } from "../inspector/default-value";
 import { Field } from "../inspector/fields/Field";
 import { ASSET_FOLDERS, errorText, useGame, useKeptScroll, useStore } from "../shared";
 import { kindName, type Action, type Assets, type KindName, type NewData } from "./index";
-import { isComplete } from "./value";
+import { emptyValue, isComplete } from "./value";
 
 const ICONS: { [kind in KindName]: string } = { Scene: "▣", Prefab: "◇", Data: "≡", Replay: "▶", Trace: "∿", Snapshot: "◉", Other: "·" };
 const KINDS = Object.keys(ICONS) as KindName[];
@@ -237,7 +237,7 @@ function NewDataForm({ editor, creating, assets, attempt }: { editor: Editor; cr
         <p>
           {creating.type} has no default value: fill in every field.
         </p>
-        <Field schema={value.schema} value={value.draft} path={[]} edit={edit} readOnly={false} editor={editor} />
+        <Field schema={value.schema} value={value.draft} path={[]} edit={edit} readOnly={false} editor={editor} seed={emptyValue} />
         <button aria-label={`Create ${creating.path}`} disabled={!isComplete(value.schema, value.draft)} onClick={() => attempt(assets.create())}>
           Create
         </button>

@@ -10,11 +10,8 @@ import { InspectorPanel } from "./InspectorPanel";
  */
 export type AddDraft = { chosen: string; draft: { component: string; value: JsonValue } | null; error: string | null };
 
-/**
- * What the inspector's commands and panel share; kept here while the panel is hidden.
- * `unsaved`: the data assets whose text the session changed (a tick 0 edit, "Apply to asset") since saved.
- */
-export type InspectorState = Store<{ focused: string | null; adding: AddDraft | null; unsaved: AssetId[] }>;
+/** What the inspector's commands and panel share; kept here while the panel is hidden. */
+export type InspectorState = Store<{ focused: string | null; adding: AddDraft | null }>;
 
 /** Runs a request on the selection; `NoSuchEntity` (seeked before its spawn) clears the selection. */
 export async function onEntity<T>(editor: Editor, request: Promise<T>): Promise<T> {
@@ -29,7 +26,7 @@ export async function onEntity<T>(editor: Editor, request: Promise<T>): Promise<
 export const inspectorPlugin = definePlugin({
   name: "ludenea.inspector",
   activate(editor) {
-    const state: InspectorState = createStore({ focused: null as string | null, adding: null as AddDraft | null, unsaved: [] as AssetId[] });
+    const state: InspectorState = createStore({ focused: null as string | null, adding: null as AddDraft | null });
     const target = () => {
       const control = editor.control;
       if (!control) throw new Error("no game is running");
@@ -83,7 +80,7 @@ export const inspectorPlugin = definePlugin({
       async run() {
         const { control, id } = selectedAsset();
         await edit(editor, control, { type: "apply_to_asset", id });
-        markUnsaved(state, id);
+        markUnsaved(editor, id, true);
       },
     });
     editor.commands.register({
@@ -95,9 +92,15 @@ export const inspectorPlugin = definePlugin({
         const { entries } = await editor.project.request({ type: "list_files" });
         const path = entries.find((file) => file.id === id)?.path;
         if (!path) throw new Error(`no project file has the identifier ${id}`);
-        // The shell reloads the session's assets from the written file.
-        await editor.project.request({ type: "write_text", path, text });
-        state.set({ unsaved: state.get().unsaved.filter((other) => other !== id) });
+        // Saved before the write: the watcher's reload of the written file may come first.
+        markUnsaved(editor, id, false);
+        try {
+          // The shell reloads the session's assets from the written file.
+          await editor.project.request({ type: "write_text", path, text });
+        } catch (error) {
+          markUnsaved(editor, id, true);
+          throw error;
+        }
       },
     });
     editor.panels.register({
@@ -109,7 +112,9 @@ export const inspectorPlugin = definePlugin({
   },
 });
 
-export function markUnsaved(state: InspectorState, id: AssetId): void {
-  const { unsaved } = state.get();
-  if (!unsaved.includes(id)) state.set({ unsaved: [...unsaved, id] });
+/** Marks the data asset `id` as differing from its file, or not. */
+export function markUnsaved(editor: Editor, id: AssetId, unsaved: boolean): void {
+  const { unsavedAssets } = editor.document.getState();
+  const others = unsavedAssets.filter((other) => other !== id);
+  editor.document.setState({ unsavedAssets: unsaved ? [...others, id] : others });
 }

@@ -42,18 +42,18 @@ export function defaultValue(schema: TypeSchema): JsonValue {
   }
 }
 
-/** A variant in serde's externally tagged form: its name alone, or `{ name: content }`. */
-export function variantValue(variant: VariantSchema): JsonValue {
+/** A variant in serde's externally tagged form: its name alone, or `{ name: content }`, the content from `seed`. */
+export function variantValue(variant: VariantSchema, seed: (schema: TypeSchema) => JsonValue = defaultValue): JsonValue {
   const { fields } = variant;
   switch (fields.kind) {
     case "unit":
       return variant.name;
     case "newtype":
-      return { [variant.name]: defaultValue(fields.item) };
+      return { [variant.name]: seed(fields.item) };
     case "tuple":
-      return { [variant.name]: fields.items.map(defaultValue) };
+      return { [variant.name]: fields.items.map(seed) };
     case "struct":
-      return { [variant.name]: Object.fromEntries(fields.fields.map((field) => [field.name, defaultValue(field.schema)])) };
+      return { [variant.name]: Object.fromEntries(fields.fields.map((field) => [field.name, seed(field.schema)])) };
   }
 }
 

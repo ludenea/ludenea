@@ -1,4 +1,4 @@
-import type { AssetKind, FileChange, FileEntry, JsonValue, TypeSchema } from "@ludenea/control-client";
+import type { AssetId, AssetKind, FileChange, FileEntry, JsonValue, TypeSchema } from "@ludenea/control-client";
 import { definePlugin, type Editor } from "@ludenea/editor-shell";
 import { createStore, errorText, shared, showPanel, type Scroll, type Store } from "../shared";
 import { AssetsPanel, baseName } from "./AssetsPanel";
@@ -26,8 +26,8 @@ export interface AssetsState {
   action: Action | null;
   menu: string | null;
   creating: NewData | null;
-  /** The open document changed on disk while it had unsaved edits. */
-  banner: { path: string; text: string } | null;
+  /** The open document, or a data asset, changed on disk while it had unsaved edits. */
+  banner: { path: string; text: string } | { path: string; asset: AssetId } | null;
   error: string | null;
   /** Why the files could not be listed. */
   listError: string | null;
@@ -91,7 +91,7 @@ export const assetsPlugin = definePlugin({
         if (!entry) throw new Error(`no project file is at ${path}`);
         const kind = kindName(entry.kind);
         // Registered by the divergence viewer.
-        if (kind === "Trace" || kind === "Snapshot") return editor.commands.run("divergence.open-file", path);
+        if (kind === "Trace" || kind === "Snapshot") return editor.commands.run("divergence.open-file", { path });
         if (kind === "Data") {
           editor.selection.getState().selectAsset(entry.id);
           return showPanel(editor, "ludenea.inspector");
@@ -146,7 +146,11 @@ export const assetsPlugin = definePlugin({
       async reload() {
         const { banner } = state.get();
         state.set({ banner: null });
-        if (banner) await replace(banner.text);
+        if (!banner) return;
+        if ("text" in banner) return replace(banner.text);
+        const { unsavedAssets } = documents.getState();
+        documents.setState({ unsavedAssets: unsavedAssets.filter((id) => id !== banner.asset) });
+        await documents.getState().reloadAssets();
       },
       keepMine: () => state.set({ banner: null }),
     };
@@ -162,6 +166,12 @@ export const assetsPlugin = definePlugin({
     let info = project.get().info;
     const stops = [
       editor.project.on("files_changed", ({ changes }) => {
+        // The shell's reload keeps an unsaved data asset's text: the user picks which stays.
+        const { unsavedAssets } = documents.getState();
+        for (const change of changes) {
+          const id = state.get().files.find((file) => file.path === changedPath(change))?.id;
+          if (id && unsavedAssets.includes(id)) state.set({ banner: { path: changedPath(change)!, asset: id } });
+        }
         void refresh();
         const open = documents.getState().current?.path;
         if (!open) return;

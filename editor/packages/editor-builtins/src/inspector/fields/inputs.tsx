@@ -47,10 +47,11 @@ export function FieldRow({ path, error, children }: { path: PathSegment[]; error
 const shown = (value: JsonValue) => (value === null ? "" : String(value));
 
 /** An input committing its text on blur or Enter, and only when the text changed. */
-function TextInput(props: { text: string; path: PathSegment[]; readOnly: boolean; type?: "text" | "number"; step?: number | "any"; onCommit(text: string): void }) {
-  const { text, path, readOnly, type = "text", step, onCommit } = props;
+function TextInput(props: { text: string; path: PathSegment[]; readOnly: boolean; type?: "text" | "number"; step?: number | "any"; unset?: boolean; onCommit(text: string): void }) {
+  const { text, path, readOnly, type = "text", step, unset = false, onCommit } = props;
+  // An unset value takes even the text it shows (an empty string).
   const commit = (next: string) => {
-    if (next !== text) onCommit(next);
+    if (next !== text || unset) onCommit(next);
   };
   return (
     <input
@@ -96,7 +97,7 @@ export function StringField({ value, path, edit, readOnly }: LeafProps) {
   const { error, commit } = useCommit(edit, path);
   return (
     <FieldRow path={path} error={error}>
-      <TextInput text={shown(value)} path={path} readOnly={readOnly} onCommit={commit} />
+      <TextInput unset={value === null} text={shown(value)} path={path} readOnly={readOnly} onCommit={commit} />
     </FieldRow>
   );
 }

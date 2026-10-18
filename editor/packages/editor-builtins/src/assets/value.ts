@@ -3,6 +3,7 @@ import type { JsonValue, TypeSchema } from "@ludenea/control-client";
 /**
  * A value of `schema` for the user to fill: every number, string, asset, and enum is `null`
  * (unset) until given; booleans, options, lists, and maps start valid (false, None, empty).
+ * Also what a new list item, a set option, or a chosen variant's content starts from.
  */
 export function emptyValue(schema: TypeSchema): JsonValue {
   switch (schema.kind) {
@@ -33,9 +34,10 @@ export function isComplete(schema: TypeSchema, value: JsonValue): boolean {
   switch (schema.kind) {
     case "unit":
     case "unit_struct":
-    case "option":
     case "map":
       return true;
+    case "option":
+      return value === null || isComplete(schema.item, value);
     case "list":
     case "array":
       return (value as JsonValue[]).every((item) => isComplete(schema.item, item));
@@ -61,7 +63,13 @@ export function isComplete(schema: TypeSchema, value: JsonValue): boolean {
   }
 }
 
-const float = (value: JsonValue) => (Number.isInteger(value) ? (value as number).toFixed(1) : String(value));
+// RON's spelling of the floats JSON cannot carry, should a value hold one.
+const float = (value: JsonValue) => {
+  const number = value as number;
+  if (Number.isNaN(number)) return "NaN";
+  if (!Number.isFinite(number)) return number > 0 ? "inf" : "-inf";
+  return Number.isInteger(number) ? number.toFixed(1) : String(number);
+};
 const joined = (items: string[]) => items.join(", ");
 
 /** `value` (in the host's JSON form, complete) as the RON text of a data asset file. */

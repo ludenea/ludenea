@@ -25,6 +25,13 @@ export interface DocumentState {
   loaded: Loaded | null;
   /** The open replay was recorded with other game types (its schema fingerprint differs); false for a scene or prefab. */
   fingerprintDiffers: boolean;
+  /**
+   * The data assets whose text in the session differs from their file (a tick 0 edit, "Apply
+   * to asset"): plugins add an asset when they change it and remove it when they save it.
+   * Reloading changed assets keeps their session text. Emptied when a document opens or loads
+   * into a new game (both load the files' texts).
+   */
+  unsavedAssets: AssetId[];
   /** Why the last open, reload, or load into a new game was refused (the previous document and session stay); null once one succeeds. */
   error: string | null;
   /**
@@ -35,6 +42,8 @@ export interface DocumentState {
   open(id: AssetId): Promise<void>;
   /** Replaces the open scene or prefab with `text` (a change on disk), with the project's asset texts: the session replays. */
   replace(text: string): Promise<void>;
+  /** Reloads the project's prefab and data asset texts into the session, keeping its edits and the text of each unsaved asset. */
+  reloadAssets(): Promise<void>;
   /** Stores the game's session as the open document's, as `open` does before loading another. */
   store(): Promise<void>;
 }
@@ -209,6 +218,7 @@ export function createDocumentStore(options: {
     text: null,
     loaded: null,
     fingerprintDiffers: false,
+    unsavedAssets: [],
     error: null,
     open: (id) => {
       // The file once known, for the console.
@@ -239,7 +249,7 @@ export function createDocumentStore(options: {
           texts = fresh;
           replay = bytes;
           // A stored session's load reports what stays loaded: the scene load's report is not kept.
-          set({ current: document, text, loaded: game && restoring ? null : loaded, fingerprintDiffers: differs(reply), error: null });
+          set({ current: document, text, loaded: game && restoring ? null : loaded, fingerprintDiffers: differs(reply), unsavedAssets: [], error: null });
           pending = game ? null : restoring;
           if (!game) return;
           if (restoring) set({ loaded: await restoreSession(game, restoring).catch(locatedIn(texts.paths)) });
@@ -257,13 +267,15 @@ export function createDocumentStore(options: {
         texts = fresh;
         set({ text, error: null, ...(loaded && { loaded: loadedIn(loaded) }) });
       }).catch(reported("Cannot reload the scene")),
+    reloadAssets: () => reloadAssets(),
     store: () => sessions.store(),
   }));
 
   // A prefab or data asset changed on disk: the open scene or prefab reloads with it. The
   // session goes back with the new texts as a whole (`ReplaceScene` would mark unsaved scene
-  // edits saved): it keeps its edits, history, branches, and unsaved state, and replays.
-  // Refused, the game keeps the previous session and the previous texts stay.
+  // edits saved): it keeps its edits, history, branches, and unsaved state, and replays. An
+  // unsaved asset keeps its session text over the file's. Refused, the game keeps the
+  // previous session and the previous texts stay.
   const reloadAssets = async () => {
     const reloaded = await serial(async () => {
       const document = store.getState().current;
@@ -273,8 +285,13 @@ export function createDocumentStore(options: {
       let saved: SavedSession | null = null;
       if (document && game) {
         const exported = await exportSession(game);
-        saved = { ...exported, load: { ...exported.load, assets: fresh.assets } };
-        store.setState({ loaded: loadedIn(await game.request(saved.load).catch(locatedIn(fresh.paths))), error: null });
+        const unsaved = store.getState().unsavedAssets;
+        const kept = new Map(exported.load.assets.filter(([id]) => unsaved.includes(id)));
+        const assets = fresh.assets.map(([id, text]): [AssetId, string] => [id, kept.get(id) ?? text]);
+        saved = { ...exported, load: { ...exported.load, assets } };
+        const loaded = loadedIn(await game.request(saved.load).catch(locatedIn(fresh.paths)));
+        // An unsaved asset the session no longer holds has nothing left to save.
+        store.setState({ loaded, unsavedAssets: store.getState().unsavedAssets.filter((id) => kept.has(id) || !unsaved.includes(id)), error: null });
       }
       texts = fresh;
       return game && saved && { game, saved };
@@ -306,7 +323,7 @@ export function createDocumentStore(options: {
     const restored = saved ? restoreSession(game, saved).catch(locatedIn(texts.paths)) : null;
     Promise.all([loaded, restored])
       .then(([first, second]) => {
-        store.setState({ loaded: second ?? loadedIn(first), fingerprintDiffers: differs(first), error: null });
+        store.setState({ loaded: second ?? loadedIn(first), fingerprintDiffers: differs(first), unsavedAssets: [], error: null });
         return nameRoot(game, document);
       })
       .catch(reported(`Cannot load ${document.path} into the game`))
