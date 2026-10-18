@@ -7,8 +7,8 @@ import { Introspection, type IntrospectionTab } from "./Introspection";
 
 const TABS = ["Entities", "Schedule", "Events", "Commands"] as const;
 export type Tab = (typeof TABS)[number];
-/** The shown tab and the entity query as typed and as applied. */
-export type ExplorerState = Store<{ tab: Tab; text: string; filter: string }>;
+/** The shown tab, the entity query as typed and as applied, and the list's scroll position. */
+export type ExplorerState = Store<{ tab: Tab; text: string; filter: string; scroll: { top: number } }>;
 
 export function ExplorerPanel({ editor, state }: { editor: Editor; state: ExplorerState }) {
   const control = useGame(editor);
@@ -33,7 +33,7 @@ export function ExplorerPanel({ editor, state }: { editor: Editor; state: Explor
 
 /** The entities matching a query written like the code, such as `With<Body>, Without<Dead>`. */
 function Entities({ editor, control, state }: { editor: Editor; control: ControlClient; state: ExplorerState }) {
-  const { text, filter } = useStore(state);
+  const { text, filter, scroll } = useStore(state);
   const [error, setError] = useState<string | null>(null);
   return (
     <div className="ludenea-entities">
@@ -57,6 +57,7 @@ function Entities({ editor, control, state }: { editor: Editor; control: Control
           filter={filter}
           label="Matching entities"
           onError={setError}
+          scroll={scroll}
           row={(row) => (
             <>
               <span className="ludenea-mono">{entityKey(row.entity)}</span> <code className="ludenea-muted">{row.hash}</code>

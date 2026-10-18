@@ -9,15 +9,15 @@ const LABEL_COMPONENTS = 3;
 
 const shortName = (name: string) => name.split("::").at(-1)!;
 
-export function SceneTree({ editor }: { editor: Editor }) {
+export function SceneTree({ editor, scroll }: { editor: Editor; scroll: { top: number } }) {
   const control = useGame(editor);
   const { build } = useStore(shared(editor).project);
   if (!control) return <p className="ludenea-muted">{build.status === "building" ? "Building the game..." : "No game is running."}</p>;
-  return <Entities editor={editor} control={control} />;
+  return <Entities editor={editor} control={control} scroll={scroll} />;
 }
 
 /** Every entity of the current tick, each labelled by its first components. */
-function Entities({ editor, control }: { editor: Editor; control: ControlClient }) {
+function Entities({ editor, control, scroll }: { editor: Editor; control: ControlClient; scroll: { top: number } }) {
   const labels = useMemo(() => new Map<string, Cached>(), [control]);
   const playing = editor.timeline((state) => state.playing);
   const [error, setError] = useState<string | null>(null);
@@ -40,6 +40,7 @@ function Entities({ editor, control }: { editor: Editor; control: ControlClient 
         filter=""
         label="Entities"
         onError={setError}
+        scroll={scroll}
         row={(row) => (
           <>
             <Label control={control} row={row} labels={labels} playing={playing} /> <span className="ludenea-muted ludenea-mono">{entityKey(row.entity)}</span>

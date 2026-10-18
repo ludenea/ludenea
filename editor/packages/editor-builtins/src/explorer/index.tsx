@@ -6,7 +6,7 @@ export const explorerPlugin = definePlugin({
   name: "ludenea.explorer",
   activate(editor) {
     // Kept here, not in the panel: the shell unmounts a panel while its tab is hidden.
-    const state: ExplorerState = createStore({ tab: "Entities" as Tab, text: "", filter: "" });
+    const state: ExplorerState = createStore({ tab: "Entities" as Tab, text: "", filter: "", scroll: { top: 0 } });
     editor.panels.register({
       id: "ludenea.explorer",
       title: "Explorer",

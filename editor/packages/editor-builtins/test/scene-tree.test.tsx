@@ -153,4 +153,17 @@ describe("scene tree", () => {
     await settle();
     expect(despawns()).toEqual([{ type: "despawn", entity: entity(1) }]);
   });
+
+  it("scroll_position_survives_hiding_the_panel", async () => {
+    const { host } = await sceneTree();
+    const list = () => document.querySelector(".ludenea-entity-list") as HTMLElement;
+    list().scrollTop = 440;
+    fireEvent.scroll(list());
+
+    // The shell unmounts a panel while its tab is hidden.
+    cleanup();
+    renderPanel(host, "ludenea.scene-tree");
+    await settle();
+    expect(list().scrollTop).toBe(440);
+  });
 });

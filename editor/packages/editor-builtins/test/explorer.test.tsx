@@ -79,4 +79,19 @@ describe("explorer", () => {
     await settle();
     expect(sent()).toEqual(["subscribe", "unsubscribe"]);
   });
+
+  it("scroll_position_survives_hiding_the_panel", async () => {
+    const { host } = await explorer(1000);
+    const list = () => document.querySelector(".ludenea-entity-list") as HTMLElement;
+    list().scrollTop = 2200;
+    fireEvent.scroll(list());
+    await settle();
+
+    cleanup();
+    renderPanel(host, "ludenea.explorer");
+    await settle();
+    expect(list().scrollTop).toBe(2200);
+    // Row 100 is at the top, after ten rows of overscan.
+    expect(screen.getAllByRole("option")[0]!.textContent).toMatch(/^90v0 /);
+  });
 });

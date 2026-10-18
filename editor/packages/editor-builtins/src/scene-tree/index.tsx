@@ -33,6 +33,8 @@ export const sceneTreePlugin = definePlugin({
       },
     });
     editor.shortcuts.register({ key: "Mod+S", command: "scene.save" });
-    editor.panels.register({ id: "ludenea.scene-tree", title: "Scene", defaultPosition: "left", component: SceneTree });
+    // Kept here, not in the panel: the shell unmounts a panel while its tab is hidden.
+    const scroll = { top: 0 };
+    editor.panels.register({ id: "ludenea.scene-tree", title: "Scene", defaultPosition: "left", component: ({ editor }) => <SceneTree editor={editor} scroll={scroll} /> });
   },
 });
