@@ -246,3 +246,20 @@ fn io_error(path: &Path, source: io::Error) -> ProjectError {
         source,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn open_unfollowed_refuses_a_symbolic_link() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target = dir.path().join("target.txt");
+        fs::write(&target, "outside").unwrap();
+        let link = dir.path().join("link.txt");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(open_unfollowed(&target).is_ok());
+        assert!(open_unfollowed(&link).is_err());
+    }
+}
