@@ -441,3 +441,43 @@ fn prefab_document_refuses_resources() {
         Err(SessionError::PrefabHasNoResources)
     ));
 }
+
+#[test]
+fn undo_keeps_loads_a_later_edit_at_the_tick_needs() {
+    let mut sim = simulation();
+    let scene = boxes::generate_scene(10, 3);
+    let mut session = Session::start(&mut sim, scene, assets(), Document::Scene).unwrap();
+    play(&mut session, &mut sim, 10);
+    let spawner = component(
+        &sim,
+        "boxes::Spawner",
+        json!({ "prefab": PREFAB.to_string(), "stats": STATS.to_string() }),
+    );
+    let spawn = Edit::Spawn {
+        components: vec![("boxes::Spawner".to_string(), spawner.clone())],
+    };
+    session.edit(&mut sim, spawn).unwrap();
+    play(&mut session, &mut sim, 5);
+    // A second spawner at the same tick forks a branch and needs no load of its own.
+    session.seek(&mut sim, 10).unwrap();
+    let insert = Edit::Insert {
+        entity: EntityRef::Loaded(vec![0]),
+        component: "boxes::Spawner".to_string(),
+        value: spawner,
+    };
+    session.edit(&mut sim, insert.clone()).unwrap();
+    assert_eq!(edits(&session).len(), 4);
+    // New inputs flatten the tree: the fork's undo entry goes, the spawn's stays.
+    let inputs = InputLog::decode(&session.export().unwrap().inputs).unwrap();
+    session.load_inputs(&mut sim, inputs).unwrap();
+    resimulate_all(&mut session, &mut sim);
+
+    session.undo(&mut sim).unwrap();
+    let left: Vec<Edit> = edits(&session).into_iter().map(|e| e.edit).collect();
+    assert_eq!(left.len(), 3, "{left:?}");
+    assert!(matches!(left[0], Edit::LoadAsset { id, .. } if id == PREFAB));
+    assert!(matches!(left[1], Edit::LoadAsset { id, .. } if id == STATS));
+    assert_eq!(left[2], insert);
+    // The remaining spawner spawns at tick 60 from the kept assets.
+    play(&mut session, &mut sim, 60);
+}

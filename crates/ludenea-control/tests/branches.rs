@@ -617,6 +617,19 @@ fn scene_edit(session: &mut Session, sim: &mut Simulation, begins: u64) {
     session.edit(sim, edit).unwrap();
 }
 
+/// The ticks of the progress reports, checked to increase strictly.
+fn progress(reports: &[Resimulation]) -> Vec<u64> {
+    let ticks: Vec<u64> = reports
+        .iter()
+        .filter_map(|report| match report {
+            Resimulation::Progress { up_to } => Some(*up_to),
+            _ => None,
+        })
+        .collect();
+    assert!(ticks.windows(2).all(|pair| pair[0] < pair[1]), "{ticks:?}");
+    ticks
+}
+
 /// Every report until resimulation is done.
 fn reports_until_done(session: &mut Session, sim: &mut Simulation) -> Vec<Resimulation> {
     let mut reports = Vec::new();
@@ -705,21 +718,20 @@ fn switching_to_stale_branch_resimulates_it() {
     ));
     session.seek(&mut sim, 20).unwrap();
 
-    let reports = reports_until_done(&mut session, &mut sim);
-    assert!(
-        reports
-            .iter()
-            .any(|report| matches!(report, Resimulation::Progress { .. })),
-        "{reports:?}"
-    );
+    let mut reports = vec![first];
+    reports.extend(reports_until_done(&mut session, &mut sim));
+    assert!(progress(&reports).len() > 2, "{reports:?}");
     assert_eq!(session.current_branch(), BranchId(1));
     assert!(!branch(&session, BranchId(1)).stale);
-    assert!(!branch(&session, ROOT).stale, "the root resimulated first");
     assert_replays(&session);
     session.seek(&mut sim, 200).unwrap();
 
+    // The root resimulated up to the fork only: the rest resimulates from there.
+    assert!(branch(&session, ROOT).stale);
     session.switch_branch(&mut sim, ROOT).unwrap();
-    assert!(!session.timeline().resimulating);
+    assert!(session.timeline().resimulating);
+    let rest = progress(&reports_until_done(&mut session, &mut sim));
+    assert!(rest[0] > 100, "{rest:?}");
     assert_replays(&session);
 }
 
@@ -741,17 +753,25 @@ fn stale_ancestor_resimulates_first() {
     assert_eq!(session.current_branch(), BranchId(2));
     // The ticks Branch 2 shares with its stale parent show while the parent resimulates.
     assert_eq!(session.timeline().current, 100);
-    resimulate_all(&mut session, &mut sim);
-    assert!(!branch(&session, BranchId(1)).stale);
+    let reports = reports_until_done(&mut session, &mut sim);
+    assert!(progress(&reports).len() > 2, "{reports:?}");
     assert!(!branch(&session, BranchId(2)).stale);
     assert_eq!(session.timeline().current, 250);
     assert_replays(&session);
 
-    for id in [BranchId(1), BranchId(2)] {
-        session.switch_branch(&mut sim, id).unwrap();
-        assert!(!session.timeline().resimulating, "{id:?} stays fresh");
-        assert_replays(&session);
-    }
+    // Branch 1 is fresh up to the fork of Branch 2, and resimulates from there.
+    session.switch_branch(&mut sim, BranchId(1)).unwrap();
+    assert!(session.timeline().resimulating);
+    session.seek(&mut sim, 200).unwrap();
+    assert!(matches!(
+        session.seek(&mut sim, 201),
+        Err(SessionError::Resimulating { up_to: 200 })
+    ));
+    reports_until_done(&mut session, &mut sim);
+    assert_replays(&session);
+    session.switch_branch(&mut sim, BranchId(2)).unwrap();
+    assert!(!session.timeline().resimulating, "Branch 2 stays fresh");
+    assert_replays(&session);
 }
 
 /// Inserts a pose on the scene entity at `address` at the current tick.

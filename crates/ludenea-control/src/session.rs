@@ -451,16 +451,7 @@ impl Session {
                 stored.extend(self.tree.take(&dependents, players));
                 *removed = StoredBranch::encode(&stored);
                 self.remove_edit(index);
-                // The assets the edit loaded, recorded just before it, go with it.
-                let own_first = self.own_first();
-                let mut index = index;
-                while index > own_first
-                    && self.edits.edits[index - 1].tick == tick
-                    && matches!(self.edits.edits[index - 1].edit, Edit::LoadAsset { .. })
-                {
-                    index -= 1;
-                    self.remove_edit(index);
-                }
+                self.remove_loads_before(sim, index)?;
                 self.discard_after(tick);
                 Ok(Some((*branch, tick)))
             }
@@ -582,6 +573,51 @@ impl Session {
         let first = self.own_first();
         let own = self.edits.edits.get(first..)?;
         Some(first + own.iter().rposition(|e| e == edit)?)
+    }
+
+    /// After the edit at `index` was undone: removes the `LoadAsset` edits recorded just
+    /// before it, at its tick, unless a later edit of that tick reaches their asset. Leaves
+    /// the world at that tick, before its edits.
+    fn remove_loads_before(
+        &mut self,
+        sim: &mut Simulation,
+        index: usize,
+    ) -> Result<(), SessionError> {
+        let tick = match self.edits.edits.get(index.wrapping_sub(1)) {
+            Some(edit) if matches!(edit.edit, Edit::LoadAsset { .. }) => edit.tick,
+            _ => return Ok(()),
+        };
+        let mut first = index;
+        while first > self.own_first()
+            && self.edits.edits[first - 1].tick == tick
+            && matches!(self.edits.edits[first - 1].edit, Edit::LoadAsset { .. })
+        {
+            first -= 1;
+        }
+        // The assets those loads brought are not loaded before the tick's edits.
+        self.replay_before_edits(sim, tick)?;
+        let mut needed = BTreeSet::new();
+        let later = self.edits.edits[index..]
+            .iter()
+            .take_while(|edit| edit.tick == tick);
+        for edit in later {
+            match sim.assets_introduced_by(&edit.edit, &self.assets) {
+                Ok(loads) => needed.extend(loads.into_iter().filter_map(|load| match load {
+                    Edit::LoadAsset { id, .. } => Some(id),
+                    _ => None,
+                })),
+                // A later edit that cannot tell what it reaches keeps every load.
+                Err(_) => return Ok(()),
+            }
+        }
+        for at in (first..index).rev() {
+            if let Edit::LoadAsset { id, .. } = self.edits.edits[at].edit
+                && !needed.contains(&id)
+            {
+                self.remove_edit(at);
+            }
+        }
+        Ok(())
     }
 
     /// The index of the first edit of the current branch's own part of the run.
@@ -909,8 +945,10 @@ impl Session {
         };
         let at_current = sim.snapshot();
         self.replay_to(sim, up_to)?;
+        // A stale ancestor of a switch's target resimulates only the part they share.
+        let stop = self.chain_stop().unwrap_or(u64::MAX).min(self.end());
         for _ in 0..budget {
-            if up_to >= self.end() {
+            if up_to >= stop {
                 break;
             }
             self.run_tick(sim, self.inputs.tick(up_to).map(<[u8]>::to_vec).as_deref())?;
@@ -955,12 +993,10 @@ impl Session {
             sim.restore(&at_current)
                 .expect("a snapshot restores into the world it was taken from");
         }
+        // A switch goes on with the next stale branch on its way.
+        self.continue_switch(sim)?;
         if self.resimulating.is_none() {
-            // A switch goes on with the next stale branch on its way.
-            self.continue_switch(sim)?;
-            if self.resimulating.is_none() {
-                self.reports.push_back(Resimulation::Done);
-            }
+            self.reports.push_back(Resimulation::Done);
         }
         let up_to = self.resimulated_to().unwrap_or(up_to);
         Ok(self
@@ -1049,8 +1085,14 @@ impl Session {
         }
         self.drop_reports();
         self.switching = Some((id, tick));
-        self.switch_step(sim)?;
-        self.continue_switch(sim)
+        let result = self
+            .switch_step(sim)
+            .and_then(|()| self.continue_switch(sim));
+        if result.is_err() {
+            // The session stays on the branch that failed.
+            self.switching = None;
+        }
+        result
     }
 
     /// Drops the reports of a resimulation that starts over, except dropped edits: those
@@ -1076,8 +1118,14 @@ impl Session {
     }
 
     /// Takes the switch on while the current branch has nothing left to resimulate.
+    /// A stale ancestor counts as done once resimulated up to the child's fork tick: it is
+    /// stored fresh up to there.
     fn continue_switch(&mut self, sim: &mut Simulation) -> Result<(), SessionError> {
-        while self.switching.is_some() && self.resimulating.is_none() {
+        while self.switching.is_some()
+            && self
+                .resimulating
+                .is_none_or(|up_to| self.chain_stop().is_some_and(|stop| up_to >= stop))
+        {
             self.switch_step(sim)?;
         }
         Ok(())
@@ -1100,17 +1148,18 @@ impl Session {
         })
     }
 
-    /// While a switch resimulates an ancestor: the last tick the target's run shares with it.
-    fn chain_cap(&self) -> Option<u64> {
+    /// While a switch resimulates an ancestor: the fork tick of the next branch on the way,
+    /// where the ancestor's resimulation stops.
+    fn chain_stop(&self) -> Option<u64> {
         let (target, _) = self.switching?;
         let path = self.tree.path(target);
         let at = path.iter().position(|&id| id == self.tree.current())?;
-        Some(
-            self.tree
-                .get(*path.get(at + 1)?)?
-                .fork_tick
-                .saturating_sub(1),
-        )
+        Some(self.tree.get(*path.get(at + 1)?)?.fork_tick)
+    }
+
+    /// While a switch resimulates an ancestor: the last tick the target's run shares with it.
+    fn chain_cap(&self) -> Option<u64> {
+        Some(self.chain_stop()?.saturating_sub(1))
     }
 
     /// The last resimulated tick that may be shown, while resimulating.
