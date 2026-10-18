@@ -127,9 +127,9 @@ LUDENEA_ENGINE_PATH=$PWD pnpm -C editor/apps/desktop tauri dev -- -- ~/games/my_
 
 A prefab (`.prefab.ron`) is a group of entities a scene places as instances. The scene tree
 groups each instance under its prefab file; "Place prefab" adds one, and "Create prefab
-from selection" turns selected entities into a new prefab. A component changed on an
-instance is an override, marked in the inspector with "Revert to prefab" and "Apply to
-prefab". Opening the prefab ("Open the selected instance's prefab") edits it as a document;
+from selection" turns selected entities into a new prefab. A field changed on an instance
+in the scene (at tick 0) is an override of that one field, marked in the inspector with
+"Revert to prefab" and "Apply to prefab"; the instance keeps following the prefab elsewhere. Opening the prefab ("Open the selected instance's prefab") edits it as a document;
 once saved, every scene using it replays with the change and keeps its overrides.
 
 ### Data assets

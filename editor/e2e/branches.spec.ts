@@ -9,8 +9,10 @@ test.beforeAll(async () => {
 
 test.afterAll(() => served?.stop());
 
+/** The hash at `tick`, once it no longer waits for edits to be simulated. */
 const hashAt = async (page: Page, tick: number) => {
   await seek(page, tick);
+  await expect(page.getByLabel("Hash")).not.toContainText("pending");
   return page.getByLabel("Hash").textContent();
 };
 

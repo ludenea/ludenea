@@ -778,6 +778,38 @@ fn apply_override_then_revert() {
 }
 
 #[test]
+fn set_field_on_instance_entity_at_tick_0_overrides_that_field() {
+    let (mut host, _) = spawner_host(fs::read_to_string(SPAWNER_SCENE).unwrap());
+    let entity = instance_entity(&mut host, 5);
+    ok(
+        &mut host,
+        Command::SetField {
+            target: FieldTarget::Component {
+                entity,
+                component: "ludenea::Pose".to_string(),
+            },
+            path: vec![field("position"), field("y")],
+            value: json!(3.0),
+        },
+    );
+    let entity = instance_entity(&mut host, 5);
+    assert_eq!(
+        pose_position(&mut host, entity),
+        json!({"x": 0.0, "y": 3.0})
+    );
+    let scene = scene_text(&mut host);
+    assert!(
+        scene.contains(
+            r#"(entity: [0], component: "ludenea::Pose", path: [(type:"field",name:"position"),(type:"field",name:"y")], value: 3.0)"#
+        ),
+        "{scene}"
+    );
+    assert!(!scene.contains("path: []"), "{scene}");
+    // A scene edit, not a recorded one.
+    assert!(timeline(&mut host).edit_ticks.is_empty());
+}
+
+#[test]
 fn apply_to_prefab_returns_updated_prefab() {
     let (mut host, _) = spawner_host(fs::read_to_string(SPAWNER_SCENE).unwrap());
     // Instance 6 overrides the position's `x` with 5.0.

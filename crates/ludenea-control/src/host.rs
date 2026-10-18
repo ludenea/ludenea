@@ -960,6 +960,26 @@ impl Host {
         path: &[PathSegment],
         value: JsonValue,
     ) -> Result<(), ProtocolError> {
+        // At tick 0 a field of a prefab instance's entity is an override of that one field.
+        if let FieldTarget::Component { entity, component } = &target
+            && self.session.timeline().current == 0
+            && let Some(address) = self.simulation.load_addresses().get(entity)
+            && address.len() > 1
+        {
+            let address = address.clone();
+            let ron = self.override_ron(&address, component, path, Some(value))?;
+            return self
+                .session
+                .set_override(
+                    &mut self.simulation,
+                    &address[..1],
+                    &address[1..],
+                    component,
+                    path,
+                    &ron,
+                )
+                .map_err(|e| self.fail(e));
+        }
         let world = self.simulation.world();
         let (kind, name, current) = match &target {
             FieldTarget::Component { entity, component } => {

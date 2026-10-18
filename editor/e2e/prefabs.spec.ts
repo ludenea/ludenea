@@ -46,21 +46,23 @@ test("place_override_and_edit_prefab", async ({ page }) => {
   await runCommand(page, "Save scene");
   await expect(prefab.getByLabel("unsaved changes")).not.toBeAttached();
 
-  // Back in the scene: the session replays against the heavier prefab, and the override stays.
+  // Back in the scene: the session replays against the heavier prefab from tick 0, and the
+  // override stays.
   await openScene(page, "main.scene.ron");
   await page.getByRole("tab", { name: "Timeline" }).click();
-  await expect(page.getByLabel(/^Divergence at tick \d+$/)).toBeAttached({ timeout: 60_000 });
+  await expect(page.getByLabel("Divergence at tick 0", { exact: true })).toBeAttached({ timeout: 60_000 });
   expect((await settledTimeline(page)).head).toBe(recorded.head);
   await page.getByRole("tab", { name: "Scene" }).click();
   await expect(balls).toHaveCount(3);
-  await balls.nth(0).getByRole("button").click();
-  await page.getByRole("tab", { name: "Inspector" }).click();
-  await expect(density).toHaveValue("4");
-  // The override holds the whole collider as it was then, the prefab's density included.
-  await page.getByRole("tab", { name: "Scene" }).click();
   await balls.nth(2).getByRole("button").click();
   await page.getByRole("tab", { name: "Inspector" }).click();
+  // The override holds the radius only: the prefab's new density reaches the placed ball.
+  await expect(density).toHaveValue("4");
   await expect(radius).toHaveValue("0.75");
-  await expect(collider.getByLabel(/radius overridden$/)).toBeVisible();
+  // The component's mark, and the radius's: no other field is overridden.
+  const marks = collider.getByLabel(/ overridden$/);
+  await expect(marks).toHaveCount(2);
+  const labels = await marks.evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-label")));
+  expect(labels.sort()).toEqual(["Collider overridden", "shape.Circle.radius overridden"]);
   expect(errors).toEqual([]);
 });
