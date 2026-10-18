@@ -1,5 +1,5 @@
 import { ProtocolFailure, type TypeSchema } from "@ludenea/control-client";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AssetFailure } from "../src";
 import { fakeProject, gameWithSession, ids, settle, testGame, testHost, type Session } from "./support";
 
@@ -104,9 +104,54 @@ describe("document store", () => {
     expect(game.sent.find((command) => command.type === "load_scene")).toEqual({ type: "load_scene", scene: "(main)", assets: project.assets(), document: "Scene" });
   });
 
+  it("a_replay_that_fails_to_open_leaves_the_open_one_for_the_next_game", async () => {
+    const project = fakeProject();
+    const host = await testHost(undefined, project.answer, vi.fn());
+    const game = await testGame((command) =>
+      command.type === "load_replay" && command.replay === btoa("replays/second.replay") ? { error: { code: "invalid_replay", message: "edit of tick 3 failed to decode" } } : { type: "done" },
+    );
+    host.setControl(game.control);
+    await host.editor.document.getState().open(ids.first);
+
+    await expect(host.editor.document.getState().open(ids.second)).rejects.toThrow("edit of tick 3");
+    const next = await testGame(() => ({ type: "done" }));
+    host.setControl(next.control);
+
+    expect(host.editor.document.getState().current?.id).toBe(ids.first);
+    expect(next.sent.filter((command) => command.type === "load_replay")).toEqual([{ type: "load_replay", replay: btoa("replays/first.replay") }]);
+  });
+
+  it("a_document_a_new_game_refuses_is_logged_at_the_asset", async () => {
+    const project = fakeProject();
+    const log = vi.fn();
+    const host = await testHost(undefined, project.answer, log);
+    await host.editor.document.getState().open(ids.main);
+    const message = `asset ${ids.settings} is invalid: 3:5: Expected comma`;
+
+    const game = await testGame((command) => (command.type === "load_scene" ? { error: { code: "invalid_scene", message } } : { type: "done" }));
+    host.setControl(game.control);
+    await settle();
+
+    expect(log).toHaveBeenCalledWith("error", expect.stringContaining("Expected comma"), { file: "assets/settings.ron", line: 3, column: 5 });
+  });
+
+  it("an_error_names_the_file_of_each_asset_without_a_position", async () => {
+    const project = fakeProject();
+    const host = await testHost(undefined, project.answer, vi.fn());
+    const message = `asset ${ids.ball} is a \`demo::Settings\`, but entity 2 expects a \`ludenea::Prefab\``;
+    const game = await testGame((command) => (command.type === "load_scene" ? { error: { code: "invalid_scene", message } } : { type: "done" }));
+    host.setControl(game.control);
+
+    const failure = await host.editor.document.getState().open(ids.main).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ProtocolFailure);
+    expect((failure as Error).message).toContain(`asset ${ids.ball} (assets/ball.prefab.ron) is a`);
+  });
+
   it("broken_asset_error_names_path_line_and_column", async () => {
     const project = fakeProject();
-    const host = await testHost(undefined, project.answer);
+    const log = vi.fn();
+    const host = await testHost(undefined, project.answer, log);
     const message = `asset ${ids.settings} is invalid: 2:17-2:18: Expected integer`;
     const game = await testGame((command) => (command.type === "replace_scene" ? { error: { code: "invalid_scene", message } } : { type: "done" }));
     host.setControl(game.control);
@@ -117,7 +162,8 @@ describe("document store", () => {
     expect(failure).toBeInstanceOf(AssetFailure);
     expect(failure).toBeInstanceOf(ProtocolFailure);
     expect(failure).toMatchObject({ code: "invalid_scene", path: "assets/settings.ron", line: 2, column: 17 });
-    expect((failure as Error).message).toBe(`assets/settings.ron:2:17: ${message}`);
+    expect((failure as Error).message).toBe(`assets/settings.ron:2:17: asset ${ids.settings} (assets/settings.ron) is invalid: 2:17-2:18: Expected integer`);
+    expect(log).toHaveBeenCalledWith("error", expect.stringContaining("Expected integer"), { file: "assets/settings.ron", line: 2, column: 17 });
   });
 });
 

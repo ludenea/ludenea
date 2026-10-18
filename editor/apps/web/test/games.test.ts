@@ -1,6 +1,7 @@
 import { ControlClient, ProjectClient, fakeTransport, type GameInfo, type WorkerCrash, type WorkerGame } from "@ludenea/control-client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { followNativeGames, followWasmGames } from "../src/games";
+import { exportSession, type SavedSession } from "../src/session-guard";
 
 type Message = { type: string; [key: string]: unknown };
 
@@ -41,7 +42,8 @@ async function fakeProject(answer: (request: Message) => object) {
   return { project, push: (event: object) => transport.push(JSON.stringify({ type: "event", event })) };
 }
 
-const app = () => ({ connectGame: vi.fn(), log: vi.fn(), storeSession: vi.fn() });
+// No document is open: every session is the editor's own.
+const app = () => ({ connectGame: vi.fn(), log: vi.fn(), sessions: { export: exportSession, store: vi.fn(async () => {}), own: async (saved: SavedSession | null) => saved } });
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 afterEach(() => {

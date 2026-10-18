@@ -1,4 +1,5 @@
-import { ControlClient, fakeTransport, type GameInfo, type WorkerCrash } from "@ludenea/control-client";
+import { ControlClient, ProjectClient, fakeTransport, type GameInfo, type WorkerCrash } from "@ludenea/control-client";
+import { createEditor } from "@ludenea/editor-shell/app";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EXPORT_COALESCE_MS, guardSession, restoreSession } from "../src/session-guard";
 
@@ -235,5 +236,72 @@ describe("guardSession", () => {
     expect(second.sent.map((command) => command.type)).toEqual(["load_session", "get_timeline", "seek"]);
     expect(second.sent[0]).toMatchObject({ scene: "newer", inputs: "AA==" });
     expect(second.sent.at(-1)).toEqual({ type: "seek", tick: 4 });
+  });
+});
+
+describe("guardSession with documents", () => {
+  it("a_crash_after_a_document_switch_restores_only_the_open_document", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const files = { "scenes/a.scene.ron": "(A)", "scenes/b.scene.ron": "(B)" };
+    const entries = Object.keys(files).map((path, index) => ({ path, id: String(index + 1).padStart(32, "0"), kind: "Scene" }));
+    const [a, b] = entries.map((entry) => entry.id) as [string, string];
+    const requests: Command[] = [];
+    const stored = new Map<string, string>();
+    const project = await ProjectClient.connect(
+      fakeTransport((raw) => {
+        const message = JSON.parse(raw);
+        if (message.type === "hello") return [JSON.stringify({ type: "welcome", protocol_version: 2 })];
+        const request: Command = message.request;
+        requests.push(request);
+        const reply =
+          request.type === "list_files"
+            ? { type: "files", entries }
+            : request.type === "read_text"
+              ? { type: "text", text: files[request.path as keyof typeof files] }
+              : request.type === "read_asset_texts"
+                ? { type: "asset_texts", assets: [], paths: [] }
+                : request.type === "load_stored_session"
+                  ? { type: "stored_session", bytes: stored.get(request.document as string) ?? null }
+                  : { type: "done" };
+        if (request.type === "store_session") stored.set(request.document as string, request.bytes as string);
+        return [JSON.stringify({ type: "response", id: message.id, result: { ok: reply } })];
+      }),
+    );
+    const host = createEditor({ project, log: () => {} });
+    // A game whose session is the scene it loaded last.
+    const game = async () => {
+      let scene = "";
+      return fakeGame((command) => {
+        if (command.type === "load_scene") scene = command.scene as string;
+        if (command.type === "export_session") return session(scene);
+        if (command.type === "get_timeline") return { type: "timeline", ...timeline, branch: 0, branches: [], compare: null };
+        return { type: "done" };
+      });
+    };
+    const first = await game();
+    host.setControl(first.control);
+    await host.editor.document.getState().open(a);
+    const worker = fakeWorker();
+    const second = await game();
+    const restart = vi.fn(async () => {
+      host.setControl(second.control);
+      return second.control;
+    });
+    guardSession(first.control, worker, restart, { sessions: host.sessions });
+    await settle();
+    expect(exports(first.sent)).toBe(1);
+
+    // The guard's latest export is still A's when the game crashes on B.
+    await host.editor.document.getState().open(b);
+    worker.crash({ tick: 2, message: "boom" });
+    await settle();
+    await settle();
+
+    expect(restart).toHaveBeenCalledWith(null);
+    expect(second.sent.filter((command) => command.type === "load_session")).toEqual([]);
+    expect(second.sent.find((command) => command.type === "load_scene")).toMatchObject({ scene: "(B)" });
+    const decode = (bytes: string) => JSON.parse(atob(bytes));
+    expect(stored.has(b) ? decode(stored.get(b)!).load.scene : "(B)").toBe("(B)");
+    expect(requests.filter((request) => request.type === "write_text")).toEqual([]);
   });
 });

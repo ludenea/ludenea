@@ -208,6 +208,8 @@ interface DocumentState {
     open(id: AssetId): Promise<void>;
     /** Replaces the open scene or prefab with `text` (a change on disk), with the project's asset texts: the session replays. */
     replace(text: string): Promise<void>;
+    /** Stores the game's session as the open document's, as `open` does before loading another. */
+    store(): Promise<void>;
 }
 /** A Zustand store: one document at a time, as the game keeps one session. */
 type DocumentStore = UseBoundStore<StoreApi<DocumentState>>;

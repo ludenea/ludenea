@@ -1,8 +1,8 @@
 import { ControlClient, type MessageTransport, type ProjectClient, type WorkerGame } from "@ludenea/control-client";
 import type { EditorApp } from "./app";
-import { exportSession, guardSession, restoreSession, type SavedSession, type SessionGuard } from "./session-guard";
+import { guardSession, restoreSession, type SavedSession, type SessionGuard } from "./session-guard";
 
-type App = Pick<EditorApp, "connectGame" | "log" | "storeSession">;
+type App = Pick<EditorApp, "connectGame" | "log" | "sessions">;
 
 /** Runs steps one after the other; a failing step is reported and never blocks the next. */
 function sequence(app: App): (what: string, step: () => Promise<void>) => void {
@@ -58,7 +58,7 @@ export function followWasmGames(project: ProjectClient, app: App, start: (glueUr
     const control = await ControlClient.connect(game.transport);
     // The document store loads the open document into the new game here, before any restore.
     app.connectGame(control);
-    const guard = guardSession(control, game, (saved) => relaunch(glueUrl, saved), { seed, log: app.log, store: app.storeSession });
+    const guard = guardSession(control, game, (saved) => relaunch(glueUrl, saved), { seed, log: app.log, sessions: app.sessions });
     running = { glueUrl, game, control, guard };
     return control;
   };
@@ -68,7 +68,8 @@ export function followWasmGames(project: ProjectClient, app: App, start: (glueUr
     crashes = [];
     stopped = false;
     const previous = running;
-    const saved = previous && (await exportSession(previous.control).catch(() => previous.guard.latest()));
+    // The last export may predate a document switch: only the open document's session carries over.
+    const saved = previous && (await app.sessions.own(await app.sessions.export(previous.control).catch(() => previous.guard.latest())));
     const control = await launch(endpoint.glue_url, saved);
     if (saved) restoreInBackground(app, control, saved);
   };
@@ -95,7 +96,7 @@ export function followNativeGames(project: ProjectClient, app: App, connect: () 
       // One export per swap: a second rebuild before the new game is ready keeps the first,
       // taken while the old game still ran.
       const exporting = pending === null;
-      if (current && exporting) pending = await exportSession(current.control).catch(() => current.guard.latest());
+      if (current && exporting) pending = await app.sessions.export(current.control).catch(() => current.guard.latest());
       try {
         await project.request({ type: "restart_game" });
       } catch (error) {
@@ -107,7 +108,8 @@ export function followNativeGames(project: ProjectClient, app: App, connect: () 
   );
   project.on("game_ready", () =>
     enqueue("connect to the game", async () => {
-      const saved = pending;
+      // The last export may predate a document switch: only the open document's session carries over.
+      const saved = await app.sessions.own(pending);
       pending = null;
       running?.guard.dispose();
       running?.control.close();
@@ -116,7 +118,7 @@ export function followNativeGames(project: ProjectClient, app: App, connect: () 
       // The document store loads the open document into the new game here, before any restore.
       app.connectGame(control);
       // The native host recovers from panics itself, so there is no crash to restart from.
-      const guard = guardSession(control, { onCrashed: () => () => {} }, async () => control, { seed: saved, log: app.log, store: app.storeSession });
+      const guard = guardSession(control, { onCrashed: () => () => {} }, async () => control, { seed: saved, log: app.log, sessions: app.sessions });
       running = { control, guard };
       if (saved) restoreInBackground(app, control, saved);
     }),

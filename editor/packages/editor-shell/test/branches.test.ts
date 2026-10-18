@@ -39,7 +39,7 @@ describe("branch store", () => {
     before.setControl(first.control);
     await before.editor.document.getState().open(ids.main);
     // Closing the editor stores the session.
-    await before.storeSession();
+    await before.sessions.store();
 
     const after = await testHost(undefined, project.answer);
     const second = await gameWithSession({ ...session, branches: "" });

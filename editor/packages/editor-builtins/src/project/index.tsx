@@ -27,12 +27,17 @@ export const projectPlugin = definePlugin({
       editor.settings.set(RECENT, [info.root, ...recent].slice(0, RECENT_LIMIT));
       ui.set({ form: null, error: null });
     };
-    const attempt = (request: Promise<ProjectInfo>) =>
-      request.then(opened, (error) => ui.set({ error: errorText(error) }));
+    // The open document's session is stored in its own project before another one opens.
+    const attempt = (request: () => Promise<ProjectInfo>) =>
+      editor.document
+        .getState()
+        .store()
+        .then(request)
+        .then(opened, (error) => ui.set({ error: errorText(error) }));
     const actions = {
       create: (name: string, parent: string, enginePath: string) =>
-        attempt(editor.project.request({ type: "create", name, parent, engine_path: enginePath || null })),
-      open: (path: string) => attempt(editor.project.request({ type: "open", path })),
+        attempt(() => editor.project.request({ type: "create", name, parent, engine_path: enginePath || null })),
+      open: (path: string) => attempt(() => editor.project.request({ type: "open", path })),
     };
 
     // The service may already have a project open (`ludenea serve <project>`).

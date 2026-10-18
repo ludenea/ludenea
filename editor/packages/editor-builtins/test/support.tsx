@@ -2,6 +2,7 @@ import { ControlClient, ProjectClient, fakeTransport, type GameInfo, type TypeSc
 import type { PluginDefinition } from "@ludenea/editor-shell";
 import { createEditor, type EditorHost } from "@ludenea/editor-shell/app";
 import { act, render } from "@testing-library/react";
+import { logToConsole } from "../src";
 
 type Message = { type: string; [key: string]: unknown };
 type Answer = (message: Message) => object | undefined;
@@ -38,7 +39,7 @@ export const testGame = (answer: Answer = () => ({ type: "done" }), info: Partia
 /** An editor on a fake project service with `plugins` active. */
 export async function testEditor(plugins: PluginDefinition[], answer?: Answer) {
   const project = await testProject(answer);
-  const host = createEditor({ project: project.client });
+  const host: EditorHost = createEditor({ project: project.client, log: (level, text, location) => logToConsole(host.editor, level, text, location) });
   for (const plugin of plugins) host.loader.activate(plugin);
   return { ...host, project };
 }

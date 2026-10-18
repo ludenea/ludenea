@@ -15,7 +15,7 @@ import type {
 import { Registry } from "./registry";
 import { normalizeShortcut } from "./shortcuts";
 import { createBranchStore, type BranchStore } from "./stores/branches";
-import { createDocumentStore, type DocumentStore, type SavedSession } from "./stores/document";
+import { createDocumentStore, type DocumentLog, type DocumentSessions, type DocumentStore } from "./stores/document";
 import { createSelectionStore, type SelectionStore } from "./stores/selection";
 import { feedTimeline, createTimelineStore, type TimelineStore } from "./stores/timeline";
 
@@ -68,11 +68,8 @@ export interface EditorHost {
   loader: PluginLoader;
   /** Switches to another game (or none): plugins hear it through `onGameChanged`. The same game again changes nothing. */
   setControl(control: ControlClient | null): void;
-  /**
-   * Stores `saved` (by default an export of the game's session) as the open document's
-   * session, unless a document is opening; on close and on the crash recovery schedule.
-   */
-  storeSession(saved?: SavedSession): Promise<void>;
+  /** The documents' sessions, for crash recovery, rebuilds, and close. */
+  sessions: DocumentSessions;
 }
 
 /** Registrations a panel lists, re-rendering when they change. */
@@ -105,6 +102,8 @@ export function createEditor(options: {
   control?: ControlClient | null;
   /** Imports a plugin bundle; tests replace it. */
   importModule?: (url: string) => Promise<unknown>;
+  /** Where documents that fail to load are reported; the devtools console by default. */
+  log?: DocumentLog;
 }): EditorHost {
   const registry = new Registry();
   const { commands, inspectors, overlays, settings, decorations, columns } = registry;
@@ -119,7 +118,12 @@ export function createEditor(options: {
   let captures = 0;
   const timeline = createTimelineStore(() => control);
   // Its listener comes first, so a new game loads the document before plugins hear of it.
-  const documents = createDocumentStore({ project: options.project, control: () => control, onGameChanged: (listener) => gameListeners.add(listener) });
+  const documents = createDocumentStore({
+    project: options.project,
+    control: () => control,
+    onGameChanged: (listener) => gameListeners.add(listener),
+    log: options.log ?? ((level, text) => (level === "error" ? console.error(text) : console.warn(text))),
+  });
   const editor: Editor = {
     get control() {
       return control;
@@ -197,5 +201,5 @@ export function createEditor(options: {
     for (const listener of [...gameListeners]) listener(next);
   };
 
-  return { editor, registry, loader: new PluginLoader(editor, registry, options.importModule), setControl, storeSession: documents.storeSession };
+  return { editor, registry, loader: new PluginLoader(editor, registry, options.importModule), setControl, sessions: documents.sessions };
 }

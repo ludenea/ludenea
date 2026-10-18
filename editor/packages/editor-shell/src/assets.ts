@@ -34,14 +34,20 @@ export class AssetFailure extends ProtocolFailure {
 
 // The host names an asset by identifier (it knows no paths), then the position of the error.
 const INVALID_ASSET = /asset ([0-9a-f]{32})(?: \([^)]*\))? is invalid: (\d+):(\d+)/;
+const ASSET_ID = /\b[0-9a-f]{32}\b/g;
 
-/** `error` as an `AssetFailure` when it names an asset of `paths` and a position, else unchanged. */
+/**
+ * `error` with each asset identifier of `paths` it names followed by the asset's file; an
+ * `AssetFailure` when it also gives the position of the error in that file.
+ */
 export function locateAssetError(error: unknown, paths: [AssetId, string][]): unknown {
   if (!(error instanceof ProtocolFailure)) return error;
+  const files = new Map(paths);
+  const message = error.message.replace(ASSET_ID, (id) => (files.has(id) ? `${id} (${files.get(id)})` : id));
   const match = INVALID_ASSET.exec(error.message);
-  const path = match && paths.find(([id]) => id === match[1])?.[1];
-  if (!match || !path) return error;
-  return new AssetFailure(error.code, error.message, path, Number(match[2]), Number(match[3]));
+  const path = match && files.get(match[1]!);
+  if (match && path) return new AssetFailure(error.code, message, path, Number(match[2]), Number(match[3]));
+  return message === error.message ? error : new ProtocolFailure(error.code, message);
 }
 
 export function createAssetAccess(control: () => ControlClient | null, project: ProjectClient): AssetAccess {
@@ -65,7 +71,8 @@ export function createAssetAccess(control: () => ControlClient | null, project: 
       try {
         ({ text } = await current.request({ type: "new_asset_value", asset: type }));
       } catch (error) {
-        // How the host refuses a type registered without a default value.
+        // How the host refuses a type registered without a default value: the text of
+        // `EcsError::NoDefault` in crates/ludenea-ecs/src/error.rs, sent as `InvalidCommand`.
         const schema = current.game.assets.find((asset) => asset.name === type)?.schema;
         if (schema && error instanceof ProtocolFailure && error.message.includes("has no default value")) return { kind: "needs-value", schema };
         throw error;

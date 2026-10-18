@@ -1,6 +1,6 @@
-import type { AssetId, Command, ControlClient, ProjectClient } from "@ludenea/control-client";
+import type { AssetId, Command, ConsoleLevel, ControlClient, FileChange, ProjectClient } from "@ludenea/control-client";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
-import { locateAssetError } from "../assets";
+import { AssetFailure, locateAssetError } from "../assets";
 
 /** The file the game's session edits or plays. */
 export interface OpenDocument {
@@ -22,7 +22,22 @@ export interface DocumentState {
   open(id: AssetId): Promise<void>;
   /** Replaces the open scene or prefab with `text` (a change on disk), with the project's asset texts: the session replays. */
   replace(text: string): Promise<void>;
+  /** Stores the game's session as the open document's, as `open` does before loading another. */
+  store(): Promise<void>;
 }
+
+/** The sessions of documents, as the application's crash recovery and close keep them. */
+export interface DocumentSessions {
+  /** Exports the session of `control`, tagged with the document open when asked (none while one opens). */
+  export(control: ControlClient): Promise<SavedSession>;
+  /** Stores `saved` (a fresh export by default) as the open document's session; one tagged with another document is not stored. */
+  store(saved?: SavedSession): Promise<void>;
+  /** `saved` when it belongs to the open document, else the open document's stored session, if any. */
+  own(saved: SavedSession | null): Promise<SavedSession | null>;
+}
+
+/** Where the store reports failures: the editor's console, at the asset's file when known. */
+export type DocumentLog = (level: ConsoleLevel, text: string, location?: { file: string; line: number; column: number }) => void;
 
 /** A Zustand store: one document at a time, as the game keeps one session. */
 export type DocumentStore = UseBoundStore<StoreApi<DocumentState>>;
@@ -31,6 +46,8 @@ export type DocumentStore = UseBoundStore<StoreApi<DocumentState>>;
 export interface SavedSession {
   load: Extract<Command, { type: "load_session" }>;
   tick: number;
+  /** The document open when it was exported; null while one was opening or none was open. */
+  document?: AssetId | null;
 }
 
 export async function exportSession(control: ControlClient): Promise<SavedSession> {
@@ -101,43 +118,56 @@ const KINDS: { [kind: string]: OpenDocument["kind"] } = { Scene: "scene", Prefab
 /** How the session names its root branch until the editor renames it after the document. */
 const ROOT_NAME = "Branch 1";
 
+const assetKind = (change: FileChange) => Object.values(change)[0]!.kind;
+const changedPath = (change: FileChange) => Object.values(change)[0]!.path;
+
 export function createDocumentStore(options: {
   project: ProjectClient;
   control: () => ControlClient | null;
   onGameChanged(listener: (control: ControlClient | null) => void): void;
-}): { store: DocumentStore; storeSession(saved?: SavedSession): Promise<void> } {
-  const { project, control } = options;
-  // The project's asset texts as last read, and the file of each.
-  let assets: [AssetId, string][] = [];
-  let paths: [AssetId, string][] = [];
+  log: DocumentLog;
+}): { store: DocumentStore; sessions: DocumentSessions } {
+  const { project, control, log } = options;
+  // The project's asset texts the game last accepted, the file of each, and the open replay.
+  let texts: { assets: [AssetId, string][]; paths: [AssetId, string][] } = { assets: [], paths: [] };
   let replay = "";
   // The stored session of a document opened without a game, for the next game.
   let pending: SavedSession | null = null;
-  // Exports taken while a document opens may belong to either document: they are not stored.
+  // Exports taken while a document opens may belong to either document: they are tagged with none.
   let opening = false;
   let queue: Promise<unknown> = Promise.resolve();
-  // One open or replace at a time, in call order.
+  // One open or reload at a time, in call order.
   const serial = <T>(run: () => Promise<T>): Promise<T> => {
     const result = queue.then(run);
     queue = result.catch(() => {});
     return result;
   };
-  const located = (error: unknown) => {
+  const locatedIn = (paths: [AssetId, string][]) => (error: unknown) => {
     throw locateAssetError(error, paths);
   };
-
-  const readAssets = async () => {
-    ({ assets, paths } = await project.request({ type: "read_asset_texts" }));
+  /** Logs `error` in the console, located in the asset at fault, and rethrows it. */
+  const reported = (what: string) => (error: unknown) => {
+    const text = `${what}: ${error instanceof Error ? error.message : String(error)}`;
+    log("error", text, error instanceof AssetFailure ? { file: error.path, line: error.line, column: error.column } : undefined);
+    throw error;
   };
-  const load = (game: ControlClient, document: OpenDocument, text: string | null): Promise<unknown> => {
+
+  const readTexts = () => project.request({ type: "read_asset_texts" }).then(({ assets, paths }) => ({ assets, paths }));
+  const load = (game: ControlClient, document: OpenDocument, text: string | null, source: { texts: typeof texts; replay: string }): Promise<unknown> => {
     const command: Command =
-      document.kind === "replay" ? { type: "load_replay", replay } : { type: "load_scene", scene: text!, assets, document: document.kind === "prefab" ? "Prefab" : "Scene" };
-    return game.request(command).catch(located);
+      document.kind === "replay"
+        ? { type: "load_replay", replay: source.replay }
+        : { type: "load_scene", scene: text!, assets: source.texts.assets, document: document.kind === "prefab" ? "Prefab" : "Scene" };
+    return game.request(command).catch(locatedIn(source.texts.paths));
   };
   const storeIn = (document: OpenDocument, saved: SavedSession) =>
     project.request({ type: "store_session", document: document.id, bytes: encode(saved) }).then(() => {});
+  const stored = async (document: OpenDocument): Promise<SavedSession | null> => {
+    const { bytes } = await project.request({ type: "load_stored_session", document: document.id });
+    return bytes ? decode(bytes) : null;
+  };
   // The scene and assets on disk now, so a stored session whose files changed replays against them.
-  const refreshed = (saved: SavedSession, text: string | null): SavedSession => {
+  const refreshed = (saved: SavedSession, text: string | null, assets: [AssetId, string][]): SavedSession => {
     if (saved.load.keeps_assets) return saved;
     const scene = saved.load.saved_scene === null && text !== null ? text : saved.load.scene;
     return { ...saved, load: { ...saved.load, scene, assets } };
@@ -149,6 +179,11 @@ export function createDocumentStore(options: {
     const name = document.path.split("/").at(-1)!.split(".")[0]!;
     if (root?.name === ROOT_NAME) await game.request({ type: "rename_branch", branch: root.id, name });
   };
+  const tagged = async (game: ControlClient): Promise<SavedSession> => {
+    const document = opening ? null : (store.getState().current?.id ?? null);
+    return { ...(await exportSession(game)), document };
+  };
+
   const store: DocumentStore = create<DocumentState>()((set, get) => ({
     current: null,
     text: null,
@@ -160,34 +195,63 @@ export function createDocumentStore(options: {
         const kind = typeof entry.kind === "string" ? KINDS[entry.kind] : undefined;
         if (!kind) throw new Error(`${entry.path} is not a scene, a prefab, or a replay`);
         const document = { id, kind, path: entry.path };
+        const game = control();
+        const previous = get().current;
+        if (previous && game) await storeIn(previous, await tagged(game));
         opening = true;
         try {
-          const game = control();
-          const previous = get().current;
-          if (previous && game) await storeIn(previous, await exportSession(game));
-          await readAssets();
+          const fresh = await readTexts();
           let text: string | null = null;
-          if (kind === "replay") ({ bytes: replay } = await project.request({ type: "read_binary", path: entry.path }));
+          let bytes = "";
+          if (kind === "replay") ({ bytes } = await project.request({ type: "read_binary", path: entry.path }));
           else ({ text } = await project.request({ type: "read_text", path: entry.path }));
-          const { bytes } = await project.request({ type: "load_stored_session", document: id });
-          const stored = bytes ? refreshed(decode(bytes), text) : null;
-          if (game) await load(game, document, text);
+          const saved = await stored(document);
+          const restoring = saved && refreshed(saved, text, fresh.assets);
+          if (game) await load(game, document, text, { texts: fresh, replay: bytes });
+          // Only what the game accepted is kept: a refused document leaves the previous one.
+          texts = fresh;
+          replay = bytes;
           set({ current: document, text });
-          pending = game ? null : stored;
+          pending = game ? null : restoring;
           if (!game) return;
-          if (stored) await restoreSession(game, stored).catch(located);
+          if (restoring) await restoreSession(game, restoring).catch(locatedIn(texts.paths));
           await nameRoot(game, document);
         } finally {
           opening = false;
         }
-      }),
+      }).catch(reported(`Cannot open the document ${id}`)),
     replace: (text) =>
       serial(async () => {
-        await readAssets();
-        await control()?.request({ type: "replace_scene", scene: text, assets }).catch(located);
+        const fresh = await readTexts();
+        await control()?.request({ type: "replace_scene", scene: text, assets: fresh.assets }).catch(locatedIn(fresh.paths));
+        texts = fresh;
         set({ text });
-      }),
+      }).catch(reported("Cannot reload the scene")),
+    store: () => sessions.store(),
   }));
+
+  // A prefab or data asset changed on disk: the open scene or prefab reloads with it, keeping
+  // the session's scene as it is (unsaved edits included). Refused, the previous texts stay.
+  const reloadAssets = () =>
+    serial(async () => {
+      const document = store.getState().current;
+      if (document?.kind === "replay") return;
+      const fresh = await readTexts();
+      const game = control();
+      if (document && game) {
+        const { scene } = await game.request({ type: "export_session" });
+        await game.request({ type: "replace_scene", scene, assets: fresh.assets }).catch(locatedIn(fresh.paths));
+      }
+      texts = fresh;
+    }).catch(reported("Cannot reload the changed assets"));
+  project.on("files_changed", ({ changes }) => {
+    const open = store.getState().current?.path;
+    const assetChanged = (change: FileChange) => {
+      const kind = assetKind(change);
+      return changedPath(change) !== open && (kind === "Prefab" || (typeof kind === "object" && "Data" in kind));
+    };
+    if (changes.some(assetChanged)) reloadAssets().catch(() => {});
+  });
 
   options.onGameChanged((game) => {
     const document = store.getState().current;
@@ -196,20 +260,28 @@ export function createDocumentStore(options: {
     pending = null;
     // Both sent at once: a session the application restores into this game, and its first
     // export, come after them.
-    const loaded = load(game, document, store.getState().text);
-    const restored = saved ? restoreSession(game, saved).catch(located) : null;
+    const loaded = load(game, document, store.getState().text, { texts, replay });
+    const restored = saved ? restoreSession(game, saved).catch(locatedIn(texts.paths)) : null;
     Promise.all([loaded, restored])
       .then(() => nameRoot(game, document))
-      .catch((error) => console.error(`${document.path} not loaded into the game: ${error instanceof Error ? error.message : String(error)}`));
+      .catch(reported(`Cannot load ${document.path} into the game`))
+      .catch(() => {});
   });
 
-  return {
-    store,
-    async storeSession(saved) {
+  const sessions: DocumentSessions = {
+    export: tagged,
+    async store(saved) {
       const document = store.getState().current;
       const game = control();
-      if (opening || !document || (!saved && !game)) return;
-      await storeIn(document, saved ?? (await exportSession(game!)));
+      if (!document || (!saved && !game)) return;
+      saved ??= await tagged(game!);
+      if (saved.document === document.id) await storeIn(document, saved);
+    },
+    async own(saved) {
+      const document = store.getState().current;
+      if ((saved?.document ?? null) === (document?.id ?? null)) return saved;
+      return document && stored(document);
     },
   };
+  return { store, sessions };
 }

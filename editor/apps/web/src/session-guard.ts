@@ -1,6 +1,6 @@
 import type { ConsoleLevel, ControlClient, WorkerGame } from "@ludenea/control-client";
 import type { Disposable } from "@ludenea/editor-shell";
-import { exportSession, restoreSession, type SavedSession } from "@ludenea/editor-shell/app";
+import { exportSession, restoreSession, type DocumentSessions, type SavedSession } from "@ludenea/editor-shell/app";
 
 export { exportSession, restoreSession, type SavedSession };
 
@@ -52,14 +52,15 @@ function withoutTicks(inputs: string): string {
  * (else the exported tick). `seed` is the session being restored into this game: it stays the
  * latest until a newer export exists, and a crash before then (the restored session crashes
  * this build) reloads only its scene, so the game does not crash again at once. `restart`
- * resolves to `null` when it gives up restarting. `store` gets every export, to store it as
- * the open document's session.
+ * resolves to `null` when it gives up restarting. With `sessions`, exports are tagged with
+ * their document and stored as its session, and a crash restores only a session of the open
+ * document: an export taken before switching documents gives way to the open one's stored session.
  */
 export function guardSession(
   control: ControlClient,
   game: Pick<WorkerGame, "onCrashed">,
   restart: (saved: SavedSession | null) => Promise<ControlClient | null>,
-  options: { seed?: SavedSession | null; log?: Log; store?: (saved: SavedSession) => void } = {},
+  options: { seed?: SavedSession | null; log?: Log; sessions?: DocumentSessions } = {},
 ): SessionGuard {
   const log = options.log ?? devtools;
   let latest: SavedSession | null = options.seed ?? null;
@@ -73,12 +74,12 @@ export function guardSession(
     clearTimeout(coalescing);
     clearTimeout(deadline);
     deadline = undefined;
-    exportSession(control).then(
+    (options.sessions?.export ?? exportSession)(control).then(
       (saved) => {
         if (disposed) return;
         latest = saved;
         restoring = false;
-        options.store?.(saved);
+        options.sessions?.store(saved).catch((error) => log("warning", `Cannot store the session: ${error instanceof Error ? error.message : String(error)}`));
       },
       // Nothing loaded yet, still resimulating, or the game is gone: the previous export stays.
       () => {},
@@ -100,15 +101,19 @@ export function guardSession(
     }),
     game.onCrashed(async (crash) => {
       log("error", `The game crashed${crash.tick === undefined ? "" : ` at tick ${crash.tick}`}: ${crash.message}`);
-      let saved = latest;
-      let tick = crash.tick ?? saved?.tick;
-      if (saved && restoring) {
-        saved = sceneOf(saved);
-        tick = 0;
-        log("warning", "The game crashed while restoring the session: only its scene was reloaded, without its recorded inputs and edits.");
-      }
       dispose();
       try {
+        let saved = latest;
+        let tick = crash.tick ?? saved?.tick;
+        const own = options.sessions ? await options.sessions.own(saved) : saved;
+        if (own !== saved) {
+          saved = own;
+          tick = own?.tick;
+        } else if (saved && restoring) {
+          saved = sceneOf(saved);
+          tick = 0;
+          log("warning", "The game crashed while restoring the session: only its scene was reloaded, without its recorded inputs and edits.");
+        }
         const next = await restart(saved);
         if (next && saved) await restoreSession(next, saved, tick);
       } catch (error) {

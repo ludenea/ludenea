@@ -3,7 +3,7 @@ import "../../../packages/editor-shell/src/theme.css";
 import "../../../packages/editor-builtins/src/panels.css";
 import type { ConsoleLevel, ControlClient, PluginBundle, ProjectClient } from "@ludenea/control-client";
 import { builtinPlugins, logToConsole } from "@ludenea/editor-builtins";
-import { createEditor, mountShell, type EditorHost, type SavedSession } from "@ludenea/editor-shell/app";
+import { createEditor, mountShell, type DocumentSessions, type EditorHost } from "@ludenea/editor-shell/app";
 
 /** What the web and desktop applications share: the shell, its plugins, and the game switch. */
 export interface EditorApp {
@@ -14,8 +14,8 @@ export interface EditorApp {
   connectGame(control: ControlClient | null): void;
   /** Shows a message in the Console panel. */
   log(level: ConsoleLevel, text: string): void;
-  /** Stores `saved` as the open document's session under `.ludenea/`; failures go to the Console panel. */
-  storeSession(saved: SavedSession): void;
+  /** The documents' sessions, stored under `.ludenea/`. */
+  sessions: DocumentSessions;
 }
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -27,7 +27,8 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
  * application serves a bundle.
  */
 export function startEditor(project: ProjectClient, pluginUrl: (bundle: PluginBundle) => string): EditorApp {
-  const host = createEditor({ project });
+  // A document that fails to load is reported in the Console panel, at the asset at fault.
+  const host: EditorHost = createEditor({ project, log: (level, text, location) => logToConsole(host.editor, level, text, location) });
   for (const plugin of builtinPlugins) host.loader.activate(plugin);
   mountShell(document.getElementById("root")!, host);
   const log = (level: ConsoleLevel, text: string) => logToConsole(host.editor, level, text);
@@ -68,16 +69,14 @@ export function startEditor(project: ProjectClient, pluginUrl: (bundle: PluginBu
     void loadPlugins();
   });
 
-  const storeSession = (saved?: SavedSession) =>
-    void host.storeSession(saved).catch((error) => log("warning", `Cannot store the session: ${errorText(error)}`));
   // Closing the editor stores the session as it is, if the game still answers in time.
-  addEventListener("pagehide", () => storeSession());
+  addEventListener("pagehide", () => void host.sessions.store().catch((error) => log("warning", `Cannot store the session: ${errorText(error)}`)));
 
   return {
     host,
     loadPlugins,
     log,
-    storeSession,
+    sessions: host.sessions,
     connectGame(control) {
       host.setControl(control);
       if (!control) return;

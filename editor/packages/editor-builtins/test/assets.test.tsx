@@ -12,16 +12,16 @@ const entries = [
 /** The editor with every built-in plugin, a game, and the asset browser showing two files. */
 const SETTINGS = "0000000000000000000000000000000c";
 
-async function browser(disk: { text: string } = { text: "(on disk)" }, withGame = true, game?: Awaited<ReturnType<typeof testGame>>) {
+async function browser(disk: { text: string } = { text: "(on disk)" }, withGame = true) {
   const host = await testEditor(builtinPlugins, (request) => {
     if (request.type === "list_files") return { type: "files", entries };
     if (request.type === "read_text") return { type: "text", text: disk.text };
-    if (request.type === "read_asset_texts") return { type: "asset_texts", assets: [], paths: [[SETTINGS, "assets/settings.ron"]] };
+    if (request.type === "read_asset_texts") return { type: "asset_texts", assets: [], paths: [] };
     if (request.type === "load_stored_session") return { type: "stored_session", bytes: null };
     if (request.type === "info") return undefined;
     return { type: "done" };
   });
-  game ??= await testGame();
+  const game = await testGame();
   if (withGame) act(() => host.setControl(game.client));
   renderPanel(host, "ludenea.assets");
   await settle();
@@ -81,21 +81,71 @@ describe("assets", () => {
     expect(game.sent.filter((command) => command.type === "replace_scene")).toEqual([{ type: "replace_scene", scene: "(changed)", assets: [] }]);
   });
 
-  it("a_broken_asset_is_logged_at_its_file_line_and_column", async () => {
-    const message = `asset ${SETTINGS} is invalid: 2:17-2:18: Expected integer`;
-    const game = await testGame((command) => (command.type === "replace_scene" ? { error: { code: "invalid_scene", message } } : { type: "done" }));
-    const { host, disk } = await browser(undefined, true, game);
-    renderPanel(host, "ludenea.console");
-    await openScene();
-    setSceneDirty(host, false);
+  describe("assets changed on disk", () => {
+    const BALL = "0000000000000000000000000000000d";
+    const paths = [
+      [BALL, "assets/ball.prefab.ron"],
+      [SETTINGS, "assets/settings.ron"],
+    ];
+    /** The open scene with unsaved edits, over a project whose asset texts `disk` holds. */
+    async function project() {
+      const disk = { ball: "(ball)", settings: "(gravity_scale: 0.5)" };
+      const texts = () => [
+        [BALL, disk.ball],
+        [SETTINGS, `AssetFile(type: "demo::Settings", value: ${disk.settings})`],
+      ];
+      const game = await testGame((command) => {
+        if (command.type === "export_session") return { type: "session", scene: "(edited)", saved_scene: "(scene)", inputs: "", edits: "", undo: "", hashes: [], assets: [], branches: "", document: "Scene", keeps_assets: false };
+        // The host refuses the broken data asset, naming it by identifier.
+        if (command.type === "replace_scene" && disk.settings.includes("oops")) return { error: { code: "invalid_scene", message: `asset ${SETTINGS} is invalid: 1:17: Expected float` } };
+        return { type: "done" };
+      });
+      const host = await testEditor(builtinPlugins, (request) => {
+        if (request.type === "list_files") return { type: "files", entries };
+        if (request.type === "read_text") return { type: "text", text: "(scene)" };
+        if (request.type === "read_asset_texts") return { type: "asset_texts", assets: texts(), paths };
+        if (request.type === "load_stored_session") return { type: "stored_session", bytes: null };
+        if (request.type === "info") return undefined;
+        return { type: "done" };
+      });
+      act(() => host.setControl(game.client));
+      renderPanel(host, "ludenea.assets");
+      renderPanel(host, "ludenea.console");
+      await settle();
+      await openScene();
+      setSceneDirty(host, true);
+      const changed = (path: string, kind: object | string) => {
+        act(() => host.project.push({ type: "files_changed", changes: [{ Changed: { path, kind } }] }));
+        return settle();
+      };
+      return { host, game, disk, texts, changed };
+    }
 
-    disk.text = "(changed)";
-    act(() => host.project.push({ type: "files_changed", changes: [{ Changed: { path: SCENE, kind: "Scene" } }] }));
-    await settle();
+    it("a_prefab_change_reloads_the_open_scene_with_its_unsaved_edits", async () => {
+      const { game, disk, texts, changed } = await project();
 
-    const lines = screen.getByRole("list", { name: "Console" });
-    expect(lines.textContent).toContain(message);
-    expect(screen.getByRole("button", { name: "assets/settings.ron:2:17" })).toBeTruthy();
+      disk.ball = "(bigger ball)";
+      await changed("assets/ball.prefab.ron", "Prefab");
+
+      expect(game.sent.filter((command) => command.type === "replace_scene")).toEqual([{ type: "replace_scene", scene: "(edited)", assets: texts() }]);
+    });
+
+    it("a_data_asset_broken_on_disk_is_refused_and_logged_at_its_file_line_and_column", async () => {
+      const { host, game, disk, changed } = await project();
+      const before = `AssetFile(type: "demo::Settings", value: ${disk.settings})`;
+
+      disk.settings = "(gravity_scale: oops)";
+      await changed("assets/settings.ron", { Data: { type: "demo::Settings" } });
+
+      expect(game.sent.filter((command) => command.type === "replace_scene")).toHaveLength(1);
+      expect(screen.getByRole("button", { name: "assets/settings.ron:1:17" })).toBeTruthy();
+      expect(screen.getByRole("list", { name: "Console" }).textContent).toContain("Expected float");
+      // The game keeps the previous value, and so does every game started next.
+      const next = await testGame();
+      act(() => host.setControl(next.client));
+      await settle();
+      expect(next.sent.find((command) => command.type === "load_scene")?.assets).toContainEqual([SETTINGS, before]);
+    });
   });
 
   it("unsaved_marker_follows_scene_dirty", async () => {

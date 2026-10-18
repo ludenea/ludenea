@@ -1,6 +1,5 @@
 import type { FileChange, FileEntry } from "@ludenea/control-client";
-import { AssetFailure, definePlugin, type Editor } from "@ludenea/editor-shell";
-import { logToConsole } from "../console";
+import { definePlugin, type Editor } from "@ludenea/editor-shell";
 import { createStore, errorText, shared, type Scroll, type Store } from "../shared";
 import { AssetsPanel, baseName } from "./AssetsPanel";
 
@@ -56,15 +55,9 @@ export const assetsPlugin = definePlugin({
         ({ entries }) => state.set({ files: entries, listError: null }),
         (error) => state.set({ files: [], listError: errorText(error) }),
       );
-    // A document that fails to load also goes to the console, located in the asset at fault.
-    const logged = <T,>(work: Promise<T>) =>
-      work.catch((error: unknown) => {
-        const location = error instanceof AssetFailure ? { file: error.path, line: error.line, column: error.column } : undefined;
-        logToConsole(editor, "error", errorText(error), location);
-        throw error;
-      });
-    // Without a game the new text is only remembered: the next game loads it.
-    const replace = (text: string) => logged(documents.getState().replace(text));
+    // Without a game the new text is only remembered: the next game loads it. The document
+    // store reports a refused load in the console, at the asset at fault.
+    const replace = (text: string) => documents.getState().replace(text);
 
     // The watcher may report a rename's removal before the service answers it.
     const renaming = new Set<string>();
@@ -76,7 +69,7 @@ export const assetsPlugin = definePlugin({
         const entry = state.get().files.find((file) => file.path === path);
         if (entry?.kind !== "Scene" && entry?.kind !== "Prefab" && entry?.kind !== "Replay") throw new Error(`${path} is not a scene, a prefab, or a replay`);
         // Documents are usable before the build: the document is remembered and loaded into each game.
-        await logged(documents.getState().open(entry.id));
+        await documents.getState().open(entry.id);
         state.set({ banner: null, error: null });
       },
       async rename(from, to) {

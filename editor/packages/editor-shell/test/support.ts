@@ -1,5 +1,5 @@
 import { ControlClient, ProjectClient, fakeTransport, type GameInfo, type Reply } from "@ludenea/control-client";
-import { createEditor } from "../src/app";
+import { createEditor, type DocumentLog } from "../src/app";
 
 const game: GameInfo = { components: [], resources: [], assets: [], events: [], fingerprint: "0000000000000000", input: null, tick_rate: 60, debug_layers: [] };
 
@@ -11,7 +11,7 @@ const respond = (id: number, reply: object | undefined) =>
   reply ? [JSON.stringify({ type: "response", id, result: "error" in reply ? reply : { ok: reply } })] : [];
 
 /** An editor on a project service that welcomes it and answers with `answer` (nothing by default). */
-export async function testHost(importModule?: (url: string) => Promise<unknown>, answer: Answer = () => undefined) {
+export async function testHost(importModule?: (url: string) => Promise<unknown>, answer: Answer = () => undefined, log?: DocumentLog) {
   const project = await ProjectClient.connect(
     fakeTransport((raw) => {
       const message = JSON.parse(raw);
@@ -19,7 +19,7 @@ export async function testHost(importModule?: (url: string) => Promise<unknown>,
       return respond(message.id, answer(message.request));
     }),
   );
-  return createEditor({ project, importModule });
+  return createEditor({ project, importModule, log });
 }
 
 /** A game whose host answers each command with `answer(command)` (nothing when undefined). */
@@ -76,13 +76,15 @@ export const ids = {
   ball: "00000000000000000000000000000002",
   settings: "00000000000000000000000000000003",
   created: "00000000000000000000000000000004",
+  first: "00000000000000000000000000000005",
+  second: "00000000000000000000000000000006",
 };
 
 /** Stored sessions are the JSON of a `SavedSession`, base64-encoded. */
 const encode = (value: unknown) => btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(value))));
 const decode = (bytes: string) => JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(bytes), (char) => char.charCodeAt(0))));
 
-/** A project service with a scene, a prefab, and a data asset on its disk, which stores sessions. */
+/** A project service with a scene, a prefab, a data asset, and two replays on its disk, which stores sessions. */
 export function fakeProject() {
   const disk: { [path: string]: string } = {
     "scenes/main.scene.ron": "(main)",
@@ -93,6 +95,8 @@ export function fakeProject() {
     { path: "scenes/main.scene.ron", id: ids.main, kind: "Scene" },
     { path: "assets/ball.prefab.ron", id: ids.ball, kind: "Prefab" },
     { path: "assets/settings.ron", id: ids.settings, kind: { Data: { type: "demo::Settings" } } },
+    { path: "replays/first.replay", id: ids.first, kind: "Replay" },
+    { path: "replays/second.replay", id: ids.second, kind: "Replay" },
   ];
   const sessions = new Map<string, string>();
   const sent: Message[] = [];
@@ -108,7 +112,9 @@ export function fakeProject() {
       case "read_text":
         return { type: "text", text: disk[request.path as string] };
       case "read_asset_texts":
-        return { type: "asset_texts", assets: assets(), paths: entries.slice(1).map(({ id, path }) => [id, path]) };
+        return { type: "asset_texts", assets: assets(), paths: entries.slice(1, 3).map(({ id, path }) => [id, path]) };
+      case "read_binary":
+        return { type: "bytes", bytes: btoa(request.path as string) };
       case "store_session":
         sessions.set(request.document as string, request.bytes as string);
         return { type: "done" };
