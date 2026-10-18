@@ -96,7 +96,7 @@ const RESIMULATION_TIMEOUT_MS = 5 * 60 * 1000;
  * by default once it no longer resimulates; rejects if the game goes away, panics, or takes
  * longer than `RESIMULATION_TIMEOUT_MS`.
  */
-function simulated(control: ControlClient, tick = Infinity): Promise<void> {
+function simulated(control: ControlClient, tick = Infinity, onWait = () => {}): Promise<void> {
   return new Promise((resolve, reject) => {
     const stops: (() => void)[] = [];
     const settle = (error?: Error) => {
@@ -121,6 +121,7 @@ function simulated(control: ControlClient, tick = Infinity): Promise<void> {
     // Already resimulated: nothing to wait for. Otherwise `Resimulated` tells how far it got.
     control.request({ type: "get_timeline" }).then((timeline) => {
       if (!timeline.resimulating) settle();
+      else onWait();
     }, settle);
   });
 }
@@ -190,6 +191,8 @@ export function createDocumentStore(options: {
   let pending: SavedSession | null = null;
   // Exports taken while a document opens may belong to either document: they are tagged with none.
   let opening = false;
+  // The opens asked for and not finished, by document: a second open of one already waiting is the same.
+  const opens = new Map<AssetId, Promise<void>>();
   let queue: Promise<unknown> = Promise.resolve();
   // One open or reload at a time, in call order.
   const serial = <T>(run: () => Promise<T>): Promise<T> => {
@@ -273,9 +276,11 @@ export function createDocumentStore(options: {
     unsavedAssets: [],
     error: null,
     open: (id) => {
+      const waiting = opens.get(id);
+      if (waiting) return waiting;
       // The file once known, for the console.
       let name = `the document ${id}`;
-      return serial(async () => {
+      const opened = serial(async () => {
         const { entries } = await project.request({ type: "list_files" });
         const entry = entries.find((file) => file.id === id);
         if (!entry) throw new Error(`no project file has the identifier ${id}`);
@@ -287,7 +292,7 @@ export function createDocumentStore(options: {
         const previous = get().current;
         // A resimulating session cannot be exported: the switch waits for it.
         if (previous && game) {
-          await simulated(game);
+          await simulated(game, Infinity, () => log("info", `Opening ${entry.path} once the game finishes resimulating.`));
           await storeIn(previous, await tagged(game));
         }
         opening = true;
@@ -311,13 +316,22 @@ export function createDocumentStore(options: {
           pending = game ? null : restoring;
           if (!game) return;
           if (restoring) {
-            // The document is open, from its file: a stored session it cannot take back is reported, not refused.
-            const restored = await restore(game, restoring).then(
+            // The document is open, from its file: a stored session it cannot take back is
+            // reported (on the scene tree too when refused), not a refused open.
+            let accepted = false;
+            const restored = await restoreSession(game, restoring, restoring.tick, () => {
+              accepted = true;
+              set({ unsavedAssets: unsavedIn(restoring) });
+            }).then(
               (reply) => reply,
               (error: unknown) => {
                 const failure = locateAssetError(error, texts.paths);
-                log("error", `Cannot restore the stored session of ${entry.path}: ${message(failure)}`, failure instanceof AssetFailure ? { file: failure.path, line: failure.line, column: failure.column } : undefined);
-                return loaded;
+                const text = accepted
+                  ? `The stored session of ${entry.path} is loaded, but cannot go back to tick ${restoring.tick}: ${message(failure)}`
+                  : `The game refused the stored session of ${entry.path}; the document opened from its file: ${message(failure)}`;
+                log(accepted ? "warning" : "error", text, failure instanceof AssetFailure ? { file: failure.path, line: failure.line, column: failure.column } : undefined);
+                if (!accepted) set({ error: text });
+                return accepted ? null : loaded;
               },
             );
             set({ loaded: restored });
@@ -327,6 +341,9 @@ export function createDocumentStore(options: {
           opening = false;
         }
       }).catch((error: unknown) => reported(`Cannot open ${name}`)(error));
+      const done = opened.finally(() => opens.delete(id));
+      opens.set(id, done);
+      return done;
     },
     replace: (text) =>
       serial(async () => {
@@ -348,17 +365,38 @@ export function createDocumentStore(options: {
   // edits saved): it keeps its edits, history, branches, and unsaved state, and replays. An
   // unsaved asset keeps its session text over the file's. Refused, the game keeps the
   // previous session and the previous texts stay.
-  const reloadAssets = async () => {
+  //
+  // Reloads coalesce: one asked for while another waits its turn or for a resimulation is the
+  // same reload, which reads the texts on disk once it runs. Each reload plays on when the game
+  // played when the first of them was asked for, or when the reload it follows was to.
+  let queued: Promise<void> | null = null;
+  // The latest reload: an earlier one leaves the seek and play to it.
+  let latest = 0;
+  let resuming = false;
+  const reloadAssets = (): Promise<void> => {
+    if (queued) return queued;
+    const reload = ++latest;
+    const playing = resuming || (options.playing?.() ?? false);
+    resuming = playing;
+    // Once it reads the texts, a new change on disk needs a reload of its own.
+    const release = () => {
+      if (queued === mine) queued = null;
+    };
+    const mine: Promise<void> = reloadOnce(reload, playing, release).finally(release);
+    queued = mine;
+    return mine;
+  };
+  const reloadOnce = async (reload: number, playing: boolean, reading: () => void) => {
     const reloaded = await serial(async () => {
       const document = store.getState().current;
+      const game = control();
+      // A resimulating session cannot be exported: the reload waits for it.
+      if (document?.kind !== "replay" && document && game) await simulated(game);
+      reading();
       if (document?.kind === "replay") return null;
       const fresh = await readTexts();
-      const game = control();
       let saved: SavedSession | null = null;
-      const playing = options.playing?.() ?? false;
       if (document && game) {
-        // A resimulating session cannot be exported: the reload waits for it.
-        await simulated(game);
         const exported = await exportSession(game);
         const { assets, kept } = keepingUnsaved(fresh.assets, exported.load.assets);
         saved = { ...exported, load: { ...exported.load, assets } };
@@ -366,20 +404,21 @@ export function createDocumentStore(options: {
         store.setState({ loaded, unsavedAssets: kept(store.getState().unsavedAssets), error: null });
       }
       texts = fresh;
-      return game && saved && document && { game, saved, document, playing };
+      return game && saved && document && { game, saved, document };
     }).catch(reported("Cannot reload the changed assets"));
     // Off the queue: a long resimulation holds up no document change, and a document opened
-    // or a game started meanwhile is left as it is.
+    // (or asked for), a game started, or a later reload meanwhile is left as it is.
     if (reloaded) {
       const { game, saved, document } = reloaded;
-      const still = () => !opening && control() === game && store.getState().current?.id === document.id;
+      const still = () => reload === latest && opens.size === 0 && !opening && control() === game && store.getState().current?.id === document.id;
       try {
         // Loading the session paused the game: it plays on from where it was.
-        if ((await returnTo(game, saved, saved.tick, still)) && reloaded.playing && still()) await game.request({ type: "play" });
+        if ((await returnTo(game, saved, saved.tick, still)) && playing && still()) await game.request({ type: "play" });
       } catch (error) {
         log("warning", `Cannot go back to tick ${saved.tick} after reloading the assets: ${message(error)}`);
       }
     }
+    if (reload === latest) resuming = false;
   };
   project.on("files_changed", ({ changes }) => {
     const open = store.getState().current?.path;

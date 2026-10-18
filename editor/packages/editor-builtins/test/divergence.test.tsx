@@ -157,6 +157,14 @@ describe("divergence", () => {
     act(() => host.editor.timeline.setState({ timeline: timeline({ simulated: 520, head: 520, current: 360 }) }));
     await settle();
     expect([traces(), snapshots()]).toEqual([2, 2]);
+    // While playing, the snapshot waits for the pause.
+    act(() => host.editor.timeline.setState({ playing: true, timeline: timeline({ simulated: 520, head: 520, current: 361 }) }));
+    act(() => host.editor.timeline.setState({ timeline: timeline({ simulated: 520, head: 520, current: 362 }) }));
+    await settle();
+    expect(snapshots()).toBe(2);
+    act(() => host.editor.timeline.setState({ playing: false }));
+    await settle();
+    expect(snapshots()).toBe(3);
 
     // Two files: nothing follows the session.
     fireEvent.change(screen.getByLabelText("Compare the trace with"), { target: { value: "assets/other.trace" } });

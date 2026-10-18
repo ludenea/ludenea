@@ -106,9 +106,12 @@ export const inspectorPlugin = definePlugin({
         }
       },
     });
-    // Undo and redo may take a tick 0 asset edit back or bring it again.
+    // Undo and redo may take a tick 0 asset edit back or bring it again. A check answered
+    // after a later edit is stale: that edit's own check, or its mark, decides.
+    let edits = 0;
     onEdited(editor, (command) => {
-      if (command.type === "undo" || command.type === "redo") void markDiffering(editor);
+      const asked = ++edits;
+      if (command.type === "undo" || command.type === "redo") void markDiffering(editor, () => asked === edits);
     });
     editor.panels.register({
       id: "ludenea.inspector",
@@ -123,7 +126,7 @@ export const inspectorPlugin = definePlugin({
  * Marks each data asset unsaved whose text in the session differs from its file. A replay's
  * assets are its own: they are left as they are.
  */
-async function markDiffering(editor: Editor): Promise<void> {
+async function markDiffering(editor: Editor, current: () => boolean): Promise<void> {
   const control = editor.control;
   if (!control || editor.document.getState().current?.kind === "replay") return;
   try {
@@ -135,7 +138,7 @@ async function markDiffering(editor: Editor): Promise<void> {
         const session = await control.request({ type: "save_asset", id }).catch(() => null);
         if (!session) return;
         const { text } = await editor.project.request({ type: "read_text", path });
-        markUnsaved(editor, id, session.text.trim() !== text.trim());
+        if (current()) markUnsaved(editor, id, session.text.trim() !== text.trim());
       }),
     );
   } catch (error) {

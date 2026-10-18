@@ -566,6 +566,30 @@ describe("data assets, replays, traces, and snapshots", () => {
     expect(host.editor.document.getState().unsavedAssets).toEqual([SETTINGS]);
   });
 
+  it("an_unsaved_check_answered_after_a_later_edit_is_dropped", async () => {
+    // The check after undo is answered late, each asset with its file's text.
+    const late: (() => void)[] = [];
+    const files: { [id: string]: string } = { [SETTINGS]: "(gravity_scale: 0.5)", [SWORD]: "(damage: 1)" };
+    const { host, onDisk } = await project({
+      answer: (command) =>
+        command.type === "save_asset" ? new Promise<object>((resolve) => late.push(() => resolve({ type: "text", text: files[command.id as string] }))) : undefined,
+    });
+    onDisk.files = { "assets/settings.ron": "(gravity_scale: 0.5)", "assets/sword.ron": "(damage: 1)" };
+    renderPanel(host, "ludenea.inspector");
+    fireEvent.click(screen.getByText("settings.ron"));
+    await settle();
+
+    await act(() => host.editor.commands.run("edit.undo"));
+    type("gravity_scale", "2");
+    await settle();
+    expect(host.editor.document.getState().unsavedAssets).toEqual([SETTINGS]);
+    expect(late).toHaveLength(2);
+    late.forEach((answer) => answer());
+    await settle();
+
+    expect(host.editor.document.getState().unsavedAssets).toEqual([SETTINGS]);
+  });
+
   it("apply_to_asset_shown_past_tick_0", async () => {
     const { host, game } = await project({ current: 40 });
     renderPanel(host, "ludenea.inspector");

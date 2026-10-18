@@ -121,7 +121,8 @@ export const divergencePlugin = definePlugin({
         await viewer.diffSnapshot({ path: null, against: null, tick: result.first_divergent });
       },
     };
-    // Comparisons with the session follow it: at once while paused, once a second while playing.
+    // Comparisons with the session follow it: a trace at once while paused and once a second
+    // while playing, a snapshot (a whole diff of the world) only while paused, once play stops.
     const live = (store: Store<Comparison<unknown>>) => store.get().path !== null && store.get().against === null;
     const stale = { trace: false, snapshot: false };
     let following: ReturnType<typeof setTimeout> | undefined;
@@ -137,9 +138,9 @@ export const divergencePlugin = definePlugin({
         editor.timeline.getState().playing ? FOLLOW_PLAYING_MS : 0,
       );
     };
-    const stopFollowing = editor.timeline.subscribe(({ timeline: next }, { timeline: previous }) => {
-      stale.trace ||= live(trace) && next?.simulated !== previous?.simulated;
-      stale.snapshot ||= live(snapshot) && next?.current !== previous?.current;
+    const stopFollowing = editor.timeline.subscribe((next, previous) => {
+      stale.trace ||= live(trace) && next.timeline?.simulated !== previous.timeline?.simulated;
+      stale.snapshot ||= live(snapshot) && !next.playing && (previous.playing || next.timeline?.current !== previous.timeline?.current);
       if (stale.trace || stale.snapshot) followSession();
     });
 

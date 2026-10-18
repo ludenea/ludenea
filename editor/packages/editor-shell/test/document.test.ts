@@ -167,8 +167,11 @@ describe("document store", () => {
 
     await host.editor.document.getState().open(ids.main);
 
-    expect(host.editor.document.getState()).toMatchObject({ current: { id: ids.main }, error: null, unsavedAssets: [], loaded: { warnings: ["from the file"] } });
-    expect(log).toHaveBeenCalledWith("error", "Cannot restore the stored session of scenes/main.scene.ron: the branch tree cannot be decoded", undefined);
+    expect(host.editor.document.getState()).toMatchObject({ current: { id: ids.main }, unsavedAssets: [], loaded: { warnings: ["from the file"] } });
+    const refused = "The game refused the stored session of scenes/main.scene.ron; the document opened from its file: the branch tree cannot be decoded";
+    expect(log).toHaveBeenCalledWith("error", refused, undefined);
+    // Shown on the scene tree as well.
+    expect(host.editor.document.getState().error).toBe(refused);
   });
 
   it("the_session_of_the_open_document_is_refreshed_from_disk_for_a_new_game", async () => {
@@ -201,7 +204,11 @@ describe("document store", () => {
       resimulating = false;
       game.push({ type: "timeline_changed", timeline: timeline(2) });
     };
-    return { ...game, finish };
+    // A resimulation starts (an edit, a branch switch).
+    const start = () => {
+      resimulating = true;
+    };
+    return { ...game, finish, start };
   }
 
   it("an_asset_reload_waits_for_a_resimulation_then_plays_on", async () => {
@@ -267,6 +274,59 @@ describe("document store", () => {
     await reloaded;
 
     expect(game.sent.filter((command) => command.type === "seek")).toEqual([]);
+  });
+
+  const kinds = (sent: { type: string }[], types: string[]) => sent.filter((command) => types.includes(command.type)).map((command) => command.type);
+
+  it("asset_reloads_asked_for_during_a_resimulation_coalesce_and_play_on", async () => {
+    const project = fakeProject();
+    const host = await testHost(undefined, project.answer);
+    const game = await resimulatingGame();
+    host.setControl(game.control);
+    await host.editor.document.getState().open(ids.main);
+    // The session resimulates (an edit) while files change twice, the game playing.
+    const first = host.editor.document.getState().reloadAssets();
+    await vi.waitFor(() => expect(game.sent.some((command) => command.type === "load_session")).toBe(true));
+    game.finish();
+    await first;
+    game.start();
+    game.sent.length = 0;
+    host.editor.timeline.setState({ playing: true });
+    const reloads = [host.editor.document.getState().reloadAssets(), host.editor.document.getState().reloadAssets()];
+    expect(reloads[0]).toBe(reloads[1]);
+    for (let turn = 0; turn < 5; turn++) await settle();
+    game.finish();
+    await vi.waitFor(() => expect(game.sent.some((command) => command.type === "load_session")).toBe(true));
+    // The load paused the game: a reload asked for now still plays on.
+    host.editor.timeline.setState({ playing: false });
+    const third = host.editor.document.getState().reloadAssets();
+    game.finish();
+    await vi.waitFor(() => expect(kinds(game.sent, ["load_session"])).toHaveLength(2));
+    game.finish();
+    await Promise.all([...reloads, third]);
+
+    expect(kinds(game.sent, ["load_session", "seek", "play"])).toEqual(["load_session", "load_session", "seek", "play"]);
+  });
+
+  it("an_open_waiting_for_a_resimulation_says_so_and_keeps_a_reload_from_seeking", async () => {
+    const project = fakeProject();
+    const log = vi.fn();
+    const host = await testHost(undefined, project.answer, log);
+    const game = await resimulatingGame();
+    host.setControl(game.control);
+    await host.editor.document.getState().open(ids.main);
+    const reloaded = host.editor.document.getState().reloadAssets();
+    await vi.waitFor(() => expect(game.sent.some((command) => command.type === "load_session")).toBe(true));
+    game.sent.length = 0;
+
+    const opened = [host.editor.document.getState().open(ids.ball), host.editor.document.getState().open(ids.ball)];
+    expect(opened[0]).toBe(opened[1]);
+    await vi.waitFor(() => expect(log).toHaveBeenCalledWith("info", "Opening assets/ball.prefab.ron once the game finishes resimulating."));
+    game.finish();
+    await Promise.all([reloaded, ...opened]);
+
+    expect(kinds(game.sent, ["seek", "load_scene"])).toEqual(["load_scene"]);
+    expect(host.editor.document.getState().current?.id).toBe(ids.ball);
   });
 
   it("root_branch_takes_the_document_name", async () => {
