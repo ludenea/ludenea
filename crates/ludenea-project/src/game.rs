@@ -1,9 +1,10 @@
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
+use ludenea_control::ServerMessage;
 use serde::{Deserialize, Serialize};
 
 use crate::{ProjectError, io_error};
@@ -85,25 +86,22 @@ impl GameProcess {
         self.stdin = None;
     }
 
-    /// The protocol messages the game prints. The receiver disconnects when the game exits.
-    /// A second call returns a receiver that is already disconnected.
-    pub fn take_messages(&mut self) -> Receiver<String> {
-        self.messages.take().unwrap_or_else(|| mpsc::channel().1)
+    /// The protocol messages the game prints, once: `None` when already taken. The receiver
+    /// disconnects when the game closes its output, which it does when it exits.
+    pub fn take_messages(&mut self) -> Option<Receiver<String>> {
+        self.messages.take()
     }
 
-    /// Everything else the game prints, on both streams.
-    pub fn take_output(&mut self) -> Receiver<GameOutput> {
-        self.output.take().unwrap_or_else(|| mpsc::channel().1)
+    /// Everything else the game prints, on both streams, once: `None` when already taken.
+    pub fn take_output(&mut self) -> Option<Receiver<GameOutput>> {
+        self.output.take()
     }
 
-    /// The exit code once the game has exited; `None` while it runs (and when a signal ended
-    /// it). Never blocks: detect the exit by the message receiver disconnecting, then call this.
-    pub fn wait(&mut self) -> Option<i32> {
-        self.child
-            .try_wait()
-            .ok()
-            .flatten()
-            .and_then(|status| status.code())
+    /// How the game ended (`code()` is `None` when a signal ended it), or `None` while it runs.
+    /// Never blocks. The message receiver disconnecting comes first: the status can follow a
+    /// moment later, so poll for a while.
+    pub fn wait(&mut self) -> Option<ExitStatus> {
+        self.child.try_wait().ok().flatten()
     }
 
     pub fn stop(self) {}
@@ -120,12 +118,21 @@ fn forward(sender: &Sender<GameOutput>, stream: OutputStream, line: String) {
     let _ = sender.send(GameOutput { stream, line });
 }
 
-/// Splits a stdout line into what the game printed and a protocol message, which starts
-/// with `{"type":`. Text the game printed without a trailing newline ends up in front of
-/// the next protocol line on the same line; it is split off as the game's own output.
+/// Splits a stdout line into what the game printed and a protocol message. A line starting
+/// with `{"type":` is a protocol message: the host writes nothing else that way, and a game
+/// printing such a line itself confuses the editor. Text the game printed without a trailing
+/// newline ends up in front of the next protocol line; it is split off only where the rest of
+/// the line is a whole protocol message, so a game printing `{"type":` mid-line keeps its line.
 fn split_stdout_line(line: &str) -> (Option<&str>, Option<&str>) {
-    match line.find(r#"{"type":"#) {
-        Some(0) => (None, Some(line)),
+    const START: &str = r#"{"type":"#;
+    if line.starts_with(START) {
+        return (None, Some(line));
+    }
+    let message = line
+        .match_indices(START)
+        .map(|(at, _)| at)
+        .find(|&at| serde_json::from_str::<ServerMessage>(&line[at..]).is_ok());
+    match message {
         Some(at) => (Some(&line[..at]), Some(&line[at..])),
         None => (Some(line), None),
     }
@@ -137,12 +144,22 @@ mod tests {
 
     #[test]
     fn printed_text_without_a_newline_is_split_from_the_next_message() {
-        let message = r#"{"type":"event"}"#;
+        let message = r#"{"type":"event","event":{"type":"resimulated","up_to":3}}"#;
         assert_eq!(split_stdout_line(message), (None, Some(message)));
         assert_eq!(
             split_stdout_line(&format!("loading...{message}")),
             (Some("loading..."), Some(message))
         );
+        assert_eq!(
+            split_stdout_line(&format!(r#"saw {{"type":"jump"}} then {message}"#)),
+            (Some(r#"saw {"type":"jump"} then "#), Some(message))
+        );
         assert_eq!(split_stdout_line("hello"), (Some("hello"), None));
+    }
+
+    #[test]
+    fn printed_json_mid_line_stays_the_games_output() {
+        let line = r#"state: {"type":"jump"}"#;
+        assert_eq!(split_stdout_line(line), (Some(line), None));
     }
 }

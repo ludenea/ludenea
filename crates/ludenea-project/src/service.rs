@@ -16,7 +16,7 @@ use crate::protocol::{
 };
 use crate::{
     BuildArtifact, BuildError, BuildEvent, BuildTarget, GameProcess, PluginEvent, Project,
-    ProjectError, ProjectWarning,
+    ProjectError, ProjectWarning, WATCH_POLL, Watch,
 };
 
 /// Events a slow client may fall behind by before it misses some.
@@ -35,7 +35,8 @@ pub struct ProjectService {
     engine_path: Option<PathBuf>,
     events: broadcast::Sender<ProjectEvent>,
     opened: Option<Opened>,
-    /// Set once an editor said hello: from then on a desktop rebuild waits for `RestartGame`.
+    /// Set while an editor is connected (it said hello): a desktop rebuild then waits for
+    /// `RestartGame`.
     editor_connected: Arc<AtomicBool>,
 }
 
@@ -43,7 +44,7 @@ pub struct ProjectService {
 struct Opened {
     project: Arc<Mutex<Project>>,
     game: Arc<Mutex<Game>>,
-    /// Builds share a staging directory, so they run one at a time.
+    /// Builds run one at a time, so the last to finish is the newest.
     builds: Arc<Mutex<()>>,
     /// Cleared when the project is closed; background threads then stop.
     alive: Arc<AtomicBool>,
@@ -85,6 +86,12 @@ impl ProjectService {
             opened: None,
             editor_connected: Arc::default(),
         }
+    }
+
+    /// Desktop: the editor went away (its window reloaded or closed), so rebuilds swap the game
+    /// at once until the next hello.
+    pub fn editor_disconnected(&self) {
+        self.editor_connected.store(false, Ordering::SeqCst);
     }
 
     /// The events of every open project from now on, for one client.
@@ -250,6 +257,7 @@ impl ProjectService {
                 let binary = game.rebuilt.take().ok_or_else(|| {
                     ProjectFailure::new(FailureCode::NoGame, "no rebuilt game waits to start")
                 })?;
+                // A game that cannot start leaves the previous one running.
                 start_game(&mut game, &binary, &self.events)
                     .map_err(|message| ProjectFailure::new(FailureCode::Io, message))?;
                 let _ = self.events.send(ProjectEvent::GameReady);
@@ -279,10 +287,16 @@ impl ProjectService {
 
     fn game_endpoint(&self) -> Result<ProjectReply, ProjectFailure> {
         let opened = self.opened()?;
-        if self.mode == ServiceMode::Desktop {
-            return Ok(ProjectReply::Native);
-        }
         let game = lock(&opened.game);
+        if self.mode == ServiceMode::Desktop {
+            return match game.process {
+                Some(_) => Ok(ProjectReply::Native),
+                None => Err(ProjectFailure::new(
+                    FailureCode::NoGame,
+                    "the game has not started yet",
+                )),
+            };
+        }
         let hash = game
             .wasm
             .as_deref()
@@ -309,29 +323,14 @@ impl ProjectService {
             alive: Arc::new(AtomicBool::new(true)),
             last_build: Arc::default(),
         };
-        let (alive, events) = (Arc::clone(&opened.alive), self.events.clone());
-        thread::spawn(move || {
-            while let Ok(change) = changes.recv() {
-                if !alive.load(Ordering::SeqCst) {
-                    return;
-                }
-                let mut batch = vec![change];
-                batch.extend(changes.try_iter());
-                let _ = events.send(ProjectEvent::FilesChanged { changes: batch });
-            }
+        let events = self.events.clone();
+        forward_while_open(&opened.alive, changes, move |changes| {
+            let _ = events.send(ProjectEvent::FilesChanged { changes });
         });
-        let (alive, events) = (Arc::clone(&opened.alive), self.events.clone());
-        thread::spawn(move || {
-            for event in plugins {
-                if !alive.load(Ordering::SeqCst) {
-                    return;
-                }
-                let _ = events.send(match event {
-                    PluginEvent::Rebuilt(bundle) => ProjectEvent::PluginRebuilt(bundle),
-                    PluginEvent::Failed { name, diagnostics } => {
-                        ProjectEvent::PluginFailed { name, diagnostics }
-                    }
-                });
+        let events = self.events.clone();
+        forward_while_open(&opened.alive, plugins, move |batch| {
+            for event in batch {
+                let _ = events.send(plugin_event(event));
             }
         });
         self.build(&opened);
@@ -391,6 +390,40 @@ impl ProjectService {
     }
 }
 
+/// Hands each batch `watch` reports to `forward` on a thread of its own until the project
+/// closes, then drops `watch`, which stops its watcher.
+fn forward_while_open<T: Send + 'static>(
+    alive: &Arc<AtomicBool>,
+    watch: Watch<T>,
+    mut forward: impl FnMut(Vec<T>) + Send + 'static,
+) {
+    let alive = Arc::clone(alive);
+    thread::spawn(move || {
+        while alive.load(Ordering::SeqCst) {
+            match watch.recv_timeout(WATCH_POLL) {
+                Ok(first) => {
+                    let mut batch = vec![first];
+                    batch.extend(watch.try_iter());
+                    if alive.load(Ordering::SeqCst) {
+                        forward(batch);
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            }
+        }
+    });
+}
+
+fn plugin_event(event: PluginEvent) -> ProjectEvent {
+    match event {
+        PluginEvent::Rebuilt(bundle) => ProjectEvent::PluginRebuilt(bundle),
+        PluginEvent::Failed { name, diagnostics } => {
+            ProjectEvent::PluginFailed { name, diagnostics }
+        }
+    }
+}
+
 /// Sends a build's event and keeps it for `announcements`, a progress replacing the last one.
 fn record(log: &BuildLog, events: &broadcast::Sender<ProjectEvent>, event: ProjectEvent) {
     let mut log = lock(log);
@@ -412,7 +445,8 @@ fn record(log: &BuildLog, events: &broadcast::Sender<ProjectEvent>, event: Proje
 
 /// Puts a successful build in place and announces it. On desktop with an editor connected
 /// (`hold`), a running game keeps running until `RestartGame`, so the editor can export its
-/// session first.
+/// session first; a newer build replaces the waiting one without a second announcement, so
+/// the editor exports once.
 fn finish_build(
     game: &mut Game,
     artifact: BuildArtifact,
@@ -422,8 +456,9 @@ fn finish_build(
     match artifact {
         BuildArtifact::Wasm { dir } => game.wasm = Some(dir),
         BuildArtifact::Native { binary } if hold && game.process.is_some() => {
-            game.rebuilt = Some(binary);
-            let _ = events.send(ProjectEvent::GameRebuilt);
+            if game.rebuilt.replace(binary).is_none() {
+                let _ = events.send(ProjectEvent::GameRebuilt);
+            }
             return;
         }
         BuildArtifact::Native { binary } => {
@@ -435,19 +470,19 @@ fn finish_build(
     let _ = events.send(ProjectEvent::GameReady);
 }
 
-/// Stops the running game, if any, and starts `binary` in its place.
+/// Starts `binary`, then stops the running game, if any, and puts the new one in its place.
+/// When `binary` cannot start, the running game stays.
 fn start_game(
     game: &mut Game,
     binary: &Path,
     events: &broadcast::Sender<ProjectEvent>,
 ) -> Result<(), String> {
+    let process =
+        GameProcess::start(binary).map_err(|error| format!("cannot start the game: {error}"))?;
     if let Some(previous) = game.process.take() {
         lock(&previous).take();
     }
-    game.control = None;
     game.rebuilt = None;
-    let process =
-        GameProcess::start(binary).map_err(|error| format!("cannot start the game: {error}"))?;
     let (slot, control) = relay(process, events);
     game.process = Some(slot);
     game.control = Some(control);
@@ -460,8 +495,8 @@ fn relay(
     mut process: GameProcess,
     events: &broadcast::Sender<ProjectEvent>,
 ) -> (GameSlot, ControlChannel) {
-    let messages = process.take_messages();
-    let output = process.take_output();
+    let messages = process.take_messages().expect("a new game's messages");
+    let output = process.take_output().expect("a new game's output");
     let slot: GameSlot = Arc::new(Mutex::new(Some(process)));
     let (to_game, input) = mpsc::channel::<String>();
     let (from_game, relayed) = mpsc::channel();
@@ -492,8 +527,9 @@ fn relay(
             let mut slot = lock(&watcher);
             // A replaced game is not news.
             let Some(process) = slot.as_mut() else { return };
-            if let Some(code) = process.wait() {
-                let _ = events.send(ProjectEvent::GameExited { code: Some(code) });
+            if let Some(status) = process.wait() {
+                let code = status.code();
+                let _ = events.send(ProjectEvent::GameExited { code });
                 return;
             }
             drop(slot);
@@ -546,13 +582,33 @@ mod tests {
 
     /// A stand-in game binary answering each line with `{"type":"<name>"}`.
     fn fake_game(dir: &Path, name: &str) -> PathBuf {
+        script(
+            dir,
+            name,
+            &format!("while IFS= read -r line; do echo '{{\"type\":\"{name}\"}}'; done"),
+        )
+    }
+
+    /// A stand-in game binary running the shell `body`.
+    fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
         let path = dir.join(name);
-        let script = format!(
-            "#!/bin/sh\nwhile IFS= read -r line; do echo '{{\"type\":\"{name}\"}}'; done\n"
-        );
-        fs::write(&path, script).unwrap();
+        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
         path
+    }
+
+    /// Waits for the first `GameExited` and returns its code with how long it took.
+    #[allow(clippy::disallowed_methods)]
+    fn game_exited(events: &mut broadcast::Receiver<ProjectEvent>) -> (Option<i32>, Duration) {
+        let start = std::time::Instant::now();
+        while start.elapsed() < Duration::from_secs(10) {
+            match events.try_recv() {
+                Ok(ProjectEvent::GameExited { code }) => return (code, start.elapsed()),
+                Ok(_) => {}
+                Err(_) => thread::sleep(Duration::from_millis(5)),
+            }
+        }
+        panic!("the game never exited");
     }
 
     /// A desktop service with a project open (its own build fails fast: no engine).
@@ -609,6 +665,102 @@ mod tests {
         std::iter::from_fn(|| events.try_recv().ok())
             .filter(|event| matches!(event, ProjectEvent::GameReady | ProjectEvent::GameRebuilt))
             .collect()
+    }
+
+    #[test]
+    fn an_exit_code_is_announced() {
+        let dir = TempDir::new().unwrap();
+        let mut service = desktop_service(&dir);
+        let mut events = service.subscribe();
+        finish(
+            &service,
+            script(dir.path(), "exits", "read -r line; exit 3"),
+            false,
+        );
+        let (to_game, _from_game) = service.take_control_channel().unwrap();
+        to_game.send("{}".to_string()).unwrap();
+        assert_eq!(game_exited(&mut events).0, Some(3));
+    }
+
+    /// A game a signal ended has no code to wait for.
+    #[test]
+    fn a_signal_exit_is_announced_at_once() {
+        let dir = TempDir::new().unwrap();
+        let mut service = desktop_service(&dir);
+        let mut events = service.subscribe();
+        finish(
+            &service,
+            script(dir.path(), "killed", "read -r line; kill -9 $$"),
+            false,
+        );
+        let (to_game, _from_game) = service.take_control_channel().unwrap();
+        to_game.send("{}".to_string()).unwrap();
+        let (code, waited) = game_exited(&mut events);
+        assert_eq!(code, None);
+        assert!(waited < EXIT_POLL_INTERVAL * EXIT_POLLS / 2, "{waited:?}");
+    }
+
+    #[test]
+    fn a_game_that_cannot_start_keeps_the_previous_one() {
+        let dir = TempDir::new().unwrap();
+        let mut service = desktop_service(&dir);
+        finish(&service, fake_game(dir.path(), "first"), false);
+        finish(&service, dir.path().join("missing"), false);
+        assert_eq!(ask(&mut service), r#"{"type":"first"}"#);
+
+        finish(&service, dir.path().join("missing"), true);
+        let failure = service.handle(ProjectRequest::RestartGame).unwrap_err();
+        assert_eq!(failure.code, FailureCode::Io);
+        assert_eq!(game_announcements(&service), [ProjectEvent::GameReady]);
+    }
+
+    /// The editor exports its session once for two rebuilds; the newest one starts.
+    #[test]
+    fn rebuilds_waiting_for_a_restart_are_announced_once() {
+        let dir = TempDir::new().unwrap();
+        let mut service = desktop_service(&dir);
+        let mut events = service.subscribe();
+        finish(&service, fake_game(dir.path(), "first"), true);
+        finish(&service, fake_game(dir.path(), "second"), true);
+        finish(&service, fake_game(dir.path(), "third"), true);
+        assert_eq!(
+            received(&mut events),
+            [ProjectEvent::GameReady, ProjectEvent::GameRebuilt]
+        );
+        service.take_control_channel();
+        service.handle(ProjectRequest::RestartGame).unwrap();
+        assert_eq!(ask(&mut service), r#"{"type":"third"}"#);
+    }
+
+    #[test]
+    fn desktop_game_endpoint_waits_for_a_game() {
+        let dir = TempDir::new().unwrap();
+        let mut service = desktop_service(&dir);
+        let failure = service.handle(ProjectRequest::GameEndpoint).unwrap_err();
+        assert_eq!(failure.code, FailureCode::NoGame);
+        finish(&service, fake_game(dir.path(), "first"), false);
+        assert_eq!(
+            service.handle(ProjectRequest::GameEndpoint),
+            Ok(ProjectReply::Native)
+        );
+    }
+
+    /// Every thread of a closed project ends, watchers included, even if nothing changes.
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn closing_a_project_stops_its_threads() {
+        let dir = TempDir::new().unwrap();
+        let mut service = desktop_service(&dir);
+        let alive = Arc::clone(&service.opened.as_ref().unwrap().alive);
+        service.opened = None;
+        let start = std::time::Instant::now();
+        while Arc::strong_count(&alive) > 1 {
+            assert!(
+                start.elapsed() < Duration::from_secs(60),
+                "a thread still runs"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
     }
 
     #[test]

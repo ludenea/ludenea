@@ -154,7 +154,7 @@ fn wasm_build_produces_glue_and_wasm_in_hashed_dir() {
 #[ignore]
 fn game_process_handshakes_over_stdio() {
     let mut game = GameProcess::start(game_binary()).unwrap();
-    let messages = game.take_messages();
+    let messages = game.take_messages().unwrap();
     let info = handshake(&mut game, &messages);
     assert!(info.tick_rate > 0);
     game.stop();
@@ -164,8 +164,8 @@ fn game_process_handshakes_over_stdio() {
 #[ignore]
 fn game_println_is_output_not_protocol() {
     let mut game = GameProcess::start(game_binary()).unwrap();
-    let messages = game.take_messages();
-    let output = game.take_output();
+    let messages = game.take_messages().unwrap();
+    let output = game.take_output().unwrap();
     handshake(&mut game, &messages);
     let line = output
         .recv_timeout(TIMEOUT)
@@ -179,7 +179,7 @@ fn game_println_is_output_not_protocol() {
 #[ignore]
 fn game_types_declare_template_components() {
     let mut game = GameProcess::start(game_binary()).unwrap();
-    let messages = game.take_messages();
+    let messages = game.take_messages().unwrap();
     let info = handshake(&mut game, &messages);
     game.stop();
     let dir = TempDir::new().unwrap();
@@ -217,7 +217,7 @@ export async function probe(editor: Editor, entity: Entity): Promise<number | un
 #[ignore]
 fn generated_game_types_type_check_project_plugins() {
     let mut game = GameProcess::start(game_binary()).unwrap();
-    let messages = game.take_messages();
+    let messages = game.take_messages().unwrap();
     let info = handshake(&mut game, &messages);
     game.stop();
     let dir = TempDir::new().unwrap();
@@ -246,9 +246,10 @@ fn generated_game_types_type_check_project_plugins() {
 #[ignore]
 fn wait_is_none_while_running_and_has_the_code_after_exit() {
     let mut game = GameProcess::start(game_binary()).unwrap();
-    let messages = game.take_messages();
+    let messages = game.take_messages().unwrap();
     handshake(&mut game, &messages);
     assert_eq!(game.wait(), None);
+    assert!(game.take_messages().is_none(), "taken once");
     game.close_input();
     assert!(game.send("{}").is_err());
     // The receiver disconnects when the game exits.
@@ -265,5 +266,5 @@ fn wait_is_none_while_running_and_has_the_code_after_exit() {
         std::thread::sleep(Duration::from_millis(50));
         code = game.wait();
     }
-    assert_eq!(code, Some(0));
+    assert_eq!(code.and_then(|status| status.code()), Some(0));
 }

@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::{fs, io, thread};
 
@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use xxhash_rust::xxh3::xxh3_64;
 
 use crate::files::WATCH_DEBOUNCE;
-use crate::{Diagnostic, Project};
+use crate::{Diagnostic, Project, Watch, next_raw};
 
 /// Provided by the editor at runtime (import map), so every plugin shares one instance.
 const SHARED_MODULES: [&str; 4] = [
@@ -90,11 +90,11 @@ impl Project {
             .collect()
     }
 
-    /// Rebundles a plugin whenever a file of its `editor/` directory changes. Watching stops when
-    /// the receiver is dropped (noticed at the next change). If watching cannot start, the only
-    /// event is a failure of the project's plugin.
-    pub fn watch_plugins(&self) -> Receiver<PluginEvent> {
-        let (sender, receiver) = mpsc::channel();
+    /// Rebundles a plugin whenever a file of its `editor/` directory changes, until the watch
+    /// is dropped. If watching cannot start, the only event is a failure of the project's
+    /// plugin.
+    pub fn watch_plugins(&self) -> Watch<PluginEvent> {
+        let (watch, sender, dropped) = Watch::new();
         let (raw_sender, raw_receiver) = mpsc::channel();
         // ponytail: the plugin list is read once; a dependency added later needs a new watch.
         let watched = self.plugin_entries().and_then(|entries| {
@@ -114,7 +114,7 @@ impl Project {
                     name: self.manifest.name.clone(),
                     diagnostics: vec![diagnostic],
                 });
-                return receiver;
+                return watch;
             }
         };
         let root = self.root.clone();
@@ -123,7 +123,7 @@ impl Project {
             let _debouncer = debouncer;
             // The last bundle announced per plugin, so an unchanged rebuild stays silent.
             let mut announced: BTreeMap<String, String> = BTreeMap::new();
-            for batch in raw_receiver {
+            while let Some(batch) = next_raw(&raw_receiver, &dropped) {
                 let Ok(events) = batch else { continue };
                 for entry in changed_entries(&entries, events.iter().map(|event| &event.event)) {
                     let event = match bundle(&root, entry) {
@@ -149,7 +149,7 @@ impl Project {
                 }
             }
         });
-        receiver
+        watch
     }
 
     /// The project's plugin, then those of its dependencies in `cargo metadata` order.
