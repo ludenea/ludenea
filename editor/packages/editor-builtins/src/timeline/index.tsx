@@ -1,6 +1,7 @@
 import type { BranchId, FileEntry } from "@ludenea/control-client";
 import { definePlugin, type Editor } from "@ludenea/editor-shell";
-import { createStore, shared, showPanel, type Store } from "../shared";
+import { logToConsole } from "../console";
+import { createStore, errorText, shared, showPanel, type Store } from "../shared";
 import type { BranchAction, BranchForms } from "./BranchLanes";
 import { edit } from "./editing";
 import { TimelinePanel } from "./TimelinePanel";
@@ -49,7 +50,9 @@ async function saveReplay(editor: Editor, branch: BranchId | null): Promise<stri
   try {
     await editor.project.request({ type: "write_binary", path, bytes: replay });
   } catch (error) {
-    await editor.project.request({ type: "delete", path }).catch(() => {});
+    await editor.project.request({ type: "delete", path }).catch((failure: unknown) =>
+      logToConsole(editor, "warning", `Cannot remove ${path}, left empty by the failed save: ${errorText(failure)}`),
+    );
     throw error;
   }
   return path;
@@ -133,7 +136,9 @@ export const timelinePlugin = definePlugin({
       game(editor);
       const { list, current, compare } = editor.branches.getState();
       let branch: BranchId | null = chosen ?? (kind === "compare" ? compare : current);
-      if (kind === "delete" && chosen === undefined && list.find((info) => info.id === branch)?.parent === null) {
+      if (kind === "delete" && list.find((info) => info.id === branch)?.parent === null) {
+        // The picker lists no root: a root asked for by name is refused here.
+        if (chosen !== undefined) throw new Error("the root branch cannot be deleted");
         branch = list.find((info) => info.parent !== null)?.id ?? null;
         if (branch === null) throw new Error("the root branch cannot be deleted, and there is no other");
       }

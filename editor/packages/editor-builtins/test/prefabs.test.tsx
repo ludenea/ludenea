@@ -38,7 +38,9 @@ beforeAll(() => {
 });
 
 /** The editor with every built-in plugin and a game that opened `main.scene.ron` with `warnings`. */
-async function editor(options: { warnings?: string[]; refuse?: (scene: string) => string | null; overrides?: Override[] } = {}) {
+async function editor(
+  options: { warnings?: string[]; refuse?: (scene: string) => string | null; overrides?: Override[]; game?: (command: { type: string }) => object | undefined; project?: (request: { type: string }) => object | undefined } = {},
+) {
   // What the host reports of instance 5's overrides; a field edit on its entity adds one.
   const held = { overrides: options.overrides ?? [override("position", "x")] };
   const instances = () => [
@@ -46,6 +48,8 @@ async function editor(options: { warnings?: string[]; refuse?: (scene: string) =
     { address: [5], prefab: BALL, entities: [entity(5)], overrides: held.overrides },
   ];
   const project = await testEditor(builtinPlugins, (request) => {
+    const answer = options.project?.(request);
+    if (answer) return answer;
     if (request.type === "list_files") return { type: "files", entries: files };
     if (request.type === "read_text") return { type: "text", text: `(${request.path as string})` };
     if (request.type === "read_asset_texts") return { type: "asset_texts", assets: [], paths: [] };
@@ -57,6 +61,8 @@ async function editor(options: { warnings?: string[]; refuse?: (scene: string) =
   const loaded = () => ({ type: "loaded", warnings: options.warnings ?? [], instances: instances(), load_addresses: loadAddresses });
   const game = await testGame(
     (command) => {
+      const answer = options.game?.(command);
+      if (answer) return answer;
       if (command.type === "load_scene") {
         const message = options.refuse?.(command.scene as string);
         return message ? { error: { code: "invalid_scene", message } } : loaded();
@@ -209,6 +215,31 @@ describe("prefabs", () => {
     // `assets/new.prefab.ron` exists: the next free name is taken.
     expect(host.project.sent).toContainEqual({ type: "create_asset", path: "assets/new-2.prefab.ron", kind: "Prefab", text: "(new prefab)" });
     expect(sent(game, "replace_with_instance")).toEqual([{ type: "replace_with_instance", entities: [entity(0)], prefab: CREATED, prefab_text: "(new prefab)" }]);
+  });
+
+  it("create_from_selection_with_a_foreign_reference_creates_nothing", async () => {
+    const message = "component `my_game::Target` of entity 0 references an entity outside the prefab at `entity`; include that entity or clear the reference";
+    const { host, game } = await editor({ game: (command) => (command.type === "create_prefab" ? { error: { code: "invalid_edit", message } } : undefined) });
+    act(() => host.editor.selection.getState().select([entity(0)]));
+
+    await expect(host.editor.commands.run("prefabs.create-from-selection")).rejects.toThrow(message);
+    expect(host.project.sent.filter((request) => request.type === "create_asset" || request.type === "delete")).toEqual([]);
+    expect(sent(game, "replace_with_instance")).toEqual([]);
+    expect(host.editor.selection.getState().entities).toEqual([entity(0)]);
+  });
+
+  it("a_refused_replacement_removes_the_new_prefab_and_reports_a_failed_removal", async () => {
+    const { host } = await editor({
+      game: (command) => (command.type === "replace_with_instance" ? { error: { code: "invalid_edit", message: "refused" } } : undefined),
+      project: (request) => (request.type === "delete" ? { error: { code: "io", message: "read-only" } } : undefined),
+    });
+    renderPanel(host, "ludenea.console");
+    act(() => host.editor.selection.getState().select([entity(0)]));
+
+    await expect(host.editor.commands.run("prefabs.create-from-selection")).rejects.toThrow("refused");
+    await settle();
+    expect(host.project.sent).toContainEqual({ type: "delete", path: "assets/new-2.prefab.ron" });
+    expect(screen.getByText("Cannot remove assets/new-2.prefab.ron, created for the refused prefab: read-only")).toBeTruthy();
   });
 
   it("missing_prefab_error_shows_on_tree", async () => {

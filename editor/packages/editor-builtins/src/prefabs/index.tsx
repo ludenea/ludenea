@@ -151,7 +151,9 @@ export const prefabsPlugin = definePlugin({
           await edit(editor, control, { type: "replace_with_instance", entities, prefab: created.id, prefab_text: text });
         } catch (error) {
           // Refused: the new file is no one's prefab.
-          await editor.project.request({ type: "delete", path }).catch(() => {});
+          await editor.project.request({ type: "delete", path }).catch((failure: unknown) =>
+            logToConsole(editor, "warning", `Cannot remove ${path}, created for the refused prefab: ${errorText(failure)}`),
+          );
           throw error;
         }
         editor.selection.getState().clear();

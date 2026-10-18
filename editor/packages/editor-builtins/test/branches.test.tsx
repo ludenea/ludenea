@@ -151,6 +151,79 @@ describe("branches", () => {
     ]);
   });
 
+  it("deleting_the_root_by_name_is_refused_before_any_form", async () => {
+    const { host, game } = await editorWith();
+    renderPanel(host, "ludenea.timeline");
+    await settle();
+
+    await expect(host.editor.commands.run("timeline.delete-branch", 0)).rejects.toThrow("the root branch cannot be deleted");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(sentOf(game.sent, "delete_branch")).toEqual([]);
+  });
+
+  it("rename_sends_the_new_name", async () => {
+    const { host, game } = await editorWith();
+    renderPanel(host, "ludenea.timeline");
+    await settle();
+
+    await act(() => host.editor.commands.run("timeline.rename-branch", 3, "Jump test"));
+    // From the palette: the form names the current branch.
+    await act(() => host.editor.commands.run("timeline.rename-branch"));
+    const name = screen.getByRole("textbox", { name: "New name" }) as HTMLInputElement;
+    expect(name.value).toBe("Branch 2");
+    fireEvent.change(name, { target: { value: "Faster" } });
+    fireEvent.click(within(screen.getByRole("group", { name: "Rename branch" })).getByRole("button", { name: "Rename" }));
+    await settle();
+
+    expect(sentOf(game.sent, "rename_branch")).toEqual([
+      { type: "rename_branch", branch: 3, name: "Jump test" },
+      { type: "rename_branch", branch: 1, name: "Faster" },
+    ]);
+    expect(screen.queryByRole("group", { name: "Rename branch" })).toBeNull();
+  });
+
+  it("compare_none_turns_the_ghost_off", async () => {
+    const { host, game } = await editorWith();
+    renderPanel(host, "ludenea.timeline");
+    await settle();
+
+    await act(() => host.editor.commands.run("timeline.set-compare-branch"));
+    const form = screen.getByRole("group", { name: "Compare branch" });
+    fireEvent.change(within(form).getByRole("combobox", { name: "Branch" }), { target: { value: "" } });
+    fireEvent.click(within(form).getByRole("button", { name: "Compare" }));
+    await settle();
+    await act(() => host.editor.commands.run("timeline.set-compare-branch", null));
+
+    expect(sentOf(game.sent, "set_compare_branch")).toEqual([
+      { type: "set_compare_branch", branch: null },
+      { type: "set_compare_branch", branch: null },
+    ]);
+  });
+
+  it("save_replay_removes_the_file_when_the_write_fails_and_reports_a_failed_removal", async () => {
+    let deletes = 0;
+    const { host } = await editorWith({
+      game: (command) => (command.type === "export_replay" ? { type: "replay", replay: "cmVwbGF5" } : undefined),
+      project: (request) => {
+        if (request.type === "list_files") return { type: "files", entries: [] };
+        if (request.type === "create_asset") return { type: "file", path: request.path, id: "b", kind: "Replay" };
+        if (request.type === "write_binary") return { error: { code: "io", message: "disk full" } };
+        if (request.type === "delete") return deletes++ === 0 ? { type: "done" } : { error: { code: "io", message: "read-only" } };
+        return { type: "done" };
+      },
+    });
+    renderPanel(host, "ludenea.console");
+    const path = "assets/replays/branch-2.replay";
+
+    await expect(host.editor.commands.run("timeline.save-replay")).rejects.toThrow("disk full");
+    expect(host.project.sent.filter((request) => request.type === "delete")).toEqual([{ type: "delete", path }]);
+    expect(screen.queryByText(/Cannot remove/)).toBeNull();
+
+    await expect(host.editor.commands.run("timeline.save-replay")).rejects.toThrow("disk full");
+    await settle();
+    expect(screen.getByText(`Cannot remove ${path}, left empty by the failed save: read-only`)).toBeTruthy();
+  });
+
   it("undo_label_names_removed_branches", async () => {
     const { host } = await editorWith({ timeline: { undo_label: "Undo edit at tick 300 (removes Branch 3, Branch 4)" } });
     // jsdom has no layout, hence no `scrollIntoView`.
