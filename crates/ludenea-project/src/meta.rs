@@ -37,8 +37,9 @@ pub(crate) struct Meta {
 
 /// How long a lister waits for another one to finish writing a meta it just created.
 const CREATION_GRACE: Duration = Duration::from_millis(50);
-/// An empty meta modified longer ago than this is not being written: it is just empty.
-const CREATION_WINDOW: Duration = Duration::from_secs(1);
+/// An empty meta modified longer ago than this is not being written: it is just empty. Wide
+/// enough for file systems that keep modification times to 1 or 2 seconds (HFS+, FAT, exFAT).
+const CREATION_WINDOW: Duration = Duration::from_secs(3);
 
 /// Whether the meta at `path` was modified so recently that another lister may still be
 /// writing it.
@@ -102,6 +103,7 @@ mod tests {
 
     /// An empty meta left on disk long ago is not waited for at every listing.
     #[test]
+    #[allow(clippy::disallowed_methods)]
     fn only_a_recently_created_empty_meta_may_still_be_written() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("main.scene.ron.meta");
@@ -115,6 +117,12 @@ mod tests {
             .set_modified(long_ago)
             .unwrap();
         assert!(!may_be_being_written(&path));
+        let start = std::time::Instant::now();
+        assert!(Meta::read(&path).is_err());
+        assert!(
+            start.elapsed() < CREATION_GRACE,
+            "an old empty meta fails without waiting"
+        );
     }
 
     /// Another lister created the meta and writes it a moment later.
