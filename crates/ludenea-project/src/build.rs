@@ -2,10 +2,12 @@ use std::fs;
 use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::thread::{self, JoinHandle};
 
-use cargo_metadata::{Message, diagnostic::Diagnostic as CargoDiagnostic};
+use cargo_metadata::Message;
+use cargo_metadata::diagnostic::{Diagnostic as CargoDiagnostic, DiagnosticLevel};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen_cli_support::Bindgen;
 use xxhash_rust::xxh3::xxh3_64;
@@ -51,6 +53,8 @@ pub enum BuildEvent {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export_to = "project/"))]
 pub struct Diagnostic {
+    /// `error`, `warning`, `note`, `help`, `failure-note`, or `ice` (an internal compiler
+    /// error); plugin bundles also report `info`.
     pub level: String,
     pub message: String,
     /// Relative to the project root.
@@ -140,7 +144,17 @@ fn run(
     let stdout = BufReader::new(child.stdout.take().expect("stdout is piped"));
     let mut done = 0;
     let mut produced: Option<PathBuf> = None;
-    for message in Message::parse_stream(stdout).map_while(Result::ok) {
+    let mut unreadable = None;
+    for message in Message::parse_stream(stdout) {
+        let message = match message {
+            Ok(message) => message,
+            Err(error) => {
+                // Nobody reads cargo's output any more: stop it before it blocks on a full pipe.
+                let _ = child.kill();
+                unreadable = Some(error);
+                break;
+            }
+        };
         match message {
             Message::CompilerArtifact(artifact) => {
                 done += 1;
@@ -169,6 +183,9 @@ fn run(
     }
     let status = child.wait()?;
     let _ = lines.join();
+    if let Some(error) = unreadable {
+        return Err(BuildError::Io(error));
+    }
     if !status.success() {
         return Err(BuildError::Failed);
     }
@@ -192,7 +209,7 @@ fn run(
 fn diagnostic(message: CargoDiagnostic) -> Diagnostic {
     let span = message.spans.iter().find(|span| span.is_primary);
     Diagnostic {
-        level: format!("{:?}", message.level).to_lowercase(),
+        level: level_name(message.level).to_string(),
         message: message.message,
         file: span.map(|span| span.file_name.clone()),
         line: span.and_then(|span| u32::try_from(span.line_start).ok()),
@@ -200,12 +217,49 @@ fn diagnostic(message: CargoDiagnostic) -> Diagnostic {
     }
 }
 
-/// Generates the browser glue for `module` into `.ludenea/build/wasm/<hash of the module>/`.
+/// The name a diagnostic level has in [`Diagnostic::level`].
+fn level_name(level: DiagnosticLevel) -> &'static str {
+    match level {
+        DiagnosticLevel::Ice => "ice",
+        DiagnosticLevel::Error => "error",
+        DiagnosticLevel::Warning => "warning",
+        DiagnosticLevel::FailureNote => "failure-note",
+        DiagnosticLevel::Help => "help",
+        // A level added to cargo later reads as a note.
+        _ => "note",
+    }
+}
+
+/// Generates the browser glue for `module` into `.ludenea/build/wasm/<hash of the module>/`,
+/// then removes the builds older than the previous one.
 fn bind(root: &Path, module: &Path) -> Result<PathBuf, BuildError> {
+    static BINDS: AtomicU64 = AtomicU64::new(0);
     let parent = root.join(".ludenea/build/wasm");
-    let staging = parent.join("staging");
+    let bind = BINDS.fetch_add(1, Ordering::Relaxed);
+    let staging = parent.join(format!("staging-{}-{bind}", std::process::id()));
     let _ = fs::remove_dir_all(&staging);
     fs::create_dir_all(&staging)?;
+    let generated = generate(module, &staging);
+    let placed = generated.and_then(|hash| {
+        let directory = parent.join(&hash);
+        // Another build may have placed the same module meanwhile: its copy is as good.
+        if !directory.exists() && fs::rename(&staging, &directory).is_err() && !directory.exists() {
+            return Err(BuildError::Io(io::Error::other(format!(
+                "cannot move the build to {}",
+                directory.display()
+            ))));
+        }
+        Ok((hash, directory))
+    });
+    let _ = fs::remove_dir_all(&staging);
+    let (hash, directory) = placed?;
+    // Best effort: an old build left behind only takes space.
+    let _ = retire_old_builds(&parent, &hash);
+    Ok(directory)
+}
+
+/// Writes the glue into `staging` and returns the hash of the module, as hex.
+fn generate(module: &Path, staging: &Path) -> Result<String, BuildError> {
     Bindgen::new()
         .input_path(module)
         .web(true)
@@ -214,15 +268,73 @@ fn bind(root: &Path, module: &Path) -> Result<PathBuf, BuildError> {
                 .typescript(false)
                 .omit_default_module_path(false)
                 .out_name("game")
-                .generate(&staging)
+                .generate(staging)
         })
         .map_err(|error| BuildError::Bindgen(error.to_string()))?;
     let hash = xxh3_64(&fs::read(staging.join("game_bg.wasm"))?);
-    let directory = parent.join(format!("{hash:016x}"));
-    if directory.exists() {
-        fs::remove_dir_all(&staging)?;
-    } else {
-        fs::rename(&staging, &directory)?;
+    Ok(format!("{hash:016x}"))
+}
+
+/// Records `current` as the current build in `parent` and removes every build but it and the
+/// one current before it, which an editor may still be loading.
+fn retire_old_builds(parent: &Path, current: &str) -> io::Result<()> {
+    let record = parent.join("current");
+    let previous = fs::read_to_string(&record).unwrap_or_default();
+    fs::write(&record, current)?;
+    for entry in fs::read_dir(parent)?.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let is_build = name.len() == 16 && name.chars().all(|c| c.is_ascii_hexdigit());
+        if is_build && name != current && name != previous.trim() {
+            let _ = fs::remove_dir_all(entry.path());
+        }
     }
-    Ok(directory)
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use cargo_metadata::diagnostic::DiagnosticLevel;
+
+    use super::*;
+
+    #[test]
+    fn diagnostic_levels_have_stable_names() {
+        let names = [
+            DiagnosticLevel::Ice,
+            DiagnosticLevel::Error,
+            DiagnosticLevel::Warning,
+            DiagnosticLevel::FailureNote,
+            DiagnosticLevel::Note,
+            DiagnosticLevel::Help,
+        ]
+        .map(level_name);
+        assert_eq!(
+            names,
+            ["ice", "error", "warning", "failure-note", "note", "help"]
+        );
+    }
+
+    #[test]
+    fn only_the_current_and_the_previous_wasm_builds_are_kept() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let builds = ["0000000000000001", "0000000000000002", "0000000000000003"];
+        let present = || -> Vec<String> {
+            let mut names: Vec<_> = fs::read_dir(dir.path())
+                .unwrap()
+                .flatten()
+                .filter(|entry| entry.path().is_dir())
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        };
+        for build in builds {
+            fs::create_dir_all(dir.path().join(build)).unwrap();
+            retire_old_builds(dir.path(), build).unwrap();
+        }
+        assert_eq!(present(), builds[1..]);
+        // Rebuilding the current module keeps it and nothing older.
+        retire_old_builds(dir.path(), builds[2]).unwrap();
+        assert_eq!(present(), builds[2..]);
+    }
 }
