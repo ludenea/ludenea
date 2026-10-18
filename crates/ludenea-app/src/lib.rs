@@ -10,6 +10,7 @@ pub mod parallel;
 pub mod path;
 pub mod prefab;
 pub mod raw_input;
+pub mod replay;
 pub mod rng;
 pub mod scene;
 pub mod simulation;

@@ -7,7 +7,7 @@ use ludenea_math::Vec2;
 
 use ludenea_ecs::schema::TypeSchema;
 use ludenea_ecs::{
-    HashTree, Schedule, ScheduleObserver, Snapshot, SnapshotError, SystemInfo, World,
+    HashTree, Schedule, ScheduleObserver, Snapshot, SnapshotError, SystemInfo, World, hash_value,
 };
 
 use crate::app::EditorHooks;
@@ -226,8 +226,24 @@ impl Simulation {
         self.world.hash_tree()
     }
 
+    /// Identifies the game build's types: `hash_value` of the component, resource, asset,
+    /// event, and input schemas, each list in name order.
+    pub fn schema_fingerprint(&self) -> u64 {
+        hash_value(&(
+            self.world.component_schemas(),
+            self.world.resource_schemas(),
+            self.world.asset_schemas(),
+            self.world.event_schemas(),
+            self.input_schema(),
+        ))
+    }
+
+    /// The world's snapshot, stamped with `schema_fingerprint`.
     pub fn snapshot(&self) -> Snapshot {
-        self.world.snapshot()
+        Snapshot {
+            fingerprint: self.schema_fingerprint(),
+            ..self.world.snapshot()
+        }
     }
 
     /// The snapshot taken right after `App::build`, before any step.
