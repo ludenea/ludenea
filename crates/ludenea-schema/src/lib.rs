@@ -237,6 +237,38 @@ tuple!(A, B, C, D);
 /// }
 /// ```
 ///
+/// Likewise custom serialization of one field, either way.
+///
+/// ```compile_fail
+/// use ludenea_schema::Schema;
+/// use serde::{Deserialize, Serialize, Serializer};
+///
+/// fn as_zero<S: Serializer>(_: &u8, serializer: S) -> Result<S::Ok, S::Error> {
+///     serializer.serialize_u8(0)
+/// }
+///
+/// #[derive(Schema, Serialize, Deserialize)]
+/// struct Custom {
+///     #[serde(serialize_with = "as_zero")]
+///     value: u8,
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use ludenea_schema::Schema;
+/// use serde::{Deserialize, Deserializer, Serialize};
+///
+/// fn from_any<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u8, D::Error> {
+///     u8::deserialize(deserializer)
+/// }
+///
+/// #[derive(Schema, Serialize, Deserialize)]
+/// struct Custom {
+///     #[serde(deserialize_with = "from_any")]
+///     value: u8,
+/// }
+/// ```
+///
 /// A generic type is rejected too: all its instantiations would share one schema name.
 ///
 /// ```compile_fail
