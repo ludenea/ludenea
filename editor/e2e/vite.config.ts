@@ -10,7 +10,14 @@ function mount(prefix: string, directory: string): Plugin {
     name: `mount ${prefix}`,
     configureServer(server) {
       server.middlewares.use(prefix, (request, response, next) => {
-        const file = join(directory, decodeURIComponent((request.url ?? "/").split("?")[0] ?? "/"));
+        let path: string;
+        try {
+          path = decodeURIComponent((request.url ?? "/").split("?")[0] ?? "/");
+        } catch {
+          response.statusCode = 400;
+          return response.end();
+        }
+        const file = join(directory, path);
         if (!file.startsWith(directory + sep)) return next();
         readFile(file).then((bytes) => response.end(bytes), () => next());
       });

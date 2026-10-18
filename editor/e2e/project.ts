@@ -1,11 +1,12 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, type Page } from "@playwright/test";
 
 export const repository = resolve(import.meta.dirname, "../..");
 const ludenea = join(repository, "target/debug/ludenea");
+const editorDir = join(repository, "editor/apps/web/dist");
 /** One target directory for every run and every spec, so only the first one builds the engine. */
 export const targetDir = join(repository, "target/e2e");
 
@@ -19,11 +20,13 @@ export interface ServedProject {
 
 /** Creates the project `name` from the template, lets `prepare` change it, then serves it on `port`. */
 export async function serveProject(name: string, port: number, prepare: (root: string) => void = () => {}): Promise<ServedProject> {
+  expect(existsSync(ludenea), `${ludenea} is missing: run cargo build -p ludenea-serve`).toBe(true);
+  expect(existsSync(join(editorDir, "index.html")), `${editorDir} is missing: run pnpm -C editor build`).toBe(true);
   const directory = mkdtempSync(join(tmpdir(), `ludenea-${name}-`));
   const root = join(directory, name);
   execFileSync(ludenea, ["new", root, "--engine-path", repository]);
   prepare(root);
-  const server: ChildProcess = spawn(ludenea, ["serve", root, "--port", String(port), "--editor-dir", join(repository, "editor/apps/web/dist")], {
+  const server: ChildProcess = spawn(ludenea, ["serve", root, "--port", String(port), "--editor-dir", editorDir], {
     env: { ...process.env, CARGO_TARGET_DIR: targetDir },
     stdio: ["ignore", "pipe", "inherit"],
   });
