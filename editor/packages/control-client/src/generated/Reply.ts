@@ -5,6 +5,7 @@ import type { Bytes } from "./Bytes";
 import type { ComponentValue } from "./ComponentValue";
 import type { DebugDrawFrame } from "./DebugDrawFrame";
 import type { Difference } from "./Difference";
+import type { DivergenceReport } from "./DivergenceReport";
 import type { Document } from "./Document";
 import type { Entity } from "./Entity";
 import type { EntityRow } from "./EntityRow";
@@ -21,4 +22,4 @@ export type Reply = { "type": "done" } | { "type": "stepped", tick: number, hash
 /**
  * The scene as last saved, when `scene` holds unsaved edits.
  */
-saved_scene: string | null, inputs: Bytes, edits: Bytes, undo: Bytes, hashes: Array<Hash64>, assets: Array<[AssetId, string]>, branches: Bytes, document: Document, keeps_assets: boolean, } | { "type": "loaded", warnings: Array<string>, instances: Array<InstanceInfo>, load_addresses: Array<[Entity, Array<number>]>, } | { "type": "asset", asset: string, value: ComponentValue, } | { "type": "text", text: string, } | { "type": "deleted", branches: Array<BranchId>, } | { "type": "placed", instance: number, } | { "type": "instances", instances: Array<InstanceInfo>, } | { "type": "replay", replay: Bytes, } | { "type": "replay_loaded", fingerprint_differs: boolean, } | { "type": "schedule", systems: Array<SystemRow>, } | { "type": "tick_events", events: Array<RecordedEvent>, } | { "type": "tick_commands", sync_points: Array<SyncPoint>, } | { "type": "debug_draw", tick: number, frame: DebugDrawFrame, } | { "type": "picked", entities: Array<Entity>, } | { "type": "ghost_draw", frame: DebugDrawFrame, tick: number, lagging: boolean, };
+saved_scene: string | null, inputs: Bytes, edits: Bytes, undo: Bytes, hashes: Array<Hash64>, assets: Array<[AssetId, string]>, branches: Bytes, document: Document, keeps_assets: boolean, } | { "type": "loaded", warnings: Array<string>, instances: Array<InstanceInfo>, load_addresses: Array<[Entity, Array<number>]>, } | { "type": "asset", asset: string, value: ComponentValue, } | { "type": "text", text: string, } | { "type": "deleted", branches: Array<BranchId>, } | { "type": "placed", instance: number, } | { "type": "instances", instances: Array<InstanceInfo>, } | { "type": "replay", replay: Bytes, } | { "type": "replay_loaded", fingerprint_differs: boolean, } | { "type": "schedule", systems: Array<SystemRow>, } | { "type": "tick_events", events: Array<RecordedEvent>, } | { "type": "tick_commands", sync_points: Array<SyncPoint>, } | { "type": "debug_draw", tick: number, frame: DebugDrawFrame, } | { "type": "picked", entities: Array<Entity>, } | { "type": "ghost_draw", frame: DebugDrawFrame, tick: number, lagging: boolean, } | { "type": "divergence" } & DivergenceReport;

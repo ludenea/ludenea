@@ -4,6 +4,7 @@
 pub mod branches;
 pub mod checkpoints;
 mod compare;
+pub mod divergence;
 pub mod host;
 pub mod in_process;
 pub mod json;
@@ -21,6 +22,7 @@ pub mod worker;
 
 pub use branches::{BranchId, BranchInfo};
 pub use compare::{COMPARE_BUDGET_PAUSED, COMPARE_BUDGET_PLAYING};
+pub use divergence::{DIVERGENCE_TICKS, DivergenceReport};
 pub use host::Host;
 pub use in_process::{InProcess, Transport};
 pub use json::{from_wire, to_wire, untyped_to_wire};

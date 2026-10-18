@@ -12,6 +12,7 @@ use ludenea_ecs::{AssetId, Entity, EntityFilter, FilterError, Snapshot};
 use serde_json::Value as JsonValue;
 
 use crate::compare::{COMPARE_BUDGET_PAUSED, COMPARE_BUDGET_PLAYING, CompareRun};
+use crate::divergence::DivergenceRun;
 use crate::json::{from_wire, to_wire};
 use crate::pacer::Pacer;
 use crate::path::{Path, PathSegment, set_at_path};
@@ -48,6 +49,12 @@ pub struct Host {
     /// What `GhostAdvanced` last reported: the ghost's tick, or `None` outside the compare
     /// branch's run.
     ghost_reported: Option<Option<u64>>,
+    /// The divergence report's simulations, built the first time a report is needed.
+    divergence: Option<DivergenceRun>,
+    /// Whether `Topic::Divergence` is subscribed.
+    divergence_subscribed: bool,
+    /// Whether a requested report is not complete yet: it runs until it is.
+    divergence_asked: bool,
 }
 
 impl Host {
@@ -63,6 +70,9 @@ impl Host {
             compare: None,
             ghost: false,
             ghost_reported: None,
+            divergence: None,
+            divergence_subscribed: false,
+            divergence_asked: false,
             pacer: Pacer::new(simulation.tick_rate()),
             timeline: session.timeline(),
             simulation,
@@ -114,6 +124,9 @@ impl Host {
             if let Some(compare) = &mut self.compare {
                 compare.invalidate();
             }
+            if let Some(divergence) = &mut self.divergence {
+                divergence.invalidate();
+            }
             self.report_state(before);
             self.report_changes();
         }
@@ -136,6 +149,12 @@ impl Host {
         }
         if self.playing {
             let due = self.pacer.advance(elapsed_seconds);
+            // Play records the current branch's future, and a take-over forks.
+            if due > 0
+                && let Some(divergence) = &mut self.divergence
+            {
+                divergence.invalidate();
+            }
             for ran in 0..due {
                 match self
                     .session
@@ -162,7 +181,11 @@ impl Host {
         if resimulating && let Some(compare) = &mut self.compare {
             compare.invalidate();
         }
+        if resimulating && let Some(divergence) = &mut self.divergence {
+            divergence.invalidate();
+        }
         self.follow_compare();
+        self.follow_divergence();
         self.report_changes();
         self.report_timeline();
         std::mem::take(&mut self.events)
@@ -194,6 +217,62 @@ impl Host {
             }
             Err(message) => self.stop_ghost(&message),
         }
+    }
+
+    /// Computes the divergence report a budget further while it is asked for or subscribed;
+    /// a failure stops it, the main session untouched.
+    fn follow_divergence(&mut self) {
+        if !(self.divergence_subscribed || self.divergence_asked)
+            || self.session.compare_branch().is_none()
+        {
+            return;
+        }
+        let budget = if self.playing {
+            COMPARE_BUDGET_PLAYING
+        } else {
+            COMPARE_BUDGET_PAUSED
+        };
+        let advanced = self.build_divergence().and_then(|()| {
+            let divergence = self.divergence.as_mut().expect("built");
+            divergence.advance(&self.session, budget)
+        });
+        match advanced {
+            Ok((moved, complete)) => {
+                if let Some(up_to) = moved {
+                    self.events.push(Event::DivergenceProgress { up_to });
+                }
+                if complete {
+                    self.divergence_asked = false;
+                }
+            }
+            Err(message) => {
+                self.divergence = None;
+                self.divergence_asked = false;
+                let text = format!("the divergence report stopped: {message}");
+                self.console(ConsoleLevel::Error, text);
+            }
+        }
+    }
+
+    /// The divergence report as far as it is computed; `advance` computes it until it is
+    /// complete.
+    fn get_divergence(&mut self, up_to: Option<u64>) -> Result<Reply, ProtocolError> {
+        let invalid = |message| ProtocolError::new(ErrorCode::InvalidCommand, message);
+        self.build_divergence().map_err(invalid)?;
+        let divergence = self.divergence.as_mut().expect("built");
+        divergence.request(up_to);
+        let report = divergence.report(&self.session).map_err(invalid)?;
+        self.divergence_asked = !report.complete;
+        Ok(Reply::Divergence(report))
+    }
+
+    /// Builds the divergence report's simulations on first use.
+    fn build_divergence(&mut self) -> Result<(), String> {
+        if self.divergence.is_none() {
+            let build = || (self.build)().build().map_err(|error| error.to_string());
+            self.divergence = Some(DivergenceRun::new(build()?, build()?));
+        }
+        Ok(())
     }
 
     /// Builds the compare simulation on first use.
@@ -730,10 +809,14 @@ impl Host {
                 Ok(Reply::Done)
             }
             Command::GetGhostDraw { tick, layers } => self.ghost_draw(tick, layers),
+            Command::GetDivergence { up_to } => self.get_divergence(up_to),
             Command::Subscribe { topic } => {
                 if topic == Topic::Ghost {
                     self.ghost = true;
                     self.ghost_reported = None;
+                }
+                if topic == Topic::Divergence {
+                    self.divergence_subscribed = true;
                 }
                 if topic == Topic::Introspection {
                     self.session
@@ -748,6 +831,9 @@ impl Host {
             Command::Unsubscribe { topic } => {
                 if topic == Topic::Ghost {
                     self.ghost = false;
+                }
+                if topic == Topic::Divergence {
+                    self.divergence_subscribed = false;
                 }
                 if topic == Topic::Introspection {
                     self.session.introspection = None;
@@ -1167,6 +1253,7 @@ fn changes_state(command: &Command) -> bool {
             | Command::Pick { .. }
             | Command::SetCompareBranch { .. }
             | Command::GetGhostDraw { .. }
+            | Command::GetDivergence { .. }
             | Command::Subscribe { .. }
             | Command::Unsubscribe { .. }
     )

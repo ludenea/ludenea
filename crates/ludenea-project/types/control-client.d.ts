@@ -30,6 +30,32 @@ type BranchInfo = {
  */
 type Bytes = string;
 
+/**
+ * A generational handle: the index of a slot plus the generation of that slot when the
+ * entity was spawned, so a handle kept after despawn never aliases a reused slot.
+ */
+type Entity = {
+    index: number;
+    generation: number;
+};
+
+/**
+ * A cause candidate, in either branch, at the entity's first divergent tick or the tick
+ * before.
+ */
+type Cause = {
+    "type": "event";
+    tick: number;
+    event: string;
+    path: string;
+    other: Entity;
+} | {
+    "type": "command";
+    tick: number;
+    system: string;
+    kind: string;
+};
+
 type JsonValue = number | string | boolean | Array<JsonValue> | {
     [key in string]: JsonValue;
 } | null;
@@ -50,15 +76,6 @@ type ComponentValue = {
  * What the session edits: its scene text is a scene file or a prefab file.
  */
 type Document = "Scene" | "Prefab";
-
-/**
- * A generational handle: the index of a slot plus the generation of that slot when the
- * entity was spawned, so a handle kept after despawn never aliases a reused slot.
- */
-type Entity = {
-    index: number;
-    generation: number;
-};
 
 /**
  * What `SetField` changes.
@@ -126,6 +143,8 @@ type Topic = {
     "type": "introspection";
 } | {
     "type": "ghost";
+} | {
+    "type": "divergence";
 };
 
 type Vec2 = {
@@ -339,6 +358,9 @@ type Command = {
     tick: number;
     layers: Array<string>;
 } | {
+    "type": "get_divergence";
+    up_to: number | null;
+} | {
     "type": "subscribe";
     topic: Topic;
 } | {
@@ -428,6 +450,61 @@ type Difference = {
      */
     left_text: string;
     right_text: string;
+};
+
+type DivergenceKind = "changed" | "only_in_current" | "only_in_compare" | "replaced";
+
+/**
+ * One entity, matched across the branches by identifier, at its first divergent tick.
+ */
+type EntityDivergence = {
+    entity: Entity;
+    kind: DivergenceKind;
+    first_tick: number;
+    /**
+     * The first differing component and field of a `Changed` entity.
+     */
+    first_difference: Difference | null;
+    causes: Array<Cause>;
+};
+
+type RootCauseKind = {
+    "type": "edit";
+    description: string;
+} | {
+    "type": "take_over";
+};
+
+/**
+ * What made the branches part, at the fork tick, and the entities divergent at the first
+ * divergent tick.
+ */
+type RootCause = {
+    tick: number;
+    kind: RootCauseKind;
+    entities: Array<Entity>;
+};
+
+/**
+ * How the current branch diverges from the compare branch, from the tick their runs part
+ * up to `up_to`, the last tick compared so far.
+ */
+type DivergenceReport = {
+    fork_tick: number;
+    up_to: number;
+    /**
+     * Whether every tick of the range is compared.
+     */
+    complete: boolean;
+    /**
+     * The first tick whose world hashes differ.
+     */
+    first_divergent: number | null;
+    root_cause: RootCause | null;
+    /**
+     * Ordered by first divergent tick, then entity.
+     */
+    entities: Array<EntityDivergence>;
 };
 
 type NamedHash = {
@@ -548,6 +625,9 @@ type Event = {
 } | {
     "type": "ghost_advanced";
     tick: number;
+} | {
+    "type": "divergence_progress";
+    up_to: number;
 };
 
 type VariantFields = {
@@ -862,7 +942,9 @@ type Reply = {
     frame: DebugDrawFrame;
     tick: number;
     lagging: boolean;
-};
+} | ({
+    "type": "divergence";
+} & DivergenceReport);
 
 type Outcome = {
     "ok": Reply;
@@ -1363,5 +1445,5 @@ function startWorkerGame(options: {
 }): WorkerGame;
 
 export { ControlClient, PROJECT_PROTOCOL_VERSION, PROTOCOL_VERSION, ProjectClient, ProtocolFailure, RequestTracker, fakeTransport, handshake, parseFrame, postMessageTransport, startWorkerGame, tauriTransport, unwrap, webSocketTransport };
-export type { AssetId, AssetKind, BranchId, BranchInfo, BuildEvent, Bytes, ClientMessage, Color, Command, ComponentValue, ConsoleLevel, DebugDrawFrame, Diagnostic, Difference, Document, Entity, EntityHash, EntityRow, ErrorCode, Event, FailureCode, FieldSchema, FieldTarget, FileChange, FileEntry, GameInfo, GameOutput, Hash64, HashTree, InstanceInfo, Item, JsonValue, MessageTransport, NamedHash, NamedSchema, Outcome, OutputStream, PathSegment, PauseReason, PluginBundle, PluginSource, Primitive, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo, ProjectOutcome, ProjectReply, ProjectReplyFor, ProjectRequest, ProjectServerMessage, ProtocolError, RawGamepad, RawInput, RecordedEvent, Reply, ReplyFor, ServerMessage, ServiceMode, SyncPoint, SystemRow, Timeline, Topic, TraceComparison, TypeSchema, VariantFields, VariantSchema, Vec2, WorkerCrash, WorkerGame };
+export type { AssetId, AssetKind, BranchId, BranchInfo, BuildEvent, Bytes, Cause, ClientMessage, Color, Command, ComponentValue, ConsoleLevel, DebugDrawFrame, Diagnostic, Difference, DivergenceKind, DivergenceReport, Document, Entity, EntityDivergence, EntityHash, EntityRow, ErrorCode, Event, FailureCode, FieldSchema, FieldTarget, FileChange, FileEntry, GameInfo, GameOutput, Hash64, HashTree, InstanceInfo, Item, JsonValue, MessageTransport, NamedHash, NamedSchema, Outcome, OutputStream, PathSegment, PauseReason, PluginBundle, PluginSource, Primitive, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo, ProjectOutcome, ProjectReply, ProjectReplyFor, ProjectRequest, ProjectServerMessage, ProtocolError, RawGamepad, RawInput, RecordedEvent, Reply, ReplyFor, RootCause, RootCauseKind, ServerMessage, ServiceMode, SyncPoint, SystemRow, Timeline, Topic, TraceComparison, TypeSchema, VariantFields, VariantSchema, Vec2, WorkerCrash, WorkerGame };
 }

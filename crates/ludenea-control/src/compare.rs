@@ -8,6 +8,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use ludenea_app::Simulation;
 use ludenea_debug_draw::DebugDrawFrame;
+use ludenea_ecs::Snapshot;
 
 use crate::branches::BranchId;
 use crate::session::{BranchRun, Session, SessionError, panic_message};
@@ -119,10 +120,7 @@ impl CompareRun {
                     *restores += 1;
                 }
                 *at = None;
-                // Load addresses and kept assets come from the scene load, not the snapshot.
-                session.load_into(sim).map_err(|error| error.to_string())?;
-                sim.restore(snapshot).map_err(|error| error.to_string())?;
-                apply_edits(sim, run, checkpoint);
+                restore(sim, session, run, checkpoint, snapshot)?;
                 *at = Some(checkpoint);
                 checkpoint
             }
@@ -194,9 +192,25 @@ impl CompareRun {
     }
 }
 
+/// Loads the session's scene into `sim` and restores `run`'s checkpoint `snapshot` at
+/// `tick`, with the edits recorded at that tick.
+pub(crate) fn restore(
+    sim: &mut Simulation,
+    session: &Session,
+    run: &BranchRun,
+    tick: u64,
+    snapshot: &Snapshot,
+) -> Result<(), String> {
+    // Load addresses and kept assets come from the scene load, not the snapshot.
+    session.load_into(sim).map_err(|error| error.to_string())?;
+    sim.restore(snapshot).map_err(|error| error.to_string())?;
+    apply_edits(sim, run, tick);
+    Ok(())
+}
+
 /// Applies the edits recorded at `tick`. One that fails is skipped, as resimulation drops
 /// it from a stale run.
-fn apply_edits(sim: &mut Simulation, run: &BranchRun, tick: u64) {
+pub(crate) fn apply_edits(sim: &mut Simulation, run: &BranchRun, tick: u64) {
     for timed in run.edits.at(tick) {
         let _ = sim.apply_edit(&timed.edit);
     }
@@ -204,7 +218,7 @@ fn apply_edits(sim: &mut Simulation, run: &BranchRun, tick: u64) {
 
 /// Whether runs `a` and `b` reach the same state at `tick`: the same tick 0 state, recorded
 /// hashes, inputs, and edits up to it.
-fn same_past(a: &BranchRun, b: &BranchRun, tick: u64) -> bool {
+pub(crate) fn same_past(a: &BranchRun, b: &BranchRun, tick: u64) -> bool {
     let at = usize::try_from(tick).expect("tick fits in memory");
     let edits = |run: &BranchRun| run.edits.edits.partition_point(|edit| edit.tick <= tick);
     a.inputs.players == b.inputs.players

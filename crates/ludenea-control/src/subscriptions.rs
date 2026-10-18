@@ -73,7 +73,7 @@ impl Subscriptions {
             Topic::Resources => {
                 self.resources.get_or_insert_with(|| resource_hashes(world));
             }
-            Topic::Introspection | Topic::Ghost => {}
+            Topic::Introspection | Topic::Ghost | Topic::Divergence => {}
         }
         Ok(())
     }
@@ -83,7 +83,7 @@ impl Subscriptions {
             Topic::Entities { filter } => self.entities.retain(|watch| watch.text != *filter),
             Topic::Entity { entity } => self.entity.retain(|watch| watch.entity != *entity),
             Topic::Resources => self.resources = None,
-            Topic::Introspection | Topic::Ghost => {}
+            Topic::Introspection | Topic::Ghost | Topic::Divergence => {}
         }
     }
 

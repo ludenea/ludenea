@@ -14,6 +14,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value as JsonValue;
 
 use crate::branches::BranchId;
+use crate::divergence::DivergenceReport;
 use crate::path::PathSegment;
 use crate::session::{Document, Timeline};
 
@@ -412,6 +413,12 @@ pub enum Command {
         tick: u64,
         layers: Vec<String>,
     },
+    /// The causal divergence report between the current and the compare branch, from the
+    /// tick their runs part up to `up_to` (`DIVERGENCE_TICKS` after it by default), as far
+    /// as `Host::advance` computed it; replies `Divergence`.
+    GetDivergence {
+        up_to: Option<u64>,
+    },
     Subscribe {
         topic: Topic,
     },
@@ -435,6 +442,8 @@ pub enum Topic {
     Introspection,
     /// Runs the compare simulation toward the current tick; `GhostAdvanced` when it moves.
     Ghost,
+    /// Computes the divergence report; `DivergenceProgress` when it moves.
+    Divergence,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -557,6 +566,7 @@ pub enum Reply {
         tick: u64,
         lagging: bool,
     },
+    Divergence(DivergenceReport),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -673,6 +683,10 @@ pub enum Event {
     /// branch's run.
     GhostAdvanced {
         tick: u64,
+    },
+    /// The divergence report is compared up to `up_to`.
+    DivergenceProgress {
+        up_to: u64,
     },
 }
 
