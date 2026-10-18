@@ -49,6 +49,23 @@ function edit(label: string, value: string, inside = component("ludenea::Collide
 describe("inspector", () => {
   afterEach(cleanup);
 
+  it("resources_follow_the_game_while_paused_and_reload_on_pause", async () => {
+    const { host, game } = await inspector();
+    const subscriptions = () =>
+      game.sent.filter((command) => (command.type === "subscribe" || command.type === "unsubscribe") && (command.topic as { type: string }).type === "resources").map((command) => command.type);
+    expect(subscriptions()).toEqual(["subscribe"]);
+
+    // Playing: every tick may change a resource, and pushing them all would hold the game up.
+    act(() => host.editor.timeline.setState({ playing: true }));
+    await settle();
+    expect(subscriptions()).toEqual(["subscribe", "unsubscribe"]);
+
+    game.sent.length = 0;
+    act(() => host.editor.timeline.setState({ playing: false }));
+    await settle();
+    expect(game.sent.map((command) => command.type)).toEqual(expect.arrayContaining(["subscribe", "get_resources"]));
+  });
+
   it("editing_newtype_variant_field_sends_set_field_with_path", async () => {
     const { game } = await inspector();
     edit("shape.Circle.radius", "2");

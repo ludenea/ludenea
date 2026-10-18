@@ -29,7 +29,7 @@ function Inspector({ editor, control, state }: { editor: Editor; control: Contro
   const components = useMemo(() => schemaMap(control.game.components), [control]);
   const resourceSchemas = useMemo(() => schemaMap(control.game.resources), [control]);
   const values = useEntity(editor, control, entity);
-  const resources = useResources(control);
+  const resources = useResources(editor, control);
   const resimulating = useResimulating(editor);
 
   const setField = (target: FieldTarget, refresh: () => void): Edit => async (path, value) => {
@@ -190,13 +190,20 @@ function useEntity(editor: Editor, control: ControlClient, entity: Entity | unde
   return { components, error, setError, refresh: () => setVersion((version) => version + 1) };
 }
 
-/** Every resource, kept current through the `Resources` topic. */
-function useResources(control: ControlClient) {
+/**
+ * Every resource, kept current through the `Resources` topic while paused. While playing, a
+ * resource such as the contact cache changes every tick, and pushing its whole value each tick
+ * holds the game and the interface up: the values shown are those of the pause, read again
+ * once paused.
+ */
+function useResources(editor: Editor, control: ControlClient) {
   const [values, setValues] = useState<Values>({});
   const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
+  const playing = editor.timeline((timeline) => timeline.playing);
 
   useEffect(() => {
+    if (playing) return;
     let current = true;
     control.request({ type: "get_resources" }).then(
       (reply) => current && setValues(reply.resources),
@@ -205,9 +212,10 @@ function useResources(control: ControlClient) {
     return () => {
       current = false;
     };
-  }, [control, version]);
+  }, [control, version, playing]);
 
   useEffect(() => {
+    if (playing) return;
     const topic = { type: "resources" } as const;
     control.request({ type: "subscribe", topic }).catch((failure) => setError(errorText(failure)));
     const stop = control.on("resources_changed", (event) => setValues((values) => ({ ...values, ...event.resources })));
@@ -215,7 +223,7 @@ function useResources(control: ControlClient) {
       stop();
       control.request({ type: "unsubscribe", topic }).catch(() => {});
     };
-  }, [control]);
+  }, [control, playing]);
 
   return { values, error, refresh: () => setVersion((version) => version + 1) };
 }

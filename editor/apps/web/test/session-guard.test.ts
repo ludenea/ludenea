@@ -1,7 +1,7 @@
 import { ControlClient, ProjectClient, fakeTransport, type GameInfo, type WorkerCrash } from "@ludenea/control-client";
 import { createEditor } from "@ludenea/editor-shell/app";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { EXPORT_COALESCE_MS, guardSession, restoreSession } from "../src/session-guard";
+import { EXPORT_COALESCE_MS, exportSession, guardSession, restoreSession } from "../src/session-guard";
 
 type Command = { type: string; [key: string]: unknown };
 
@@ -126,6 +126,29 @@ describe("guardSession", () => {
     guard.dispose();
     await vi.advanceTimersByTimeAsync(5000);
     expect(exports(game.sent)).toBe(4);
+  });
+
+  it("stores_the_session_on_pause_and_edits_but_not_while_playing", async () => {
+    vi.useFakeTimers();
+    const game = await fakeGame((command) => (command.type === "export_session" ? session("scene") : command.type === "get_timeline" ? { type: "timeline", ...timeline } : { type: "done" }));
+    const store = vi.fn(async () => {});
+    const sessions = { export: exportSession, store, own: async () => null };
+    guardSession(game.control, fakeWorker(), async () => game.control, { sessions });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store).toHaveBeenCalledTimes(1);
+
+    // Playing: the export taken every second stays in memory, for a crash.
+    game.push({ type: "ticked", tick: 4, hash: "0000000000000003", pending: false, playing: true, effective_rate: 1 });
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(exports(game.sent)).toBe(4);
+    expect(store).toHaveBeenCalledTimes(1);
+
+    game.push({ type: "paused", reason: { type: "user" } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store).toHaveBeenCalledTimes(2);
+    game.push({ type: "timeline_changed", timeline: { ...timeline, edit_ticks: [3] } });
+    await vi.advanceTimersByTimeAsync(EXPORT_COALESCE_MS);
+    expect(store).toHaveBeenCalledTimes(3);
   });
 
   it("timeline_changes_while_paused_coalesce_into_one_export", async () => {

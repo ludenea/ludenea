@@ -53,7 +53,7 @@ function withoutTicks(inputs: string): string {
  * latest until a newer export exists, and a crash before then (the restored session crashes
  * this build) reloads only its scene, so the game does not crash again at once. `restart`
  * resolves to `null` when it gives up restarting. With `sessions`, exports are tagged with
- * their document and stored as its session, and a crash restores only a session of the open
+ * their document and stored as its session (except those taken while playing, kept in memory), and a crash restores only a session of the open
  * document: an export taken before switching documents gives way to the open one's stored session.
  */
 export function guardSession(
@@ -70,7 +70,9 @@ export function guardSession(
   let coalescing: ReturnType<typeof setTimeout> | undefined;
   // The longest a burst of timeline changes waits for its export.
   let deadline: ReturnType<typeof setTimeout> | undefined;
-  const take = () => {
+  // While playing, the export every second stays in memory: storing a large session that
+  // often stalls the interface. Pauses and edits store it.
+  const take = (store = true) => {
     clearTimeout(coalescing);
     clearTimeout(deadline);
     deadline = undefined;
@@ -79,7 +81,7 @@ export function guardSession(
         if (disposed) return;
         latest = saved;
         restoring = false;
-        options.sessions?.store(saved).catch((error) => log("warning", `Cannot store the session: ${error instanceof Error ? error.message : String(error)}`));
+        if (store) options.sessions?.store(saved).catch((error) => log("warning", `Cannot store the session: ${error instanceof Error ? error.message : String(error)}`));
       },
       // Nothing loaded yet, still resimulating, or the game is gone: the previous export stays.
       () => {},
@@ -122,7 +124,7 @@ export function guardSession(
     }),
   ];
   const timer = setInterval(() => {
-    if (playing) take();
+    if (playing) take(false);
   }, EXPORT_INTERVAL_MS);
   const dispose = () => {
     disposed = true;
