@@ -14,6 +14,7 @@ pub mod event;
 pub mod filter;
 pub mod hash;
 pub mod observer;
+pub mod prefab;
 pub mod query;
 pub mod schedule;
 pub mod snapshot;
@@ -33,6 +34,7 @@ pub use hash::{EntityHash, HashTree, NamedHash, hash_value};
 pub use ludenea_macros::{Asset, Component, Query, Resource};
 pub use ludenea_schema as schema;
 pub use observer::{CommandKind, CommandRecord, ScheduleObserver};
+pub use prefab::{Prefab, PrefabEntity};
 pub use query::{
     Access, Query, QueryData, QueryError, QueryFilter, ReadOnlyQueryData, With, Without, accesses,
     check_accesses,

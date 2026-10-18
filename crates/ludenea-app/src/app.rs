@@ -3,7 +3,8 @@ use std::collections::BTreeSet;
 
 use ludenea_debug_draw::DebugDrawFrame;
 use ludenea_ecs::{
-    Asset, BuildError, Component, EcsError, IntoSystemConfig, Resource, ScheduleBuilder, World,
+    Asset, BuildError, Component, EcsError, IntoSystemConfig, Prefab, Resource, ScheduleBuilder,
+    World,
 };
 
 use ludenea_ecs::Entity;
@@ -78,7 +79,8 @@ impl Default for App {
 }
 
 impl App {
-    /// An app with `Time` and `Rng::new(0, 0)` registered, ticking at 60 Hz.
+    /// An app with `Time`, `Rng::new(0, 0)`, and the `Prefab` asset type registered,
+    /// ticking at 60 Hz.
     pub fn new() -> Self {
         let mut app = Self {
             world: World::new(),
@@ -89,7 +91,8 @@ impl App {
             errors: Vec::new(),
         };
         app.resource(Time { tick: 0, dt: 0.0 })
-            .resource(Rng::new(0, 0));
+            .resource(Rng::new(0, 0))
+            .asset::<Prefab>();
         app
     }
 

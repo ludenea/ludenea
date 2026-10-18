@@ -12,6 +12,7 @@ use ludenea_ecs::{
 
 use crate::app::EditorHooks;
 use crate::input::{self, Input, InputType};
+use crate::prefab::LoadedInstance;
 use crate::scene::LoadAddress;
 use crate::{Parallel, RawInput, Time};
 
@@ -53,6 +54,8 @@ pub struct Simulation {
     pub(crate) initial: Snapshot,
     /// Where each entity of the last loaded scene came from; not part of the state.
     pub(crate) load_addresses: BTreeMap<Entity, LoadAddress>,
+    /// The prefab instances of the last loaded scene; not part of the state.
+    pub(crate) instances: Vec<LoadedInstance>,
 }
 
 impl Simulation {
@@ -72,6 +75,7 @@ impl Simulation {
             tick_rate,
             hooks,
             load_addresses: BTreeMap::new(),
+            instances: Vec::new(),
         }
     }
 
