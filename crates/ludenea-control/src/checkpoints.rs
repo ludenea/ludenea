@@ -2,6 +2,7 @@
 //! back costs about as many replayed ticks as the distance sought.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use ludenea_ecs::Snapshot;
 
@@ -18,8 +19,11 @@ pub const CHECKPOINTS_PER_LEVEL: usize = 2;
 /// PER_LEVEL` (at least `INTERVAL`), so at most `CHECKPOINTS_PER_LEVEL` of them. Each
 /// level's spacing divides the next one's, so a checkpoint dropped as the head moves on
 /// would never have been kept later.
+///
+/// Snapshots are shared: a branch's run and its ancestors' stored segments hold the same
+/// checkpoints of their common past without copying them.
 pub struct Checkpoints {
-    snapshots: BTreeMap<u64, Snapshot>,
+    snapshots: BTreeMap<u64, Arc<Snapshot>>,
     /// Ticks never thinned out: their state cannot be recomputed from the recorded logs.
     pinned: BTreeSet<u64>,
 }
@@ -28,7 +32,7 @@ impl Checkpoints {
     /// Starts with the snapshot of tick 0, which is never dropped.
     pub fn new(initial: Snapshot) -> Self {
         Self {
-            snapshots: BTreeMap::from([(0, initial)]),
+            snapshots: BTreeMap::from([(0, Arc::new(initial))]),
             pinned: BTreeSet::new(),
         }
     }
@@ -45,7 +49,7 @@ impl Checkpoints {
 
     /// Stores `snapshot`, then thins the older checkpoints relative to the newest one.
     pub fn insert(&mut self, tick: u64, snapshot: Snapshot) {
-        self.snapshots.insert(tick, snapshot);
+        self.snapshots.insert(tick, Arc::new(snapshot));
         let head = *self.snapshots.keys().next_back().expect("tick 0 is kept");
         self.snapshots.retain(|&kept, _| {
             kept == 0
@@ -69,7 +73,19 @@ impl Checkpoints {
             .range(..=tick)
             .next_back()
             .expect("tick 0 is kept");
-        (at, snapshot)
+        (at, &**snapshot)
+    }
+
+    /// Only the checkpoint of tick 0, shared.
+    pub(crate) fn tick_zero(&self) -> Checkpoints {
+        Checkpoints {
+            snapshots: self
+                .snapshots
+                .range(..=0)
+                .map(|(&t, s)| (t, Arc::clone(s)))
+                .collect(),
+            pinned: BTreeSet::new(),
+        }
     }
 
     /// Drops every checkpoint after `tick`.
@@ -95,22 +111,22 @@ impl Checkpoints {
         }
     }
 
-    /// A copy of the checkpoints after `tick`, pins included.
+    /// The checkpoints after `tick`, pins included, sharing their snapshots.
     pub(crate) fn after(&self, tick: u64) -> Checkpoints {
         Checkpoints {
             snapshots: self
                 .snapshots
                 .range(tick + 1..)
-                .map(|(&t, s)| (t, s.clone()))
+                .map(|(&t, s)| (t, Arc::clone(s)))
                 .collect(),
             pinned: self.pinned.range(tick + 1..).copied().collect(),
         }
     }
 
-    /// Adds `other`'s checkpoints as they are, without thinning.
+    /// Adds `other`'s checkpoints as they are, without thinning, sharing their snapshots.
     pub(crate) fn extend(&mut self, other: &Checkpoints) {
-        let copies = other.snapshots.iter().map(|(&t, s)| (t, s.clone()));
-        self.snapshots.extend(copies);
+        let shared = other.snapshots.iter().map(|(&t, s)| (t, Arc::clone(s)));
+        self.snapshots.extend(shared);
         self.pinned.extend(&other.pinned);
     }
 
@@ -149,6 +165,20 @@ mod tests {
             }
         }
         checkpoints
+    }
+
+    #[test]
+    fn split_and_composed_checkpoints_share_their_snapshots() {
+        let checkpoints = filled(160);
+        let mut composed = checkpoints.tick_zero();
+        composed.extend(&checkpoints.after(0));
+        assert_eq!(composed.ticks(), checkpoints.ticks());
+        for (tick, snapshot) in &checkpoints.snapshots {
+            assert!(
+                Arc::ptr_eq(snapshot, &composed.snapshots[tick]),
+                "tick {tick}"
+            );
+        }
     }
 
     #[test]

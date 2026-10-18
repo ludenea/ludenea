@@ -1509,8 +1509,7 @@ impl Session {
         current: &Segment,
         defaults: Option<&[u8]>,
     ) -> (InputLog, EditLog, Vec<u64>, Checkpoints) {
-        let (_, scene_state) = self.checkpoints.nearest_at_or_before(0);
-        let mut checkpoints = Checkpoints::new(scene_state.clone());
+        let mut checkpoints = self.checkpoints.tick_zero();
         let mut inputs = InputLog::new(self.inputs.players);
         let mut edits = EditLog::new();
         let mut hashes = vec![self.hashes[0]];
