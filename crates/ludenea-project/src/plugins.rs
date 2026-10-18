@@ -21,7 +21,7 @@ use rolldown_plugin::{
 use serde::{Deserialize, Serialize};
 use xxhash_rust::xxh3::xxh3_64;
 
-use crate::files::WATCH_DEBOUNCE;
+use crate::files::{WATCH_DEBOUNCE, unwatch_below, watch_except_packages};
 use crate::{Diagnostic, Project, Watch, next_raw};
 
 /// Provided by the editor at runtime (import map), so every plugin shares one instance.
@@ -117,26 +117,26 @@ impl Project {
         let (watch, sender, dropped) = Watch::new();
         let (raw_sender, raw_receiver) = mpsc::channel();
         // ponytail: the dependencies are listed once; a dependency added later needs a new
-        // watch. The project's own `editor/` is watched for even before it exists.
+        // watch. Each `editor/` is watched for even before it exists or after it is deleted,
+        // through its parent.
         let watched = self.plugin_entries().and_then(|(entries, _)| {
             let cannot = |error| error_diagnostic(format!("cannot watch plugins: {error}"));
             let mut debouncer = new_debouncer(WATCH_DEBOUNCE, None, raw_sender).map_err(cannot)?;
-            let mut recursive = BTreeSet::new();
+            let mut watched = BTreeSet::new();
             for entry in &entries {
-                if entry.directory.is_dir() {
-                    debouncer
-                        .watch(&entry.directory, RecursiveMode::Recursive)
-                        .map_err(cannot)?;
-                    recursive.insert(entry.directory.clone());
-                } else if let Some(parent) = entry.directory.parent() {
+                if let Some(parent) = entry.directory.parent() {
                     debouncer
                         .watch(parent, RecursiveMode::NonRecursive)
                         .map_err(cannot)?;
                 }
+                if entry.directory.is_dir() {
+                    watch_except_packages(&mut debouncer, &entry.directory, &mut watched)
+                        .map_err(cannot)?;
+                }
             }
-            Ok((entries, debouncer, recursive))
+            Ok((entries, debouncer, watched))
         });
-        let (entries, mut debouncer, mut recursive) = match watched {
+        let (entries, mut debouncer, mut watched) = match watched {
             Ok(watched) => watched,
             Err(diagnostic) => {
                 let _ = sender.send(PluginEvent::Failed {
@@ -153,15 +153,27 @@ impl Project {
             let mut announced: BTreeMap<String, String> = BTreeMap::new();
             while let Some(batch) = next_raw(&raw_receiver, &dropped) {
                 let Ok(events) = batch else { continue };
-                for entry in changed_entries(&entries, events.iter().map(|event| &event.event)) {
-                    // An `editor/` created after watching started.
-                    if entry.directory.is_dir()
-                        && !recursive.contains(&entry.directory)
-                        && debouncer
-                            .watch(&entry.directory, RecursiveMode::Recursive)
-                            .is_ok()
+                // A directory created in an `editor/` (watched alone, see
+                // `watch_except_packages`) after watching started.
+                for path in events.iter().flat_map(|event| &event.paths) {
+                    let in_editor = entries
+                        .iter()
+                        .any(|entry| path.parent() == Some(entry.directory.as_path()));
+                    if in_editor
+                        && path.is_dir()
+                        && path.file_name().is_some_and(|name| name != "node_modules")
+                        && watched.insert(path.clone())
                     {
-                        recursive.insert(entry.directory.clone());
+                        let _ = debouncer.watch(path, RecursiveMode::Recursive);
+                    }
+                }
+                for entry in changed_entries(&entries, events.iter().map(|event| &event.event)) {
+                    // An `editor/` created after watching started, or deleted.
+                    if !entry.directory.is_dir() {
+                        unwatch_below(&mut debouncer, &entry.directory, &mut watched);
+                    } else if !watched.contains(&entry.directory) {
+                        let _ =
+                            watch_except_packages(&mut debouncer, &entry.directory, &mut watched);
                     }
                     if entry_file(&entry.directory).is_none() {
                         continue;

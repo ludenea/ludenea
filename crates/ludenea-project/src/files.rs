@@ -1,15 +1,15 @@
 use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
 use ludenea_ecs::AssetId;
-use notify::RecursiveMode;
-use notify_debouncer_full::new_debouncer;
+use notify::{RecommendedWatcher, RecursiveMode};
+use notify_debouncer_full::{Debouncer, RecommendedCache, new_debouncer};
 use serde::{Deserialize, Serialize};
 
 use crate::meta::{AssetKind, Meta};
@@ -205,10 +205,8 @@ impl Project {
         for entry in fs::read_dir(&self.root).map_err(|error| io_error(&self.root, error))? {
             let path = entry.map_err(|error| io_error(&self.root, error))?.path();
             if path.is_dir() && relative_path(&self.root, &path).is_some() {
-                debouncer
-                    .watch(&path, RecursiveMode::Recursive)
+                watch_except_packages(&mut debouncer, &path, &mut watched)
                     .map_err(|error| ProjectError::Watch(error.to_string()))?;
-                watched.insert(path);
             }
         }
         let (watch, sender, dropped) = Watch::new();
@@ -225,17 +223,28 @@ impl Project {
                     touched.extend(relative_path(&root, path));
                 }
                 let mut changes = Vec::new();
+                // Created in this batch: a file found in a new directory may have its own
+                // event in the same batch, which is not a change.
+                let mut created = BTreeSet::new();
                 for relative in touched {
                     let file = root.join(&relative);
-                    if file.parent() == Some(root.as_path()) && file.is_dir() {
-                        // A new top-level directory: watch it, and report what it already holds.
-                        if watched.insert(file.clone())
-                            && debouncer.watch(&file, RecursiveMode::Recursive).is_ok()
-                        {
+                    // Top-level directories are watched alone, and the directories in them
+                    // recursively (see `watch_except_packages`).
+                    let depth = relative.split('/').count();
+                    if depth <= 2 && file.is_dir() && !watched.contains(&file) {
+                        // A new directory: watch it, and report what it already holds.
+                        let watching = if depth == 1 {
+                            watch_except_packages(&mut debouncer, &file, &mut watched)
+                        } else {
+                            watched.insert(file.clone());
+                            debouncer.watch(&file, RecursiveMode::Recursive)
+                        };
+                        if watching.is_ok() {
                             let mut inside = BTreeSet::new();
                             list_files(&root, &file, &mut inside);
                             for relative in inside {
                                 if known.insert(relative.clone()) {
+                                    created.insert(relative.clone());
                                     changes.push(FileChange::Created(relative));
                                 }
                             }
@@ -247,15 +256,15 @@ impl Project {
                     let change = if file.is_dir() {
                         continue;
                     } else if !file.exists() {
-                        if watched.remove(&file) {
-                            let _ = debouncer.unwatch(&file);
-                        }
+                        unwatch_below(&mut debouncer, &file, &mut watched);
                         if !known.remove(&relative) {
                             continue;
                         }
                         FileChange::Removed(relative)
                     } else if known.insert(relative.clone()) {
                         FileChange::Created(relative)
+                    } else if created.contains(&relative) {
+                        continue;
                     } else {
                         FileChange::Changed(relative)
                     };
@@ -269,6 +278,40 @@ impl Project {
             }
         });
         Ok(watch)
+    }
+}
+
+/// Watches `directory` and what is below it, except a `node_modules` directly in it: installed
+/// packages hold thousands of directories (one inotify watch each, all walked by the debouncer)
+/// that no watcher reports. `directory` is watched alone and each other directory in it
+/// recursively, all added to `watched`; a directory created in it later is the caller's to watch.
+pub(crate) fn watch_except_packages(
+    debouncer: &mut Debouncer<RecommendedWatcher, RecommendedCache>,
+    directory: &Path,
+    watched: &mut BTreeSet<PathBuf>,
+) -> notify::Result<()> {
+    debouncer.watch(directory, RecursiveMode::NonRecursive)?;
+    watched.insert(directory.to_path_buf());
+    for entry in fs::read_dir(directory)
+        .map_err(notify::Error::io)?
+        .flatten()
+    {
+        let path = entry.path();
+        if path.is_dir() && entry.file_name() != "node_modules" && watched.insert(path.clone()) {
+            debouncer.watch(&path, RecursiveMode::Recursive)?;
+        }
+    }
+    Ok(())
+}
+
+/// Stops watching `directory` and every watched directory below it (it was removed).
+pub(crate) fn unwatch_below(
+    debouncer: &mut Debouncer<RecommendedWatcher, RecommendedCache>,
+    directory: &Path,
+    watched: &mut BTreeSet<PathBuf>,
+) {
+    for path in watched.extract_if(.., |path| path.starts_with(directory)) {
+        let _ = debouncer.unwatch(&path);
     }
 }
 
@@ -333,6 +376,25 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
+
+    #[test]
+    fn installed_packages_are_not_watched() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let editor = dir.path().join("editor");
+        for directory in ["node_modules/react", "panels/deep"] {
+            fs::create_dir_all(editor.join(directory)).unwrap();
+        }
+        fs::write(editor.join("index.ts"), "").unwrap();
+        let mut debouncer = new_debouncer(WATCH_DEBOUNCE, None, |_| {}).unwrap();
+        let mut watched = BTreeSet::new();
+        watch_except_packages(&mut debouncer, &editor, &mut watched).unwrap();
+        assert_eq!(
+            watched,
+            BTreeSet::from([editor.clone(), editor.join("panels")])
+        );
+        unwatch_below(&mut debouncer, &editor, &mut watched);
+        assert!(watched.is_empty());
+    }
 
     /// The watcher thread holds the dropped flag until it exits.
     #[test]

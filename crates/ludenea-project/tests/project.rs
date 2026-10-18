@@ -288,6 +288,40 @@ fn watch_follows_new_top_level_directories() {
     expect_change(&changes, &FileChange::Changed("levels/one/a.txt".into()));
 }
 
+/// A new directory and the file written in it right away are one creation, not a creation
+/// followed by a change.
+#[test]
+fn a_new_directory_with_a_file_reports_the_file_once() {
+    let dir = TempDir::new().unwrap();
+    let project = new_project(&dir);
+    let changes = project.watch().unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    fs::create_dir_all(project.root().join("levels")).unwrap();
+    fs::write(project.root().join("levels/a.txt"), "a").unwrap();
+    let file_changes: Vec<_> = settled_changes(&changes)
+        .into_iter()
+        .filter(|change| path_of(change) == "levels/a.txt")
+        .collect();
+    assert_eq!(file_changes, [FileChange::Created("levels/a.txt".into())]);
+}
+
+/// A directory created inside `editor/` after watching started is watched too (`editor/` is
+/// watched apart from its installed packages).
+#[test]
+fn watch_follows_new_directories_in_the_editor_directory() {
+    let dir = TempDir::new().unwrap();
+    let project = new_project(&dir);
+    fs::create_dir_all(project.root().join("editor/node_modules")).unwrap();
+    let changes = project.watch().unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    fs::create_dir_all(project.root().join("editor/panels")).unwrap();
+    fs::write(project.root().join("editor/panels/a.ts"), "a").unwrap();
+    expect_change(&changes, &FileChange::Created("editor/panels/a.ts".into()));
+    std::thread::sleep(Duration::from_millis(500));
+    fs::write(project.root().join("editor/panels/a.ts"), "changed").unwrap();
+    expect_change(&changes, &FileChange::Changed("editor/panels/a.ts".into()));
+}
+
 #[cfg(unix)]
 #[test]
 fn write_text_keeps_the_permissions_of_the_file() {

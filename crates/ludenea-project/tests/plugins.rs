@@ -432,6 +432,30 @@ fn a_project_plugin_created_after_watching_starts_is_bundled() {
     }
 }
 
+/// Deleting `editor/` and creating it again keeps the plugin watched.
+#[test]
+fn a_recreated_project_plugin_directory_is_watched_again() {
+    let dir = TempDir::new().unwrap();
+    let project = project(&dir, "", &[("editor/index.ts", "export default 'first';")]);
+    let editor = project.root().join("editor");
+    let events = project.watch_plugins();
+    std::thread::sleep(Duration::from_millis(500));
+    fs::remove_dir_all(&editor).unwrap();
+    quiet(&events);
+    fs::create_dir_all(&editor).unwrap();
+    fs::write(editor.join("index.ts"), "export default 'second';").unwrap();
+    match next_event(&events) {
+        PluginEvent::Rebuilt(bundle) => assert!(code(&project, &bundle).contains("second")),
+        other => panic!("{other:?}"),
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    fs::write(editor.join("index.ts"), "export default 'third';").unwrap();
+    match next_event(&events) {
+        PluginEvent::Rebuilt(bundle) => assert!(code(&project, &bundle).contains("third")),
+        other => panic!("{other:?}"),
+    }
+}
+
 /// A failure is reported; the next good bundle is announced even if it is the one announced
 /// before; a save that changes nothing announces nothing; only the changed plugin rebuilds.
 #[test]
