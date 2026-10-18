@@ -1,4 +1,4 @@
-import { RequestTracker, parseFrame, unwrap } from "./client";
+import { RequestTracker, handshake, parseFrame, unwrap } from "./client";
 import type {
   ProjectClientMessage,
   ProjectEvent,
@@ -47,23 +47,8 @@ export class ProjectClient {
   }
 
   static connect(transport: MessageTransport): Promise<ProjectClient> {
-    return new Promise((resolve, reject) => {
-      const stopMessages = transport.onMessage((raw) => {
-        const message = parseFrame<ProjectServerMessage>(raw);
-        if (message?.type === "welcome") {
-          stopMessages();
-          stopClose();
-          resolve(new ProjectClient(transport, new RequestTracker<ProjectOutcome>(transport)));
-        } else if (message?.type === "refused") {
-          stopMessages();
-          stopClose();
-          reject(new Error(message.error.message));
-        }
-      });
-      const stopClose = transport.onClose((reason) => reject(new Error(`connection closed: ${reason}`)));
-      const hello: ProjectClientMessage = { type: "hello", protocol_version: PROJECT_PROTOCOL_VERSION };
-      transport.send(JSON.stringify(hello));
-    });
+    const hello: ProjectClientMessage = { type: "hello", protocol_version: PROJECT_PROTOCOL_VERSION };
+    return handshake<ProjectServerMessage, ProjectClient>(transport, hello, () => new ProjectClient(transport, new RequestTracker<ProjectOutcome>(transport)));
   }
 
   async request<R extends ProjectRequest>(request: R): Promise<ProjectReplyFor<R>> {

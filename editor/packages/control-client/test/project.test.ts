@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ProjectClient, ProtocolFailure, fakeTransport } from "../src";
 
 const welcome = JSON.stringify({ type: "welcome", protocol_version: 1 });
@@ -31,6 +31,32 @@ describe("ProjectClient", () => {
       JSON.stringify({ type: "refused", error: { code: "version_mismatch", message: "service speaks 1" } }),
     ]);
     await expect(ProjectClient.connect(transport)).rejects.toThrow("service speaks 1");
+  });
+
+  it("refused_handshake_closes_the_transport_and_rejects_with_the_code", async () => {
+    const transport = fakeTransport(() => [
+      JSON.stringify({ type: "refused", error: { code: "version_mismatch", message: "service speaks 1" } }),
+    ]);
+    const closes: string[] = [];
+    transport.onClose((reason) => closes.push(reason));
+    const failure = await ProjectClient.connect(transport).catch((error) => error);
+    expect(failure).toBeInstanceOf(ProtocolFailure);
+    expect(failure.code).toBe("version_mismatch");
+    expect(closes).toEqual(["closed"]);
+  });
+
+  it("malformed_frames_are_ignored_and_do_not_break_pending_requests", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { transport, client: connecting } = connected();
+    const client = await connecting;
+    const pending = client.request({ type: "list_files" });
+    transport.push("{not json");
+    transport.push('{"type":"response","result":{"ok":{"type":"done"}}}');
+    transport.push('{"type":"event","event":null}');
+    transport.push(JSON.stringify({ type: "response", id: 1, result: { ok: { type: "files", entries: [] } } }));
+    expect((await pending).entries).toEqual([]);
+    expect(warn).toHaveBeenCalledTimes(3);
+    warn.mockRestore();
   });
 
   it("resolves_a_request_by_id_with_its_typed_reply", async () => {

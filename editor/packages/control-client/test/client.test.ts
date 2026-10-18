@@ -26,6 +26,18 @@ describe("ControlClient", () => {
     await expect(ControlClient.connect(transport)).rejects.toThrow("need protocol 2");
   });
 
+  it("refused_handshake_closes_the_transport_and_rejects_with_the_code", async () => {
+    const transport = fakeTransport(() => [
+      JSON.stringify({ type: "refused", error: { code: "unsupported_version", message: "need protocol 2" } }),
+    ]);
+    const closes: string[] = [];
+    transport.onClose((reason) => closes.push(reason));
+    const failure = await ControlClient.connect(transport).catch((error) => error);
+    expect(failure).toBeInstanceOf(ProtocolFailure);
+    expect(failure.code).toBe("unsupported_version");
+    expect(closes).toEqual(["closed"]);
+  });
+
   it("sends_hello_with_the_protocol_version_and_exposes_the_game", async () => {
     const hellos: unknown[] = [];
     const transport = fakeTransport((raw) => {
@@ -87,6 +99,37 @@ describe("ControlClient", () => {
     expect((await pending).tick).toBe(1);
     expect(warn).toHaveBeenCalledOnce();
     warn.mockRestore();
+  });
+
+  it("frames_of_the_wrong_shape_are_ignored", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { transport, client: connecting } = connected();
+    const client = await connecting;
+    const pending = client.request({ type: "get_hash" });
+    for (const frame of ["null", "[]", '{"id":1}', '{"type":"response","id":"1","result":{}}', '{"type":"response","id":1}', '{"type":"event"}']) {
+      transport.push(frame);
+    }
+    transport.push(ok(1, { type: "hash", tick: 1, hash: "1", pending: false }));
+    expect((await pending).tick).toBe(1);
+    expect(warn).toHaveBeenCalledTimes(6);
+    warn.mockRestore();
+  });
+
+  it("response_with_an_unknown_id_is_ignored", async () => {
+    const { transport, client: connecting } = connected();
+    const client = await connecting;
+    const pending = client.request({ type: "get_hash" });
+    transport.push(ok(99, { type: "done" }));
+    transport.push(ok(1, { type: "hash", tick: 2, hash: "2", pending: false }));
+    expect((await pending).tick).toBe(2);
+  });
+
+  it("request_after_the_transport_dropped_rejects", async () => {
+    const { transport, sent, client: connecting } = connected();
+    const client = await connecting;
+    transport.drop("socket reset");
+    await expect(client.request({ type: "get_hash" })).rejects.toThrow("connection closed");
+    expect(sent).toEqual([]);
   });
 
   it("topic_subscriptions_are_counted_so_only_the_last_unsubscribe_is_sent", async () => {

@@ -103,14 +103,64 @@ export function unwrap<R, C extends string>(result: { ok: R } | { error: { code:
   return result.ok;
 }
 
-/** Parses an incoming frame; a malformed one is ignored with a warning so it cannot break delivery or hang requests. */
+const isObject = (value: unknown): value is { [key: string]: unknown } => typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** Whether `value` has the envelope of a server message: a `type`, and what responses and events carry. */
+function isEnvelope(value: unknown): boolean {
+  if (!isObject(value) || typeof value.type !== "string") return false;
+  if (value.type === "response") return typeof value.id === "number" && isObject(value.result);
+  if (value.type === "event") return isObject(value.event) && typeof value.event.type === "string";
+  return true;
+}
+
+/**
+ * Parses an incoming frame; one that is not JSON or lacks the envelope of a server message is
+ * ignored with a warning, so it cannot break delivery or hang requests.
+ */
 export function parseFrame<T>(raw: string): T | undefined {
+  let value: unknown;
   try {
-    return JSON.parse(raw) as T;
+    value = JSON.parse(raw);
   } catch (error) {
     console.warn(`ignoring malformed message: ${String(error)}`);
     return undefined;
   }
+  if (isEnvelope(value)) return value as T;
+  console.warn(`ignoring malformed message: ${raw.slice(0, 200)}`);
+  return undefined;
+}
+
+/**
+ * Sends `hello` and resolves with what `accept` makes of the peer's welcome, called as the
+ * welcome arrives so the client it builds misses nothing right behind it (a close). A refusal closes
+ * the transport and rejects with a `ProtocolFailure` carrying its code; a closed transport
+ * rejects too.
+ */
+export function handshake<M extends { type: string }, T>(
+  transport: MessageTransport,
+  hello: unknown,
+  accept: (welcome: Extract<M, { type: "welcome" }>) => T,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const stop = () => {
+      stopMessages();
+      stopClose();
+    };
+    const stopMessages = transport.onMessage((raw) => {
+      const message = parseFrame<M>(raw);
+      if (message?.type === "welcome") {
+        stop();
+        resolve(accept(message as Extract<M, { type: "welcome" }>));
+      } else if (message?.type === "refused") {
+        stop();
+        const { code, message: text } = (message as unknown as { error: { code: string; message: string } }).error;
+        transport.close();
+        reject(new ProtocolFailure(code, text));
+      }
+    });
+    const stopClose = transport.onClose((reason) => reject(new Error(`connection closed: ${reason}`)));
+    transport.send(JSON.stringify(hello));
+  });
 }
 
 type Listener = (event: never) => void;
@@ -144,23 +194,8 @@ export class ControlClient {
   }
 
   static connect(transport: MessageTransport): Promise<ControlClient> {
-    return new Promise((resolve, reject) => {
-      const stopMessages = transport.onMessage((raw) => {
-        const message = parseFrame<ServerMessage>(raw);
-        if (message?.type === "welcome") {
-          stopMessages();
-          stopClose();
-          resolve(new ControlClient(transport, new RequestTracker(transport), message.game));
-        } else if (message?.type === "refused") {
-          stopMessages();
-          stopClose();
-          reject(new Error(message.error.message));
-        }
-      });
-      const stopClose = transport.onClose((reason) => reject(new Error(`connection closed: ${reason}`)));
-      const hello: ClientMessage = { type: "hello", protocol_version: PROTOCOL_VERSION };
-      transport.send(JSON.stringify(hello));
-    });
+    const hello: ClientMessage = { type: "hello", protocol_version: PROTOCOL_VERSION };
+    return handshake<ServerMessage, ControlClient>(transport, hello, (welcome) => new ControlClient(transport, new RequestTracker(transport), welcome.game));
   }
 
   /**

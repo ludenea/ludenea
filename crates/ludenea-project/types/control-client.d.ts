@@ -987,8 +987,22 @@ function unwrap<R, C extends string>(result: {
         message: string;
     };
 }): R;
-/** Parses an incoming frame; a malformed one is ignored with a warning so it cannot break delivery or hang requests. */
+/**
+ * Parses an incoming frame; one that is not JSON or lacks the envelope of a server message is
+ * ignored with a warning, so it cannot break delivery or hang requests.
+ */
 function parseFrame<T>(raw: string): T | undefined;
+/**
+ * Sends `hello` and resolves with what `accept` makes of the peer's welcome, called as the
+ * welcome arrives so the client it builds misses nothing right behind it (a close). A refusal closes
+ * the transport and rejects with a `ProtocolFailure` carrying its code; a closed transport
+ * rejects too.
+ */
+function handshake<M extends {
+    type: string;
+}, T>(transport: MessageTransport, hello: unknown, accept: (welcome: Extract<M, {
+    type: "welcome";
+}>) => T): Promise<T>;
 class ControlClient {
     private readonly transport;
     private readonly requests;
@@ -1059,6 +1073,7 @@ class ProjectClient {
 
 function webSocketTransport(url: string): Promise<MessageTransport>;
 
+/** Over a worker or a message port. An uncaught worker error or an unreadable message closes it. */
 function postMessageTransport(port: MessagePort | Worker): MessageTransport;
 
 /** The desktop backend's channels. It streams batches: protocol messages one per line. */
@@ -1088,6 +1103,6 @@ function startWorkerGame(options: {
     glueUrl: string;
 }): WorkerGame;
 
-export { ControlClient, PROJECT_PROTOCOL_VERSION, PROTOCOL_VERSION, ProjectClient, ProtocolFailure, RequestTracker, fakeTransport, parseFrame, postMessageTransport, startWorkerGame, tauriTransport, unwrap, webSocketTransport };
+export { ControlClient, PROJECT_PROTOCOL_VERSION, PROTOCOL_VERSION, ProjectClient, ProtocolFailure, RequestTracker, fakeTransport, handshake, parseFrame, postMessageTransport, startWorkerGame, tauriTransport, unwrap, webSocketTransport };
 export type { AssetKind, BuildEvent, Bytes, ClientMessage, Color, Command, ComponentValue, ConsoleLevel, DebugDrawFrame, Diagnostic, Entity, EntityHash, EntityRow, ErrorCode, Event, FailureCode, FieldSchema, FieldTarget, FileChange, FileEntry, GameInfo, GameOutput, Hash64, HashTree, Item, JsonValue, MessageTransport, NamedHash, NamedSchema, Outcome, OutputStream, PathSegment, PauseReason, PluginBundle, PluginSource, Primitive, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo, ProjectOutcome, ProjectReply, ProjectReplyFor, ProjectRequest, ProjectServerMessage, ProtocolError, RawGamepad, RawInput, RecordedEvent, Reply, ReplyFor, ServerMessage, ServiceMode, SyncPoint, SystemRow, Timeline, Topic, TypeSchema, VariantFields, VariantSchema, Vec2, WorkerCrash, WorkerGame };
 }
