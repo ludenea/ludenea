@@ -45,8 +45,9 @@ pub struct Host {
     compare: Option<CompareRun>,
     /// Whether `Topic::Ghost` is subscribed: the compare simulation follows only then.
     ghost: bool,
-    /// The ghost's tick last reported by `GhostAdvanced`.
-    ghost_tick: Option<u64>,
+    /// What `GhostAdvanced` last reported: the ghost's tick, or `None` outside the compare
+    /// branch's run.
+    ghost_reported: Option<Option<u64>>,
 }
 
 impl Host {
@@ -61,7 +62,7 @@ impl Host {
             build,
             compare: None,
             ghost: false,
-            ghost_tick: None,
+            ghost_reported: None,
             pacer: Pacer::new(simulation.tick_rate()),
             timeline: session.timeline(),
             simulation,
@@ -124,7 +125,6 @@ impl Host {
     /// while the recorded future is stale. Returns the events since the last call.
     pub fn advance(&mut self, elapsed_seconds: f64) -> Vec<Event> {
         let resimulating = self.session.timeline().resimulating;
-        let start = self.simulation.tick();
         if resimulating {
             // Resimulation changes the state shown only by moving to another tick (back
             // to the tick of a scene change), so the tick alone says whether to announce it.
@@ -158,12 +158,8 @@ impl Host {
                 }
             }
         }
-        let compare = self.session.compare_branch();
-        let grown =
-            self.simulation.tick() != start && compare == Some(self.session.current_branch());
-        if (resimulating || grown)
-            && let Some(compare) = &mut self.compare
-        {
+        // Play never changes the compare branch's run: it is never the current branch.
+        if resimulating && let Some(compare) = &mut self.compare {
             compare.invalidate();
         }
         self.follow_compare();
@@ -190,8 +186,9 @@ impl Host {
         });
         match followed {
             Ok(state) => {
-                if self.ghost_tick != Some(state.tick) {
-                    self.ghost_tick = Some(state.tick);
+                let reported = (!state.outside).then_some(state.tick);
+                if self.ghost_reported != Some(reported) {
+                    self.ghost_reported = Some(reported);
                     self.events.push(Event::GhostAdvanced { tick: state.tick });
                 }
             }
@@ -211,7 +208,7 @@ impl Host {
     /// Drops the compare simulation and the compare branch, and reports why.
     fn stop_ghost(&mut self, message: &str) {
         self.compare = None;
-        self.ghost_tick = None;
+        self.ghost_reported = None;
         self.session
             .set_compare_branch(None)
             .expect("no branch always sets");
@@ -736,7 +733,7 @@ impl Host {
             Command::Subscribe { topic } => {
                 if topic == Topic::Ghost {
                     self.ghost = true;
-                    self.ghost_tick = None;
+                    self.ghost_reported = None;
                 }
                 if topic == Topic::Introspection {
                     self.session

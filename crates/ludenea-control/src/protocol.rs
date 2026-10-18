@@ -402,7 +402,8 @@ pub enum Command {
     Pick {
         point: Vec2,
     },
-    /// The branch the ghost shows, or none.
+    /// Chooses the branch the ghost shows (the parent of the current branch while it is
+    /// the current one), or turns the ghost off until the next fork.
     SetCompareBranch {
         branch: Option<BranchId>,
     },

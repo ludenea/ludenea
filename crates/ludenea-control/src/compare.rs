@@ -24,6 +24,8 @@ pub(crate) struct CompareState {
     pub tick: u64,
     /// Whether it has not reached the tick followed yet.
     pub lagging: bool,
+    /// Whether the tick followed is past the end of the branch's run.
+    pub outside: bool,
 }
 
 pub(crate) struct CompareRun {
@@ -35,6 +37,9 @@ pub(crate) struct CompareRun {
     /// The tick of `sim`'s state, edits recorded at that tick applied; `None` until a
     /// checkpoint is restored.
     at: Option<u64>,
+    /// How many times a checkpoint was restored.
+    #[cfg(test)]
+    restores: u32,
 }
 
 impl CompareRun {
@@ -45,6 +50,8 @@ impl CompareRun {
             run: None,
             outdated: false,
             at: None,
+            #[cfg(test)]
+            restores: 0,
         }
     }
 
@@ -84,18 +91,33 @@ impl CompareRun {
         running: &mut u64,
     ) -> Result<CompareState, String> {
         self.refresh(session);
-        let Self { sim, run, at, .. } = self;
+        let Self {
+            sim,
+            run,
+            at,
+            #[cfg(test)]
+            restores,
+            ..
+        } = self;
         let run = run.as_ref().expect("refreshed");
         if tick > run.end() {
             return Ok(CompareState {
                 tick,
                 lagging: false,
+                outside: true,
             });
         }
         let (checkpoint, snapshot) = run.checkpoints.nearest_at_or_before(tick.min(run.fresh));
+        // Stepping on beats a checkpoint unless the budget cannot get there by stepping.
         let mut now = match *at {
-            Some(now) if now <= tick && now >= checkpoint => now,
+            Some(now) if now <= tick && (now >= checkpoint || tick - now <= u64::from(budget)) => {
+                now
+            }
             _ => {
+                #[cfg(test)]
+                {
+                    *restores += 1;
+                }
                 *at = None;
                 // Load addresses and kept assets come from the scene load, not the snapshot.
                 session.load_into(sim).map_err(|error| error.to_string())?;
@@ -126,6 +148,7 @@ impl CompareRun {
         Ok(CompareState {
             tick: now,
             lagging: now < tick,
+            outside: false,
         })
     }
 
@@ -193,4 +216,49 @@ fn same_past(a: &BranchRun, b: &BranchRun, tick: u64) -> bool {
 /// The first `count` items, or all of them when there are fewer.
 fn first<T>(items: &[T], count: usize) -> &[T] {
     &items[..count.min(items.len())]
+}
+
+#[cfg(test)]
+mod tests {
+    use ludenea_app::{AssetTexts, Edit, EntityRef};
+
+    use super::*;
+    use crate::session::Document;
+
+    #[test]
+    fn following_play_steps_across_checkpoints_without_restoring() {
+        let mut sim = boxes::app().build().unwrap();
+        let scene = boxes::generate_scene(10, 3);
+        let mut session =
+            Session::start(&mut sim, scene, AssetTexts::new(), Document::Scene).unwrap();
+        for _ in 0..100 {
+            session.step(&mut sim, None).unwrap();
+        }
+        // An edit at tick 10 forks; the root, ahead to tick 100, becomes the compare branch.
+        session.seek(&mut sim, 10).unwrap();
+        let entity = *sim.load_addresses().keys().next().unwrap();
+        let value = sim
+            .world()
+            .component_bytes(entity, "ludenea::Pose")
+            .unwrap();
+        let edit = Edit::Insert {
+            entity: EntityRef::Runtime(entity),
+            component: "ludenea::Pose".to_string(),
+            value,
+        };
+        session.edit(&mut sim, edit).unwrap();
+        assert_eq!(session.compare_branch(), Some(BranchId::ROOT));
+
+        let mut compare = CompareRun::new(boxes::app().build().unwrap());
+        compare.follow(&session, 10, COMPARE_BUDGET_PAUSED).unwrap();
+        assert_eq!(compare.restores, 1);
+        // Play at one tick per advance crosses the checkpoints at 16, 32, and 48.
+        for tick in 11..=50 {
+            let state = compare
+                .follow(&session, tick, COMPARE_BUDGET_PLAYING)
+                .unwrap();
+            assert_eq!((state.tick, state.lagging), (tick, false));
+        }
+        assert_eq!(compare.restores, 1);
+    }
 }

@@ -113,7 +113,8 @@ pub struct Timeline {
     pub resimulating: bool,
     pub branch: BranchId,
     pub branches: Vec<BranchInfo>,
-    /// The branch the ghost shows: the parent of a branch when it forks, until changed.
+    /// The branch the ghost shows: the parent of the current branch unless another is
+    /// chosen, none once the ghost is turned off.
     pub compare: Option<BranchId>,
 }
 
@@ -218,8 +219,17 @@ pub struct Session {
     /// Whether every scene load keeps every asset of `assets`, reached or not, as a
     /// replay's resolved scene needs: it reaches no prefab.
     keeps_assets: bool,
-    /// The branch the ghost shows, while it exists.
-    compare: Option<BranchId>,
+    /// What the ghost shows.
+    compare: CompareChoice,
+}
+
+/// What the ghost shows: the parent of the current branch unless a branch is chosen.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum CompareChoice {
+    Parent,
+    Off,
+    /// Shown while it exists and is not the current branch; the parent otherwise.
+    Branch(BranchId),
 }
 
 impl Session {
@@ -266,7 +276,7 @@ impl Session {
             switching: None,
             warnings,
             keeps_assets: false,
-            compare: None,
+            compare: CompareChoice::Parent,
         }
     }
 
@@ -297,10 +307,7 @@ impl Session {
         };
         sim.set_players(usize::from(inputs.players));
         let assets: AssetTexts = export.assets.into_iter().collect();
-        let warnings = load(sim, document, &export.scene, &assets)?;
-        if export.keeps_assets {
-            keep_assets(sim, assets.iter().map(|(&id, text)| (id, text.as_str())))?;
-        }
+        let warnings = load_kept(sim, document, &export.scene, &assets, export.keeps_assets)?;
         let mut session = Session::loaded(sim, export.scene, assets, document, warnings);
         session.keeps_assets = export.keeps_assets;
         if let Some(saved) = export.saved_scene {
@@ -314,7 +321,6 @@ impl Session {
         if !export.branches.is_empty() {
             session.tree = BranchTree::decode(&export.branches, &session.edits, session.head)?;
         }
-        session.compare = session.tree.current_branch().parent;
         if !export.hashes.is_empty() {
             session.hashes = export.hashes;
         }
@@ -422,19 +428,24 @@ impl Session {
         Ok(())
     }
 
-    /// The branch the ghost shows, while it exists.
+    /// The branch the ghost shows: the chosen one while it exists and is not the current
+    /// branch, otherwise the parent of the current branch; none once the ghost is turned off.
     pub fn compare_branch(&self) -> Option<BranchId> {
-        self.compare.filter(|&id| self.tree.get(id).is_some())
+        let current = self.current_branch();
+        match self.compare {
+            CompareChoice::Off => None,
+            CompareChoice::Branch(id) if id != current && self.tree.get(id).is_some() => Some(id),
+            _ => self.tree.get(current).and_then(|branch| branch.parent),
+        }
     }
 
-    /// Sets the branch the ghost shows, or none.
+    /// Chooses the branch the ghost shows; `None` turns the ghost off until the next fork.
     pub fn set_compare_branch(&mut self, branch: Option<BranchId>) -> Result<(), SessionError> {
-        if let Some(id) = branch
-            && self.tree.get(id).is_none()
-        {
-            return Err(SessionError::NoSuchBranch(id));
-        }
-        self.compare = branch;
+        self.compare = match branch {
+            Some(id) if self.tree.get(id).is_none() => return Err(SessionError::NoSuchBranch(id)),
+            Some(id) => CompareChoice::Branch(id),
+            None => CompareChoice::Off,
+        };
         Ok(())
     }
 
@@ -1536,7 +1547,7 @@ impl Session {
         if self.end() > tick {
             let segment = self.current_segment();
             let fork = (tick, self.edits.at(tick).len());
-            self.compare = Some(self.tree.current());
+            self.compare = CompareChoice::Parent;
             self.tree.fork(segment, self.resimulating, fork);
         }
         self.discard_after(tick);
@@ -1766,11 +1777,7 @@ impl Session {
         text: &str,
         assets: &AssetTexts,
     ) -> Result<Vec<String>, SessionError> {
-        let warnings = load(sim, self.document, text, assets)?;
-        if self.keeps_assets {
-            keep_assets(sim, assets.iter().map(|(&id, text)| (id, text.as_str())))?;
-        }
-        Ok(warnings)
+        load_kept(sim, self.document, text, assets, self.keeps_assets)
     }
 
     /// Loads a scene version from the undo history, like a tick 0 edit.
@@ -2055,6 +2062,21 @@ impl Session {
             }
         }
     }
+}
+
+/// `load`, keeping every asset of `assets` when `keeps_assets`.
+fn load_kept(
+    sim: &mut Simulation,
+    document: Document,
+    text: &str,
+    assets: &AssetTexts,
+    keeps_assets: bool,
+) -> Result<Vec<String>, SessionError> {
+    let warnings = load(sim, document, text, assets)?;
+    if keeps_assets {
+        keep_assets(sim, assets.iter().map(|(&id, text)| (id, text.as_str())))?;
+    }
+    Ok(warnings)
 }
 
 /// Loads `text`, a scene or prefab file as `document` says, with `assets`; returns the

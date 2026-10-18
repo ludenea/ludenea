@@ -219,7 +219,57 @@ fn compare_defaults_to_parent_on_fork() {
             branch: Some(forked.branch),
         },
     );
-    assert_eq!(timeline(&mut host).compare, Some(forked.branch));
+    // The current branch itself: the ghost shows its parent.
+    assert_eq!(timeline(&mut host).compare, Some(BranchId::ROOT));
+}
+
+/// The root runs to tick 40; branch 1 forks from it at tick 20 and branch 2 from branch 1
+/// at tick 10, and is current.
+fn three_generations() -> Host {
+    let (mut host, _) = spawner_host();
+    step(&mut host, 40);
+    seek(&mut host, 20);
+    spawn_crate(&mut host);
+    step(&mut host, 10);
+    seek(&mut host, 10);
+    spawn_crate(&mut host);
+    assert_eq!(timeline(&mut host).branch, BranchId(2));
+    host
+}
+
+fn switch(host: &mut Host, branch: u32) -> Option<BranchId> {
+    ok(
+        host,
+        Command::SwitchBranch {
+            branch: BranchId(branch),
+        },
+    );
+    timeline(host).compare
+}
+
+#[test]
+fn compare_follows_the_parent_of_the_current_branch() {
+    let mut host = three_generations();
+    assert_eq!(timeline(&mut host).compare, Some(BranchId(1)));
+    assert_eq!(switch(&mut host, 1), Some(BranchId::ROOT));
+    assert_eq!(switch(&mut host, 0), None);
+    assert_eq!(switch(&mut host, 2), Some(BranchId(1)));
+}
+
+#[test]
+fn chosen_compare_survives_switches_and_falls_back_while_current() {
+    let mut host = three_generations();
+    ok(
+        &mut host,
+        Command::SetCompareBranch {
+            branch: Some(BranchId::ROOT),
+        },
+    );
+    assert_eq!(timeline(&mut host).compare, Some(BranchId::ROOT));
+    assert_eq!(switch(&mut host, 1), Some(BranchId::ROOT));
+    // The chosen branch is current: the ghost shows the parent, here none.
+    assert_eq!(switch(&mut host, 0), None);
+    assert_eq!(switch(&mut host, 2), Some(BranchId::ROOT));
 }
 
 #[test]
@@ -295,12 +345,18 @@ fn ghost_never_changes_main_hashes() {
         seek(&mut host, 30);
         ok(&mut host, Command::Play);
         let mut hashes = Vec::new();
+        let mut events = Vec::new();
         for _ in 0..20 {
-            host.advance(1.0 / 60.0);
+            events.extend(host.advance(1.0 / 60.0));
             hashes.push(hash(&mut host));
         }
         ok(&mut host, Command::Pause);
-        settle(&mut host);
+        events.extend(settle(&mut host));
+        let advanced = events
+            .iter()
+            .any(|event| matches!(event, Event::GhostAdvanced { .. }));
+        assert_eq!(advanced, ghost, "{events:?}");
+        assert!(errors(&events).is_empty(), "{events:?}");
         let Reply::Session {
             hashes: recorded, ..
         } = ok(&mut host, Command::ExportSession)
@@ -328,6 +384,18 @@ fn ghost_outside_range_is_empty() {
     settle(&mut host);
     // The root ends at tick 20.
     assert_eq!(ghost(&mut host, 40), (DebugDrawFrame::default(), 40, false));
+    ok(&mut host, Command::Play);
+    let mut events = Vec::new();
+    for _ in 0..5 {
+        events.extend(host.advance(1.0 / 60.0));
+    }
+    ok(&mut host, Command::Pause);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::GhostAdvanced { .. })),
+        "past the end the ghost stays as it is: {events:?}"
+    );
     seek(&mut host, 15);
     settle(&mut host);
     let (frame, tick, lagging) = ghost(&mut host, 15);

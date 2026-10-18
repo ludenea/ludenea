@@ -485,7 +485,8 @@ type Timeline = {
     branch: BranchId;
     branches: Array<BranchInfo>;
     /**
-     * The branch the ghost shows: the parent of a branch when it forks, until changed.
+     * The branch the ghost shows: the parent of the current branch unless another is
+     * chosen, none once the ghost is turned off.
      */
     compare: BranchId | null;
 };
