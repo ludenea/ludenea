@@ -30,6 +30,14 @@ function located(entries: Entry[], diagnostic: Diagnostic, next: () => number): 
   return [...entries, { id: next(), level, source: "build", text: `${diagnostic.level}: ${diagnostic.message}`, location }];
 }
 
+/** `file` relative to the project `root` (as the asset browser names it), when it lies inside. */
+function projectPath(file: string, root: string | undefined): string {
+  let path = file.replaceAll("\\", "/");
+  const prefix = root && `${root.replaceAll("\\", "/").replace(/\/+$/, "")}/`;
+  if (prefix && path.startsWith(prefix)) path = path.slice(prefix.length);
+  return path.replace(/^(\.\/)+/, "");
+}
+
 /** Where each editor's Console panel takes messages from the application around it. */
 const sinks = new WeakMap<Editor, (level: ConsoleLevel, text: string) => void>();
 
@@ -84,8 +92,9 @@ export const consolePlugin = definePlugin({
     // Scenes and assets open in the asset browser. It lists nothing else, and the editor has no
     // source view: a source location goes to the clipboard, for the user's own editor.
     const open = (location: Location) => {
-      if (ASSET_FOLDERS.some((folder) => location.file.startsWith(`${folder}/`))) {
-        shared(editor).reveal.set({ path: location.file });
+      const path = projectPath(location.file, shared(editor).project.get().info?.root);
+      if (ASSET_FOLDERS.some((folder) => path.startsWith(`${folder}/`))) {
+        shared(editor).reveal.set({ path });
         showPanel(editor, "ludenea.assets");
         return;
       }

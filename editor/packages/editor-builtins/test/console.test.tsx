@@ -98,4 +98,25 @@ describe("console", () => {
     renderPanel(host, "ludenea.console");
     expect(lines().scrollTop).toBe(300);
   });
+
+  it("locations_are_classified_relative_to_the_project_root", async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    const info = { type: "info", name: "demo", root: "/work/demo", default_scene: null, mode: "browser" };
+    const host = await testEditor(builtinPlugins, (request) => (request.type === "info" ? info : request.type === "list_files" ? { type: "files", entries: [] } : undefined));
+    renderPanel(host, "ludenea.console");
+    renderPanel(host, "ludenea.assets");
+    await settle();
+    const diagnostic = (file: string) => ({ type: "build", event: { type: "diagnostic", level: "warning", message: file, file, line: 1, column: null } });
+    act(() => ["/work/demo/scenes/main.scene.ron", "./assets/logo.png", "/work/demo/src/lib.rs"].forEach((file) => host.project.push(diagnostic(file))));
+    const filter = () => (screen.getByRole("searchbox", { name: "Filter assets" }) as HTMLInputElement).value;
+
+    fireEvent.click(screen.getByRole("button", { name: "/work/demo/scenes/main.scene.ron:1" }));
+    expect(filter()).toBe("scenes/main.scene.ron");
+    fireEvent.click(screen.getByRole("button", { name: "./assets/logo.png:1" }));
+    expect(filter()).toBe("assets/logo.png");
+    fireEvent.click(screen.getByRole("button", { name: "/work/demo/src/lib.rs:1" }));
+    await settle();
+    expect(writeText).toHaveBeenCalledWith("/work/demo/src/lib.rs:1");
+  });
 });
