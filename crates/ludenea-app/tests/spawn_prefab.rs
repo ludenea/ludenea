@@ -1,4 +1,5 @@
-use ludenea_app::{App, AssetTexts, Rng, Sim, Simulation, Time};
+use ludenea_app::replay::{ReplayOutcome, play_replay, record_replay};
+use ludenea_app::{App, AssetTexts, EditLog, InputLog, Rng, Sim, Simulation, Time};
 use ludenea_ecs::{
     AssetId, CommandKind, CommandRecord, Commands, Component, Entity, Handle, IntoSystemConfig,
     Prefab, Query, Res, ResMut, ScheduleObserver, World,
@@ -59,6 +60,13 @@ fn simulation(every: u64) -> Simulation {
 }
 
 fn simulation_with<M>(every: u64, spawn: impl IntoSystemConfig<M>) -> Simulation {
+    let mut simulation = unloaded(spawn);
+    let (scene, assets) = bullet_scene(every);
+    simulation.load_scene_with(&scene, &assets).unwrap();
+    simulation
+}
+
+fn unloaded<M>(spawn: impl IntoSystemConfig<M>) -> Simulation {
     let mut app = App::new();
     app.component::<Tag>()
         .component::<Target>()
@@ -67,7 +75,11 @@ fn simulation_with<M>(every: u64, spawn: impl IntoSystemConfig<M>) -> Simulation
         .component::<Spawner>()
         .system(Sim, spawn)
         .system(Sim, move_bullets);
-    let mut simulation = app.build().unwrap();
+    app.build().unwrap()
+}
+
+/// A scene with one spawner of the bullet prefab, and its assets.
+fn bullet_scene(every: u64) -> (String, AssetTexts) {
     let bullet = "Prefab(version: 1, next_id: 2, entities: [\
         (id: 0, components: {\"spawn_prefab::Tag\": (1), \"spawn_prefab::Pos\": (x: 0.0, y: 0.0), \
          \"spawn_prefab::Target\": ((index: 1, generation: 0))}),\
@@ -81,8 +93,7 @@ fn simulation_with<M>(every: u64, spawn: impl IntoSystemConfig<M>) -> Simulation
          (id: 0, components: {{\"spawn_prefab::Spawner\": (bullet: \"{}\", every: {every})}})], instances: [])",
         AssetId(BULLET)
     );
-    simulation.load_scene_with(&scene, &assets).unwrap();
-    simulation
+    (scene, assets)
 }
 
 fn tagged(world: &World, value: u32) -> Vec<Entity> {
@@ -174,6 +185,24 @@ fn spawn_prefab_survives_snapshot_and_restore() {
     let first = run(&mut simulation);
     simulation.restore(&snapshot).unwrap();
     assert_eq!(run(&mut simulation), first);
+}
+
+/// A replay stores the prefab a component's handle names in flattened form.
+#[test]
+fn replay_of_a_scene_holding_a_prefab_handle_plays_back() {
+    let (scene, assets) = bullet_scene(5);
+    let mut recording = unloaded(spawn_bullets);
+    let replay = record_replay(
+        &mut recording,
+        &scene,
+        &assets,
+        &InputLog::new(1),
+        &EditLog::new(),
+        50,
+    )
+    .unwrap();
+    let report = play_replay(&mut unloaded(spawn_bullets), &replay, |_, _| {}).unwrap();
+    assert_eq!(report.outcome, ReplayOutcome::Matched);
 }
 
 #[derive(Default)]

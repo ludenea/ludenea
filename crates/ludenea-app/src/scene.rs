@@ -834,9 +834,14 @@ impl Simulation {
             };
             if asset == Prefab::NAME {
                 if !is_prefab_file(text)
-                    && let Ok((found, _)) = parse_asset_file_in_place(text)
+                    && let Ok((found, value)) = parse_asset_file_in_place(text)
                 {
-                    return Err(wrong_type(&found));
+                    if found != asset {
+                        return Err(wrong_type(&found));
+                    }
+                    // Already flattened, in file form: how a replay stores a prefab.
+                    loaded.insert(id, (found, LoadedValue::Ron(value)));
+                    continue;
                 }
                 let (prefab, nested) = self.flatten(id, assets)?;
                 pending.extend(nested.into_iter().rev());
