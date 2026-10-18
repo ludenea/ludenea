@@ -39,6 +39,14 @@ fn fs(in: Varyings) -> @location(0) vec4<f32> {
 }
 ";
 
+/// `frame_json` (a `DebugDrawFrame`) in the ghost style, as JSON: what the editor draws for
+/// another branch.
+#[wasm_bindgen]
+pub fn ghost_frame(frame_json: &str) -> Result<String, JsValue> {
+    let frame: DebugDrawFrame = serde_json::from_str(frame_json).map_err(failure)?;
+    serde_json::to_string(&frame.ghost()).map_err(failure)
+}
+
 #[wasm_bindgen]
 pub struct ViewportRenderer {
     surface: wgpu::Surface<'static>,

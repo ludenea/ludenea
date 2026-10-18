@@ -9,6 +9,11 @@ export const renderers: ViewportRenderer[] = [];
 
 export default async function init(): Promise<void> {}
 
+/** The ghost style is the renderer crate's; tests see the frame as it came. */
+export function ghost_frame(frame: string): string {
+  return frame;
+}
+
 export class ViewportRenderer implements Shape {
   readonly calls: { method: string; args: unknown[] }[] = [];
 

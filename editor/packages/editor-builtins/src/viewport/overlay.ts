@@ -17,7 +17,7 @@ export type OverlayScene = {
   drag: { entity: Entity; offset: Vec2 } | null;
 };
 
-const css = (color: Color) => `rgba(${color >>> 24}, ${(color >>> 16) & 255}, ${(color >>> 8) & 255}, ${(color & 255) / 255})`;
+export const css = (color: Color) => `rgba(${color >>> 24}, ${(color >>> 16) & 255}, ${(color >>> 8) & 255}, ${(color & 255) / 255})`;
 const same = (a: Entity | null, b: Entity) => a !== null && a.index === b.index && a.generation === b.generation;
 
 /** Draws what the GPU renderer does not: labels, the drag outline, and plugin overlays. */
@@ -59,7 +59,8 @@ export function drawOverlay(context: CanvasRenderingContext2D, scene: OverlaySce
   }
 }
 
-function outline(context: CanvasRenderingContext2D, primitive: Primitive, toScreen: (point: Vec2) => { x: number; y: number }, scale: number) {
+/** Adds `primitive`'s outline to the current path; `scale` in pixels per meter. */
+export function outline(context: CanvasRenderingContext2D, primitive: Primitive, toScreen: (point: Vec2) => { x: number; y: number }, scale: number) {
   const circle = (center: Vec2, radius: number) => {
     const at = toScreen(center);
     context.moveTo(at.x + radius * scale, at.y);

@@ -1,6 +1,7 @@
 import type { PluginDefinition } from "@ludenea/editor-shell";
 import { assetsPlugin } from "./assets";
 import { consolePlugin } from "./console";
+import { divergencePlugin } from "./divergence";
 import { explorerPlugin } from "./explorer";
 import { inspectorPlugin } from "./inspector";
 import { prefabsPlugin } from "./prefabs";
@@ -10,5 +11,5 @@ import { timelinePlugin } from "./timeline";
 import { viewportPlugin } from "./viewport";
 
 /** The editor's own panels, plugins on the public `Editor` API like any project plugin. */
-export const builtinPlugins: PluginDefinition[] = [projectPlugin, assetsPlugin, sceneTreePlugin, prefabsPlugin, explorerPlugin, inspectorPlugin, viewportPlugin, timelinePlugin, consolePlugin];
+export const builtinPlugins: PluginDefinition[] = [projectPlugin, assetsPlugin, sceneTreePlugin, prefabsPlugin, explorerPlugin, inspectorPlugin, viewportPlugin, timelinePlugin, divergencePlugin, consolePlugin];
 export { logToConsole } from "./console";

@@ -3,7 +3,7 @@ import type { Entity, Vec2 } from "@ludenea/control-client";
 import type { Editor } from "@ludenea/editor-shell";
 import { useEffect, useRef, useState } from "react";
 import { captureInput } from "../input/capture";
-import { errorText, useGame } from "../shared";
+import { errorText, shared, useGame } from "../shared";
 import { ResimulatingNotice } from "../timeline/editing";
 import { panBy, screenToWorld, zoomAt, type Size } from "./camera";
 import { moveBy, visibleLayers, type ViewportState } from "./state";
@@ -15,8 +15,11 @@ const WHEEL_ZOOM = 0.0015;
 const ARROWS: { [key: string]: string } = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" };
 
 let loaded: Promise<unknown> | undefined;
+/** Loads the renderer's WebAssembly module once, for every use of it. */
+export const loadRenderer = () => (loaded ??= init());
+
 async function createRenderer(canvas: HTMLCanvasElement): Promise<ViewportRenderer> {
-  await (loaded ??= init());
+  await loadRenderer();
   return ViewportRenderer.create(canvas);
 }
 
@@ -141,6 +144,7 @@ export function ViewportPanel({ editor, state }: { editor: Editor; state: Viewpo
       }),
       editor.timeline.subscribe(() => (dirty = true)),
       editor.selection.subscribe(() => (repaint = true)),
+      shared(editor).overlays.subscribe(() => (repaint = true)),
       subscribeGame(editor, () => {
         state.set({ frame: null, tick: 0 });
         dirty = true;

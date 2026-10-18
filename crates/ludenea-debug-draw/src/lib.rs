@@ -65,11 +65,72 @@ pub struct DebugDrawFrame {
     pub layers: BTreeMap<String, Vec<Item>>,
 }
 
+/// The share of its alpha a color keeps in the ghost style, in percent.
+pub const GHOST_OPACITY_PERCENT: u32 = 40;
+
+impl Color {
+    /// The same color at `percent` of its alpha.
+    fn faded(self, percent: u32) -> Color {
+        let alpha = (self.0 & 0xFF) * percent / 100;
+        Color(self.0 & !0xFF | alpha)
+    }
+}
+
 impl DebugDrawFrame {
+    /// The frame in the ghost style, how the viewport draws another branch: the same
+    /// primitives, outlines only, at reduced opacity.
+    pub fn ghost(&self) -> DebugDrawFrame {
+        let fade = |color: &mut Color| *color = color.faded(GHOST_OPACITY_PERCENT);
+        let mut ghost = self.clone();
+        for item in ghost.layers.values_mut().flatten() {
+            match &mut item.primitive {
+                Primitive::Circle { color, fill, .. } | Primitive::Polygon { color, fill, .. } => {
+                    *fill = false;
+                    fade(color);
+                }
+                Primitive::Line { color, .. }
+                | Primitive::Capsule { color, .. }
+                | Primitive::Label { color, .. } => fade(color),
+            }
+        }
+        ghost
+    }
+
     pub fn push(&mut self, layer: &str, entity: Option<Entity>, primitive: Primitive) {
         self.layers
             .entry(layer.to_string())
             .or_default()
             .push(Item { entity, primitive });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ghost_keeps_primitives_as_faded_outlines() {
+        let mut frame = DebugDrawFrame::default();
+        let circle = |color, fill| Primitive::Circle {
+            center: Vec2::ZERO,
+            radius: 1.0,
+            color: Color(color),
+            fill,
+        };
+        let label = |color| Primitive::Label {
+            at: Vec2::ZERO,
+            text: "x".into(),
+            color: Color(color),
+        };
+        frame.push("l", None, circle(0x112233FF, true));
+        frame.push("l", None, label(0x44556680));
+        let ghost = frame.ghost();
+        assert_eq!(
+            ghost.layers["l"]
+                .iter()
+                .map(|item| &item.primitive)
+                .collect::<Vec<_>>(),
+            [&circle(0x11223366, false), &label(0x44556633)]
+        );
     }
 }

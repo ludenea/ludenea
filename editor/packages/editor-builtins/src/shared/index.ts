@@ -69,6 +69,8 @@ export interface Shared {
   project: Store<{ info: ProjectInfo | null; build: BuildState }>;
   /** Asks the asset browser to show `path` (from a console location). */
   reveal: Store<{ path: string | null }>;
+  /** Changed by a built-in viewport overlay with something new to draw: the viewport repaints. */
+  overlays: Store<{ version: number }>;
 }
 
 const sharedState = new WeakMap<Editor, Shared>();
@@ -79,6 +81,7 @@ export function shared(editor: Editor): Shared {
     state = {
       project: createStore({ info: null as ProjectInfo | null, build: { status: "idle", done: 0, total: null } as BuildState }),
       reveal: createStore({ path: null as string | null }),
+      overlays: createStore({ version: 0 }),
     };
     sharedState.set(editor, state);
   }

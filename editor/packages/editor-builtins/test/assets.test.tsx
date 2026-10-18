@@ -488,14 +488,13 @@ describe("data assets, replays, traces, and snapshots", () => {
 
   it("opening_trace_runs_divergence_command", async () => {
     const { host } = await project();
-    const opened: unknown[] = [];
-    host.editor.commands.register({ id: "divergence.open-file", title: "Open a trace or snapshot", run: (_, file) => void opened.push((file as { path: string }).path) });
-
     fireEvent.doubleClick(screen.getByText("run.trace"));
     fireEvent.keyDown(screen.getByText("tick.snap").closest("[role=treeitem]")!, { key: "Enter" });
     await settle();
 
-    expect(opened).toEqual(["assets/run.trace", "assets/tick.snap"]);
+    // The divergence viewer reads each file to compare it.
+    const read = host.project.sent.filter((request) => request.type === "read_binary").map((request) => request.path);
+    expect(read).toEqual(["assets/run.trace", "assets/tick.snap"]);
     expect(host.editor.document.getState().current).toBeNull();
   });
 
