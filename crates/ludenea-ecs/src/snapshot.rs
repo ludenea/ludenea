@@ -7,15 +7,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::commands::CommandQueue;
 use crate::hash::ENTITIES_LEAF;
-use crate::{EntitiesState, Entity, World};
+use crate::{AssetId, EntitiesState, Entity, World};
 
-pub const SNAPSHOT_VERSION: u32 = 1;
+pub const SNAPSHOT_VERSION: u32 = 2;
 
 /// Postcard bytes of one component type, per entity.
 pub type ComponentValues = Vec<(Entity, Vec<u8>)>;
 
 /// Entity allocator state plus every registered resource and component, encoded with
-/// postcard and listed in name order. Runtime resources are never included.
+/// postcard and listed in name order, and the loaded assets. Runtime resources are never
+/// included.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Snapshot {
     pub version: u32,
@@ -24,6 +25,10 @@ pub struct Snapshot {
     pub resources: Vec<(String, Vec<u8>)>,
     /// Every registered component, even one no entity has.
     pub components: Vec<(String, ComponentValues)>,
+    /// Loaded assets in identifier order: type name and canonical postcard bytes.
+    pub assets: Vec<(AssetId, String, Vec<u8>)>,
+    /// Identifies the game build that recorded the snapshot; `0` means unknown.
+    pub fingerprint: u64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -57,7 +62,16 @@ impl Snapshot {
         postcard::to_allocvec(self).expect("a snapshot always encodes")
     }
 
+    /// Reads the version first, so a snapshot of another version fails as such.
     pub fn decode(bytes: &[u8]) -> Result<Snapshot, SnapshotError> {
+        let (version, _) = postcard::take_from_bytes::<u32>(bytes)
+            .map_err(|error| decode_error("snapshot")(error.to_string()))?;
+        if version != SNAPSHOT_VERSION {
+            return Err(SnapshotError::Version {
+                found: version,
+                expected: SNAPSHOT_VERSION,
+            });
+        }
         crate::component::decode_exact(bytes).map_err(decode_error("snapshot"))
     }
 }
@@ -92,12 +106,18 @@ impl World {
             entities: self.entities.clone(),
             resources,
             components,
+            assets: self
+                .assets
+                .iter()
+                .map(|(&id, asset)| (id, asset.type_name.to_string(), asset.bytes.clone()))
+                .collect(),
+            fingerprint: 0,
         }
     }
 
-    /// Replaces the entities, components, and resources with those of `snapshot`, and drops
-    /// any queued command and event (left behind by a tick that panicked). On error the
-    /// world is unchanged. Runtime resources are kept as they are.
+    /// Replaces the entities, components, resources, and assets with those of `snapshot`,
+    /// and drops any queued command and event (left behind by a tick that panicked). On
+    /// error the world is unchanged. Runtime resources are kept as they are.
     pub fn restore(&mut self, snapshot: &Snapshot) -> Result<(), SnapshotError> {
         self.check_compatible(snapshot)?;
         check_entities(&snapshot.entities)?;
@@ -129,6 +149,13 @@ impl World {
             }
             components.push((key, decoded));
         }
+        let mut assets = Vec::with_capacity(snapshot.assets.len());
+        for (id, type_name, bytes) in &snapshot.assets {
+            let asset = self
+                .decode_asset(*id, type_name, bytes)
+                .map_err(|error| decode_error(&format!("asset {id}"))(error.to_string()))?;
+            assets.push(asset);
+        }
 
         self.entities = snapshot.entities.clone();
         for (name, value) in resources {
@@ -142,6 +169,7 @@ impl World {
             let entry = self.components.get_mut(name).expect("checked");
             entry.storage.replace_all(values);
         }
+        self.replace_assets(assets);
         *self.commands.get_mut() = CommandQueue::default();
         self.clear_events();
         Ok(())

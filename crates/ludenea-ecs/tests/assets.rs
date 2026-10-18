@@ -1,0 +1,249 @@
+use ludenea_ecs::hash::ASSETS_LEAF;
+use ludenea_ecs::schema::{Schema, TypeSchema};
+use ludenea_ecs::{
+    Asset, AssetId, Assets, Component, EcsError, Handle, ResMut, Resource, ScheduleBuilder,
+    Snapshot, SnapshotError, World, hash_value,
+};
+use serde::{Deserialize, Serialize};
+
+#[derive(Asset, Serialize, Deserialize, Debug, PartialEq, Default)]
+#[asset(name = "test::Stats")]
+struct Stats {
+    damage: u32,
+    cooldown: u32,
+}
+
+#[derive(Asset, Serialize, Deserialize, Debug, PartialEq)]
+struct NoDefault(u8);
+
+#[derive(Component, Serialize, Deserialize)]
+struct Weapon(u32);
+
+#[derive(Resource, Serialize, Deserialize)]
+struct Read(Option<u32>);
+
+const ID: AssetId = AssetId(7);
+
+fn world() -> World {
+    let mut world = World::new();
+    world.register_component::<Weapon>().unwrap();
+    world.register_resource(Read(None)).unwrap();
+    let entity = world.spawn();
+    world.insert(entity, Weapon(3)).unwrap();
+    world
+}
+
+fn with_assets() -> World {
+    let mut world = world();
+    world.register_asset_with_default::<Stats>().unwrap();
+    world.register_asset::<NoDefault>().unwrap();
+    world
+}
+
+fn run(world: &mut World, system: fn(Assets<Stats>, ResMut<Read>)) {
+    let mut builder = ScheduleBuilder::default();
+    builder.add(system);
+    let Ok(mut schedule) = builder.build(world) else {
+        panic!("schedule should build");
+    };
+    schedule.run(world);
+}
+
+#[test]
+fn handle_encodes_and_hashes_like_its_asset_id() {
+    let handle = Handle::<Stats>::new(ID);
+    assert_eq!(handle.id, ID);
+    assert_eq!(
+        postcard::to_allocvec(&handle).unwrap(),
+        postcard::to_allocvec(&ID).unwrap()
+    );
+    assert_eq!(hash_value(&handle), hash_value(&ID));
+    assert_eq!(
+        ron::to_string(&handle).unwrap(),
+        ron::to_string(&ID).unwrap()
+    );
+    let back: Handle<Stats> = ron::from_str(&ron::to_string(&ID).unwrap()).unwrap();
+    assert_eq!(back, handle);
+}
+
+#[test]
+fn handle_schema_names_its_asset_type() {
+    assert_eq!(
+        Handle::<Stats>::schema(),
+        TypeSchema::Handle {
+            asset: "test::Stats".to_string()
+        }
+    );
+    assert!(NoDefault::NAME.ends_with("assets::NoDefault"));
+}
+
+#[test]
+fn world_without_assets_hashes_as_before() {
+    let plain = world();
+    let registered = with_assets();
+    assert_eq!(registered.hash_tree(), plain.hash_tree());
+    assert!(
+        registered
+            .hash_tree()
+            .resources
+            .iter()
+            .all(|leaf| leaf.name != ASSETS_LEAF)
+    );
+}
+
+#[test]
+fn loaded_asset_adds_the_assets_leaf_after_entities() {
+    let mut world = with_assets();
+    let before = world.hash();
+    world
+        .insert_asset_ron(ID, "test::Stats", "(damage: 4, cooldown: 2)")
+        .unwrap();
+    let tree = world.hash_tree();
+    let names: Vec<_> = tree
+        .resources
+        .iter()
+        .map(|leaf| leaf.name.as_str())
+        .collect();
+    assert_eq!(names[names.len() - 2..], ["ludenea::Entities", ASSETS_LEAF]);
+    assert_ne!(tree.root, before);
+
+    let (type_name, bytes) = world.asset_bytes(ID).unwrap();
+    assert_eq!(type_name, "test::Stats");
+    let mut expected = xxhash_rust::xxh3::Xxh3::new();
+    expected.update(&ID.0.to_le_bytes());
+    expected.update(&hash_value(&bytes[..]).to_le_bytes());
+    assert_eq!(tree.resources.last().unwrap().hash, expected.digest());
+
+    world.clear_assets();
+    assert_eq!(world.hash(), before);
+}
+
+#[test]
+fn asset_hash_ignores_ron_formatting() {
+    let mut compact = with_assets();
+    compact
+        .insert_asset_ron(ID, "test::Stats", "(damage:4,cooldown:2)")
+        .unwrap();
+    let mut spaced = with_assets();
+    spaced
+        .insert_asset_ron(
+            ID,
+            "test::Stats",
+            "// tuned\n(\n    damage: 4,\n    cooldown: 2,\n)\n",
+        )
+        .unwrap();
+    assert_eq!(compact.hash_tree(), spaced.hash_tree());
+    assert_eq!(compact.asset_ron(ID), spaced.asset_ron(ID));
+    assert_eq!(compact.asset_ids(), vec![ID]);
+}
+
+fn read_damage(assets: Assets<Stats>, mut read: ResMut<Read>) {
+    let handle = Handle::new(ID);
+    read.0 = Some(assets.get(handle).damage);
+    assert!(assets.try_get(Handle::new(AssetId(8))).is_none());
+}
+
+#[test]
+fn assets_param_reads_loaded_asset() {
+    let mut world = with_assets();
+    let bytes = postcard::to_allocvec(&Stats {
+        damage: 9,
+        cooldown: 1,
+    })
+    .unwrap();
+    world.insert_asset(ID, "test::Stats", &bytes).unwrap();
+    run(&mut world, read_damage);
+    assert_eq!(world.resource::<Read>().unwrap().0, Some(9));
+}
+
+#[test]
+#[should_panic(
+    expected = "asset 00000000000000000000000000000007 of type test::Stats is not loaded"
+)]
+fn assets_param_panics_naming_missing_asset() {
+    let mut world = with_assets();
+    run(&mut world, read_damage);
+}
+
+#[test]
+fn snapshot_restores_assets() {
+    let mut source = with_assets();
+    source
+        .insert_asset_ron(ID, "test::Stats", "(damage: 4, cooldown: 2)")
+        .unwrap();
+    let snapshot = source.snapshot();
+    assert_eq!(snapshot.fingerprint, 0);
+    assert_eq!(snapshot.assets.len(), 1);
+    let decoded = Snapshot::decode(&snapshot.encode()).unwrap();
+    assert_eq!(decoded, snapshot);
+
+    let mut target = with_assets();
+    target
+        .insert_asset_ron(AssetId(99), "test::Stats", "(damage: 1, cooldown: 1)")
+        .unwrap();
+    target.restore(&decoded).unwrap();
+    assert_eq!(target.hash_tree(), source.hash_tree());
+    assert_eq!(target.asset_ids(), vec![ID]);
+}
+
+#[test]
+fn snapshot_version_1_is_refused_as_version() {
+    let mut bytes = postcard::to_allocvec(&1u32).unwrap();
+    // A version 1 snapshot continues with fields this build does not read.
+    bytes.extend_from_slice(&[0, 0, 0, 0]);
+    let error = Snapshot::decode(&bytes).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            SnapshotError::Version {
+                found: 1,
+                expected: 2
+            }
+        ),
+        "{error}"
+    );
+}
+
+#[test]
+fn invalid_asset_ron_reports_line_and_column() {
+    let mut world = with_assets();
+    let error = world
+        .insert_asset_ron(ID, "test::Stats", "(\n  damage: oops,\n)")
+        .unwrap_err();
+    let EcsError::InvalidAsset {
+        id,
+        type_name,
+        reason,
+    } = error
+    else {
+        panic!("expected InvalidAsset, got {error}");
+    };
+    assert_eq!(id, ID);
+    assert_eq!(type_name, "test::Stats");
+    assert!(reason.contains("2:"), "{reason}");
+    assert!(world.asset_ids().is_empty());
+}
+
+#[test]
+fn default_asset_ron_requires_a_registered_default() {
+    let world = with_assets();
+    let ron = world.default_asset_ron("test::Stats").unwrap();
+    assert_eq!(ron::from_str::<Stats>(&ron).unwrap(), Stats::default());
+    assert!(matches!(
+        world.default_asset_ron(NoDefault::NAME),
+        Err(EcsError::NoDefault(name)) if name == NoDefault::NAME
+    ));
+    assert!(matches!(
+        world.default_asset_ron("missing"),
+        Err(EcsError::UnknownAsset(name)) if name == "missing"
+    ));
+    let names: Vec<_> = world
+        .asset_schemas()
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    let mut sorted = names.clone();
+    sorted.sort();
+    assert_eq!(names, sorted);
+    assert_eq!(names.len(), 2);
+}

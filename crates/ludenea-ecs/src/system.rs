@@ -15,9 +15,11 @@ pub(crate) const COMPONENT: &str = "component";
 pub(crate) const RESOURCE: &str = "resource";
 pub(crate) const EVENT: &str = "event";
 pub(crate) const RUNTIME: &str = "runtime resource";
+pub(crate) const ASSET: &str = "asset";
 
 /// Accesses declared by one parameter, each tagged with its kind (`"component"`,
-/// `"resource"`, `"event"`, or `"runtime resource"`): only accesses of one kind conflict.
+/// `"resource"`, `"event"`, `"runtime resource"`, or `"asset"`): only accesses of one kind
+/// conflict.
 pub type Accesses = Vec<(&'static str, Access)>;
 
 /// The kind and name of a registration a parameter requires but the world lacks.

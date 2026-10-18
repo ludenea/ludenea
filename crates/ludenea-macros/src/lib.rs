@@ -24,6 +24,13 @@ pub fn derive_resource(input: TokenStream) -> TokenStream {
     derive_named(input, "Resource", "resource")
 }
 
+/// Implements `Asset` with a stable name: `module_path!()::Type` by default,
+/// or the value of `#[asset(name = "...")]`. Also implements `Schema`.
+#[proc_macro_derive(Asset, attributes(asset))]
+pub fn derive_asset(input: TokenStream) -> TokenStream {
+    derive_named(input, "Asset", "asset")
+}
+
 fn derive_named(input: TokenStream, trait_name: &str, attribute: &str) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     match expand(&input, trait_name, attribute) {

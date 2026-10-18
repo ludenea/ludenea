@@ -30,7 +30,7 @@ impl Project {
             .iter()
             .map(|component| (component.name.as_str(), &component.schema))
             .collect();
-        let declarations = typescript_declarations(&components);
+        let declarations = typescript_declarations(&components, &[]);
         let indented: String = declarations
             .lines()
             .map(|line| format!("  {line}\n"))

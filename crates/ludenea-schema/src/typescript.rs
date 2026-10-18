@@ -2,17 +2,20 @@ use std::collections::BTreeMap;
 
 use crate::{FieldSchema, TypeSchema, VariantFields};
 
-/// TypeScript declarations for the given `(stable name, type)` pairs: one `export type`
-/// per named type reachable from them, and an `export interface ComponentTypes` keyed by
-/// stable name.
+/// TypeScript declarations for the given component and asset `(stable name, type)` pairs:
+/// one `export type` per named type reachable from them, then an `export interface
+/// ComponentTypes` and an `export interface AssetTypes`, both keyed by stable name.
 ///
 /// A named type is called by its last path segment; when two distinct types share one, both
 /// are called by their full path with `::` replaced by `_`. The declarations follow serde's
 /// externally tagged JSON form. Integers that may exceed 2^53 (`u64`, `i64`) are
 /// `number | string`, because large values travel as strings.
-pub fn typescript_declarations(types: &[(&str, &TypeSchema)]) -> String {
+pub fn typescript_declarations(
+    components: &[(&str, &TypeSchema)],
+    assets: &[(&str, &TypeSchema)],
+) -> String {
     let mut named = BTreeMap::new();
-    for (_, schema) in types {
+    for (_, schema) in components.iter().chain(assets) {
         collect(schema, &mut named);
     }
     let names = Names::new(named.keys().map(String::as_str));
@@ -24,14 +27,16 @@ pub fn typescript_declarations(types: &[(&str, &TypeSchema)]) -> String {
             declaration(schema, &names)
         ));
     }
-    out.push_str("export interface ComponentTypes {\n");
-    for (stable_name, schema) in types {
-        out.push_str(&format!(
-            "  \"{stable_name}\": {};\n",
-            reference(schema, &names)
-        ));
+    for (interface, types) in [("ComponentTypes", components), ("AssetTypes", assets)] {
+        out.push_str(&format!("export interface {interface} {{\n"));
+        for (stable_name, schema) in types {
+            out.push_str(&format!(
+                "  \"{stable_name}\": {};\n",
+                reference(schema, &names)
+            ));
+        }
+        out.push_str("}\n");
     }
-    out.push_str("}\n");
     out
 }
 
@@ -84,8 +89,22 @@ fn collect<'a>(schema: &'a TypeSchema, named: &mut BTreeMap<String, &'a TypeSche
                 }
             }
         }
-        Bool | U8 | U16 | U32 | U64 | I8 | I16 | I32 | I64 | F32 | F64 | String | Unit | Entity
-        | AssetId => {}
+        Bool
+        | U8
+        | U16
+        | U32
+        | U64
+        | I8
+        | I16
+        | I32
+        | I64
+        | F32
+        | F64
+        | String
+        | Unit
+        | Entity
+        | AssetId
+        | Handle { .. } => {}
     }
 }
 
@@ -162,7 +181,7 @@ fn reference(schema: &TypeSchema, names: &Names) -> String {
         | UnitStruct { name }
         | Enum { name, .. } => names.of(name).to_string(),
         Entity => "{ index: number; generation: number }".into(),
-        AssetId => "string".into(),
+        AssetId | Handle { .. } => "string".into(),
     }
 }
 
@@ -208,4 +227,49 @@ fn object(fields: &[FieldSchema], names: &Names) -> String {
 fn tuple(items: &[TypeSchema], names: &Names) -> String {
     let items: Vec<_> = items.iter().map(|item| reference(item, names)).collect();
     format!("[{}]", items.join(", "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn asset_types_interface_lists_assets() {
+        let stats = TypeSchema::Struct {
+            name: "game::Stats".into(),
+            fields: vec![FieldSchema {
+                name: "damage".into(),
+                schema: TypeSchema::U32,
+            }],
+        };
+        let weapon = TypeSchema::Struct {
+            name: "game::Weapon".into(),
+            fields: vec![FieldSchema {
+                name: "stats".into(),
+                schema: TypeSchema::Handle {
+                    asset: "game::Stats".into(),
+                },
+            }],
+        };
+
+        let text =
+            typescript_declarations(&[("game::Weapon", &weapon)], &[("game::Stats", &stats)]);
+
+        assert!(
+            text.contains("export type Weapon = { stats: string };"),
+            "{text}"
+        );
+        assert!(
+            text.contains("export type Stats = { damage: number };"),
+            "{text}"
+        );
+        assert!(
+            text.contains("export interface AssetTypes {\n  \"game::Stats\": Stats;\n}\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("export interface ComponentTypes {\n  \"game::Weapon\": Weapon;\n}\n"),
+            "{text}"
+        );
+    }
 }

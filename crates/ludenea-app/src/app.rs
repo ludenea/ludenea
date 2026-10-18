@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 
 use ludenea_debug_draw::DebugDrawFrame;
 use ludenea_ecs::{
-    BuildError, Component, EcsError, IntoSystemConfig, Resource, ScheduleBuilder, World,
+    Asset, BuildError, Component, EcsError, IntoSystemConfig, Resource, ScheduleBuilder, World,
 };
 
 use ludenea_ecs::Entity;
@@ -100,6 +100,21 @@ impl App {
 
     pub fn component<T: Component>(&mut self) -> &mut Self {
         if let Err(error) = self.world.register_component::<T>() {
+            self.errors.push(error);
+        }
+        self
+    }
+
+    pub fn asset<T: Asset>(&mut self) -> &mut Self {
+        if let Err(error) = self.world.register_asset::<T>() {
+            self.errors.push(error);
+        }
+        self
+    }
+
+    /// Registers the asset type `T`, whose new assets start as `T::default()`.
+    pub fn asset_with_default<T: Asset + Default>(&mut self) -> &mut Self {
+        if let Err(error) = self.world.register_asset_with_default::<T>() {
             self.errors.push(error);
         }
         self

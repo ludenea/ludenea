@@ -1,4 +1,4 @@
-use crate::Entity;
+use crate::{AssetId, Entity};
 
 #[derive(Debug, thiserror::Error)]
 pub enum EcsError {
@@ -13,11 +13,23 @@ pub enum EcsError {
     )]
     ComponentBorrowed(&'static str),
     #[error(
-        "name `{name}` is used by both `{first}` and `{second}`; give one of them another name with `#[component(name = \"...\")]` or `#[resource(name = \"...\")]`"
+        "name `{name}` is used by both `{first}` and `{second}`; give one of them another name with `#[component(name = \"...\")]`, `#[resource(name = \"...\")]`, or `#[asset(name = \"...\")]`"
     )]
     DuplicateName {
         name: &'static str,
         first: &'static str,
         second: &'static str,
+    },
+    #[error("asset type `{0}` is not registered; call `World::register_asset` first")]
+    UnknownAsset(String),
+    #[error(
+        "asset type `{0}` has no default value; register it with `World::register_asset_with_default`"
+    )]
+    NoDefault(String),
+    #[error("asset {id} is not a valid `{type_name}`: {reason}")]
+    InvalidAsset {
+        id: AssetId,
+        type_name: String,
+        reason: String,
     },
 }

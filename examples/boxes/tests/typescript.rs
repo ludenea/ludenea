@@ -10,7 +10,7 @@ fn typescript_declarations_for_boxes_components() {
         .map(|(name, schema)| (*name, schema))
         .collect();
 
-    let text = typescript_declarations(&types);
+    let text = typescript_declarations(&types, &[]);
 
     assert!(text.contains("export type Shape ="), "{text}");
     assert!(text.contains("{ Circle: Circle }"), "{text}");
@@ -32,7 +32,7 @@ fn thing(module: &str) -> TypeSchema {
 fn typescript_names_collide_to_full_paths() {
     let (left, right) = (thing("left"), thing("right"));
 
-    let text = typescript_declarations(&[("left::Thing", &left), ("right::Thing", &right)]);
+    let text = typescript_declarations(&[("left::Thing", &left), ("right::Thing", &right)], &[]);
 
     assert!(
         text.contains("export type left_Thing = { id: number };"),
@@ -51,7 +51,7 @@ fn input_and_wide_integers_map_to_typescript() {
     let input = simulation.input_schema().expect("boxes registers an input");
     let wide = <(u64, Entity, Option<Vec<i64>>)>::schema();
 
-    let text = typescript_declarations(&[("input", &input), ("wide", &wide)]);
+    let text = typescript_declarations(&[("input", &input), ("wide", &wide)], &[]);
 
     assert!(text.contains("velocity_change: Vec2 | null"), "{text}");
     assert!(

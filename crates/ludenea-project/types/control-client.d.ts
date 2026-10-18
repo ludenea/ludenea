@@ -475,6 +475,9 @@ type TypeSchema = {
     "kind": "entity";
 } | {
     "kind": "asset_id";
+} | {
+    "kind": "handle";
+    asset: string;
 };
 
 type FieldSchema = {
@@ -508,7 +511,8 @@ type GameInfo = {
 type HashTree = {
     root: string;
     /**
-     * Registered resources sorted by name, then the `ludenea::Entities` leaf.
+     * Registered resources sorted by name, then the `ludenea::Entities` leaf, then the
+     * `ludenea::Assets` leaf when at least one asset is loaded.
      */
     resources: Array<NamedHash>;
     /**

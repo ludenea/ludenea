@@ -159,6 +159,11 @@ impl Simulation {
         self.input.as_ref().map(|input| (input.schema)())
     }
 
+    /// The schema of every registered asset type, by stable name.
+    pub fn asset_schemas(&self) -> Vec<(&'static str, TypeSchema)> {
+        self.world.asset_schemas()
+    }
+
     /// The debug draw layers the app registered, sorted.
     pub fn debug_layers(&self) -> Vec<&'static str> {
         self.hooks.layers.iter().copied().collect()

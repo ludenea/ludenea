@@ -75,6 +75,11 @@ pub enum TypeSchema {
     },
     Entity,
     AssetId,
+    /// A typed asset handle, serialized as its `AssetId`; `asset` is the stable name of
+    /// the asset type.
+    Handle {
+        asset: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

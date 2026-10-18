@@ -40,6 +40,7 @@ export function Field(props: FieldProps) {
     case "entity":
       return <EntityField {...props} />;
     case "asset_id":
+    case "handle":
       return <AssetField {...props} />;
     case "unit":
     case "unit_struct":

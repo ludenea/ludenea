@@ -8,7 +8,8 @@ import type { NamedHash } from "./NamedHash";
  */
 export type HashTree = { root: string, 
 /**
- * Registered resources sorted by name, then the `ludenea::Entities` leaf.
+ * Registered resources sorted by name, then the `ludenea::Entities` leaf, then the
+ * `ludenea::Assets` leaf when at least one asset is loaded.
  */
 resources: Array<NamedHash>, 
 /**

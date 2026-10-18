@@ -5,9 +5,10 @@ use std::collections::BTreeMap;
 use ludenea_schema::TypeSchema;
 use serde::Serialize;
 
+use crate::assets::{AssetType, LoadedAsset};
 use crate::commands::CommandQueue;
 use crate::event::EventQueue;
-use crate::{Codec, Component, EcsError, EntitiesState, Entity, Resource};
+use crate::{AssetId, Codec, Component, EcsError, EntitiesState, Entity, Resource};
 
 /// Type-erased access to one component storage.
 pub(crate) trait Storage {
@@ -136,6 +137,9 @@ pub struct World {
     pub(crate) entities: EntitiesState,
     pub(crate) components: BTreeMap<&'static str, ComponentEntry>,
     pub(crate) resources: BTreeMap<&'static str, ResourceEntry>,
+    pub(crate) asset_types: BTreeMap<&'static str, AssetType>,
+    /// Loaded assets: hashed (only when not empty) and snapshotted, never written by systems.
+    pub(crate) assets: BTreeMap<AssetId, LoadedAsset>,
     /// Never hashed, snapshotted, or iterated; each value is a `RefCell<T>`.
     runtime: BTreeMap<TypeId, Box<dyn Any + Send>>,
     /// Events of the current tick, keyed by type name; each value is a `RefCell<Vec<T>>`.
@@ -530,7 +534,7 @@ impl World {
 
 /// Lookups go by `T::NAME` and the downcast checks the type, so the registry needs no
 /// `TypeId` index; this guard keeps one name bound to one type.
-fn check_same_type<T: 'static>(
+pub(crate) fn check_same_type<T: 'static>(
     name: &'static str,
     registered: TypeId,
     registered_name: &'static str,

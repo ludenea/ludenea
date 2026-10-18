@@ -35,6 +35,7 @@ export function defaultValue(schema: TypeSchema): JsonValue {
     case "entity":
       return { index: 0, generation: 0 };
     case "asset_id":
+    case "handle":
       return ZERO_ASSET;
     default:
       return 0;

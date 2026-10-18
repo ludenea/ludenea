@@ -12,6 +12,9 @@ use crate::{Entity, World};
 /// Name of the hash leaf that covers the entity allocator state.
 pub const ENTITIES_LEAF: &str = "ludenea::Entities";
 
+/// Name of the hash leaf that covers the loaded assets, present only when one is loaded.
+pub const ASSETS_LEAF: &str = "ludenea::Assets";
+
 const CANONICAL_NAN_F32: u32 = 0x7fc0_0000;
 const CANONICAL_NAN_F64: u64 = 0x7ff8_0000_0000_0000;
 
@@ -77,7 +80,8 @@ pub struct HashTree {
     #[serde(with = "hex_u64")]
     #[cfg_attr(feature = "ts", ts(type = "string"))]
     pub root: u64,
-    /// Registered resources sorted by name, then the `ludenea::Entities` leaf.
+    /// Registered resources sorted by name, then the `ludenea::Entities` leaf, then the
+    /// `ludenea::Assets` leaf when at least one asset is loaded.
     pub resources: Vec<NamedHash>,
     /// Alive entities in ascending index order.
     pub entities: Vec<EntityHash>,
@@ -94,6 +98,12 @@ impl World {
             name: ENTITIES_LEAF.to_string(),
             hash: hash_value(&self.entities),
         });
+        if !self.assets.is_empty() {
+            resources.push(NamedHash {
+                name: ASSETS_LEAF.to_string(),
+                hash: self.assets_hash(),
+            });
+        }
 
         // Components are visited in name order, so each entity's list comes out sorted.
         let mut components: BTreeMap<u32, Vec<NamedHash>> = BTreeMap::new();
