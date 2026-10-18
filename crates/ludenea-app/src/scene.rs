@@ -115,6 +115,13 @@ fn located(path: &Option<String>) -> String {
         .unwrap_or_default()
 }
 
+/// Read before anything else, so a scene of another version is refused as such.
+#[derive(Deserialize)]
+#[serde(rename = "Scene")]
+struct Versioned {
+    version: u32,
+}
+
 /// The fields every scene version shares; the RON name `Scene` is checked against it.
 #[derive(Deserialize)]
 #[serde(rename = "Scene")]
@@ -203,8 +210,8 @@ pub(crate) struct ParsedScene {
 
 pub(crate) fn parse_scene(ron: &str) -> Result<ParsedScene, SceneError> {
     let parse = |error: ron::error::SpannedError| SceneError::Parse(error.to_string());
-    let header: Header = ron::from_str(ron).map_err(parse)?;
-    match header.version {
+    let versioned: Versioned = ron::from_str(ron).map_err(parse)?;
+    match versioned.version {
         1 => {
             let file: SceneV1 = ron::from_str(ron).map_err(parse)?;
             Ok(ParsedScene {
@@ -592,13 +599,13 @@ impl Simulation {
         let mut next_id = alive
             .iter()
             .filter_map(kept)
-            .map(|local| local + 1)
+            .map(|local| after(local, 1))
             .fold(next_id_of(previous), u32::max);
         let locals = alive
             .into_iter()
             .map(|entity| {
                 let local = kept(&entity).unwrap_or_else(|| {
-                    next_id += 1;
+                    next_id = after(next_id, 1);
                     next_id - 1
                 });
                 (entity, local)
@@ -690,7 +697,7 @@ impl Simulation {
                 let local = by_entity.get(&(index, generation)).copied();
                 let local = local.unwrap_or_else(|| {
                     let mut stale = stale.borrow_mut();
-                    let fresh = next_id + u32::try_from(stale.len()).expect("few references");
+                    let fresh = after(next_id, stale.len());
                     *stale.entry((index, generation)).or_insert(fresh)
                 });
                 Some((local, 0))
@@ -719,7 +726,7 @@ impl Simulation {
                 format!("    (id: {local}, components: {{{components}}}),\n")
             })
             .collect::<String>();
-        let next_id = next_id + u32::try_from(stale.borrow().len()).expect("few references");
+        let next_id = after(next_id, stale.borrow().len());
         let instances = if instances.is_empty() {
             String::new()
         } else {
@@ -1065,6 +1072,17 @@ fn instance_entries(ron: &str) -> Vec<(u32, String)> {
             Some((entry.id, raw.get_ron().trim().to_string()))
         })
         .collect()
+}
+
+/// The local identifier `count` after `id`.
+///
+/// # Panics
+/// When it does not fit in `u32`, rather than reuse identifiers.
+fn after(id: u32, count: usize) -> u32 {
+    u32::try_from(count)
+        .ok()
+        .and_then(|count| id.checked_add(count))
+        .expect("a scene has fewer than u32::MAX local identifiers")
 }
 
 fn invalid(entity: Option<usize>, name: &str, reason: String) -> SceneError {

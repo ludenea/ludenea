@@ -147,6 +147,11 @@ fn scene_with_another_version_is_rejected() {
         .unwrap_err();
     assert!(matches!(error, SceneError::Version(3)));
     assert!(error.to_string().contains("expected 1 or 2"), "{error}");
+
+    let error = simulation()
+        .load_scene("Scene(version: 3, objects: {}, next_id: \"a\")")
+        .unwrap_err();
+    assert!(matches!(error, SceneError::Version(3)), "{error}");
 }
 
 #[test]
