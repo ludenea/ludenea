@@ -55,10 +55,11 @@ impl AssetSource for NamedAssetTexts {
 
 /// The data asset file form; the RON name `AssetFile` is checked against this struct name.
 #[derive(Deserialize)]
-struct AssetFile {
+struct AssetFile<'a> {
     #[serde(rename = "type")]
     type_name: String,
-    value: Box<RawValue>,
+    #[serde(borrow)]
+    value: &'a RawValue,
 }
 
 /// Writes an asset in file form.
@@ -69,8 +70,21 @@ pub(crate) fn asset_file(type_name: &str, value_ron: &str) -> String {
 /// The type name and the value RON of a data asset file, or the parse error with its line
 /// and column.
 pub fn parse_asset_file(text: &str) -> Result<(String, String), String> {
+    let (type_name, value) = parse_asset_file_in_place(text)?;
+    Ok((type_name, value.trim_start().to_string()))
+}
+
+/// Like `parse_asset_file`, but the value RON keeps its place in the file: the text before
+/// it is blanked (newlines kept), so errors decoding it give line and column in the file.
+pub(crate) fn parse_asset_file_in_place(text: &str) -> Result<(String, String), String> {
     let file: AssetFile = ron::from_str(text).map_err(|error| error.to_string())?;
-    Ok((file.type_name, file.value.get_ron().to_string()))
+    let value = file.value.get_ron();
+    let start = value.as_ptr() as usize - text.as_ptr() as usize;
+    let blank: String = text[..start]
+        .chars()
+        .map(|c| if c == '\n' { '\n' } else { ' ' })
+        .collect();
+    Ok((file.type_name, blank + value))
 }
 
 /// Adds every `Handle` inside `value` (identifier and asset type name), walked by `schema`.

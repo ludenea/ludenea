@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
+use std::f32::consts::PI;
 use std::fs;
 
 use ludenea::cli::Trace;
 use ludenea_app::{App, AssetTexts, NamedAssetTexts, NoAssets, SceneError, Simulation};
-use ludenea_ecs::{Asset, AssetId, Component, Entity, Handle};
+use ludenea_ecs::schema::Schema;
+use ludenea_ecs::{Asset, AssetId, Component, Entity, Handle, Resource};
 use serde::{Deserialize, Serialize};
 
 #[derive(Asset, Serialize, Deserialize, Debug, PartialEq)]
@@ -263,12 +265,12 @@ fn entity_values_name_local_identifiers() {
 
 #[test]
 fn unknown_local_identifier_is_refused() {
-    let target = "\"scene_assets::Target\": ((index: 4, generation: 0))";
+    let target = "\"scene_assets::Target\": ((index: 6, generation: 0))";
     let error = simulation()
         .load_scene(&scene(6, &[(2, target), (5, &tag(1))]))
         .unwrap_err();
     assert!(
-        matches!(&error, SceneError::UnknownLocal { entity: 2, component, local: 4 }
+        matches!(&error, SceneError::UnknownLocal { entity: 2, component, local: 6 }
             if component == "scene_assets::Target"),
         "{error:?}"
     );
@@ -335,4 +337,191 @@ fn deleted_local_identifier_is_never_reused() {
         Some(tagged(&simulation, 99))
     );
     assert_eq!(simulation.entity_at_address(&[2]), None);
+}
+
+#[test]
+fn asset_value_error_gives_the_file_line_and_column() {
+    let mut simulation = simulation();
+    let text = "AssetFile(\n    type: \"scene_assets::Stats\",\n    value: (\n        damage: \"x\",\n        next: None,\n    ),\n)\n";
+    let assets = NamedAssetTexts {
+        texts: texts(&[(1, text.to_string())]),
+        paths: BTreeMap::from([(AssetId(1), "stats/broken.ron".to_string())]),
+    };
+    let error = simulation
+        .load_scene_with(&scene(1, &[(0, &turret(1))]), &assets)
+        .unwrap_err();
+    assert!(
+        matches!(&error, SceneError::InvalidAsset { id: AssetId(1), path: Some(path), reason }
+            if path == "stats/broken.ron" && reason.starts_with("4:16-4:17")),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("stats/broken.ron"), "{error}");
+}
+
+#[test]
+fn asset_syntax_error_in_value_gives_the_file_line() {
+    let mut simulation = simulation();
+    let text =
+        "AssetFile(\n    type: \"scene_assets::Stats\",\n    value: (damage: 1, next: None),\n)\n";
+    let broken = text.replace("next: None", "next: None,,");
+    let error = simulation
+        .load_scene_with(&scene(1, &[(0, &turret(1))]), &texts(&[(1, broken)]))
+        .unwrap_err();
+    assert!(
+        matches!(&error, SceneError::InvalidAsset { reason, .. } if reason.starts_with("3:")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn stale_reference_survives_save_and_reload() {
+    let mut simulation = simulation();
+    let target = format!(
+        "{}, \"scene_assets::Target\": ((index: 1, generation: 0))",
+        tag(0)
+    );
+    simulation
+        .load_scene(&scene(2, &[(0, &target), (1, &tag(1))]))
+        .unwrap();
+    let world = simulation.world_mut();
+    let despawned = tagged_in(world, 1);
+    world.despawn(despawned).unwrap();
+    let spawned = world.spawn();
+    world.insert(spawned, Tag(2)).unwrap();
+    world.insert(spawned, Target(despawned)).unwrap();
+
+    for saved in [
+        simulation.save_scene(),
+        simulation.save_scene_keeping(&scene(2, &[])),
+    ] {
+        let mut reloaded = self::simulation();
+        reloaded.load_scene(&saved).unwrap();
+        let world = reloaded.world();
+        let first = world.get::<Target>(tagged(&reloaded, 0)).unwrap().0;
+        let second = world.get::<Target>(tagged(&reloaded, 2)).unwrap().0;
+        assert!(!world.is_alive(first), "{saved}");
+        assert_eq!(first, second, "one stale entity stays one: {saved}");
+        let again = reloaded.save_scene();
+        self::simulation().load_scene(&again).unwrap();
+    }
+}
+
+#[test]
+fn deleted_local_identifier_below_next_id_loads_as_a_dead_entity() {
+    let mut simulation = simulation();
+    let target = format!(
+        "{}, \"scene_assets::Target\": ((index: 3, generation: 0))",
+        tag(0)
+    );
+    simulation.load_scene(&scene(5, &[(0, &target)])).unwrap();
+    let world = simulation.world();
+    let target = world.get::<Target>(tagged(&simulation, 0)).unwrap().0;
+    assert!(!world.is_alive(target));
+}
+
+fn tagged_in(world: &ludenea_ecs::World, value: u32) -> Entity {
+    world
+        .entities()
+        .find(|&entity| world.get::<Tag>(entity).is_some_and(|tag| tag.0 == value))
+        .unwrap()
+}
+
+#[derive(Serialize, Deserialize, Schema, Clone, Debug, PartialEq)]
+enum Mood {
+    Calm,
+    Angry(u8, f32),
+    Watching { name: String, at: Entity },
+}
+
+/// `Entity` values after and inside every shape the postcard walker crosses.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+struct Mixed {
+    label: String,
+    scale: f32,
+    precise: f64,
+    signed: i64,
+    calm: Mood,
+    angry: Mood,
+    after: Entity,
+    watching: Mood,
+    maybe: Option<Entity>,
+    none: Option<Entity>,
+    list: Vec<Entity>,
+    named: BTreeMap<String, Entity>,
+    keyed: BTreeMap<Entity, u16>,
+    pair: (u16, Entity),
+    array: [Entity; 2],
+    stats: Handle<Stats>,
+    last: Entity,
+}
+
+#[derive(Resource, Serialize, Deserialize, Clone, Debug, PartialEq)]
+struct Boss(Option<Entity>);
+
+fn mixed_simulation() -> Simulation {
+    let mut app = App::new();
+    app.component::<Mixed>()
+        .component::<Tag>()
+        .asset::<Stats>()
+        .resource(Boss(None));
+    app.build().unwrap()
+}
+
+#[test]
+fn entities_inside_mixed_values_are_remapped_and_round_trip() {
+    let entity = |local: u32| format!("(index: {local}, generation: 0)");
+    let mixed = format!(
+        "\"scene_assets::Mixed\": (label: \"héllo\", scale: {PI}, precise: -0.1, signed: -300, \
+         calm: Calm, angry: Angry(7, -2.5), after: {a}, \
+         watching: Watching(name: \"w\", at: {b}), maybe: Some({b}), none: None, \
+         list: [{a}, {b}, {a}], named: {{\"x\": {b}, \"y\": {a}}}, keyed: {{{b}: 1, {a}: 2}}, \
+         pair: (9, {b}), array: ({a}, {b}), stats: \"{stats}\", last: {b})",
+        a = entity(40),
+        b = entity(300),
+        stats = AssetId(1),
+    );
+    let ron = format!(
+        "Scene(version: 2, next_id: 301, resources: {{\"scene_assets::Boss\": (Some({}))}}, \
+         entities: [(id: 300, components: {{{}}}), (id: 40, components: {{{mixed}}})])",
+        entity(40),
+        tag(300),
+    );
+    let assets = texts(&[(1, stats(5, None))]);
+    let mut first = mixed_simulation();
+    first.load_scene_with(&ron, &assets).unwrap();
+
+    let world = first.world();
+    let a = first.entity_at_address(&[40]).unwrap();
+    let b = first.entity_at_address(&[300]).unwrap();
+    let value = world.get::<Mixed>(a).unwrap().clone();
+    let expected = Mixed {
+        label: "héllo".into(),
+        scale: PI,
+        precise: -0.1,
+        signed: -300,
+        calm: Mood::Calm,
+        angry: Mood::Angry(7, -2.5),
+        after: a,
+        watching: Mood::Watching {
+            name: "w".into(),
+            at: b,
+        },
+        maybe: Some(b),
+        none: None,
+        list: vec![a, b, a],
+        named: BTreeMap::from([("x".into(), b), ("y".into(), a)]),
+        keyed: BTreeMap::from([(b, 1), (a, 2)]),
+        pair: (9, b),
+        array: [a, b],
+        stats: Handle::new(AssetId(1)),
+        last: b,
+    };
+    assert_eq!(value, expected);
+    assert_eq!(world.resource::<Boss>().unwrap().0, Some(a));
+
+    let saved = first.save_scene();
+    let mut second = mixed_simulation();
+    second.load_scene_with(&saved, &assets).unwrap();
+    assert_eq!(second.hash(), first.hash());
+    assert_eq!(second.save_scene(), saved);
 }

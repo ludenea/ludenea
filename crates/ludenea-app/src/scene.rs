@@ -2,6 +2,7 @@
 //! reach through handles.
 
 use std::any::Any;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -13,7 +14,7 @@ use serde::{Deserialize, Deserializer};
 
 use crate::Simulation;
 use crate::assets::{
-    AssetSource, AssetTexts, NoAssets, asset_file, parse_asset_file, visit_handles,
+    AssetSource, AssetTexts, NoAssets, asset_file, parse_asset_file_in_place, visit_handles,
 };
 
 const SCENE_VERSION: u32 = 2;
@@ -72,7 +73,7 @@ pub enum SceneError {
     #[error("local identifier {0} is given to two entities of the scene; give each entity its own")]
     DuplicateLocal(u32),
     #[error(
-        "component `{component}` of entity {entity} names local identifier {local}, which no entity of the scene has; fix the reference"
+        "component `{component}` of entity {entity} names local identifier {local}, which is not below the scene's `next_id`; fix the reference"
     )]
     UnknownLocal {
         entity: u32,
@@ -115,9 +116,7 @@ struct SceneV1 {
 #[derive(Deserialize)]
 #[serde(rename = "Scene")]
 struct SceneV2 {
-    /// Required, but only `save_scene_keeping` reads it.
-    #[serde(rename = "next_id")]
-    _next_id: u32,
+    next_id: u32,
     resources: NamedValues,
     entities: Vec<SceneEntity>,
 }
@@ -155,9 +154,10 @@ impl<'de> Deserialize<'de> for NamedValues {
     }
 }
 
-/// A scene file of any version. `Entity` values name local identifiers when `local_entities`.
+/// A scene file of any version. `Entity` values name local identifiers when it has a
+/// `next_id` (version 2).
 struct ParsedScene {
-    local_entities: bool,
+    next_id: Option<u32>,
     resources: NamedValues,
     entities: Vec<(u32, NamedValues)>,
 }
@@ -169,7 +169,7 @@ fn parse_scene(ron: &str) -> Result<ParsedScene, SceneError> {
         1 => {
             let file: SceneV1 = ron::from_str(ron).map_err(parse)?;
             Ok(ParsedScene {
-                local_entities: false,
+                next_id: None,
                 resources: file.resources,
                 entities: (0..).zip(file.entities).collect(),
             })
@@ -181,7 +181,7 @@ fn parse_scene(ron: &str) -> Result<ParsedScene, SceneError> {
                 return Err(SceneError::DuplicateLocal(entity.id));
             }
             Ok(ParsedScene {
-                local_entities: true,
+                next_id: Some(file.next_id),
                 resources: file.resources,
                 entities: file
                     .entities
@@ -222,7 +222,7 @@ struct Reference {
 /// Decodes scene values, collecting the handles they hold and checking their local
 /// identifiers.
 struct Decoder {
-    local_entities: bool,
+    next_id: Option<u32>,
     locals: BTreeSet<u32>,
     shapes: BTreeMap<String, Shape>,
     references: Vec<Reference>,
@@ -287,13 +287,14 @@ impl Decoder {
             );
         }
 
-        if !(self.local_entities && shape.entities) {
+        let Some(next_id) = self.next_id.filter(|_| shape.entities) else {
             return Ok(Pending::Ready(value));
-        }
+        };
         let bytes = (codec.encode)(&*value);
         let locals = &self.locals;
+        // An identifier below `next_id` that no entity has names a deleted entity.
         rewrite_entities(&shape.schema, &bytes, &mut |local, _| {
-            locals.contains(&local).then_some((local, 0))
+            (locals.contains(&local) || local < next_id).then_some((local, 0))
         })
         .map_err(|local| match owner {
             Some(entity) => SceneError::UnknownLocal {
@@ -302,7 +303,7 @@ impl Decoder {
                 local,
             },
             None => invalid(format!(
-                "names local identifier {local}, which no entity of the scene has"
+                "names local identifier {local}, which is not below the scene's `next_id`"
             )),
         })?;
         Ok(Pending::Local(bytes))
@@ -328,7 +329,7 @@ impl Simulation {
     ) -> Result<SceneLoad, SceneError> {
         let file = parse_scene(ron)?;
         let mut decoder = Decoder {
-            local_entities: file.local_entities,
+            next_id: file.next_id,
             locals: file.entities.iter().map(|(local, _)| *local).collect(),
             shapes: BTreeMap::new(),
             references: Vec::new(),
@@ -396,8 +397,9 @@ impl Simulation {
     /// Writes the alive entities in ascending index order with local identifiers `0..n`,
     /// `next_id: n`, and every registered resource. Generations and the free list are not
     /// kept: use it on freshly built worlds, such as scene generators, not to save a
-    /// running game. An `Entity` value naming an entity that is not saved is written as
-    /// local identifier `u32::MAX`, which loading refuses.
+    /// running game. An `Entity` value naming an entity that is not saved (a stale
+    /// reference) gets an identifier of its own that no entity has, so it loads as a
+    /// reference to a dead entity.
     pub fn save_scene(&self) -> String {
         let alive: Vec<Entity> = self.world.entities().collect();
         let next_id = u32::try_from(alive.len()).expect("fewer than u32::MAX entities");
@@ -450,17 +452,19 @@ impl Simulation {
             .iter()
             .map(|(entity, local)| ((entity.index(), entity.generation()), *local))
             .collect();
+        // Stale references, each with an identifier from `next_id` on, in write order.
+        let stale: RefCell<BTreeMap<(u32, u32), u32>> = RefCell::default();
         let ron = |codec: Codec, bytes: &[u8]| {
             let schema = (codec.schema)();
             let bytes = if mentions(&schema, &|schema| matches!(schema, TypeSchema::Entity)) {
                 rewrite_entities(&schema, bytes, &mut |index, generation| {
-                    Some((
-                        by_entity
-                            .get(&(index, generation))
-                            .copied()
-                            .unwrap_or(u32::MAX),
-                        0,
-                    ))
+                    let local = by_entity.get(&(index, generation)).copied();
+                    let local = local.unwrap_or_else(|| {
+                        let mut stale = stale.borrow_mut();
+                        let fresh = next_id + u32::try_from(stale.len()).expect("few references");
+                        *stale.entry((index, generation)).or_insert(fresh)
+                    });
+                    Some((local, 0))
                 })
                 .expect("every entity is mapped")
             } else {
@@ -496,12 +500,14 @@ impl Simulation {
                 format!("    (id: {local}, components: {{{components}}}),\n")
             })
             .collect::<String>();
+        let next_id = next_id + u32::try_from(stale.borrow().len()).expect("few references");
         format!(
             "Scene(\n    version: {SCENE_VERSION},\n    next_id: {next_id},\n    resources: {{{resources}}},\n    entities: [\n{entities}    ],\n)\n"
         )
     }
 
-    /// Turns a pending value into a value, remapping local identifiers to `spawned`.
+    /// Turns a pending value into a value, remapping local identifiers to `spawned`. A
+    /// deleted entity's identifier becomes the dead entity `u32::MAX` of generation `local`.
     fn ready(
         &self,
         shapes: &BTreeMap<String, Shape>,
@@ -515,9 +521,9 @@ impl Simulation {
             Pending::Local(bytes) => bytes,
         };
         let bytes = rewrite_entities(&shapes[name].schema, &bytes, &mut |local, _| {
-            spawned
-                .get(&local)
-                .map(|entity| (entity.index(), entity.generation()))
+            Some(spawned.get(&local).map_or((u32::MAX, local), |entity| {
+                (entity.index(), entity.generation())
+            }))
         })
         .expect("local identifiers were checked");
         let codec = if resource {
@@ -568,7 +574,7 @@ impl Simulation {
                 path: path(),
                 reason,
             };
-            let (found, value) = parse_asset_file(text).map_err(invalid)?;
+            let (found, value) = parse_asset_file_in_place(text).map_err(invalid)?;
             if found != asset {
                 return Err(wrong_type(&found));
             }
