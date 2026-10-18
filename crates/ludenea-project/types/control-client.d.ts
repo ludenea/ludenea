@@ -658,6 +658,10 @@ type ServerMessage = {
 type AssetKind = "Scene" | "Other";
 
 type Diagnostic = {
+    /**
+     * `error`, `warning`, `note`, `help`, `failure-note`, or `ice` (an internal compiler
+     * error); plugin bundles also report `info`.
+     */
     level: string;
     message: string;
     /**
@@ -700,6 +704,10 @@ type FileEntry = {
      * Relative to the project root, with forward slashes.
      */
     path: string;
+    /**
+     * `AssetId(0)` while the file's meta is unreadable (reported once as an
+     * `InvalidMeta` warning): every such file shares it, so it names none of them.
+     */
     id: string;
     kind: AssetKind;
 };
