@@ -112,10 +112,13 @@ jobs:
     runs-on: macos-14
     # Shared runners measure noisily: the timing and memory budgets are reported, not enforced.
     continue-on-error: true
+    # A cold release build plus the tests, with room to spare: a hang is cut off.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - name: Install the pinned toolchain
         run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
       - name: Run the timing and memory tests in release
         run: cargo test --locked --release -p ludenea-control --test branches --test divergence -- --ignored --nocapture
 

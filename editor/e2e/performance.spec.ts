@@ -89,10 +89,17 @@ async function playWithBranchAndGhost(page: Page, beforePlay: () => Promise<void
       }
       return undefined;
     };
-    // Counts the changes of the contact cache's section, when the inspector shows it.
+    // Counts the changes of the contact cache's shown value (its RON text), when the inspector
+    // shows it; queried on each mutation: a re-render may replace the element.
     window.__cacheChanges = 0;
     const cache = document.querySelector('section[aria-label="ludenea::ContactCache"]');
-    const observer = new MutationObserver(() => window.__cacheChanges!++);
+    const ron = () => cache?.querySelector('[aria-label="ludenea::ContactCache as RON"]')?.textContent;
+    let shown = ron();
+    const observer = new MutationObserver(() => {
+      if (ron() === shown) return;
+      shown = ron();
+      window.__cacheChanges!++;
+    });
     if (cache) observer.observe(cache, { childList: true, subtree: true, characterData: true });
     let last = performance.now();
     let running = true;

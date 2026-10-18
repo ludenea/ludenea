@@ -55,7 +55,7 @@ test.describe("the ghost and the causal report", () => {
   let served: ServedProject;
 
   test.beforeAll(async () => {
-    served = await serveProject("ghost_game", 4315);
+    served = await serveProject("ghost_game", 4321);
   });
 
   test.afterAll(() => served?.stop());
