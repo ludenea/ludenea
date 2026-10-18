@@ -429,6 +429,58 @@ fn diff_output_lines_unchanged() {
 }
 
 #[derive(Serialize, Deserialize, Schema, Debug, PartialEq, Clone)]
+struct Slot {
+    weight: u32,
+    amount: u32,
+}
+
+#[derive(Component, Serialize, Deserialize, Debug, PartialEq, Clone)]
+struct Inventory {
+    counts: std::collections::BTreeMap<String, u32>,
+    slots: Vec<Slot>,
+}
+
+/// String map keys and a whole struct inside a list, as milestone 1 printed them.
+#[test]
+fn diff_output_lines_unchanged_for_maps_and_list_items() {
+    let mut world = World::new();
+    world.register_component::<Inventory>().unwrap();
+    let entity = world.spawn();
+    let slot = |weight, amount| Slot { weight, amount };
+    let counts = |pairs: &[(&str, u32)]| {
+        pairs
+            .iter()
+            .map(|(name, count)| (name.to_string(), *count))
+            .collect()
+    };
+    let inventory = Inventory {
+        counts: counts(&[("apple", 1), ("pear", 2)]),
+        slots: vec![slot(5, 1)],
+    };
+    world.insert(entity, inventory).unwrap();
+    let left = world.snapshot();
+    let inventory = Inventory {
+        counts: counts(&[("apple", 3)]),
+        slots: vec![slot(5, 1), slot(6, 2)],
+    };
+    world.insert(entity, inventory).unwrap();
+    let lines: Vec<String> = world
+        .diff_snapshots(&left, &world.snapshot())
+        .unwrap()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "entity 0v0 snapshot::Inventory .counts.apple: 1 != 3",
+            "entity 0v0 snapshot::Inventory .counts.pear: 2 != absent",
+            "entity 0v0 snapshot::Inventory .slots[1]: absent != {\"amount\":2,\"weight\":6}",
+        ]
+    );
+}
+
+#[derive(Serialize, Deserialize, Schema, Debug, PartialEq, Clone)]
 enum Shape {
     Circle { radius: u32 },
     Square(u32),

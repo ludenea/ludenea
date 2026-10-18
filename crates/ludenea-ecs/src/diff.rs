@@ -297,7 +297,11 @@ impl<'a> Found<'a> {
             (Some(TypeSchema::Map { key, value }), Value::Object(l), Value::Object(r)) => {
                 let keys: BTreeSet<&String> = l.keys().chain(r.keys()).collect();
                 for name in keys {
-                    let segment = format!("[{}]", key_text(key, name));
+                    // Milestone 1 paths: `.name` for a string key, `[key]` otherwise.
+                    let segment = match **key {
+                        TypeSchema::String => name.clone(),
+                        _ => format!("[{name}]"),
+                    };
                     self.at(path, segment, |found, path| {
                         found.walk(Some(value), path, l.get(name), r.get(name));
                     });
@@ -395,8 +399,11 @@ impl<'a> Found<'a> {
         left: Option<&Value>,
         right: Option<&Value>,
     ) {
-        let text =
-            |value: Option<&Value>| value.map_or(ABSENT.to_string(), |v| ron_text(schema, v));
+        let text = |value: Option<&Value>| {
+            value.map_or(ABSENT.to_string(), |value| {
+                milestone_1(ron_text(schema, value))
+            })
+        };
         self.push(
             path.to_vec(),
             left.cloned(),
@@ -427,6 +434,15 @@ fn variant(value: &Value) -> (&str, Option<&Value>) {
             (name, Some(content))
         }
         _ => ("", None),
+    }
+}
+
+/// RON text as milestone 1 rendered a part of a value: through `ron::Value`, so a struct
+/// reads as a map with its fields in name order.
+fn milestone_1(text: String) -> String {
+    match ron::from_str::<ron::Value>(&text) {
+        Ok(value) => ron::to_string(&value).expect("a RON value always encodes"),
+        Err(_) => text,
     }
 }
 

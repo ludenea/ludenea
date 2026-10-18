@@ -56,6 +56,8 @@ pub struct Simulation {
     pub(crate) load_addresses: BTreeMap<Entity, LoadAddress>,
     /// The prefab instances of the last loaded scene; not part of the state.
     pub(crate) instances: Vec<LoadedInstance>,
+    /// See [`Simulation::resolved_scene`].
+    pub(crate) resolved_scene: Option<String>,
 }
 
 impl Simulation {
@@ -76,6 +78,7 @@ impl Simulation {
             hooks,
             load_addresses: BTreeMap::new(),
             instances: Vec::new(),
+            resolved_scene: None,
         }
     }
 

@@ -18,7 +18,11 @@ const ASSET_DIRECTORIES: [&str; 2] = ["scenes", "assets"];
 /// else the scene's folder. A project root's `scenes/` and `assets/` are scanned, a plain
 /// folder entirely, in sorted path order. Files without a meta are skipped.
 pub fn project_assets(scene: &Path, project: Option<&Path>) -> Result<NamedAssetTexts, String> {
-    let folder = scene.parent().unwrap_or(Path::new("."));
+    // Absolute, so a bare file name has a folder and the manifest search climbs past the
+    // current directory.
+    let scene = std::path::absolute(scene)
+        .map_err(|error| format!("cannot locate {}: {error}", scene.display()))?;
+    let folder = scene.parent().expect("an absolute file path has a parent");
     let root = project.map(Path::to_path_buf).or_else(|| {
         folder
             .ancestors()
@@ -71,8 +75,10 @@ pub fn project_assets(scene: &Path, project: Option<&Path>) -> Result<NamedAsset
 
 /// Adds every file under `directory`, if it exists.
 fn collect(directory: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
-    let Ok(entries) = fs::read_dir(directory) else {
-        return Ok(());
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("cannot list {}: {error}", directory.display())),
     };
     for entry in entries {
         let path = entry

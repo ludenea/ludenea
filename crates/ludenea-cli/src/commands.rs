@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use clap::Args;
 use ludenea_app::replay::{Replay, ReplayOutcome, play_replay, record_replay};
-use ludenea_app::trace::{TRACE_VERSION, Trace, inputs_hash, scene_hash};
+use ludenea_app::trace::{TRACE_VERSION, Trace, compare_traces, inputs_hash, scene_hash};
 use ludenea_app::{App, EditLog, InputLog, NamedAssetTexts, Simulation};
 use ludenea_control::{Bytes, Command, Host, InProcess, PROTOCOL_VERSION, Reply, Transport};
 
@@ -83,15 +83,16 @@ fn simulation(app: fn() -> App, threads: Option<u32>) -> Result<Simulation, Stri
     Ok(sim)
 }
 
-/// Plays `replay` against its hashes; on the first mismatch writes the snapshots of that
-/// tick and the one before into `dump_dir`.
+/// Plays `replay` against its hashes and tells whether they all match; on the first
+/// mismatch reports it and writes the snapshots of that tick and the one before into
+/// `dump_dir`.
 fn play(
     app: fn() -> App,
     replay: &Replay,
     threads: Option<u32>,
     dump_dir: &Path,
     out: &mut dyn Write,
-) -> Outcome {
+) -> Result<bool, String> {
     let mut sim = simulation(app, threads)?;
     let report = play_replay(&mut sim, replay, |_, _| {}).map_err(|error| error.to_string())?;
     if report.fingerprint_differs {
@@ -103,16 +104,9 @@ fn play(
         got,
     } = report.outcome
     else {
-        return say(
-            out,
-            format_args!("ok: {} hashes match", replay.hashes.len()),
-        )
-        .map(|()| 0);
+        return Ok(true);
     };
-    say(
-        out,
-        format_args!("mismatch at tick {tick}: expected {expected:016x}, got {got:016x}"),
-    )?;
+    mismatch(out, tick, expected, got)?;
     let (previous, current) = report
         .diverged_snapshots
         .expect("a divergence has its snapshots");
@@ -127,7 +121,19 @@ fn play(
         paths.push(path.display().to_string());
     }
     say(out, format_args!("wrote {}", paths.join(" and ")))?;
-    Ok(1)
+    Ok(false)
+}
+
+fn mismatch(out: &mut dyn Write, tick: u64, expected: u64, got: u64) -> Result<(), String> {
+    say(
+        out,
+        format_args!("mismatch at tick {tick}: expected {expected:016x}, got {got:016x}"),
+    )
+}
+
+fn matched(out: &mut dyn Write, hashes: usize) -> Outcome {
+    say(out, format_args!("ok: {hashes} hashes match"))?;
+    Ok(0)
 }
 
 /// Sends `command`; the events it queues are dropped, since nothing here shows them.
@@ -245,7 +251,10 @@ pub fn verify(app: fn() -> App, args: &VerifyArgs, out: &mut dyn Write) -> Outco
         .is_some_and(|extension| extension == "replay")
     {
         let replay = Replay::decode(&read(&files.scene)?).map_err(|error| error.to_string())?;
-        return play(app, &replay, *threads, dump_dir, out);
+        return match play(app, &replay, *threads, dump_dir, out)? {
+            true => matched(out, replay.hashes.len()),
+            false => Ok(1),
+        };
     }
     let (Some(inputs), Some(golden)) = (inputs, golden) else {
         return Err("verifying a scene needs --inputs and --golden".into());
@@ -261,16 +270,20 @@ pub fn verify(app: fn() -> App, args: &VerifyArgs, out: &mut dyn Write) -> Outco
     }
     let ticks = golden.hashes.len().saturating_sub(1) as u64;
     let mut replay = run.record(ticks)?;
-    if replay.hashes == golden.hashes {
-        say(
-            out,
-            format_args!("ok: {} hashes match", golden.hashes.len()),
-        )?;
-        return Ok(0);
-    }
+    let Some(tick) = compare_traces(&golden.hashes, &replay.hashes).first_divergent else {
+        return matched(out, golden.hashes.len());
+    };
+    let got = replay.hashes[tick as usize];
     // Played again against the golden hashes, to stop at the first mismatch with dumps.
     replay.hashes = golden.hashes;
-    play(app, &replay, *threads, dump_dir, out)
+    if play(app, &replay, *threads, dump_dir, out)? {
+        mismatch(out, tick, replay.hashes[tick as usize], got)?;
+        say(
+            out,
+            "note: a second run matched the golden trace; the simulation is not deterministic",
+        )?;
+    }
+    Ok(1)
 }
 
 pub fn diff(app: fn() -> App, args: &DiffArgs, out: &mut dyn Write) -> Outcome {

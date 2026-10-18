@@ -418,7 +418,16 @@ impl Simulation {
         assets: &dyn AssetSource,
     ) -> Result<SceneLoad, SceneError> {
         let resolved = resolve(ron, assets)?;
-        self.load_resolved(resolved, assets)
+        let text = resolved.to_scene_text();
+        let load = self.load_resolved(resolved, assets)?;
+        self.resolved_scene = Some(text);
+        Ok(load)
+    }
+
+    /// The resolved text (`Resolved::to_scene_text`) of the last scene loaded; not part of
+    /// the state or its hash.
+    pub fn resolved_scene(&self) -> Option<&str> {
+        self.resolved_scene.as_deref()
     }
 
     fn load_resolved(

@@ -392,3 +392,93 @@ fn verify_replay_fails_on_altered_hash_and_dumps_snapshots() {
     assert_eq!(snapshot_hash(&dir.join("dump/tick-6.snap")), expected[6]);
     assert_eq!(snapshot_hash(&dir.join("dump/tick-7.snap")), expected[7]);
 }
+
+static FLAKY_BUILDS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Counts twice as fast in the second app built, and only there.
+fn flaky_app() -> App {
+    let mut app = app();
+    if FLAKY_BUILDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 1 {
+        app.system(Sim, count);
+    }
+    app
+}
+
+#[test]
+fn verify_reports_a_divergence_that_a_second_run_does_not_repeat() {
+    let dir = dir("verify_flaky");
+    let args = |args: &[&str]| -> Vec<String> {
+        ["test"]
+            .iter()
+            .chain(args)
+            .map(|arg| arg.replace("{}", dir.to_str().unwrap()))
+            .collect()
+    };
+    let mut out = Vec::new();
+    let record = args(&[
+        "run",
+        "{}/scene.ron",
+        "--inputs",
+        "{}/inputs.bin",
+        "--ticks",
+        "5",
+        "--trace",
+        "{}/golden.bin",
+    ]);
+    assert_eq!(run(flaky_app, &record, &mut out), 0);
+    let verify = args(&[
+        "verify",
+        "{}/scene.ron",
+        "--inputs",
+        "{}/inputs.bin",
+        "--golden",
+        "{}/golden.bin",
+        "--dump-dir",
+        "{}/dump",
+    ]);
+    let mut out = Vec::new();
+    assert_eq!(run(flaky_app, &verify, &mut out), 1);
+    let out = String::from_utf8(out).unwrap();
+    assert!(out.starts_with("mismatch at tick 1: "), "{out}");
+    assert!(out.contains("not deterministic"), "{out}");
+}
+
+/// Run in a child process started in the scene's folder: the current directory is global
+/// to the test process.
+#[test]
+fn project_assets_resolve_from_a_bare_scene_file_name() {
+    const CHILD: &str = "LUDENEA_CLI_TEST_SCENE_FOLDER";
+    if let Ok(folder) = std::env::var(CHILD) {
+        assert_eq!(std::env::current_dir().unwrap(), PathBuf::from(folder));
+        let scene = Path::new("main.scene.ron");
+        let assets = ludenea_cli::assets::project_assets(scene, None).unwrap();
+        assert_eq!(
+            assets.texts.keys().copied().collect::<Vec<_>>(),
+            [ludenea_ecs::AssetId(11)]
+        );
+        return;
+    }
+    let root = dir("bare_scene");
+    fs::write(root.join("ludenea.toml"), "").unwrap();
+    let folder = root.join("scenes/levels");
+    fs::create_dir_all(&folder).unwrap();
+    fs::create_dir_all(root.join("assets")).unwrap();
+    fs::write(folder.join("main.scene.ron"), "").unwrap();
+    fs::write(root.join("assets/a.prefab.ron"), "Prefab(version: 1)").unwrap();
+    fs::write(
+        root.join("assets/a.prefab.ron.meta"),
+        "Meta(version: 1, id: \"0000000000000000000000000000000b\", kind: Prefab)",
+    )
+    .unwrap();
+    let folder = folder.canonicalize().unwrap();
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "project_assets_resolve_from_a_bare_scene_file_name",
+        ])
+        .current_dir(&folder)
+        .env(CHILD, &folder)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}

@@ -40,8 +40,10 @@ impl Trace {
         Ok(trace)
     }
 
-    /// The trace of a replay. Without the game's codecs the assets are hashed as their
-    /// file text, after the resolved scene, in identifier order.
+    /// The trace of a replay, for comparing its `hashes` with another trace. Its scene and
+    /// inputs hashes never match those of a `run` trace: a replay holds neither the raw scene
+    /// file nor the codecs for canonical asset bytes, so they hash the resolved scene, then
+    /// each asset's identifier and file text, and the input log then the edit log.
     pub fn from_replay(replay: &Replay) -> Trace {
         let scene_hash = if replay.assets.is_empty() {
             xxh3_64(replay.scene.as_bytes())
@@ -65,17 +67,17 @@ impl Trace {
 
 /// The scene hash of a trace, for `sim` just after loading the scene `scene_bytes`: xxh3 of
 /// the raw bytes when no asset is loaded (so traces of scenes without assets keep their
-/// milestone 1 hash); otherwise xxh3 of the bytes followed by each loaded asset's identifier
-/// and canonical bytes, in identifier order. The loaded prefabs are flattened, so with the
-/// scene's own overrides they determine its resolved form.
+/// milestone 1 hash); otherwise xxh3 of the resolved scene text followed by each loaded
+/// asset's identifier and canonical bytes, in identifier order.
 pub fn scene_hash(scene_bytes: &[u8], sim: &Simulation) -> u64 {
     let world = sim.world();
     let ids = world.asset_ids();
-    if ids.is_empty() {
+    let resolved = sim.resolved_scene();
+    let (false, Some(resolved)) = (ids.is_empty(), resolved) else {
         return xxh3_64(scene_bytes);
-    }
+    };
     let mut hasher = Xxh3::new();
-    hasher.update(scene_bytes);
+    hasher.update(resolved.as_bytes());
     for id in ids {
         let (_, bytes) = world.asset_bytes(id).expect("a loaded identifier");
         hasher.update(&id.0.to_le_bytes());
@@ -122,6 +124,22 @@ pub fn compare_traces(a: &[u64], b: &[u64]) -> TraceComparison {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replay_trace_keeps_the_replay_hashes() {
+        let replay = Replay {
+            version: crate::replay::REPLAY_VERSION,
+            engine: String::new(),
+            fingerprint: 0,
+            scene: "Scene()".to_string(),
+            assets: Vec::new(),
+            inputs: vec![1],
+            edits: vec![2],
+            hashes: vec![7, 8, 9],
+            checkpoints: Vec::new(),
+        };
+        assert_eq!(Trace::from_replay(&replay).hashes, replay.hashes);
+    }
 
     #[test]
     fn identical_traces_have_no_divergence() {
