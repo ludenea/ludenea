@@ -356,6 +356,26 @@ fn tick_zero_edit_resimulates_and_reports_first_divergence() {
 }
 
 #[test]
+fn timeline_counts_only_resimulated_ticks_while_resimulating() {
+    let (mut sim, mut session) = started(recorded(200, None));
+    play(&mut session, &mut sim, 200);
+    session.seek(&mut sim, 0).unwrap();
+    let edit = stats_edit(&sim, 1_000);
+    session.edit(&mut sim, edit).unwrap();
+    assert_eq!(session.timeline().simulated, 0);
+    let mut up_to = None;
+    while up_to.is_none() {
+        if let Resimulation::Progress { up_to: tick } = session.resimulate(&mut sim, 64).unwrap() {
+            up_to = Some(tick);
+        }
+    }
+    let timeline = session.timeline();
+    assert!(timeline.resimulating);
+    assert_eq!(timeline.simulated, up_to.unwrap());
+    assert!(timeline.simulated < timeline.head, "{timeline:?}");
+}
+
+#[test]
 fn edits_are_refused_while_resimulating() {
     let (mut sim, mut session) = started(recorded(200, None));
     play(&mut session, &mut sim, 200);

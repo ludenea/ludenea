@@ -1346,7 +1346,9 @@ impl Session {
         };
         Timeline {
             head: head.unwrap_or(self.head),
-            simulated: self.simulated().min(cap),
+            // While resimulating, the recorded future stays for comparison: only the ticks
+            // resimulated count.
+            simulated: self.resimulated_to().unwrap_or(self.simulated()).min(cap),
             current: self.current,
             checkpoints,
             edit_ticks,
