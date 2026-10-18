@@ -5,7 +5,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
@@ -24,8 +24,7 @@ const ENGINE_PATH_VARIABLE: &str = "LUDENEA_ENGINE_PATH";
 
 struct Backend {
     service: Mutex<ProjectService>,
-    /// Whether the front end said hello on the project channel: events wait for it.
-    connected: AtomicBool,
+    delivery: Mutex<Delivery>,
     project: Mutex<Option<Channel<String>>>,
     control: Mutex<Option<Channel<String>>>,
     /// The running game's input, and which game it is: a replaced game's last lines are dropped.
@@ -33,25 +32,46 @@ struct Backend {
     game: AtomicU64,
 }
 
+/// What reaches the front end on the project channel. Locked after the service, never before.
+#[derive(Default)]
+struct Delivery {
+    /// Whether the front end said hello: events wait for it.
+    connected: bool,
+    /// The subscription that follows the replay sent at the last hello, for the event relay
+    /// to switch to: the events it had already received are in the replay or predate the hello.
+    caught_up: Option<broadcast::Receiver<ProjectEvent>>,
+}
+
 impl Backend {
     /// Answers one project message and sends the reply on the project channel. After a
-    /// hello, also what the editor missed about the games (a fast build, a reloaded window).
+    /// hello, also what the editor missed (a fast build, a reloaded window), each event once.
     fn answer(&self, text: &str) {
-        let (reply, missed) = {
-            let mut service = lock(&self.service);
-            let mut connected = self.connected.load(Ordering::SeqCst);
-            let reply = service.answer(&mut connected, text);
-            self.connected.store(connected, Ordering::SeqCst);
-            let missed = match reply {
-                ProjectServerMessage::Welcome { .. } => service.announcements(),
-                _ => Vec::new(),
-            };
-            (reply, missed)
-        };
+        let mut service = lock(&self.service);
+        let was_connected = lock(&self.delivery).connected;
+        let mut connected = was_connected;
+        let reply = service.answer(&mut connected, text);
+        let mut delivery = lock(&self.delivery);
         deliver(&self.project, encode(&reply));
-        if !missed.is_empty() {
-            deliver(&self.project, events_batch(missed));
+        if matches!(reply, ProjectServerMessage::Welcome { .. }) {
+            let (missed, events) = service.subscribe_caught_up();
+            if !missed.is_empty() {
+                deliver(&self.project, events_batch(missed));
+            }
+            delivery.caught_up = Some(events);
         }
+        // Only a hello changes it; a window that reloaded meanwhile stays disconnected.
+        if connected != was_connected {
+            delivery.connected = connected;
+        }
+    }
+
+    /// A front end (re)subscribed to the project channel: the previous one is gone, so until
+    /// this one says hello, events wait and rebuilds swap the game at once.
+    fn replace_editor(&self, channel: Channel<String>) {
+        let service = lock(&self.service);
+        service.editor_disconnected();
+        lock(&self.delivery).connected = false;
+        *lock(&self.project) = Some(channel);
     }
 
     /// Takes the control channel of the game just started and relays what it prints.
@@ -96,29 +116,41 @@ impl Backend {
                 .iter()
                 .any(|event| matches!(event, ProjectEvent::GameReady))
             {
+                // Taking the control channel twice (a repeated `GameReady`) finds nothing.
                 self.attach_game();
             }
-            if !self.connected.load(Ordering::SeqCst) {
+            let mut delivery = lock(&self.delivery);
+            if let Some(caught_up) = delivery.caught_up.take() {
+                events = caught_up;
                 continue;
             }
-            deliver(&self.project, events_batch(batch));
+            if delivery.connected {
+                deliver(&self.project, events_batch(batch));
+            }
         }
     }
 }
 
 #[tauri::command]
-fn subscribe(
-    channel: &str,
+async fn subscribe(
+    channel: String,
     on_message: Channel<String>,
     backend: State<'_, Arc<Backend>>,
 ) -> Result<(), String> {
-    let slot = match channel {
-        "project" => &backend.project,
-        "control" => &backend.control,
-        _ => return Err(format!("no channel named {channel:?}")),
-    };
-    *lock(slot) = Some(on_message);
-    Ok(())
+    match channel.as_str() {
+        // Waits for a long request to finish: off the main thread.
+        "project" => {
+            let backend = Arc::clone(&backend);
+            tauri::async_runtime::spawn_blocking(move || backend.replace_editor(on_message))
+                .await
+                .map_err(|error| error.to_string())
+        }
+        "control" => {
+            *lock(&backend.control) = Some(on_message);
+            Ok(())
+        }
+        _ => Err(format!("no channel named {channel:?}")),
+    }
 }
 
 #[tauri::command]
@@ -219,7 +251,7 @@ fn main() {
     }
     let backend = Arc::new(Backend {
         service: Mutex::new(service),
-        connected: AtomicBool::new(false),
+        delivery: Mutex::default(),
         project: Mutex::new(None),
         control: Mutex::new(None),
         to_game: Mutex::new(None),

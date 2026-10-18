@@ -133,4 +133,49 @@ describe("followNativeGames", () => {
     const loaded = log.indexOf("new:load_session");
     expect(log.slice(loaded)).toEqual(["new:load_session", "new:get_timeline", "new:seek"]);
   });
+
+  it("a_second_rebuild_before_the_swap_keeps_the_first_export", async () => {
+    const games = [fakeHost("old"), fakeHost("new")];
+    let restarts = 0;
+    const { project, push } = await fakeProject((request) => {
+      if (request.type !== "restart_game") return { ok: { type: "done" } };
+      restarts += 1;
+      return restarts === 1 ? { ok: { type: "done" } } : { error: { code: "no_game", message: "no rebuilt game waits to start" } };
+    });
+    followNativeGames(project, app(), async () => games[restarts > 0 ? 1 : 0]!);
+    push({ type: "game_ready" });
+    await settle();
+    log = [];
+
+    push({ type: "game_rebuilt" });
+    push({ type: "game_rebuilt" });
+    await settle();
+    push({ type: "game_ready" });
+    await settle();
+    expect(log.filter((entry) => entry === "old:export_session")).toHaveLength(1);
+    expect(log).toContain("new:load_session");
+  });
+
+  it("a_failed_restart_exports_again_at_the_next_rebuild", async () => {
+    const games = [fakeHost("old"), fakeHost("new")];
+    let restarts = 0;
+    const { project, push } = await fakeProject((request) => {
+      if (request.type !== "restart_game") return { ok: { type: "done" } };
+      restarts += 1;
+      return restarts === 1 ? { error: { code: "io", message: "cannot start the game" } } : { ok: { type: "done" } };
+    });
+    followNativeGames(project, app(), async () => games[restarts > 1 ? 1 : 0]!);
+    push({ type: "game_ready" });
+    await settle();
+    log = [];
+
+    push({ type: "game_rebuilt" });
+    await settle();
+    push({ type: "game_rebuilt" });
+    await settle();
+    push({ type: "game_ready" });
+    await settle();
+    expect(log.filter((entry) => entry === "old:export_session")).toHaveLength(2);
+    expect(log).toContain("new:load_session");
+  });
 });

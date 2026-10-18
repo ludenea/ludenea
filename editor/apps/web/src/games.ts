@@ -65,8 +65,17 @@ export function followNativeGames(project: ProjectClient, app: App, connect: () 
   project.on("game_rebuilt", () =>
     enqueue("restart the rebuilt game", async () => {
       const current = running;
-      if (current) pending = await exportSession(current.control).catch(() => current.guard.latest());
-      await project.request({ type: "restart_game" });
+      // One export per swap: a second rebuild before the new game is ready keeps the first,
+      // taken while the old game still ran.
+      const exporting = pending === null;
+      if (current && exporting) pending = await exportSession(current.control).catch(() => current.guard.latest());
+      try {
+        await project.request({ type: "restart_game" });
+      } catch (error) {
+        // The old game still runs: the next rebuild exports it afresh.
+        if (exporting) pending = null;
+        throw error;
+      }
     }),
   );
   project.on("game_ready", () =>
