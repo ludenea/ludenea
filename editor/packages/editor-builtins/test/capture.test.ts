@@ -1,12 +1,15 @@
 import { act, fireEvent, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { captureInput } from "../src/input/capture";
 import { settle, testEditor, testGame } from "./support";
 
 const idle = { type: "set_live_input", players: [{ keys: [], gamepads: [] }] };
 
 describe("live input capture", () => {
-  afterEach(() => document.body.replaceChildren());
+  afterEach(() => {
+    document.body.replaceChildren();
+    vi.unstubAllGlobals();
+  });
 
   it("capture_sends_pressed_codes_and_idle_on_blur", async () => {
     const host = await testEditor([]);
@@ -79,6 +82,46 @@ describe("live input capture", () => {
     await settle();
     expect(host.editor.shortcuts.captured).toBe(false);
     expect(game.sent.filter((command) => command.type === "set_live_input")).toEqual([]);
+    stop();
+  });
+
+  it("pausing_sends_idle_and_releases_the_keys", async () => {
+    const host = await testEditor([]);
+    const game = await testGame(undefined, { input: { kind: "unit" } });
+    act(() => host.setControl(game.client));
+    const element = document.body.appendChild(document.createElement("div"));
+    element.tabIndex = 0;
+    const stop = captureInput(host.editor, element);
+    const live = () => game.sent.filter((command) => command.type === "set_live_input");
+    element.focus();
+    act(() => host.editor.timeline.setState({ playing: true }));
+    fireEvent.keyDown(element, { code: "KeyD", key: "d" });
+    await waitFor(() => expect(live().at(-1)).toEqual({ type: "set_live_input", players: [{ keys: ["KeyD"], gamepads: [] }] }));
+
+    act(() => host.editor.timeline.setState({ playing: false }));
+    await waitFor(() => expect(live().at(-1)).toEqual(idle));
+    expect(host.editor.shortcuts.captured).toBe(false);
+    stop();
+  });
+
+  it("the_first_connected_gamepad_is_sent", async () => {
+    const pad = { buttons: [{ value: 0 }, { value: 1 }], axes: [0.5, -1] };
+    vi.stubGlobal("navigator", { ...navigator, getGamepads: () => [null, pad] });
+    const host = await testEditor([]);
+    const game = await testGame(undefined, { input: { kind: "unit" } });
+    act(() => host.setControl(game.client));
+    const element = document.body.appendChild(document.createElement("div"));
+    element.tabIndex = 0;
+    const stop = captureInput(host.editor, element);
+    element.focus();
+    act(() => host.editor.timeline.setState({ playing: true }));
+
+    await waitFor(() =>
+      expect(game.sent.filter((command) => command.type === "set_live_input").at(-1)).toEqual({
+        type: "set_live_input",
+        players: [{ keys: [], gamepads: [{ buttons: [0, 1], axes: [0.5, -1] }] }],
+      }),
+    );
     stop();
   });
 });
