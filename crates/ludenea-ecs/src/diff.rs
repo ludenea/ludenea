@@ -305,9 +305,13 @@ impl<'a> Found<'a> {
             (Some(TypeSchema::Map { key, value }), Value::Object(l), Value::Object(r)) => {
                 let keys: BTreeSet<&String> = l.keys().chain(r.keys()).collect();
                 for name in keys {
-                    // Milestone 1 paths: `.name` for a string key, `[key]` otherwise.
+                    // Milestone 1 paths: `.name` for a string key, `[key]` otherwise; a string
+                    // key that would read as an index or as nothing is quoted, `["[x"]`.
                     let segment = match **key {
-                        TypeSchema::String => name.clone(),
+                        TypeSchema::String if !name.is_empty() && !name.starts_with('[') => {
+                            name.clone()
+                        }
+                        TypeSchema::String => format!("[{name:?}]"),
                         _ => format!("[{name}]"),
                     };
                     self.at(path, segment, |found, path| {

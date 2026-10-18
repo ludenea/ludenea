@@ -480,6 +480,35 @@ fn diff_output_lines_unchanged_for_maps_and_list_items() {
     );
 }
 
+#[test]
+fn diff_quotes_map_keys_that_read_as_an_index_or_nothing() {
+    let mut world = World::new();
+    world.register_component::<Inventory>().unwrap();
+    let entity = world.spawn();
+    let inventory = |count| Inventory {
+        counts: [("[0]", count), ("", count)]
+            .map(|(name, count)| (name.to_string(), count))
+            .into(),
+        slots: Vec::new(),
+    };
+    world.insert(entity, inventory(1)).unwrap();
+    let left = world.snapshot();
+    world.insert(entity, inventory(2)).unwrap();
+    let lines: Vec<String> = world
+        .diff_snapshots(&left, &world.snapshot())
+        .unwrap()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "entity 0v0 snapshot::Inventory .counts[\"\"]: 1 != 2",
+            "entity 0v0 snapshot::Inventory .counts[\"[0]\"]: 1 != 2",
+        ]
+    );
+}
+
 #[derive(Serialize, Deserialize, Schema, Debug, PartialEq, Clone)]
 enum Shape {
     Circle { radius: u32 },
