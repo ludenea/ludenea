@@ -61,7 +61,10 @@ fn edits(session: &Session) -> Vec<TimedEdit> {
 }
 
 fn resimulate_all(session: &mut Session, sim: &mut Simulation) {
-    while session.resimulate(sim, 64).unwrap() != Resimulation::Done {}
+    while !matches!(
+        session.resimulate(sim, 256).unwrap(),
+        Resimulation::Done | Resimulation::Idle
+    ) {}
 }
 
 /// A session with an edit at tick 300, played on to tick 400.
@@ -153,13 +156,17 @@ fn new_edit_clears_redo() {
 }
 
 #[test]
-fn discarded_future_removes_its_undo_entries() {
+fn a_fork_keeps_the_undo_entries_of_the_future_it_forks_from() {
     let (mut sim, mut session, _, _) = edited_at_300();
     session.seek(&mut sim, 100).unwrap();
     let edit = stats_edit(&sim, 7);
     session.edit(&mut sim, edit).unwrap();
     session.undo(&mut sim).unwrap();
     assert_eq!(session.timeline().current, 100);
+    assert_eq!(session.current_branch(), BranchId(1));
+    session.undo(&mut sim).unwrap();
+    assert_eq!(session.timeline().current, 300);
+    assert_eq!(session.current_branch(), ROOT);
     assert!(matches!(
         session.undo(&mut sim),
         Err(SessionError::NothingToUndo)
@@ -240,7 +247,8 @@ fn scene_dirty_until_saved() {
 
 #[test]
 fn edit_dropped_by_resimulation_leaves_undo_history() {
-    let (mut sim, mut session) = started(200);
+    // The edit at the head extends the branch: it has a plain entry, not a fork.
+    let (mut sim, mut session) = started(100);
     play(&mut session, &mut sim, 100);
     let target = sim.world().entities().last().unwrap();
     let remove = Edit::Remove {
@@ -356,12 +364,17 @@ fn live_spawn() -> Vec<u8> {
 }
 
 #[test]
-fn take_over_drops_the_undo_entries_of_its_discarded_future() {
+fn take_over_forks_and_keeps_the_undo_entries_of_the_future_it_forks_from() {
     let (mut sim, mut session, _, _) = edited_at_300();
     session.seek(&mut sim, 200).unwrap();
     session.step(&mut sim, Some(&live_spawn())).unwrap();
-    assert!(!session.timeline().can_undo);
     assert!(edits(&session).is_empty());
+    session.undo(&mut sim).unwrap();
+    assert_eq!(session.current_branch(), BranchId(1));
+    assert_eq!(session.timeline().current, 200);
+    assert_eq!(edits(&session).len(), 1);
+    session.undo(&mut sim).unwrap();
+    assert!(!session.timeline().can_undo);
 }
 
 #[test]
@@ -439,4 +452,366 @@ fn session_export_from_2a_with_undo_history_resumes() {
     host.handle(Command::Undo).unwrap();
     assert!(!timeline(&mut host).scene_dirty);
     assert!(!timeline(&mut host).can_undo);
+}
+
+use ludenea::control::{BranchId, SessionExport};
+use serde::Serialize;
+
+const ROOT: BranchId = BranchId::ROOT;
+
+/// Seeks to `tick` and edits there.
+fn edit_at(session: &mut Session, sim: &mut Simulation, tick: u64, begins: u64) {
+    session.seek(sim, tick).unwrap();
+    let edit = stats_edit(sim, begins);
+    session.edit(sim, edit).unwrap();
+}
+
+fn branch_ids(session: &Session) -> Vec<BranchId> {
+    session.branches().iter().map(|branch| branch.id).collect()
+}
+
+fn resume(sim: &mut Simulation, export: SessionExport) -> Session {
+    Session::resume(
+        sim,
+        export.scene,
+        export.saved_scene,
+        InputLog::decode(&export.inputs).unwrap(),
+        EditLog::decode(&export.edits).unwrap(),
+        &export.undo,
+        &export.branches,
+        export.hashes,
+    )
+    .unwrap()
+}
+
+/// Switches to `id` and returns its hashes up to its head.
+fn branch_hashes(session: &mut Session, sim: &mut Simulation, id: BranchId) -> Vec<u64> {
+    session.switch_branch(sim, id).unwrap();
+    resimulate_all(session, sim);
+    let timeline = session.timeline();
+    session.seek(sim, timeline.head.max(timeline.simulated)).unwrap();
+    hashes(session)
+}
+
+/// The undo entry milestone 2b wrote before branches had their own entries.
+#[derive(Serialize)]
+#[allow(dead_code)]
+enum UndoEntryV2 {
+    Scene { before: String, after: String },
+    Run { edit: TimedEdit },
+}
+
+fn undo_history_v2(undo: Vec<UndoEntryV2>) -> Vec<u8> {
+    postcard::to_allocvec(&(2u32, undo, Vec::<UndoEntryV2>::new())).unwrap()
+}
+
+#[test]
+fn undo_fork_returns_to_parent_with_future() {
+    let (mut sim, mut session) = started(400);
+    play(&mut session, &mut sim, 300);
+    let root = hashes(&session);
+    edit_at(&mut session, &mut sim, 150, 1_000);
+    play(&mut session, &mut sim, 20);
+    assert_eq!(session.current_branch(), BranchId(1));
+
+    session.undo(&mut sim).unwrap();
+    assert_eq!(branch_ids(&session), vec![ROOT]);
+    assert_eq!(session.current_branch(), ROOT);
+    let timeline = session.timeline();
+    assert_eq!((timeline.current, timeline.head), (150, 399));
+    assert_eq!(hashes(&session), root);
+    assert_eq!(sim.hash(), root[150]);
+}
+
+#[test]
+fn redo_fork_recreates_same_branch() {
+    let (mut sim, mut session) = started(400);
+    play(&mut session, &mut sim, 300);
+    edit_at(&mut session, &mut sim, 150, 1_000);
+    play(&mut session, &mut sim, 20);
+    let forked = hashes(&session);
+    let forked_edits = edits(&session);
+    session
+        .rename_branch(BranchId(1), "Try".to_string())
+        .unwrap();
+
+    session.undo(&mut sim).unwrap();
+    session.seek(&mut sim, 30).unwrap();
+    session.redo(&mut sim).unwrap();
+    let info = session.branches()[1].clone();
+    assert_eq!(
+        (info.id, info.name.as_str(), info.parent, info.fork_tick, info.head),
+        (BranchId(1), "Try", Some(ROOT), 150, 169)
+    );
+    assert_eq!(session.current_branch(), BranchId(1));
+    assert_eq!(session.timeline().current, 150);
+    assert!(session.is_pending());
+    assert_eq!(edits(&session), forked_edits);
+    session.seek(&mut sim, 170).unwrap();
+    assert_eq!(hashes(&session), forked);
+    assert!(!session.timeline().can_redo);
+}
+
+#[test]
+fn undo_switches_to_entry_branch_first() {
+    let (mut sim, mut session) = started(400);
+    play(&mut session, &mut sim, 300);
+    let root = hashes(&session);
+    edit_at(&mut session, &mut sim, 150, 1_000);
+    play(&mut session, &mut sim, 20);
+    // At the branch's head, an edit extends it.
+    let edit = stats_edit(&sim, 2_000);
+    session.edit(&mut sim, edit.clone()).unwrap();
+    assert_eq!(branch_ids(&session), vec![ROOT, BranchId(1)]);
+    session.switch_branch(&mut sim, ROOT).unwrap();
+
+    session.undo(&mut sim).unwrap();
+    assert_eq!(session.current_branch(), BranchId(1));
+    assert_eq!(session.timeline().current, 170);
+    assert_eq!(edits(&session).len(), 1);
+    assert_eq!(edits(&session)[0].tick, 150);
+    session.redo(&mut sim).unwrap();
+    assert_eq!(edits(&session)[1], TimedEdit { tick: 170, edit });
+
+    session.switch_branch(&mut sim, ROOT).unwrap();
+    assert_eq!(hashes(&session), root);
+}
+
+/// A root with an edit at tick 300 and three branches: forked at 200 (before the edit),
+/// at 300 (inheriting it), and at 350. The history holds only the edit at 300, as a
+/// history written before forks had their own entries.
+fn descendants_of_an_edit() -> (Simulation, Session, Vec<Vec<u64>>) {
+    let (mut sim, mut session) = started(300);
+    play(&mut session, &mut sim, 300);
+    edit_at(&mut session, &mut sim, 300, 1_000);
+    play(&mut session, &mut sim, 100);
+    assert_eq!(branch_ids(&session), vec![ROOT]);
+    let edit = edits(&session)[0].clone();
+    for (tick, begins) in [(200, 1), (300, 2), (350, 3)] {
+        session.switch_branch(&mut sim, ROOT).unwrap();
+        edit_at(&mut session, &mut sim, tick, begins);
+        play(&mut session, &mut sim, 10);
+    }
+    let fork_ticks: Vec<u64> = session.branches().iter().map(|b| b.fork_tick).collect();
+    assert_eq!(fork_ticks, vec![0, 200, 300, 350]);
+    session.switch_branch(&mut sim, ROOT).unwrap();
+    let mut export = session.export().unwrap();
+    export.undo = undo_history_v2(vec![UndoEntryV2::Run { edit }]);
+    let mut session = resume(&mut sim, export);
+    resimulate_all(&mut session, &mut sim);
+    let expected = (0..4)
+        .map(|id| branch_hashes(&mut session, &mut sim, BranchId(id)))
+        .collect();
+    session.switch_branch(&mut sim, ROOT).unwrap();
+    (sim, session, expected)
+}
+
+#[test]
+fn undo_run_removes_descendants_forked_at_or_after_and_redo_restores_them() {
+    let (mut sim, mut session, expected) = descendants_of_an_edit();
+    session.undo(&mut sim).unwrap();
+    assert_eq!(branch_ids(&session), vec![ROOT, BranchId(1)]);
+    assert_eq!(session.current_branch(), ROOT);
+    let timeline = session.timeline();
+    assert_eq!((timeline.current, timeline.head), (300, 300));
+    assert!(edits(&session).is_empty());
+
+    session.redo(&mut sim).unwrap();
+    assert_eq!(
+        branch_ids(&session),
+        vec![ROOT, BranchId(1), BranchId(2), BranchId(3)]
+    );
+    assert_eq!(session.current_branch(), ROOT);
+    assert_eq!(session.timeline().current, 300);
+    let names: Vec<String> = session.branches().into_iter().map(|b| b.name).collect();
+    assert_eq!(names, ["Branch 1", "Branch 2", "Branch 3", "Branch 4"]);
+    for id in [2, 3, 0] {
+        let got = branch_hashes(&mut session, &mut sim, BranchId(id));
+        assert_eq!(got, expected[id as usize], "branch {id}");
+    }
+}
+
+#[test]
+fn undo_run_keeps_descendants_forked_before_its_tick() {
+    let (mut sim, mut session, expected) = descendants_of_an_edit();
+    session.undo(&mut sim).unwrap();
+    let kept = session.branches()[1].clone();
+    assert_eq!((kept.id, kept.fork_tick, kept.head), (BranchId(1), 200, 209));
+    assert_eq!(branch_hashes(&mut session, &mut sim, BranchId(1)), expected[1]);
+
+    // Natively, an edit at a branch's head extends it: no branch depends on it.
+    let (mut sim, mut session) = started(400);
+    play(&mut session, &mut sim, 300);
+    edit_at(&mut session, &mut sim, 100, 1);
+    session.switch_branch(&mut sim, ROOT).unwrap();
+    edit_at(&mut session, &mut sim, 399, 2);
+    assert_eq!(
+        session.timeline().undo_label.as_deref(),
+        Some("Undo edit at tick 399")
+    );
+    session.undo(&mut sim).unwrap();
+    assert_eq!(branch_ids(&session), vec![ROOT, BranchId(1)]);
+    assert!(edits(&session).is_empty());
+}
+
+#[test]
+fn undo_label_names_removed_branches() {
+    let (_, session, _) = descendants_of_an_edit();
+    assert_eq!(
+        session.timeline().undo_label.as_deref(),
+        Some("Undo edit at tick 300 (removes Branch 3, Branch 4)")
+    );
+
+    let (mut sim, mut session) = started(400);
+    let timeline = session.timeline();
+    assert_eq!((timeline.undo_label, timeline.redo_label), (None, None));
+    play(&mut session, &mut sim, 300);
+    edit_at(&mut session, &mut sim, 150, 1);
+    play(&mut session, &mut sim, 20);
+    edit_at(&mut session, &mut sim, 160, 2);
+    session.switch_branch(&mut sim, ROOT).unwrap();
+    session.rename_branch(BranchId(2), "Nested".to_string()).unwrap();
+    assert_eq!(
+        session.timeline().undo_label.as_deref(),
+        Some("Undo edit at tick 160 (removes Nested)")
+    );
+    session.undo(&mut sim).unwrap();
+    let timeline = session.timeline();
+    assert_eq!(
+        timeline.undo_label.as_deref(),
+        Some("Undo edit at tick 150 (removes Branch 2)")
+    );
+    assert_eq!(
+        timeline.redo_label.as_deref(),
+        Some("Redo edit at tick 160 (restores Nested)")
+    );
+
+    session.seek(&mut sim, 40).unwrap();
+    session.step(&mut sim, Some(&live_spawn())).unwrap();
+    let timeline = session.timeline();
+    assert_eq!(
+        timeline.undo_label.as_deref(),
+        Some("Undo take-over at tick 40 (removes Branch 4)")
+    );
+    assert_eq!(timeline.redo_label, None);
+    session.undo(&mut sim).unwrap();
+    assert_eq!(session.current_branch(), BranchId(1));
+    assert_eq!(session.timeline().current, 40);
+}
+
+#[test]
+fn undo_survives_export_and_resume_with_branches() {
+    let (mut sim, mut session) = started(400);
+    play(&mut session, &mut sim, 300);
+    edit_at(&mut session, &mut sim, 150, 1);
+    play(&mut session, &mut sim, 20);
+    edit_at(&mut session, &mut sim, 160, 2);
+    play(&mut session, &mut sim, 10);
+    let nested = hashes(&session);
+    let export = session.export().unwrap();
+    drop(session);
+
+    let mut session = resume(&mut sim, export);
+    resimulate_all(&mut session, &mut sim);
+    session.undo(&mut sim).unwrap();
+    resimulate_all(&mut session, &mut sim);
+    assert_eq!(branch_ids(&session), vec![ROOT, BranchId(1)]);
+    assert_eq!(
+        (session.current_branch(), session.timeline().current),
+        (BranchId(1), 160)
+    );
+    session.undo(&mut sim).unwrap();
+    resimulate_all(&mut session, &mut sim);
+    assert_eq!(branch_ids(&session), vec![ROOT]);
+    assert_eq!(session.timeline().current, 150);
+
+    // The redo stack survives an export too.
+    let export = session.export().unwrap();
+    let mut session = resume(&mut sim, export);
+    resimulate_all(&mut session, &mut sim);
+    session.redo(&mut sim).unwrap();
+    resimulate_all(&mut session, &mut sim);
+    session.redo(&mut sim).unwrap();
+    resimulate_all(&mut session, &mut sim);
+    assert_eq!(session.current_branch(), BranchId(2));
+    assert_eq!(branch_hashes(&mut session, &mut sim, BranchId(2)), nested);
+}
+
+#[test]
+fn undo_history_version_2_decodes() {
+    let (mut sim, mut session) = started(100);
+    play(&mut session, &mut sim, 100);
+    let before = sim.hash();
+    let edit = stats_edit(&sim, 1_000);
+    session.edit(&mut sim, edit.clone()).unwrap();
+    let mut export = session.export().unwrap();
+    export.undo = undo_history_v2(vec![UndoEntryV2::Run {
+        edit: TimedEdit { tick: 100, edit },
+    }]);
+    let mut session = resume(&mut sim, export.clone());
+    resimulate_all(&mut session, &mut sim);
+    assert_eq!(
+        session.timeline().undo_label.as_deref(),
+        Some("Undo edit at tick 100")
+    );
+    session.undo(&mut sim).unwrap();
+    assert!(edits(&session).is_empty());
+    assert_eq!(sim.hash(), before);
+    assert_eq!(session.current_branch(), ROOT);
+
+    // Redone after a rebuild, the branch resimulates on the new build.
+    let mut session = resume(&mut sim, session.export().unwrap());
+    resimulate_all(&mut session, &mut sim);
+    session.redo(&mut sim).unwrap();
+    assert!(session.timeline().resimulating);
+    resimulate_all(&mut session, &mut sim);
+    assert_eq!(session.timeline().current, 100);
+    assert_eq!(edits(&session).len(), 1);
+    assert!(session.is_pending());
+
+    // A history of a later version is refused by name, not misread as 2a bytes.
+    export.undo = vec![4];
+    assert!(matches!(
+        Session::resume(
+            &mut sim,
+            export.scene,
+            export.saved_scene,
+            InputLog::decode(&export.inputs).unwrap(),
+            EditLog::decode(&export.edits).unwrap(),
+            &export.undo,
+            &export.branches,
+            export.hashes,
+        ),
+        Err(SessionError::UndoVersion { version: 4 })
+    ));
+}
+
+#[test]
+fn an_entry_whose_branch_was_deleted_never_blocks_the_history() {
+    let (mut sim, mut session) = started(400);
+    play(&mut session, &mut sim, 300);
+    edit_at(&mut session, &mut sim, 100, 1);
+    session.switch_branch(&mut sim, ROOT).unwrap();
+    edit_at(&mut session, &mut sim, 200, 2);
+    session.undo(&mut sim).unwrap();
+    assert!(session.timeline().can_redo);
+    // Deleting a branch drops its entries and the redo stack: the undo of the edit
+    // that forked it goes, the one of the other fork stays.
+    session.delete_branch(&mut sim, BranchId(1)).unwrap();
+    let timeline = session.timeline();
+    assert!(!timeline.can_redo);
+    assert_eq!(timeline.undo_label, None);
+    assert!(matches!(
+        session.undo(&mut sim),
+        Err(SessionError::NothingToUndo)
+    ));
+
+    let (mut sim, mut session) = started(400);
+    play(&mut session, &mut sim, 300);
+    edit_at(&mut session, &mut sim, 100, 1);
+    session.switch_branch(&mut sim, ROOT).unwrap();
+    edit_at(&mut session, &mut sim, 200, 2);
+    session.delete_branch(&mut sim, BranchId(1)).unwrap();
+    session.undo(&mut sim).unwrap();
+    assert_eq!(branch_ids(&session), vec![ROOT]);
 }

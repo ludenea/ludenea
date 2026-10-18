@@ -5,4 +5,9 @@ import type { BranchInfo } from "./BranchInfo";
 /**
  * What the timeline shows.
  */
-export type Timeline = { head: number, simulated: number, current: number, checkpoints: Array<number>, edit_ticks: Array<number>, can_undo: boolean, can_redo: boolean, scene_dirty: boolean, resimulating: boolean, branch: BranchId, branches: Array<BranchInfo>, };
+export type Timeline = { head: number, simulated: number, current: number, checkpoints: Array<number>, edit_ticks: Array<number>, can_undo: boolean, can_redo: boolean, 
+/**
+ * What undo does, naming the branches it removes, such as
+ * `Undo edit at tick 300 (removes Branch 3, Branch 4)`.
+ */
+undo_label: string | null, redo_label: string | null, scene_dirty: boolean, resimulating: boolean, branch: BranchId, branches: Array<BranchInfo>, };

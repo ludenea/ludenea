@@ -18,6 +18,8 @@ const timeline = (patch: Partial<Timeline> = {}): Timeline => ({
   edit_ticks: [20],
   can_undo: true,
   can_redo: false,
+  undo_label: "Undo edit at tick 20",
+  redo_label: null,
   scene_dirty: false,
   resimulating: false,
   branch: 0,

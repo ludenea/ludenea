@@ -436,27 +436,15 @@ fn pinned_checkpoints_are_never_evicted() {
 }
 
 #[test]
-fn undo_of_an_edit_on_another_branch_is_refused_and_keeps_the_timeline() {
+fn undo_of_a_fork_from_another_branch_keeps_the_parent_timeline() {
     let (mut sim, mut session) = played(400, 300);
     edit_at(&mut session, &mut sim, 150, 1_000);
     session.switch_branch(&mut sim, ROOT).unwrap();
     let before = hashes(&session);
-    assert!(matches!(
-        session.undo(&mut sim),
-        Err(SessionError::NotOnBranch { tick: 150 })
-    ));
-    assert_eq!(session.timeline().head, 399);
-    assert_eq!(hashes(&session), before);
-    assert!(session.timeline().can_undo, "the entry stays");
-
-    session.switch_branch(&mut sim, BranchId(1)).unwrap();
-    assert_eq!(edits(&session).len(), 1);
-    session.delete_branch(&mut sim, BranchId(1)).unwrap();
-    assert!(matches!(
-        session.undo(&mut sim),
-        Err(SessionError::NotOnBranch { .. })
-    ));
-    assert_eq!(session.timeline().head, 399);
+    session.undo(&mut sim).unwrap();
+    assert_eq!(session.branches().len(), 1);
+    let timeline = session.timeline();
+    assert_eq!((timeline.current, timeline.head), (150, 399));
     assert_eq!(hashes(&session), before);
 }
 

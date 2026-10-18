@@ -25,10 +25,10 @@ use ludenea_app::{
 use ludenea_ecs::{Entity, Snapshot, SnapshotError};
 use serde::{Deserialize, Serialize};
 
-use crate::branches::{BranchId, BranchInfo, BranchTree, BranchesError, Segment};
+use crate::branches::{BranchId, BranchInfo, BranchTree, BranchesError, Segment, StoredBranch};
 use crate::checkpoints::{CHECKPOINT_BUDGET, Checkpoints};
 use crate::subscriptions::Introspection;
-use crate::undo::{UndoEntry, UndoHistory};
+use crate::undo::{ForkCause, UNDO_VERSION, UndoEntry, UndoHistory};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
@@ -44,6 +44,8 @@ pub enum SessionError {
     NothingToRedo,
     #[error("the undo history cannot be decoded: {0}")]
     UndoDecode(#[from] postcard::Error),
+    #[error("the undo history has version {version}; this editor reads up to {UNDO_VERSION}")]
+    UndoVersion { version: u32 },
     #[error(transparent)]
     Edit(#[from] EditError),
     /// The message leaves the entity out: callers name it in their context.
@@ -61,7 +63,8 @@ pub enum SessionError {
     Snapshot(#[from] SnapshotError),
     #[error("there is no branch {}", .0.0)]
     NoSuchBranch(BranchId),
-    #[error("the edit to undo, at tick {tick}, was recorded on another branch; switch to it first")]
+    /// The entry is dropped from the history, so the next undo goes on.
+    #[error("the edit to undo, at tick {tick}, is no longer on its branch; it was dropped from the history")]
     NotOnBranch { tick: u64 },
     #[error("the root branch cannot be deleted")]
     RootBranch,
@@ -80,6 +83,10 @@ pub struct Timeline {
     pub edit_ticks: Vec<u64>,
     pub can_undo: bool,
     pub can_redo: bool,
+    /// What undo does, naming the branches it removes, such as
+    /// `Undo edit at tick 300 (removes Branch 3, Branch 4)`.
+    pub undo_label: Option<String>,
+    pub redo_label: Option<String>,
     pub scene_dirty: bool,
     pub resimulating: bool,
     pub branch: BranchId,
@@ -193,11 +200,12 @@ impl Session {
         branches: &[u8],
         expected: Vec<u64>,
     ) -> Result<Session, SessionError> {
-        let history = if undo.is_empty() {
+        let mut history = if undo.is_empty() {
             UndoHistory::default()
         } else {
             UndoHistory::decode(undo)?
         };
+        history.mark_removed_stale()?;
         sim.set_players(usize::from(inputs.players));
         let mut session = Session::start(sim, scene)?;
         if let Some(saved) = saved_scene {
@@ -239,7 +247,7 @@ impl Session {
     pub fn load_edits(&mut self, sim: &mut Simulation, log: EditLog) -> Result<(), SessionError> {
         self.edits = log;
         // Undo entries past tick 0 name edits of the replaced log.
-        self.history.discard_after(0);
+        self.history.keep_on_root(&[]);
         self.reset_future(sim)
     }
 
@@ -259,8 +267,13 @@ impl Session {
         let take_over = live.filter(|live| recorded.as_deref() != Some(*live));
         self.run_tick(sim, take_over.or(recorded.as_deref()))?;
         if let Some(live) = take_over {
+            let before = self.tree.current();
             self.fork_or_discard_after(tick);
             self.record_input(sim, tick, live.to_vec());
+            if self.tree.current() != before {
+                let input = live.to_vec();
+                self.record_entry(before, ForkCause::TakeOver { tick, input });
+            }
         } else if recorded.is_none()
             && tick >= self.head
             && let Some(defaults) = sim.encoded_default_inputs()
@@ -294,73 +307,250 @@ impl Session {
             tick: self.current,
             edit,
         };
+        let before = self.tree.current();
         let spawned = self.record_edit(sim, edit.clone())?;
-        self.history.record(UndoEntry::Run { edit });
+        self.record_entry(before, ForkCause::Edit(edit));
         Ok(spawned)
     }
 
-    /// Takes back the last edit. A scene edit reloads the scene before it and marks the
-    /// recorded future stale; a recorded edit is removed from the log, the future after its
-    /// tick is discarded, and the session moves to its tick.
+    /// Takes back the last edit, on any branch: it first switches to the entry's branch.
+    /// A scene edit reloads the scene before it and marks the recorded future stale. An
+    /// edit or take-over that forked a branch deletes it and its descendants and shows the
+    /// parent at its tick. Any other recorded edit is removed from its branch's log, the
+    /// branch's future after its tick is discarded along with the descendants forked at or
+    /// after it, which inherit it, and the session moves to its tick.
+    /// An entry whose edit or branch is gone (an edit dropped from a resumed history, a
+    /// branch deleted) is dropped with the error, so the history never gets stuck. An
+    /// entry on a stale branch switches to it and waits: undo again once resimulated.
     pub fn undo(&mut self, sim: &mut Simulation) -> Result<(), SessionError> {
         self.ensure_resimulated()?;
-        let entry = self
+        let mut entry = self
             .history
             .take_undo()
             .ok_or(SessionError::NothingToUndo)?;
-        match &entry {
+        let result = self.undo_entry(sim, &mut entry);
+        if !is_dropped(&result) {
+            self.history.undone(entry, result.is_ok());
+        }
+        self.show(sim, result?)
+    }
+
+    /// Applies the last undone entry again: a scene edit reloads the scene after it, a fork
+    /// brings back the branches it removed with the same identifiers and names and switches
+    /// to the forked one, and a recorded edit puts its branch back as it was before the
+    /// undo, with the descendants the undo removed. Play recorded on that branch since the
+    /// undo is replaced without warning.
+    pub fn redo(&mut self, sim: &mut Simulation) -> Result<(), SessionError> {
+        self.ensure_resimulated()?;
+        let mut entry = self
+            .history
+            .take_redo()
+            .ok_or(SessionError::NothingToRedo)?;
+        let result = self.redo_entry(sim, &mut entry);
+        if !is_dropped(&result) {
+            self.history.redone(entry, result.is_ok());
+        }
+        self.show(sim, result?)
+    }
+
+    /// Undoes `entry`, leaving the world to `show`: returns the branch and tick to show.
+    fn undo_entry(
+        &mut self,
+        sim: &mut Simulation,
+        entry: &mut UndoEntry,
+    ) -> Result<Option<(BranchId, u64)>, SessionError> {
+        let players = self.inputs.players;
+        match entry {
             UndoEntry::Scene { before, .. } => {
-                let result = self.load_scene_version(sim, before.clone());
-                self.history.undone(entry, result.is_ok());
-                result
+                self.load_scene_version(sim, before.clone())?;
+                Ok(None)
             }
-            UndoEntry::Run { edit } if self.is_forking_edit(edit) => {
-                // The branch it created goes, and the parent is shown at its tick.
-                self.current = edit.tick;
-                let result = self.delete_branch(sim, self.tree.current()).map(drop);
-                self.history.undone(entry, result.is_ok());
-                result
+            UndoEntry::Fork {
+                branch,
+                cause,
+                name,
+                removed,
+            } => {
+                let forked = self
+                    .tree
+                    .get(*branch)
+                    .ok_or(SessionError::NoSuchBranch(*branch))?;
+                let parent = forked.parent.expect("a forked branch has a parent");
+                name.clone_from(&forked.name);
+                let subtree = self.tree.subtree(*branch);
+                if subtree.contains(&self.tree.current()) {
+                    self.switch_to(sim, parent, cause.tick())?;
+                }
+                *removed = StoredBranch::encode(&self.tree.take(&subtree, players));
+                Ok(Some((parent, cause.tick())))
             }
-            UndoEntry::Run { edit } => {
+            UndoEntry::Run {
+                branch,
+                edit,
+                removed,
+            } => {
                 let tick = edit.tick;
-                // An edit recorded on another branch is refused, leaving the timeline and
-                // the entry as they are: discarding here would cut this branch's future.
-                let Some(index) = self.edits.edits.iter().rposition(|e| e == edit) else {
-                    self.history.undone(entry, false);
-                    return Err(SessionError::NotOnBranch { tick });
-                };
+                self.switch_to(sim, *branch, tick)?;
+                self.ensure_resimulated()?;
+                let index = self
+                    .own_edit_index(edit)
+                    .ok_or(SessionError::NotOnBranch { tick })?;
+                let segment = self.current_segment();
+                let mut stored = vec![self.tree.store_current(&segment, players)];
+                let dependents = self.tree.forked_at_or_after(*branch, tick);
+                stored.extend(self.tree.take(&dependents, players));
+                *removed = StoredBranch::encode(&stored);
                 self.remove_edit(index);
                 self.discard_after(tick);
-                self.history.undone(entry, true);
-                // The ticks up to the edit ran before with these same inputs and edits.
-                self.current = tick;
-                self.replay_to(sim, tick)?;
-                if self.edits.at(tick).is_empty() {
-                    self.keep_checkpoint_if_sparse(sim);
-                }
-                Ok(())
+                Ok(Some((*branch, tick)))
             }
         }
     }
 
-    /// Applies the last undone edit again: a scene edit reloads the scene after it, a
-    /// recorded edit is applied and recorded again at its tick. Redoing a recorded edit
-    /// discards the future after its tick, so play recorded since the undo is replaced
-    /// without warning.
-    pub fn redo(&mut self, sim: &mut Simulation) -> Result<(), SessionError> {
-        self.ensure_resimulated()?;
-        let entry = self
-            .history
-            .take_redo()
-            .ok_or(SessionError::NothingToRedo)?;
-        let result = match &entry {
-            UndoEntry::Scene { after, .. } => self.load_scene_version(sim, after.clone()),
-            UndoEntry::Run { edit } => self
-                .seek(sim, edit.tick)
-                .and_then(|()| self.record_edit(sim, edit.clone()).map(drop)),
+    /// Redoes `entry`, leaving the world to `show`: returns the branch and tick to show.
+    fn redo_entry(
+        &mut self,
+        sim: &mut Simulation,
+        entry: &mut UndoEntry,
+    ) -> Result<Option<(BranchId, u64)>, SessionError> {
+        match entry {
+            UndoEntry::Scene { after, .. } => {
+                self.load_scene_version(sim, after.clone())?;
+                Ok(None)
+            }
+            UndoEntry::Fork {
+                branch,
+                cause,
+                removed,
+                ..
+            } => {
+                let stored = StoredBranch::decode(removed)?;
+                self.tree.put_back(stored)?;
+                removed.clear();
+                Ok(Some((*branch, cause.tick())))
+            }
+            UndoEntry::Run {
+                branch,
+                edit,
+                removed,
+            } => {
+                let tick = edit.tick;
+                self.switch_to(sim, *branch, tick)?;
+                self.ensure_resimulated()?;
+                let mut stored = StoredBranch::decode(removed)?.into_iter();
+                match stored.next() {
+                    Some(own) => {
+                        let (segment, stale) = own.into_segment()?;
+                        self.tree.put_back(stored.collect())?;
+                        let defaults = sim.encoded_default_inputs();
+                        self.compose(&segment, defaults.as_deref());
+                        if stale {
+                            let (_, scene_state) = self.checkpoints.nearest_at_or_before(0);
+                            sim.restore(scene_state)
+                                .expect("a checkpoint restores into the world it was taken from");
+                            self.resimulate_from_scene(sim);
+                        }
+                    }
+                    // An entry of a history written before branches: as in 2a, within
+                    // the branch.
+                    None => {
+                        self.seek(sim, tick)?;
+                        sim.apply_edit(&edit.edit)?;
+                        self.discard_after(tick);
+                        self.edits.edits.push(edit.clone());
+                        self.update_head();
+                    }
+                }
+                removed.clear();
+                Ok(Some((*branch, tick)))
+            }
+        }
+    }
+
+    /// Switches to `branch` and moves to `tick` once undo or redo changed the logs; a
+    /// stale branch moves there once resimulated.
+    fn show(
+        &mut self,
+        sim: &mut Simulation,
+        at: Option<(BranchId, u64)>,
+    ) -> Result<(), SessionError> {
+        let Some((branch, tick)) = at else {
+            return Ok(());
         };
-        self.history.redone(entry, result.is_ok());
-        result
+        self.switch_to(sim, branch, tick)?;
+        if self.resimulating.is_some() {
+            self.return_to = Some(tick);
+            return Ok(());
+        }
+        // The ticks up to `tick` ran before with these same inputs and edits.
+        self.current = tick;
+        self.replay_to(sim, tick)?;
+        if self.edits.at(tick).is_empty() {
+            self.keep_checkpoint_if_sparse(sim);
+        }
+        Ok(())
+    }
+
+    /// Records the undo entry of an edit or take-over made on `before`: a fork when it
+    /// forked a branch, otherwise a plain recorded edit. A take-over that extends the
+    /// branch records nothing, as in 2a.
+    fn record_entry(&mut self, before: BranchId, cause: ForkCause) {
+        let branch = self.tree.current();
+        let entry = match cause {
+            ForkCause::Edit(edit) if branch == before => UndoEntry::Run {
+                branch,
+                edit,
+                removed: Vec::new(),
+            },
+            cause => UndoEntry::Fork {
+                branch,
+                cause,
+                name: self.tree.current_branch().name.clone(),
+                removed: Vec::new(),
+            },
+        };
+        self.history.record(entry);
+    }
+
+    /// The index of `edit` in the current branch's own part of the run.
+    fn own_edit_index(&self, edit: &TimedEdit) -> Option<usize> {
+        let (fork_tick, fork_edits) = self.tree.current_branch().fork();
+        let first = self.edits.edits.partition_point(|e| e.tick < fork_tick) + fork_edits;
+        let own = self.edits.edits.get(first..)?;
+        Some(first + own.iter().rposition(|e| e == edit)?)
+    }
+
+    fn undo_label(&self) -> Option<String> {
+        let (what, removes) = match self.history.next_undo()? {
+            UndoEntry::Scene { .. } => return Some("Undo scene edit".to_string()),
+            UndoEntry::Run { branch, edit, .. } => (
+                format!("edit at tick {}", edit.tick),
+                self.tree.forked_at_or_after(*branch, edit.tick),
+            ),
+            UndoEntry::Fork { branch, cause, .. } => {
+                let removes = match self.tree.get(*branch) {
+                    Some(_) => self.tree.subtree(*branch),
+                    None => Vec::new(),
+                };
+                (cause.describe(), removes)
+            }
+        };
+        let names = self.tree.names(&removes).join(", ");
+        Some(if names.is_empty() {
+            format!("Undo {what}")
+        } else {
+            format!("Undo {what} (removes {names})")
+        })
+    }
+
+    fn redo_label(&self) -> Option<String> {
+        Some(match self.history.next_redo()? {
+            UndoEntry::Scene { .. } => "Redo scene edit".to_string(),
+            UndoEntry::Run { edit, .. } => format!("Redo edit at tick {}", edit.tick),
+            UndoEntry::Fork { cause, name, .. } => {
+                format!("Redo {} (restores {name})", cause.describe())
+            }
+        })
     }
 
     /// Copies the current value of `component` on `entity` into the scene. Like every scene
@@ -501,6 +691,7 @@ impl Session {
             let first = self.edits.edits.partition_point(|edit| edit.tick < tick);
             let end = self.edits.edits.partition_point(|edit| edit.tick <= tick);
             let dropped: Vec<TimedEdit> = self.edits.edits.drain(first..end).collect();
+            let branch = self.tree.current();
             // ponytail: at the fork tick the branch stops inheriting the dropped edits, but
             // the restored state and its hash sit in the prefix, which switching away and
             // back recomposes from the parent, undoing the restore (before the fork tick,
@@ -508,7 +699,7 @@ impl Session {
             // it must survive switching.
             self.tree.edits_dropped_at(tick, dropped.len());
             for edit in &dropped {
-                self.history.forget(edit);
+                self.history.forget(branch, edit);
             }
             self.update_head();
             self.hashes[kept - 1] = restored;
@@ -635,6 +826,8 @@ impl Session {
             edit_ticks,
             can_undo: self.history.can_undo(),
             can_redo: self.history.can_redo(),
+            undo_label: self.undo_label(),
+            redo_label: self.redo_label(),
             scene_dirty: self.scene_dirty,
             resimulating: self.resimulating.is_some(),
             branch: self.tree.current(),
@@ -657,13 +850,22 @@ impl Session {
         sim: &mut Simulation,
         id: BranchId,
     ) -> Result<(), SessionError> {
+        self.switch_to(sim, id, self.current)
+    }
+
+    /// `switch_branch`, at `tick` instead of the current tick.
+    fn switch_to(
+        &mut self,
+        sim: &mut Simulation,
+        id: BranchId,
+        tick: u64,
+    ) -> Result<(), SessionError> {
         if self.tree.get(id).is_none() {
             return Err(SessionError::NoSuchBranch(id));
         }
         if id == self.tree.current() {
             return Ok(());
         }
-        let tick = self.current;
         let defaults = sim.encoded_default_inputs();
         let stale = self
             .tree
@@ -702,7 +904,9 @@ impl Session {
     }
 
     /// Deletes `id` and its descendants, and returns the descendants. Deleting the current
-    /// branch, or one of its ancestors, switches to the parent of `id` first.
+    /// branch, or one of its ancestors, switches to the parent of `id` first. The undo
+    /// entries of the deleted branches go, and so does the redo stack: deleting is not
+    /// undoable, and the history never waits on a branch that is gone.
     pub fn delete_branch(
         &mut self,
         sim: &mut Simulation,
@@ -715,6 +919,7 @@ impl Session {
             self.switch_branch(sim, parent)?;
         }
         self.tree.remove(&removed);
+        self.history.forget_branches(&removed);
         removed.retain(|&branch| branch != id);
         Ok(removed)
     }
@@ -774,14 +979,6 @@ impl Session {
             self.tree.edits_dropped_at(removed.tick, 1);
         }
         removed
-    }
-
-    /// Whether `edit` created the current branch: its first own edit at its fork tick.
-    fn is_forking_edit(&self, edit: &TimedEdit) -> bool {
-        let branch = self.tree.current_branch();
-        branch.parent.is_some()
-            && edit.tick == branch.fork_tick
-            && self.edits.at(edit.tick).get(branch.fork_edits) == Some(edit)
     }
 
     /// Before recording at `tick`: forks a branch when the current one has recorded ticks
@@ -932,7 +1129,7 @@ impl Session {
                 Ok(_) => index += 1,
                 Err(error) => {
                     let dropped = self.remove_edit(index);
-                    self.history.forget(&dropped);
+                    self.history.forget(self.tree.current(), &dropped);
                     self.reports.push_back(Resimulation::EditDropped {
                         tick,
                         reason: error.to_string(),
@@ -965,7 +1162,6 @@ impl Session {
         self.edits.edits.retain(|edit| edit.tick <= tick);
         self.hashes.truncate(kept);
         self.checkpoints.truncate_after(tick);
-        self.history.discard_after(tick);
         self.update_head();
         // A live take-over below the resimulated point discards the whole stale future.
         if self.resimulating.is_some_and(|up_to| up_to > tick) {
@@ -1008,6 +1204,8 @@ impl Session {
     /// After new logs, which define a new linear run: only tick 0 stays simulated, the
     /// session is at tick 0, and recorded edits are checked on this state by resimulation.
     fn reset_future(&mut self, sim: &mut Simulation) -> Result<(), SessionError> {
+        self.history
+            .keep_on_root(&self.tree.path(self.tree.current()));
         self.tree = BranchTree::default();
         self.hashes.truncate(1);
         self.update_head();
@@ -1092,4 +1290,12 @@ impl Session {
         // Without a stale future there is nothing to return through.
         self.return_to = (stale && was_at > 0).then_some(was_at);
     }
+}
+
+/// Whether an undo or redo failed for good: its entry is dropped.
+fn is_dropped<T>(result: &Result<T, SessionError>) -> bool {
+    matches!(
+        result,
+        Err(SessionError::NotOnBranch { .. } | SessionError::NoSuchBranch(_))
+    )
 }

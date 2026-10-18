@@ -366,6 +366,8 @@ fn every_command_and_reply_round_trips_through_json() {
         edit_ticks: vec![2],
         can_undo: true,
         can_redo: false,
+        undo_label: Some("Undo edit at tick 2".to_string()),
+        redo_label: None,
         scene_dirty: true,
         resimulating: false,
         branch: BranchId(1),

@@ -768,6 +768,7 @@ fn session_error(error: &SessionError) -> ProtocolError {
         SessionError::NothingToUndo => ErrorCode::NothingToUndo,
         SessionError::NothingToRedo => ErrorCode::NothingToRedo,
         SessionError::UndoDecode(_)
+        | SessionError::UndoVersion { .. }
         | SessionError::BranchesDecode(_)
         | SessionError::NoSuchBranch(_)
         | SessionError::RootBranch

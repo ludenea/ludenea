@@ -226,6 +226,63 @@ impl BranchTree {
         }
     }
 
+    /// The children of `id` forked at or after `tick`, and their descendants: the
+    /// branches that inherit an edit `id` records at `tick`.
+    pub fn forked_at_or_after(&self, id: BranchId, tick: u64) -> Vec<BranchId> {
+        self.branches
+            .keys()
+            .copied()
+            .filter(|&branch| {
+                let path = self.path(branch);
+                let below = path.iter().position(|&b| b == id).map(|at| at + 1);
+                below
+                    .and_then(|at| path.get(at))
+                    .is_some_and(|child| self.branches[child].fork_tick >= tick)
+            })
+            .collect()
+    }
+
+    pub fn names(&self, ids: &[BranchId]) -> Vec<&str> {
+        ids.iter()
+            .filter_map(|id| Some(self.branches.get(id)?.name.as_str()))
+            .collect()
+    }
+
+    /// The current branch as `segment` would store it.
+    pub fn store_current(&self, segment: &Segment, players: u16) -> StoredBranch {
+        StoredBranch::new(
+            self.current,
+            self.current_branch(),
+            Some(segment),
+            players,
+        )
+    }
+
+    /// Takes the stored branches `ids` out of the tree.
+    pub fn take(&mut self, ids: &[BranchId], players: u16) -> Vec<StoredBranch> {
+        ids.iter()
+            .map(|&id| {
+                let branch = self.branches.remove(&id).expect("a branch of the tree");
+                assert!(branch.segment.is_some(), "only stored branches are taken");
+                StoredBranch::new(id, &branch, branch.segment.as_ref(), players)
+            })
+            .collect()
+    }
+
+    /// Puts back branches `take` took, parents first.
+    pub fn put_back(&mut self, branches: Vec<StoredBranch>) -> Result<(), BranchesError> {
+        for stored in branches {
+            let id = stored.id;
+            let branch = stored.into_branch(true)?;
+            let parent = branch.parent.ok_or(BranchesError::Tree)?;
+            if !self.branches.contains_key(&parent) || self.branches.contains_key(&id) {
+                return Err(BranchesError::Tree);
+            }
+            self.branches.insert(id, branch);
+        }
+        Ok(())
+    }
+
     /// After `count` edits were removed at `tick` from the front of that tick's edits in
     /// the current run: the current branch inherits that many fewer at its fork tick.
     pub fn edits_dropped_at(&mut self, tick: u64, count: usize) {
@@ -314,28 +371,7 @@ impl BranchTree {
         let branches = self
             .branches
             .iter()
-            .map(|(&id, branch)| {
-                let segment = branch.segment.as_ref();
-                let mut inputs = InputLog::new(players);
-                let mut edits = EditLog::new();
-                let mut hashes = Vec::new();
-                if let Some(segment) = segment {
-                    inputs.ticks.clone_from(&segment.inputs);
-                    edits.edits.clone_from(&segment.edits);
-                    hashes.clone_from(&segment.hashes);
-                }
-                StoredBranch {
-                    id,
-                    name: branch.name.clone(),
-                    parent: branch.parent,
-                    fork_tick: branch.fork_tick,
-                    fork_edits: branch.fork_edits as u64,
-                    stale: branch.stale,
-                    inputs: inputs.encode(),
-                    edits: edits.encode(),
-                    hashes,
-                }
-            })
+            .map(|(&id, branch)| StoredBranch::new(id, branch, branch.segment.as_ref(), players))
             .collect();
         let stored = StoredTree {
             current: self.current,
@@ -350,28 +386,8 @@ impl BranchTree {
         let stored: StoredTree = postcard::from_bytes(bytes)?;
         let mut branches = BTreeMap::new();
         for branch in stored.branches {
-            let segment = (branch.id != stored.current)
-                .then(|| -> Result<Segment, BranchesError> {
-                    Ok(Segment {
-                        inputs: InputLog::decode(&branch.inputs)?.ticks,
-                        edits: EditLog::decode(&branch.edits)?.edits,
-                        hashes: branch.hashes,
-                        checkpoints: Checkpoints::empty(),
-                    })
-                })
-                .transpose()?;
-            let fork_edits = usize::try_from(branch.fork_edits).expect("edits fit in memory");
-            branches.insert(
-                branch.id,
-                Branch {
-                    name: branch.name,
-                    parent: branch.parent,
-                    fork_tick: branch.fork_tick,
-                    fork_edits,
-                    stale: branch.stale,
-                    segment,
-                },
-            );
+            let id = branch.id;
+            branches.insert(id, branch.into_branch(id != stored.current)?);
         }
         // A parent is always older than its children, so the tree has no cycle.
         let linked = branches.iter().all(|(&id, branch)| match branch.parent {
@@ -409,7 +425,7 @@ struct StoredTree {
 }
 
 #[derive(Serialize, Deserialize)]
-struct StoredBranch {
+pub(crate) struct StoredBranch {
     id: BranchId,
     name: String,
     parent: Option<BranchId>,
@@ -421,4 +437,73 @@ struct StoredBranch {
     /// An encoded edit log, likewise.
     edits: Vec<u8>,
     hashes: Vec<u64>,
+}
+
+impl StoredBranch {
+    fn new(id: BranchId, branch: &Branch, segment: Option<&Segment>, players: u16) -> Self {
+        let mut inputs = InputLog::new(players);
+        let mut edits = EditLog::new();
+        let mut hashes = Vec::new();
+        if let Some(segment) = segment {
+            inputs.ticks.clone_from(&segment.inputs);
+            edits.edits.clone_from(&segment.edits);
+            hashes.clone_from(&segment.hashes);
+        }
+        StoredBranch {
+            id,
+            name: branch.name.clone(),
+            parent: branch.parent,
+            fork_tick: branch.fork_tick,
+            fork_edits: branch.fork_edits as u64,
+            stale: branch.stale,
+            inputs: inputs.encode(),
+            edits: edits.encode(),
+            hashes,
+        }
+    }
+
+    pub fn encode(branches: &[StoredBranch]) -> Vec<u8> {
+        postcard::to_allocvec(branches).expect("branches always encode")
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Vec<StoredBranch>, BranchesError> {
+        Ok(postcard::from_bytes(bytes)?)
+    }
+
+    /// Its segment, and whether it is stale.
+    pub fn into_segment(self) -> Result<(Segment, bool), BranchesError> {
+        let branch = self.into_branch(true)?;
+        Ok((branch.segment.expect("a stored segment"), branch.stale))
+    }
+
+    /// Marks encoded branches stale, after a rebuild: their hashes are of the old build.
+    pub fn mark_stale(bytes: &[u8]) -> Result<Vec<u8>, BranchesError> {
+        let mut branches = StoredBranch::decode(bytes)?;
+        for branch in &mut branches {
+            branch.stale = true;
+        }
+        Ok(StoredBranch::encode(&branches))
+    }
+
+    /// The branch, with its segment when `stored` (not the current branch).
+    fn into_branch(self, stored: bool) -> Result<Branch, BranchesError> {
+        let segment = stored
+            .then(|| -> Result<Segment, BranchesError> {
+                Ok(Segment {
+                    inputs: InputLog::decode(&self.inputs)?.ticks,
+                    edits: EditLog::decode(&self.edits)?.edits,
+                    hashes: self.hashes,
+                    checkpoints: Checkpoints::empty(),
+                })
+            })
+            .transpose()?;
+        Ok(Branch {
+            name: self.name,
+            parent: self.parent,
+            fork_tick: self.fork_tick,
+            fork_edits: usize::try_from(self.fork_edits).expect("edits fit in memory"),
+            stale: self.stale,
+            segment,
+        })
+    }
 }
