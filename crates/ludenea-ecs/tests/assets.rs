@@ -247,3 +247,96 @@ fn default_asset_ron_requires_a_registered_default() {
     assert_eq!(names, sorted);
     assert_eq!(names.len(), 2);
 }
+
+#[test]
+fn insert_asset_of_unknown_type_is_refused() {
+    let mut world = with_assets();
+    assert!(matches!(
+        world.insert_asset(ID, "missing", &[]),
+        Err(EcsError::UnknownAsset(name)) if name == "missing"
+    ));
+    assert!(world.asset_ids().is_empty());
+}
+
+#[test]
+fn insert_asset_replaces_the_same_identifier() {
+    let mut world = with_assets();
+    world
+        .insert_asset_ron(ID, "test::Stats", "(damage: 1, cooldown: 1)")
+        .unwrap();
+    world
+        .insert_asset_ron(ID, "test::Stats", "(damage: 5, cooldown: 1)")
+        .unwrap();
+    assert_eq!(world.asset_ids(), vec![ID]);
+    assert_eq!(
+        world.asset_ron(ID).unwrap(),
+        ron::to_string(&Stats {
+            damage: 5,
+            cooldown: 1
+        })
+        .unwrap()
+    );
+}
+
+fn stats_snapshot() -> Snapshot {
+    let mut source = with_assets();
+    source
+        .insert_asset_ron(ID, "test::Stats", "(damage: 4, cooldown: 2)")
+        .unwrap();
+    source.snapshot()
+}
+
+#[test]
+fn restore_refuses_an_unregistered_asset_type_and_keeps_the_world() {
+    let mut target = world();
+    let before = target.hash_tree();
+    let error = target.restore(&stats_snapshot()).unwrap_err();
+    assert!(
+        matches!(&error, SnapshotError::Decode { name, reason }
+            if name == &format!("asset {ID}") && reason.contains("test::Stats")),
+        "{error}"
+    );
+    assert_eq!(target.hash_tree(), before);
+}
+
+#[test]
+fn restore_refuses_unsorted_or_duplicate_asset_identifiers() {
+    let sorted = stats_snapshot();
+    let (_, type_name, bytes) = sorted.assets[0].clone();
+    for ids in [[ID, ID], [AssetId(8), ID]] {
+        let mut snapshot = sorted.clone();
+        snapshot.assets = ids
+            .iter()
+            .map(|&id| (id, type_name.clone(), bytes.clone()))
+            .collect();
+        let mut target = with_assets();
+        let error = target.restore(&snapshot).unwrap_err();
+        assert!(
+            matches!(&error, SnapshotError::Decode { reason, .. } if reason.contains("ascending")),
+            "{error}"
+        );
+        assert!(target.asset_ids().is_empty());
+    }
+}
+
+#[test]
+fn handle_field_appears_in_the_component_schema() {
+    #[derive(Component, Serialize, Deserialize)]
+    #[component(name = "test::Armed")]
+    struct Armed {
+        stats: Handle<Stats>,
+    }
+
+    let mut world = World::new();
+    world.register_component::<Armed>().unwrap();
+    let (_, schema) = world.component_schemas().remove(0);
+    let TypeSchema::Struct { fields, .. } = schema else {
+        panic!("expected a struct, got {schema:?}");
+    };
+    assert_eq!(
+        fields[0].schema,
+        TypeSchema::Handle {
+            asset: "test::Stats".to_string()
+        }
+    );
+}

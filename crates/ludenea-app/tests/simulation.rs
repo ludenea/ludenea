@@ -172,3 +172,25 @@ fn simulation_is_send() {
     fn assert_send<T: Send>() {}
     assert_send::<Simulation>();
 }
+
+#[test]
+fn app_registers_asset_types_and_reports_name_clashes_at_build() {
+    #[derive(ludenea_ecs::Asset, Serialize, Deserialize, Default)]
+    #[asset(name = "test::Stats")]
+    struct Stats(u32);
+
+    #[derive(ludenea_ecs::Asset, Serialize, Deserialize)]
+    #[asset(name = "test::Stats")]
+    struct Clash(u32);
+
+    let mut app = App::new();
+    app.asset_with_default::<Stats>();
+    let simulation = app.build().unwrap();
+    let world = simulation.world();
+    assert_eq!(world.default_asset_ron("test::Stats").unwrap(), "(0)");
+    assert!(world.asset_codec("ludenea::Prefab").is_some());
+
+    let mut app = App::new();
+    app.asset::<Stats>().asset::<Clash>();
+    assert!(matches!(app.build(), Err(ludenea_app::AppError::Ecs(_))));
+}

@@ -155,6 +155,11 @@ impl World {
         }
         let mut assets = Vec::with_capacity(snapshot.assets.len());
         for (id, type_name, bytes) in &snapshot.assets {
+            if assets.last().is_some_and(|(last, _)| last >= id) {
+                return Err(decode_error(&format!("asset {id}"))(
+                    "asset identifiers are not in strictly ascending order".to_string(),
+                ));
+            }
             let asset = self
                 .decode_asset(*id, type_name, bytes)
                 .map_err(|error| decode_error(&format!("asset {id}"))(error.to_string()))?;
