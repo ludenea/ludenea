@@ -233,6 +233,11 @@ pub(crate) fn parse_scene(ron: &str) -> Result<ParsedScene, SceneError> {
 fn parse_resolved(ron: &str) -> Result<ParsedScene, SceneError> {
     let file: ResolvedV2 =
         ron::from_str(ron).map_err(|error| SceneError::Parse(error.to_string()))?;
+    if file.entities.iter().any(|entity| entity.address.is_empty()) {
+        return Err(SceneError::Parse(
+            "an entity has an empty address; give it at least its local identifier".to_string(),
+        ));
+    }
     let mut seen = BTreeSet::new();
     if let Some(entity) = file.entities.iter().find(|e| !seen.insert(&e.address)) {
         return Err(SceneError::Parse(format!(

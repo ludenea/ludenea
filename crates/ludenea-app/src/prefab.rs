@@ -489,7 +489,7 @@ impl<'a> Parser<'a> {
                             break;
                         }
                     } else {
-                        self.at += 1;
+                        self.at += self.rest().chars().next().map_or(1, char::len_utf8);
                     }
                 }
             } else {
@@ -702,6 +702,10 @@ mod tests {
         assert!(
             set_at_ron_path("(r#\"a)\"#, 2)", &[PathSegment::Index { index: 1 }], "3")
                 .is_some_and(|text| text == "(r#\"a)\"#, 3)")
+        );
+        assert!(
+            set_at_ron_path("(x: 1.0 /* café */, y: 2.0)", &[field("y")], "4.0")
+                .is_some_and(|text| text == "(x: 1.0 /* café */, y: 4.0)")
         );
         assert!(
             set_at_ron_path("((5))", &[PathSegment::Index { index: 0 }], "6")

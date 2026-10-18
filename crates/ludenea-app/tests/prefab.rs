@@ -457,3 +457,14 @@ fn assets_inside_prefabs_are_reached() {
         .unwrap();
     assert_eq!(simulation.world().asset_ids(), [AssetId(A), AssetId(C)]);
 }
+
+#[test]
+fn resolved_scene_with_an_empty_address_is_refused() {
+    let mut simulation = simulation();
+    let text = format!(
+        "Scene(version: 2, next_id: 1, resources: {{}}, entities: [(address: [], components: {{{}}})])",
+        tag(1)
+    );
+    let error = simulation.load_scene(&text).unwrap_err();
+    assert!(matches!(error, SceneError::Parse(_)), "{error:?}");
+}
