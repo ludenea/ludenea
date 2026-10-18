@@ -4,8 +4,9 @@ const port = 4310;
 
 export default defineConfig({
   testDir: ".",
-  // The golden check runs 10,000 ticks of a release build in the worker.
-  timeout: 10 * 60 * 1000,
+  // The golden check runs 10,000 ticks of a release build in the worker, and the first spec
+  // waits for the first build (`FIRST_BUILD_MS` in project.ts).
+  timeout: (process.env.CI ? 20 : 10) * 60 * 1000,
   // The specs share one cargo target directory, and the performance spec measures frame times:
   // one at a time.
   workers: 1,

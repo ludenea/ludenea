@@ -57,8 +57,8 @@ export function collectErrors(page: Page): string[] {
   return errors;
 }
 
-/** The first build of the engine for the browser takes minutes. */
-export const FIRST_BUILD_MS = 9 * 60 * 1000;
+/** The first build of the engine for the browser takes minutes, more on a cold CI runner. */
+export const FIRST_BUILD_MS = (process.env.CI ? 18 : 9) * 60 * 1000;
 
 /** Opens the scene file `name` (in `scenes/`) from the asset browser. */
 export async function openScene(page: Page, name: string): Promise<void> {
