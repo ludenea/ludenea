@@ -1,5 +1,5 @@
 import { copyFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { expect, test } from "@playwright/test";
 import { collectErrors, openScene, repository, serveProject, timeline, waitForGame, type ServedProject } from "./project";
 
@@ -11,8 +11,8 @@ declare global {
   }
 }
 
-// Written by `cargo run -p boxes --bin editor-bench`.
-const BENCH_SCENE = join(repository, "target/editor-bench.scene.ron");
+// Written by `cargo run -p boxes --bin editor-bench` (from the repository root).
+const BENCH_SCENE = join(resolve(repository, process.env.CARGO_TARGET_DIR ?? "target"), "editor-bench.scene.ron");
 const PLAY_MS = 5000;
 // Assertions hold on the reference machine (an Apple M-series); elsewhere the numbers are only reported.
 const strict = process.env.PERF_STRICT === "1";

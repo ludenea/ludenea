@@ -10,6 +10,7 @@ use std::error::Error;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
+use cargo_metadata::MetadataCommand;
 use wasm_bindgen_cli_support::Bindgen;
 
 const USAGE: &str =
@@ -74,14 +75,28 @@ fn build(package: &str, command: &[&str]) -> Result<PathBuf, Box<dyn Error>> {
     if !status.success() {
         return Err(format!("building {package} for {TARGET} failed").into());
     }
-    Ok(target_dir()
+    Ok(target_dir()?
         .join(TARGET)
         .join("release")
         .join(format!("{}.wasm", package.replace('-', "_"))))
 }
 
-fn target_dir() -> PathBuf {
-    std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target"))
+/// Where cargo puts the workspace's builds, as configured (`CARGO_TARGET_DIR`,
+/// `build.target-dir`, or the default).
+fn target_dir() -> Result<PathBuf, Box<dyn Error>> {
+    let metadata = MetadataCommand::new()
+        .manifest_path(concat!(env!("CARGO_MANIFEST_DIR"), "/../Cargo.toml"))
+        .no_deps()
+        .exec()?;
+    Ok(metadata.target_directory.into_std_path_buf())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn target_dir_is_where_cargo_builds() {
+        let this_test = std::env::current_exe().unwrap().canonicalize().unwrap();
+        let target = super::target_dir().unwrap().canonicalize().unwrap();
+        assert!(this_test.starts_with(&target), "{}", target.display());
+    }
 }

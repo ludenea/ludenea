@@ -1,10 +1,11 @@
-//! Writes the editor's performance scene to `target/editor-bench.scene.ron`: the container of
+//! Writes the editor's performance scene to `target/editor-bench.scene.ron` (under
+//! `CARGO_TARGET_DIR` when it is set): the container of
 //! the reference scenario (4 walls) with 1,000 crates, plus 98,996 entities holding only a
 //! `Pose` (on a grid under the ground): 100,000 entities. Engine components and resources
 //! only, so the scene loads in a project made from the template.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use boxes::spawn_container;
 use ludenea::prelude::*;
@@ -33,12 +34,11 @@ fn main() {
         let entity = world.spawn();
         world.insert(entity, pose).expect("Pose is registered");
     }
-    let path = Path::new(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../target/editor-bench.scene.ron"
-    ));
-    fs::create_dir_all(path.parent().expect("a file has a parent"))
-        .expect("cannot create the target directory");
-    fs::write(path, simulation.save_scene()).expect("cannot write the scene");
+    let target = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target"));
+    let path = target.join("editor-bench.scene.ron");
+    fs::create_dir_all(&target).expect("cannot create the target directory");
+    fs::write(&path, simulation.save_scene()).expect("cannot write the scene");
     println!("wrote {}", path.display());
 }

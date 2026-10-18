@@ -5,4 +5,5 @@ edition.workspace = true
 publish = false
 
 [dependencies]
+cargo_metadata.workspace = true
 wasm-bindgen-cli-support.workspace = true
