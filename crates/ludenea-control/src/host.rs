@@ -1,6 +1,9 @@
+use ludenea_app::prefab;
+use ludenea_app::replay::Replay;
+use ludenea_app::trace::{Trace, compare_traces};
 use ludenea_app::{
-    App, AppError, AssetTexts, Edit, EditError, EditLog, InputLog, RawInput, SimError, Simulation,
-    ValueKind,
+    App, AppError, AssetTexts, Edit, EditError, EditLog, InputLog, RawInput, SceneError, SimError,
+    Simulation, ValueKind,
 };
 use std::collections::BTreeSet;
 
@@ -11,8 +14,8 @@ use crate::json::{from_wire, to_wire};
 use crate::pacer::Pacer;
 use crate::path::{Path, PathSegment, set_at_path};
 use crate::protocol::{
-    Bytes, Command, ConsoleLevel, EntityRow, ErrorCode, Event, FieldTarget, GameInfo, Hash64,
-    NamedSchema, PauseReason, ProtocolError, Reply, SyncPoint, SystemRow, Topic,
+    Bytes, Command, ComponentValue, ConsoleLevel, EntityRow, ErrorCode, Event, FieldTarget,
+    GameInfo, Hash64, NamedSchema, PauseReason, ProtocolError, Reply, SyncPoint, SystemRow, Topic,
 };
 use crate::session::{Document, Resimulation, Session, SessionError, SessionExport, Timeline};
 use crate::subscriptions::{INTROSPECTION_TICKS, Subscriptions, TickRecord};
@@ -204,14 +207,24 @@ impl Host {
                 Ok(Reply::Done)
             }
             Command::DiffSnapshots { a, b } => {
-                let (a, b) = (decode_snapshot(&a)?, decode_snapshot(&b)?);
+                let a = decode_snapshot(&a)?;
+                let b = match b {
+                    Some(b) => decode_snapshot(&b)?,
+                    None => sim.snapshot(),
+                };
                 let differences = sim
                     .world()
                     .diff_snapshots(&a, &b)
                     .map_err(|e| ProtocolError::new(ErrorCode::InvalidSnapshot, e))?;
-                Ok(Reply::Differences {
-                    lines: differences.iter().map(ToString::to_string).collect(),
-                })
+                Ok(Reply::Differences { differences })
+            }
+            Command::CompareTraces { a, b } => {
+                let a = decode_trace(&a)?.hashes;
+                let b = match b {
+                    Some(b) => decode_trace(&b)?.hashes,
+                    None => self.session.hashes().to_vec(),
+                };
+                Ok(Reply::TraceComparison(compare_traces(&a, &b)))
             }
             Command::QueryEntities {
                 filter,
@@ -459,6 +472,118 @@ impl Host {
                     branches: std::iter::once(branch).chain(descendants).collect(),
                 })
             }
+            Command::CreatePrefab { entities } => Ok(Reply::Text {
+                text: prefab::create_prefab(sim, &entities).map_err(scene_error)?,
+            }),
+            Command::PlaceInstance { prefab } => {
+                let instance = self
+                    .session
+                    .place_instance(sim, prefab)
+                    .map_err(|e| self.fail(e))?;
+                Ok(Reply::Placed { instance })
+            }
+            Command::ReplaceWithInstance {
+                entities,
+                prefab,
+                prefab_text,
+            } => {
+                let instance = self
+                    .session
+                    .replace_with_instance(sim, &entities, prefab, prefab_text)
+                    .map_err(|e| self.fail(e))?;
+                Ok(Reply::Placed { instance })
+            }
+            Command::ApplyOverride {
+                instance,
+                entity,
+                component,
+                path,
+                value,
+            } => {
+                let value = match value {
+                    ComponentValue::Ron { text } => text,
+                    ComponentValue::Json { value } => {
+                        let address = [&instance[..], &entity[..]].concat();
+                        self.override_ron(&address, &component, &path, Some(value))?
+                    }
+                };
+                self.session
+                    .set_override(
+                        &mut self.simulation,
+                        &instance,
+                        &entity,
+                        &component,
+                        &path,
+                        &value,
+                    )
+                    .map_err(|e| self.fail(e))?;
+                Ok(Reply::Done)
+            }
+            Command::RevertOverride {
+                instance,
+                entity,
+                component,
+                path,
+            } => {
+                self.session
+                    .revert_override(&mut self.simulation, &instance, &entity, &component, &path)
+                    .map_err(|e| self.fail(e))?;
+                Ok(Reply::Done)
+            }
+            Command::ApplyToPrefab {
+                instance,
+                entity,
+                component,
+                path,
+            } => {
+                let address = [&instance[..], &entity[..]].concat();
+                let value = self.override_ron(&address, &component, &path, None)?;
+                let id = self
+                    .simulation
+                    .instances()
+                    .into_iter()
+                    .find(|info| info.address == instance)
+                    .map(|info| info.prefab)
+                    .ok_or_else(|| {
+                        ProtocolError::new(
+                            ErrorCode::NoSuchEntity,
+                            format!("there is no instance {instance:?}"),
+                        )
+                    })?;
+                let assets = self.session.assets();
+                let file = assets.get(&id).ok_or_else(|| missing_asset(id))?;
+                let text = prefab::apply_to_prefab(file, &entity, &component, &path, &value)
+                    .map_err(scene_error)?;
+                prefab::save_prefab_checked(id, &text, assets).map_err(scene_error)?;
+                Ok(Reply::Text { text })
+            }
+            Command::GetInstances => Ok(Reply::Instances {
+                instances: sim.instances(),
+            }),
+            Command::ExportReplay { branch } => {
+                let replay = self
+                    .session
+                    .export_replay(sim, branch)
+                    .map_err(|e| self.fail(e))?;
+                Ok(Reply::Replay {
+                    replay: Bytes(replay.encode()),
+                })
+            }
+            Command::LoadReplay { replay } => {
+                let replay = Replay::decode(&replay.0).map_err(|e| session_error(&e.into()))?;
+                let fingerprint_differs = replay.fingerprint != sim.schema_fingerprint();
+                match Session::from_replay(sim, &replay) {
+                    Ok(session) => self.load(session),
+                    Err(error) => {
+                        // The replay loaded in part: the session takes its world back.
+                        self.session.reload(sim).map_err(|e| self.fail(e))?;
+                        return Err(self.fail(error));
+                    }
+                }
+                Ok(Reply::ReplayLoaded {
+                    fingerprint_differs,
+                })
+            }
             Command::GetSchedule => {
                 let systems = sim.systems();
                 let micros = match &self.session.introspection {
@@ -558,6 +683,65 @@ impl Host {
                     ),
                 )
             })
+    }
+
+    /// The RON at `path` of `component` on the entity at load address `address`, as an
+    /// override value of that entity: its current value, with `value` at `path` when given.
+    fn override_ron(
+        &self,
+        address: &[u32],
+        component: &str,
+        path: &[PathSegment],
+        value: Option<JsonValue>,
+    ) -> Result<String, ProtocolError> {
+        let sim = &self.simulation;
+        let entity = sim
+            .entity_at_address(address)
+            .ok_or_else(|| edit_error(&EditError::NoSuchAddress(address.to_vec())))?;
+        let missing = || {
+            if sim.world().component_codec(component).is_none() {
+                edit_error(&EditError::UnknownComponent(component.to_string()))
+            } else {
+                session_error(&SessionError::MissingComponent {
+                    entity,
+                    component: component.to_string(),
+                })
+            }
+        };
+        let bytes = match value {
+            None => sim
+                .world()
+                .component_bytes(entity, component)
+                .ok_or_else(missing)?,
+            Some(value) => {
+                let current = sim
+                    .world()
+                    .component_json(entity, component)
+                    .ok_or_else(missing)?
+                    .map_err(|reason| {
+                        ProtocolError::new(
+                            ErrorCode::InvalidEdit,
+                            format!("`{component}` is read-only in the editor: {reason}"),
+                        )
+                    })?;
+                let schema = value_schema(sim, ValueKind::Component, component)
+                    .map_err(|e| edit_error(&e))?;
+                let mut whole = to_wire(current, &schema);
+                set_at_path(&mut whole, path, value)
+                    .map_err(|reason| ProtocolError::new(ErrorCode::InvalidPath, reason))?;
+                encode_value(sim, ValueKind::Component, component, whole)
+                    .map_err(|e| edit_error(&e))?
+            }
+        };
+        let whole = sim
+            .override_value_ron(address, component, &bytes)
+            .map_err(scene_error)?;
+        prefab::ron_at_path(&whole, path).ok_or_else(|| {
+            ProtocolError::new(
+                ErrorCode::InvalidPath,
+                format!("`{component}` has no `{}`", Path(path)),
+            )
+        })
     }
 
     /// Reads the exact current value of `target`, replaces the value at `path`, and records
@@ -852,6 +1036,10 @@ fn changes_state(command: &Command) -> bool {
             | Command::GetHashTree
             | Command::TakeSnapshot
             | Command::DiffSnapshots { .. }
+            | Command::CompareTraces { .. }
+            | Command::CreatePrefab { .. }
+            | Command::ApplyToPrefab { .. }
+            | Command::GetInstances
             | Command::QueryEntities { .. }
             | Command::GetEntity { .. }
             | Command::GetResources
@@ -901,6 +1089,7 @@ fn session_error(error: &SessionError) -> ProtocolError {
         SessionError::Sim(error) => return sim_error(error),
         SessionError::Scene(_) => ErrorCode::InvalidScene,
         SessionError::Snapshot(_) => ErrorCode::InvalidSnapshot,
+        SessionError::Replay(_) => ErrorCode::InvalidReplay,
     };
     ProtocolError::new(code, error)
 }
@@ -915,6 +1104,10 @@ fn edit_error(error: &EditError) -> ProtocolError {
         }
     };
     ProtocolError::new(code, error)
+}
+
+fn scene_error(error: SceneError) -> ProtocolError {
+    session_error(&error.into())
 }
 
 fn missing_asset(id: AssetId) -> ProtocolError {
@@ -952,6 +1145,10 @@ fn sim_error(error: &SimError) -> ProtocolError {
 
 fn decode_snapshot(bytes: &Bytes) -> Result<Snapshot, ProtocolError> {
     Snapshot::decode(&bytes.0).map_err(|e| ProtocolError::new(ErrorCode::InvalidSnapshot, e))
+}
+
+fn decode_trace(bytes: &Bytes) -> Result<Trace, ProtocolError> {
+    Trace::decode(&bytes.0).map_err(|e| ProtocolError::new(ErrorCode::InvalidCommand, e))
 }
 
 fn decode_edits(bytes: &Bytes) -> Result<EditLog, ProtocolError> {

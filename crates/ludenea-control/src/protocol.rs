@@ -4,10 +4,11 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use ludenea_app::RawInput;
 use ludenea_app::prefab::InstanceInfo;
+use ludenea_app::trace::TraceComparison;
 use ludenea_debug_draw::DebugDrawFrame;
 use ludenea_ecs::hash::hex_u64;
 use ludenea_ecs::schema::TypeSchema;
-use ludenea_ecs::{AssetId, Entity, HashTree};
+use ludenea_ecs::{AssetId, Difference, Entity, HashTree};
 use ludenea_math::Vec2;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value as JsonValue;
@@ -195,9 +196,17 @@ pub enum Command {
     Restore {
         snapshot: Bytes,
     },
+    /// The differences from snapshot `a` to snapshot `b`, or to the current tick when `b`
+    /// is `None`.
     DiffSnapshots {
         a: Bytes,
-        b: Bytes,
+        b: Option<Bytes>,
+    },
+    /// Compares the hashes of trace `a` with those of trace `b`, or with the current
+    /// branch's recorded hashes when `b` is `None`.
+    CompareTraces {
+        a: Bytes,
+        b: Option<Bytes>,
     },
     /// A page of the entities matching `filter` (see `EntityFilter::parse`), in ascending
     /// index order.
@@ -321,6 +330,56 @@ pub enum Command {
     DeleteBranch {
         branch: BranchId,
     },
+    /// A prefab file of these entities' current components; replies `Text`.
+    CreatePrefab {
+        entities: Vec<Entity>,
+    },
+    /// Appends an instance of `prefab` to the scene, like a tick 0 edit; replies `Placed`.
+    PlaceInstance {
+        prefab: AssetId,
+    },
+    /// Moves scene entities into the new prefab `prefab`, whose file text is `prefab_text`,
+    /// and places an instance of it in their stead; replies `Placed`.
+    ReplaceWithInstance {
+        entities: Vec<Entity>,
+        prefab: AssetId,
+        prefab_text: String,
+    },
+    /// Overrides the value at `path` of `component` on `entity` of the instance at
+    /// `instance` (both paths of local identifiers), like a tick 0 edit. An empty `path`
+    /// overrides the whole component.
+    ApplyOverride {
+        instance: Vec<u32>,
+        entity: Vec<u32>,
+        component: String,
+        path: Vec<PathSegment>,
+        value: ComponentValue,
+    },
+    /// Removes that override; an empty `path` removes every override of the component.
+    RevertOverride {
+        instance: Vec<u32>,
+        entity: Vec<u32>,
+        component: String,
+        path: Vec<PathSegment>,
+    },
+    /// The instance's prefab file with the current value at `path` written into it;
+    /// replies `Text`.
+    ApplyToPrefab {
+        instance: Vec<u32>,
+        entity: Vec<u32>,
+        component: String,
+        path: Vec<PathSegment>,
+    },
+    GetInstances,
+    /// The replay of a branch, the current one when `branch` is `None`; replies `Replay`.
+    ExportReplay {
+        branch: Option<BranchId>,
+    },
+    /// Opens a replay as the session, its recorded hashes as the expected ones; replies
+    /// `ReplayLoaded`. A value that no longer decodes fails, naming it.
+    LoadReplay {
+        replay: Bytes,
+    },
     GetSchedule,
     /// The events sent during the tick that ended at `tick`, recorded while `Introspection`
     /// is subscribed.
@@ -387,8 +446,9 @@ pub enum Reply {
         snapshot: Bytes,
     },
     Differences {
-        lines: Vec<String>,
+        differences: Vec<Difference>,
     },
+    TraceComparison(TraceComparison),
     Entities {
         total: u32,
         rows: Vec<EntityRow>,
@@ -442,6 +502,20 @@ pub enum Reply {
     /// The deleted branch first, then its descendants.
     Deleted {
         branches: Vec<BranchId>,
+    },
+    /// The local identifier of a placed instance.
+    Placed {
+        instance: u32,
+    },
+    Instances {
+        instances: Vec<InstanceInfo>,
+    },
+    Replay {
+        replay: Bytes,
+    },
+    /// `fingerprint_differs` when the replay was recorded with other game types.
+    ReplayLoaded {
+        fingerprint_differs: bool,
     },
     Schedule {
         systems: Vec<SystemRow>,
@@ -616,6 +690,7 @@ pub enum ErrorCode {
     InvalidScene,
     InvalidInputs,
     InvalidSnapshot,
+    InvalidReplay,
     NoSuchEntity,
     /// An edit the target type rejects, or one on a read-only value.
     InvalidEdit,

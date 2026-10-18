@@ -30,6 +30,22 @@ type BranchInfo = {
  */
 type Bytes = string;
 
+type JsonValue = number | string | boolean | Array<JsonValue> | {
+    [key in string]: JsonValue;
+} | null;
+
+/**
+ * A component or resource value: JSON in its wire form, or RON text when the value has
+ * no exact JSON form (maps with non-string keys, non-finite floats), which is read-only.
+ */
+type ComponentValue = {
+    "type": "json";
+    value: JsonValue;
+} | {
+    "type": "ron";
+    text: string;
+};
+
 /**
  * What the session edits: its scene text is a scene file or a prefab file.
  */
@@ -115,10 +131,6 @@ type Vec2 = {
     y: number;
 };
 
-type JsonValue = number | string | boolean | Array<JsonValue> | {
-    [key in string]: JsonValue;
-} | null;
-
 type Command = {
     "type": "load_scene";
     scene: string;
@@ -149,7 +161,11 @@ type Command = {
 } | {
     "type": "diff_snapshots";
     a: Bytes;
-    b: Bytes;
+    b: Bytes | null;
+} | {
+    "type": "compare_traces";
+    a: Bytes;
+    b: Bytes | null;
 } | {
     "type": "query_entities";
     filter: string;
@@ -258,6 +274,44 @@ type Command = {
     "type": "delete_branch";
     branch: BranchId;
 } | {
+    "type": "create_prefab";
+    entities: Array<Entity>;
+} | {
+    "type": "place_instance";
+    prefab: AssetId;
+} | {
+    "type": "replace_with_instance";
+    entities: Array<Entity>;
+    prefab: AssetId;
+    prefab_text: string;
+} | {
+    "type": "apply_override";
+    instance: Array<number>;
+    entity: Array<number>;
+    component: string;
+    path: Array<PathSegment>;
+    value: ComponentValue;
+} | {
+    "type": "revert_override";
+    instance: Array<number>;
+    entity: Array<number>;
+    component: string;
+    path: Array<PathSegment>;
+} | {
+    "type": "apply_to_prefab";
+    instance: Array<number>;
+    entity: Array<number>;
+    component: string;
+    path: Array<PathSegment>;
+} | {
+    "type": "get_instances";
+} | {
+    "type": "export_replay";
+    branch: BranchId | null;
+} | {
+    "type": "load_replay";
+    replay: Bytes;
+} | {
     "type": "get_schedule";
 } | {
     "type": "get_tick_events";
@@ -292,18 +346,6 @@ type ClientMessage = {
  * `0xRRGGBBAA`.
  */
 type Color = number;
-
-/**
- * A component or resource value: JSON in its wire form, or RON text when the value has
- * no exact JSON form (maps with non-string keys, non-finite floats), which is read-only.
- */
-type ComponentValue = {
-    "type": "json";
-    value: JsonValue;
-} | {
-    "type": "ron";
-    text: string;
-};
 
 type ConsoleLevel = "info" | "warning" | "error";
 
@@ -353,6 +395,28 @@ type DebugDrawFrame = {
     };
 };
 
+/**
+ * One differing value: `subject` is `entity 3v0`, `resource`, `entities`, or `asset <id>`,
+ * and `path` locates the field inside the component (empty when the whole value differs):
+ * field names, and `[i]` for items, tuple positions, newtype contents, and map keys.
+ */
+type Difference = {
+    subject: string;
+    component: string;
+    path: Array<string>;
+    /**
+     * The value as JSON (a RON string when it has no JSON form); `None` when absent. A
+     * variant change gives the variant names.
+     */
+    left: JsonValue | null;
+    right: JsonValue | null;
+    /**
+     * The value as RON, or `absent`.
+     */
+    left_text: string;
+    right_text: string;
+};
+
 type NamedHash = {
     name: string;
     hash: string;
@@ -372,7 +436,7 @@ type EntityRow = {
     hash: Hash64;
 };
 
-type ErrorCode = "version_mismatch" | "not_connected" | "invalid_scene" | "invalid_inputs" | "invalid_snapshot" | "no_such_entity" | "invalid_edit" | "unknown_component" | "unknown_resource" | "invalid_path" | "invalid_command" | "invalid_tick" | "resimulating" | "nothing_to_undo" | "nothing_to_redo" | "no_input_mapping" | "system_panicked" | "invalid_filter";
+type ErrorCode = "version_mismatch" | "not_connected" | "invalid_scene" | "invalid_inputs" | "invalid_snapshot" | "invalid_replay" | "no_such_entity" | "invalid_edit" | "unknown_component" | "unknown_resource" | "invalid_path" | "invalid_command" | "invalid_tick" | "resimulating" | "nothing_to_undo" | "nothing_to_redo" | "no_input_mapping" | "system_panicked" | "invalid_filter";
 
 type PauseReason = {
     "type": "user";
@@ -649,6 +713,24 @@ type SystemRow = {
     micros: number | null;
 };
 
+/**
+ * How two traces' hashes compare tick by tick.
+ */
+type TraceComparison = {
+    /**
+     * Ticks both traces have.
+     */
+    common: number;
+    /**
+     * The first of the common ticks whose hashes differ.
+     */
+    first_divergent: number | null;
+    /**
+     * Ticks only the longer trace has.
+     */
+    only_in_longer: number;
+};
+
 type Reply = {
     "type": "done";
 } | {
@@ -670,8 +752,10 @@ type Reply = {
     snapshot: Bytes;
 } | {
     "type": "differences";
-    lines: Array<string>;
-} | {
+    differences: Array<Difference>;
+} | ({
+    "type": "trace_comparison";
+} & TraceComparison) | {
     "type": "entities";
     total: number;
     rows: Array<EntityRow>;
@@ -723,6 +807,18 @@ type Reply = {
 } | {
     "type": "deleted";
     branches: Array<BranchId>;
+} | {
+    "type": "placed";
+    instance: number;
+} | {
+    "type": "instances";
+    instances: Array<InstanceInfo>;
+} | {
+    "type": "replay";
+    replay: Bytes;
+} | {
+    "type": "replay_loaded";
+    fingerprint_differs: boolean;
 } | {
     "type": "schedule";
     systems: Array<SystemRow>;
@@ -1236,5 +1332,5 @@ function startWorkerGame(options: {
 }): WorkerGame;
 
 export { ControlClient, PROJECT_PROTOCOL_VERSION, PROTOCOL_VERSION, ProjectClient, ProtocolFailure, RequestTracker, fakeTransport, handshake, parseFrame, postMessageTransport, startWorkerGame, tauriTransport, unwrap, webSocketTransport };
-export type { AssetId, AssetKind, BranchId, BranchInfo, BuildEvent, Bytes, ClientMessage, Color, Command, ComponentValue, ConsoleLevel, DebugDrawFrame, Diagnostic, Document, Entity, EntityHash, EntityRow, ErrorCode, Event, FailureCode, FieldSchema, FieldTarget, FileChange, FileEntry, GameInfo, GameOutput, Hash64, HashTree, InstanceInfo, Item, JsonValue, MessageTransport, NamedHash, NamedSchema, Outcome, OutputStream, PathSegment, PauseReason, PluginBundle, PluginSource, Primitive, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo, ProjectOutcome, ProjectReply, ProjectReplyFor, ProjectRequest, ProjectServerMessage, ProtocolError, RawGamepad, RawInput, RecordedEvent, Reply, ReplyFor, ServerMessage, ServiceMode, SyncPoint, SystemRow, Timeline, Topic, TypeSchema, VariantFields, VariantSchema, Vec2, WorkerCrash, WorkerGame };
+export type { AssetId, AssetKind, BranchId, BranchInfo, BuildEvent, Bytes, ClientMessage, Color, Command, ComponentValue, ConsoleLevel, DebugDrawFrame, Diagnostic, Difference, Document, Entity, EntityHash, EntityRow, ErrorCode, Event, FailureCode, FieldSchema, FieldTarget, FileChange, FileEntry, GameInfo, GameOutput, Hash64, HashTree, InstanceInfo, Item, JsonValue, MessageTransport, NamedHash, NamedSchema, Outcome, OutputStream, PathSegment, PauseReason, PluginBundle, PluginSource, Primitive, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo, ProjectOutcome, ProjectReply, ProjectReplyFor, ProjectRequest, ProjectServerMessage, ProtocolError, RawGamepad, RawInput, RecordedEvent, Reply, ReplyFor, ServerMessage, ServiceMode, SyncPoint, SystemRow, Timeline, Topic, TraceComparison, TypeSchema, VariantFields, VariantSchema, Vec2, WorkerCrash, WorkerGame };
 }

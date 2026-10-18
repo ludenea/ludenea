@@ -708,6 +708,13 @@ pub fn scene_as_prefab(scene: &str) -> Result<String, SceneError> {
     ))
 }
 
+/// The RON text of the value at `path` inside the RON value `text`, as written.
+pub fn ron_at_path(text: &str, path: &[PathSegment]) -> Option<String> {
+    let root = parse_file(text).ok()?;
+    let node = locate(text, &root, path)?;
+    Some(text[node.span.clone()].to_string())
+}
+
 /// Refuses despawning an entity a prefab instance spawned (a load address of more than one
 /// element): at tick 0 its components are overridden instead, and the instance is removed
 /// as a whole.

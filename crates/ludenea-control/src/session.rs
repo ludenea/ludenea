@@ -20,7 +20,9 @@ use std::collections::{BTreeSet, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use ludenea_app::assets::{asset_file, parse_asset_file};
+use ludenea_app::path::PathSegment;
 use ludenea_app::prefab;
+use ludenea_app::replay::{Replay, ReplayError, load_replay, record_replay};
 use ludenea_app::{
     AssetTexts, Edit, EditError, EditLog, EntityRef, InputLog, LoadAddress, SceneError, SimError,
     Simulation, TimedEdit,
@@ -79,6 +81,8 @@ pub enum SessionError {
     PrefabHasNoResources,
     #[error("asset {0} is not a data asset; open a prefab as a document to edit it")]
     NotDataAsset(AssetId),
+    #[error(transparent)]
+    Replay(#[from] ReplayError),
 }
 
 /// What the session edits: its scene text is a scene file or a prefab file.
@@ -198,8 +202,19 @@ impl Session {
         document: Document,
     ) -> Result<Session, SessionError> {
         let warnings = load(sim, document, &scene, &assets)?;
+        Ok(Session::loaded(sim, scene, assets, document, warnings))
+    }
+
+    /// A session at tick 0 with empty logs on the scene `sim` just loaded.
+    fn loaded(
+        sim: &Simulation,
+        scene: String,
+        assets: AssetTexts,
+        document: Document,
+        warnings: Vec<String>,
+    ) -> Session {
         let players = u16::try_from(sim.players()).expect("fewer than 2^16 players");
-        Ok(Session {
+        Session {
             saved_scene: scene.clone(),
             scene,
             document,
@@ -220,7 +235,7 @@ impl Session {
             tree: BranchTree::default(),
             switching: None,
             warnings,
-        })
+        }
     }
 
     /// Restarts an exported session on a new build: the new hashes are compared with the
@@ -265,17 +280,89 @@ impl Session {
         if !export.hashes.is_empty() {
             session.hashes = export.hashes;
         }
-        let (expected, got) = (session.hashes[0], sim.hash());
-        session.start_resimulation(sim)?;
+        session.resimulate_against_recorded(sim)?;
+        Ok(session)
+    }
+
+    /// Opens a replay as a scene session whose recorded hashes are the replay's: they are
+    /// compared with the new ones while it resimulates. Fails on the first recorded value
+    /// that does not decode, leaving part of the replay loaded in `sim`.
+    pub fn from_replay(sim: &mut Simulation, replay: &Replay) -> Result<Session, SessionError> {
+        let (inputs, edits) = load_replay(sim, replay)?;
+        let assets = replay.assets.iter().cloned().collect();
+        let mut session = Session::loaded(
+            sim,
+            replay.scene.clone(),
+            assets,
+            Document::Scene,
+            Vec::new(),
+        );
+        session.inputs = inputs;
+        session.edits = edits;
+        session.update_head();
+        session.hashes.clone_from(&replay.hashes);
+        session.resimulate_against_recorded(sim)?;
+        Ok(session)
+    }
+
+    /// Resimulates the recorded run, reporting the first tick whose new hash differs from
+    /// the recorded one, tick 0 included.
+    fn resimulate_against_recorded(&mut self, sim: &mut Simulation) -> Result<(), SessionError> {
+        let (expected, got) = (self.hashes[0], sim.hash());
+        self.start_resimulation(sim)?;
         if expected != got {
-            session.diverged = true;
-            session.reports.push_front(Resimulation::Diverged {
+            self.diverged = true;
+            self.reports.push_front(Resimulation::Diverged {
                 tick: 0,
                 expected,
                 got,
             });
         }
-        Ok(session)
+        Ok(())
+    }
+
+    /// Records the replay of `branch`, the current one when `None`, over its recorded
+    /// ticks. Recording runs on `sim`, which then comes back to the current tick.
+    pub fn export_replay(
+        &mut self,
+        sim: &mut Simulation,
+        branch: Option<BranchId>,
+    ) -> Result<Replay, SessionError> {
+        self.ensure_resimulated()?;
+        let (inputs, edits, simulated) = match branch {
+            Some(id) if id != self.tree.current() => self.run_of(sim, id)?,
+            _ => (self.inputs.clone(), self.edits.clone(), self.simulated()),
+        };
+        let inputs_end = inputs.ticks.len() as u64;
+        let edits_end = edits.last_tick().map_or(0, |tick| tick + 1);
+        let ticks = simulated.max(inputs_end).max(edits_end);
+        let scene = scene_form(self.document, &self.scene)?;
+        let replay = record_replay(sim, &scene, &self.assets, &inputs, &edits, ticks);
+        self.reload(sim)?;
+        Ok(replay?)
+    }
+
+    /// The input and edit logs of the stored branch `id`'s run, and its simulated ticks.
+    fn run_of(
+        &self,
+        sim: &Simulation,
+        id: BranchId,
+    ) -> Result<(InputLog, EditLog, u64), SessionError> {
+        if self.tree.get(id).is_none() {
+            return Err(SessionError::NoSuchBranch(id));
+        }
+        let defaults = sim.encoded_default_inputs();
+        let (inputs, edits, hashes, _) =
+            self.composed(id, &self.current_segment(), defaults.as_deref());
+        Ok((inputs, edits, hashes.len() as u64 - 1))
+    }
+
+    /// Loads the session's scene into `sim` again and comes back to the current tick, after
+    /// `sim` loaded something else.
+    pub fn reload(&mut self, sim: &mut Simulation) -> Result<(), SessionError> {
+        load(sim, self.document, &self.scene, &self.assets)?;
+        sim.set_players(usize::from(self.inputs.players));
+        self.replay_to(sim, self.current)
     }
 
     /// Replaces the recorded inputs and seeks to tick 0.
@@ -743,6 +830,11 @@ impl Session {
         self.hashes.get(usize::try_from(tick).ok()?).copied()
     }
 
+    /// The hash recorded after each tick of the current branch, from tick 0.
+    pub(crate) fn hashes(&self) -> &[u64] {
+        &self.hashes
+    }
+
     /// Whether edits recorded at the current tick are applied but not yet simulated.
     pub fn is_pending(&self) -> bool {
         !self.edits.at(self.current).is_empty()
@@ -843,6 +935,37 @@ impl Session {
             return Err(error);
         }
         Ok(id)
+    }
+
+    /// Sets the override of `component` at `path` on `entity` of the instance at `instance`
+    /// to the RON `value`, like a tick 0 edit.
+    pub fn set_override(
+        &mut self,
+        sim: &mut Simulation,
+        instance: &[u32],
+        entity: &[u32],
+        component: &str,
+        path: &[PathSegment],
+        value: &str,
+    ) -> Result<(), SessionError> {
+        self.ensure_resimulated()?;
+        let scene = prefab::set_override(&self.scene, instance, entity, component, path, value)?;
+        self.change_scene(sim, scene)
+    }
+
+    /// Removes that override, like a tick 0 edit; an empty `path` removes every override of
+    /// the component.
+    pub fn revert_override(
+        &mut self,
+        sim: &mut Simulation,
+        instance: &[u32],
+        entity: &[u32],
+        component: &str,
+        path: &[PathSegment],
+    ) -> Result<(), SessionError> {
+        self.ensure_resimulated()?;
+        let scene = prefab::revert_override(&self.scene, instance, entity, component, path)?;
+        self.change_scene(sim, scene)
     }
 
     /// Copies the current value of the data asset `id` into its asset text, like a tick 0
@@ -1251,15 +1374,27 @@ impl Session {
     /// Flattens the run of the current branch, whose segment is `target`, from its
     /// ancestors' segments. Tick 0 is common to every branch.
     fn compose(&mut self, target: &Segment, defaults: Option<&[u8]>) {
+        (self.inputs, self.edits, self.hashes, self.checkpoints) =
+            self.composed(self.tree.current(), target, defaults);
+        self.update_head();
+    }
+
+    /// The flattened run of branch `id`, from its ancestors' segments; `current` stands for
+    /// the segment of the branch whose run lives in the session.
+    fn composed(
+        &self,
+        id: BranchId,
+        current: &Segment,
+        defaults: Option<&[u8]>,
+    ) -> (InputLog, EditLog, Vec<u64>, Checkpoints) {
         let (_, scene_state) = self.checkpoints.nearest_at_or_before(0);
         let mut checkpoints = Checkpoints::new(scene_state.clone());
         let mut inputs = InputLog::new(self.inputs.players);
         let mut edits = EditLog::new();
         let mut hashes = vec![self.hashes[0]];
-        let current = self.tree.current();
-        for id in self.tree.path(current) {
+        for id in self.tree.path(id) {
             let branch = self.tree.get(id).expect("a branch of the path");
-            let segment = branch.segment.as_ref().unwrap_or(target);
+            let segment = branch.segment.as_ref().unwrap_or(current);
             segment.append_to(
                 branch.fork(),
                 &mut inputs,
@@ -1269,9 +1404,7 @@ impl Session {
                 defaults,
             );
         }
-        (self.inputs, self.edits, self.hashes, self.checkpoints) =
-            (inputs, edits, hashes, checkpoints);
-        self.update_head();
+        (inputs, edits, hashes, checkpoints)
     }
 
     /// Removes an edit from the run, keeping the count of edits the current branch inherits
@@ -1528,8 +1661,12 @@ impl Session {
         self.start_resimulation(sim)
     }
 
-    /// Loads `scene` like a tick 0 edit, recorded in the undo history.
+    /// Loads `scene` like a tick 0 edit, recorded in the undo history; the same scene
+    /// changes nothing.
     fn change_scene(&mut self, sim: &mut Simulation, scene: String) -> Result<(), SessionError> {
+        if scene == self.scene {
+            return Ok(());
+        }
         let before = self.scene.clone();
         self.load_scene_version(sim, scene)?;
         let after = self.scene.clone();

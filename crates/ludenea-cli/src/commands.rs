@@ -290,22 +290,22 @@ pub fn diff(app: fn() -> App, args: &DiffArgs, out: &mut dyn Write) -> Outcome {
     let (a, b) = (read(&args.snapshot_a)?, read(&args.snapshot_b)?);
     let host = Host::new(app()).map_err(|error| error.to_string())?;
     let mut client = InProcess::connect(host, PROTOCOL_VERSION).map_err(|error| error.message)?;
-    let Reply::Differences { lines } = send(
+    let Reply::Differences { differences } = send(
         &mut client,
         Command::DiffSnapshots {
             a: Bytes(a),
-            b: Bytes(b),
+            b: Some(Bytes(b)),
         },
     )?
     else {
         return Err("unexpected reply to DiffSnapshots".into());
     };
-    if lines.is_empty() {
+    if differences.is_empty() {
         say(out, "snapshots are identical")?;
         return Ok(0);
     }
-    for line in lines {
-        say(out, line)?;
+    for difference in differences {
+        say(out, difference)?;
     }
     Ok(1)
 }

@@ -156,13 +156,7 @@ pub fn play_replay(
     replay: &Replay,
     mut on_tick: impl FnMut(u64, u64),
 ) -> Result<ReplayReport, ReplayError> {
-    if replay.hashes.is_empty() {
-        return Err(decode(
-            "hashes",
-            "the replay has no hash of tick 0".to_string(),
-        ));
-    }
-    let total = replay.hashes.len() as u64 - 1;
+    let total = ticks(replay)?;
     let (inputs, edits) = load(sim, replay, total)?;
 
     let mut report = ReplayReport {
@@ -208,6 +202,26 @@ pub fn play_replay(
         on_tick(tick, total);
     }
     Ok(report)
+}
+
+/// Loads the replay's scene and assets into `sim` and checks that every recorded value
+/// decodes, without playing it; returns its input and edit logs.
+pub fn load_replay(
+    sim: &mut Simulation,
+    replay: &Replay,
+) -> Result<(InputLog, EditLog), ReplayError> {
+    load(sim, replay, ticks(replay)?)
+}
+
+/// The number of ticks the replay records.
+fn ticks(replay: &Replay) -> Result<u64, ReplayError> {
+    match replay.hashes.len() {
+        0 => Err(decode(
+            "hashes",
+            "the replay has no hash of tick 0".to_string(),
+        )),
+        hashes => Ok(hashes as u64 - 1),
+    }
 }
 
 /// Loads the scene and assets, sets the players, and checks that every value played up to

@@ -105,7 +105,9 @@ impl Segment {
     }
 
     fn head(&self, fork_tick: u64) -> u64 {
-        let inputs = (fork_tick + self.inputs.len() as u64).saturating_sub(1);
+        let inputs = fork_tick
+            .saturating_add(self.inputs.len() as u64)
+            .saturating_sub(1);
         let edits = self.edits.last().map_or(0, |edit| edit.tick);
         fork_tick.max(inputs).max(edits)
     }
@@ -500,6 +502,8 @@ pub enum BranchesError {
     Tree,
     #[error("a branch forks outside its parent's run")]
     Fork,
+    #[error("a branch records an edit outside its run")]
+    Run,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -573,13 +577,27 @@ impl StoredBranch {
         Ok(StoredBranch::encode(&branches))
     }
 
-    /// The branch, with its segment when `stored` (not the current branch).
+    /// The branch, with its segment when `stored` (not the current branch). Its edits lie
+    /// between its fork tick and the last tick it records an input or a hash for, where a
+    /// session records them, so a later fork stays within ticks the run holds.
     fn into_branch(self, stored: bool) -> Result<Branch, BranchesError> {
+        let fork_tick = self.fork_tick;
         let segment = stored
             .then(|| -> Result<Segment, BranchesError> {
+                let inputs = InputLog::decode(&self.inputs)?.ticks;
+                let edits = EditLog::decode(&self.edits)?.edits;
+                let recorded = inputs.len().max(self.hashes.len()) as u64;
+                let end = fork_tick.checked_add(recorded).ok_or(BranchesError::Run)?;
+                // The log is in tick order.
+                let outside = |edit: Option<&TimedEdit>| {
+                    edit.is_some_and(|edit| edit.tick < fork_tick || edit.tick > end)
+                };
+                if outside(edits.first()) || outside(edits.last()) {
+                    return Err(BranchesError::Run);
+                }
                 Ok(Segment {
-                    inputs: InputLog::decode(&self.inputs)?.ticks,
-                    edits: EditLog::decode(&self.edits)?.edits,
+                    inputs,
+                    edits,
                     hashes: self.hashes,
                     checkpoints: Checkpoints::empty(),
                 })

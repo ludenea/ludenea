@@ -2,13 +2,18 @@ use std::fs;
 use std::path::Path;
 
 use boxes::SpawnerStats;
+use ludenea::app::EntityRef;
+use ludenea::app::prefab::InstanceInfo;
+use ludenea::app::replay::Replay;
+use ludenea::app::trace::{TRACE_VERSION, Trace, TraceComparison};
 use ludenea::cli::assets::project_assets;
 use ludenea::control::{
-    BranchId, Bytes, Command, ComponentValue, Document, ErrorCode, Hash64, Host, InProcess,
+    BranchId, Bytes, Command, ComponentValue, Document, ErrorCode, Event, Hash64, Host, InProcess,
     PROTOCOL_VERSION, PathSegment, ProtocolError, Reply, Timeline,
 };
-use ludenea::ecs::{Asset, AssetId};
-use ludenea::prelude::{App, Edit, EditLog, InputLog};
+use ludenea::ecs::diff::Difference;
+use ludenea::ecs::{Asset, AssetId, Entity, Snapshot};
+use ludenea::prelude::{App, Edit, EditLog, InputLog, TimedEdit};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -512,4 +517,473 @@ fn load_session_refuses_a_hostile_branch_tree() {
             "{error:?}"
         );
     }
+}
+
+#[test]
+fn load_session_refuses_a_stored_edit_past_any_run() {
+    // A stored edit at the last tick lets a grandchild fork there; its inputs would end
+    // past the last tick.
+    let edits = EditLog {
+        edits: vec![TimedEdit {
+            tick: u64::MAX,
+            edit: Edit::Despawn {
+                entity: EntityRef::Loaded(vec![0]),
+            },
+        }],
+        ..EditLog::new()
+    };
+    let mut inputs = InputLog::new(1);
+    inputs.ticks.push(vec![0]);
+    let branch = |id, parent, fork_tick, inputs: &InputLog, edits: &EditLog| HostileBranch {
+        id: BranchId(id),
+        name: String::new(),
+        parent,
+        fork_tick,
+        fork_edits: 0,
+        stale: false,
+        inputs: inputs.encode(),
+        edits: edits.encode(),
+        hashes: Vec::new(),
+    };
+    let empty = (InputLog::new(1), EditLog::new());
+    let tree = postcard::to_allocvec(&HostileTree {
+        current: BranchId::ROOT,
+        next: 3,
+        branches: vec![
+            branch(0, None, 0, &empty.0, &empty.1),
+            branch(1, Some(BranchId(0)), 0, &empty.0, &edits),
+            branch(2, Some(BranchId(1)), u64::MAX, &inputs, &empty.1),
+        ],
+    })
+    .unwrap();
+    let mut host = Host::new(boxes::app()).unwrap();
+    let error = host
+        .handle(Command::LoadSession {
+            scene: boxes::generate_scene(30, 7),
+            saved_scene: None,
+            inputs: Bytes(Vec::new()),
+            edits: Bytes(Vec::new()),
+            undo: Bytes(Vec::new()),
+            expected: Vec::new(),
+            assets: Vec::new(),
+            branches: Bytes(tree),
+            document: Document::Scene,
+        })
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidCommand);
+    assert!(
+        error
+            .message
+            .starts_with("the branch tree cannot be decoded"),
+        "{error:?}"
+    );
+}
+
+fn text(reply: Reply) -> String {
+    match reply {
+        Reply::Text { text } => text,
+        other => panic!("{other:?}"),
+    }
+}
+
+fn instances(host: &mut Host) -> Vec<InstanceInfo> {
+    match ok(host, Command::GetInstances) {
+        Reply::Instances { instances } => instances,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// The entity of `instance` that its prefab gives the local identifier 0.
+fn instance_entity(host: &mut Host, instance: u32) -> Entity {
+    instances(host)
+        .into_iter()
+        .find(|info| info.address == [instance])
+        .unwrap()
+        .entities[0]
+}
+
+fn pose_position(host: &mut Host, entity: Entity) -> serde_json::Value {
+    let Reply::Entity { components, .. } = ok(host, Command::GetEntity { entity }) else {
+        panic!("get_entity replies entity");
+    };
+    let Some(ComponentValue::Json { value }) = components.get("ludenea::Pose") else {
+        panic!("{components:?}");
+    };
+    value["position"].clone()
+}
+
+fn field(name: &str) -> PathSegment {
+    PathSegment::Field {
+        name: name.to_string(),
+    }
+}
+
+fn scene_text(host: &mut Host) -> String {
+    match ok(host, Command::SaveScene) {
+        Reply::Scene { ron } => ron,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn create_prefab_returns_prefab_text() {
+    let (mut host, reply) = spawner_host(fs::read_to_string(SPAWNER_SCENE).unwrap());
+    let Reply::Loaded { load_addresses, .. } = reply else {
+        panic!("{reply:?}");
+    };
+    let (ground, _) = load_addresses
+        .into_iter()
+        .find(|(_, address)| address == &[0])
+        .unwrap();
+    let prefab = text(ok(
+        &mut host,
+        Command::CreatePrefab {
+            entities: vec![ground],
+        },
+    ));
+    assert!(prefab.starts_with("Prefab("), "{prefab}");
+    assert!(prefab.contains("ludenea::Collider"), "{prefab}");
+}
+
+#[test]
+fn place_instance_over_protocol() {
+    let (mut host, _) = spawner_host(fs::read_to_string(SPAWNER_SCENE).unwrap());
+    assert_eq!(
+        ok(&mut host, Command::PlaceInstance { prefab: PREFAB }),
+        Reply::Placed { instance: 7 }
+    );
+    let placed = instances(&mut host);
+    assert!(
+        placed
+            .iter()
+            .any(|info| info.address == [7] && info.prefab == PREFAB)
+    );
+    assert!(scene_text(&mut host).contains("(id: 7, prefab: \"38b36be4f8a140d695e5cdac24c82f90\""));
+
+    // Instance entities are refused as the entities of a new prefab instance.
+    let entity = instance_entity(&mut host, 7);
+    let error = host
+        .handle(Command::ReplaceWithInstance {
+            entities: vec![entity],
+            prefab: AssetId(7),
+            prefab_text: fs::read_to_string(CRATE_PREFAB).unwrap(),
+        })
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidScene);
+    assert!(
+        error
+            .message
+            .starts_with("entity 7/0 belongs to a prefab instance"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn apply_override_then_revert() {
+    let scene = fs::read_to_string(SPAWNER_SCENE).unwrap();
+    let (mut host, _) = spawner_host(scene.clone());
+    let path = vec![field("position"), field("y")];
+    ok(
+        &mut host,
+        Command::ApplyOverride {
+            instance: vec![5],
+            entity: vec![0],
+            component: "ludenea::Pose".to_string(),
+            path: path.clone(),
+            value: ComponentValue::Json { value: json!(3.0) },
+        },
+    );
+    let entity = instance_entity(&mut host, 5);
+    assert_eq!(
+        pose_position(&mut host, entity),
+        json!({"x": 0.0, "y": 3.0})
+    );
+    assert!(scene_text(&mut host).contains("value: 3.0)"));
+
+    ok(
+        &mut host,
+        Command::RevertOverride {
+            instance: vec![5],
+            entity: vec![0],
+            component: "ludenea::Pose".to_string(),
+            path,
+        },
+    );
+    let entity = instance_entity(&mut host, 5);
+    assert_eq!(
+        pose_position(&mut host, entity),
+        json!({"x": 0.0, "y": 26.0})
+    );
+    let instance_5 = "(id: 5, prefab: \"38b36be4f8a140d695e5cdac24c82f90\"";
+    assert_eq!(
+        scene_text(&mut host),
+        scene.replace(
+            &format!("{instance_5})"),
+            &format!("{instance_5}, overrides: [])")
+        )
+    );
+}
+
+#[test]
+fn apply_to_prefab_returns_updated_prefab() {
+    let (mut host, _) = spawner_host(fs::read_to_string(SPAWNER_SCENE).unwrap());
+    // Instance 6 overrides the position's `x` with 5.0.
+    let prefab = text(ok(
+        &mut host,
+        Command::ApplyToPrefab {
+            instance: vec![6],
+            entity: vec![0],
+            component: "ludenea::Pose".to_string(),
+            path: vec![field("position"), field("x")],
+        },
+    ));
+    let original = fs::read_to_string(CRATE_PREFAB).unwrap();
+    assert_eq!(
+        prefab,
+        original.replace("position:(x:0.0,y:26.0)", "position:(x:5.0,y:26.0)")
+    );
+    assert_ne!(prefab, original);
+}
+
+fn export_replay(host: &mut Host, branch: Option<BranchId>) -> Bytes {
+    match ok(host, Command::ExportReplay { branch }) {
+        Reply::Replay { replay } => replay,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A spawner session with a crate spawned at tick 10, 40 ticks long.
+fn recorded_host() -> Host {
+    let (mut host, _) = spawner_host(fs::read_to_string(SPAWNER_SCENE).unwrap());
+    step(&mut host, 10);
+    spawn_crate(&mut host);
+    step(&mut host, 30);
+    host
+}
+
+/// Advances `host` until its resimulation ends, and returns the events.
+fn settle(host: &mut Host) -> Vec<Event> {
+    let mut events = host.advance(0.0);
+    while timeline(host).resimulating {
+        events.extend(host.advance(0.0));
+    }
+    events
+}
+
+#[test]
+fn export_and_load_replay_round_trip() {
+    let mut host = recorded_host();
+    let expected = hash(&mut host);
+    let replay = export_replay(&mut host, None);
+    // Exporting leaves the session where it was.
+    assert_eq!(hash(&mut host), expected);
+    assert_eq!(timeline(&mut host).current, 40);
+
+    let mut loaded = Host::new(boxes::app()).unwrap();
+    assert_eq!(
+        ok(&mut loaded, Command::LoadReplay { replay }),
+        Reply::ReplayLoaded {
+            fingerprint_differs: false
+        }
+    );
+    let events = settle(&mut loaded);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::Diverged { .. })),
+        "{events:?}"
+    );
+    ok(&mut loaded, Command::Seek { tick: 40 });
+    assert_eq!(hash(&mut loaded), expected);
+}
+
+#[test]
+fn export_replay_of_another_branch() {
+    let mut host = recorded_host();
+    ok(&mut host, Command::Seek { tick: 20 });
+    spawn_crate(&mut host);
+    let forked = timeline(&mut host);
+    assert_ne!(forked.branch, BranchId::ROOT);
+    let replay = export_replay(&mut host, Some(BranchId::ROOT));
+    let after = timeline(&mut host);
+    assert_eq!((after.branch, after.current), (forked.branch, 20));
+
+    let mut loaded = Host::new(boxes::app()).unwrap();
+    ok(&mut loaded, Command::LoadReplay { replay });
+    settle(&mut loaded);
+    ok(
+        &mut host,
+        Command::SwitchBranch {
+            branch: BranchId::ROOT,
+        },
+    );
+    ok(&mut host, Command::Seek { tick: 40 });
+    ok(&mut loaded, Command::Seek { tick: 40 });
+    assert_eq!(hash(&mut loaded), hash(&mut host));
+}
+
+fn decode_replay(bytes: &Bytes) -> Replay {
+    Replay::decode(&bytes.0).unwrap()
+}
+
+#[test]
+fn load_replay_with_broken_input_names_the_tick() {
+    let mut host = recorded_host();
+    let mut replay = decode_replay(&export_replay(&mut host, None));
+    let mut inputs = InputLog::decode(&replay.inputs).unwrap();
+    inputs.ticks[3] = vec![0xff; 9];
+    replay.inputs = inputs.encode();
+
+    let mut loaded = Host::new(boxes::app()).unwrap();
+    let error = loaded
+        .handle(Command::LoadReplay {
+            replay: Bytes(replay.encode()),
+        })
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidReplay);
+    assert!(
+        error
+            .message
+            .starts_with("cannot decode the input of tick 3 of the replay: "),
+        "{error:?}"
+    );
+    // The previous session stays.
+    assert_eq!(timeline(&mut loaded).head, 0);
+    assert_eq!(timeline(&mut host).head, 39);
+}
+
+#[test]
+fn load_replay_with_changed_fingerprint_reports_first_divergent_tick() {
+    let mut host = recorded_host();
+    let mut replay = decode_replay(&export_replay(&mut host, None));
+    // As recorded by a build whose types and simulation differ from tick 12.
+    replay.fingerprint ^= 1;
+    let got = replay.hashes[12];
+    replay.hashes[12] ^= 1;
+    replay.hashes[20] ^= 1;
+
+    let mut loaded = Host::new(boxes::app()).unwrap();
+    assert_eq!(
+        ok(
+            &mut loaded,
+            Command::LoadReplay {
+                replay: Bytes(replay.encode()),
+            }
+        ),
+        Reply::ReplayLoaded {
+            fingerprint_differs: true
+        }
+    );
+    let diverged: Vec<Event> = settle(&mut loaded)
+        .into_iter()
+        .filter(|event| matches!(event, Event::Diverged { .. }))
+        .collect();
+    assert_eq!(
+        diverged,
+        [Event::Diverged {
+            tick: 12,
+            expected: Hash64(got ^ 1),
+            got: Hash64(got),
+        }]
+    );
+}
+
+fn snapshot(host: &mut Host) -> Bytes {
+    match ok(host, Command::TakeSnapshot) {
+        Reply::Snapshot { snapshot, .. } => snapshot,
+        other => panic!("{other:?}"),
+    }
+}
+
+fn differences(host: &mut Host, a: Bytes, b: Option<Bytes>) -> Vec<Difference> {
+    match ok(host, Command::DiffSnapshots { a, b }) {
+        Reply::Differences { differences } => differences,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn diff_snapshots_is_structured() {
+    let (mut host, _) = spawner_host(fs::read_to_string(SPAWNER_SCENE).unwrap());
+    let a = snapshot(&mut host);
+    step(&mut host, 10);
+    let b = snapshot(&mut host);
+    let found = differences(&mut host, a, Some(b));
+    let fall = found
+        .iter()
+        .find(|difference| {
+            difference.component == "ludenea::Pose" && difference.path == ["position", "y"]
+        })
+        .unwrap_or_else(|| panic!("{found:?}"));
+    assert_eq!(fall.left, Some(json!(26.0)));
+    assert!(
+        fall.right.as_ref().unwrap().as_f64().unwrap() != 26.0,
+        "{fall:?}"
+    );
+    assert_eq!(fall.left_text, "26.0");
+    assert!(fall.subject.starts_with("entity "), "{fall:?}");
+}
+
+#[test]
+fn diff_snapshot_against_current_tick() {
+    let (mut host, _) = spawner_host(fs::read_to_string(SPAWNER_SCENE).unwrap());
+    let a = snapshot(&mut host);
+    step(&mut host, 10);
+    let b = snapshot(&mut host);
+    let current = differences(&mut host, a.clone(), None);
+    assert!(!current.is_empty());
+    assert_eq!(current, differences(&mut host, a, Some(b)));
+}
+
+#[test]
+fn snapshot_with_other_fingerprint_is_refused() {
+    let (mut host, _) = spawner_host(fs::read_to_string(SPAWNER_SCENE).unwrap());
+    let a = snapshot(&mut host);
+    let mut other = Snapshot::decode(&a.0).unwrap();
+    let fingerprint = other.fingerprint;
+    other.fingerprint ^= 1;
+    let error = host
+        .handle(Command::DiffSnapshots {
+            a,
+            b: Some(Bytes(other.encode())),
+        })
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidSnapshot);
+    for named in [fingerprint, fingerprint ^ 1] {
+        assert!(
+            error.message.contains(&format!("{named:016x}")),
+            "{error:?}"
+        );
+    }
+}
+
+#[test]
+fn compare_traces_against_current_branch() {
+    let mut host = recorded_host();
+    let Reply::Session { hashes, .. } = ok(&mut host, Command::ExportSession) else {
+        panic!("export_session replies session");
+    };
+    let mut hashes: Vec<u64> = hashes.into_iter().map(|hash| hash.0).collect();
+    hashes[15] ^= 1;
+    hashes.truncate(31);
+    let trace = Trace {
+        version: TRACE_VERSION,
+        scene_hash: 0,
+        inputs_hash: 0,
+        hashes,
+    };
+    assert_eq!(
+        ok(
+            &mut host,
+            Command::CompareTraces {
+                a: Bytes(trace.encode()),
+                b: None,
+            }
+        ),
+        Reply::TraceComparison(TraceComparison {
+            common: 31,
+            first_divergent: Some(15),
+            only_in_longer: 10,
+        })
+    );
 }

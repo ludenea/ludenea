@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
 
+use ludenea_app::prefab::InstanceInfo;
+use ludenea_app::trace::TraceComparison;
 use ludenea_app::{App, InputLog, Inputs, RawGamepad, RawInput, Rng, Sim};
 use ludenea_control::*;
 use ludenea_ecs::schema::{Schema, TypeSchema};
 use ludenea_ecs::{
-    AssetId, Component, Entity, EntityHash, HashTree, NamedHash, Query, ResMut, Runtime,
+    AssetId, Component, Difference, Entity, EntityHash, HashTree, NamedHash, Query, ResMut, Runtime,
 };
 use serde::{Deserialize, Serialize};
 
@@ -215,18 +217,23 @@ fn list_and_get_entity_return_components_and_reject_dead_ones() {
 }
 
 #[test]
-fn diff_snapshots_returns_lines() {
+fn diff_snapshots_returns_differences() {
     let mut client = client();
     let before = snapshot(&mut client);
     step(&mut client, 1);
     let after = snapshot(&mut client);
-    let Ok(Reply::Differences { lines }) = client.request(Command::DiffSnapshots {
+    let Ok(Reply::Differences { differences }) = client.request(Command::DiffSnapshots {
         a: before,
-        b: after,
+        b: Some(after),
     }) else {
         panic!()
     };
-    assert!(lines.iter().any(|line| line.contains("Score")), "{lines:?}");
+    assert!(
+        differences
+            .iter()
+            .any(|difference| difference.component.contains("Score")),
+        "{differences:?}"
+    );
 }
 
 #[test]
@@ -253,7 +260,15 @@ fn every_command_and_reply_round_trips_through_json() {
         },
         Command::DiffSnapshots {
             a: bytes.clone(),
-            b: bytes.clone(),
+            b: Some(bytes.clone()),
+        },
+        Command::DiffSnapshots {
+            a: bytes.clone(),
+            b: None,
+        },
+        Command::CompareTraces {
+            a: bytes.clone(),
+            b: None,
         },
         Command::QueryEntities {
             filter: "With<Score>".into(),
@@ -350,6 +365,44 @@ fn every_command_and_reply_round_trips_through_json() {
         Command::DeleteBranch {
             branch: BranchId(1),
         },
+        Command::CreatePrefab {
+            entities: vec![entity],
+        },
+        Command::PlaceInstance { prefab: AssetId(7) },
+        Command::ReplaceWithInstance {
+            entities: vec![entity],
+            prefab: AssetId(7),
+            prefab_text: "p".into(),
+        },
+        Command::ApplyOverride {
+            instance: vec![5],
+            entity: vec![0],
+            component: "n".into(),
+            path: vec![PathSegment::Field { name: "a".into() }],
+            value: ComponentValue::Json {
+                value: serde_json::json!(1),
+            },
+        },
+        Command::RevertOverride {
+            instance: vec![5, 1],
+            entity: vec![0],
+            component: "n".into(),
+            path: vec![],
+        },
+        Command::ApplyToPrefab {
+            instance: vec![5],
+            entity: vec![0],
+            component: "n".into(),
+            path: vec![],
+        },
+        Command::GetInstances,
+        Command::ExportReplay {
+            branch: Some(BranchId(1)),
+        },
+        Command::ExportReplay { branch: None },
+        Command::LoadReplay {
+            replay: bytes.clone(),
+        },
         Command::GetSchedule,
         Command::GetTickEvents { tick: 3 },
         Command::GetTickCommands { tick: 4 },
@@ -434,7 +487,34 @@ fn every_command_and_reply_round_trips_through_json() {
             snapshot: bytes.clone(),
         },
         Reply::Differences {
-            lines: vec!["a".into()],
+            differences: vec![Difference {
+                subject: "entity 1v0".into(),
+                component: "n".into(),
+                path: vec!["a".into(), "[2]".into()],
+                left: Some(serde_json::json!(1.5)),
+                right: None,
+                left_text: "1.5".into(),
+                right_text: "absent".into(),
+            }],
+        },
+        Reply::TraceComparison(TraceComparison {
+            common: 3,
+            first_divergent: Some(1),
+            only_in_longer: 2,
+        }),
+        Reply::Placed { instance: 7 },
+        Reply::Instances {
+            instances: vec![InstanceInfo {
+                address: vec![5],
+                prefab: AssetId(7),
+                entities: vec![entity],
+            }],
+        },
+        Reply::Replay {
+            replay: bytes.clone(),
+        },
+        Reply::ReplayLoaded {
+            fingerprint_differs: true,
         },
         Reply::Entities {
             total: 4,
@@ -645,6 +725,7 @@ fn every_error_code() -> Vec<ErrorCode> {
         InvalidScene,
         InvalidInputs,
         InvalidSnapshot,
+        InvalidReplay,
         NoSuchEntity,
         InvalidEdit,
         UnknownComponent,
@@ -662,9 +743,9 @@ fn every_error_code() -> Vec<ErrorCode> {
     for code in &all {
         match code {
             VersionMismatch | NotConnected | InvalidScene | InvalidInputs | InvalidSnapshot
-            | NoSuchEntity | InvalidEdit | UnknownComponent | UnknownResource | InvalidPath
-            | InvalidCommand | InvalidTick | Resimulating | NothingToUndo | NothingToRedo
-            | NoInputMapping | SystemPanicked | InvalidFilter => {}
+            | InvalidReplay | NoSuchEntity | InvalidEdit | UnknownComponent | UnknownResource
+            | InvalidPath | InvalidCommand | InvalidTick | Resimulating | NothingToUndo
+            | NothingToRedo | NoInputMapping | SystemPanicked | InvalidFilter => {}
         }
     }
     all

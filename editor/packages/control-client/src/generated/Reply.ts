@@ -4,6 +4,7 @@ import type { BranchId } from "./BranchId";
 import type { Bytes } from "./Bytes";
 import type { ComponentValue } from "./ComponentValue";
 import type { DebugDrawFrame } from "./DebugDrawFrame";
+import type { Difference } from "./Difference";
 import type { Document } from "./Document";
 import type { Entity } from "./Entity";
 import type { EntityRow } from "./EntityRow";
@@ -14,9 +15,10 @@ import type { RecordedEvent } from "./RecordedEvent";
 import type { SyncPoint } from "./SyncPoint";
 import type { SystemRow } from "./SystemRow";
 import type { Timeline } from "./Timeline";
+import type { TraceComparison } from "./TraceComparison";
 
-export type Reply = { "type": "done" } | { "type": "stepped", tick: number, hashes: Array<Hash64>, } | { "type": "hash", tick: number, hash: Hash64, pending: boolean, } | { "type": "hash_tree", tick: number, tree: HashTree, } | { "type": "snapshot", tick: number, snapshot: Bytes, } | { "type": "differences", lines: Array<string>, } | { "type": "entities", total: number, rows: Array<EntityRow>, } | { "type": "entity", entity: Entity, components: { [key in string]: ComponentValue }, } | { "type": "resources", resources: { [key in string]: ComponentValue }, } | { "type": "spawned", entity: Entity, } | { "type": "scene", ron: string, } | { "type": "timeline" } & Timeline | { "type": "session", scene: string, 
+export type Reply = { "type": "done" } | { "type": "stepped", tick: number, hashes: Array<Hash64>, } | { "type": "hash", tick: number, hash: Hash64, pending: boolean, } | { "type": "hash_tree", tick: number, tree: HashTree, } | { "type": "snapshot", tick: number, snapshot: Bytes, } | { "type": "differences", differences: Array<Difference>, } | { "type": "trace_comparison" } & TraceComparison | { "type": "entities", total: number, rows: Array<EntityRow>, } | { "type": "entity", entity: Entity, components: { [key in string]: ComponentValue }, } | { "type": "resources", resources: { [key in string]: ComponentValue }, } | { "type": "spawned", entity: Entity, } | { "type": "scene", ron: string, } | { "type": "timeline" } & Timeline | { "type": "session", scene: string, 
 /**
  * The scene as last saved, when `scene` holds unsaved edits.
  */
-saved_scene: string | null, inputs: Bytes, edits: Bytes, undo: Bytes, hashes: Array<Hash64>, assets: Array<[AssetId, string]>, branches: Bytes, document: Document, } | { "type": "loaded", warnings: Array<string>, instances: Array<InstanceInfo>, load_addresses: Array<[Entity, Array<number>]>, } | { "type": "asset", asset: string, value: ComponentValue, } | { "type": "text", text: string, } | { "type": "deleted", branches: Array<BranchId>, } | { "type": "schedule", systems: Array<SystemRow>, } | { "type": "tick_events", events: Array<RecordedEvent>, } | { "type": "tick_commands", sync_points: Array<SyncPoint>, } | { "type": "debug_draw", tick: number, frame: DebugDrawFrame, } | { "type": "picked", entities: Array<Entity>, };
+saved_scene: string | null, inputs: Bytes, edits: Bytes, undo: Bytes, hashes: Array<Hash64>, assets: Array<[AssetId, string]>, branches: Bytes, document: Document, } | { "type": "loaded", warnings: Array<string>, instances: Array<InstanceInfo>, load_addresses: Array<[Entity, Array<number>]>, } | { "type": "asset", asset: string, value: ComponentValue, } | { "type": "text", text: string, } | { "type": "deleted", branches: Array<BranchId>, } | { "type": "placed", instance: number, } | { "type": "instances", instances: Array<InstanceInfo>, } | { "type": "replay", replay: Bytes, } | { "type": "replay_loaded", fingerprint_differs: boolean, } | { "type": "schedule", systems: Array<SystemRow>, } | { "type": "tick_events", events: Array<RecordedEvent>, } | { "type": "tick_commands", sync_points: Array<SyncPoint>, } | { "type": "debug_draw", tick: number, frame: DebugDrawFrame, } | { "type": "picked", entities: Array<Entity>, };
