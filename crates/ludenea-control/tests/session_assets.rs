@@ -510,3 +510,48 @@ fn edit_at_a_load_address_despawned_at_tick_0_is_dropped() {
         "{reports:?}"
     );
 }
+
+/// Whether `panic_once` panics the next time it runs.
+static ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn panic_once() {
+    if ARMED.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        panic!("boom once");
+    }
+}
+
+fn panicking_app() -> App {
+    let mut app = boxes::app();
+    app.system(Sim, panic_once);
+    app
+}
+
+#[test]
+fn undo_whose_replay_panics_still_takes_the_edit_back() {
+    let mut sim = panicking_app().build().unwrap();
+    let scene = boxes::generate_scene(10, 3);
+    let mut session = Session::start(&mut sim, scene, assets(), Document::Scene).unwrap();
+    play(&mut session, &mut sim, 10);
+    let spawner = component(
+        &sim,
+        "boxes::Spawner",
+        json!({ "prefab": PREFAB.to_string(), "stats": STATS.to_string() }),
+    );
+    let spawn = Edit::Spawn {
+        components: vec![("boxes::Spawner".to_string(), spawner)],
+    };
+    session.edit(&mut sim, spawn).unwrap();
+    let recorded = edits(&session);
+
+    // The replay before the loads panics once: the undo still completes, keeping them.
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    ARMED.store(true, std::sync::atomic::Ordering::Relaxed);
+    let undone = session.undo(&mut sim);
+    std::panic::set_hook(hook);
+    undone.unwrap();
+    assert_eq!(edits(&session), recorded[..2]);
+    assert!(session.timeline().can_redo);
+    session.redo(&mut sim).unwrap();
+    assert_eq!(edits(&session), recorded);
+}

@@ -450,6 +450,7 @@ fn session_export_from_2a_with_undo_history_resumes() {
 }
 
 use ludenea::control::BranchId;
+use ludenea::control::undo::UndoError;
 use serde::Serialize;
 
 const ROOT: BranchId = BranchId::ROOT;
@@ -774,7 +775,7 @@ fn undo_history_version_2_decodes() {
     export.undo = vec![4];
     assert!(matches!(
         Session::resume(&mut sim, export, Document::Scene),
-        Err(SessionError::UndoVersion { version: 4 })
+        Err(SessionError::Undo(UndoError::Version { version: 4 }))
     ));
 }
 
@@ -806,4 +807,39 @@ fn an_entry_whose_branch_was_deleted_never_blocks_the_history() {
     session.delete_branch(&mut sim, BranchId(1)).unwrap();
     session.undo(&mut sim).unwrap();
     assert_eq!(branch_ids(&session), vec![ROOT]);
+}
+
+#[test]
+fn redo_label_names_the_branches_an_edit_undo_removed() {
+    let (mut sim, mut session, _) = descendants_of_an_edit();
+    session.undo(&mut sim).unwrap();
+    resimulate_all(&mut session, &mut sim);
+    let label = Some("Redo edit at tick 300 (restores Branch 3, Branch 4)");
+    assert_eq!(session.timeline().redo_label.as_deref(), label);
+    let session = resume(&mut sim, session.export().unwrap());
+    assert_eq!(session.timeline().redo_label.as_deref(), label);
+}
+
+#[test]
+fn new_logs_keep_only_the_undo_entries_of_edits_on_the_current_run() {
+    let (mut sim, mut session) = started(0);
+    for begins in [1, 2] {
+        play(&mut session, &mut sim, 100);
+        let edit = stats_edit(&sim, begins);
+        session.edit(&mut sim, edit).unwrap();
+    }
+    play(&mut session, &mut sim, 50);
+    // Branch 1 inherits the root's edit at tick 100, not the one at tick 200.
+    edit_at(&mut session, &mut sim, 150, 3);
+    assert_eq!(session.current_branch(), BranchId(1));
+
+    session.load_inputs(&mut sim, recorded(10)).unwrap();
+    resimulate_all(&mut session, &mut sim);
+    assert_eq!(
+        session.timeline().undo_label.as_deref(),
+        Some("Undo edit at tick 100")
+    );
+    // Its undo discards the future after tick 100, Branch 1's edit at 150 included.
+    session.undo(&mut sim).unwrap();
+    assert!(edits(&session).is_empty());
 }

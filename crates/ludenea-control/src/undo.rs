@@ -1,15 +1,22 @@
 //! The undo and redo history of an editor session.
 
-use ludenea_app::TimedEdit;
+use ludenea_app::{EditLog, TimedEdit};
 use ludenea_ecs::AssetId;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::branches::{BranchId, BranchesError, StoredBranch};
-use crate::session::SessionError;
 
 /// The version `UndoHistory::encode` writes first. Milestone 2a wrote no version.
 pub const UNDO_VERSION: u32 = 3;
+
+#[derive(Debug, thiserror::Error)]
+pub enum UndoError {
+    #[error("the undo history cannot be decoded: {0}")]
+    Decode(#[from] postcard::Error),
+    #[error("the undo history has version {version}; this editor reads up to {UNDO_VERSION}")]
+    Version { version: u32 },
+}
 
 /// One history per session, across branches: undoing or redoing an entry first switches to
 /// the branch it belongs to. `removed` holds the branches the undo took out of the tree,
@@ -28,6 +35,10 @@ pub(crate) enum UndoEntry {
         branch: BranchId,
         edit: TimedEdit,
         removed: Vec<u8>,
+        /// The names of the descendants in `removed`, for the redo label; not encoded,
+        /// read back from `removed` on decode.
+        #[serde(skip)]
+        restores: Vec<String>,
     },
     /// An edit or take-over that forked `branch`, named `name` when last undone.
     Fork {
@@ -151,18 +162,22 @@ impl UndoHistory {
         self.redo.clear();
     }
 
-    /// After the tree was reset to a single root holding the run of `path`'s last branch:
-    /// the edits of `path` now belong to the root, and every other entry past tick 0 goes.
-    /// The branches their undo removed are gone with the tree, so redo works within the
-    /// root, as in 2a.
-    pub fn keep_on_root(&mut self, path: &[BranchId]) {
+    /// After the tree was reset to a single root holding `run`, the run of `path`'s last
+    /// branch: the edits of `path` that `run` holds now belong to the root, and every other
+    /// entry past tick 0 goes. The branches their undo removed are gone with the tree, so
+    /// redo works within the root, as in 2a.
+    pub fn keep_on_root(&mut self, path: &[BranchId], run: &EditLog) {
         let keep = |entry: &mut UndoEntry| match entry {
             UndoEntry::Scene { .. } | UndoEntry::Asset { .. } => true,
             UndoEntry::Run {
-                branch, removed, ..
-            } if path.contains(branch) => {
+                branch,
+                edit,
+                removed,
+                restores,
+            } if path.contains(branch) && run.edits.contains(edit) => {
                 *branch = BranchId::ROOT;
                 removed.clear();
+                restores.clear();
                 true
             }
             _ => false,
@@ -189,10 +204,20 @@ impl UndoHistory {
     }
 
     /// Decodes the current version, version 2, or the unversioned 2a form, the last two
-    /// with every entry on the root branch (2a edit targets as `EntityRef::Runtime`). All
-    /// start with a varint, so each versioned form is tried first and must use every byte.
-    pub fn decode(bytes: &[u8]) -> Result<UndoHistory, SessionError> {
-        if let Ok((UNDO_VERSION, history)) = decode_exact::<(u32, UndoHistory)>(bytes) {
+    /// with every entry on the root branch (2a edit targets as `EntityRef::Runtime`): an
+    /// entry of version 2 recorded on another branch then fails to undo as `NotOnBranch`
+    /// and is dropped. All start with a varint, so each versioned form is tried first and
+    /// must use every byte.
+    pub fn decode(bytes: &[u8]) -> Result<UndoHistory, UndoError> {
+        if let Ok((UNDO_VERSION, mut history)) = decode_exact::<(u32, UndoHistory)>(bytes) {
+            for entry in history.undo.iter_mut().chain(&mut history.redo) {
+                if let UndoEntry::Run {
+                    removed, restores, ..
+                } = entry
+                {
+                    *restores = StoredBranch::names_of_descendants(removed);
+                }
+            }
             return Ok(history);
         }
         if let Ok((2, history)) = decode_exact::<(u32, version_2::UndoHistory)>(bytes) {
@@ -202,9 +227,7 @@ impl UndoHistory {
             Ok(history) => Ok(history.into()),
             // Not 2a either: a version number above ours names a newer editor.
             Err(error) => match postcard::take_from_bytes::<u32>(bytes) {
-                Ok((version, _)) if version > UNDO_VERSION => {
-                    Err(SessionError::UndoVersion { version })
-                }
+                Ok((version, _)) if version > UNDO_VERSION => Err(UndoError::Version { version }),
                 _ => Err(error.into()),
             },
         }
@@ -245,6 +268,7 @@ mod version_2 {
                     branch: BranchId::ROOT,
                     edit,
                     removed: Vec::new(),
+                    restores: Vec::new(),
                 },
             }
         }

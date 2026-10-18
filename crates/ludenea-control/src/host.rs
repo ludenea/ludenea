@@ -1312,8 +1312,7 @@ fn session_error(error: &SessionError) -> ProtocolError {
         SessionError::Panicked { .. } => ErrorCode::SystemPanicked,
         SessionError::NothingToUndo => ErrorCode::NothingToUndo,
         SessionError::NothingToRedo => ErrorCode::NothingToRedo,
-        SessionError::UndoDecode(_)
-        | SessionError::UndoVersion { .. }
+        SessionError::Undo(_)
         | SessionError::BranchesDecode(_)
         | SessionError::NoSuchBranch(_)
         | SessionError::RootBranch

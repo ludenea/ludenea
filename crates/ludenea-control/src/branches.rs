@@ -570,6 +570,17 @@ impl StoredBranch {
         Ok(postcard::from_bytes(bytes)?)
     }
 
+    /// The names of the branches after the first in `encode`'s bytes, as a `Run` undo
+    /// entry removes them; none when they do not decode.
+    pub fn names_of_descendants(bytes: &[u8]) -> Vec<String> {
+        let branches = StoredBranch::decode(bytes).unwrap_or_default();
+        branches
+            .into_iter()
+            .skip(1)
+            .map(|branch| branch.name)
+            .collect()
+    }
+
     /// Its segment, and whether it is stale.
     pub fn into_segment(self) -> Result<(Segment, bool), BranchesError> {
         let branch = self.into_branch(true)?;

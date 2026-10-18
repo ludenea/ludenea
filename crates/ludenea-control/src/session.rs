@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 use crate::branches::{BranchId, BranchInfo, BranchTree, BranchesError, Segment, StoredBranch};
 use crate::checkpoints::{CHECKPOINT_BUDGET, Checkpoints};
 use crate::subscriptions::Introspection;
-use crate::undo::{ForkCause, UNDO_VERSION, UndoEntry, UndoHistory};
+use crate::undo::{ForkCause, UndoEntry, UndoError, UndoHistory};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
@@ -47,10 +47,8 @@ pub enum SessionError {
     NothingToUndo,
     #[error("there is nothing to redo")]
     NothingToRedo,
-    #[error("the undo history cannot be decoded: {0}")]
-    UndoDecode(#[from] postcard::Error),
-    #[error("the undo history has version {version}; this editor reads up to {UNDO_VERSION}")]
-    UndoVersion { version: u32 },
+    #[error(transparent)]
+    Undo(#[from] UndoError),
     #[error(transparent)]
     Edit(#[from] EditError),
     /// The message leaves the entity out: callers name it in their context.
@@ -497,7 +495,7 @@ impl Session {
     pub fn load_edits(&mut self, sim: &mut Simulation, log: EditLog) -> Result<(), SessionError> {
         self.edits = log;
         // Undo entries past tick 0 name edits of the replaced log.
-        self.history.keep_on_root(&[]);
+        self.history.keep_on_root(&[], &self.edits);
         self.reset_future(sim)
     }
 
@@ -649,6 +647,7 @@ impl Session {
                 branch,
                 edit,
                 removed,
+                restores,
             } => {
                 let tick = edit.tick;
                 self.switch_to(sim, *branch, tick)?;
@@ -659,10 +658,16 @@ impl Session {
                 let segment = self.current_segment();
                 let mut stored = vec![self.tree.store_current(&segment, players)];
                 let dependents = self.tree.forked_at_or_after(*branch, tick);
+                *restores = self
+                    .tree
+                    .names(&dependents)
+                    .into_iter()
+                    .map(String::from)
+                    .collect();
                 stored.extend(self.tree.take(&dependents, players));
                 *removed = StoredBranch::encode(&stored);
                 self.remove_edit(index);
-                self.remove_loads_before(sim, index)?;
+                self.remove_loads_before(sim, index);
                 self.discard_after(tick);
                 Ok(Some((*branch, tick)))
             }
@@ -699,6 +704,7 @@ impl Session {
                 branch,
                 edit,
                 removed,
+                restores,
             } => {
                 let tick = edit.tick;
                 self.switch_to(sim, *branch, tick)?;
@@ -725,6 +731,7 @@ impl Session {
                     }
                 }
                 removed.clear();
+                restores.clear();
                 Ok(Some((*branch, tick)))
             }
         }
@@ -768,6 +775,7 @@ impl Session {
                 branch,
                 edit,
                 removed: Vec::new(),
+                restores: Vec::new(),
             },
             cause => UndoEntry::Fork {
                 branch,
@@ -788,15 +796,12 @@ impl Session {
 
     /// After the edit at `index` was undone: removes the `LoadAsset` edits recorded just
     /// before it, at its tick, unless a later edit of that tick reaches their asset. Leaves
-    /// the world at that tick, before its edits.
-    fn remove_loads_before(
-        &mut self,
-        sim: &mut Simulation,
-        index: usize,
-    ) -> Result<(), SessionError> {
+    /// the world at that tick, before its edits. A replay that fails keeps every load: the
+    /// undo is done either way, and showing the tick reports the failure.
+    fn remove_loads_before(&mut self, sim: &mut Simulation, index: usize) {
         let tick = match self.edits.edits.get(index.wrapping_sub(1)) {
             Some(edit) if matches!(edit.edit, Edit::LoadAsset { .. }) => edit.tick,
-            _ => return Ok(()),
+            _ => return,
         };
         let mut first = index;
         while first > self.own_first()
@@ -806,7 +811,9 @@ impl Session {
             first -= 1;
         }
         // The assets those loads brought are not loaded before the tick's edits.
-        self.replay_before_edits(sim, tick)?;
+        if self.replay_before_edits(sim, tick).is_err() {
+            return;
+        }
         let mut needed = BTreeSet::new();
         let later = self.edits.edits[index..]
             .iter()
@@ -818,7 +825,7 @@ impl Session {
                     _ => None,
                 })),
                 // A later edit that cannot tell what it reaches keeps every load.
-                Err(_) => return Ok(()),
+                Err(_) => return,
             }
         }
         for at in (first..index).rev() {
@@ -828,7 +835,6 @@ impl Session {
                 self.remove_edit(at);
             }
         }
-        Ok(())
     }
 
     /// The index of the first edit of the current branch's own part of the run.
@@ -865,7 +871,16 @@ impl Session {
         Some(match self.history.next_redo()? {
             UndoEntry::Scene { .. } => "Redo scene edit".to_string(),
             UndoEntry::Asset { .. } => "Redo asset edit".to_string(),
-            UndoEntry::Run { edit, .. } => format!("Redo edit at tick {}", edit.tick),
+            UndoEntry::Run { edit, restores, .. } if restores.is_empty() => {
+                format!("Redo edit at tick {}", edit.tick)
+            }
+            UndoEntry::Run { edit, restores, .. } => {
+                format!(
+                    "Redo edit at tick {} (restores {})",
+                    edit.tick,
+                    restores.join(", ")
+                )
+            }
             UndoEntry::Fork { cause, name, .. } => {
                 format!("Redo {} (restores {name})", cause.describe())
             }
@@ -1875,7 +1890,7 @@ impl Session {
     /// session is at tick 0, and recorded edits are checked on this state by resimulation.
     fn reset_future(&mut self, sim: &mut Simulation) -> Result<(), SessionError> {
         self.history
-            .keep_on_root(&self.tree.path(self.tree.current()));
+            .keep_on_root(&self.tree.path(self.tree.current()), &self.edits);
         self.tree = BranchTree::default();
         self.switching = None;
         self.hashes.truncate(1);
@@ -2154,10 +2169,55 @@ pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
         .unwrap_or_else(|| "a panic without a message".to_string())
 }
 
-/// Whether an undo or redo failed for good: its entry is dropped.
+/// Whether an undo or redo failed for good: its entry is dropped. That includes removed
+/// branches that do not decode, which only corrupt data holds.
 fn is_dropped<T>(result: &Result<T, SessionError>) -> bool {
     matches!(
         result,
-        Err(SessionError::NotOnBranch { .. } | SessionError::NoSuchBranch(_))
+        Err(SessionError::NotOnBranch { .. }
+            | SessionError::NoSuchBranch(_)
+            | SessionError::BranchesDecode(_))
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use ludenea_app::ValueKind;
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn redo_whose_removed_branches_do_not_decode_is_dropped() {
+        let mut sim = boxes::app().build().unwrap();
+        let scene = boxes::generate_scene(10, 3);
+        let mut session =
+            Session::start(&mut sim, scene, AssetTexts::new(), Document::Scene).unwrap();
+        for _ in 0..50 {
+            session.step(&mut sim, None).unwrap();
+        }
+        let value = sim
+            .encode_json_value(
+                ValueKind::Resource,
+                "boxes::ContactStats",
+                json!({ "begins": 1, "ends": 0 }),
+            )
+            .unwrap();
+        let resource = "boxes::ContactStats".to_string();
+        session
+            .edit(&mut sim, Edit::SetResource { resource, value })
+            .unwrap();
+        session.undo(&mut sim).unwrap();
+        let mut entry = session.history.take_redo().unwrap();
+        if let UndoEntry::Run { removed, .. } = &mut entry {
+            *removed = vec![0xff; 3];
+        }
+        session.history.redone(entry, false);
+
+        assert!(matches!(
+            session.redo(&mut sim),
+            Err(SessionError::BranchesDecode(_))
+        ));
+        assert!(!session.timeline().can_redo);
+    }
 }
