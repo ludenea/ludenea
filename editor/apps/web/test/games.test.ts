@@ -21,7 +21,7 @@ function fakeHost(name: string, options: { resimulating?: boolean } = {}) {
     log.push(`${name}:${message.command.type}`);
     if (message.command.type === "load_session") loads.push(message.command);
     const answers: Record<string, object> = {
-      export_session: { type: "session", scene: `${name} scene`, saved_scene: "saved", inputs: "AQEA", edits: "", undo: "", hashes, assets: [], branches: "", document: "Scene" },
+      export_session: { type: "session", scene: `${name} scene`, saved_scene: "saved", inputs: "AQEA", edits: "", undo: "", hashes, assets: [], branches: "", document: "Scene", keeps_assets: false },
       get_timeline: { type: "timeline", ...timeline, resimulating: options.resimulating ?? false },
     };
     return [JSON.stringify({ type: "response", id: message.id, result: { ok: answers[message.command.type] ?? { type: "done" } } })];
@@ -105,7 +105,7 @@ describe("followWasmGames crashes", () => {
     crashes.at(-1)!({ tick: 3, message: "boom" });
     await settle();
     expect(start).toHaveBeenCalledTimes(3);
-    expect(loads[1]).toEqual({ type: "load_session", scene: `${builds[0]} scene`, saved_scene: "saved", inputs: "AQEA", edits: "", undo: "", expected: [], assets: [], branches: "", document: "Scene" });
+    expect(loads[1]).toEqual({ type: "load_session", scene: `${builds[0]} scene`, saved_scene: "saved", inputs: "AQEA", edits: "", undo: "", expected: [], assets: [], branches: "", document: "Scene", keeps_assets: false });
     expect(editor.log).toHaveBeenCalledWith("error", "The game crashed at tick 3: boom");
   });
 });

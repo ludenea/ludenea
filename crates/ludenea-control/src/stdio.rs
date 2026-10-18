@@ -24,7 +24,7 @@ pub fn serve_stdio(
     input: impl BufRead + Send + 'static,
     mut output: impl Write,
 ) -> io::Result<()> {
-    let host = Host::new(app()).map_err(io::Error::other);
+    let host = Host::new(app).map_err(io::Error::other);
     let mut host = host?;
     host.handle(Command::SetThreads {
         threads: available_threads(),

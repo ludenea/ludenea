@@ -288,7 +288,7 @@ pub fn verify(app: fn() -> App, args: &VerifyArgs, out: &mut dyn Write) -> Outco
 
 pub fn diff(app: fn() -> App, args: &DiffArgs, out: &mut dyn Write) -> Outcome {
     let (a, b) = (read(&args.snapshot_a)?, read(&args.snapshot_b)?);
-    let host = Host::new(app()).map_err(|error| error.to_string())?;
+    let host = Host::new(app).map_err(|error| error.to_string())?;
     let mut client = InProcess::connect(host, PROTOCOL_VERSION).map_err(|error| error.message)?;
     let Reply::Differences { differences } = send(
         &mut client,

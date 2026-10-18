@@ -25,12 +25,12 @@ export type Log = (level: ConsoleLevel, text: string) => void;
 const devtools: Log = (level, text) => (level === "error" ? console.error(text) : console.warn(text));
 
 export async function exportSession(control: ControlClient): Promise<SavedSession> {
-  const [{ scene, saved_scene, inputs, edits, undo, hashes, assets, branches, document }, timeline] = await Promise.all([
+  const [{ scene, saved_scene, inputs, edits, undo, hashes, assets, branches, document, keeps_assets }, timeline] = await Promise.all([
     control.request({ type: "export_session" }),
     control.request({ type: "get_timeline" }),
   ]);
   return {
-    load: { type: "load_session", scene, saved_scene, inputs, edits, undo, expected: hashes, assets, branches, document },
+    load: { type: "load_session", scene, saved_scene, inputs, edits, undo, expected: hashes, assets, branches, document, keeps_assets },
     tick: timeline.current,
   };
 }

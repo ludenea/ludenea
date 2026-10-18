@@ -50,7 +50,7 @@ fn assets() -> Vec<(AssetId, String)> {
 
 /// A boxes host with the spawner scene loaded with its assets, and its reply.
 fn spawner_host(scene: String) -> (Host, Reply) {
-    let mut host = Host::new(boxes::app()).unwrap();
+    let mut host = Host::new(boxes::app).unwrap();
     let reply = ok(
         &mut host,
         Command::LoadScene {
@@ -82,7 +82,7 @@ fn timeline(host: &mut Host) -> Timeline {
 #[test]
 fn handshake_refuses_version_2() {
     assert_eq!(PROTOCOL_VERSION, 3);
-    let Err(error) = InProcess::connect(Host::new(boxes::app()).unwrap(), 2) else {
+    let Err(error) = InProcess::connect(Host::new(boxes::app).unwrap(), 2) else {
         panic!("a version 2 client connects");
     };
     assert_eq!(
@@ -96,7 +96,7 @@ fn handshake_refuses_version_2() {
 
 #[test]
 fn game_info_lists_assets_events_and_fingerprint() {
-    let host = Host::new(boxes::app()).unwrap();
+    let host = Host::new(boxes::app).unwrap();
     let game = host.game_info();
     let names = |schemas: &[ludenea::control::NamedSchema]| -> Vec<String> {
         schemas.iter().map(|named| named.name.clone()).collect()
@@ -192,8 +192,11 @@ fn set_asset_field_records_set_asset_past_tick_0() {
 
 #[test]
 fn new_asset_value_uses_default() {
-    let mut app = App::new();
-    app.asset_with_default::<Tuning>();
+    fn app() -> App {
+        let mut app = App::new();
+        app.asset_with_default::<Tuning>();
+        app
+    }
     let mut host = Host::new(app).unwrap();
     let reply = ok(
         &mut host,
@@ -211,7 +214,7 @@ fn new_asset_value_uses_default() {
 
 #[test]
 fn new_asset_value_without_default_is_an_error() {
-    let mut host = Host::new(boxes::app()).unwrap();
+    let mut host = Host::new(boxes::app).unwrap();
     let error = host
         .handle(Command::NewAssetValue {
             asset: SpawnerStats::NAME.to_string(),
@@ -223,7 +226,7 @@ fn new_asset_value_without_default_is_an_error() {
 
 #[test]
 fn switch_rename_and_delete_branch_over_protocol() {
-    let mut host = Host::new(boxes::app()).unwrap();
+    let mut host = Host::new(boxes::app).unwrap();
     ok(
         &mut host,
         Command::LoadScene {
@@ -291,13 +294,14 @@ fn session_export_from_2a_loads() {
         assets,
         branches,
         document,
+        ..
     } = serde_json::from_str(fixture).unwrap()
     else {
         panic!("the fixture is a session export");
     };
     assert!(assets.is_empty() && branches.0.is_empty());
     assert_eq!(document, Document::Scene);
-    let mut host = Host::new(boxes::app()).unwrap();
+    let mut host = Host::new(boxes::app).unwrap();
     ok(
         &mut host,
         Command::LoadSession {
@@ -310,6 +314,7 @@ fn session_export_from_2a_loads() {
             assets,
             branches,
             document,
+            keeps_assets: false,
         },
     );
     while timeline(&mut host).resimulating {
@@ -348,7 +353,7 @@ fn branches(timeline: &Timeline) -> Vec<(BranchId, String, Option<BranchId>, u64
 
 #[test]
 fn export_and_load_session_round_trips_assets_branches_and_document() {
-    let mut host = Host::new(boxes::app()).unwrap();
+    let mut host = Host::new(boxes::app).unwrap();
     ok(
         &mut host,
         Command::LoadScene {
@@ -394,6 +399,7 @@ fn export_and_load_session_round_trips_assets_branches_and_document() {
         assets,
         branches: tree,
         document,
+        ..
     } = ok(&mut host, Command::ExportSession)
     else {
         panic!("export_session replies session");
@@ -401,7 +407,7 @@ fn export_and_load_session_round_trips_assets_branches_and_document() {
     assert_eq!(document, Document::Prefab);
     assert!(!assets.is_empty() && !tree.0.is_empty());
 
-    let mut loaded = Host::new(boxes::app()).unwrap();
+    let mut loaded = Host::new(boxes::app).unwrap();
     ok(
         &mut loaded,
         Command::LoadSession {
@@ -414,6 +420,7 @@ fn export_and_load_session_round_trips_assets_branches_and_document() {
             assets: assets.clone(),
             branches: tree,
             document,
+            keeps_assets: false,
         },
     );
     while timeline(&mut loaded).resimulating {
@@ -497,7 +504,7 @@ fn load_session_refuses_a_hostile_branch_tree() {
     })
     .unwrap();
     for tree in [far_fork, vec![0xff; 16]] {
-        let mut host = Host::new(boxes::app()).unwrap();
+        let mut host = Host::new(boxes::app).unwrap();
         let error = host
             .handle(Command::LoadSession {
                 scene: boxes::generate_scene(30, 7),
@@ -509,6 +516,7 @@ fn load_session_refuses_a_hostile_branch_tree() {
                 assets: Vec::new(),
                 branches: Bytes(tree),
                 document: Document::Scene,
+                keeps_assets: false,
             })
             .unwrap_err();
         assert_eq!(error.code, ErrorCode::InvalidCommand);
@@ -558,7 +566,7 @@ fn load_session_refuses_a_stored_edit_past_any_run() {
         ],
     })
     .unwrap();
-    let mut host = Host::new(boxes::app()).unwrap();
+    let mut host = Host::new(boxes::app).unwrap();
     let error = host
         .handle(Command::LoadSession {
             scene: boxes::generate_scene(30, 7),
@@ -570,6 +578,7 @@ fn load_session_refuses_a_stored_edit_past_any_run() {
             assets: Vec::new(),
             branches: Bytes(tree),
             document: Document::Scene,
+            keeps_assets: false,
         })
         .unwrap_err();
     assert_eq!(error.code, ErrorCode::InvalidCommand);
@@ -781,7 +790,7 @@ fn export_and_load_replay_round_trip() {
     assert_eq!(hash(&mut host), expected);
     assert_eq!(timeline(&mut host).current, 40);
 
-    let mut loaded = Host::new(boxes::app()).unwrap();
+    let mut loaded = Host::new(boxes::app).unwrap();
     assert_eq!(
         ok(&mut loaded, Command::LoadReplay { replay }),
         Reply::ReplayLoaded {
@@ -810,7 +819,7 @@ fn export_replay_of_another_branch() {
     let after = timeline(&mut host);
     assert_eq!((after.branch, after.current), (forked.branch, 20));
 
-    let mut loaded = Host::new(boxes::app()).unwrap();
+    let mut loaded = Host::new(boxes::app).unwrap();
     ok(&mut loaded, Command::LoadReplay { replay });
     settle(&mut loaded);
     ok(
@@ -836,7 +845,7 @@ fn load_replay_with_broken_input_names_the_tick() {
     inputs.ticks[3] = vec![0xff; 9];
     replay.inputs = inputs.encode();
 
-    let mut loaded = Host::new(boxes::app()).unwrap();
+    let mut loaded = Host::new(boxes::app).unwrap();
     let error = loaded
         .handle(Command::LoadReplay {
             replay: Bytes(replay.encode()),
@@ -864,7 +873,7 @@ fn load_replay_with_changed_fingerprint_reports_first_divergent_tick() {
     replay.hashes[12] ^= 1;
     replay.hashes[20] ^= 1;
 
-    let mut loaded = Host::new(boxes::app()).unwrap();
+    let mut loaded = Host::new(boxes::app).unwrap();
     assert_eq!(
         ok(
             &mut loaded,
@@ -1003,7 +1012,7 @@ fn replay_of_a_replay_keeps_prefabs_reached_only_by_instances() {
     step(&mut host, 20);
     let a = export_replay(&mut host, None);
 
-    let mut loaded = Host::new(boxes::app()).unwrap();
+    let mut loaded = Host::new(boxes::app).unwrap();
     ok(&mut loaded, Command::LoadReplay { replay: a.clone() });
     settle(&mut loaded);
     let b = export_replay(&mut loaded, None);
@@ -1042,13 +1051,17 @@ fn export_replay_contains_a_panic_and_keeps_the_session() {
         assets,
         branches,
         document,
+        ..
     } = ok(&mut host, Command::ExportSession)
     else {
         panic!("export_session replies session");
     };
     // A build that panics at tick 30, which only the stored root reaches.
-    let mut app = boxes::app();
-    app.system(Sim, panic_at_30);
+    fn app() -> App {
+        let mut app = boxes::app();
+        app.system(Sim, panic_at_30);
+        app
+    }
     let mut panicking = Host::new(app).unwrap();
     ok(
         &mut panicking,
@@ -1062,6 +1075,7 @@ fn export_replay_contains_a_panic_and_keeps_the_session() {
             assets,
             branches,
             document,
+            keeps_assets: false,
         },
     );
     settle(&mut panicking);
@@ -1097,7 +1111,7 @@ fn load_replay_refuses_an_edit_past_the_recorded_ticks() {
         },
     });
     replay.edits = edits.encode();
-    let mut loaded = Host::new(boxes::app()).unwrap();
+    let mut loaded = Host::new(boxes::app).unwrap();
     let error = loaded
         .handle(Command::LoadReplay {
             replay: Bytes(replay.encode()),
@@ -1123,13 +1137,17 @@ fn grow(mut scores: Query<&mut Score>, mut rng: ResMut<Rng>) {
     }
 }
 
+fn score_app() -> App {
+    let mut app = App::new();
+    app.component::<Score>().system(Sim, grow);
+    app
+}
+
 #[test]
 fn branch_restored_before_its_edits_still_reloads() {
     // A game without inputs records no input: its edits lie past its hashes once a
     // restore drops them.
-    let mut app = App::new();
-    app.component::<Score>().system(Sim, grow);
-    let mut host = Host::new(app).unwrap();
+    let mut host = Host::new(score_app).unwrap();
     ok(
         &mut host,
         Command::LoadScene {
@@ -1183,13 +1201,12 @@ fn branch_restored_before_its_edits_still_reloads() {
         assets,
         branches: tree,
         document,
+        ..
     } = ok(&mut host, Command::ExportSession)
     else {
         panic!("export_session replies session");
     };
-    let mut app = App::new();
-    app.component::<Score>().system(Sim, grow);
-    let mut loaded = Host::new(app).unwrap();
+    let mut loaded = Host::new(score_app).unwrap();
     ok(
         &mut loaded,
         Command::LoadSession {
@@ -1202,6 +1219,7 @@ fn branch_restored_before_its_edits_still_reloads() {
             assets,
             branches: tree,
             document,
+            keeps_assets: false,
         },
     );
     settle(&mut loaded);

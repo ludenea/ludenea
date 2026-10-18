@@ -55,8 +55,7 @@ impl WorkerHost {
             });
             post_message(&parse_json(&crash.to_string()));
         }));
-        let host =
-            Host::new(app()).unwrap_or_else(|error| panic!("cannot build the game: {error}"));
+        let host = Host::new(app).unwrap_or_else(|error| panic!("cannot build the game: {error}"));
         WorkerHost {
             host,
             connected: false,

@@ -53,7 +53,7 @@ fn golden_matches_with_8_threads() {
 }
 
 fn connect() -> InProcess {
-    let host = Host::new(boxes::app()).unwrap();
+    let host = Host::new(boxes::app).unwrap();
     let mut client = InProcess::connect(host, PROTOCOL_VERSION).unwrap();
     let ron = fs::read_to_string(SCENE).unwrap();
     client

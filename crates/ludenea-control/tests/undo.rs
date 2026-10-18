@@ -416,7 +416,7 @@ fn session_export_from_2a_with_undo_history_resumes() {
         }]
     ));
 
-    let mut host = Host::new(boxes::app()).unwrap();
+    let mut host = Host::new(boxes::app).unwrap();
     host.handle(Command::LoadSession {
         scene,
         saved_scene,
@@ -427,6 +427,7 @@ fn session_export_from_2a_with_undo_history_resumes() {
         assets: Vec::new(),
         branches: Bytes(Vec::new()),
         document: Document::Scene,
+        keeps_assets: false,
     })
     .unwrap();
     let timeline = |host: &mut Host| match host.handle(Command::GetTimeline).unwrap() {

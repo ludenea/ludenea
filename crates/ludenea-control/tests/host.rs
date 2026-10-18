@@ -29,7 +29,7 @@ fn app() -> App {
 const SCENE: &str = r#"Scene(version: 1, resources: {}, entities: [{ "host::Score": (5) }])"#;
 
 fn client() -> InProcess {
-    let mut client = InProcess::connect(Host::new(app()).unwrap(), PROTOCOL_VERSION).unwrap();
+    let mut client = InProcess::connect(Host::new(app).unwrap(), PROTOCOL_VERSION).unwrap();
     client
         .request(Command::LoadScene {
             scene: SCENE.into(),
@@ -67,7 +67,7 @@ fn log(ticks: &[u8]) -> Bytes {
 
 #[test]
 fn handshake_with_version_1_is_refused() {
-    let error = InProcess::connect(Host::new(app()).unwrap(), 1)
+    let error = InProcess::connect(Host::new(app).unwrap(), 1)
         .err()
         .unwrap();
     assert_eq!(error.code, ErrorCode::VersionMismatch);
@@ -76,7 +76,7 @@ fn handshake_with_version_1_is_refused() {
 
 #[test]
 fn welcome_carries_game_schemas() {
-    let client = InProcess::connect(Host::new(app()).unwrap(), PROTOCOL_VERSION).unwrap();
+    let client = InProcess::connect(Host::new(app).unwrap(), PROTOCOL_VERSION).unwrap();
     let game = client.game();
     let score = game
         .components
@@ -345,6 +345,7 @@ fn every_command_and_reply_round_trips_through_json() {
             assets: vec![(AssetId(7), "a".into())],
             branches: bytes.clone(),
             document: Document::Prefab,
+            keeps_assets: false,
         },
         Command::GetAsset { id: AssetId(7) },
         Command::SetAssetField {
@@ -426,6 +427,17 @@ fn every_command_and_reply_round_trips_through_json() {
         Command::Unsubscribe {
             topic: Topic::Introspection,
         },
+        Command::SetCompareBranch {
+            branch: Some(BranchId(2)),
+        },
+        Command::SetCompareBranch { branch: None },
+        Command::GetGhostDraw {
+            tick: 9,
+            layers: vec!["physics.colliders".into()],
+        },
+        Command::Subscribe {
+            topic: Topic::Ghost,
+        },
     ];
     for command in commands {
         let message = ClientMessage::Request { id: 7, command };
@@ -441,7 +453,7 @@ fn every_command_and_reply_round_trips_through_json() {
     let json = serde_json::to_string(&hello).unwrap();
     assert_eq!(json, r#"{"type":"hello","protocol_version":2}"#);
 
-    let tree = Host::new(app())
+    let tree = Host::new(app)
         .map(|mut host| host.handle(Command::GetHashTree))
         .unwrap();
     let Ok(Reply::HashTree { tree, .. }) = tree else {
@@ -469,6 +481,7 @@ fn every_command_and_reply_round_trips_through_json() {
             head: 9,
             stale: false,
         }],
+        compare: Some(BranchId(0)),
     };
     let replies = vec![
         Reply::Done,
@@ -550,6 +563,11 @@ fn every_command_and_reply_round_trips_through_json() {
         Reply::Picked {
             entities: vec![entity],
         },
+        Reply::GhostDraw {
+            frame: Default::default(),
+            tick: 4,
+            lagging: true,
+        },
         Reply::Entity {
             entity,
             components: BTreeMap::from([
@@ -583,6 +601,7 @@ fn every_command_and_reply_round_trips_through_json() {
             assets: vec![(AssetId(7), "a".into())],
             branches: bytes.clone(),
             document: Document::Scene,
+            keeps_assets: true,
         },
         Reply::Loaded {
             warnings: vec!["w".into()],
@@ -650,6 +669,7 @@ fn every_command_and_reply_round_trips_through_json() {
         },
         Event::TimelineChanged { timeline },
         Event::Resimulated { up_to: 7 },
+        Event::GhostAdvanced { tick: 6 },
         Event::Diverged {
             tick: 30,
             expected: Hash64(1),

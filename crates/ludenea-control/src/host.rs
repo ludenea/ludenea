@@ -7,9 +7,11 @@ use ludenea_app::{
 };
 use std::collections::BTreeSet;
 
+use ludenea_debug_draw::DebugDrawFrame;
 use ludenea_ecs::{AssetId, Entity, EntityFilter, FilterError, Snapshot};
 use serde_json::Value as JsonValue;
 
+use crate::compare::{COMPARE_BUDGET_PAUSED, COMPARE_BUDGET_PLAYING, CompareRun};
 use crate::json::{from_wire, to_wire};
 use crate::pacer::Pacer;
 use crate::path::{Path, PathSegment, set_at_path};
@@ -25,8 +27,9 @@ use crate::values::{asset_json, asset_value, entity_values, resource_values, val
 pub const RESIMULATION_BUDGET: u32 = 240;
 
 /// Owns a simulation and its editor session, executes protocol commands against them, and
-/// runs play and resimulation as time passes.
+/// runs play, resimulation, and the compare simulation as time passes.
 pub struct Host {
+    build: fn() -> App,
     simulation: Simulation,
     session: Session,
     pacer: Pacer,
@@ -38,16 +41,27 @@ pub struct Host {
     subscriptions: Subscriptions,
     /// Events produced by commands, returned by the next `advance`.
     events: Vec<Event>,
+    /// The second simulation, built the first time the ghost is needed.
+    compare: Option<CompareRun>,
+    /// Whether `Topic::Ghost` is subscribed: the compare simulation follows only then.
+    ghost: bool,
+    /// The ghost's tick last reported by `GhostAdvanced`.
+    ghost_tick: Option<u64>,
 }
 
 impl Host {
-    /// Starts a session on an empty scene: the built world, without entities.
-    pub fn new(app: App) -> Result<Host, AppError> {
-        let mut simulation = app.build()?;
+    /// Starts a session on an empty scene: the built world, without entities. `build` makes
+    /// the game again for the compare simulation.
+    pub fn new(build: fn() -> App) -> Result<Host, AppError> {
+        let mut simulation = build().build()?;
         let scene = simulation.save_scene();
         let session = Session::start(&mut simulation, scene, AssetTexts::new(), Document::Scene)
             .expect("the built world's scene loads");
         Ok(Host {
+            build,
+            compare: None,
+            ghost: false,
+            ghost_tick: None,
             pacer: Pacer::new(simulation.tick_rate()),
             timeline: session.timeline(),
             simulation,
@@ -96,6 +110,9 @@ impl Host {
         let before = changes_state(&command).then(|| self.state());
         let result = self.execute(command);
         if let Some(before) = before {
+            if let Some(compare) = &mut self.compare {
+                compare.invalidate();
+            }
             self.report_state(before);
             self.report_changes();
         }
@@ -106,7 +123,9 @@ impl Host {
     /// Runs the ticks due after `elapsed_seconds` while playing, and a resimulation budget
     /// while the recorded future is stale. Returns the events since the last call.
     pub fn advance(&mut self, elapsed_seconds: f64) -> Vec<Event> {
-        if self.session.timeline().resimulating {
+        let resimulating = self.session.timeline().resimulating;
+        let start = self.simulation.tick();
+        if resimulating {
             // Resimulation changes the state shown only by moving to another tick (back
             // to the tick of a scene change), so the tick alone says whether to announce it.
             let before = self.simulation.tick();
@@ -139,9 +158,82 @@ impl Host {
                 }
             }
         }
+        let compare = self.session.compare_branch();
+        let grown =
+            self.simulation.tick() != start && compare == Some(self.session.current_branch());
+        if (resimulating || grown)
+            && let Some(compare) = &mut self.compare
+        {
+            compare.invalidate();
+        }
+        self.follow_compare();
         self.report_changes();
         self.report_timeline();
         std::mem::take(&mut self.events)
+    }
+
+    /// Runs the compare simulation toward the current tick while the ghost is subscribed;
+    /// a failure stops the ghost, the main session untouched.
+    fn follow_compare(&mut self) {
+        if !self.ghost || self.session.compare_branch().is_none() {
+            return;
+        }
+        let budget = if self.playing {
+            COMPARE_BUDGET_PLAYING
+        } else {
+            COMPARE_BUDGET_PAUSED
+        };
+        let tick = self.simulation.tick();
+        let followed = self.build_compare().and_then(|()| {
+            let compare = self.compare.as_mut().expect("built");
+            compare.follow(&self.session, tick, budget)
+        });
+        match followed {
+            Ok(state) => {
+                if self.ghost_tick != Some(state.tick) {
+                    self.ghost_tick = Some(state.tick);
+                    self.events.push(Event::GhostAdvanced { tick: state.tick });
+                }
+            }
+            Err(message) => self.stop_ghost(&message),
+        }
+    }
+
+    /// Builds the compare simulation on first use.
+    fn build_compare(&mut self) -> Result<(), String> {
+        if self.compare.is_none() {
+            let sim = (self.build)().build().map_err(|error| error.to_string())?;
+            self.compare = Some(CompareRun::new(sim));
+        }
+        Ok(())
+    }
+
+    /// Drops the compare simulation and the compare branch, and reports why.
+    fn stop_ghost(&mut self, message: &str) {
+        self.compare = None;
+        self.ghost_tick = None;
+        self.session
+            .set_compare_branch(None)
+            .expect("no branch always sets");
+        self.console(ConsoleLevel::Error, format!("the ghost stopped: {message}"));
+    }
+
+    fn ghost_draw(&mut self, tick: u64, layers: Vec<String>) -> Result<Reply, ProtocolError> {
+        let (frame, tick, lagging) = match self.session.compare_branch() {
+            None => (DebugDrawFrame::default(), tick, false),
+            Some(_) => {
+                let layers = layers.into_iter().collect();
+                self.build_compare()
+                    .map_err(|message| ProtocolError::new(ErrorCode::InvalidCommand, message))?;
+                let compare = self.compare.as_mut().expect("built");
+                compare.draw(&self.session, tick, &layers)
+            }
+        };
+        Ok(Reply::GhostDraw {
+            frame,
+            tick,
+            lagging,
+        })
     }
 
     /// The events queued since the last `advance` or `drain_events`, for a client that
@@ -381,6 +473,7 @@ impl Host {
                     assets: export.assets,
                     branches: Bytes(export.branches),
                     document: self.session.document(),
+                    keeps_assets: export.keeps_assets,
                 })
             }
             Command::ReplaceScene { scene, assets } => {
@@ -399,6 +492,7 @@ impl Host {
                 assets,
                 branches,
                 document,
+                keeps_assets,
             } => {
                 // Empty logs load the scene alone; the logs are checked here for their
                 // error codes.
@@ -418,6 +512,7 @@ impl Host {
                     hashes: expected.into_iter().map(|hash| hash.0).collect(),
                     branches: branches.0,
                     assets,
+                    keeps_assets,
                 };
                 let session = Session::resume(sim, export, document).map_err(|e| self.fail(e))?;
                 self.load(session);
@@ -631,7 +726,18 @@ impl Host {
             Command::Pick { point } => Ok(Reply::Picked {
                 entities: sim.pick(point),
             }),
+            Command::SetCompareBranch { branch } => {
+                self.session
+                    .set_compare_branch(branch)
+                    .map_err(|e| self.fail(e))?;
+                Ok(Reply::Done)
+            }
+            Command::GetGhostDraw { tick, layers } => self.ghost_draw(tick, layers),
             Command::Subscribe { topic } => {
+                if topic == Topic::Ghost {
+                    self.ghost = true;
+                    self.ghost_tick = None;
+                }
                 if topic == Topic::Introspection {
                     self.session
                         .introspection
@@ -643,6 +749,9 @@ impl Host {
                 Ok(Reply::Done)
             }
             Command::Unsubscribe { topic } => {
+                if topic == Topic::Ghost {
+                    self.ghost = false;
+                }
                 if topic == Topic::Introspection {
                     self.session.introspection = None;
                 }
@@ -1059,6 +1168,8 @@ fn changes_state(command: &Command) -> bool {
             | Command::GetTickCommands { .. }
             | Command::GetDebugDraw { .. }
             | Command::Pick { .. }
+            | Command::SetCompareBranch { .. }
+            | Command::GetGhostDraw { .. }
             | Command::Subscribe { .. }
             | Command::Unsubscribe { .. }
     )

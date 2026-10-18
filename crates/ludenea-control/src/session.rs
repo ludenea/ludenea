@@ -113,6 +113,8 @@ pub struct Timeline {
     pub resimulating: bool,
     pub branch: BranchId,
     pub branches: Vec<BranchInfo>,
+    /// The branch the ghost shows: the parent of a branch when it forks, until changed.
+    pub compare: Option<BranchId>,
 }
 
 /// One report of `Session::resimulate`.
@@ -155,6 +157,29 @@ pub struct SessionExport {
     /// The prefab and data asset texts the scene loads with, in file form.
     #[serde(default)]
     pub assets: Vec<(AssetId, String)>,
+    /// Whether every scene load keeps every asset, as a replay's session does.
+    #[serde(default)]
+    pub keeps_assets: bool,
+}
+
+/// The flattened run of a branch, for a simulation other than the session's.
+pub(crate) struct BranchRun {
+    pub inputs: InputLog,
+    pub edits: EditLog,
+    pub hashes: Vec<u64>,
+    pub checkpoints: Checkpoints,
+    /// The last tick whose recorded hash and checkpoints hold for the current scene and
+    /// build; those after it are stale.
+    pub fresh: u64,
+}
+
+impl BranchRun {
+    /// The last tick of the run.
+    pub fn end(&self) -> u64 {
+        let inputs = (self.inputs.ticks.len() as u64).saturating_sub(1);
+        let edits = self.edits.last_tick().unwrap_or(0);
+        (self.hashes.len() as u64 - 1).max(inputs).max(edits)
+    }
 }
 
 pub struct Session {
@@ -193,6 +218,8 @@ pub struct Session {
     /// Whether every scene load keeps every asset of `assets`, reached or not, as a
     /// replay's resolved scene needs: it reaches no prefab.
     keeps_assets: bool,
+    /// The branch the ghost shows, while it exists.
+    compare: Option<BranchId>,
 }
 
 impl Session {
@@ -239,6 +266,7 @@ impl Session {
             switching: None,
             warnings,
             keeps_assets: false,
+            compare: None,
         }
     }
 
@@ -268,8 +296,13 @@ impl Session {
             EditLog::decode(&export.edits)?
         };
         sim.set_players(usize::from(inputs.players));
-        let assets = export.assets.into_iter().collect();
-        let mut session = Session::start(sim, export.scene, assets, document)?;
+        let assets: AssetTexts = export.assets.into_iter().collect();
+        let warnings = load(sim, document, &export.scene, &assets)?;
+        if export.keeps_assets {
+            keep_assets(sim, assets.iter().map(|(&id, text)| (id, text.as_str())))?;
+        }
+        let mut session = Session::loaded(sim, export.scene, assets, document, warnings);
+        session.keeps_assets = export.keeps_assets;
         if let Some(saved) = export.saved_scene {
             session.scene_dirty = saved != session.scene;
             session.saved_scene = saved;
@@ -281,6 +314,7 @@ impl Session {
         if !export.branches.is_empty() {
             session.tree = BranchTree::decode(&export.branches, &session.edits, session.head)?;
         }
+        session.compare = session.tree.current_branch().parent;
         if !export.hashes.is_empty() {
             session.hashes = export.hashes;
         }
@@ -376,9 +410,68 @@ impl Session {
     /// Loads the session's scene into `sim` again and comes back to the current tick, after
     /// `sim` loaded something else.
     pub fn reload(&mut self, sim: &mut Simulation) -> Result<(), SessionError> {
+        self.load_into(sim)?;
+        self.replay_to(sim, self.current)
+    }
+
+    /// Loads the session's scene and assets into `sim`, as every scene load of the session
+    /// does, with its player count, so load addresses and kept assets match.
+    pub(crate) fn load_into(&self, sim: &mut Simulation) -> Result<(), SessionError> {
         self.load_scene(sim, &self.scene, &self.assets)?;
         sim.set_players(usize::from(self.inputs.players));
-        self.replay_to(sim, self.current)
+        Ok(())
+    }
+
+    /// The branch the ghost shows, while it exists.
+    pub fn compare_branch(&self) -> Option<BranchId> {
+        self.compare.filter(|&id| self.tree.get(id).is_some())
+    }
+
+    /// Sets the branch the ghost shows, or none.
+    pub fn set_compare_branch(&mut self, branch: Option<BranchId>) -> Result<(), SessionError> {
+        if let Some(id) = branch
+            && self.tree.get(id).is_none()
+        {
+            return Err(SessionError::NoSuchBranch(id));
+        }
+        self.compare = branch;
+        Ok(())
+    }
+
+    /// The flattened run of branch `id`, the current one included. Its recorded hashes and
+    /// checkpoints are fresh up to the first stale tick on its way: a stored branch's
+    /// staleness, or the current branch's resimulation.
+    // ponytail: copies every checkpoint on the way; hand out the one a seek needs if
+    // composing shows in profiles.
+    pub(crate) fn branch_run(&self, id: BranchId, defaults: Option<&[u8]>) -> BranchRun {
+        let (inputs, edits, hashes, checkpoints) =
+            self.composed(id, &self.current_segment(), defaults);
+        let path = self.tree.path(id);
+        let fresh = path
+            .iter()
+            .enumerate()
+            .filter_map(|(at, &branch)| {
+                let stale = if branch == self.tree.current() {
+                    self.resimulating
+                } else {
+                    self.tree.get(branch)?.stale
+                };
+                let until = path
+                    .get(at + 1)
+                    .and_then(|&child| self.tree.get(child))
+                    .map_or(u64::MAX, |child| child.fork_tick);
+                stale.filter(|&from| from < until)
+            })
+            .min()
+            .unwrap_or(u64::MAX)
+            .min(hashes.len() as u64 - 1);
+        BranchRun {
+            inputs,
+            edits,
+            hashes,
+            checkpoints,
+            fresh,
+        }
     }
 
     /// Replaces the recorded inputs and seeks to tick 0.
@@ -1177,6 +1270,7 @@ impl Session {
                 .iter()
                 .map(|(&id, text)| (id, text.clone()))
                 .collect(),
+            keeps_assets: self.keeps_assets,
         })
     }
 
@@ -1197,6 +1291,7 @@ impl Session {
             resimulating: self.resimulating.is_some(),
             branch: self.current_branch(),
             branches: self.branches(),
+            compare: self.compare_branch(),
         }
     }
 
@@ -1441,6 +1536,7 @@ impl Session {
         if self.end() > tick {
             let segment = self.current_segment();
             let fork = (tick, self.edits.at(tick).len());
+            self.compare = Some(self.tree.current());
             self.tree.fork(segment, self.resimulating, fork);
         }
         self.discard_after(tick);
@@ -2005,7 +2101,7 @@ fn override_value(
 }
 
 /// The message of a panic's payload.
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     payload
         .downcast_ref::<&str>()
         .map(|message| message.to_string())

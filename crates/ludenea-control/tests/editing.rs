@@ -17,7 +17,7 @@ fn ok(host: &mut Host, command: Command) -> Reply {
 
 /// A boxes host with the scene and `ticks` idle recorded inputs loaded.
 fn loaded(ticks: u64) -> Host {
-    let mut host = Host::new(boxes::app()).unwrap();
+    let mut host = Host::new(boxes::app).unwrap();
     ok(
         &mut host,
         Command::LoadScene {

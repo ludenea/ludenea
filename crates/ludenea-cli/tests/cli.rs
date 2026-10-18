@@ -125,7 +125,7 @@ fn golden_hashes(dir: &Path) -> Vec<u64> {
 
 /// The state hash of a dumped snapshot, after restoring it into a fresh host.
 fn snapshot_hash(path: &Path) -> u64 {
-    let mut client = InProcess::connect(Host::new(app()).unwrap(), PROTOCOL_VERSION).unwrap();
+    let mut client = InProcess::connect(Host::new(app).unwrap(), PROTOCOL_VERSION).unwrap();
     let snapshot = Bytes(fs::read(path).unwrap());
     client.request(Command::Restore { snapshot }).unwrap();
     match client.request(Command::GetHash) {
@@ -241,7 +241,7 @@ fn trace_parent_directory_is_created() {
 
 /// A session with a recorded edit, exported through the protocol and written as files.
 fn export_session_with_edits(dir: &Path) -> Vec<u64> {
-    let mut client = InProcess::connect(Host::new(app()).unwrap(), PROTOCOL_VERSION).unwrap();
+    let mut client = InProcess::connect(Host::new(app).unwrap(), PROTOCOL_VERSION).unwrap();
     let ron = fs::read_to_string(dir.join("scene.ron")).unwrap();
     let log = Bytes(fs::read(dir.join("inputs.bin")).unwrap());
     client

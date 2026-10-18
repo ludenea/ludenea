@@ -64,6 +64,8 @@ export type ReplyFor<C extends Command> = C extends { type: "get_hash" }
                               ? Extract<Reply, { type: "tick_commands" }>
                               : C extends { type: "get_debug_draw" }
                                 ? Extract<Reply, { type: "debug_draw" }>
+                                : C extends { type: "get_ghost_draw" }
+                                  ? Extract<Reply, { type: "ghost_draw" }>
                                 : C extends { type: "pick" }
                                   ? Extract<Reply, { type: "picked" }>
                                   : C extends { type: "load_scene" | "replace_scene" }

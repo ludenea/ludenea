@@ -45,7 +45,7 @@ fn error(host: &mut Host, command: Command) -> ErrorCode {
 }
 
 /// A boxes host with `scene` and `inputs` loaded.
-fn loaded_with(app: App, scene: String, inputs: Bytes) -> Host {
+fn loaded_with(app: fn() -> App, scene: String, inputs: Bytes) -> Host {
     let mut host = Host::new(app).unwrap();
     ok(
         &mut host,
@@ -60,7 +60,7 @@ fn loaded_with(app: App, scene: String, inputs: Bytes) -> Host {
 }
 
 fn loaded(ticks: u64) -> Host {
-    loaded_with(boxes::app(), scene_a(), recorded(ticks))
+    loaded_with(boxes::app, scene_a(), recorded(ticks))
 }
 
 fn step(host: &mut Host, ticks: u32) -> Vec<Hash64> {
@@ -132,6 +132,7 @@ fn load_session(export: Export, expected: Vec<Hash64>) -> Command {
         assets: Vec::new(),
         branches: Bytes(Vec::new()),
         document: Document::Scene,
+        keeps_assets: false,
     }
 }
 
@@ -151,7 +152,7 @@ fn resimulate(host: &mut Host) -> Vec<Event> {
 #[test]
 fn cli_style_run_through_host_matches_golden() {
     let mut host = loaded_with(
-        boxes::app(),
+        boxes::app,
         fs::read_to_string(SCENE).unwrap(),
         Bytes(fs::read(INPUTS).unwrap()),
     );
@@ -279,12 +280,17 @@ fn panic_at_50(time: Res<Time>) {
     }
 }
 
-#[test]
-fn panicking_system_pauses_with_panicked_and_keeps_session() {
+/// Boxes with a system that panics at tick 50.
+fn panicking_app() -> App {
     let mut app = boxes::app();
     app.system(Sim, panic_at_50);
+    app
+}
+
+#[test]
+fn panicking_system_pauses_with_panicked_and_keeps_session() {
     let inputs = recorded(100);
-    let mut host = loaded_with(app, scene_a(), inputs.clone());
+    let mut host = loaded_with(panicking_app, scene_a(), inputs.clone());
     ok(&mut host, Command::Play);
 
     let hook = std::panic::take_hook();
@@ -341,7 +347,7 @@ fn replace_scene_at_a_later_tick_returns_there_after_resimulation() {
     resimulate(&mut host);
     assert_eq!(timeline(&mut host).current, 40);
 
-    let mut fresh = loaded_with(boxes::app(), scene_b(), recorded(100));
+    let mut fresh = loaded_with(boxes::app, scene_b(), recorded(100));
     step(&mut fresh, 40);
     assert_eq!(hash(&mut host), hash(&mut fresh));
 
@@ -392,7 +398,7 @@ fn export_session_replays_in_fresh_host() {
     let hashes = exported.hashes.clone();
     assert_eq!(hashes.len(), 81);
 
-    let mut fresh = Host::new(boxes::app()).unwrap();
+    let mut fresh = Host::new(boxes::app).unwrap();
     ok(&mut fresh, load_session(exported, hashes.clone()));
     let events = resimulate(&mut fresh);
     assert!(
@@ -417,7 +423,7 @@ fn load_session_with_changed_code_reports_diverged() {
     let mut expected = exported.hashes.clone();
     expected[30] = Hash64(original.0 ^ 1);
 
-    let mut fresh = Host::new(boxes::app()).unwrap();
+    let mut fresh = Host::new(boxes::app).unwrap();
     ok(&mut fresh, load_session(exported, expected.clone()));
     let events = resimulate(&mut fresh);
     let diverged: Vec<_> = events
@@ -459,7 +465,7 @@ fn replace_scene_keeps_recorded_inputs() {
     assert_eq!(replaced.scene, scene_b());
     assert!(!timeline(&mut host).scene_dirty);
 
-    let mut direct = loaded_with(boxes::app(), scene_b(), inputs);
+    let mut direct = loaded_with(boxes::app, scene_b(), inputs);
     let mut hashes = vec![hash(&mut direct)];
     hashes.extend(step(&mut direct, 100));
     assert_eq!(replaced.hashes, hashes);
@@ -494,10 +500,8 @@ fn seek_while_resimulating_is_resimulating() {
 
 #[test]
 fn panic_during_resimulation_ends_it_and_keeps_undo_and_export() {
-    let mut app = boxes::app();
-    app.system(Sim, panic_at_50);
     let inputs = recorded(100);
-    let mut host = loaded_with(app, scene_a(), inputs.clone());
+    let mut host = loaded_with(panicking_app, scene_a(), inputs.clone());
     step(&mut host, 40);
     ok(
         &mut host,
@@ -532,7 +536,7 @@ fn panic_during_resimulation_ends_it_and_keeps_undo_and_export() {
 }
 
 fn snapshot_at(scene: String, tick: u32) -> (Bytes, Hash64) {
-    let mut host = loaded_with(boxes::app(), scene, recorded(100));
+    let mut host = loaded_with(boxes::app, scene, recorded(100));
     step(&mut host, tick);
     let Reply::Snapshot { snapshot, .. } = ok(&mut host, Command::TakeSnapshot) else {
         panic!()
@@ -588,7 +592,7 @@ fn ticked(events: &[Event]) -> Vec<(u64, Hash64)> {
 
 #[test]
 fn a_command_that_changes_the_state_announces_it_once() {
-    let mut host = Host::new(boxes::app()).unwrap();
+    let mut host = Host::new(boxes::app).unwrap();
     host.advance(0.0);
     ok(
         &mut host,
@@ -646,9 +650,7 @@ fn a_command_that_changes_the_state_announces_it_once() {
 
 #[test]
 fn a_panicking_step_names_its_tick_once() {
-    let mut app = boxes::app();
-    app.system(Sim, panic_at_50);
-    let mut host = loaded_with(app, scene_a(), recorded(100));
+    let mut host = loaded_with(panicking_app, scene_a(), recorded(100));
     step(&mut host, 50);
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
@@ -679,7 +681,7 @@ fn reads_announce_nothing() {
 
 #[test]
 fn load_session_with_empty_logs_loads_only_its_scene() {
-    let mut host = Host::new(boxes::app()).unwrap();
+    let mut host = Host::new(boxes::app).unwrap();
     let load = Command::LoadSession {
         scene: scene_a(),
         saved_scene: Some(scene_b()),
@@ -690,6 +692,7 @@ fn load_session_with_empty_logs_loads_only_its_scene() {
         assets: Vec::new(),
         branches: Bytes(Vec::new()),
         document: Document::Scene,
+        keeps_assets: false,
     };
     ok(&mut host, load);
     let timeline = timeline(&mut host);

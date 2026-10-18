@@ -10,4 +10,8 @@ export type Timeline = { head: number, simulated: number, current: number, check
  * What undo does, naming the branches it removes, such as
  * `Undo edit at tick 300 (removes Branch 3, Branch 4)`.
  */
-undo_label: string | null, redo_label: string | null, scene_dirty: boolean, resimulating: boolean, branch: BranchId, branches: Array<BranchInfo>, };
+undo_label: string | null, redo_label: string | null, scene_dirty: boolean, resimulating: boolean, branch: BranchId, branches: Array<BranchInfo>, 
+/**
+ * The branch the ghost shows: the parent of a branch when it forks, until changed.
+ */
+compare: BranchId | null, };

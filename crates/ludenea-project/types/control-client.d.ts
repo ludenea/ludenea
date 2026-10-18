@@ -124,6 +124,8 @@ type Topic = {
     "type": "resources";
 } | {
     "type": "introspection";
+} | {
+    "type": "ghost";
 };
 
 type Vec2 = {
@@ -246,6 +248,10 @@ type Command = {
      */
     branches: Bytes;
     document: Document;
+    /**
+     * Whether every scene load keeps every asset, as a replay's session does.
+     */
+    keeps_assets: boolean;
 } | {
     "type": "get_asset";
     id: AssetId;
@@ -325,6 +331,13 @@ type Command = {
 } | {
     "type": "pick";
     point: Vec2;
+} | {
+    "type": "set_compare_branch";
+    branch: BranchId | null;
+} | {
+    "type": "get_ghost_draw";
+    tick: number;
+    layers: Array<string>;
 } | {
     "type": "subscribe";
     topic: Topic;
@@ -471,6 +484,10 @@ type Timeline = {
     resimulating: boolean;
     branch: BranchId;
     branches: Array<BranchInfo>;
+    /**
+     * The branch the ghost shows: the parent of a branch when it forks, until changed.
+     */
+    compare: BranchId | null;
 };
 
 /**
@@ -527,6 +544,9 @@ type Event = {
     resources: {
         [key in string]: ComponentValue;
     };
+} | {
+    "type": "ghost_advanced";
+    tick: number;
 };
 
 type VariantFields = {
@@ -792,6 +812,7 @@ type Reply = {
     assets: Array<[AssetId, string]>;
     branches: Bytes;
     document: Document;
+    keeps_assets: boolean;
 } | {
     "type": "loaded";
     warnings: Array<string>;
@@ -835,6 +856,11 @@ type Reply = {
 } | {
     "type": "picked";
     entities: Array<Entity>;
+} | {
+    "type": "ghost_draw";
+    frame: DebugDrawFrame;
+    tick: number;
+    lagging: boolean;
 };
 
 type Outcome = {
@@ -1174,6 +1200,10 @@ type ReplyFor<C extends Command> = C extends {
     type: "get_debug_draw";
 } ? Extract<Reply, {
     type: "debug_draw";
+}> : C extends {
+    type: "get_ghost_draw";
+} ? Extract<Reply, {
+    type: "ghost_draw";
 }> : C extends {
     type: "pick";
 } ? Extract<Reply, {

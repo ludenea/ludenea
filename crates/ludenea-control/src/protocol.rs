@@ -294,6 +294,9 @@ pub enum Command {
         branches: Bytes,
         #[serde(default)]
         document: Document,
+        /// Whether every scene load keeps every asset, as a replay's session does.
+        #[serde(default)]
+        keeps_assets: bool,
     },
     /// The current value of a loaded asset.
     GetAsset {
@@ -399,6 +402,15 @@ pub enum Command {
     Pick {
         point: Vec2,
     },
+    /// The branch the ghost shows, or none.
+    SetCompareBranch {
+        branch: Option<BranchId>,
+    },
+    /// The debug drawing of the compare branch at `tick`; replies `GhostDraw`.
+    GetGhostDraw {
+        tick: u64,
+        layers: Vec<String>,
+    },
     Subscribe {
         topic: Topic,
     },
@@ -420,6 +432,8 @@ pub enum Topic {
     Resources,
     /// Records the events, commands, and system timings of the ticks run while subscribed.
     Introspection,
+    /// Runs the compare simulation toward the current tick; `GhostAdvanced` when it moves.
+    Ghost,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -483,6 +497,8 @@ pub enum Reply {
         branches: Bytes,
         #[serde(default)]
         document: Document,
+        #[serde(default)]
+        keeps_assets: bool,
     },
     /// A scene load: the warnings of stale overrides, the prefab instances, and where each
     /// entity of the scene came from.
@@ -532,6 +548,13 @@ pub enum Reply {
     },
     Picked {
         entities: Vec<Entity>,
+    },
+    /// The compare branch at `tick`: the tick asked for, or the last one the compare
+    /// simulation reached while `lagging` behind. Empty outside the compare branch's run.
+    GhostDraw {
+        frame: DebugDrawFrame,
+        tick: u64,
+        lagging: bool,
     },
 }
 
@@ -644,6 +667,11 @@ pub enum Event {
     /// The resources whose value changed since the last push.
     ResourcesChanged {
         resources: BTreeMap<String, ComponentValue>,
+    },
+    /// The compare simulation reached `tick`, or follows a tick outside the compare
+    /// branch's run.
+    GhostAdvanced {
+        tick: u64,
     },
 }
 
