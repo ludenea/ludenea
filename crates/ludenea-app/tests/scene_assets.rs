@@ -583,11 +583,24 @@ fn a_resource_and_a_component_may_share_a_stable_name() {
 }
 
 #[test]
+fn a_next_id_that_cannot_grow_is_refused_at_load() {
+    let mut simulation = simulation();
+    let error = simulation
+        .load_scene(&scene(u32::MAX, &[(0, &tag(1))]))
+        .unwrap_err();
+    assert!(
+        matches!(&error, SceneError::Parse(reason) if reason.contains("next_id")),
+        "{error}"
+    );
+}
+
+#[test]
 #[should_panic(expected = "fewer than u32::MAX local identifiers")]
 fn saving_past_the_last_local_identifier_panics_rather_than_reuse_one() {
     let mut simulation = simulation();
-    let ron = scene(u32::MAX, &[(0, &tag(1))]);
+    let ron = scene(u32::MAX - 1, &[(u32::MAX - 2, &tag(1))]);
     simulation.load_scene(&ron).unwrap();
+    simulation.world_mut().spawn();
     simulation.world_mut().spawn();
     simulation.save_scene_keeping(&ron);
 }

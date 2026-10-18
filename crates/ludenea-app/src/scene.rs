@@ -240,7 +240,7 @@ pub(crate) fn parse_scene(ron: &str) -> Result<ParsedScene, SceneError> {
                 return Err(SceneError::DuplicateLocal(local));
             }
             Ok(ParsedScene {
-                next_id: file.next_id,
+                next_id: growable(file.next_id)?,
                 checked: true,
                 resources: file.resources,
                 entities: file
@@ -277,7 +277,7 @@ fn parse_resolved(ron: &str) -> Result<ParsedScene, SceneError> {
         )));
     }
     Ok(ParsedScene {
-        next_id: file.next_id,
+        next_id: growable(file.next_id)?,
         checked: false,
         resources: file.resources,
         entities: file
@@ -1127,6 +1127,17 @@ fn instance_entries(ron: &str) -> Vec<(u32, String)> {
         .collect()
 }
 
+/// `next_id` when an identifier can still be given from it: `u32::MAX` is refused at load
+/// rather than when a save runs out of identifiers.
+fn growable(next_id: u32) -> Result<u32, SceneError> {
+    if next_id == u32::MAX {
+        return Err(SceneError::Parse(format!(
+            "`next_id` is {next_id}, which leaves no identifier for a new entity; renumber the scene"
+        )));
+    }
+    Ok(next_id)
+}
+
 /// The local identifier `count` after `id`.
 ///
 /// # Panics
@@ -1215,7 +1226,8 @@ fn rewrite_entities(
 }
 
 /// Calls `found` with the identifier, asset type name, and field path (such as `.stats`,
-/// `.weapons[2]`, or `.Armed.0`) of every handle inside the postcard `bytes` of a value of
+/// `.weapons[2]`, or `.Pair[0]` for a tuple variant: tuple elements read as indexes, as in
+/// every path `Rewriter` reports) of every handle inside the postcard `bytes` of a value of
 /// `schema`. Enum values are walked through their own variant only.
 ///
 /// # Panics
