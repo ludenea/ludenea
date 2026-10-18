@@ -1299,3 +1299,32 @@ fn branch_restored_before_its_edits_still_reloads() {
     settle(&mut loaded);
     assert_eq!(branches(&timeline(&mut loaded)), branches(&before));
 }
+
+#[test]
+fn compare_traces_against_the_session_waits_for_resimulation() {
+    let mut host = recorded_host();
+    let Reply::Scene { ron } = ok(&mut host, Command::SaveScene) else {
+        panic!("save_scene replies scene");
+    };
+    ok(
+        &mut host,
+        Command::ReplaceScene {
+            scene: ron,
+            assets: assets(),
+        },
+    );
+    assert!(timeline(&mut host).resimulating);
+    let trace = Trace {
+        version: TRACE_VERSION,
+        scene_hash: 0,
+        inputs_hash: 0,
+        hashes: vec![1],
+    };
+    let error = host
+        .handle(Command::CompareTraces {
+            a: Bytes(trace.encode()),
+            b: None,
+        })
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::Resimulating);
+}

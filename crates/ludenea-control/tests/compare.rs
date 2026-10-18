@@ -616,3 +616,66 @@ fn a_panic_in_the_compare_simulation_stops_the_ghost_only() {
     // The main session goes on.
     step(&mut host, 5);
 }
+
+/// Whether `draw_panics_when_armed` panics.
+static DRAW_ARMED: AtomicBool = AtomicBool::new(false);
+
+fn draw_panics_when_armed(
+    _: &ludenea::ecs::World,
+    _: &std::collections::BTreeSet<String>,
+    _: &mut DebugDrawFrame,
+) {
+    if DRAW_ARMED.load(Ordering::Relaxed) {
+        panic!("boom in the drawer");
+    }
+}
+
+fn draw_armed_app() -> App {
+    let mut app = boxes::app();
+    app.debug_draw(&["boom"], draw_panics_when_armed);
+    app
+}
+
+#[test]
+fn a_panicking_debug_drawer_fails_the_draw_and_stops_the_ghost_only() {
+    let mut host = Host::new(draw_armed_app).unwrap();
+    ok(
+        &mut host,
+        Command::LoadScene {
+            scene: boxes::generate_scene(10, 3),
+            assets: Vec::new(),
+            document: Document::Scene,
+        },
+    );
+    step(&mut host, 40);
+    seek(&mut host, 20);
+    spawn_crate(&mut host);
+    ok(
+        &mut host,
+        Command::Subscribe {
+            topic: Topic::Ghost,
+        },
+    );
+    settle(&mut host);
+    let layers = layers(&host);
+
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    DRAW_ARMED.store(true, Ordering::Relaxed);
+    let drawn = host.handle(Command::GetDebugDraw {
+        layers: layers.clone(),
+    });
+    let ghost_drawn = host.handle(Command::GetGhostDraw { tick: 20, layers });
+    DRAW_ARMED.store(false, Ordering::Relaxed);
+    std::panic::set_hook(hook);
+
+    for result in [drawn, ghost_drawn] {
+        let error = result.unwrap_err();
+        assert_eq!(error.code, ludenea::control::ErrorCode::SystemPanicked);
+        assert!(error.message.contains("boom in the drawer"), "{error:?}");
+    }
+    assert_eq!(timeline(&mut host).compare, None);
+    // The session goes on.
+    step(&mut host, 5);
+    draw(&mut host);
+}

@@ -5,13 +5,12 @@ use ludenea_app::{
     App, AppError, AssetTexts, Edit, EditError, EditLog, InputLog, RawInput, SceneError, SimError,
     Simulation, ValueKind,
 };
-use std::collections::BTreeSet;
 
 use ludenea_debug_draw::DebugDrawFrame;
 use ludenea_ecs::{AssetId, Entity, EntityFilter, FilterError, Snapshot};
 use serde_json::Value as JsonValue;
 
-use crate::compare::{COMPARE_BUDGET_PAUSED, COMPARE_BUDGET_PLAYING, CompareRun};
+use crate::compare::{COMPARE_BUDGET_PAUSED, COMPARE_BUDGET_PLAYING, CompareRun, caught_draw};
 use crate::divergence::DivergenceRun;
 use crate::json::{from_wire, to_wire};
 use crate::pacer::Pacer;
@@ -315,7 +314,13 @@ impl Host {
                 self.build_compare()
                     .map_err(|message| ProtocolError::new(ErrorCode::InvalidCommand, message))?;
                 let compare = self.compare.as_mut().expect("built");
-                compare.draw(&self.session, tick, &layers)
+                match compare.draw(&self.session, tick, &layers) {
+                    Ok(drawn) => drawn,
+                    Err(message) => {
+                        self.stop_ghost(&message);
+                        return Err(ProtocolError::new(ErrorCode::SystemPanicked, message));
+                    }
+                }
             }
         };
         Ok(Reply::GhostDraw {
@@ -403,7 +408,11 @@ impl Host {
                 let a = decode_trace(&a)?.hashes;
                 let b = match b {
                     Some(b) => decode_trace(&b)?.hashes,
-                    None => self.session.hashes().to_vec(),
+                    None => self
+                        .session
+                        .hashes()
+                        .map(<[u64]>::to_vec)
+                        .map_err(|e| self.fail(e))?,
                 };
                 Ok(Reply::TraceComparison(compare_traces(&a, &b)))
             }
@@ -760,8 +769,11 @@ impl Host {
                 match Session::from_replay(sim, &replay) {
                     Ok(session) => self.load(session),
                     Err(error) => {
-                        // The replay loaded in part: the session takes its world back.
-                        self.session.reload(sim).map_err(|e| self.fail(e))?;
+                        // The replay loaded in part: the session takes its world back. The
+                        // reply names the replay's error; a failed reload goes to the console.
+                        if let Err(reload) = self.session.reload(sim) {
+                            self.fail_unattended(reload);
+                        }
                         return Err(self.fail(error));
                     }
                 }
@@ -811,7 +823,8 @@ impl Host {
             }
             Command::GetDebugDraw { layers } => Ok(Reply::DebugDraw {
                 tick: sim.tick(),
-                frame: sim.debug_draw(&layers.into_iter().collect::<BTreeSet<_>>()),
+                frame: caught_draw(sim, &layers.into_iter().collect())
+                    .map_err(|message| ProtocolError::new(ErrorCode::SystemPanicked, message))?,
             }),
             Command::Pick { point } => Ok(Reply::Picked {
                 entities: sim.pick(point),
@@ -1049,8 +1062,8 @@ impl Host {
         path: &[PathSegment],
         value: JsonValue,
     ) -> Result<(), ProtocolError> {
-        let (asset, schema, current) =
-            asset_json(&self.simulation, id).ok_or_else(|| missing_asset(id))?;
+        let (asset, schema, current) = asset_json(&self.simulation, id)
+            .ok_or_else(|| edit_error(&EditError::MissingAsset(id)))?;
         let current = current.map_err(|reason| {
             ProtocolError::new(
                 ErrorCode::InvalidEdit,
@@ -1354,8 +1367,9 @@ fn load_addresses(sim: &Simulation) -> Vec<(Entity, Vec<u32>)> {
         .collect()
 }
 
+/// An asset a query names that the session does not have: no edit is involved.
 fn missing_asset(id: AssetId) -> ProtocolError {
-    edit_error(&EditError::MissingAsset(id))
+    ProtocolError::new(ErrorCode::InvalidCommand, EditError::MissingAsset(id))
 }
 
 fn in_context(mut error: ProtocolError, context: &str) -> ProtocolError {
@@ -1402,6 +1416,16 @@ fn decode_edits(bytes: &Bytes) -> Result<EditLog, ProtocolError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn asking_for_an_unknown_asset_is_an_invalid_command() {
+        let mut host = Host::new(boxes::app).unwrap();
+        let id = AssetId(7);
+        for command in [Command::GetAsset { id }, Command::SaveAsset { id }] {
+            let error = host.handle(command).unwrap_err();
+            assert_eq!(error.code, ErrorCode::InvalidCommand, "{error:?}");
+        }
+    }
 
     #[test]
     fn playing_with_a_complete_report_composes_nothing() {

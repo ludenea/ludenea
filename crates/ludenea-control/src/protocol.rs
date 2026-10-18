@@ -105,7 +105,7 @@ pub mod outcome {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 // One message lives per request, briefly: boxing the command would buy nothing.
-#[allow(clippy::large_enum_variant)]
+#[expect(clippy::large_enum_variant)]
 pub enum ClientMessage {
     Hello { protocol_version: u32 },
     Request { id: u64, command: Command },

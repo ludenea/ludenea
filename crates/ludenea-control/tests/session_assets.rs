@@ -555,3 +555,20 @@ fn undo_whose_replay_panics_still_takes_the_edit_back() {
     session.redo(&mut sim).unwrap();
     assert_eq!(edits(&session), recorded);
 }
+
+#[test]
+fn warnings_follow_every_scene_load() {
+    // The override of instance 6 targets an entity the prefab does not have.
+    let scene = fs::read_to_string(SPAWNER_SCENE)
+        .unwrap()
+        .replace("(entity: [0], component", "(entity: [9], component");
+    let mut sim = simulation();
+    let mut session = Session::start(&mut sim, scene, assets(), Document::Scene).unwrap();
+    assert_eq!(session.warnings().len(), 1);
+    session
+        .revert_override(&mut sim, &[6], &[9], Pose::NAME, &[])
+        .unwrap();
+    assert_eq!(session.warnings(), [] as [String; 0]);
+    session.undo(&mut sim).unwrap();
+    assert_eq!(session.warnings().len(), 1);
+}

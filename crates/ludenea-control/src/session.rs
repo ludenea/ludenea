@@ -212,7 +212,7 @@ pub struct Session {
     /// The branch a switch goes to and the tick it asked for, while its stale ancestors
     /// resimulate first, one after the other, as the tree's current branch.
     switching: Option<(BranchId, u64)>,
-    /// The warnings of the load by `start` or the last `replace_scene`.
+    /// The warnings of the last load of a new scene or asset version.
     warnings: Vec<String>,
     /// Whether every scene load keeps every asset of `assets`, reached or not, as a
     /// replay's resolved scene needs: it reaches no prefab.
@@ -387,13 +387,16 @@ impl Session {
         };
         let recorded = catch_unwind(AssertUnwindSafe(record));
         let tick = sim.tick();
-        self.reload(sim)?;
-        recorded.unwrap_or_else(|payload| {
+        let reloaded = self.reload(sim);
+        // A contained panic says more than a failed reload after it.
+        let recorded = recorded.unwrap_or_else(|payload| {
             Err(SessionError::Panicked {
                 tick,
                 message: panic_message(&*payload),
             })
-        })
+        })?;
+        reloaded?;
+        Ok(recorded)
     }
 
     /// The input and edit logs of the stored branch `id`'s run, and its simulated ticks.
@@ -969,9 +972,11 @@ impl Session {
         self.hashes.get(usize::try_from(tick).ok()?).copied()
     }
 
-    /// The hash recorded after each tick of the current branch, from tick 0.
-    pub(crate) fn hashes(&self) -> &[u64] {
-        &self.hashes
+    /// The hash recorded after each tick of the current branch, from tick 0, once
+    /// resimulated: stale hashes are never compared.
+    pub(crate) fn hashes(&self) -> Result<&[u64], SessionError> {
+        self.ensure_resimulated()?;
+        Ok(&self.hashes)
     }
 
     /// Whether edits recorded at the current tick are applied but not yet simulated.
@@ -988,7 +993,7 @@ impl Session {
         self.document
     }
 
-    /// The warnings of the load by `start` or the last `replace_scene`, such as stale
+    /// The warnings of the last load of a new scene or asset version, such as stale
     /// overrides.
     pub fn warnings(&self) -> &[String] {
         &self.warnings
@@ -1824,7 +1829,7 @@ impl Session {
         sim: &mut Simulation,
         scene: String,
     ) -> Result<(), SessionError> {
-        self.load_scene(sim, &scene, &self.assets)?;
+        self.warnings = self.load_scene(sim, &scene, &self.assets)?;
         self.set_scene(scene);
         self.start_resimulation(sim)
     }
@@ -1876,12 +1881,15 @@ impl Session {
         text: String,
     ) -> Result<(), SessionError> {
         let previous = self.assets.insert(id, text);
-        if let Err(error) = self.load_scene(sim, &self.scene, &self.assets) {
-            match previous {
-                Some(text) => self.assets.insert(id, text),
-                None => self.assets.remove(&id),
-            };
-            return Err(error);
+        match self.load_scene(sim, &self.scene, &self.assets) {
+            Ok(warnings) => self.warnings = warnings,
+            Err(error) => {
+                match previous {
+                    Some(text) => self.assets.insert(id, text),
+                    None => self.assets.remove(&id),
+                };
+                return Err(error);
+            }
         }
         self.start_resimulation(sim)
     }
@@ -1944,9 +1952,12 @@ impl Session {
                 return result.map(|_| None);
             }
         };
-        if let Err(error) = self.load_scene(sim, &scene, &self.assets) {
-            self.replay_to(sim, self.current)?;
-            return Err(error);
+        match self.load_scene(sim, &scene, &self.assets) {
+            Ok(warnings) => self.warnings = warnings,
+            Err(error) => {
+                self.replay_to(sim, self.current)?;
+                return Err(error);
+            }
         }
         self.set_scene(scene);
         // The scene keeps every other entity's address: a spawned one has a new address.

@@ -151,20 +151,21 @@ impl CompareRun {
     }
 
     /// The ghost at `tick`: the state there, or the last state reached and `lagging`, or an
-    /// empty frame outside the compare branch's run or before any state.
+    /// empty frame outside the compare branch's run or before any state. Fails when the
+    /// game's drawer panics; the compare simulation is then unusable.
     pub fn draw(
         &mut self,
         session: &Session,
         tick: u64,
         layers: &BTreeSet<String>,
-    ) -> (DebugDrawFrame, u64, bool) {
+    ) -> Result<(DebugDrawFrame, u64, bool), String> {
         self.refresh(session);
         let run = self.run.as_ref().expect("refreshed");
-        match self.at {
+        Ok(match self.at {
             _ if tick > run.end() => (DebugDrawFrame::default(), tick, false),
-            Some(at) => (self.sim.debug_draw(layers), at, at != tick),
+            Some(at) => (caught_draw(&self.sim, layers)?, at, at != tick),
             None => (DebugDrawFrame::default(), tick, true),
-        }
+        })
     }
 
     /// Composes the compare branch's run when it changed, and forgets the position unless
@@ -190,6 +191,19 @@ impl CompareRun {
         }
         self.run = Some(run);
     }
+}
+
+/// What the game's drawers draw for `layers`, a panic of theirs as its message.
+pub(crate) fn caught_draw(
+    sim: &Simulation,
+    layers: &BTreeSet<String>,
+) -> Result<DebugDrawFrame, String> {
+    catch_unwind(AssertUnwindSafe(|| sim.debug_draw(layers))).map_err(|payload| {
+        format!(
+            "the game panicked while drawing debug layers: {}",
+            panic_message(&*payload)
+        )
+    })
 }
 
 /// Loads the session's scene into `sim` and restores `run`'s checkpoint `snapshot` at
