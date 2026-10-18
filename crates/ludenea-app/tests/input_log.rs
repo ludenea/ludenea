@@ -33,6 +33,19 @@ fn input_log_round_trips() {
     assert_eq!(decoded.tick(2), None);
 }
 
+/// The web editor drops the ticks of a log by decoding this prefix itself
+/// (`withoutTicks` in `editor/apps/web/src/session-guard.ts`): change both together.
+#[test]
+fn input_log_prefix_is_version_then_players() {
+    let mut log = InputLog::new(300);
+    log.record(&[7u8; 300]);
+    let bytes = log.encode();
+    // Postcard varints: the version (1), the player count (300), then the tick count (1).
+    assert_eq!(INPUT_LOG_VERSION, 1);
+    assert_eq!(bytes[..4], [1, 0xac, 0x02, 1]);
+    assert_eq!(InputLog::new(300).encode(), [1, 0xac, 0x02, 0]);
+}
+
 #[test]
 fn input_log_with_another_version_is_rejected() {
     let mut log = InputLog::new(1);

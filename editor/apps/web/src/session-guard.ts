@@ -36,7 +36,9 @@ function sceneOf(saved: SavedSession): SavedSession {
 
 /**
  * An input log (base64 postcard bytes: version, player count, ticks) without its ticks, so
- * a fresh game keeps the session's player count. An empty log stays empty.
+ * a fresh game keeps the session's player count. An empty log stays empty. The layout is
+ * `InputLog` in `crates/ludenea-app/src/input_log.rs`, pinned by its test
+ * `input_log_prefix_is_version_then_players`.
  */
 function withoutTicks(inputs: string): string {
   if (inputs === "") return "";
