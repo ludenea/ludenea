@@ -306,10 +306,12 @@ impl Project {
                     fs::rename(&temporary, file)
                 } else {
                     fs::hard_link(&temporary, file).or_else(|error| match error.kind() {
-                        io::ErrorKind::AlreadyExists => Err(error),
-                        // ponytail: without hard links (FAT, some network shares) the new
-                        // file is written in place, so a crash mid-write can truncate it.
-                        _ => File::options()
+                        // No hard links here: `Unsupported`, or `PermissionDenied` as FAT
+                        // reports it on Linux. ponytail: the new file is then written in
+                        // place, so a crash mid-write can truncate it.
+                        io::ErrorKind::Unsupported
+                        | io::ErrorKind::CrossesDevices
+                        | io::ErrorKind::PermissionDenied => File::options()
                             .write(true)
                             .create_new(true)
                             .open(file)
@@ -317,6 +319,7 @@ impl Project {
                                 created.write_all(bytes)?;
                                 created.sync_all()
                             }),
+                        _ => Err(error),
                     })
                 };
                 placed.map_err(|error| match error.kind() {
