@@ -1,6 +1,6 @@
 import type { ControlClient } from "@ludenea/control-client";
 import type { Editor } from "@ludenea/editor-shell";
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { useGame, useStore, type Store } from "../shared";
 import { EntityList, entityKey } from "../shared/EntityList";
 import { Introspection, type IntrospectionTab } from "./Introspection";
@@ -35,6 +35,7 @@ export function ExplorerPanel({ editor, state }: { editor: Editor; state: Explor
 function Entities({ editor, control, state }: { editor: Editor; control: ControlClient; state: ExplorerState }) {
   const { text, filter, scroll } = useStore(state);
   const [error, setError] = useState<string | null>(null);
+  const columns = useSyncExternalStore(editor.explorer.columns.subscribe, editor.explorer.columns.list);
   return (
     <div className="ludenea-entities">
       <form
@@ -50,6 +51,16 @@ function Entities({ editor, control, state }: { editor: Editor; control: Control
           {error}
         </p>
       )}
+      {columns.length > 0 && (
+        <div role="row" className="ludenea-columns">
+          <span role="columnheader">Entity</span>
+          {columns.map((column) => (
+            <span key={column.id} role="columnheader" style={{ width: column.width }}>
+              {column.title}
+            </span>
+          ))}
+        </div>
+      )}
       <div className="ludenea-entities-list">
         <EntityList
           editor={editor}
@@ -60,7 +71,14 @@ function Entities({ editor, control, state }: { editor: Editor; control: Control
           scroll={scroll}
           row={(row) => (
             <>
-              <span className="ludenea-mono">{entityKey(row.entity)}</span> <code className="ludenea-muted">{row.hash}</code>
+              <span>
+                <span className="ludenea-mono">{entityKey(row.entity)}</span> <code className="ludenea-muted">{row.hash}</code>
+              </span>
+              {columns.map((column) => (
+                <span key={column.id} className="ludenea-column" style={{ width: column.width }}>
+                  {column.value(row.entity)}
+                </span>
+              ))}
             </>
           )}
         />

@@ -1,6 +1,8 @@
 import type {
   CommandDefinition,
   Disposable,
+  ExplorerColumn,
+  FieldDecoration,
   InspectorComponent,
   PanelDefinition,
   SettingDefinition,
@@ -81,6 +83,8 @@ export class Registry {
   readonly shortcuts: Collection<string> = new Collection("shortcut", this);
   readonly overlays: Collection<ViewportOverlay> = new Collection("overlay", this);
   readonly settings: Collection<SettingDefinition<unknown>> = new Collection("setting", this);
+  readonly decorations: Collection<FieldDecoration> = new Collection("decoration", this);
+  readonly columns: Collection<ExplorerColumn> = new Collection("column", this);
   private activation: Activation | null = null;
 
   owner(): string {

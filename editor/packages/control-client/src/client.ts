@@ -76,7 +76,19 @@ export type ReplyFor<C extends Command> = C extends { type: "get_hash" }
                                         ? Extract<Reply, { type: "text" }>
                                         : C extends { type: "delete_branch" }
                                           ? Extract<Reply, { type: "deleted" }>
-                                          : Extract<Reply, { type: "done" }>;
+                                          : C extends { type: "load_replay" }
+                                            ? Extract<Reply, { type: "replay_loaded" }>
+                                            : C extends { type: "export_replay" }
+                                              ? Extract<Reply, { type: "replay" }>
+                                              : C extends { type: "get_instances" }
+                                                ? Extract<Reply, { type: "instances" }>
+                                                : C extends { type: "place_instance" }
+                                                  ? Extract<Reply, { type: "placed" }>
+                                                  : C extends { type: "get_divergence" }
+                                                    ? Extract<Reply, { type: "divergence" }>
+                                                    : C extends { type: "compare_traces" }
+                                                      ? Extract<Reply, { type: "trace_comparison" }>
+                                                      : Extract<Reply, { type: "done" }>;
 
 type Pending<O> = { resolve: (result: O) => void; reject: (error: Error) => void };
 

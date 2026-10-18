@@ -22,7 +22,15 @@ export type ProjectReplyFor<R extends ProjectRequest> = R extends { type: "info"
         ? Extract<ProjectReply, { type: "plugins" }>
         : R extends { type: "game_endpoint" }
           ? Extract<ProjectReply, { type: "native" | "wasm" }>
-          : Extract<ProjectReply, { type: "done" }>;
+          : R extends { type: "read_binary" }
+            ? Extract<ProjectReply, { type: "bytes" }>
+            : R extends { type: "create_asset" }
+              ? Extract<ProjectReply, { type: "file" }>
+              : R extends { type: "read_asset_texts" }
+                ? Extract<ProjectReply, { type: "asset_texts" }>
+                : R extends { type: "load_stored_session" }
+                  ? Extract<ProjectReply, { type: "stored_session" }>
+                  : Extract<ProjectReply, { type: "done" }>;
 
 type Listener = (event: never) => void;
 

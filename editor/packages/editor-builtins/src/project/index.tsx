@@ -20,6 +20,8 @@ export const projectPlugin = definePlugin({
     editor.settings.register<string[]>({ id: RECENT, title: "Recent projects", default: [], kind: "list" });
 
     const opened = (info: ProjectInfo) => {
+      // Documents are files of a project: another project's are not open.
+      if (info.root !== project.get().info?.root) editor.document.setState({ current: null, text: null });
       project.set({ info });
       const recent = editor.settings.get<string[]>(RECENT).filter((root) => root !== info.root);
       editor.settings.set(RECENT, [info.root, ...recent].slice(0, RECENT_LIMIT));

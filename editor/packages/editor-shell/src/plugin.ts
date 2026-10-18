@@ -1,5 +1,5 @@
 import type { Entity, PathSegment, Vec2 } from "@ludenea/control-client";
-import type { ComponentType } from "react";
+import type { ComponentType, ReactNode } from "react";
 import type { Editor } from "./editor";
 
 export interface Disposable {
@@ -63,4 +63,19 @@ export interface OverlayContext {
 export interface ViewportOverlay {
   id: string;
   draw(context: OverlayContext): void;
+}
+
+/** Drawn by the inspector beside every field of every component, the component itself (empty `path`) included. */
+export interface FieldDecoration {
+  id: string;
+  /** Rendered as a component: it may use hooks. */
+  render(props: { editor: Editor; entity: Entity; component: string; path: PathSegment[] }): ReactNode;
+}
+
+/** A column of the explorer's entity list; `width` in pixels. */
+export interface ExplorerColumn {
+  id: string;
+  title: string;
+  width: number;
+  value(entity: Entity): string | null;
 }

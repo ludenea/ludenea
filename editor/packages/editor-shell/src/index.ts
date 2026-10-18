@@ -1,11 +1,14 @@
 // `@ludenea/editor-shell`: the API plugins extend the editor through. The applications also
 // import `@ludenea/editor-shell/app`.
-export type { Editor } from "./editor";
+export type { Editor, Observed } from "./editor";
+export { AssetFailure, type AssetAccess, type AssetTypes } from "./assets";
 export type { ComponentTypes, EntityAccess } from "./entities";
 export {
   definePlugin,
   type CommandDefinition,
   type Disposable,
+  type ExplorerColumn,
+  type FieldDecoration,
   type InspectorComponent,
   type OverlayContext,
   type PanelDefinition,
@@ -15,5 +18,7 @@ export {
 } from "./plugin";
 export { DuplicateRegistration } from "./registry";
 export { isEditorKey, isTextField, normalizeShortcut } from "./shortcuts";
+export type { BranchState, BranchStore } from "./stores/branches";
+export type { DocumentState, DocumentStore, OpenDocument } from "./stores/document";
 export type { SelectionState, SelectionStore } from "./stores/selection";
 export type { TimelineState, TimelineStore } from "./stores/timeline";

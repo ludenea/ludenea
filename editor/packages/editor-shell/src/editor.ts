@@ -1,9 +1,12 @@
 import type { ControlClient, ProjectClient } from "@ludenea/control-client";
+import { createAssetAccess, type AssetAccess } from "./assets";
 import { createEntityAccess, type ComponentTypes, type EntityAccess } from "./entities";
 import { PluginLoader } from "./loader";
 import type {
   CommandDefinition,
   Disposable,
+  ExplorerColumn,
+  FieldDecoration,
   InspectorComponent,
   PanelDefinition,
   SettingDefinition,
@@ -11,6 +14,8 @@ import type {
 } from "./plugin";
 import { Registry } from "./registry";
 import { normalizeShortcut } from "./shortcuts";
+import { createBranchStore, type BranchStore } from "./stores/branches";
+import { createDocumentStore, type DocumentStore, type SavedSession } from "./stores/document";
 import { createSelectionStore, type SelectionStore } from "./stores/selection";
 import { feedTimeline, createTimelineStore, type TimelineStore } from "./stores/timeline";
 
@@ -24,7 +29,10 @@ export interface Editor {
   inspectors: {
     register<N extends keyof ComponentTypes>(component: N, inspector: InspectorComponent<ComponentTypes[N]>): Disposable;
     get(component: string): InspectorComponent<unknown> | undefined;
+    decorate(decoration: FieldDecoration): Disposable;
+    decorations: Observed<FieldDecoration>;
   };
+  explorer: { columns: Observed<ExplorerColumn> & { register(column: ExplorerColumn): Disposable } };
   commands: {
     register(command: CommandDefinition): Disposable;
     run(id: string): Promise<void>;
@@ -46,6 +54,10 @@ export interface Editor {
   };
   selection: SelectionStore;
   timeline: TimelineStore;
+  /** The document the game's session edits or plays, one at a time. */
+  document: DocumentStore;
+  branches: BranchStore;
+  assets: AssetAccess;
   onGameChanged(listener: (control: ControlClient | null) => void): Disposable;
 }
 
@@ -56,6 +68,18 @@ export interface EditorHost {
   loader: PluginLoader;
   /** Switches to another game (or none): plugins hear it through `onGameChanged`. The same game again changes nothing. */
   setControl(control: ControlClient | null): void;
+  /**
+   * Stores `saved` (by default an export of the game's session) as the open document's
+   * session, unless a document is opening; on close and on the crash recovery schedule.
+   */
+  storeSession(saved?: SavedSession): Promise<void>;
+}
+
+/** Registrations a panel lists, re-rendering when they change. */
+export interface Observed<T> {
+  /** In registration order; the same array until the next change. */
+  list(): T[];
+  subscribe(listener: () => void): () => void;
 }
 
 const SETTINGS_PREFIX = "ludenea.settings.";
@@ -83,7 +107,7 @@ export function createEditor(options: {
   importModule?: (url: string) => Promise<unknown>;
 }): EditorHost {
   const registry = new Registry();
-  const { commands, inspectors, overlays, settings } = registry;
+  const { commands, inspectors, overlays, settings, decorations, columns } = registry;
   const gameListeners = new Set<(control: ControlClient | null) => void>();
   const setting = (id: string) => {
     const definition = settings.get(id);
@@ -93,6 +117,9 @@ export function createEditor(options: {
 
   let control = options.control ?? null;
   let captures = 0;
+  const timeline = createTimelineStore(() => control);
+  // Its listener comes first, so a new game loads the document before plugins hear of it.
+  const documents = createDocumentStore({ project: options.project, control: () => control, onGameChanged: (listener) => gameListeners.add(listener) });
   const editor: Editor = {
     get control() {
       return control;
@@ -107,7 +134,10 @@ export function createEditor(options: {
     inspectors: {
       register: (component, inspector) => inspectors.register(component as string, inspector as InspectorComponent<unknown>),
       get: (component) => inspectors.get(component),
+      decorate: (decoration) => decorations.register(decoration.id, decoration),
+      decorations: { list: decorations.values, subscribe: decorations.subscribe },
     },
+    explorer: { columns: { register: (column) => columns.register(column.id, column), list: columns.values, subscribe: columns.subscribe } },
     commands: {
       register: (command) => commands.register(command.id, command),
       async run(id) {
@@ -146,7 +176,10 @@ export function createEditor(options: {
       },
     },
     selection: createSelectionStore(),
-    timeline: createTimelineStore(() => control),
+    timeline,
+    document: documents.store,
+    branches: createBranchStore(() => control, timeline),
+    assets: createAssetAccess(() => control, options.project),
     onGameChanged(listener) {
       // A fresh entry per call, so registering one function twice needs two disposals.
       const entry = (control: ControlClient | null) => listener(control);
@@ -164,5 +197,5 @@ export function createEditor(options: {
     for (const listener of [...gameListeners]) listener(next);
   };
 
-  return { editor, registry, loader: new PluginLoader(editor, registry, options.importModule), setControl };
+  return { editor, registry, loader: new PluginLoader(editor, registry, options.importModule), setControl, storeSession: documents.storeSession };
 }

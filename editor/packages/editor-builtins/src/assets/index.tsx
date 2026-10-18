@@ -1,5 +1,6 @@
 import type { FileChange, FileEntry } from "@ludenea/control-client";
-import { definePlugin, type Editor } from "@ludenea/editor-shell";
+import { AssetFailure, definePlugin, type Editor } from "@ludenea/editor-shell";
+import { logToConsole } from "../console";
 import { createStore, errorText, shared, type Scroll, type Store } from "../shared";
 import { AssetsPanel, baseName } from "./AssetsPanel";
 
@@ -12,7 +13,7 @@ export interface AssetsState {
   /** The inline form (rename, move) or confirmation (delete) the panel shows. */
   action: Action | null;
   menu: string | null;
-  /** The open scene changed on disk while it had unsaved edits. */
+  /** The open document changed on disk while it had unsaved edits. */
   banner: { path: string; text: string } | null;
   error: string | null;
   /** Why the files could not be listed. */
@@ -37,7 +38,8 @@ const removedPath = (change: FileChange) => ("Removed" in change ? change.Remove
 export const assetsPlugin = definePlugin({
   name: "ludenea.assets",
   activate(editor) {
-    const { scene, reveal, project } = shared(editor);
+    const { reveal, project } = shared(editor);
+    const documents = editor.document;
     const state = createStore<AssetsState>({
       files: [],
       filter: "",
@@ -54,11 +56,15 @@ export const assetsPlugin = definePlugin({
         ({ entries }) => state.set({ files: entries, listError: null }),
         (error) => state.set({ files: [], listError: errorText(error) }),
       );
+    // A document that fails to load also goes to the console, located in the asset at fault.
+    const logged = <T,>(work: Promise<T>) =>
+      work.catch((error: unknown) => {
+        const location = error instanceof AssetFailure ? { file: error.path, line: error.line, column: error.column } : undefined;
+        logToConsole(editor, "error", errorText(error), location);
+        throw error;
+      });
     // Without a game the new text is only remembered: the next game loads it.
-    const replace = async (text: string) => {
-      await editor.control?.request({ type: "replace_scene", scene: text, assets: [] });
-      scene.set({ text });
-    };
+    const replace = (text: string) => logged(documents.getState().replace(text));
 
     // The watcher may report a rename's removal before the service answers it.
     const renaming = new Set<string>();
@@ -68,11 +74,9 @@ export const assetsPlugin = definePlugin({
       async open(path) {
         state.set({ selected: path });
         const entry = state.get().files.find((file) => file.path === path);
-        if (entry?.kind !== "Scene") throw new Error(`${path} is not a scene`);
-        // Scene files are usable before the build: the scene is remembered and loaded into each game.
-        const { text } = await editor.project.request({ type: "read_text", path });
-        await editor.control?.request({ type: "load_scene", scene: text, assets: [], document: "Scene" });
-        scene.set({ path, text });
+        if (entry?.kind !== "Scene" && entry?.kind !== "Prefab" && entry?.kind !== "Replay") throw new Error(`${path} is not a scene, a prefab, or a replay`);
+        // Documents are usable before the build: the document is remembered and loaded into each game.
+        await logged(documents.getState().open(entry.id));
         state.set({ banner: null, error: null });
       },
       async rename(from, to) {
@@ -83,7 +87,8 @@ export const assetsPlugin = definePlugin({
         } finally {
           renaming.delete(from);
         }
-        if (scene.get().path === from) scene.set({ path: to });
+        const open = documents.getState().current;
+        if (open?.path === from) documents.setState({ current: { ...open, path: to } });
         state.set({ selected: to });
         await refresh();
       },
@@ -91,7 +96,7 @@ export const assetsPlugin = definePlugin({
       async remove(path) {
         state.set({ action: null });
         await editor.project.request({ type: "delete", path });
-        if (scene.get().path === path) scene.set({ path: null, text: null });
+        if (documents.getState().current?.path === path) documents.setState({ current: null, text: null });
         await refresh();
       },
       async reload() {
@@ -102,10 +107,11 @@ export const assetsPlugin = definePlugin({
       keepMine: () => state.set({ banner: null }),
     };
 
-    // A change to the open scene reloads it, unless the editor holds unsaved edits.
+    // A change to the open scene or prefab reloads it, unless the editor holds unsaved edits.
     const onDiskChange = async (path: string) => {
       const { text } = await editor.project.request({ type: "read_text", path });
-      if (scene.get().path !== path || text === scene.get().text) return;
+      const { current, text: loaded } = documents.getState();
+      if (current?.path !== path || current.kind === "replay" || text === loaded) return;
       if (editor.timeline.getState().timeline?.scene_dirty) state.set({ banner: { path, text } });
       else await replace(text);
     };
@@ -113,11 +119,11 @@ export const assetsPlugin = definePlugin({
     const stops = [
       editor.project.on("files_changed", ({ changes }) => {
         void refresh();
-        const open = scene.get().path;
+        const open = documents.getState().current?.path;
         if (!open) return;
-        // Removed or renamed outside the editor: nothing on disk to save the game's scene to any more.
+        // Removed or renamed outside the editor: nothing on disk to save the game's document to any more.
         if (!renaming.has(open) && changes.some((change) => removedPath(change) === open)) {
-          scene.set({ path: null, text: null });
+          documents.setState({ current: null, text: null });
           if (state.get().banner?.path === open) state.set({ banner: null });
         } else if (changes.some((change) => changedPath(change) === open)) onDiskChange(open).catch(report);
       }),
@@ -131,11 +137,6 @@ export const assetsPlugin = definePlugin({
         if (path !== null) state.set({ filter: path, selected: path });
       }),
     ];
-    // A new game (first build, rebuild, restart) starts from its own state: show it the open scene.
-    editor.onGameChanged((control) => {
-      const { text } = scene.get();
-      if (control && text !== null) control.request({ type: "load_scene", scene: text, assets: [], document: "Scene" }).catch(report);
-    });
     void refresh();
 
     // Commands act on the selected asset and report failures in the panel.

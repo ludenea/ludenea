@@ -1361,6 +1361,30 @@ type ReplyFor<C extends Command> = C extends {
     type: "delete_branch";
 } ? Extract<Reply, {
     type: "deleted";
+}> : C extends {
+    type: "load_replay";
+} ? Extract<Reply, {
+    type: "replay_loaded";
+}> : C extends {
+    type: "export_replay";
+} ? Extract<Reply, {
+    type: "replay";
+}> : C extends {
+    type: "get_instances";
+} ? Extract<Reply, {
+    type: "instances";
+}> : C extends {
+    type: "place_instance";
+} ? Extract<Reply, {
+    type: "placed";
+}> : C extends {
+    type: "get_divergence";
+} ? Extract<Reply, {
+    type: "divergence";
+}> : C extends {
+    type: "compare_traces";
+} ? Extract<Reply, {
+    type: "trace_comparison";
 }> : Extract<Reply, {
     type: "done";
 }>;
@@ -1447,6 +1471,22 @@ type ProjectReplyFor<R extends ProjectRequest> = R extends {
     type: "game_endpoint";
 } ? Extract<ProjectReply, {
     type: "native" | "wasm";
+}> : R extends {
+    type: "read_binary";
+} ? Extract<ProjectReply, {
+    type: "bytes";
+}> : R extends {
+    type: "create_asset";
+} ? Extract<ProjectReply, {
+    type: "file";
+}> : R extends {
+    type: "read_asset_texts";
+} ? Extract<ProjectReply, {
+    type: "asset_texts";
+}> : R extends {
+    type: "load_stored_session";
+} ? Extract<ProjectReply, {
+    type: "stored_session";
 }> : Extract<ProjectReply, {
     type: "done";
 }>;

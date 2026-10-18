@@ -67,11 +67,6 @@ export type BuildState = { status: "idle" | "building" | "succeeded" | "failed";
 /** What the built-in plugins of one editor share with each other. */
 export interface Shared {
   project: Store<{ info: ProjectInfo | null; build: BuildState }>;
-  /**
-   * The scene the asset browser loaded into the game, which `scene.save` writes back, and
-   * its text as last loaded or saved (a disk change to that same text is the editor's own).
-   */
-  scene: Store<{ path: string | null; text: string | null }>;
   /** Asks the asset browser to show `path` (from a console location). */
   reveal: Store<{ path: string | null }>;
 }
@@ -83,7 +78,6 @@ export function shared(editor: Editor): Shared {
   if (!state) {
     state = {
       project: createStore({ info: null as ProjectInfo | null, build: { status: "idle", done: 0, total: null } as BuildState }),
-      scene: createStore({ path: null as string | null, text: null as string | null }),
       reveal: createStore({ path: null as string | null }),
     };
     sharedState.set(editor, state);

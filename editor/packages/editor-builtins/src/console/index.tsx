@@ -39,12 +39,12 @@ function projectPath(file: string, root: string | undefined): string {
 }
 
 /** Where each editor's Console panel takes messages from the application around it. */
-const sinks = new WeakMap<Editor, (level: ConsoleLevel, text: string) => void>();
+const sinks = new WeakMap<Editor, (level: ConsoleLevel, text: string, location?: Location) => void>();
 
-/** Shows `text` in the editor's Console panel; in the devtools console when there is none. */
-export function logToConsole(editor: Editor, level: ConsoleLevel, text: string): void {
+/** Shows `text` (from `location` when given) in the editor's Console panel; in the devtools console when there is none. */
+export function logToConsole(editor: Editor, level: ConsoleLevel, text: string, location?: Location): void {
   const sink = sinks.get(editor);
-  if (sink) sink(level, text);
+  if (sink) sink(level, text, location);
   else if (level === "error") console.error(text);
   else if (level === "warning") console.warn(text);
   else console.info(text);
@@ -57,10 +57,10 @@ export const consolePlugin = definePlugin({
     const next = () => ++lastId;
     const state = createStore({ entries: [] as Entry[], levels: { error: true, warning: true, info: true } as Levels, notice: null as string | null });
     const update = (change: (entries: Entry[]) => Entry[]) => state.set({ entries: change(state.get().entries).slice(-LIMIT) });
-    const add = (level: ConsoleLevel, text: string, source: Entry["source"] = "editor") =>
-      update((entries) => [...entries, { id: next(), level, source, text }]);
+    const add = (level: ConsoleLevel, text: string, source: Entry["source"] = "editor", location?: Location) =>
+      update((entries) => [...entries, { id: next(), level, source, text, location }]);
 
-    sinks.set(editor, (level, text) => add(level, text));
+    sinks.set(editor, (level, text, location) => add(level, text, "editor", location));
     // Kept here, not in the panel: the shell unmounts a panel while its tab is hidden.
     const scroll = { top: 0 };
     const project = editor.project;

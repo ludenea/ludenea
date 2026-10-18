@@ -2,7 +2,7 @@ import { ControlClient, type MessageTransport, type ProjectClient, type WorkerGa
 import type { EditorApp } from "./app";
 import { exportSession, guardSession, restoreSession, type SavedSession, type SessionGuard } from "./session-guard";
 
-type App = Pick<EditorApp, "connectGame" | "log">;
+type App = Pick<EditorApp, "connectGame" | "log" | "storeSession">;
 
 /** Runs steps one after the other; a failing step is reported and never blocks the next. */
 function sequence(app: App): (what: string, step: () => Promise<void>) => void {
@@ -56,9 +56,9 @@ export function followWasmGames(project: ProjectClient, app: App, start: (glueUr
     running = null;
     const game = start(glueUrl);
     const control = await ControlClient.connect(game.transport);
-    // The asset browser loads the open scene into the new game here, before any restore.
+    // The document store loads the open document into the new game here, before any restore.
     app.connectGame(control);
-    const guard = guardSession(control, game, (saved) => relaunch(glueUrl, saved), { seed, log: app.log });
+    const guard = guardSession(control, game, (saved) => relaunch(glueUrl, saved), { seed, log: app.log, store: app.storeSession });
     running = { glueUrl, game, control, guard };
     return control;
   };
@@ -113,10 +113,10 @@ export function followNativeGames(project: ProjectClient, app: App, connect: () 
       running?.control.close();
       running = null;
       const control = await ControlClient.connect(await connect());
-      // The asset browser loads the open scene into the new game here, before any restore.
+      // The document store loads the open document into the new game here, before any restore.
       app.connectGame(control);
       // The native host recovers from panics itself, so there is no crash to restart from.
-      const guard = guardSession(control, { onCrashed: () => () => {} }, async () => control, { seed: saved, log: app.log });
+      const guard = guardSession(control, { onCrashed: () => () => {} }, async () => control, { seed: saved, log: app.log, store: app.storeSession });
       running = { control, guard };
       if (saved) restoreInBackground(app, control, saved);
     }),

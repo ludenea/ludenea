@@ -177,7 +177,7 @@ function Section({ editor, name, value, schema, edit, entity, state, focused = f
         (failure) => setError(errorText(failure)),
       );
     body = <Custom value={value.value} entity={entity} onChange={onChange} />;
-  } else if (schema) body = <Field schema={schema} value={value.value} path={[]} edit={edit} readOnly={readOnly} editor={editor} />;
+  } else if (schema) body = <Field schema={schema} value={value.value} path={[]} edit={edit} readOnly={readOnly} editor={editor} owner={entity && { entity, component: name }} />;
   else body = <pre>{JSON.stringify(value.value, null, 2)}</pre>;
 
   return (

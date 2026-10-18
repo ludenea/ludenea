@@ -1,7 +1,7 @@
 import type { FileEntry } from "@ludenea/control-client";
 import type { Editor } from "@ludenea/editor-shell";
 import { useRef, type KeyboardEvent } from "react";
-import { ASSET_FOLDERS, errorText, shared, useKeptScroll, useStore } from "../shared";
+import { ASSET_FOLDERS, errorText, useKeptScroll, useStore } from "../shared";
 import type { Action, Assets } from "./index";
 
 export const baseName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
@@ -23,7 +23,7 @@ function grouped(files: FileEntry[], filter: string): [string, FileEntry[]][] {
 
 export function AssetsPanel({ editor, assets }: { editor: Editor; assets: Assets }) {
   const { files, filter, selected, action, menu, banner, error, listError } = useStore(assets.state);
-  const openScene = useStore(shared(editor).scene).path;
+  const openScene = editor.document((state) => state.current?.path ?? null);
   const unsaved = editor.timeline((state) => state.timeline?.scene_dirty ?? false);
   const dragged = useRef<string | null>(null);
   const scrolled = useKeptScroll<HTMLDivElement>(assets.scroll);

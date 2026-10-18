@@ -1,6 +1,6 @@
-import type { JsonValue, PathSegment, TypeSchema } from "@ludenea/control-client";
-import type { Editor } from "@ludenea/editor-shell";
-import type { ReactNode } from "react";
+import type { Entity, JsonValue, PathSegment, TypeSchema } from "@ludenea/control-client";
+import type { Editor, FieldDecoration } from "@ludenea/editor-shell";
+import { useSyncExternalStore, type ReactNode } from "react";
 import { defaultValue, variantValue } from "../default-value";
 import { AssetField, BoolField, EntityField, FieldRow, LargeIntegerField, NumberField, StringField, pathText, useCommit, type Edit } from "./inputs";
 
@@ -11,13 +11,39 @@ export interface FieldProps {
   edit: Edit;
   readOnly: boolean;
   editor: Editor;
+  /** The component the value belongs to; only its fields get the plugins' decorations. */
+  owner?: { entity: Entity; component: string };
 }
 
 const field = (name: string): PathSegment => ({ type: "field", name });
 const index = (index: number): PathSegment => ({ type: "index", index });
 
-/** One value rendered from its schema; every change goes through `edit` with its path. */
+/** One value rendered from its schema, with the decorations beside it; every change goes through `edit` with its path. */
 export function Field(props: FieldProps) {
+  const { editor, owner, path } = props;
+  const { subscribe, list } = editor.inspectors.decorations;
+  const decorations = useSyncExternalStore(subscribe, list);
+  if (!owner || decorations.length === 0) return <Value {...props} />;
+  return (
+    <div className="ludenea-decorated">
+      <div>
+        <Value {...props} />
+      </div>
+      <span className="ludenea-decorations">
+        {decorations.map((decoration) => (
+          <Decoration key={decoration.id} decoration={decoration} editor={editor} {...owner} path={path} />
+        ))}
+      </span>
+    </div>
+  );
+}
+
+/** A decoration's `render` as a component, so it may use hooks. */
+function Decoration({ decoration, ...props }: { decoration: FieldDecoration } & Parameters<FieldDecoration["render"]>[0]) {
+  return <>{decoration.render(props)}</>;
+}
+
+function Value(props: FieldProps) {
   const { schema, value, path } = props;
   switch (schema.kind) {
     case "bool":

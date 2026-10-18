@@ -40,6 +40,27 @@
 }
 
 .ludenea-dock .dv-content-container .ludenea-explorer [role="tabpanel"],
+/* Plugin columns: the entity first, taking the room left, then each column at its width. */
+.ludenea-dock .dv-content-container .ludenea-columns,
+.ludenea-dock .dv-content-container .ludenea-entities [role="option"] {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.ludenea-dock .dv-content-container .ludenea-columns > :first-child,
+.ludenea-dock .dv-content-container .ludenea-entities [role="option"] > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.ludenea-dock .dv-content-container .ludenea-columns > span,
+.ludenea-dock .dv-content-container .ludenea-column {
+  flex: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .ludenea-dock .dv-content-container .ludenea-entities-list,
 .ludenea-dock .dv-content-container .ludenea-scene-tree .ludenea-entity-list {
   flex: 1;
@@ -475,6 +496,17 @@
 
 .ludenea-dock .dv-content-container .ludenea-field input[type="checkbox"] {
   justify-self: start;
+}
+
+.ludenea-dock .dv-content-container .ludenea-decorated {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.ludenea-dock .dv-content-container .ludenea-decorated > :first-child {
+  flex: 1;
+  min-width: 0;
 }
 
 .ludenea-dock .dv-content-container .ludenea-group {

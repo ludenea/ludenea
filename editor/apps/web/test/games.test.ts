@@ -41,7 +41,7 @@ async function fakeProject(answer: (request: Message) => object) {
   return { project, push: (event: object) => transport.push(JSON.stringify({ type: "event", event })) };
 }
 
-const app = () => ({ connectGame: vi.fn(), log: vi.fn() });
+const app = () => ({ connectGame: vi.fn(), log: vi.fn(), storeSession: vi.fn() });
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 afterEach(() => {

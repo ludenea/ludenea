@@ -10,14 +10,18 @@ const entries = [
 ];
 
 /** The editor with every built-in plugin, a game, and the asset browser showing two files. */
-async function browser(disk: { text: string } = { text: "(on disk)" }, withGame = true) {
+const SETTINGS = "0000000000000000000000000000000c";
+
+async function browser(disk: { text: string } = { text: "(on disk)" }, withGame = true, game?: Awaited<ReturnType<typeof testGame>>) {
   const host = await testEditor(builtinPlugins, (request) => {
     if (request.type === "list_files") return { type: "files", entries };
     if (request.type === "read_text") return { type: "text", text: disk.text };
+    if (request.type === "read_asset_texts") return { type: "asset_texts", assets: [], paths: [[SETTINGS, "assets/settings.ron"]] };
+    if (request.type === "load_stored_session") return { type: "stored_session", bytes: null };
     if (request.type === "info") return undefined;
     return { type: "done" };
   });
-  const game = await testGame();
+  game ??= await testGame();
   if (withGame) act(() => host.setControl(game.client));
   renderPanel(host, "ludenea.assets");
   await settle();
@@ -75,6 +79,23 @@ describe("assets", () => {
 
     expect(screen.queryByRole("alert")).toBeNull();
     expect(game.sent.filter((command) => command.type === "replace_scene")).toEqual([{ type: "replace_scene", scene: "(changed)", assets: [] }]);
+  });
+
+  it("a_broken_asset_is_logged_at_its_file_line_and_column", async () => {
+    const message = `asset ${SETTINGS} is invalid: 2:17-2:18: Expected integer`;
+    const game = await testGame((command) => (command.type === "replace_scene" ? { error: { code: "invalid_scene", message } } : { type: "done" }));
+    const { host, disk } = await browser(undefined, true, game);
+    renderPanel(host, "ludenea.console");
+    await openScene();
+    setSceneDirty(host, false);
+
+    disk.text = "(changed)";
+    act(() => host.project.push({ type: "files_changed", changes: [{ Changed: { path: SCENE, kind: "Scene" } }] }));
+    await settle();
+
+    const lines = screen.getByRole("list", { name: "Console" });
+    expect(lines.textContent).toContain(message);
+    expect(screen.getByRole("button", { name: "assets/settings.ron:2:17" })).toBeTruthy();
   });
 
   it("unsaved_marker_follows_scene_dirty", async () => {

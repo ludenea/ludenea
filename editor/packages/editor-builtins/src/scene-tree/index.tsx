@@ -24,12 +24,14 @@ export const sceneTreePlugin = definePlugin({
       id: "scene.save",
       title: "Save scene",
       async run() {
-        const { scene, project } = shared(editor);
-        const path = scene.get().path ?? project.get().info?.default_scene;
+        const open = editor.document.getState().current;
+        if (open?.kind === "replay") throw new Error(`${open.path} is a replay: its file is never overwritten`);
+        // The session of a prefab document holds the prefab file.
+        const path = open?.path ?? shared(editor).project.get().info?.default_scene;
         if (!path) throw new Error("no scene is open");
         const { ron } = await game().request({ type: "save_scene" });
         await editor.project.request({ type: "write_text", path, text: ron });
-        scene.set({ path, text: ron });
+        if (open) editor.document.setState({ text: ron });
       },
     });
     editor.shortcuts.register({ key: "Mod+S", command: "scene.save" });
