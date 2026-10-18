@@ -251,7 +251,7 @@ impl Host {
                 value,
             } => {
                 let context = format!("entity {entity}, component `{component}`");
-                if sim.world().component_json(entity, &component).is_some() {
+                if sim.world().has_component_named(entity, &component) {
                     let error = ProtocolError::new(
                         ErrorCode::InvalidEdit,
                         "the entity already has this component; use SetField to change it",

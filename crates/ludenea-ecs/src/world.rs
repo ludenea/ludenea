@@ -380,6 +380,12 @@ impl World {
         self.with_component(entity, name, |codec, value| (codec.to_json)(value))
     }
 
+    /// Whether `entity` is alive and has the component registered under `name`, without
+    /// encoding its value.
+    pub fn has_component_named(&self, entity: Entity, name: &str) -> bool {
+        self.with_component(entity, name, |_, _| ()).is_some()
+    }
+
     /// The `name` component of `entity` as a RON string, or `None` when `entity` is not
     /// alive, the name is not registered, or the entity has no such component.
     pub fn component_ron(&self, entity: Entity, name: &str) -> Option<String> {

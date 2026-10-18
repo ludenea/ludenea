@@ -109,6 +109,9 @@ fn single_component_accessors_read_one_value() {
     );
     assert_eq!(world.component_bytes(entities[1], health), None);
     assert_eq!(world.component_ron(entities[0], "unknown"), None);
+    assert!(world.has_component_named(entities[0], health));
+    assert!(!world.has_component_named(entities[1], health));
+    assert!(!world.has_component_named(entities[0], "unknown"));
 }
 
 #[test]
