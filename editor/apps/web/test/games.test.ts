@@ -110,6 +110,43 @@ describe("followWasmGames crashes", () => {
   });
 });
 
+describe("followWasmGames crash loops", () => {
+  it("a_game_that_keeps_crashing_stops_restarting_until_the_next_build", async () => {
+    const builds = ["/game/a/game.js", "/game/b/game.js"] as const;
+    let build = 0;
+    const { project, push } = await fakeProject(() => ({ ok: { type: "wasm", glue_url: builds[build] } }));
+    const crashes: ((crash: WorkerCrash) => void)[] = [];
+    const start = vi.fn((glueUrl: string): WorkerGame => {
+      const host = fakeHost(glueUrl);
+      return { transport: host, onCrashed: (listener: (crash: WorkerCrash) => void) => (crashes.push(listener), () => {}), terminate: () => host.close() };
+    });
+    const editor = app();
+    followWasmGames(project, editor, start);
+    await settle();
+    expect(start).toHaveBeenCalledTimes(1);
+
+    // The restored scene panics as soon as it loads: three restarts, then none.
+    for (let crash = 0; crash < 4; crash++) {
+      crashes.at(-1)!({ message: "boom" });
+      await settle();
+    }
+    expect(start).toHaveBeenCalledTimes(4);
+    expect(editor.log).toHaveBeenLastCalledWith("error", expect.stringMatching(/^The game crashed 4 times within \d+ seconds/));
+
+    // The next build starts again, even an identical one, with a fresh allowance.
+    push({ type: "game_ready" });
+    await settle();
+    expect(start).toHaveBeenCalledTimes(5);
+    build = 1;
+    push({ type: "game_ready" });
+    await settle();
+    expect(start).toHaveBeenLastCalledWith(builds[1]);
+    crashes.at(-1)!({ message: "boom" });
+    await settle();
+    expect(start).toHaveBeenCalledTimes(7);
+  });
+});
+
 describe("followNativeGames", () => {
   it("desktop_rebuild_exports_before_restart_game", async () => {
     const games = [fakeHost("old"), fakeHost("new")];

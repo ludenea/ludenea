@@ -101,12 +101,13 @@ export async function restoreSession(control: ControlClient, saved: SavedSession
  * restarts it, loads that export, and seeks back to the crash tick when known (else the
  * exported tick). `seed` is the session being restored into this game: it stays the latest
  * until a newer export exists, and a crash before then (the restored session crashes this
- * build) reloads only its scene, so the game does not crash again at once.
+ * build) reloads only its scene, so the game does not crash again at once. `restart` resolves
+ * to `null` when it gives up restarting.
  */
 export function guardSession(
   control: ControlClient,
   game: Pick<WorkerGame, "onCrashed">,
-  restart: (saved: SavedSession | null) => Promise<ControlClient>,
+  restart: (saved: SavedSession | null) => Promise<ControlClient | null>,
   options: { seed?: SavedSession | null; log?: Log } = {},
 ): SessionGuard {
   const log = options.log ?? devtools;
@@ -152,7 +153,7 @@ export function guardSession(
       dispose();
       try {
         const next = await restart(saved);
-        if (saved) await restoreSession(next, saved, tick);
+        if (next && saved) await restoreSession(next, saved, tick);
       } catch (error) {
         log("error", `Cannot restore the session after the crash: ${error instanceof Error ? error.message : String(error)}`);
       }

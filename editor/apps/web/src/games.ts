@@ -19,14 +19,32 @@ function restoreInBackground(app: App, control: ControlClient, saved: SavedSessi
   restoreSession(control, saved).catch((error) => app.log("error", `Cannot restore the session: ${errorText(error)}`));
 }
 
+/** Crashes closer together than this count as one loop. */
+const CRASH_WINDOW_MS = 30_000;
+/** Restarts allowed within `CRASH_WINDOW_MS`; one more crash stops the game. */
+const MAX_CRASH_RESTARTS = 3;
+
 /**
  * Browser: runs each WebAssembly build announced by `GameReady` in a worker from `start`. A
  * rebuild carries the session over (export from the running game, `LoadSession` into the new
- * one, back to its tick); a crash restarts the same build the same way (`guardSession`).
+ * one, back to its tick); a crash restarts the same build the same way (`guardSession`). A
+ * build that keeps crashing (a scene that panics on load) stays stopped until the next build.
  */
 export function followWasmGames(project: ProjectClient, app: App, start: (glueUrl: string) => WorkerGame): void {
   type Running = { glueUrl: string; game: WorkerGame; control: ControlClient; guard: SessionGuard };
   let running: Running | null = null;
+  let crashes: number[] = [];
+  let stopped = false;
+  const relaunch = async (glueUrl: string, saved: SavedSession | null): Promise<ControlClient | null> => {
+    const now = Date.now();
+    crashes = [...crashes.filter((time) => now - time < CRASH_WINDOW_MS), now];
+    if (crashes.length > MAX_CRASH_RESTARTS) {
+      stopped = true;
+      app.log("error", `The game crashed ${crashes.length} times within ${CRASH_WINDOW_MS / 1000} seconds: it restarts with the next build.`);
+      return null;
+    }
+    return launch(glueUrl, saved);
+  };
   // `seed` is the session about to be restored into the new game.
   const launch = async (glueUrl: string, seed: SavedSession | null): Promise<ControlClient> => {
     running?.guard.dispose();
@@ -36,13 +54,15 @@ export function followWasmGames(project: ProjectClient, app: App, start: (glueUr
     const control = await ControlClient.connect(game.transport);
     // The asset browser loads the open scene into the new game here, before any restore.
     app.connectGame(control);
-    const guard = guardSession(control, game, (saved) => launch(glueUrl, saved), { seed, log: app.log });
+    const guard = guardSession(control, game, (saved) => relaunch(glueUrl, saved), { seed, log: app.log });
     running = { glueUrl, game, control, guard };
     return control;
   };
   const update = async () => {
     const endpoint = await project.request({ type: "game_endpoint" }).catch(() => null);
-    if (endpoint?.type !== "wasm" || endpoint.glue_url === running?.glueUrl) return;
+    if (endpoint?.type !== "wasm" || (endpoint.glue_url === running?.glueUrl && !stopped)) return;
+    crashes = [];
+    stopped = false;
     const previous = running;
     const saved = previous && (await exportSession(previous.control).catch(() => previous.guard.latest()));
     const control = await launch(endpoint.glue_url, saved);
