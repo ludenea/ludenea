@@ -336,3 +336,112 @@ fn despawning_instance_entity_is_refused() {
     );
     check_despawn(&[1]).unwrap();
 }
+
+#[test]
+fn values_that_are_not_one_ron_value_are_refused() {
+    let scene = scene_with_instance();
+    let tag = "prefab_editing::Tag";
+    for value in ["(9)), (entity: [1]", "", "(9) (8)"] {
+        assert!(matches!(
+            set_override(&scene, &[3], &[0], tag, &[], value),
+            Err(SceneError::Parse(_))
+        ));
+        assert!(matches!(
+            add_component_override(&scene, &[3], &[0], tag, value),
+            Err(SceneError::Parse(_))
+        ));
+        assert!(matches!(
+            apply_to_prefab(PREFAB, &[0], tag, &[], value),
+            Err(SceneError::Parse(_))
+        ));
+    }
+    let shaped = "Circle(radius: Some([1.0, 2.0]))";
+    assert!(set_override(&scene, &[3], &[0], tag, &[], shaped).is_ok());
+}
+
+#[test]
+fn create_prefab_refuses_dead_entities_and_writes_duplicates_once() {
+    let mut simulation = simulation();
+    simulation
+        .load_scene(
+            "Scene(version: 2, next_id: 2, resources: {}, entities: [\
+            (id: 0, components: {\"prefab_editing::Tag\": (1)}),\
+            (id: 1, components: {\"prefab_editing::Tag\": (2)}),\
+            ])",
+        )
+        .unwrap();
+    let first = simulation.entity_at_address(&[0]).unwrap();
+    let second = simulation.entity_at_address(&[1]).unwrap();
+    let text = create_prefab(&simulation, &[first, first]).unwrap();
+    assert!(text.contains("next_id: 1"), "{text}");
+    simulation.world_mut().despawn(second).unwrap();
+    assert!(matches!(
+        create_prefab(&simulation, &[first, second]),
+        Err(SceneError::MissingTarget(_))
+    ));
+}
+
+#[test]
+fn stale_entries_are_kept_byte_for_byte_while_a_neighbour_is_edited() {
+    let stale = "(entity: [9], component: \"prefab_editing::Tag\", path: [], value: (5))";
+    let scene = scene_with_instance().replace("overrides: []", &format!("overrides: [{stale}]"));
+    let text = set_override(
+        &scene,
+        &[3],
+        &[0],
+        "prefab_editing::Pos",
+        &[field("y")],
+        "4.0",
+    )
+    .unwrap();
+    assert!(text.contains(stale), "{text}");
+    let resolved = resolve(&text, &texts(&[(A, PREFAB)])).unwrap();
+    assert_eq!(resolved.warnings.len(), 1, "{:?}", resolved.warnings);
+    assert_eq!(
+        component(&resolved, &[3, 0], "Pos").unwrap(),
+        "(x: 1.0, y: 4.0)"
+    );
+}
+
+#[test]
+fn overrides_append_to_inline_and_multiline_lists() {
+    let first = "(entity: [1], component: \"prefab_editing::Tag\", path: [], value: (5))";
+    let inline = scene_with_instance().replace("overrides: []", &format!("overrides: [{first}]"));
+    let multiline = scene_with_instance().replace(
+        "overrides: []",
+        &format!("overrides: [\n            {first},\n        ]"),
+    );
+    for scene in [inline, multiline] {
+        let text = set_override(&scene, &[3], &[0], "prefab_editing::Tag", &[], "(6)").unwrap();
+        let resolved = resolved(&text);
+        assert_eq!(
+            component(&resolved, &[3, 1], "Tag").unwrap(),
+            "(5)",
+            "{text}"
+        );
+        assert_eq!(
+            component(&resolved, &[3, 0], "Tag").unwrap(),
+            "(6)",
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn save_prefab_checked_refuses_nested_foreign_references_and_missing_prefabs() {
+    let nested = "Prefab(version: 1, next_id: 1, entities: [\
+        (id: 0, components: {\"x::Many\": (all: [Some((index: 0, generation: 0)), Some((index: 4, generation: 0))])}),\
+        ])";
+    assert!(matches!(
+        save_prefab_checked(AssetId(A), nested, &AssetTexts::new()),
+        Err(SceneError::ForeignReference { entity: 0, path, .. }) if path == "all[1]"
+    ));
+    let missing = format!(
+        "Prefab(version: 1, next_id: 1, entities: [], instances: [(id: 0, prefab: \"{}\")])",
+        AssetId(B)
+    );
+    assert!(matches!(
+        save_prefab_checked(AssetId(A), &missing, &AssetTexts::new()),
+        Err(SceneError::MissingAsset { id, .. }) if id == AssetId(B)
+    ));
+}

@@ -751,9 +751,23 @@ impl Simulation {
         )
     }
 
-    /// Writes `entities` as a prefab file with local identifiers `0..n` in that order. An
-    /// `Entity` value naming an entity outside `entities` is refused.
+    /// Writes `entities` as a prefab file with local identifiers `0..n` in that order, each
+    /// entity once. A dead entity, and an `Entity` value naming an entity outside
+    /// `entities`, are refused.
     pub(crate) fn write_prefab(&self, entities: &[Entity]) -> Result<String, SceneError> {
+        if let Some(dead) = entities
+            .iter()
+            .find(|&&entity| !self.world.is_alive(entity))
+        {
+            return Err(SceneError::MissingTarget(format!("entity {dead}")));
+        }
+        let mut seen = BTreeSet::new();
+        let entities: Vec<Entity> = entities
+            .iter()
+            .copied()
+            .filter(|&entity| seen.insert(entity))
+            .collect();
+        let entities = &entities[..];
         let locals: BTreeMap<(u32, u32), u32> = entities
             .iter()
             .map(|entity| (entity.index(), entity.generation()))

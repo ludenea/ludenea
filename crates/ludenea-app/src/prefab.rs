@@ -469,6 +469,7 @@ pub fn set_override(
     path: &[PathSegment],
     value: &str,
 ) -> Result<String, SceneError> {
+    check_value(value)?;
     let (id, entity) = split_target(instance, entity)?;
     let path_ron = ron::to_string(path).expect("a path encodes");
     let entry =
@@ -520,6 +521,7 @@ pub fn add_component_override(
     component: &str,
     value: &str,
 ) -> Result<String, SceneError> {
+    check_value(value)?;
     let (id, entity) = split_target(instance, entity)?;
     let is = targets(&entity, component, None);
     let (text, removed) = remove_where(
@@ -581,6 +583,7 @@ pub fn apply_to_prefab(
     path: &[PathSegment],
     value: &str,
 ) -> Result<String, SceneError> {
+    check_value(value)?;
     let local = match entity {
         [local] => *local,
         [instance, rest @ ..] => {
@@ -801,6 +804,15 @@ fn foreign(
         }
         Kind::Atom => None,
     }
+}
+
+/// Refuses a `value` that is not exactly one RON value, before it is spliced into a file.
+fn check_value(value: &str) -> Result<(), SceneError> {
+    ron::from_str::<serde::de::IgnoredAny>(value)
+        .map(drop)
+        .map_err(|error| {
+            SceneError::Parse(format!("the value `{value}` is not one RON value: {error}"))
+        })
 }
 
 /// The identifier of an instance entry and the entity path inside it.
