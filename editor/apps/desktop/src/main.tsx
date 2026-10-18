@@ -1,6 +1,6 @@
 import { ProjectClient, tauriTransport } from "@ludenea/control-client";
-import { startEditor } from "../../web/src/app";
-import { followNativeGames } from "../../web/src/games";
+import { startEditor } from "@ludenea/web/app";
+import { followNativeGames } from "@ludenea/web/games";
 
 // Where the backend's `ludenea-plugin` scheme answers (Windows webviews reach custom schemes
 // over http).
