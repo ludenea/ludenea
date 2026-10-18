@@ -1,7 +1,7 @@
 import { act, cleanup, render } from "@testing-library/react";
 import { useEffect } from "react";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import { Shell } from "../src";
+import { Shell } from "../src/app";
 import { testHost } from "./support";
 
 // jsdom has neither layout nor `ResizeObserver`; dockview needs both to lay out.

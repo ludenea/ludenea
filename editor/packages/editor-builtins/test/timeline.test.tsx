@@ -1,5 +1,5 @@
 import type { Timeline } from "@ludenea/control-client";
-import { installShortcuts } from "@ludenea/editor-shell";
+import { installShortcuts } from "@ludenea/editor-shell/app";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { Profiler } from "react";
 import { afterEach, describe, expect, it } from "vitest";

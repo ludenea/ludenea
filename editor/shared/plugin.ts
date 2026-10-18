@@ -8,6 +8,9 @@ export const SHARED_MODULES = {
   "react/jsx-runtime": "react-jsx-runtime",
   "react-dom": "react-dom",
   "@ludenea/editor-shell": "editor-shell",
+  // The applications' part of the shell: in the shared build so it shares the plugins' instance
+  // of the shell's modules, but never a plugin's import (plugin bundles refuse it).
+  "@ludenea/editor-shell/app": "editor-shell-app",
   "@ludenea/control-client": "control-client",
 } as const;
 

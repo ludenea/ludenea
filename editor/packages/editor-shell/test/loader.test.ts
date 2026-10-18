@@ -1,7 +1,8 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DuplicateRegistration, Shell, definePlugin, type Editor } from "../src";
+import { DuplicateRegistration, definePlugin, type Editor } from "../src";
+import { Shell } from "../src/app";
 import { testHost } from "./support";
 
 const entity = { index: 3, generation: 1 };

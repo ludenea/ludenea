@@ -1,5 +1,6 @@
 import { ControlClient, ProjectClient, fakeTransport, type GameInfo, type TypeSchema } from "@ludenea/control-client";
-import { createEditor, type EditorHost, type PluginDefinition } from "@ludenea/editor-shell";
+import type { PluginDefinition } from "@ludenea/editor-shell";
+import { createEditor, type EditorHost } from "@ludenea/editor-shell/app";
 import { act, render } from "@testing-library/react";
 
 type Message = { type: string; [key: string]: unknown };

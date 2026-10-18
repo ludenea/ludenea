@@ -48,7 +48,10 @@ const packages = join(shared, "../packages");
 writeFileSync(join(shared, "src/react.js"), commonJs("../node_modules/react/index.js", react, probe));
 writeFileSync(join(shared, "src/react-jsx-runtime.js"), commonJs("../node_modules/react/jsx-runtime.js", jsxRuntime));
 writeFileSync(join(shared, "src/react-dom.js"), commonJs("../node_modules/react-dom/index.js", reactDom));
-for (const name of ["editor-shell", "control-client"]) {
-  const index = join(packages, name, "src/index.ts");
-  writeFileSync(join(shared, `src/${name}.js`), reexport(`../../packages/${name}/src/index.ts`, valueExports(index)));
+for (const [name, source] of [
+  ["editor-shell", "editor-shell/src/index.ts"],
+  ["editor-shell-app", "editor-shell/src/app.ts"],
+  ["control-client", "control-client/src/index.ts"],
+]) {
+  writeFileSync(join(shared, `src/${name}.js`), reexport(`../../packages/${source}`, valueExports(join(packages, source))));
 }

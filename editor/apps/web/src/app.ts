@@ -3,7 +3,7 @@ import "../../../packages/editor-shell/src/theme.css";
 import "../../../packages/editor-builtins/src/panels.css";
 import type { ConsoleLevel, ControlClient, PluginBundle, ProjectClient } from "@ludenea/control-client";
 import { builtinPlugins, logToConsole } from "@ludenea/editor-builtins";
-import { createEditor, mountShell, type EditorHost } from "@ludenea/editor-shell";
+import { createEditor, mountShell, type EditorHost } from "@ludenea/editor-shell/app";
 
 /** What the web and desktop applications share: the shell, its plugins, and the game switch. */
 export interface EditorApp {

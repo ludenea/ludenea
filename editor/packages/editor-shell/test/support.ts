@@ -1,5 +1,5 @@
 import { ControlClient, ProjectClient, fakeTransport, type GameInfo } from "@ludenea/control-client";
-import { createEditor } from "../src";
+import { createEditor } from "../src/app";
 
 const game: GameInfo = { components: [], resources: [], input: null, tick_rate: 60, debug_layers: [] };
 
