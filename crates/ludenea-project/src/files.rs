@@ -643,7 +643,9 @@ mod tests {
         let scene = dir.path().join("main.scene.ron");
         fs::write(&scene, "before").unwrap();
         let mut tracked = tracked(dir.path());
-        tracked.known.insert("main.scene.ron".into(), AssetKind::Scene);
+        tracked
+            .known
+            .insert("main.scene.ron".into(), AssetKind::Scene);
         fs::write(&scene, "after").unwrap();
         let modified = || {
             Event::new(EventKind::Modify(notify::event::ModifyKind::Any)).add_path(scene.clone())
@@ -652,7 +654,10 @@ mod tests {
             path: "main.scene.ron".into(),
             kind: AssetKind::Scene,
         };
-        assert_eq!(tracked.changes(&[modified()]), std::slice::from_ref(&changed));
+        assert_eq!(
+            tracked.changes(&[modified()]),
+            std::slice::from_ref(&changed)
+        );
         assert_eq!(tracked.changes(&[modified()]), []);
         fs::write(&scene, "after again").unwrap();
         assert_eq!(tracked.changes(&[modified()]), [changed]);

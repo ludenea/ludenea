@@ -1,7 +1,7 @@
 import { ProtocolFailure, type TypeSchema } from "@ludenea/control-client";
 import { describe, expect, it, vi } from "vitest";
 import { AssetFailure } from "../src";
-import { fakeProject, gameWithSession, ids, settle, testGame, testHost, type Session } from "./support";
+import { fakeProject, gameWithSession, ids, settle, testGame, testHost, timeline, type Session } from "./support";
 
 const session = (scene: string, extra: Partial<Session> = {}): Session => ({
   scene,
@@ -77,6 +77,35 @@ describe("document store", () => {
     expect(restored.assets).toContainEqual([ids.ball, "(new ball)"]);
     expect(restored.expected).toEqual(session("").hashes);
     expect(host.editor.timeline.getState().divergence).toEqual({ tick: 1 });
+  });
+
+  it("reopening_seeks_once_resimulated_past_the_tick", async () => {
+    const project = fakeProject();
+    const host = await testHost(undefined, project.answer);
+    const exported = session("(main)");
+    let resimulating = false;
+    // A resumed session keeps its recorded hashes while it resimulates: `simulated` counts them.
+    const game = await testGame((command) => {
+      if (command.type === "export_session") return { type: "session", ...exported };
+      if (command.type === "get_timeline") return { ...timeline(2), resimulating };
+      if (command.type === "load_scene") return { type: "loaded", warnings: [], instances: [], load_addresses: [] };
+      return { type: "done" };
+    });
+    host.setControl(game.control);
+    const { open } = host.editor.document.getState();
+    await open(ids.main);
+    await open(ids.ball);
+
+    resimulating = true;
+    game.sent.length = 0;
+    const reopened = open(ids.main);
+    await vi.waitFor(() => expect(game.sent.some((command) => command.type === "load_session")).toBe(true));
+    for (let turn = 0; turn < 5; turn++) await settle();
+    expect(game.sent.filter((command) => command.type === "seek")).toEqual([]);
+
+    game.push({ type: "resimulated", up_to: 2 });
+    await reopened;
+    expect(game.sent).toContainEqual({ type: "seek", tick: 2 });
   });
 
   it("root_branch_takes_the_document_name", async () => {

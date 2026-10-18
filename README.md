@@ -123,6 +123,54 @@ native process:
 LUDENEA_ENGINE_PATH=$PWD pnpm -C editor/apps/desktop tauri dev -- -- ~/games/my_game
 ```
 
+### Prefabs
+
+A prefab (`.prefab.ron`) is a group of entities a scene places as instances. The scene tree
+groups each instance under its prefab file; "Place prefab" adds one, and "Create prefab
+from selection" turns selected entities into a new prefab. A component changed on an
+instance is an override, marked in the inspector with "Revert to prefab" and "Apply to
+prefab". Opening the prefab ("Open the selected instance's prefab") edits it as a document;
+once saved, every scene using it replays with the change and keeps its overrides.
+
+### Data assets
+
+A data asset is a `.ron` file whose meta names its type (`Data { type }`), such as the
+template's `assets/settings.ron`. Systems read it through a `Handle<T>` field and an
+`Assets<T>` parameter, so it is part of the simulation's state and of its hash. Select it in
+the asset browser to edit it in the inspector: the session replays with the new value from
+the tick of the change, and "Save the selected data asset" writes it back to its file.
+
+### Replays
+
+A replay (`.replay`) holds everything a run needs to be checked again: the resolved scene,
+its assets, the input and edit logs, and the hash of every tick. "Save as replay" in the
+timeline writes the current branch to `assets/replays/`. Opening a replay in the editor
+plays it and reports the first tick that no longer matches; a replay whose values no longer
+decode (its game's types changed) is refused with the value at fault. The command line tool
+verifies one:
+
+```sh
+cargo run --locked --release -p boxes -- verify golden/spawner.replay
+```
+
+### Branches
+
+Editing at a past tick no longer discards the recorded future: it forks a branch from that
+tick, and the timeline shows one lane per branch under its parent. Click a lane (or "Switch
+branch") to go to that branch's future; "Rename branch" and "Delete branch" manage them.
+Undoing the edit that forked a branch removes it, and redoing it brings it back. Each
+document keeps its session, branches included, when another document opens.
+
+### Divergence tools
+
+"Compare with" picks a second branch: the viewport draws it as a ghost over the current one
+("Toggle the ghost of the compare branch" hides it), and the "Divergence report" panel lists,
+entity by entity, the first tick each one diverges and its likely causes (the edit at the
+fork, or a recorded interaction such as a `ludenea::Collision` with an entity that diverged
+before it). A trace (`.trace`) or snapshot (`.snap`) opened from the asset browser shows in
+the "Divergence" panel: two traces compare tick by tick to their first divergent tick, and
+two snapshots compare entity by entity, component by component, and field by field.
+
 ### Plugins
 
 Built-in panels and project plugins use the same API. A project plugin lives in the
@@ -155,15 +203,31 @@ pnpm -C editor build
 ```
 
 End-to-end tests (Playwright, Chromium) drive the built web editor against
-`ludenea serve`: the golden trace in a browser, a session replayed by the command line tool,
-plugin parity, and fluidity with 100,000 entities. `PERF_STRICT=1` turns the frame time
-report into assertions, on the reference machine (an Apple M-series):
+`ludenea serve`: the golden trace and replay in a browser, a session replayed by the command
+line tool, plugin parity, prefabs, branches, the divergence tools, saved replays, and
+fluidity with 100,000 entities, a branch, and the ghost. `PERF_STRICT=1` turns the frame
+time report into assertions, on the reference machine (an Apple M-series):
 
 ```sh
 cargo xtask wasm-game boxes editor/e2e/golden/pkg
 cargo run --locked -p boxes --bin editor-bench
 cargo build --locked -p ludenea-serve
 pnpm -C editor e2e
+```
+
+The divergence viewer's fixtures (`editor/e2e/fixtures/divergence/`) come from the `boxes`
+app. The tests never regenerate them; after a change to the trace, snapshot, or replay
+formats, write them again and commit them:
+
+```sh
+cargo run --locked -p boxes --bin divergence-fixtures editor/e2e/fixtures/divergence
+```
+
+The timing and memory budgets (switching branches, the divergence report, checkpoints of 20
+branches) are `#[ignore]`d tests, run in release:
+
+```sh
+cargo test --locked --release -p ludenea-control --test branches --test divergence -- --ignored --nocapture
 ```
 
 After changing protocol types, regenerate the TypeScript bindings and the declarations

@@ -1,5 +1,5 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, type Page } from "@playwright/test";
@@ -84,3 +84,73 @@ export async function waitForGame(page: Page): Promise<void> {
   await page.getByRole("tab", { name: "Timeline" }).click();
   await expect(page.getByText(/^Tick \d+ of \d+/)).toBeVisible({ timeout: FIRST_BUILD_MS });
 }
+
+export const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
+
+/** Plays for `ms` milliseconds of wall time, or until tick `until` shows, then pauses and returns the tick reached. */
+export async function play(page: Page, ms: number, until?: number): Promise<number> {
+  await button(page, "Play").click();
+  await expect(button(page, "Pause")).toBeVisible();
+  if (until === undefined) await page.waitForTimeout(ms);
+  else await expect.poll(async () => (await timeline(page)).current, { timeout: ms }).toBeGreaterThanOrEqual(until);
+  await button(page, "Pause").click();
+  await expect(button(page, "Play")).toBeVisible();
+  return (await settledTimeline(page)).current;
+}
+
+/** The timeline once it stops changing (the refresh after `Paused` brings the head). */
+export async function settledTimeline(page: Page): Promise<{ current: number; head: number }> {
+  let last = "";
+  await expect
+    .poll(async () => {
+      const now = JSON.stringify(await timeline(page));
+      const settled = now === last;
+      last = now;
+      return settled;
+    }, { intervals: [250] })
+    .toBe(true);
+  return JSON.parse(last);
+}
+
+export async function seek(page: Page, tick: number): Promise<void> {
+  await page.getByRole("slider", { name: "Tick" }).fill(String(tick));
+  await expectTick(page, tick);
+}
+
+/** Runs the editor command titled `title` from the command palette. */
+export async function runCommand(page: Page, title: string): Promise<void> {
+  await page.keyboard.press("Control+k");
+  const palette = page.getByRole("dialog", { name: "Command palette" });
+  await palette.getByRole("combobox", { name: "Command" }).fill(title);
+  // An option's name ends with its shortcut, when it has one.
+  const escaped = title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  await palette.getByRole("option", { name: new RegExp(`^${escaped}`) }).first().click();
+  await expect(palette).not.toBeAttached();
+}
+
+/** Runs the project's own binary (native, built by cargo) with `args`; returns its output. */
+export function cli(root: string, args: string[]): string {
+  return execFileSync("cargo", ["run", "--quiet", "--locked", "--manifest-path", join(root, "Cargo.toml"), "--", ...args], {
+    env: { ...process.env, CARGO_TARGET_DIR: targetDir },
+    encoding: "utf8",
+  });
+}
+
+/**
+ * A project made by `ludenea new` whose game is the `boxes` example (its sources copied in,
+ * under the crate name `boxes`, so its type names match), without the template's assets:
+ * files the `boxes` app wrote open in it.
+ */
+export function serveBoxes(port: number, prepare: (root: string) => void = () => {}): Promise<ServedProject> {
+  return serveProject("boxes", port, (root) => {
+    for (const file of ["lib.rs", "scene.rs"]) copyFileSync(join(repository, "examples/boxes/src", file), join(root, "src", file));
+    for (const directory of ["assets", "scenes"]) {
+      rmSync(join(root, directory), { recursive: true, force: true });
+      mkdirSync(join(root, directory));
+    }
+    prepare(root);
+  });
+}
+
+/** The fixtures of the `boxes` app, written by `cargo run -p boxes --bin divergence-fixtures editor/e2e/fixtures/divergence`. */
+export const DIVERGENCE_FIXTURES = join(import.meta.dirname, "fixtures/divergence");

@@ -490,6 +490,7 @@ fn report_over_600_ticks_under_one_second() {
     let started = std::time::Instant::now();
     let report = complete(&mut host, None);
     let elapsed = started.elapsed();
+    println!("the report over 600 ticks took {elapsed:?}");
     assert_eq!(report.up_to, FORK + 600);
     assert!(report.entities.len() > 1);
     assert!(elapsed.as_secs_f64() < 1.0, "{elapsed:?}");

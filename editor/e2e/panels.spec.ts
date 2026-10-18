@@ -12,9 +12,9 @@ test.beforeAll(async () => {
   served = await serveProject("panels_game", 4315, (root) => {
     // The template's resources, and enough entities to scroll the scene tree.
     const path = join(root, "scenes/main.scene.ron");
-    const resources = readFileSync(path, "utf8").split("entities: [")[0];
-    const pose = '{"ludenea::Pose": (position:(x:0.0,y:0.0),rotation:(cos:1.0,sin:0.0))},';
-    writeFileSync(path, `${resources}entities: [\n${Array(ENTITIES).fill(pose).join("\n")}\n    ],\n)\n`);
+    const resources = readFileSync(path, "utf8").split("entities: [")[0]!.replace(/next_id: \d+/, `next_id: ${ENTITIES}`);
+    const pose = (id: number) => `(id: ${id}, components: {"ludenea::Pose": (position:(x:0.0,y:0.0),rotation:(cos:1.0,sin:0.0))}),`;
+    writeFileSync(path, `${resources}entities: [\n${Array.from({ length: ENTITIES }, (_, id) => pose(id)).join("\n")}\n    ],\n)\n`);
   });
 });
 

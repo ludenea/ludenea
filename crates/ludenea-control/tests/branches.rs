@@ -612,6 +612,34 @@ fn checkpoint_budget_with_20_branches_of_10000_ticks() {
     }
 }
 
+#[test]
+#[ignore = "timing, run in release"]
+// Measuring time is outside the simulation.
+#[allow(clippy::disallowed_methods)]
+fn switch_branch_under_200_ms() {
+    let (mut sim, mut session) = played(10_000, 10_000);
+    let root_hashes = hashes(&session);
+    edit_at(&mut session, &mut sim, 9_000, 1_000);
+    play(&mut session, &mut sim, 1_000);
+
+    let started = std::time::Instant::now();
+    session.switch_branch(&mut sim, ROOT).unwrap();
+    let elapsed = started.elapsed();
+    let timeline = session.timeline();
+    assert_eq!(timeline.current, 10_000);
+    assert!(
+        timeline
+            .checkpoints
+            .iter()
+            .any(|&tick| tick <= timeline.current && timeline.current - tick <= 64),
+        "{:?}",
+        timeline.checkpoints
+    );
+    assert_eq!(sim.hash(), root_hashes[10_000]);
+    println!("switching branches took {elapsed:?}");
+    assert!(elapsed.as_secs_f64() < 0.2, "{elapsed:?}");
+}
+
 /// Edits the scene at tick 0, where the session must be.
 fn scene_edit(session: &mut Session, sim: &mut Simulation, begins: u64) {
     session.seek(sim, 0).unwrap();

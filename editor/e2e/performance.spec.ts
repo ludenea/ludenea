@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { expect, test } from "@playwright/test";
-import { collectErrors, openScene, repository, serveProject, timeline, waitForGame, type ServedProject } from "./project";
+import { button, collectErrors, expectTick, openScene, repository, seek, serveProject, timeline, waitForGame, type ServedProject } from "./project";
 
 declare global {
   interface Window {
@@ -33,7 +33,7 @@ const percentile = (values: number[], fraction: number) => {
   return sorted[Math.min(sorted.length - 1, Math.floor(fraction * sorted.length))] ?? Infinity;
 };
 
-test("the UI stays at 60 fps with 100,000 entities", async ({ page }) => {
+test("the UI stays at 60 fps with 100,000 entities, a branch, and the ghost", async ({ page }) => {
   const errors = collectErrors(page);
   const opened = Date.now();
   await page.goto(served.url);
@@ -50,6 +50,23 @@ test("the UI stays at 60 fps with 100,000 entities", async ({ page }) => {
   await page.getByRole("listbox", { name: "Entities" }).getByRole("option").nth(10).click();
   await page.getByRole("tab", { name: "Viewport" }).click();
   await page.getByRole("tab", { name: "Timeline" }).click();
+
+  // That body moved at a past tick forks a branch; the parent branch is the ghost.
+  for (let step = 0; step < 3; step++) await button(page, "Step").click();
+  await expectTick(page, 3);
+  await seek(page, 1);
+  await page.getByRole("tab", { name: "Inspector" }).click();
+  const x = page.getByRole("region", { name: "ludenea::Pose" }).getByLabel("position.x");
+  await x.fill("1.5");
+  await x.press("Enter");
+  await page.getByRole("tab", { name: "Timeline" }).click();
+  const lanes = page.getByRole("list", { name: "Branches" }).getByRole("listitem");
+  await expect(lanes).toHaveCount(2);
+  await button(page, "Compare with").click();
+  const compare = page.getByRole("group", { name: "Compare branch" });
+  await compare.getByLabel("Branch").selectOption({ index: 0 });
+  await compare.getByRole("button", { name: "Compare" }).click();
+  await expect(lanes.nth(0)).toContainText("compare");
 
   const start = await timeline(page);
   await page.evaluate(() => {
@@ -83,14 +100,14 @@ test("the UI stays at 60 fps with 100,000 entities", async ({ page }) => {
       running = false;
     };
   });
-  await page.getByRole("button", { name: "Play", exact: true }).click();
+  await button(page, "Play").click();
   await page.waitForTimeout(PLAY_MS);
   const { frames, ticks } = await page.evaluate(() => {
     window.__stopFrames!();
     return { frames: window.__frameTimes!, ticks: window.__ticksShown! };
   });
-  await page.getByRole("button", { name: "Pause", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Play", exact: true })).toBeVisible();
+  await button(page, "Pause").click();
+  await expect(button(page, "Play")).toBeVisible();
 
   const p95 = percentile(frames, 0.95);
   // From the first tick shown after Play to the last one shown while sampling, so neither the

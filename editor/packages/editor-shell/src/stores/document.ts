@@ -109,8 +109,9 @@ function simulated(control: ControlClient, tick: number): Promise<void> {
       }),
       control.onClose((reason) => settle(new Error(`the game stopped while resimulating: ${reason}`))),
     );
+    // While resimulating, `simulated` counts the recorded future too: only `Resimulated` tells how far it got.
     control.request({ type: "get_timeline" }).then((timeline) => {
-      if (!timeline.resimulating || timeline.simulated >= tick) settle();
+      if (!timeline.resimulating) settle();
     }, settle);
   });
 }

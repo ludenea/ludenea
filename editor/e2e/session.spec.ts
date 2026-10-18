@@ -1,9 +1,8 @@
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, test, type Page } from "@playwright/test";
-import { collectErrors, expectTick, openScene, serveProject, targetDir, timeline, waitForGame, type ServedProject } from "./project";
+import { expect, test } from "@playwright/test";
+import { button, cli, collectErrors, expectTick, openScene, play, seek, serveProject, settledTimeline, waitForGame, type ServedProject } from "./project";
 import { decodeTrace } from "./trace";
 
 interface ExportedSession {
@@ -39,45 +38,6 @@ test.beforeAll(async () => {
 
 test.afterAll(() => served?.stop());
 
-const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
-
-/** Plays for `ms` milliseconds of wall time, then pauses and returns the tick reached. */
-async function play(page: Page, ms: number): Promise<number> {
-  await button(page, "Play").click();
-  await expect(button(page, "Pause")).toBeVisible();
-  await page.waitForTimeout(ms);
-  await button(page, "Pause").click();
-  await expect(button(page, "Play")).toBeVisible();
-  return (await settledTimeline(page)).current;
-}
-
-/** The timeline once it stops changing (the refresh after `Paused` brings the head). */
-async function settledTimeline(page: Page): Promise<{ current: number; head: number }> {
-  let last = "";
-  await expect
-    .poll(async () => {
-      const now = JSON.stringify(await timeline(page));
-      const settled = now === last;
-      last = now;
-      return settled;
-    }, { intervals: [250] })
-    .toBe(true);
-  return JSON.parse(last);
-}
-
-async function seek(page: Page, tick: number): Promise<void> {
-  await page.getByRole("slider", { name: "Tick" }).fill(String(tick));
-  await expectTick(page, tick);
-}
-
-/** Runs the project's own binary (native, built by cargo) with `args`; returns its output. */
-function cli(root: string, args: string[]): string {
-  return execFileSync("cargo", ["run", "--quiet", "--locked", "--manifest-path", join(root, "Cargo.toml"), "--", ...args], {
-    env: { ...process.env, CARGO_TARGET_DIR: targetDir },
-    encoding: "utf8",
-  });
-}
-
 test("an editor session replays in the CLI", async ({ page }) => {
   const errors = collectErrors(page);
   await page.goto(served.url);
@@ -87,6 +47,7 @@ test("an editor session replays in the CLI", async ({ page }) => {
 
   const played = await play(page, 2000);
   expect(played).toBeGreaterThan(60);
+  const parentHead = (await settledTimeline(page)).head;
   const editTick = played - 60;
   await seek(page, editTick);
 
@@ -98,8 +59,8 @@ test("an editor session replays in the CLI", async ({ page }) => {
   await x.fill("-2.5");
   await x.press("Enter");
   await page.getByRole("tab", { name: "Timeline" }).click();
-  await expect(page.getByLabel(`Edit at tick ${editTick}`)).toBeAttached();
-  // The edit discarded the recorded future.
+  await expect(page.getByLabel(`Edit at tick ${editTick}`, { exact: true })).toBeAttached();
+  // The edit forked a branch at that tick, with no future yet.
   await expectTick(page, editTick, editTick);
 
   // Record a future after the edit, then move around in it.
@@ -110,11 +71,12 @@ test("an editor session replays in the CLI", async ({ page }) => {
   await seek(page, editTick);
   await play(page, 1000);
 
+  // Undo removes the branch: back on the parent, whose recorded future is intact.
   await button(page, "Undo").click();
-  await expectTick(page, editTick, editTick);
-  await expect(page.getByLabel(`Edit at tick ${editTick}`)).not.toBeAttached();
+  await expectTick(page, editTick, parentHead);
+  await expect(page.getByLabel(`Edit at tick ${editTick}`, { exact: true })).not.toBeAttached();
   await button(page, "Redo").click();
-  await expect(page.getByLabel(`Edit at tick ${editTick}`)).toBeAttached();
+  await expect(page.getByLabel(`Edit at tick ${editTick}`, { exact: true })).toBeAttached();
   // Simulate past the redone edit, so the hashes cover its effect.
   await play(page, 1000);
 
@@ -132,11 +94,12 @@ test("an editor session replays in the CLI", async ({ page }) => {
     // `hashes[k]` is the hash after k ticks: every recorded tick is replayed.
     const ticks = session.hashes.length - 1;
     expect(ticks).toBeGreaterThan(editTick);
-    cli(served.root, ["run", scene, "--inputs", inputs, "--edits", edits, "--ticks", String(ticks), "--trace", trace]);
+    // The scene's prefab instances load from the project's assets.
+    cli(served.root, ["run", scene, "--project", served.root, "--inputs", inputs, "--edits", edits, "--ticks", String(ticks), "--trace", trace]);
     const replayed = decodeTrace(readFileSync(trace)).hashes.map((hash) => hash.toString(16).padStart(16, "0"));
     expect(replayed).toEqual(session.hashes);
 
-    const verified = cli(served.root, ["verify", scene, "--inputs", inputs, "--edits", edits, "--golden", trace, "--dump-dir", join(files, "dump")]);
+    const verified = cli(served.root, ["verify", scene, "--project", served.root, "--inputs", inputs, "--edits", edits, "--golden", trace, "--dump-dir", join(files, "dump")]);
     expect(verified).toContain(`ok: ${ticks + 1} hashes match`);
   } finally {
     rmSync(files, { recursive: true, force: true });
