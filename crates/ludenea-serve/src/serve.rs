@@ -28,6 +28,9 @@ pub struct Options {
     pub engine_path: Option<PathBuf>,
     /// Host names accepted in `Host` besides the local ones and `host`.
     pub allowed_hosts: Vec<String>,
+    /// Origins (`scheme://host:port`) whose pages may open the project WebSocket besides the
+    /// one matching `Host`, such as a development server proxying it.
+    pub allowed_origins: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -36,6 +39,7 @@ struct App {
     // the others; finer locking inside the service if that ever shows.
     service: Arc<Mutex<ProjectService>>,
     editor_dir: Option<Arc<PathBuf>>,
+    allowed_origins: Arc<Vec<String>>,
 }
 
 /// Opens the project, then serves until the process ends. Prints `listening on http://<address>`
@@ -49,6 +53,7 @@ pub async fn run(options: Options) -> Result<(), String> {
     let app = App {
         service: Arc::new(Mutex::new(service)),
         editor_dir: options.editor_dir.map(Arc::new),
+        allowed_origins: Arc::new(allowed_origins(options.allowed_origins)),
     };
     let router = Router::new()
         .route("/ws/project", get(project_socket))
@@ -92,7 +97,7 @@ async fn project_socket(
     upgrade: WebSocketUpgrade,
 ) -> Response {
     // Browsers let any page open a WebSocket to localhost: only the editor's own pages may.
-    if !same_origin(&headers) {
+    if !same_origin(&headers, &app.allowed_origins) {
         return StatusCode::FORBIDDEN.into_response();
     }
     upgrade.on_upgrade(move |socket| session(app, socket))
@@ -144,14 +149,26 @@ fn host_allowed(headers: &HeaderMap, allowed: &[String]) -> bool {
     name.is_some_and(|name| allowed.contains(&name.to_ascii_lowercase()))
 }
 
-/// A connection without `Origin` is not from a browser; one with it must match `Host`.
-fn same_origin(headers: &HeaderMap) -> bool {
+/// The origins given with `--allow-origin`, in the form browsers send: lowercase, without a
+/// trailing slash.
+fn allowed_origins(origins: Vec<String>) -> Vec<String> {
+    origins
+        .into_iter()
+        .map(|origin| origin.trim_end_matches('/').to_ascii_lowercase())
+        .collect()
+}
+
+/// A connection without `Origin` is not from a browser; one with it must match `Host` or be
+/// one of `allowed`.
+fn same_origin(headers: &HeaderMap, allowed: &[String]) -> bool {
     let Some(origin) = headers.get(header::ORIGIN) else {
         return true;
     };
+    let origin = origin.to_str().ok();
+    if origin.is_some_and(|origin| allowed.contains(&origin.to_ascii_lowercase())) {
+        return true;
+    }
     let origin_host = origin
-        .to_str()
-        .ok()
         .and_then(|origin| origin.split_once("://"))
         .map(|(_, host)| host);
     let host = headers
@@ -237,7 +254,10 @@ async fn game_file(
 }
 
 async fn serve_from_project(app: &App, relative: &Path) -> Response {
-    let Some(root) = lock(&app.service).root() else {
+    // The service lock may be held by a long request (bundling plugins): wait off the runtime.
+    let service = Arc::clone(&app.service);
+    let root = tokio::task::spawn_blocking(move || lock(&service).root()).await;
+    let Ok(Some(root)) = root else {
         return StatusCode::NOT_FOUND.into_response();
     };
     serve_file(&root.join(relative)).await
@@ -305,6 +325,54 @@ fn lock(service: &Mutex<ProjectService>) -> MutexGuard<'_, ProjectService> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn headers(host: &str, origin: Option<&str>) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, host.parse().unwrap());
+        if let Some(origin) = origin {
+            headers.insert(header::ORIGIN, origin.parse().unwrap());
+        }
+        headers
+    }
+
+    #[test]
+    fn local_hosts_are_allowed_with_or_without_a_port() {
+        let allowed = allowed_hosts("127.0.0.1", Vec::new());
+        for host in [
+            "localhost",
+            "localhost:7878",
+            "LocalHost:7878",
+            "127.0.0.1",
+            "127.0.0.1:7878",
+            "[::1]",
+            "[::1]:7878",
+        ] {
+            assert!(host_allowed(&headers(host, None), &allowed), "{host}");
+        }
+        for host in [
+            "evil.example",
+            "evil.example:7878",
+            "localhost.evil.example",
+            "[::2]:7878",
+            "[::1",
+        ] {
+            assert!(!host_allowed(&headers(host, None), &allowed), "{host}");
+        }
+    }
+
+    #[test]
+    fn an_allowed_origin_may_differ_from_the_host() {
+        let proxied = headers("localhost:7878", Some("http://localhost:5173"));
+        assert!(!same_origin(&proxied, &[]));
+        let allowed = allowed_origins(vec!["HTTP://localhost:5173/".to_string()]);
+        assert!(same_origin(&proxied, &allowed));
+        let other = headers("localhost:7878", Some("http://localhost:5174"));
+        assert!(!same_origin(&other, &allowed));
+        assert!(same_origin(
+            &headers("localhost:7878", Some("http://localhost:7878")),
+            &[]
+        ));
+    }
 
     #[test]
     fn only_addresses_beyond_this_machine_are_warned_about() {

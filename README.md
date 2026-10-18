@@ -96,6 +96,10 @@ cargo run --locked -p ludenea-serve -- serve ~/games/my_game --editor-dir editor
 who can reach the port can change and build the project, which runs its code. The tool
 prints a warning when it listens beyond this machine.
 
+Only pages served from the address the browser used may open the project connection. A
+development server on another port that proxies it (Vite on `http://localhost:5173`, for
+example) needs `--allow-origin http://localhost:5173` (repeatable).
+
 Built with `--features embed-editor`, the `ludenea` binary carries the editor and needs no
 `--editor-dir`. The desktop application (Tauri) runs the same editor with the game as a
 native process:

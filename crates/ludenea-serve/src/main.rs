@@ -41,6 +41,12 @@ enum Command {
         /// 127.0.0.1, [::1], and the --host value are always accepted.
         #[arg(long = "allow-host", value_name = "NAME")]
         allow_host: Vec<String>,
+        /// Another origin whose pages may open the project connection, such as a development
+        /// server proxying it (`http://localhost:5173`; repeatable). By default only pages
+        /// served from the address in the Host header may, so other sites cannot drive the
+        /// project from a visitor's browser.
+        #[arg(long = "allow-origin", value_name = "ORIGIN")]
+        allow_origin: Vec<String>,
     },
 }
 
@@ -54,6 +60,7 @@ fn main() -> ExitCode {
             editor_dir,
             engine_path,
             allow_host,
+            allow_origin,
         } => tokio::runtime::Runtime::new()
             .map_err(|error| error.to_string())
             .and_then(|runtime| {
@@ -64,6 +71,7 @@ fn main() -> ExitCode {
                     editor_dir,
                     engine_path,
                     allowed_hosts: allow_host,
+                    allowed_origins: allow_origin,
                 }))
             }),
     };

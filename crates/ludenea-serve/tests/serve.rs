@@ -234,6 +234,15 @@ fn allow_host_lets_a_named_host_through() {
     assert!(status.contains("421"), "{status}");
 }
 
+/// A development server on another port proxying the WebSocket, named by `--allow-origin`.
+#[test]
+fn allow_origin_lets_a_dev_proxy_connect() {
+    let server = serve_with(&["--allow-origin", "http://localhost:5555"]);
+    let mut socket = connect(&server, Some("http://localhost:5555")).unwrap();
+    handshake(&mut socket);
+    assert!(connect(&server, Some("http://localhost:5556")).is_err());
+}
+
 #[test]
 fn plugins_and_game_files_are_served_with_js_and_wasm_content_types() {
     let server = serve();
