@@ -31,7 +31,7 @@ pub(crate) struct AssetType {
 /// One loaded asset: its type's stable name, its value, and its canonical postcard bytes.
 pub(crate) struct LoadedAsset {
     pub(crate) type_name: &'static str,
-    value: AssetValue,
+    pub(crate) value: AssetValue,
     pub(crate) bytes: Vec<u8>,
 }
 

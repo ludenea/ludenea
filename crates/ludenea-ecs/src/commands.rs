@@ -4,12 +4,14 @@
 use std::cell::RefCell;
 
 use crate::observer::{CommandKind, CommandRecord};
+use crate::prefab::PrefabOverrides;
 use crate::system::{Accesses, Missing, SystemParam};
-use crate::{Component, EcsError, Entity, World};
+use crate::{Component, EcsError, Entity, Handle, Prefab, World};
 
-/// Applies itself to the world and says what it did, or `None` when it was ignored; the
-/// second argument holds the entities spawned so far by this queue, in spawn order.
-type Command = Box<dyn FnOnce(&mut World, &mut Vec<Entity>) -> Option<CommandRecord> + Send>;
+/// Applies itself to the world, reporting what it did to the third argument (nothing when
+/// it was ignored); the second argument holds the entities spawned so far by this queue, in
+/// spawn order.
+type Command = Box<dyn FnOnce(&mut World, &mut Vec<Entity>, &mut dyn FnMut(CommandRecord)) + Send>;
 
 #[derive(Default)]
 pub(crate) struct CommandQueue {
@@ -21,11 +23,13 @@ pub(crate) struct CommandQueue {
 pub(crate) fn apply(world: &mut World, mut records: Option<&mut Vec<CommandRecord>>) {
     let queue = std::mem::take(world.commands.get_mut());
     let mut spawned = Vec::with_capacity(queue.spawns);
-    for command in queue.commands {
-        let record = command(world, &mut spawned);
-        if let (Some(records), Some(record)) = (records.as_deref_mut(), record) {
+    let mut report = |record| {
+        if let Some(records) = records.as_deref_mut() {
             records.push(record);
         }
+    };
+    for command in queue.commands {
+        command(world, &mut spawned, &mut report);
     }
 }
 
@@ -55,10 +59,14 @@ impl<'w> Commands<'w> {
         let mut queue = self.queue.borrow_mut();
         let spawn = queue.spawns;
         queue.spawns += 1;
-        queue.commands.push(Box::new(|world, spawned| {
+        queue.commands.push(Box::new(|world, spawned, report| {
             let entity = world.spawn();
             spawned.push(entity);
-            record(true, CommandKind::Spawn, entity, None)
+            report(CommandRecord {
+                kind: CommandKind::Spawn,
+                entity: Some(entity),
+                component: None,
+            });
         }));
         SpawnCommands {
             queue: self.queue,
@@ -92,11 +100,34 @@ impl<'w> Commands<'w> {
         });
     }
 
+    /// Queues the spawn of every entity of `prefab`, in prefab order, with its `Entity`
+    /// values pointing to the new entities, then applies `overrides` to them.
+    ///
+    /// # Panics
+    /// When applied, if the prefab is not loaded or an override names a local identifier
+    /// it does not have.
+    pub fn spawn_prefab(
+        &mut self,
+        prefab: Handle<Prefab>,
+        overrides: impl FnOnce(&mut PrefabOverrides) + Send + 'static,
+    ) {
+        self.queue
+            .borrow_mut()
+            .commands
+            .push(Box::new(move |world, _, report| {
+                crate::prefab::spawn(world, prefab, overrides, report);
+            }));
+    }
+
     fn push(&mut self, command: impl FnOnce(&mut World) -> Option<CommandRecord> + Send + 'static) {
         self.queue
             .borrow_mut()
             .commands
-            .push(Box::new(move |world, _| command(world)));
+            .push(Box::new(move |world, _, report| {
+                if let Some(record) = command(world) {
+                    report(record);
+                }
+            }));
     }
 }
 
@@ -115,10 +146,15 @@ impl SpawnCommands<'_> {
         self.queue
             .borrow_mut()
             .commands
-            .push(Box::new(move |world, spawned| {
+            .push(Box::new(move |world, spawned, report| {
                 let entity = spawned[spawn];
-                let applied = ignore_dead(world.insert(entity, component));
-                record(applied, CommandKind::Insert, entity, Some(T::NAME))
+                if ignore_dead(world.insert(entity, component)) {
+                    report(CommandRecord {
+                        kind: CommandKind::Insert,
+                        entity: Some(entity),
+                        component: Some(T::NAME),
+                    });
+                }
             }));
         self
     }
@@ -126,7 +162,7 @@ impl SpawnCommands<'_> {
 
 /// Whether the command applied: a dead entity is ignored. An unregistered component is a
 /// programming error, so it panics with its name.
-fn ignore_dead(result: Result<(), EcsError>) -> bool {
+pub(crate) fn ignore_dead(result: Result<(), EcsError>) -> bool {
     match result {
         Ok(()) => true,
         Err(EcsError::NoSuchEntity(_)) => false,

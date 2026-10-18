@@ -1,15 +1,33 @@
 use std::fmt;
 
 use ludenea_schema::{Schema, TypeSchema};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// A generational handle: the index of a slot plus the generation of that slot when the
 /// entity was spawned, so a handle kept after despawn never aliases a reused slot.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Entity {
     index: u32,
     generation: u32,
+}
+
+impl<'de> Deserialize<'de> for Entity {
+    /// Decodes as the derive would, then lets `Codec::remap_entities` see or replace it.
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename = "Entity")]
+        struct Raw {
+            index: u32,
+            generation: u32,
+        }
+
+        let Raw { index, generation } = Raw::deserialize(deserializer)?;
+        Ok(crate::component::remap_decoded(Entity {
+            index,
+            generation,
+        }))
+    }
 }
 
 impl Entity {

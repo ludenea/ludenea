@@ -1,8 +1,11 @@
 use std::any::{Any, type_name};
+use std::cell::RefCell;
 
 use ludenea_schema::{Schema, TypeSchema};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+
+use crate::Entity;
 
 /// Per-entity simulation data. `NAME` is the stable identifier used for registration,
 /// snapshots, and scene files; derive it with `#[derive(Component)]`.
@@ -24,6 +27,8 @@ pub trait Resource: Schema + Serialize + DeserializeOwned + Send + 'static {
 
 /// A decoded value boxed as `dyn Any`, or the reason decoding failed.
 pub type DecodeResult = Result<Box<dyn Any + Send>, String>;
+
+type RemapEntities = fn(&[u8], &dyn Fn(Entity) -> Entity) -> Vec<u8>;
 
 /// Type-erased serialization of one registered component or resource type. Every function
 /// taking `&dyn Any` expects a value of that type and panics on any other.
@@ -48,6 +53,13 @@ pub struct Codec {
     pub from_json: fn(serde_json::Value) -> DecodeResult,
     /// Describes the serde shape of the type.
     pub schema: fn() -> TypeSchema,
+    /// Rewrites every `Entity` value inside postcard bytes through the map, decoding and
+    /// re-encoding the concrete type so every other value (non-finite floats included)
+    /// survives exactly.
+    ///
+    /// # Panics
+    /// If the bytes do not decode.
+    pub remap_entities: RemapEntities,
 }
 
 impl Codec {
@@ -83,8 +95,59 @@ impl Codec {
                 Ok(Box::new(value))
             },
             schema: T::schema,
+            remap_entities: |bytes, map| {
+                let Remap::Collect(seen) =
+                    decode_remapping::<T>(bytes, Remap::Collect(Vec::new())).1
+                else {
+                    unreachable!("collecting stays collecting")
+                };
+                let mapped = seen.into_iter().map(map).collect::<Vec<_>>();
+                let (value, _) = decode_remapping::<T>(bytes, Remap::Replace(mapped.into_iter()));
+                postcard::to_allocvec(&value)
+                    .unwrap_or_else(|error| panic!("cannot encode {}: {error}", type_name::<T>()))
+            },
         }
     }
+}
+
+/// What `Entity` decoding does on this thread while `remap_entities` runs: the first
+/// decode collects every entity in decode order, the second replaces them in that order.
+enum Remap {
+    Collect(Vec<Entity>),
+    Replace(std::vec::IntoIter<Entity>),
+}
+
+thread_local! {
+    static REMAP: RefCell<Option<Remap>> = const { RefCell::new(None) };
+}
+
+/// Called by `Entity`'s `Deserialize` on every decoded entity.
+pub(crate) fn remap_decoded(entity: Entity) -> Entity {
+    REMAP.with_borrow_mut(|remap| match remap {
+        None => entity,
+        Some(Remap::Collect(seen)) => {
+            seen.push(entity);
+            entity
+        }
+        Some(Remap::Replace(mapped)) => mapped.next().expect("the same bytes decode the same"),
+    })
+}
+
+/// Decodes `bytes` with `remap` active, returning the value and the remap state after.
+fn decode_remapping<T: DeserializeOwned>(bytes: &[u8], remap: Remap) -> (T, Remap) {
+    struct Reset;
+
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            REMAP.set(None);
+        }
+    }
+
+    let _reset = Reset;
+    REMAP.set(Some(remap));
+    let value = decode_exact::<T>(bytes)
+        .unwrap_or_else(|error| panic!("cannot decode {}: {error}", type_name::<T>()));
+    (value, REMAP.take().expect("set above"))
 }
 
 /// Decodes postcard bytes, rejecting any bytes left unread after the value.
