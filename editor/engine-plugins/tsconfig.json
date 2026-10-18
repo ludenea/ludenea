@@ -1,0 +1,8 @@
+{
+  // The engine crates' editor plugins (`crates/*/editor`), checked against the same bundled
+  // declarations a project plugin sees, since they import only the shared modules, and next to
+  // a game's generated component types, which they must not contradict.
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": { "noEmit": true, "composite": false, "declaration": false, "jsx": "react-jsx", "types": [] },
+  "include": ["../../crates/*/editor/**/*.ts", "../../crates/*/editor/**/*.tsx", "../../crates/ludenea-project/types/*.d.ts", "game-types.ts"]
+}

@@ -8,6 +8,6 @@
     { "path": "apps/web" },
     { "path": "apps/desktop" },
     { "path": "e2e" },
-    { "path": "tsconfig.engine-plugins.json" }
+    { "path": "engine-plugins" }
   ]
 }

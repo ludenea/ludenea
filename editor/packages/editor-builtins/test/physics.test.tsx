@@ -6,7 +6,7 @@ import { renderPanel, setSceneDirty, settle, testEditor, testGame } from "./supp
 
 // The physics crate's engine plugin lives outside this package: the project service bundles it
 // at runtime. A computed specifier keeps it out of this package's type checking: the engine
-// plugins have their own (editor/tsconfig.engine-plugins.json).
+// plugins have their own (editor/engine-plugins).
 const PHYSICS_PLUGIN: string = new URL("../../../../crates/ludenea-physics/editor/index.tsx", import.meta.url).pathname;
 
 const entity = (index: number) => ({ index, generation: 0 });

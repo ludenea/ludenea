@@ -8,21 +8,23 @@ const COLLISION = "ludenea_physics::events::Collision";
 const PAGE = 1000;
 const INTROSPECTION = { type: "introspection" } as const;
 
-// The fields this panel reads; a game's generated types describe the whole component.
-declare module "@ludenea/editor-shell" {
-  interface ComponentTypes {
-    "ludenea::Body": { kind: string };
-  }
-}
-
 type Contact = { kind: string; a: Entity; b: Entity };
 type Physics = { counts: [string, number][]; contacts: Contact[]; note: string | null };
 
 const key = (entity: Entity) => `${entity.index}v${entity.generation}`;
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
+/**
+ * The body's kind. Read untyped: `editor.entities` is typed by a game's generated
+ * `ComponentTypes`, which an engine plugin must neither assume nor augment.
+ */
+async function kindOf(control: ControlClient, entity: Entity): Promise<string | undefined> {
+  const body = (await control.request({ type: "get_entity", entity })).components[BODY];
+  return body?.type === "json" ? (body.value as { kind: string }).kind : undefined;
+}
+
 /** Body counts by kind at the current tick, and the contacts that began or ended at `tick`. */
-async function read(editor: Editor, control: ControlClient, tick: number | null): Promise<Physics> {
+async function read(control: ControlClient, tick: number | null): Promise<Physics> {
   const counts = new Map(KINDS.map((kind) => [kind, 0]));
   // ponytail: reads every body on each refresh (each tick while playing); count on the host
   // if large scenes make this slow.
@@ -30,8 +32,8 @@ async function read(editor: Editor, control: ControlClient, tick: number | null)
     const page = await control.request({ type: "query_entities", filter: `With<${BODY}>`, offset, limit: PAGE });
     if (page.rows.length === 0) break;
     total = page.total;
-    const bodies = await Promise.all(page.rows.map((row) => editor.entities.get(row.entity, BODY)));
-    for (const body of bodies) if (body) counts.set(body.kind, (counts.get(body.kind) ?? 0) + 1);
+    const bodies = await Promise.all(page.rows.map((row) => kindOf(control, row.entity)));
+    for (const kind of bodies) if (kind) counts.set(kind, (counts.get(kind) ?? 0) + 1);
   }
   if (tick === null) return { counts: [...counts], contacts: [], note: null };
   try {
@@ -64,7 +66,7 @@ function PhysicsPanel({ editor }: { editor: Editor }) {
   useEffect(() => {
     if (!control) return;
     let current = true;
-    read(editor, control, tick).then(
+    read(control, tick).then(
       (next) => {
         if (!current) return;
         setPhysics(next);
