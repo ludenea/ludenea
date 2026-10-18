@@ -94,6 +94,68 @@ fn create_asset_writes_file_and_meta() {
 }
 
 #[test]
+fn create_asset_refuses_a_kind_its_extension_contradicts() {
+    let dir = TempDir::new().unwrap();
+    let mut service = project(&dir, &[]);
+    let data = AssetKind::Data {
+        r#type: "demo::Settings".to_string(),
+    };
+    for (path, kind) in [
+        ("assets/settings.ron", AssetKind::Prefab),
+        ("assets/ball.prefab.ron", data.clone()),
+        ("assets/settings.txt", data),
+        ("assets/level.ron", AssetKind::Scene),
+    ] {
+        let failure = service
+            .handle(ProjectRequest::CreateAsset {
+                path: path.to_string(),
+                kind,
+                text: "()".to_string(),
+            })
+            .unwrap_err();
+        assert_eq!(failure.code, FailureCode::InvalidRequest, "{path}");
+    }
+    assert!(
+        !dir.path().join("demo/assets").exists(),
+        "nothing is written"
+    );
+}
+
+/// An existing file or meta is refused and left as it was, and nothing else is written.
+#[test]
+fn create_asset_refuses_an_existing_file_or_meta() {
+    let dir = TempDir::new().unwrap();
+    let mut service = project(
+        &dir,
+        &[
+            ("assets/a.prefab.ron", "mine"),
+            ("assets/b.prefab.ron.meta", &meta(7, "Prefab")),
+        ],
+    );
+    let root = dir.path().join("demo");
+    for path in ["assets/a.prefab.ron", "assets/b.prefab.ron"] {
+        let failure = service
+            .handle(ProjectRequest::CreateAsset {
+                path: path.to_string(),
+                kind: AssetKind::Prefab,
+                text: "Prefab(version: 1)".to_string(),
+            })
+            .unwrap_err();
+        assert_eq!(failure.code, FailureCode::AlreadyExists, "{path}");
+    }
+    assert_eq!(
+        fs::read_to_string(root.join("assets/a.prefab.ron")).unwrap(),
+        "mine"
+    );
+    assert!(!root.join("assets/a.prefab.ron.meta").exists());
+    assert!(!root.join("assets/b.prefab.ron").exists());
+    assert_eq!(
+        fs::read_to_string(root.join("assets/b.prefab.ron.meta")).unwrap(),
+        meta(7, "Prefab")
+    );
+}
+
+#[test]
 fn asset_texts_wrap_data_assets_with_their_type_in_path_order() {
     let dir = TempDir::new().unwrap();
     let mut service = project(
@@ -238,15 +300,24 @@ fn broken_data_asset_is_refused_and_previous_value_kept() {
         // A value of the wrong type, on the second line.
         (
             "(\n    every_ticks: \"often\",\n    impulse: (x: 4.0, y: 2.0),\n)\n",
-            "2:",
+            "2:17-2:18: Expected integer",
         ),
         // Not RON at all.
         (
             "(\n    every_ticks: 60,\n    impulse: (x: 4.0 y: 2.0),\n)\n",
-            "3:",
+            "3:22: Expected comma",
+        ),
+        // On one line, the common case: columns count from the file's own first character.
+        (
+            "(every_ticks: \"often\", impulse: (x: 4.0, y: 2.0))\n",
+            "1:14-1:15: Expected integer",
+        ),
+        (
+            "(every_ticks: 60 impulse: (x: 4.0, y: 2.0))\n",
+            "1:18: Expected comma",
         ),
     ];
-    for (text, line) in broken {
+    for (text, position) in broken {
         fs::write(dir.path().join("demo/assets/spawner.ron"), text).unwrap();
         let texts = asset_texts(&mut service).unwrap();
         let error = host
@@ -255,7 +326,6 @@ fn broken_data_asset_is_refused_and_previous_value_kept() {
                 assets: texts.assets,
             })
             .unwrap_err();
-        assert!(error.message.contains("is invalid"), "{}", error.message);
         // The game names the asset by identifier; the project names its file.
         let path = texts
             .paths
@@ -263,7 +333,11 @@ fn broken_data_asset_is_refused_and_previous_value_kept() {
             .find(|(id, _)| error.message.contains(&id.to_string()))
             .map(|(_, path)| path.as_str());
         assert_eq!(path, Some("assets/spawner.ron"), "{}", error.message);
-        assert!(error.message.contains(line), "{}", error.message);
+        assert!(
+            error.message.contains(&format!(" is invalid: {position}")),
+            "{}",
+            error.message
+        );
         assert_eq!(stats(&mut host), before);
     }
 }

@@ -7,7 +7,7 @@ use ludenea_cli::{Trace, run};
 use ludenea_control::{
     Bytes, Command, Document, Host, InProcess, PROTOCOL_VERSION, Reply, Transport,
 };
-use ludenea_ecs::{Component, Query, ResMut};
+use ludenea_ecs::{Asset, Component, Handle, Query, ResMut};
 use serde::{Deserialize, Serialize};
 
 #[derive(Component, Serialize, Deserialize)]
@@ -22,6 +22,22 @@ fn count(mut counters: Query<&mut Counter>, mut rng: ResMut<Rng>) {
 fn app() -> App {
     let mut app = App::new();
     app.input::<u8>().component::<Counter>().system(Sim, count);
+    app
+}
+
+#[derive(Asset, Serialize, Deserialize, Clone)]
+struct Tuning {
+    speed: u32,
+}
+
+#[derive(Component, Serialize, Deserialize)]
+struct Tuned {
+    tuning: Handle<Tuning>,
+}
+
+fn tuned_app() -> App {
+    let mut app = App::new();
+    app.component::<Tuned>().asset::<Tuning>();
     app
 }
 
@@ -489,4 +505,36 @@ fn project_assets_resolve_from_a_bare_scene_file_name() {
         .status()
         .unwrap();
     assert!(status.success());
+}
+
+/// A broken single-line data asset is refused with its file's own line and column, not
+/// those of the wrapped form the scan reads it in.
+#[test]
+fn broken_data_asset_names_its_file_line_and_column() {
+    let dir = dir("broken_data_asset");
+    let id = format!("{:032x}", 42);
+    fs::write(
+        dir.join("scene.ron"),
+        format!(r#"Scene(version: 1, resources: {{}}, entities: [{{ "cli::Tuned": (tuning: "{id}") }}])"#),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("tuning.ron.meta"),
+        format!(r#"Meta(version: 1, id: "{id}", kind: Data(type: "cli::Tuning"))"#),
+    )
+    .unwrap();
+    for (text, position) in [
+        (r#"(speed: "fast")"#, "1:8-1:9: Expected integer"),
+        ("(speed: 3 4)", "1:11: Expected"),
+    ] {
+        fs::write(dir.join("tuning.ron"), text).unwrap();
+        let arguments = ["test", "run", "{}/scene.ron", "--ticks", "1"]
+            .map(|argument| argument.replace("{}", dir.to_str().unwrap()));
+        let mut out = Vec::new();
+        assert_eq!(run(tuned_app, &arguments, &mut out), 2);
+        let out = String::from_utf8(out).unwrap();
+        let path = dir.join("tuning.ron");
+        assert!(out.contains(path.to_str().unwrap()), "{out}");
+        assert!(out.contains(&format!(" is invalid: {position}")), "{out}");
+    }
 }

@@ -76,15 +76,57 @@ pub fn parse_asset_file(text: &str) -> Result<(String, String), String> {
 
 /// Like `parse_asset_file`, but the value RON keeps its place in the file: the text before
 /// it is blanked (newlines kept), so errors decoding it give line and column in the file.
+/// When `text` is a file wrapped by [`asset_file`], the file is the wrapped text: the
+/// wrapper's prefix is not counted in the columns of line 1, in errors parsing `text` too.
 pub(crate) fn parse_asset_file_in_place(text: &str) -> Result<(String, String), String> {
-    let file: AssetFile = ron::from_str(text).map_err(|error| error.to_string())?;
+    let prefix = wrapper_prefix(text);
+    let file: AssetFile = ron::from_str(text)
+        .map_err(|error| shift_line_one(&error.to_string(), prefix.unwrap_or(0)))?;
     let value = file.value.get_ron();
     let start = value.as_ptr() as usize - text.as_ptr() as usize;
-    let blank: String = text[..start]
+    // The value may start before the wrapped file, at the space after `value:`.
+    let in_place: String = text[..start]
         .chars()
         .map(|c| if c == '\n' { '\n' } else { ' ' })
+        .chain(value.chars())
+        .skip(prefix.unwrap_or(0))
         .collect();
-    Ok((file.type_name, blank + value))
+    Ok((file.type_name, in_place))
+}
+
+/// The length in characters of the prefix [`asset_file`] writes on line 1 before the
+/// wrapped file, when `text` starts with it.
+fn wrapper_prefix(text: &str) -> Option<usize> {
+    const OPENING: &str = "AssetFile(type: \"";
+    const VALUE: &str = ", value: ";
+    let first = text.lines().next()?;
+    let end = first.strip_prefix(OPENING)?.find(VALUE)? + OPENING.len() + VALUE.len();
+    Some(first[..end].chars().count())
+}
+
+/// `message` with the columns of its leading line 1 positions (`1:30: ..`, `1:30-1:31: ..`)
+/// moved left by `by`.
+fn shift_line_one(message: &str, by: usize) -> String {
+    let Some((positions, rest)) = message.split_once(": ") else {
+        return message.to_string();
+    };
+    let shifted: Option<Vec<String>> = positions
+        .split('-')
+        .map(|position| {
+            let (line, column) = position.split_once(':')?;
+            let (line, column): (usize, usize) = (line.parse().ok()?, column.parse().ok()?);
+            let column = if line == 1 {
+                column.saturating_sub(by).max(1)
+            } else {
+                column
+            };
+            Some(format!("{line}:{column}"))
+        })
+        .collect();
+    match shifted {
+        Some(shifted) => format!("{}: {rest}", shifted.join("-")),
+        None => message.to_string(),
+    }
 }
 
 /// Adds every `Handle` inside `value` (identifier and asset type name), walked by `schema`.

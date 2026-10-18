@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
@@ -184,28 +184,39 @@ impl Project {
         Ok(bytes)
     }
 
-    /// Writes `text` to the new file `path` and a meta of `kind` next to it, both or neither.
-    /// The meta comes first, so a listing in between cannot give the file another identifier.
+    /// Writes `text` to the new file `path` and a meta of `kind` next to it, both or neither;
+    /// either existing is refused, and so is a kind the path's extension contradicts. The
+    /// file comes first: a crash in between leaves a file without a meta, which the next
+    /// listing gives one, never a meta without a file.
     pub fn create_asset(
         &mut self,
         path: &str,
         kind: AssetKind,
         text: &str,
     ) -> Result<FileEntry, ProjectError> {
+        let fits = match &kind {
+            AssetKind::Data { .. } => {
+                path.ends_with(".ron") && AssetKind::of(path) == AssetKind::Other
+            }
+            other => AssetKind::of(path) == *other,
+        };
+        if !fits {
+            return Err(ProjectError::KindMismatch {
+                path: path.to_string(),
+                kind,
+            });
+        }
         let file = self.resolve(path)?;
         let meta_file = meta_path(&file);
-        for existing in [&file, &meta_file] {
-            if existing.symlink_metadata().is_ok() {
-                return Err(ProjectError::AlreadyExists(existing.clone()));
-            }
+        if meta_file.symlink_metadata().is_ok() {
+            return Err(ProjectError::AlreadyExists(meta_file));
         }
-        if let Some(parent) = file.parent() {
-            fs::create_dir_all(parent).map_err(|error| io_error(parent, error))?;
-        }
-        let meta = Meta::load_or_create(&meta_file, kind)
-            .map_err(|reason| io_error(&meta_file, std::io::Error::other(reason)))?;
-        if let Err(error) = self.write_text(path, text) {
-            let _ = fs::remove_file(&meta_file);
+        let meta = Meta::new(kind);
+        let meta_text = ron::to_string(&meta).expect("a meta always encodes") + "\n";
+        self.place(&file, text.as_bytes(), false)?;
+        if let Err(error) = self.place(&meta_file, meta_text.as_bytes(), false) {
+            // Only the file is this call's to remove.
+            let _ = fs::remove_file(&file);
             return Err(error);
         }
         Ok(FileEntry {
@@ -260,8 +271,15 @@ impl Project {
 
     /// Like [`Project::write_text`], for any bytes.
     pub fn write_bytes(&mut self, path: &str, bytes: &[u8]) -> Result<(), ProjectError> {
-        static WRITES: AtomicU64 = AtomicU64::new(0);
         let file = self.resolve_target(path)?;
+        self.place(&file, bytes, true)
+    }
+
+    /// Writes `bytes` to a synced temporary file in `.ludenea/` (unwatched, on the same file
+    /// system), then puts it at `file` in one step: renamed over it when `replace`, else
+    /// linked there, which fails with `AlreadyExists` if `file` exists.
+    fn place(&self, file: &Path, bytes: &[u8], replace: bool) -> Result<(), ProjectError> {
+        static WRITES: AtomicU64 = AtomicU64::new(0);
         let parent = file.parent().expect("a project file has a parent");
         fs::create_dir_all(parent).map_err(|error| io_error(parent, error))?;
         let staging = self.root.join(".ludenea");
@@ -270,19 +288,29 @@ impl Project {
         let temporary = staging.join(format!("write-{}-{write}.tmp", std::process::id()));
         let staged = File::create(&temporary).and_then(|mut staged| {
             staged.write_all(bytes)?;
-            if let Ok(existing) = fs::metadata(&file) {
+            if let Ok(existing) = fs::metadata(file) {
                 staged.set_permissions(existing.permissions())?;
             }
             staged.sync_all()
         });
-        let written = staged
+        let placed = staged
             .map_err(|error| io_error(&temporary, error))
-            .and_then(|()| fs::rename(&temporary, &file).map_err(|error| io_error(&file, error)));
-        if written.is_err() {
+            .and_then(|()| {
+                let placed = if replace {
+                    fs::rename(&temporary, file)
+                } else {
+                    fs::hard_link(&temporary, file)
+                };
+                placed.map_err(|error| match error.kind() {
+                    io::ErrorKind::AlreadyExists => ProjectError::AlreadyExists(file.to_path_buf()),
+                    _ => io_error(file, error),
+                })
+            });
+        if placed.is_err() || !replace {
             let _ = fs::remove_file(&temporary);
         }
-        written?;
-        // Best effort: the rename itself reaches the disk with its directory.
+        placed?;
+        // Best effort: the new name itself reaches the disk with its directory.
         #[cfg(unix)]
         let _ = File::open(parent).and_then(|directory| directory.sync_all());
         Ok(())
@@ -313,6 +341,7 @@ impl Project {
         let mut tracked = Tracked {
             root: self.root.clone(),
             known,
+            reported: BTreeMap::new(),
             watched,
             debouncer,
         };
@@ -336,6 +365,11 @@ impl Project {
 struct Tracked {
     root: PathBuf,
     known: BTreeMap<String, AssetKind>,
+    /// The kind and stamp of each file when its creation or change was last reported: one
+    /// write whose events arrive in two batches is reported once.
+    /// ponytail: two writes of the same length within one modification time tick look like
+    /// one; fine with the nanosecond times of current file systems.
+    reported: BTreeMap<String, (AssetKind, Stamp)>,
     watched: BTreeSet<PathBuf>,
     debouncer: Debouncer<RecommendedWatcher, RecommendedCache>,
 }
@@ -397,6 +431,7 @@ impl Tracked {
                 continue;
             } else if !file.exists() {
                 unwatch_below(&mut self.debouncer, &file, &mut self.watched);
+                self.reported.remove(&relative);
                 let Some(kind) = self.known.remove(&relative) else {
                     continue;
                 };
@@ -406,6 +441,10 @@ impl Tracked {
                 }
             } else {
                 let kind = kind_on_disk(&self.root, &relative);
+                let seen = (kind.clone(), stamp(&file));
+                if self.reported.insert(relative.clone(), seen.clone()) == Some(seen) {
+                    continue;
+                }
                 if self.known.insert(relative.clone(), kind.clone()).is_none() {
                     FileChange::Created {
                         path: relative,
@@ -424,6 +463,14 @@ impl Tracked {
         }
         changes
     }
+}
+
+/// A file's modification time and length, `None` when unreadable.
+type Stamp = Option<(std::time::SystemTime, u64)>;
+
+fn stamp(file: &Path) -> Stamp {
+    let metadata = fs::metadata(file).ok()?;
+    Some((metadata.modified().ok()?, metadata.len()))
 }
 
 /// Watches `directory` and what is below it, except a `node_modules` directly in it: installed
@@ -533,6 +580,7 @@ mod tests {
         Tracked {
             root: root.to_path_buf(),
             known: BTreeMap::new(),
+            reported: BTreeMap::new(),
             watched: BTreeSet::new(),
             debouncer: new_debouncer(WATCH_DEBOUNCE, None, |_| {}).unwrap(),
         }
@@ -586,6 +634,28 @@ mod tests {
             }]
         );
         assert!(tracked.watched.contains(&levels.join("one")));
+    }
+
+    /// One write whose events arrive in two batches is one change.
+    #[test]
+    fn one_write_split_across_batches_is_reported_once() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let scene = dir.path().join("main.scene.ron");
+        fs::write(&scene, "before").unwrap();
+        let mut tracked = tracked(dir.path());
+        tracked.known.insert("main.scene.ron".into(), AssetKind::Scene);
+        fs::write(&scene, "after").unwrap();
+        let modified = || {
+            Event::new(EventKind::Modify(notify::event::ModifyKind::Any)).add_path(scene.clone())
+        };
+        let changed = FileChange::Changed {
+            path: "main.scene.ron".into(),
+            kind: AssetKind::Scene,
+        };
+        assert_eq!(tracked.changes(&[modified()]), std::slice::from_ref(&changed));
+        assert_eq!(tracked.changes(&[modified()]), []);
+        fs::write(&scene, "after again").unwrap();
+        assert_eq!(tracked.changes(&[modified()]), [changed]);
     }
 
     #[test]

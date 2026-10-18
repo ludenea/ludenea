@@ -69,6 +69,16 @@ fn may_be_being_written(path: &Path) -> bool {
 }
 
 impl Meta {
+    /// A meta of `kind` with a new random identifier.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn new(kind: AssetKind) -> Meta {
+        Meta {
+            version: META_VERSION,
+            id: AssetId(uuid::Uuid::new_v4().as_u128()),
+            kind,
+        }
+    }
+
     /// Reads the meta. An empty one just created is read once more after a moment: another
     /// lister may have created it and not written it yet.
     pub fn read(path: &Path) -> Result<Meta, String> {
@@ -95,11 +105,7 @@ impl Meta {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.to_string()),
         }
-        let meta = Meta {
-            version: META_VERSION,
-            id: AssetId(uuid::Uuid::new_v4().as_u128()),
-            kind,
-        };
+        let meta = Self::new(kind);
         let created = OpenOptions::new().write(true).create_new(true).open(path);
         match created {
             Ok(mut file) => {

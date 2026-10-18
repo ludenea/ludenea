@@ -46,6 +46,8 @@ pub enum ProjectError {
     Manifest { path: PathBuf, message: String },
     #[error("{0}")]
     Assets(String),
+    #[error("{path} cannot be a {kind:?} asset: its extension says otherwise")]
+    KindMismatch { path: String, kind: AssetKind },
     #[error("cannot watch the project: {0}")]
     Watch(String),
     #[error(

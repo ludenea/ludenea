@@ -293,6 +293,7 @@ impl From<ProjectError> for ProjectFailure {
             ProjectError::Manifest { .. } => FailureCode::InvalidManifest,
             ProjectError::Watch(_) => FailureCode::Watch,
             ProjectError::Assets(_) => FailureCode::InvalidAssets,
+            ProjectError::KindMismatch { .. } => FailureCode::InvalidRequest,
             // The setting names no usable engine either way.
             ProjectError::NoEnginePath | ProjectError::NotAnEngine(_) => FailureCode::NoEnginePath,
         };
