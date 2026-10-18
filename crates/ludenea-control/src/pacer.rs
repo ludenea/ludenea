@@ -57,7 +57,8 @@ impl Pacer {
             self.owed -= due;
             due as u32
         };
-        if elapsed_seconds > 0.0 {
+        // A frame that ran ticks is kept even without elapsed time: `not_run` corrects it.
+        if elapsed_seconds > 0.0 || ticks > 0 {
             self.record(elapsed_seconds, ticks);
         }
         ticks
@@ -147,6 +148,20 @@ mod tests {
         pacer.not_run(2);
         assert_eq!(pacer.effective_rate(), 0.0);
         assert_eq!(pacer.advance(1.0 / 60.0), 3);
+    }
+
+    /// Ticks still owed run on a frame without elapsed time; giving some back must correct
+    /// that frame, not an earlier one.
+    #[test]
+    fn ticks_not_run_on_a_frame_without_elapsed_time_stay_owed() {
+        let mut pacer = Pacer::new(60);
+        assert_eq!(pacer.advance(2.0 / 60.0), 2);
+        pacer.not_run(2);
+        assert_eq!(pacer.advance(0.0), 2);
+        pacer.not_run(1);
+        assert_eq!(pacer.advance(0.0), 1, "the tick given back is owed");
+        // Two ticks ran in all, over two sixtieths of a second.
+        assert_eq!(pacer.effective_rate(), 60.0);
     }
 
     #[test]
