@@ -128,15 +128,7 @@ impl EditLog {
 }
 
 fn decode_exact<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T, SimError> {
-    let (value, rest) = postcard::take_from_bytes(bytes)
-        .map_err(|error| SimError::EditLogDecode(error.to_string()))?;
-    if !rest.is_empty() {
-        return Err(SimError::EditLogDecode(format!(
-            "{} unexpected trailing bytes",
-            rest.len()
-        )));
-    }
-    Ok(value)
+    ludenea_ecs::decode_exact(bytes).map_err(SimError::EditLogDecode)
 }
 
 /// Edit log version 1, which named every target by entity identifier; also read inside

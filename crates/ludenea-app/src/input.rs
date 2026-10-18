@@ -60,31 +60,17 @@ impl InputType {
                 postcard::to_allocvec(&vec![I::default(); players]).expect("inputs always encode")
             },
             write_encoded: |world, bytes, expected| {
-                let players = decode_exact::<Vec<I>>(bytes)?;
+                let players = decode_inputs::<I>(bytes)?;
                 check_player_count(expected, players.len())?;
                 write(world, players);
                 Ok(())
             },
             check_encoded: |bytes, expected| {
-                let players = decode_exact::<Vec<I>>(bytes)?;
+                let players = decode_inputs::<I>(bytes)?;
                 check_player_count(expected, players.len())
             },
             schema: I::schema,
         }
-    }
-}
-
-/// Decodes postcard bytes, rejecting any bytes left unread after the value.
-pub(crate) fn decode_exact<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, SimError> {
-    let (value, rest) = postcard::take_from_bytes(bytes)
-        .map_err(|error| SimError::InputDecode(error.to_string()))?;
-    if rest.is_empty() {
-        Ok(value)
-    } else {
-        Err(SimError::InputDecode(format!(
-            "{} unexpected trailing bytes",
-            rest.len()
-        )))
     }
 }
 
@@ -103,4 +89,8 @@ pub(crate) fn write<I: Input>(world: &mut World, players: Vec<I>) {
         .runtime_mut::<Inputs<I>>()
         .expect("App::input inserts the inputs resource")
         .players = players;
+}
+
+fn decode_inputs<I: Input>(bytes: &[u8]) -> Result<Vec<I>, SimError> {
+    ludenea_ecs::decode_exact(bytes).map_err(SimError::InputDecode)
 }

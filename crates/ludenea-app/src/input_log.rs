@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::SimError;
-use crate::input::{self, Input};
+use crate::input::Input;
 
 pub const INPUT_LOG_VERSION: u32 = 1;
 
@@ -35,7 +35,7 @@ impl InputLog {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<InputLog, SimError> {
-        let log: InputLog = input::decode_exact(bytes)?;
+        let log: InputLog = ludenea_ecs::decode_exact(bytes).map_err(SimError::InputDecode)?;
         if log.version != INPUT_LOG_VERSION {
             return Err(SimError::InputLogVersion {
                 found: log.version,

@@ -24,7 +24,7 @@ pub mod world;
 pub use asset::{Asset, AssetId, Handle};
 pub use assets::Assets;
 pub use commands::{Commands, SpawnCommands};
-pub use component::{Codec, Component, DecodeResult, Resource};
+pub use component::{Codec, Component, DecodeResult, Resource, decode_exact};
 pub use diff::Difference;
 pub use entity::{EntitiesState, Entity};
 pub use error::EcsError;

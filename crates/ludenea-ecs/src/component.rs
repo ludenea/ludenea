@@ -151,7 +151,7 @@ fn decode_remapping<T: DeserializeOwned>(bytes: &[u8], remap: Remap) -> (T, Rema
 }
 
 /// Decodes postcard bytes, rejecting any bytes left unread after the value.
-pub(crate) fn decode_exact<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, String> {
+pub fn decode_exact<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, String> {
     let (value, rest) = postcard::take_from_bytes(bytes).map_err(|error| error.to_string())?;
     if rest.is_empty() {
         Ok(value)
