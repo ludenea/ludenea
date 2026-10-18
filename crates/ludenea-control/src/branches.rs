@@ -578,19 +578,21 @@ impl StoredBranch {
     }
 
     /// The branch, with its segment when `stored` (not the current branch). Its edits lie
-    /// between its fork tick and the last tick it records an input or a hash for, where a
-    /// session records them, so a later fork stays within ticks the run holds.
+    /// at or after its fork tick and before the last tick, and its inputs end within the
+    /// tick range, so tick arithmetic on its run never overflows. Hashes do not bound the
+    /// edits: `Restore` and a failed resimulation drop hashes and keep the future.
     fn into_branch(self, stored: bool) -> Result<Branch, BranchesError> {
         let fork_tick = self.fork_tick;
         let segment = stored
             .then(|| -> Result<Segment, BranchesError> {
                 let inputs = InputLog::decode(&self.inputs)?.ticks;
                 let edits = EditLog::decode(&self.edits)?.edits;
-                let recorded = inputs.len().max(self.hashes.len()) as u64;
-                let end = fork_tick.checked_add(recorded).ok_or(BranchesError::Run)?;
+                fork_tick
+                    .checked_add(inputs.len() as u64)
+                    .ok_or(BranchesError::Run)?;
                 // The log is in tick order.
                 let outside = |edit: Option<&TimedEdit>| {
-                    edit.is_some_and(|edit| edit.tick < fork_tick || edit.tick > end)
+                    edit.is_some_and(|edit| edit.tick < fork_tick || edit.tick == u64::MAX)
                 };
                 if outside(edits.first()) || outside(edits.last()) {
                     return Err(BranchesError::Run);

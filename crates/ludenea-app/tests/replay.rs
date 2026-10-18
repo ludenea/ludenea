@@ -457,7 +457,11 @@ fn divergence_stops_there_with_both_snapshots() {
         assert_eq!(fresh.tick(), diverged - 1);
         assert_eq!(fresh.hash(), replay.hashes[diverged as usize - 1]);
     }
+    // A replay of its first 4 ticks.
     replay.hashes.truncate(5);
+    let mut inputs = InputLog::decode(&replay.inputs).unwrap();
+    inputs.ticks.truncate(4);
+    replay.inputs = inputs.encode();
     let report = play(&replay);
     assert_eq!(report.outcome, ReplayOutcome::Matched);
     assert_eq!(report.diverged_snapshots, None);
@@ -525,4 +529,32 @@ fn replay_without_checkpoints_regenerates_them() {
     let report = play(&misplaced);
     assert_eq!(report.outcome, ReplayOutcome::Matched);
     assert_eq!(report.checkpoints, replay.checkpoints);
+}
+
+#[test]
+fn inputs_and_edits_past_the_recorded_ticks_are_refused() {
+    let mut replay = recorded(10, &EditLog::new());
+    let mut edits = EditLog::decode(&replay.edits).unwrap();
+    edits.edits.push(TimedEdit {
+        tick: u64::MAX,
+        edit: Edit::Despawn {
+            entity: EntityRef::Loaded(vec![1]),
+        },
+    });
+    replay.edits = edits.encode();
+    let error = play_replay(&mut game::simulation(), &replay, |_, _| {}).unwrap_err();
+    assert!(
+        matches!(&error, ReplayError::Decode { what, .. } if *what == format!("edit of tick {}", u64::MAX)),
+        "{error:?}"
+    );
+
+    let mut replay = recorded(10, &EditLog::new());
+    let mut inputs = InputLog::decode(&replay.inputs).unwrap();
+    inputs.ticks.resize(11, inputs.ticks[0].clone());
+    replay.inputs = inputs.encode();
+    let error = play_replay(&mut game::simulation(), &replay, |_, _| {}).unwrap_err();
+    assert!(
+        matches!(&error, ReplayError::Decode { what, .. } if what == "input of tick 10"),
+        "{error:?}"
+    );
 }

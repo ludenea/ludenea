@@ -4,16 +4,18 @@ use std::path::Path;
 use boxes::SpawnerStats;
 use ludenea::app::EntityRef;
 use ludenea::app::prefab::InstanceInfo;
-use ludenea::app::replay::Replay;
+use ludenea::app::replay::{Replay, ReplayOutcome, play_replay};
 use ludenea::app::trace::{TRACE_VERSION, Trace, TraceComparison};
 use ludenea::cli::assets::project_assets;
 use ludenea::control::{
-    BranchId, Bytes, Command, ComponentValue, Document, ErrorCode, Event, Hash64, Host, InProcess,
-    PROTOCOL_VERSION, PathSegment, ProtocolError, Reply, Timeline,
+    BranchId, Bytes, Command, ComponentValue, Document, ErrorCode, Event, FieldTarget, Hash64,
+    Host, InProcess, PROTOCOL_VERSION, PathSegment, ProtocolError, Reply, Timeline,
 };
 use ludenea::ecs::diff::Difference;
 use ludenea::ecs::{Asset, AssetId, Entity, Snapshot};
-use ludenea::prelude::{App, Edit, EditLog, InputLog, TimedEdit};
+use ludenea::prelude::{
+    App, Component, Edit, EditLog, InputLog, Query, Res, ResMut, Rng, Sim, Time, TimedEdit,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -986,4 +988,222 @@ fn compare_traces_against_current_branch() {
             only_in_longer: 10,
         })
     );
+}
+
+#[test]
+fn replay_of_a_replay_keeps_prefabs_reached_only_by_instances() {
+    // Without the spawner, only instances 5 and 6 reach the crate prefab.
+    let scene: String = fs::read_to_string(SPAWNER_SCENE)
+        .unwrap()
+        .lines()
+        .filter(|line| !line.contains("boxes::Spawner"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    let (mut host, _) = spawner_host(scene);
+    step(&mut host, 20);
+    let a = export_replay(&mut host, None);
+
+    let mut loaded = Host::new(boxes::app()).unwrap();
+    ok(&mut loaded, Command::LoadReplay { replay: a.clone() });
+    settle(&mut loaded);
+    let b = export_replay(&mut loaded, None);
+    let (a, b) = (decode_replay(&a), decode_replay(&b));
+    assert_eq!(a.assets.len(), 1);
+    assert_eq!(b.assets, a.assets);
+    assert_eq!(b.hashes, a.hashes);
+    let mut sim = boxes::app().build().unwrap();
+    let report = play_replay(&mut sim, &b, |_, _| {}).unwrap();
+    assert_eq!(report.outcome, ReplayOutcome::Matched);
+
+    // Exporting leaves the replay session's tick 0 as recorded.
+    ok(&mut loaded, Command::Seek { tick: 0 });
+    assert_eq!(hash(&mut loaded), Hash64(a.hashes[0]));
+}
+
+fn panic_at_30(time: Res<Time>) {
+    if time.tick == 30 {
+        panic!("boom at thirty");
+    }
+}
+
+#[test]
+fn export_replay_contains_a_panic_and_keeps_the_session() {
+    // The root runs to tick 40; the current branch forks at tick 20.
+    let mut host = recorded_host();
+    ok(&mut host, Command::Seek { tick: 20 });
+    spawn_crate(&mut host);
+    let Reply::Session {
+        scene,
+        saved_scene,
+        inputs,
+        edits,
+        undo,
+        hashes,
+        assets,
+        branches,
+        document,
+    } = ok(&mut host, Command::ExportSession)
+    else {
+        panic!("export_session replies session");
+    };
+    // A build that panics at tick 30, which only the stored root reaches.
+    let mut app = boxes::app();
+    app.system(Sim, panic_at_30);
+    let mut panicking = Host::new(app).unwrap();
+    ok(
+        &mut panicking,
+        Command::LoadSession {
+            scene,
+            saved_scene,
+            inputs,
+            edits,
+            undo,
+            expected: hashes,
+            assets,
+            branches,
+            document,
+        },
+    );
+    settle(&mut panicking);
+    let before = (hash(&mut panicking), timeline(&mut panicking).current);
+
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let error = panicking
+        .handle(Command::ExportReplay {
+            branch: Some(BranchId::ROOT),
+        })
+        .unwrap_err();
+    std::panic::set_hook(hook);
+    assert_eq!(error.code, ErrorCode::SystemPanicked);
+    assert!(error.message.contains("boom at thirty"), "{error:?}");
+    assert_eq!(
+        (hash(&mut panicking), timeline(&mut panicking).current),
+        before
+    );
+    // The current branch still exports.
+    export_replay(&mut panicking, None);
+}
+
+#[test]
+fn load_replay_refuses_an_edit_past_the_recorded_ticks() {
+    let mut host = recorded_host();
+    let mut replay = decode_replay(&export_replay(&mut host, None));
+    let mut edits = EditLog::decode(&replay.edits).unwrap();
+    edits.edits.push(TimedEdit {
+        tick: u64::MAX,
+        edit: Edit::Despawn {
+            entity: EntityRef::Loaded(vec![0]),
+        },
+    });
+    replay.edits = edits.encode();
+    let mut loaded = Host::new(boxes::app()).unwrap();
+    let error = loaded
+        .handle(Command::LoadReplay {
+            replay: Bytes(replay.encode()),
+        })
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidReplay);
+    assert!(
+        error.message.starts_with(&format!(
+            "cannot decode the edit of tick {} of the replay: ",
+            u64::MAX
+        )),
+        "{error:?}"
+    );
+    assert_eq!(timeline(&mut loaded).head, 0);
+}
+
+#[derive(Component, Serialize, Deserialize)]
+struct Score(u32);
+
+fn grow(mut scores: Query<&mut Score>, mut rng: ResMut<Rng>) {
+    for score in scores.iter_mut() {
+        score.0 += rng.range_u32(1, 4);
+    }
+}
+
+#[test]
+fn branch_restored_before_its_edits_still_reloads() {
+    // A game without inputs records no input: its edits lie past its hashes once a
+    // restore drops them.
+    let mut app = App::new();
+    app.component::<Score>().system(Sim, grow);
+    let mut host = Host::new(app).unwrap();
+    ok(
+        &mut host,
+        Command::LoadScene {
+            scene: r#"Scene(version: 1, resources: {}, entities: [{ "protocol_v3::Score": (5) }])"#
+                .to_string(),
+            assets: Vec::new(),
+            document: Document::Scene,
+        },
+    );
+    let set_score = |host: &mut Host, score: u32| {
+        let Reply::Entities { rows, .. } = ok(
+            host,
+            Command::QueryEntities {
+                filter: String::new(),
+                offset: 0,
+                limit: 1,
+            },
+        ) else {
+            panic!("query_entities replies entities");
+        };
+        ok(
+            host,
+            Command::SetField {
+                target: FieldTarget::Component {
+                    entity: rows[0].entity,
+                    component: "protocol_v3::Score".to_string(),
+                },
+                path: Vec::new(),
+                value: json!(score),
+            },
+        );
+    };
+    step(&mut host, 20);
+    set_score(&mut host, 100);
+    step(&mut host, 10);
+    ok(&mut host, Command::Seek { tick: 5 });
+    let at_5 = snapshot(&mut host);
+    ok(&mut host, Command::Restore { snapshot: at_5 });
+    ok(&mut host, Command::Seek { tick: 3 });
+    set_score(&mut host, 7);
+    let before = timeline(&mut host);
+    assert_eq!(before.branches.len(), 2);
+
+    let Reply::Session {
+        scene,
+        saved_scene,
+        inputs,
+        edits,
+        undo,
+        hashes,
+        assets,
+        branches: tree,
+        document,
+    } = ok(&mut host, Command::ExportSession)
+    else {
+        panic!("export_session replies session");
+    };
+    let mut app = App::new();
+    app.component::<Score>().system(Sim, grow);
+    let mut loaded = Host::new(app).unwrap();
+    ok(
+        &mut loaded,
+        Command::LoadSession {
+            scene,
+            saved_scene,
+            inputs,
+            edits,
+            undo,
+            expected: hashes,
+            assets,
+            branches: tree,
+            document,
+        },
+    );
+    settle(&mut loaded);
+    assert_eq!(branches(&timeline(&mut loaded)), branches(&before));
 }

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::assets::{AssetSource, AssetTexts, parse_asset_file};
 use crate::edit::{Edit, EditError, EditLog, EntityRef, TimedEdit};
-use crate::{InputLog, Simulation, resolve};
+use crate::{InputLog, Simulation};
 
 pub const REPLAY_VERSION: u32 = 1;
 
@@ -114,15 +114,34 @@ pub fn record_replay(
     edits: &EditLog,
     ticks: u64,
 ) -> Result<Replay, ReplayError> {
-    let resolved = resolve(scene, assets).map_err(record_error("scene"))?;
     sim.load_scene_with(scene, assets)
         .map_err(record_error("scene"))?;
     sim.set_players(usize::from(inputs.players));
+    record_loaded_replay(sim, inputs, edits, ticks)
+}
+
+/// `record_replay` on the scene and assets `sim` just loaded, with its players set: the
+/// replay holds every loaded asset, reached by the scene or not.
+pub fn record_loaded_replay(
+    sim: &mut Simulation,
+    inputs: &InputLog,
+    edits: &EditLog,
+    ticks: u64,
+) -> Result<Replay, ReplayError> {
+    let scene = sim.resolved_scene().ok_or_else(|| ReplayError::Record {
+        what: "scene".to_string(),
+        reason: "no scene is loaded".to_string(),
+    })?;
+    // A replay holds the inputs of the ticks it records only.
+    let mut inputs = inputs.clone();
+    inputs
+        .ticks
+        .truncate(usize::try_from(ticks).unwrap_or(usize::MAX));
     let mut replay = Replay {
         version: REPLAY_VERSION,
         engine: env!("CARGO_PKG_VERSION").to_string(),
         fingerprint: sim.schema_fingerprint(),
-        scene: resolved.to_scene_text(),
+        scene: scene.to_string(),
         assets: sim.assets_ron().into_iter().collect(),
         inputs: inputs.encode(),
         edits: Vec::new(),
@@ -224,15 +243,23 @@ fn ticks(replay: &Replay) -> Result<u64, ReplayError> {
     }
 }
 
-/// Loads the scene and assets, sets the players, and checks that every value played up to
-/// `total` decodes, in file order: assets, scene, inputs and edits by tick.
-fn load(
+/// Inserts every asset of `assets` into `sim` after a scene load, which keeps only the
+/// assets the scene's handles reach (a resolved scene reaches no prefab).
+pub fn keep_assets<'a>(
     sim: &mut Simulation,
-    replay: &Replay,
-    total: u64,
-) -> Result<(InputLog, EditLog), ReplayError> {
-    let mut parsed = Vec::with_capacity(replay.assets.len());
-    for (id, text) in &replay.assets {
+    assets: impl IntoIterator<Item = (AssetId, &'a str)>,
+) -> Result<(), ReplayError> {
+    let parsed = parse_assets(sim, assets)?;
+    insert_assets(sim, &parsed)
+}
+
+/// Each asset's identifier, type name, and RON value, checked to decode.
+fn parse_assets<'a>(
+    sim: &Simulation,
+    assets: impl IntoIterator<Item = (AssetId, &'a str)>,
+) -> Result<Vec<(AssetId, String, String)>, ReplayError> {
+    let mut parsed = Vec::new();
+    for (id, text) in assets {
         let what = format!("asset {id}");
         let (type_name, value) = parse_asset_file(text).map_err(decode_error(&what))?;
         let codec = sim
@@ -240,19 +267,46 @@ fn load(
             .asset_codec(&type_name)
             .ok_or_else(|| decode(&what, format!("asset type `{type_name}` is not registered")))?;
         (codec.decode_ron)(&value).map_err(decode_error(&what))?;
-        parsed.push((*id, type_name, value));
+        parsed.push((id, type_name, value));
     }
-    let assets: AssetTexts = replay.assets.iter().cloned().collect();
-    sim.load_scene_with(&replay.scene, &assets)
-        .map_err(decode_error("scene"))?;
-    // The scene load keeps only the assets its handles reach; the replay holds them all.
-    for (id, type_name, value) in &parsed {
+    Ok(parsed)
+}
+
+fn insert_assets(
+    sim: &mut Simulation,
+    parsed: &[(AssetId, String, String)],
+) -> Result<(), ReplayError> {
+    for (id, type_name, value) in parsed {
         sim.world_mut()
             .insert_asset_ron(*id, type_name, value)
             .map_err(decode_error(&format!("asset {id}")))?;
     }
+    Ok(())
+}
+
+/// Loads the scene and assets, sets the players, and checks that every value played up to
+/// `total` decodes, in file order: assets, scene, inputs and edits by tick. Inputs and edits
+/// past the recorded ticks are refused: nothing would check them.
+fn load(
+    sim: &mut Simulation,
+    replay: &Replay,
+    total: u64,
+) -> Result<(InputLog, EditLog), ReplayError> {
+    let texts = replay.assets.iter().map(|(id, text)| (*id, text.as_str()));
+    let parsed = parse_assets(sim, texts)?;
+    let assets: AssetTexts = replay.assets.iter().cloned().collect();
+    sim.load_scene_with(&replay.scene, &assets)
+        .map_err(decode_error("scene"))?;
+    insert_assets(sim, &parsed)?;
     let inputs = InputLog::decode(&replay.inputs).map_err(decode_error("input log"))?;
     let edits = EditLog::decode(&replay.edits).map_err(decode_error("edit log"))?;
+    let past = |what: String| decode(&what, format!("the replay records {total} ticks only"));
+    if inputs.ticks.len() as u64 > total {
+        return Err(past(format!("input of tick {total}")));
+    }
+    if let Some(edit) = edits.edits.iter().find(|edit| edit.tick >= total) {
+        return Err(past(format!("edit of tick {}", edit.tick)));
+    }
     sim.set_players(usize::from(inputs.players));
 
     let mut asset_types: BTreeMap<AssetId, String> = parsed

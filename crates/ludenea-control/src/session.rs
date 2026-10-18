@@ -22,7 +22,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use ludenea_app::assets::{asset_file, parse_asset_file};
 use ludenea_app::path::PathSegment;
 use ludenea_app::prefab;
-use ludenea_app::replay::{Replay, ReplayError, load_replay, record_replay};
+use ludenea_app::replay::{Replay, ReplayError, keep_assets, load_replay, record_loaded_replay};
 use ludenea_app::{
     AssetTexts, Edit, EditError, EditLog, EntityRef, InputLog, LoadAddress, SceneError, SimError,
     Simulation, TimedEdit,
@@ -190,6 +190,9 @@ pub struct Session {
     switching: Option<(BranchId, u64)>,
     /// The warnings of the load by `start` or the last `replace_scene`.
     warnings: Vec<String>,
+    /// Whether every scene load keeps every asset of `assets`, reached or not, as a
+    /// replay's resolved scene needs: it reaches no prefab.
+    keeps_assets: bool,
 }
 
 impl Session {
@@ -235,6 +238,7 @@ impl Session {
             tree: BranchTree::default(),
             switching: None,
             warnings,
+            keeps_assets: false,
         }
     }
 
@@ -297,6 +301,7 @@ impl Session {
             Document::Scene,
             Vec::new(),
         );
+        session.keeps_assets = true;
         session.inputs = inputs;
         session.edits = edits;
         session.update_head();
@@ -322,7 +327,8 @@ impl Session {
     }
 
     /// Records the replay of `branch`, the current one when `None`, over its recorded
-    /// ticks. Recording runs on `sim`, which then comes back to the current tick.
+    /// ticks. Recording runs on `sim`, which then comes back to the current tick, also when
+    /// the game panics (a stored branch may run ticks this build never ran).
     pub fn export_replay(
         &mut self,
         sim: &mut Simulation,
@@ -334,12 +340,22 @@ impl Session {
             _ => (self.inputs.clone(), self.edits.clone(), self.simulated()),
         };
         let inputs_end = inputs.ticks.len() as u64;
-        let edits_end = edits.last_tick().map_or(0, |tick| tick + 1);
+        let edits_end = edits.last_tick().map_or(0, |tick| tick.saturating_add(1));
         let ticks = simulated.max(inputs_end).max(edits_end);
-        let scene = scene_form(self.document, &self.scene)?;
-        let replay = record_replay(sim, &scene, &self.assets, &inputs, &edits, ticks);
+        let record = || -> Result<Replay, SessionError> {
+            self.load_scene(sim, &self.scene, &self.assets)?;
+            sim.set_players(usize::from(inputs.players));
+            Ok(record_loaded_replay(sim, &inputs, &edits, ticks)?)
+        };
+        let recorded = catch_unwind(AssertUnwindSafe(record));
+        let tick = sim.tick();
         self.reload(sim)?;
-        Ok(replay?)
+        recorded.unwrap_or_else(|payload| {
+            Err(SessionError::Panicked {
+                tick,
+                message: panic_message(&*payload),
+            })
+        })
     }
 
     /// The input and edit logs of the stored branch `id`'s run, and its simulated ticks.
@@ -360,7 +376,7 @@ impl Session {
     /// Loads the session's scene into `sim` again and comes back to the current tick, after
     /// `sim` loaded something else.
     pub fn reload(&mut self, sim: &mut Simulation) -> Result<(), SessionError> {
-        load(sim, self.document, &self.scene, &self.assets)?;
+        self.load_scene(sim, &self.scene, &self.assets)?;
         sim.set_players(usize::from(self.inputs.players));
         self.replay_to(sim, self.current)
     }
@@ -874,7 +890,7 @@ impl Session {
         scene: String,
         assets: AssetTexts,
     ) -> Result<(), SessionError> {
-        self.warnings = load(sim, self.document, &scene, &assets)?;
+        self.warnings = self.load_scene(sim, &scene, &assets)?;
         self.assets = assets;
         self.saved_scene = scene.clone();
         let before = std::mem::replace(&mut self.scene, scene.clone());
@@ -1490,11 +1506,7 @@ impl Session {
         match catch_unwind(AssertUnwindSafe(step)) {
             Ok(result) => Ok(result?),
             Err(payload) => {
-                let message = payload
-                    .downcast_ref::<&str>()
-                    .map(|message| message.to_string())
-                    .or_else(|| payload.downcast_ref::<String>().cloned())
-                    .unwrap_or_else(|| "a panic without a message".to_string());
+                let message = panic_message(&*payload);
                 self.replay_to(sim, self.current)?;
                 Err(SessionError::Panicked { tick, message })
             }
@@ -1650,13 +1662,28 @@ impl Session {
         Ok(spawned)
     }
 
+    /// Loads `text`, the session's scene or a version of it, with `assets`; returns the load
+    /// warnings.
+    fn load_scene(
+        &self,
+        sim: &mut Simulation,
+        text: &str,
+        assets: &AssetTexts,
+    ) -> Result<Vec<String>, SessionError> {
+        let warnings = load(sim, self.document, text, assets)?;
+        if self.keeps_assets {
+            keep_assets(sim, assets.iter().map(|(&id, text)| (id, text.as_str())))?;
+        }
+        Ok(warnings)
+    }
+
     /// Loads a scene version from the undo history, like a tick 0 edit.
     fn load_scene_version(
         &mut self,
         sim: &mut Simulation,
         scene: String,
     ) -> Result<(), SessionError> {
-        load(sim, self.document, &scene, &self.assets)?;
+        self.load_scene(sim, &scene, &self.assets)?;
         self.set_scene(scene);
         self.start_resimulation(sim)
     }
@@ -1708,7 +1735,7 @@ impl Session {
         text: String,
     ) -> Result<(), SessionError> {
         let previous = self.assets.insert(id, text);
-        if let Err(error) = load(sim, self.document, &self.scene, &self.assets) {
+        if let Err(error) = self.load_scene(sim, &self.scene, &self.assets) {
             match previous {
                 Some(text) => self.assets.insert(id, text),
                 None => self.assets.remove(&id),
@@ -1776,7 +1803,7 @@ impl Session {
                 return result.map(|_| None);
             }
         };
-        if let Err(error) = load(sim, self.document, &scene, &self.assets) {
+        if let Err(error) = self.load_scene(sim, &scene, &self.assets) {
             self.replay_to(sim, self.current)?;
             return Err(error);
         }
@@ -1975,6 +2002,15 @@ fn override_value(
     let ron = sim.override_value_ron(address, component, value)?;
     (codec.decode_ron)(&ron).map_err(invalid)?;
     Ok(ron)
+}
+
+/// The message of a panic's payload.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|message| message.to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "a panic without a message".to_string())
 }
 
 /// Whether an undo or redo failed for good: its entry is dropped.
