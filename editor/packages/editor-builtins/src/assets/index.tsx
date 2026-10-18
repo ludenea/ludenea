@@ -15,6 +15,8 @@ export interface AssetsState {
   /** The open scene changed on disk while it had unsaved edits. */
   banner: { path: string; text: string } | null;
   error: string | null;
+  /** Why the files could not be listed. */
+  listError: string | null;
 }
 
 export interface Assets {
@@ -42,12 +44,13 @@ export const assetsPlugin = definePlugin({
       menu: null,
       banner: null,
       error: null,
+      listError: null,
     });
     const report = (error: unknown) => state.set({ error: errorText(error) });
     const refresh = () =>
       editor.project.request({ type: "list_files" }).then(
-        ({ entries }) => state.set({ files: entries }),
-        () => state.set({ files: [] }),
+        ({ entries }) => state.set({ files: entries, listError: null }),
+        (error) => state.set({ files: [], listError: errorText(error) }),
       );
     // Without a game the new text is only remembered: the next game loads it.
     const replace = async (text: string) => {
@@ -55,6 +58,8 @@ export const assetsPlugin = definePlugin({
       scene.set({ text });
     };
 
+    // The watcher may report a rename's removal before the service answers it.
+    const renaming = new Set<string>();
     const assets: Assets = {
       state,
       async open(path) {
@@ -69,7 +74,12 @@ export const assetsPlugin = definePlugin({
       },
       async rename(from, to) {
         state.set({ action: null });
-        await editor.project.request({ type: "rename", from, to });
+        renaming.add(from);
+        try {
+          await editor.project.request({ type: "rename", from, to });
+        } finally {
+          renaming.delete(from);
+        }
         if (scene.get().path === from) scene.set({ path: to });
         state.set({ selected: to });
         await refresh();
@@ -103,7 +113,7 @@ export const assetsPlugin = definePlugin({
         const open = scene.get().path;
         if (!open) return;
         // Removed or renamed outside the editor: nothing on disk to save the game's scene to any more.
-        if (changes.some((change) => removedPath(change) === open)) {
+        if (!renaming.has(open) && changes.some((change) => removedPath(change) === open)) {
           scene.set({ path: null, text: null });
           if (state.get().banner?.path === open) state.set({ banner: null });
         } else if (changes.some((change) => changedPath(change) === open)) onDiskChange(open).catch(report);

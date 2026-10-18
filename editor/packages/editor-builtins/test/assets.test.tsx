@@ -165,4 +165,45 @@ describe("assets", () => {
     await settle();
     expect(host.project.sent).toContainEqual({ type: "rename", from: "assets/logo.png", to: "scenes/logo.png" });
   });
+
+  it("delete_key_in_the_tree_asks_for_confirmation", async () => {
+    const { host } = await browser();
+    fireEvent.keyDown(screen.getByText("logo.png").closest("[role=treeitem]")!, { key: "Delete" });
+    expect(host.project.sent.filter((request) => request.type === "delete")).toEqual([]);
+    expect(screen.getByRole("button", { name: "Delete assets/logo.png" })).toBeTruthy();
+  });
+
+  it("a_listing_failure_is_shown", async () => {
+    const host = await testEditor(builtinPlugins, (request) => (request.type === "list_files" ? { error: { code: "no_project", message: "no project is open" } } : undefined));
+    renderPanel(host, "ludenea.assets");
+    await settle();
+    expect(screen.getByText("no project is open")).toBeTruthy();
+  });
+
+  it("renaming_the_open_scene_keeps_it_open_when_the_removal_arrives_first", async () => {
+    let push: (event: object) => void = () => {};
+    const host = await testEditor(builtinPlugins, (request) => {
+      if (request.type === "list_files") return { type: "files", entries };
+      if (request.type === "read_text") return { type: "text", text: "(scene)" };
+      // The watcher reports the move before the service answers the rename.
+      if (request.type === "rename") push({ type: "files_changed", changes: [{ Removed: request.from }, { Created: request.to }] });
+      if (request.type === "info") return undefined;
+      return { type: "done" };
+    });
+    push = host.project.push;
+    const game = await testGame((command) => (command.type === "save_scene" ? { type: "scene", ron: "(saved)" } : { type: "done" }));
+    act(() => host.setControl(game.client));
+    renderPanel(host, "ludenea.assets");
+    await settle();
+    await openScene();
+
+    await act(() => host.editor.commands.run("assets.rename"));
+    const input = screen.getByRole("textbox", { name: "New name" });
+    fireEvent.change(input, { target: { value: "intro.scene.ron" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await settle();
+
+    await host.editor.commands.run("scene.save");
+    expect(host.project.sent).toContainEqual({ type: "write_text", path: "scenes/intro.scene.ron", text: "(saved)" });
+  });
 });

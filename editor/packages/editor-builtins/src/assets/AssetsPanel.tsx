@@ -24,7 +24,7 @@ function grouped(files: FileEntry[], filter: string): [string, FileEntry[]][] {
 }
 
 export function AssetsPanel({ editor, assets }: { editor: Editor; assets: Assets }) {
-  const { files, filter, selected, action, menu, banner, error } = useStore(assets.state);
+  const { files, filter, selected, action, menu, banner, error, listError } = useStore(assets.state);
   const openScene = useStore(shared(editor).scene).path;
   const unsaved = editor.timeline((state) => state.timeline?.scene_dirty ?? false);
   const dragged = useRef<string | null>(null);
@@ -47,6 +47,7 @@ export function AssetsPanel({ editor, assets }: { editor: Editor; assets: Assets
         </div>
       )}
       {error && <p className="ludenea-error">{error}</p>}
+      {listError && <p className="ludenea-error">{listError}</p>}
       {action && <ActionForm action={action} assets={assets} attempt={attempt} />}
       <ul role="tree" aria-label="Assets">
         {groups.map(([folder, entries]) => (
@@ -81,6 +82,9 @@ export function AssetsPanel({ editor, assets }: { editor: Editor; assets: Assets
                     } else if (event.key === "Enter") {
                       set({ selected: file.path });
                       attempt(assets.open(file.path));
+                    } else if (event.key === "Delete") {
+                      // Confirmed in the panel, like the menu's Delete.
+                      set({ selected: file.path, action: { kind: "delete", path: file.path }, menu: null });
                     }
                   }}
                   onContextMenu={(event) => {
