@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use clap::Args;
 use ludenea_app::replay::{Replay, ReplayOutcome, play_replay, record_replay};
 use ludenea_app::trace::{TRACE_VERSION, Trace, compare_traces, inputs_hash, scene_hash};
-use ludenea_app::{App, EditLog, InputLog, NamedAssetTexts, Simulation};
+use ludenea_app::{App, EditLog, InputLog, NamedAssetTexts, SimError, Simulation};
 use ludenea_control::{Bytes, Command, Host, InProcess, PROTOCOL_VERSION, Reply, Transport};
 
 use crate::assets::project_assets;
@@ -39,15 +39,21 @@ impl Run {
         sim.load_scene_with(&scene, &assets)
             .map_err(|error| format!("cannot load {}: {error}", files.scene.display()))?;
         let scene_hash = scene_hash(&scene_bytes, &sim);
-        let inputs = inputs.map(read).transpose()?;
-        let edits = files.edits.as_deref().map(read).transpose()?;
-        let inputs_hash = inputs_hash(inputs.as_deref(), edits.as_deref());
+        let with_bytes = |path: &Path| read(path).map(|bytes| (bytes, path.to_path_buf()));
+        let inputs = inputs.map(with_bytes).transpose()?;
+        let edits = files.edits.as_deref().map(with_bytes).transpose()?;
+        let inputs_hash = inputs_hash(
+            inputs.as_ref().map(|(bytes, _)| &bytes[..]),
+            edits.as_ref().map(|(bytes, _)| &bytes[..]),
+        );
+        let decode_error =
+            |path: &Path, error: SimError| format!("cannot decode {}: {error}", path.display());
         let inputs = match inputs {
-            Some(bytes) => InputLog::decode(&bytes).map_err(|error| error.to_string())?,
+            Some((bytes, path)) => InputLog::decode(&bytes).map_err(|e| decode_error(&path, e))?,
             None => InputLog::new(1),
         };
         let edits = match edits {
-            Some(bytes) => EditLog::decode(&bytes).map_err(|error| error.to_string())?,
+            Some((bytes, path)) => EditLog::decode(&bytes).map_err(|e| decode_error(&path, e))?,
             None => EditLog::new(),
         };
         Ok(Run {
@@ -250,6 +256,13 @@ pub fn verify(app: fn() -> App, args: &VerifyArgs, out: &mut dyn Write) -> Outco
         .extension()
         .is_some_and(|extension| extension == "replay")
     {
+        if inputs.is_some() || golden.is_some() || files.edits.is_some() || files.project.is_some()
+        {
+            return Err(
+                "a replay holds its own inputs, edits, assets, and hashes; drop --inputs, --golden, --edits, and --project"
+                    .into(),
+            );
+        }
         let replay = Replay::decode(&read(&files.scene)?).map_err(|error| error.to_string())?;
         return match play(app, &replay, *threads, dump_dir, out)? {
             true => matched(out, replay.hashes.len()),
@@ -260,6 +273,9 @@ pub fn verify(app: fn() -> App, args: &VerifyArgs, out: &mut dyn Write) -> Outco
         return Err("verifying a scene needs --inputs and --golden".into());
     };
     let golden = Trace::decode(&read(golden)?)?;
+    if golden.hashes.is_empty() {
+        return Err("the golden trace has no hashes; record it again".into());
+    }
     let mut run = Run::read(app, files, Some(inputs), *threads)?;
     if (run.scene_hash, run.inputs_hash) != (golden.scene_hash, golden.inputs_hash) {
         say(

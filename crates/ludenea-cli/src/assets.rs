@@ -52,7 +52,8 @@ pub fn project_assets(scene: &Path, project: Option<&Path>) -> Result<NamedAsset
     Ok(assets)
 }
 
-/// Adds every file under `directory`, if it exists.
+/// Adds every file under `directory`, if it exists. Links to folders are not followed, so
+/// a link cycle cannot loop.
 fn collect(directory: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
     let entries = match fs::read_dir(directory) {
         Ok(entries) => entries,
@@ -60,12 +61,15 @@ fn collect(directory: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
         Err(error) => return Err(format!("cannot list {}: {error}", directory.display())),
     };
     for entry in entries {
-        let path = entry
-            .map_err(|error| format!("cannot list {}: {error}", directory.display()))?
-            .path();
-        if path.is_dir() {
+        let entry =
+            entry.map_err(|error| format!("cannot list {}: {error}", directory.display()))?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+        if file_type.is_dir() {
             collect(&path, out)?;
-        } else {
+        } else if !path.is_dir() {
             out.push(path);
         }
     }
@@ -79,12 +83,11 @@ mod tests {
 
     use super::*;
 
-    fn dir(test: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("ludenea-assets-{test}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir
+    /// A fresh folder, removed when the returned guard drops.
+    fn dir() -> (tempfile::TempDir, PathBuf) {
+        let guard = tempfile::tempdir().unwrap();
+        let path = guard.path().to_path_buf();
+        (guard, path)
     }
 
     fn put(path: &Path, text: &str) {
@@ -101,7 +104,7 @@ mod tests {
 
     #[test]
     fn project_root_is_nearest_manifest() {
-        let root = dir("nearest_manifest");
+        let (_guard, root) = dir();
         put(&root.join("ludenea.toml"), "");
         let scene = root.join("scenes/levels/main.scene.ron");
         put(&scene, "");
@@ -134,7 +137,7 @@ mod tests {
 
     #[test]
     fn scene_folder_is_used_without_manifest() {
-        let folder = dir("without_manifest");
+        let (_guard, folder) = dir();
         let scene = folder.join("main.scene.ron");
         put(&scene, "");
         let prefab = folder.join("nested/crate.prefab.ron");
@@ -149,7 +152,7 @@ mod tests {
 
     #[test]
     fn duplicate_asset_identifiers_are_refused() {
-        let folder = dir("duplicates");
+        let (_guard, folder) = dir();
         let scene = folder.join("main.scene.ron");
         put(&scene, "");
         let a = folder.join("a.prefab.ron");
@@ -167,7 +170,7 @@ mod tests {
 
     #[test]
     fn broken_meta_is_refused_naming_it() {
-        let folder = dir("broken_meta");
+        let (_guard, folder) = dir();
         let scene = folder.join("main.scene.ron");
         put(&scene, "");
         let prefab = folder.join("a.prefab.ron");
@@ -175,5 +178,23 @@ mod tests {
         put(&folder.join("a.prefab.ron.meta"), "Meta(");
         let error = project_assets(&scene, None).err().expect("refused");
         assert!(error.contains("a.prefab.ron.meta"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn links_to_folders_are_not_followed() {
+        let (_guard, folder) = dir();
+        let scene = folder.join("main.scene.ron");
+        put(&scene, "");
+        let prefab = folder.join("nested/crate.prefab.ron");
+        put(&prefab, "Prefab(version: 1)");
+        meta(&prefab, 7, "Prefab");
+        std::os::unix::fs::symlink(&folder, folder.join("nested/loop")).unwrap();
+        std::os::unix::fs::symlink(&prefab, folder.join("linked.prefab.ron")).unwrap();
+        let assets = project_assets(&scene, None).unwrap();
+        assert_eq!(
+            assets.texts.keys().copied().collect::<Vec<_>>(),
+            [AssetId(7)]
+        );
     }
 }

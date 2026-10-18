@@ -1603,6 +1603,7 @@ dependencies = [
  "ludenea-ecs",
  "serde",
  "serde_json",
+ "tempfile",
  "xxhash-rust",
 ]
 

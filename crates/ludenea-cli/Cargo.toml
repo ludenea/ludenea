@@ -12,4 +12,5 @@ ludenea-control.workspace = true
 ludenea-ecs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tempfile.workspace = true
 xxhash-rust.workspace = true

@@ -538,3 +538,98 @@ fn broken_data_asset_names_its_file_line_and_column() {
         assert!(out.contains(&format!(" is invalid: {position}")), "{out}");
     }
 }
+
+#[test]
+fn undecodable_input_log_is_named() {
+    let dir = dir("undecodable_inputs");
+    fs::write(dir.join("inputs.bin"), [0xff, 0xff]).unwrap();
+    let (code, out) = cli(
+        &dir,
+        &[
+            "run",
+            "{}/scene.ron",
+            "--inputs",
+            "{}/inputs.bin",
+            "--ticks",
+            "1",
+        ],
+    );
+    assert_eq!(code, 2);
+    let path = dir.join("inputs.bin");
+    assert!(
+        out.contains(&format!("cannot decode {}", path.display())),
+        "{out}"
+    );
+}
+
+#[test]
+fn verifying_a_replay_refuses_run_definition_options() {
+    let dir = dir("replay_options");
+    record_replay(&dir);
+    for option in [
+        ["--inputs", "{}/inputs.bin"],
+        ["--golden", "{}/golden.bin"],
+        ["--edits", "{}/edits.bin"],
+        ["--project", "{}"],
+    ] {
+        let (code, out) = cli(&dir, &["verify", "{}/run.replay", option[0], option[1]]);
+        assert_eq!(code, 2, "{out}");
+        assert!(out.contains("a replay holds its own"), "{out}");
+    }
+}
+
+#[test]
+fn empty_golden_trace_is_refused() {
+    let dir = dir("empty_golden");
+    record(&dir);
+    let mut golden = Trace::decode(&fs::read(dir.join("golden.bin")).unwrap()).unwrap();
+    golden.hashes.clear();
+    fs::write(dir.join("golden.bin"), golden.encode()).unwrap();
+    let (code, out) = verify(&dir);
+    assert_eq!(code, 2);
+    assert!(out.contains("has no hashes"), "{out}");
+}
+
+#[test]
+fn scene_with_a_prefab_instance_runs_and_its_replay_verifies() {
+    let dir = dir("prefab_scene");
+    let id = format!("{:032x}", 21);
+    fs::write(
+        dir.join("main.scene.ron"),
+        format!(
+            r#"Scene(version: 2, next_id: 1, resources: {{}}, entities: [], instances: [(id: 0, prefab: "{id}")])"#
+        ),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("counter.prefab.ron"),
+        r#"Prefab(version: 1, next_id: 2, entities: [(id: 0, components: {"cli::Counter": (3)}), (id: 1, components: {"cli::Counter": (9)})])"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("counter.prefab.ron.meta"),
+        format!(r#"Meta(version: 1, id: "{id}", kind: Prefab)"#),
+    )
+    .unwrap();
+    let (code, out) = cli(
+        &dir,
+        &[
+            "run",
+            "{}/main.scene.ron",
+            "--inputs",
+            "{}/inputs.bin",
+            "--ticks",
+            "10",
+            "--replay",
+            "{}/run.replay",
+        ],
+    );
+    assert_eq!(code, 0, "{out}");
+    let replay = Replay::decode(&fs::read(dir.join("run.replay")).unwrap()).unwrap();
+    assert_eq!(replay.assets.len(), 1);
+    assert!(replay.scene.contains("address: [0, 1]"), "{}", replay.scene);
+    assert_eq!(
+        verify_replay(&dir, "1"),
+        (0, "ok: 11 hashes match\n".to_string())
+    );
+}
