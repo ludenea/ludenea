@@ -7,6 +7,8 @@ declare global {
   interface Window {
     /** Frame durations in milliseconds, recorded by `requestAnimationFrame` while it runs. */
     __frameTimes?: number[];
+    /** Each tick the timeline showed, with when it first showed it, sampled every frame. */
+    __ticksShown?: { tick: number; at: number }[];
     __stopFrames?: () => void;
   }
 }
@@ -52,12 +54,16 @@ test("the UI stays at 60 fps with 100,000 entities", async ({ page }) => {
   const start = await timeline(page);
   await page.evaluate(() => {
     const times: number[] = [];
+    const ticks: { tick: number; at: number }[] = [];
+    const label = [...document.querySelectorAll("p")].find((element) => /^Tick \d+ of/.test(element.textContent ?? ""))!;
     let last = performance.now();
     let running = true;
     const frame = (now: number) => {
       if (!running) return;
       times.push(now - last);
       last = now;
+      const tick = Number(/^Tick (\d+)/.exec(label.textContent ?? "")?.[1]);
+      if (tick !== ticks.at(-1)?.tick) ticks.push({ tick, at: now });
       requestAnimationFrame(frame);
     };
     requestAnimationFrame((now) => {
@@ -65,24 +71,26 @@ test("the UI stays at 60 fps with 100,000 entities", async ({ page }) => {
       requestAnimationFrame(frame);
     });
     window.__frameTimes = times;
+    window.__ticksShown = ticks;
     window.__stopFrames = () => {
       running = false;
     };
   });
-  const played = Date.now();
   await page.getByRole("button", { name: "Play", exact: true }).click();
   await page.waitForTimeout(PLAY_MS);
-  const frames = await page.evaluate(() => {
+  const { frames, ticks } = await page.evaluate(() => {
     window.__stopFrames!();
-    return window.__frameTimes!;
+    return { frames: window.__frameTimes!, ticks: window.__ticksShown! };
   });
-  const playedSeconds = (Date.now() - played) / 1000;
   await page.getByRole("button", { name: "Pause", exact: true }).click();
   await expect(page.getByRole("button", { name: "Play", exact: true })).toBeVisible();
-  const end = await timeline(page);
 
   const p95 = percentile(frames, 0.95);
-  const rate = (end.current - start.current) / playedSeconds;
+  // From the first tick shown after Play to the last one shown while sampling, so neither the
+  // click nor the pause counts.
+  const first = ticks.find(({ tick }) => tick > start.current);
+  const final = ticks.at(-1);
+  const rate = first && final && final.at > first.at ? ((final.tick - first.tick) * 1000) / (final.at - first.at) : 0;
   const report = `interactive in ${interactiveMs} ms; ${frames.length} frames, 95th percentile ${p95.toFixed(1)} ms, worst ${Math.max(...frames).toFixed(1)} ms; simulation at ${rate.toFixed(1)} ticks per second`;
   console.log(`performance: ${report}`);
   test.info().annotations.push({ type: "performance", description: report });
