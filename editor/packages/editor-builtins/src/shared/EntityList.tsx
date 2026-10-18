@@ -40,17 +40,22 @@ export function EntityList(props: {
     setRows(new Map());
     const topic = { type: "entities", filter } as const;
     control.request({ type: "subscribe", topic }).catch((error) => report.current(errorText(error)));
+    // A playing game reports a change every tick: refetch once per frame at most.
+    let frame = 0;
     const stop = control.on("entities_changed", (event) => {
-      if (event.filter === filter) setVersion((version) => version + 1);
+      if (event.filter !== filter || frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        setVersion((version) => version + 1);
+      });
     });
     return () => {
       stop();
+      cancelAnimationFrame(frame);
       control.request({ type: "unsubscribe", topic }).catch(() => {});
     };
   }, [control, filter]);
 
-  // ponytail: refetches the visible pages on every change (each tick while playing); coalesce
-  // to one request in flight if that shows up in profiles.
   useEffect(() => {
     let current = true;
     for (let page = firstPage; page <= lastPage; page++) {
@@ -74,7 +79,7 @@ export function EntityList(props: {
   }, [control, filter, version, firstPage, lastPage]);
 
   const selected = new Set(selection.map(entityKey));
-  // Click or Enter selects; with Shift, Ctrl, or Cmd it adds to the selection.
+  // Click, Enter, or Space selects; with Shift, Ctrl, or Cmd it adds to the selection.
   const choose = (entity: Entity, event: MouseEvent | KeyboardEvent) => {
     const store = editor.selection.getState();
     if (event.shiftKey || event.ctrlKey || event.metaKey) store.add(entity);
@@ -94,7 +99,9 @@ export function EntityList(props: {
               tabIndex={row ? 0 : -1}
               onClick={(event) => row && choose(row.entity, event)}
               onKeyDown={(event) => {
-                if (row && event.key === "Enter") choose(row.entity, event);
+                if (!row || (event.key !== "Enter" && event.key !== " ")) return;
+                event.preventDefault();
+                choose(row.entity, event);
               }}
               style={{ position: "absolute", top: 0, left: 0, right: 0, height: item.size, transform: `translateY(${item.start}px)`, listStyle: "none" }}
             >

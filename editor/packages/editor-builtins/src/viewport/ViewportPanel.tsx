@@ -214,10 +214,16 @@ export function ViewportPanel({ editor, state }: { editor: Editor; state: Viewpo
         event.preventDefault();
         return;
       }
+      // While playing, plain keys are the game's.
+      const playing = editor.timeline.getState().playing;
+      if (event.key === "Delete" && !playing) {
+        event.preventDefault();
+        editor.commands.run("scene.despawn-selection").catch(report("despawning"));
+        return;
+      }
       const direction = ARROWS[event.key];
       if (!direction || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
-      // While playing, plain arrows are the game's.
-      if (editor.timeline.getState().playing) return;
+      if (playing) return;
       event.preventDefault();
       editor.commands.run(`viewport.nudge-${direction}`).catch(report("nudging"));
     };

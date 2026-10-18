@@ -179,4 +179,16 @@ describe("viewport", () => {
     const renderer = renderers.at(-1)!;
     expect(renderer.calls.some((call) => call.method === "draw" && call.args[0] === JSON.stringify(frame))).toBe(true);
   });
+
+  it("delete_despawns_the_selection_while_paused", async () => {
+    const { host, view } = await viewport();
+    const despawn = vi.fn();
+    host.editor.commands.register({ id: "scene.despawn-selection", title: "Despawn", run: despawn });
+    fireEvent.keyDown(view, { key: "Delete" });
+    expect(despawn).toHaveBeenCalledTimes(1);
+
+    act(() => host.editor.timeline.setState({ playing: true }));
+    fireEvent.keyDown(view, { key: "Delete" });
+    expect(despawn).toHaveBeenCalledTimes(1);
+  });
 });

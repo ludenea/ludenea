@@ -32,7 +32,6 @@ export const sceneTreePlugin = definePlugin({
         scene.set({ path, text: ron });
       },
     });
-    editor.shortcuts.register({ key: "Delete", command: "scene.despawn-selection" });
     editor.shortcuts.register({ key: "Mod+S", command: "scene.save" });
     editor.panels.register({ id: "ludenea.scene-tree", title: "Scene", defaultPosition: "left", component: SceneTree });
   },

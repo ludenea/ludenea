@@ -1,8 +1,8 @@
-import type { ControlClient, Entity } from "@ludenea/control-client";
-import type { Editor } from "@ludenea/editor-shell";
-import { useEffect, useMemo, useState } from "react";
+import type { ControlClient, EntityRow } from "@ludenea/control-client";
+import { isTextField, type Editor } from "@ludenea/editor-shell";
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { EntityList, entityKey } from "../shared/EntityList";
-import { shared, useGame, useStore } from "../shared";
+import { errorText, shared, useGame, useStore } from "../shared";
 import { ResimulatingNotice } from "../timeline/editing";
 
 const LABEL_COMPONENTS = 3;
@@ -18,12 +18,20 @@ export function SceneTree({ editor }: { editor: Editor }) {
 
 /** Every entity of the current tick, each labelled by its first components. */
 function Entities({ editor, control }: { editor: Editor; control: ControlClient }) {
-  // ponytail: labels are cached per entity, one cache per game, so adding or removing a
-  // component keeps the old label; refetch on `entity_changed` if that matters.
-  const labels = useMemo(() => new Map<string, string>(), [control]);
+  const labels = useMemo(() => new Map<string, Cached>(), [control]);
+  const playing = editor.timeline((state) => state.playing);
   const [error, setError] = useState<string | null>(null);
+  // Delete despawns here and in the viewport only: elsewhere (the asset browser) it means something else.
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== "Delete" || isTextField(event.target)) return;
+    event.preventDefault();
+    editor.commands.run("scene.despawn-selection").then(
+      () => setError(null),
+      (failure) => setError(errorText(failure)),
+    );
+  };
   return (
-    <div className="ludenea-scene-tree">
+    <div className="ludenea-scene-tree" onKeyDown={onKeyDown}>
       <ResimulatingNotice editor={editor} />
       {error && <p className="ludenea-error">{error}</p>}
       <EntityList
@@ -34,7 +42,7 @@ function Entities({ editor, control }: { editor: Editor; control: ControlClient 
         onError={setError}
         row={(row) => (
           <>
-            <Label control={control} entity={row.entity} labels={labels} /> <span className="ludenea-muted ludenea-mono">{entityKey(row.entity)}</span>
+            <Label control={control} row={row} labels={labels} playing={playing} /> <span className="ludenea-muted ludenea-mono">{entityKey(row.entity)}</span>
           </>
         )}
       />
@@ -42,23 +50,31 @@ function Entities({ editor, control }: { editor: Editor; control: ControlClient 
   );
 }
 
-function Label({ control, entity, labels }: { control: ControlClient; entity: Entity; labels: Map<string, string> }) {
+/** A label and the entity hash it was read at. */
+type Cached = { hash: string; label: string };
+
+function Label({ control, row, labels, playing }: { control: ControlClient; row: EntityRow; labels: Map<string, Cached>; playing: boolean }) {
+  const { entity, hash } = row;
   const key = entityKey(entity);
-  const [label, setLabel] = useState(labels.get(key));
+  const [, setRead] = useState(0);
+  const cached = labels.get(key);
+  // A component added or removed changes the hash. So does every tick of a moving entity:
+  // while playing the label is read once, and read again once paused.
+  const stale = !cached || (!playing && cached.hash !== hash);
   useEffect(() => {
-    if (labels.has(key)) return;
+    if (!stale) return;
     let current = true;
     control.request({ type: "get_entity", entity: { index: entity.index, generation: entity.generation } }).then(
       (reply) => {
         const names = Object.keys(reply.components).slice(0, LABEL_COMPONENTS).map(shortName);
-        labels.set(key, names.join(", ") || "(no components)");
-        if (current) setLabel(labels.get(key));
+        labels.set(key, { hash, label: names.join(", ") || "(no components)" });
+        if (current) setRead((read) => read + 1);
       },
       (error) => console.warn(`entity ${key}: ${String(error)}`),
     );
     return () => {
       current = false;
     };
-  }, [control, key, labels, entity.index, entity.generation]);
-  return <span>{label ?? ""}</span>;
+  }, [control, key, hash, stale, labels, entity.index, entity.generation]);
+  return <span>{cached?.label ?? ""}</span>;
 }

@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, screen } from "@testing-library/react";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { builtinPlugins } from "../src";
 import { renderPanel, settle, testEditor, testGame } from "./support";
 
@@ -12,18 +12,18 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, "offsetWidth", { configurable: true, get: () => 300 });
 });
 
-async function sceneTree(project: (request: { type: string }) => object | undefined = () => ({ type: "done" })) {
+/** What the fake game holds: entity 1's components and hash can change. */
+const world = () => ({ collider: { "ludenea::Collider": json({}) } as Record<string, unknown>, hash: "00000000000000a1" });
+
+async function sceneTree(project: (request: { type: string }) => object | undefined = () => ({ type: "done" }), held = world()) {
   const host = await testEditor(builtinPlugins, project);
   const game = await testGame((command) => {
     if (command.type === "query_entities") {
-      return { type: "entities", total: 2, rows: [0, 1].map((index) => ({ entity: entity(index), hash: "00000000000000a" + index })) };
+      return { type: "entities", total: 2, rows: [0, 1].map((index) => ({ entity: entity(index), hash: index === 0 ? "00000000000000a0" : held.hash })) };
     }
     if (command.type === "get_entity") {
       const { index } = command.entity as { index: number };
-      const components =
-        index === 0
-          ? { "ludenea::Pose": json({}), "ludenea::Body": json({}), "my_game::Player": json({}) }
-          : { "ludenea::Collider": json({}) };
+      const components = index === 0 ? { "ludenea::Pose": json({}), "ludenea::Body": json({}), "my_game::Player": json({}) } : held.collider;
       return { type: "entity", entity: command.entity, components };
     }
     if (command.type === "save_scene") return { type: "scene", ron: "(saved)" };
@@ -32,12 +32,18 @@ async function sceneTree(project: (request: { type: string }) => object | undefi
   act(() => host.setControl(game.client));
   renderPanel(host, "ludenea.scene-tree");
   await settle();
-  return { host, game };
+  return { host, game, held };
 }
+
+const nextFrame = () => act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+const queries = (game: { sent: { type: string }[] }) => game.sent.filter((command) => command.type === "query_entities").length;
 
 describe("scene tree", () => {
   beforeEach(() => localStorage.clear());
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
 
   it("scene_tree_selection_updates_store", async () => {
     const { host, game } = await sceneTree();
@@ -84,5 +90,67 @@ describe("scene tree", () => {
 
     expect(game.sent).toContainEqual({ type: "save_scene" });
     expect(host.project.sent).toContainEqual({ type: "write_text", path: "scenes/main.scene.ron", text: "(saved)" });
+  });
+
+  it("space_selects_a_row", async () => {
+    const { host } = await sceneTree();
+    const row = screen.getByText("Collider").closest("[role=option]")!;
+    const space = new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true });
+    act(() => void row.dispatchEvent(space));
+    expect(host.editor.selection.getState().entities).toEqual([entity(1)]);
+    expect(space.defaultPrevented).toBe(true);
+  });
+
+  it("changes_in_one_frame_refetch_the_rows_once", async () => {
+    const { game } = await sceneTree();
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => frames.push(callback));
+    const before = queries(game);
+    // A playing game reports a change each tick, each in its own message.
+    for (let tick = 0; tick < 5; tick++) {
+      act(() => game.push({ type: "entities_changed", filter: "", total: 2 }));
+      await settle();
+    }
+    expect(queries(game)).toBe(before);
+    act(() => frames.splice(0).forEach((frame) => frame(0)));
+    await settle();
+    expect(queries(game)).toBe(before + 1);
+  });
+
+  it("label_follows_a_component_added_while_paused", async () => {
+    const { game, held } = await sceneTree();
+    expect(screen.getByText("Collider")).toBeTruthy();
+    held.collider = { ...held.collider, "my_game::Health": json({}) };
+    held.hash = "00000000000000b1";
+    act(() => game.push({ type: "entities_changed", filter: "", total: 2 }));
+    await nextFrame();
+    await settle();
+    expect(screen.getByText("Collider, Health")).toBeTruthy();
+  });
+
+  it("a_new_game_starts_from_an_empty_list", async () => {
+    const { host } = await sceneTree();
+    expect(screen.getAllByRole("option")).toHaveLength(2);
+    // A game that has not answered yet shows none of the previous game's rows.
+    const silent = await testGame(() => undefined);
+    act(() => host.setControl(silent.client));
+    await settle();
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+  });
+
+  it("delete_despawns_only_from_the_scene_tree", async () => {
+    const { host, game } = await sceneTree();
+    host.editor.selection.getState().select([entity(1)]);
+    const despawns = () => game.sent.filter((command) => command.type === "despawn");
+    // Not a global shortcut: Delete in the asset browser deletes an asset.
+    expect(host.registry.shortcuts.get("Delete")).toBeUndefined();
+
+    fireEvent.keyDown(document.body, { key: "Delete" });
+    await settle();
+    expect(despawns()).toEqual([]);
+
+    fireEvent.keyDown(screen.getByText("Collider"), { key: "Delete" });
+    await settle();
+    expect(despawns()).toEqual([{ type: "despawn", entity: entity(1) }]);
   });
 });
