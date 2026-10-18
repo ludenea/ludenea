@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { searchForWorkspaceRoot } from "vite";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
@@ -9,5 +10,9 @@ export default defineConfig({
     // modules it imports from this package.
     dedupe: ["react", "@ludenea/editor-shell", "@ludenea/control-client"],
   },
+  // That plugin also sits outside the pnpm workspace, which is all Vite loads files from by
+  // default. Without this a run with a cold module cache (after an install or a build) cannot
+  // load it; later runs only passed because they reused the cached transform.
+  server: { fs: { allow: [searchForWorkspaceRoot(process.cwd()), fileURLToPath(new URL("../../../crates", import.meta.url))] } },
   test: { name: "editor-builtins", environment: "jsdom" },
 });
