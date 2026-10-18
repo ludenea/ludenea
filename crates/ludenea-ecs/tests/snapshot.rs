@@ -93,6 +93,10 @@ fn single_entity_and_resource_hashes_match_the_tree() {
     }
     assert!(world.entity_hash(dead).is_none());
     assert_eq!(world.resource_hashes()[..], tree.resources[..2]);
+    for leaf in &tree.resources[..2] {
+        assert_eq!(world.resource_hash(&leaf.name), Some(leaf.hash));
+    }
+    assert_eq!(world.resource_hash("no::Such"), None);
 }
 
 #[test]

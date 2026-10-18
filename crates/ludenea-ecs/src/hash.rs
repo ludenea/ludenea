@@ -172,6 +172,13 @@ impl World {
             })
             .collect()
     }
+
+    /// The hash of the resource `name` alone, as `resource_hashes` gives it; `None` when it
+    /// is not registered.
+    pub fn resource_hash(&self, name: &str) -> Option<u64> {
+        let entry = self.resources.get(name)?;
+        Some((entry.codec.hash)(&*entry.value.value()))
+    }
 }
 
 /// The leaf of an entity from its component hashes, sorted by name.

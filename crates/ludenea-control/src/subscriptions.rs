@@ -163,10 +163,9 @@ impl Subscriptions {
         let due = !playing || self.since_resources >= 1.0 / f64::from(RESOURCE_PUSHES_PER_SECOND);
         if due && !self.resources.is_empty() {
             self.since_resources = 0.0;
-            let now = resource_hashes(world);
             let mut resources = BTreeMap::new();
             for watch in &mut self.resources {
-                let hash = now.get(&watch.name).copied();
+                let hash = world.resource_hash(&watch.name);
                 if hash.is_some() && hash != watch.hash {
                     watch.hash = hash;
                     resources.insert(watch.name.clone(), resource_value(sim, &watch.name));
@@ -203,14 +202,6 @@ fn component_hashes(world: &World, entity: Entity) -> Option<Hashes> {
             .map(|component| (component.name, component.hash))
             .collect()
     })
-}
-
-fn resource_hashes(world: &World) -> Hashes {
-    world
-        .resource_hashes()
-        .into_iter()
-        .map(|resource| (resource.name, resource.hash))
-        .collect()
 }
 
 /// One tick run while `Introspection` is subscribed.
