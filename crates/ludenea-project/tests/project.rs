@@ -58,6 +58,64 @@ fn create_writes_template_that_opens() {
     assert_eq!(opened.root(), created.root());
 }
 
+/// The template's toolchain is the engine's, read when the project is created.
+#[test]
+fn create_uses_the_engine_toolchain() {
+    let dir = TempDir::new().unwrap();
+    new_project(&dir);
+    let toolchain = |path: &Path| -> toml::Table {
+        toml::from_str(&fs::read_to_string(path.join("rust-toolchain.toml")).unwrap()).unwrap()
+    };
+    assert_eq!(
+        toolchain(&dir.path().join("demo"))["toolchain"]["channel"],
+        toolchain(&engine_path())["toolchain"]["channel"]
+    );
+}
+
+/// A quote or a backslash in the engine path must not break the generated `Cargo.toml`.
+#[cfg(unix)]
+#[test]
+fn engine_path_with_quotes_stays_valid_toml() {
+    let dir = TempDir::new().unwrap();
+    let engine = dir.path().join("my \"engine\" \\ copy");
+    fs::create_dir_all(&engine).unwrap();
+    for file in ["crates", "vendor", "rust-toolchain.toml"] {
+        std::os::unix::fs::symlink(
+            engine_path().join(file).canonicalize().unwrap(),
+            engine.join(file),
+        )
+        .unwrap();
+    }
+    let project = Project::create(dir.path(), "demo", &engine).unwrap();
+    let cargo: toml::Table =
+        toml::from_str(&fs::read_to_string(project.root().join("Cargo.toml")).unwrap()).unwrap();
+    let ludenea = cargo["dependencies"]["ludenea"]["path"].as_str().unwrap();
+    assert_eq!(
+        Path::new(ludenea),
+        engine.canonicalize().unwrap().join("crates/ludenea")
+    );
+}
+
+#[test]
+fn create_refuses_a_directory_that_is_not_the_engine() {
+    let dir = TempDir::new().unwrap();
+    let error = Project::create(dir.path(), "demo", dir.path()).unwrap_err();
+    assert!(matches!(error, ProjectError::NotAnEngine(_)), "{error:?}");
+    assert!(!dir.path().join("demo").exists());
+}
+
+/// A failure halfway leaves nothing behind, so creating again with a fixed engine works.
+#[test]
+fn failed_create_leaves_no_directory() {
+    let dir = TempDir::new().unwrap();
+    let engine = dir.path().join("engine");
+    fs::create_dir_all(engine.join("crates/ludenea")).unwrap();
+    fs::write(engine.join("crates/ludenea/Cargo.toml"), "").unwrap();
+    // No rust-toolchain.toml: the template cannot be written.
+    assert!(Project::create(dir.path(), "demo", &engine).is_err());
+    assert!(!dir.path().join("demo").exists());
+}
+
 #[test]
 fn invalid_name_is_rejected_with_rule() {
     let dir = TempDir::new().unwrap();
@@ -181,7 +239,12 @@ fn template_builds_and_runs() {
         "60",
         "--hash",
     ]);
-    assert!(!output.trim().is_empty(), "the run prints a hash");
+    let hash = output
+        .trim()
+        .strip_prefix("tick 60 hash ")
+        .unwrap_or_else(|| panic!("the run prints a hash: {output:?}"));
+    assert_eq!(hash.len(), 16, "{hash}");
+    assert!(hash.chars().all(|c| c.is_ascii_hexdigit()), "{hash}");
 }
 
 #[cfg(unix)]

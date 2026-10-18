@@ -45,6 +45,8 @@ pub enum ProjectError {
         "no engine path to create the project with: set the editor setting ludenea.engine-path"
     )]
     NoEnginePath,
+    #[error("{} is not a Ludenea engine repository (it has no crates/ludenea)", .0.display())]
+    NotAnEngine(PathBuf),
 }
 
 /// Something worth telling the user that is not an error.
@@ -92,7 +94,7 @@ impl Project {
     }
 
     /// Creates `parent/name` from the template, with the game depending on the engine at
-    /// `engine_path`.
+    /// `engine_path`. On failure nothing is left behind.
     pub fn create(parent: &Path, name: &str, engine_path: &Path) -> Result<Project, ProjectError> {
         if !template::is_valid_name(name) {
             return Err(ProjectError::InvalidName(name.to_string()));
@@ -104,9 +106,17 @@ impl Project {
         let engine_path = engine_path
             .canonicalize()
             .map_err(|source| io_error(engine_path, source))?;
+        if !engine_path.join("crates/ludenea/Cargo.toml").is_file() {
+            return Err(ProjectError::NotAnEngine(engine_path));
+        }
         fs::create_dir_all(&root).map_err(|source| io_error(&root, source))?;
-        template::write(&root, name, &engine_path).map_err(|source| io_error(&root, source))?;
-        Project::open(&root)
+        let created =
+            template::write(&root, name, &engine_path).and_then(|()| Project::open(&root));
+        if created.is_err() {
+            // `root` did not exist before: everything in it is ours.
+            let _ = fs::remove_dir_all(&root);
+        }
+        created
     }
 
     pub fn root(&self) -> &Path {

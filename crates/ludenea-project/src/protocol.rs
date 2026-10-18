@@ -244,7 +244,8 @@ impl From<ProjectError> for ProjectFailure {
             ProjectError::Io { .. } => FailureCode::Io,
             ProjectError::Manifest { .. } => FailureCode::InvalidManifest,
             ProjectError::Watch(_) => FailureCode::Watch,
-            ProjectError::NoEnginePath => FailureCode::NoEnginePath,
+            // The setting names no usable engine either way.
+            ProjectError::NoEnginePath | ProjectError::NotAnEngine(_) => FailureCode::NoEnginePath,
         };
         Self::new(code, error)
     }

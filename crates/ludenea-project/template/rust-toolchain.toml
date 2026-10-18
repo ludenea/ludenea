@@ -1,3 +1,3 @@
 [toolchain]
-channel = "1.97.1"
+channel = "{{toolchain_channel}}"
 targets = ["wasm32-unknown-unknown"]
