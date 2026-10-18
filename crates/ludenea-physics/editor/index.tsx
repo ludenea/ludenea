@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 
 const BODY = "ludenea::Body";
 const KINDS = ["Static", "Kinematic", "Dynamic"];
-const COLLISION = "ludenea_physics::events::Collision";
+const COLLISION = "ludenea::Collision";
 const PAGE = 1000;
 const INTROSPECTION = { type: "introspection" } as const;
 

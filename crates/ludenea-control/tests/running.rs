@@ -2,6 +2,7 @@ use std::fs;
 
 use boxes::BoxesInput;
 use ludenea::cli::Trace;
+use ludenea::control::Event;
 use ludenea::control::*;
 use ludenea::prelude::*;
 

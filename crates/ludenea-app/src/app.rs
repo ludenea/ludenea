@@ -3,13 +3,12 @@ use std::collections::BTreeSet;
 
 use ludenea_debug_draw::DebugDrawFrame;
 use ludenea_ecs::{
-    Asset, BuildError, Component, EcsError, IntoSystemConfig, Prefab, Resource, ScheduleBuilder,
-    World,
+    Asset, BuildError, Component, EcsError, Event, IntoSystemConfig, Prefab, Resource,
+    ScheduleBuilder, World,
 };
 
 use ludenea_ecs::Entity;
 use ludenea_math::Vec2;
-use serde::Serialize;
 
 use crate::input::{Input, InputType, Inputs};
 use crate::{Parallel, RawInput, Rng, Simulation, Time};
@@ -131,7 +130,7 @@ impl App {
         self
     }
 
-    pub fn event<T: Serialize + Send + 'static>(&mut self) -> &mut Self {
+    pub fn event<T: Event>(&mut self) -> &mut Self {
         self.world.register_event::<T>();
         self
     }

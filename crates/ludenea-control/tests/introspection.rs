@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use boxes::BoxesInput;
+use ludenea::control::Event;
 use ludenea::control::*;
 use ludenea::prelude::*;
 use serde_json::{Value, json};

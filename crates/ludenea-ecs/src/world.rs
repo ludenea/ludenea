@@ -3,11 +3,10 @@ use std::cell::{Ref, RefCell};
 use std::collections::BTreeMap;
 
 use ludenea_schema::TypeSchema;
-use serde::Serialize;
 
 use crate::assets::{AssetType, LoadedAsset};
 use crate::commands::CommandQueue;
-use crate::event::EventQueue;
+use crate::event::{Event, EventQueue};
 use crate::{AssetId, Codec, Component, EcsError, EntitiesState, Entity, Resource};
 
 /// Type-erased access to one component storage.
@@ -142,7 +141,7 @@ pub struct World {
     pub(crate) assets: BTreeMap<AssetId, LoadedAsset>,
     /// Never hashed, snapshotted, or iterated; each value is a `RefCell<T>`.
     runtime: BTreeMap<TypeId, Box<dyn Any + Send>>,
-    /// Events of the current tick, keyed by type name; each value is a `RefCell<Vec<T>>`.
+    /// Events of the current tick, keyed by stable name; each value is a `RefCell<Vec<T>>`.
     events: BTreeMap<&'static str, Box<dyn EventQueue + Send>>,
     /// Commands issued by the running system, applied when it returns.
     pub(crate) commands: RefCell<CommandQueue>,
@@ -210,20 +209,27 @@ impl World {
     }
 
     /// Registers the event type `T`; registering it again is a no-op.
-    pub fn register_event<T: Serialize + Send + 'static>(&mut self) {
+    pub fn register_event<T: Event>(&mut self) {
         self.events
-            .entry(type_name::<T>())
+            .entry(T::NAME)
             .or_insert_with(|| Box::new(RefCell::new(Vec::<T>::new())));
     }
 
     /// The events sent so far this tick as JSON, per registered event type name (name order,
     /// empty types included), each in send order. An event without a JSON form shows as
-    /// `{"error": "<message>"}`. The names are `std::any::type_name` paths, which may change
-    /// between compiler versions: they are for display only.
+    /// `{"error": "<message>"}`.
     pub fn events_json(&self) -> Vec<(&'static str, Vec<serde_json::Value>)> {
         self.events
             .iter()
             .map(|(&name, queue)| (name, queue.to_json()))
+            .collect()
+    }
+
+    /// The schema of every registered event type, by stable name.
+    pub fn event_schemas(&self) -> Vec<(&'static str, TypeSchema)> {
+        self.events
+            .iter()
+            .map(|(&name, queue)| (name, queue.schema()))
             .collect()
     }
 
@@ -514,8 +520,8 @@ impl World {
         self.runtime.get(&TypeId::of::<T>())?.downcast_ref()
     }
 
-    pub(crate) fn event_cell<T: Send + 'static>(&self) -> Option<&RefCell<Vec<T>>> {
-        self.events.get(type_name::<T>())?.as_any().downcast_ref()
+    pub(crate) fn event_cell<T: Event>(&self) -> Option<&RefCell<Vec<T>>> {
+        self.events.get(T::NAME)?.as_any().downcast_ref()
     }
 
     fn ensure_alive(&self, entity: Entity) -> Result<(), EcsError> {

@@ -128,3 +128,15 @@ fn events_are_sorted_by_pair() {
         [(true, ground, upper), (true, far, other)]
     );
 }
+
+#[test]
+fn physics_collision_is_named_ludenea_collision() {
+    let simulation = simulation();
+    let names: Vec<_> = simulation
+        .world()
+        .event_schemas()
+        .iter()
+        .map(|(name, _)| *name)
+        .collect();
+    assert_eq!(names, ["ludenea::Collision"]);
+}

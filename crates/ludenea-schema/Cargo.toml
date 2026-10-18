@@ -10,6 +10,4 @@ ts = ["dep:ts-rs"]
 ts-rs = { workspace = true, optional = true }
 ludenea-macros.workspace = true
 serde.workspace = true
-
-[dev-dependencies]
 serde_json.workspace = true

@@ -1,6 +1,6 @@
 use ludenea_ecs::{
-    BuildError, Commands, Component, Entity, EventWriter, Events, IntoSystemConfig, Query, Res,
-    ResMut, Resource, Runtime, ScheduleBuilder, SystemLabel, World,
+    BuildError, Commands, Component, Entity, Event, EventWriter, Events, IntoSystemConfig, Query,
+    Res, ResMut, Resource, Runtime, ScheduleBuilder, SystemLabel, World,
 };
 use serde::{Deserialize, Serialize};
 
@@ -22,7 +22,7 @@ struct Counter(u32);
 #[derive(Resource, Serialize, Deserialize)]
 struct Target(Entity);
 
-#[derive(Serialize)]
+#[derive(Event, Serialize)]
 struct Hit(u32);
 
 struct Spawner;

@@ -2,8 +2,8 @@ use std::panic::AssertUnwindSafe;
 
 use ludenea_ecs::schema::Schema;
 use ludenea_ecs::{
-    Commands, Component, EcsError, Entity, EventWriter, Events, ResMut, Resource, SNAPSHOT_VERSION,
-    ScheduleBuilder, Snapshot, SnapshotError, World, hash_value,
+    Commands, Component, EcsError, Entity, Event, EventWriter, Events, ResMut, Resource,
+    SNAPSHOT_VERSION, ScheduleBuilder, Snapshot, SnapshotError, World, hash_value,
 };
 use serde::{Deserialize, Serialize};
 
@@ -339,7 +339,7 @@ fn insert_resource_boxed_replaces_a_resource_by_name() {
     assert!(matches!(&error, EcsError::UnregisteredResource(name) if name == "game::Unknown"));
 }
 
-#[derive(Serialize)]
+#[derive(Event, Serialize)]
 struct Ping;
 
 #[derive(Resource, Serialize, Deserialize, Debug, PartialEq, Clone)]

@@ -1,5 +1,5 @@
 use ludenea_ecs::schema::{Schema, TypeSchema};
-use ludenea_ecs::{AssetId, Component, Entity, Resource, World};
+use ludenea_ecs::{AssetId, Component, Entity, Event, Resource, World};
 use serde::{Deserialize, Serialize};
 
 #[derive(Component, Serialize, Deserialize)]
@@ -16,6 +16,16 @@ struct Alpha(u8);
 #[derive(Resource, Serialize, Deserialize)]
 #[resource(name = "test::Score")]
 struct Score(i64);
+
+#[derive(Event, Serialize)]
+#[event(name = "test::Hit")]
+struct Hit {
+    target: Entity,
+}
+
+#[derive(Event, Serialize)]
+#[event(name = "test::Alert")]
+struct Alert(u8);
 
 fn field_names(schema: &TypeSchema) -> Vec<&str> {
     match schema {
@@ -62,4 +72,17 @@ fn asset_id_serializes_as_32_lowercase_hex_digits() {
     assert_eq!(ron::from_str::<AssetId>(&ron_text).unwrap(), id);
     assert!(ron::from_str::<AssetId>("\"AB\"").is_err());
     assert!(ron::from_str::<AssetId>("\"0000000000000000000000000000000G\"").is_err());
+}
+
+#[test]
+fn world_lists_event_schemas_by_stable_name() {
+    let mut world = World::new();
+    world.register_event::<Hit>();
+    world.register_event::<Alert>();
+
+    let schemas = world.event_schemas();
+    let names: Vec<_> = schemas.iter().map(|(name, _)| *name).collect();
+    assert_eq!(names, ["test::Alert", "test::Hit"]);
+    assert_eq!(field_names(&schemas[1].1), ["target"]);
+    assert!(matches!(schemas[0].1, TypeSchema::Newtype { .. }));
 }

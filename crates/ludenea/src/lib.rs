@@ -31,8 +31,9 @@ pub mod prelude {
         TimedEdit,
     };
     pub use crate::ecs::{
-        Asset, Assets, Commands, Component, Entity, EventWriter, Events, Handle, IntoSystemConfig,
-        Prefab, Query, Res, ResMut, Resource, Runtime, SystemLabel, With, Without, World,
+        Asset, Assets, Commands, Component, Entity, Event, EventWriter, Events, Handle,
+        IntoSystemConfig, Prefab, Query, Res, ResMut, Resource, Runtime, SystemLabel, With,
+        Without, World,
     };
     pub use crate::math::{Aabb, Rot, Transform, Vec2};
     pub use crate::physics::{

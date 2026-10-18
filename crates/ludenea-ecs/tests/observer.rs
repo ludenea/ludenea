@@ -1,6 +1,6 @@
 use ludenea_ecs::{
-    CommandKind, CommandRecord, Commands, Component, EventWriter, IntoSystemConfig, Res, ResMut,
-    Resource, ScheduleBuilder, ScheduleObserver, SystemInfo, SystemLabel, World,
+    CommandKind, CommandRecord, Commands, Component, Event, EventWriter, IntoSystemConfig, Res,
+    ResMut, Resource, ScheduleBuilder, ScheduleObserver, SystemInfo, SystemLabel, World,
 };
 use serde::{Deserialize, Serialize};
 
@@ -10,7 +10,7 @@ struct Marker;
 #[derive(Resource, Serialize, Deserialize, Default)]
 struct Counter(u32);
 
-#[derive(Serialize)]
+#[derive(Event, Serialize)]
 struct Hit(u32);
 
 struct Early;
@@ -79,7 +79,7 @@ fn observer_sees_systems_in_order_and_their_commands() {
     assert!(names[2].ends_with("spawner"));
     assert_eq!(infos[0].writes, [("resource", Counter::NAME)]);
     assert_eq!(infos[1].reads, [("resource", Counter::NAME)]);
-    assert_eq!(infos[2].writes, [("event", std::any::type_name::<Hit>())]);
+    assert_eq!(infos[2].writes, [("event", Hit::NAME)]);
 
     let mut recorder = Recorder::default();
     schedule.run_observed(&mut world, &mut recorder);
@@ -112,10 +112,7 @@ fn observer_sees_this_tick_events_before_they_clear() {
 
     let mut recorder = Recorder::default();
     schedule.run_observed(&mut world, &mut recorder);
-    assert_eq!(
-        recorder.events,
-        [(std::any::type_name::<Hit>(), vec![serde_json::json!(7)])]
-    );
+    assert_eq!(recorder.events, [(Hit::NAME, vec![serde_json::json!(7)])]);
 
     world.clear_events();
     assert!(
@@ -152,6 +149,7 @@ fn observer_sees_only_the_commands_that_applied() {
     assert_eq!(recorder.steps[1], format!("after 0 {despawn:?}"));
 }
 
+#[derive(Event)]
 struct Unrepresentable;
 
 impl Serialize for Unrepresentable {

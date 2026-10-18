@@ -3,6 +3,7 @@
 
 extern crate self as ludenea_schema;
 
+pub mod entities;
 mod typescript;
 
 use std::collections::{BTreeMap, BTreeSet};

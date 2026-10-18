@@ -108,7 +108,7 @@ describe("physics plugin", () => {
         return { type: "entity", entity: command.entity, components: { "ludenea::Body": { type: "json", value: { kind: kinds[index] } } } };
       }
       if (command.type === "get_tick_events") {
-        const collision = (kind: string, a: number, b: number) => ({ event_type: "ludenea_physics::events::Collision", value: { kind, a: entity(a), b: entity(b) } });
+        const collision = (kind: string, a: number, b: number) => ({ event_type: "ludenea::Collision", value: { kind, a: entity(a), b: entity(b) } });
         return { type: "tick_events", events: [collision("Begin", 0, 1), { event_type: "my_game::Scored", value: 1 }, collision("End", 2, 4)] };
       }
       return { type: "done" };
