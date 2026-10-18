@@ -165,6 +165,11 @@ function EnumField(props: FieldProps & { schema: Extract<TypeSchema, { kind: "en
             if (next) commit(variantValue(next));
           }}
         >
+          {name === undefined && (
+            <option value="" disabled>
+              Choose a variant
+            </option>
+          )}
           {schema.variants.map((candidate) => (
             <option key={candidate.name}>{candidate.name}</option>
           ))}

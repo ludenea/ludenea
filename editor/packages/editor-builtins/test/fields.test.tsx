@@ -58,9 +58,12 @@ describe("fields", () => {
     expect(edit).toHaveBeenCalledWith([field("shape")], { Capsule: { radius: 0 } });
   });
 
-  it("enum_without_a_value_shows_the_variant_picker", async () => {
+  it("enum_without_a_value_lets_any_variant_be_picked", async () => {
     const { edit } = await show(shape, null, [field("shape")]);
-    act(() => fireEvent.change(screen.getByRole("combobox", { name: "shape" }), { target: { value: "Capsule" } }));
-    expect(edit).toHaveBeenCalledWith([field("shape")], { Capsule: { radius: 0 } });
+    const picker = screen.getByRole("combobox", { name: "shape" }) as HTMLSelectElement;
+    // A placeholder shows instead of the first variant, which can then be picked like the others.
+    expect(picker.selectedOptions[0]?.disabled).toBe(true);
+    act(() => fireEvent.change(picker, { target: { value: "Circle" } }));
+    expect(edit).toHaveBeenCalledWith([field("shape")], { Circle: { center: { x: 0, y: 0 }, radius: 0 } });
   });
 });
