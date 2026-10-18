@@ -129,8 +129,10 @@ body,
   font-size: 15px;
 }
 
+/* The input always has the focus: a subtle accent border marks it instead of the ring. */
 .ludenea-palette input:focus-visible {
   outline: none;
+  border-bottom-color: var(--color-accent);
 }
 
 .ludenea-palette ul {

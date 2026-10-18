@@ -28,10 +28,12 @@ export function CommandPalette({ editor, registry }: { editor: Editor; registry?
   const [query, setQuery] = useState("");
   const [highlighted, setHighlighted] = useState(0);
   const list = useRef<HTMLUListElement>(null);
+  // Where the pointer went down: a drag that starts in the panel and ends outside is no click outside.
+  const pressedOutside = useRef(false);
 
   // Arrow keys move the highlight past the visible part of a long list.
   useEffect(() => {
-    list.current?.children[highlighted]?.scrollIntoView?.({ block: "nearest" });
+    list.current?.children[highlighted]?.scrollIntoView({ block: "nearest" });
   }, [highlighted, open, query]);
 
   useEffect(() => {
@@ -58,15 +60,21 @@ export function CommandPalette({ editor, registry }: { editor: Editor; registry?
   const onKeyDown = (event: ReactKeyboardEvent) => {
     if (event.key === "Escape") setOpen(false);
     else if (event.key === "Enter") run(commands[highlighted]);
-    else if (event.key === "ArrowDown") setHighlighted((index) => Math.min(index + 1, commands.length - 1));
+    else if (event.key === "ArrowDown") setHighlighted((index) => Math.max(0, Math.min(index + 1, commands.length - 1)));
     else if (event.key === "ArrowUp") setHighlighted((index) => Math.max(index - 1, 0));
-    else return;
+    // The input is the dialog's one focusable element: Tab stays in it.
+    else if (event.key !== "Tab") return;
     event.preventDefault();
   };
 
   return (
-    <div className="ludenea-palette-backdrop" data-testid="palette-backdrop" onClick={(event) => event.target === event.currentTarget && setOpen(false)}>
-      <div role="dialog" aria-label="Command palette" className="ludenea-palette">
+    <div
+      className="ludenea-palette-backdrop"
+      data-testid="palette-backdrop"
+      onMouseDown={(event) => (pressedOutside.current = event.target === event.currentTarget)}
+      onClick={(event) => event.target === event.currentTarget && pressedOutside.current && setOpen(false)}
+    >
+      <div role="dialog" aria-modal="true" aria-label="Command palette" className="ludenea-palette">
         <input
           role="combobox"
           aria-expanded

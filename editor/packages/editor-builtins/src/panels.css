@@ -1,555 +1,544 @@
 /* The built-in panels, on the tokens of @ludenea/editor-shell/theme.css. */
-/* Scoped to the dock's panel content, so project plugin panels get the same look and the shell stays untouched. */
-.ludenea-dock .dv-content-container {
-  /* Panel content */
-  .dv-react-part > * {
-    height: 100%;
-  }
-
-  .dv-react-part > p.ludenea-muted {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin: 0;
-    padding: var(--space-4);
-    text-align: center;
-  }
-
-  .ludenea-assets,
-  .ludenea-project,
-  .ludenea-timeline,
-  .ludenea-inspector,
-  .ludenea-console {
-    padding: var(--space-3);
-    overflow: auto;
-  }
-
-  .ludenea-console {
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-  }
-
-  .ludenea-explorer,
-  .ludenea-entities {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-  }
-
-  .ludenea-scene-tree {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-  }
-
-  .ludenea-explorer [role="tabpanel"],
-  .ludenea-entities-list,
-  .ludenea-scene-tree .ludenea-entity-list {
-    flex: 1;
-    min-height: 0;
-  }
-
-  p {
-    margin: var(--space-2) 0;
-  }
-
-  h2 {
-    display: flex;
-    align-items: center;
-    gap: var(--space-3);
-    margin: var(--space-3) 0 var(--space-2);
-    font-size: 14px;
-    font-weight: 600;
-  }
-
-  h3 {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    margin: 0;
-    padding: var(--space-2) var(--space-3);
-    background: var(--color-raised);
-    font-size: var(--font-size);
-    font-weight: 600;
-  }
-
-  h3 button {
-    margin-left: auto;
-  }
-
-  h3 button + button {
-    margin-left: 0;
-  }
-
-  ul,
-  ol {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  /* Text */
-  code,
-  pre,
-  kbd,
-  .ludenea-mono {
-    font-family: var(--font-mono);
-    font-size: 12px;
-  }
-
-  pre {
-    margin: 0;
-  }
-
-  .ludenea-muted {
-    color: var(--color-muted);
-  }
-
-  .ludenea-error {
-    color: var(--color-danger);
-  }
-
-  .ludenea-warning {
-    color: var(--color-warning);
-  }
-
-  .ludenea-link {
-    padding: 0;
-    border: 0;
-    background: none;
-    color: var(--color-accent);
-    font-family: var(--font-mono);
-    font-size: 12px;
-    cursor: pointer;
-  }
-
-  .ludenea-link:hover {
-    text-decoration: underline;
-  }
-
-  [role="status"].ludenea-muted {
-    padding: var(--space-2) var(--space-3);
-    text-align: center;
-  }
-
-  /* Form controls */
-  input,
-  select,
-  button,
-  textarea {
-    font: inherit;
-    color: var(--color-text);
-  }
-
-  input:not([type="checkbox"], [type="radio"], [type="range"]),
-  select {
-    min-width: 0;
-    height: 24px;
-    padding: 0 var(--space-3);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius);
-    background: var(--color-background);
-  }
-
-  input[type="number"],
-  input[aria-label][type="text"] {
-    font-family: var(--font-mono);
-    font-size: 12px;
-  }
-
-  input:read-only {
-    color: var(--color-muted);
-  }
-
-  input[type="checkbox"] {
-    margin: 0;
-    accent-color: var(--color-accent);
-  }
-
-  input[type="range"] {
-    accent-color: var(--color-accent);
-  }
-
-  progress {
-    accent-color: var(--color-accent);
-    vertical-align: middle;
-  }
-
-  button {
-    height: 24px;
-    padding: 0 var(--space-3);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius);
-    background: var(--color-raised);
-    cursor: pointer;
-  }
-
-  button:hover:not(:disabled) {
-    border-color: var(--color-muted);
-  }
-
-  button:disabled {
-    color: var(--color-muted);
-    cursor: default;
-    opacity: 0.6;
-  }
-
-  label {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-3);
-  }
-
-  .ludenea-toolbar {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-2) 0;
-  }
-
-  .ludenea-console .ludenea-toolbar {
-    flex: none;
-    padding: var(--space-2) var(--space-3);
-    border-bottom: 1px solid var(--color-border);
-    gap: var(--space-4);
-  }
-
-  form {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-  }
-
-  form label {
-    display: grid;
-    grid-template-columns: 110px 1fr;
-  }
-
-  form > button {
-    align-self: flex-start;
-  }
-
-  .ludenea-explorer form {
-    padding: var(--space-3) var(--space-3) 0;
-  }
-
-  /* Rows of trees and lists */
-  [role="tree"] [role="treeitem"],
-  [role="listbox"] [role="option"],
-  tbody tr,
-  .ludenea-console-lines li,
-  [aria-label="Recent projects"] li {
-    min-height: var(--row-height);
-  }
-
-  [role="treeitem"],
-  .ludenea-entity-list [role="option"],
-  tbody tr {
-    display: flex;
-    align-items: center;
-    gap: var(--space-3);
-    padding: 0 var(--space-3);
-    cursor: pointer;
-  }
-
-  .ludenea-entity-list [role="option"] {
-    min-height: 0;
-  }
-
-  [role="treeitem"]:hover,
-  .ludenea-entity-list [role="option"]:hover,
-  tbody tr:hover {
-    background: var(--color-hover);
-  }
-
-  [role="treeitem"][aria-selected="true"],
-  .ludenea-entity-list [role="option"][aria-selected="true"] {
-    background: var(--color-selected);
-    box-shadow: inset 2px 0 var(--color-accent);
-  }
-
-  /* Explorer tabs */
-  [role="tablist"] {
-    display: flex;
-    flex: none;
-    gap: var(--space-1);
-    padding: var(--space-2) var(--space-3) 0;
-    border-bottom: 1px solid var(--color-border);
-  }
-
-  [role="tab"] {
-    height: 26px;
-    border: 0;
-    border-bottom: 2px solid transparent;
-    border-radius: 0;
-    background: none;
-    color: var(--color-muted);
-  }
-
-  [role="tab"][aria-selected="true"] {
-    border-bottom-color: var(--color-accent);
-    color: var(--color-text);
-  }
-
-  /* Assets */
-  .ludenea-assets > input[type="search"] {
-    width: 100%;
-    margin-bottom: var(--space-3);
-  }
-
-  .ludenea-assets > input:not([type="search"]) {
-    width: 100%;
-    margin-bottom: var(--space-3);
-  }
-
-  .ludenea-folder {
-    display: block;
-    padding: var(--space-3) var(--space-3) var(--space-2);
-    color: var(--color-muted);
-    font-size: var(--font-size-small);
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-  }
-
-  [role="group"] > [role="treeitem"] {
-    position: relative;
-    padding-left: var(--space-5);
-  }
-
-  .ludenea-open-scene {
-    color: var(--color-accent);
-    font-size: var(--font-size-small);
-  }
-
-  .ludenea-banner {
-    display: flex;
-    align-items: center;
-    gap: var(--space-3);
-    margin-bottom: var(--space-3);
-    padding: var(--space-2) var(--space-3);
-    border: 1px solid var(--color-warning);
-    border-radius: var(--radius);
-    background: rgba(229, 169, 61, 0.14);
-    color: var(--color-warning);
-  }
-
-  .ludenea-banner button:first-of-type {
-    margin-left: auto;
-  }
-
-  .ludenea-confirm {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: var(--space-3);
-    margin-bottom: var(--space-3);
-  }
-
-  [role="menu"] {
-    position: absolute;
-    top: 100%;
-    left: var(--space-5);
-    z-index: 10;
-    display: flex;
-    flex-direction: column;
-    min-width: 120px;
-    padding: var(--space-2);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius);
-    background: var(--color-raised);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  }
-
-  [role="menuitem"] {
-    height: var(--row-height);
-    border: 0;
-    background: none;
-    text-align: left;
-  }
-
-  [role="menuitem"]:hover {
-    background: var(--color-selected);
-  }
-
-  /* Console */
-  .ludenea-console-lines {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-    font-family: var(--font-mono);
-  }
-
-  .ludenea-console-lines li {
-    display: flex;
-    align-items: baseline;
-    gap: var(--space-3);
-    padding: 0 var(--space-3);
-    border-bottom: 1px solid var(--color-hover);
-  }
-
-  .ludenea-console-lines pre {
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-
-  .ludenea-console-error {
-    color: var(--color-danger);
-  }
-
-  .ludenea-console-warning {
-    color: var(--color-warning);
-  }
-
-  .ludenea-console-info {
-    color: var(--color-text);
-  }
-
-  /* Timeline */
-  .ludenea-scrubber {
-    position: relative;
-  }
-
-  .ludenea-scrubber input[type="range"] {
-    display: block;
-    width: 100%;
-    margin: 0;
-  }
-
-  .ludenea-marks {
-    position: relative;
-    height: 12px;
-  }
-
-  .ludenea-marks > span {
-    position: absolute;
-    top: 0;
-    width: 2px;
-    pointer-events: none;
-  }
-
-  .ludenea-mark-checkpoint {
-    height: 50%;
-    background: var(--color-muted);
-  }
-
-  .ludenea-mark-edit {
-    height: 100%;
-    background: var(--color-warning);
-  }
-
-  .ludenea-mark-divergence {
-    height: 100%;
-    background: var(--color-danger);
-  }
-
-  /* Inspector */
-  .ludenea-component {
-    margin-bottom: var(--space-3);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius);
-  }
-
-  .ludenea-component[aria-current="true"] {
-    border-color: var(--color-accent);
-  }
-
-  .ludenea-component > :not(h3) {
-    margin-left: var(--space-3);
-    margin-right: var(--space-3);
-  }
-
-  .ludenea-component > pre {
-    padding: var(--space-3) 0;
-    overflow: auto;
-  }
-
-  .ludenea-field label {
-    display: grid;
-    grid-template-columns: minmax(60px, 110px) minmax(0, 1fr);
-    align-items: center;
-    gap: var(--space-3);
-    width: 100%;
-    min-height: var(--row-height);
-  }
-
-  .ludenea-field label > span {
-    color: var(--color-muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .ludenea-field input[type="checkbox"] {
-    justify-self: start;
-  }
-
-  .ludenea-group {
-    min-width: 0;
-    margin: var(--space-2) 0;
-    padding: 0 0 0 var(--space-3);
-    border: 0;
-    border-left: 1px solid var(--color-border);
-  }
-
-  .ludenea-group legend {
-    padding: 0;
-    color: var(--color-muted);
-    font-size: var(--font-size-small);
-  }
-
-  .ludenea-list-row,
-  .ludenea-option {
-    display: flex;
-    align-items: center;
-    gap: var(--space-3);
-  }
-
-  .ludenea-list-row > :first-child,
-  .ludenea-option > :first-child {
-    flex: 1;
-  }
-
-  .ludenea-add-component {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--space-3);
-    margin: var(--space-3);
-    padding: var(--space-3);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius);
-  }
-
-  /* Schedule table */
-  table {
-    width: 100%;
-    border-collapse: collapse;
-  }
-
-  th {
-    padding: var(--space-2) var(--space-3);
-    color: var(--color-muted);
-    font-size: var(--font-size-small);
-    font-weight: 600;
-    text-align: left;
-    text-transform: uppercase;
-  }
-
-  td {
-    padding: var(--space-2) var(--space-3);
-    vertical-align: top;
-  }
-
-  [aria-label^="Events at"] li,
-  [aria-label^="Commands at"] > li {
-    padding: var(--space-2) var(--space-3);
-  }
-
-  [aria-label="Recent projects"] {
-    margin-top: var(--space-2);
-  }
+/* Scoped to the dock's panel content, so project plugin panels get the same look and the shell stays untouched.
+   Flat selectors, without CSS nesting, for the older webviews the desktop editor runs in. */
+
+/* Panel content */
+.ludenea-dock .dv-content-container .dv-react-part > * {
+  height: 100%;
+}
+
+.ludenea-dock .dv-content-container .dv-react-part > p.ludenea-muted {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: var(--space-4);
+  text-align: center;
+}
+
+.ludenea-dock .dv-content-container .ludenea-assets,
+.ludenea-dock .dv-content-container .ludenea-project,
+.ludenea-dock .dv-content-container .ludenea-timeline,
+.ludenea-dock .dv-content-container .ludenea-inspector {
+  padding: var(--space-3);
+  overflow: auto;
+}
+
+.ludenea-dock .dv-content-container .ludenea-console {
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ludenea-dock .dv-content-container .ludenea-explorer,
+.ludenea-dock .dv-content-container .ludenea-entities,
+.ludenea-dock .dv-content-container .ludenea-scene-tree {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.ludenea-dock .dv-content-container .ludenea-explorer [role="tabpanel"],
+.ludenea-dock .dv-content-container .ludenea-entities-list,
+.ludenea-dock .dv-content-container .ludenea-scene-tree .ludenea-entity-list {
+  flex: 1;
+  min-height: 0;
+}
+
+.ludenea-dock .dv-content-container p {
+  margin: var(--space-2) 0;
+}
+
+.ludenea-dock .dv-content-container h2 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-3) 0 var(--space-2);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.ludenea-dock .dv-content-container h3 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-raised);
+  font-size: var(--font-size);
+  font-weight: 600;
+}
+
+.ludenea-dock .dv-content-container h3 button {
+  margin-left: auto;
+}
+
+.ludenea-dock .dv-content-container h3 button + button {
+  margin-left: 0;
+}
+
+.ludenea-dock .dv-content-container ul,
+.ludenea-dock .dv-content-container ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Text */
+.ludenea-dock .dv-content-container code,
+.ludenea-dock .dv-content-container pre,
+.ludenea-dock .dv-content-container kbd,
+.ludenea-dock .dv-content-container .ludenea-mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.ludenea-dock .dv-content-container pre {
+  margin: 0;
+}
+
+.ludenea-dock .dv-content-container .ludenea-muted {
+  color: var(--color-muted);
+}
+
+.ludenea-dock .dv-content-container .ludenea-error {
+  color: var(--color-danger);
+}
+
+.ludenea-dock .dv-content-container .ludenea-warning {
+  color: var(--color-warning);
+}
+
+.ludenea-dock .dv-content-container .ludenea-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ludenea-dock .dv-content-container .ludenea-link:hover {
+  text-decoration: underline;
+}
+
+.ludenea-dock .dv-content-container [role="status"].ludenea-muted {
+  padding: var(--space-2) var(--space-3);
+  text-align: center;
+}
+
+/* Form controls */
+.ludenea-dock .dv-content-container input,
+.ludenea-dock .dv-content-container select,
+.ludenea-dock .dv-content-container button,
+.ludenea-dock .dv-content-container textarea {
+  font: inherit;
+  color: var(--color-text);
+}
+
+.ludenea-dock .dv-content-container input:not([type="checkbox"], [type="radio"], [type="range"]),
+.ludenea-dock .dv-content-container select {
+  min-width: 0;
+  height: 24px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-background);
+}
+
+.ludenea-dock .dv-content-container input[type="number"],
+.ludenea-dock .dv-content-container input[aria-label][type="text"] {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.ludenea-dock .dv-content-container input:read-only {
+  color: var(--color-muted);
+}
+
+.ludenea-dock .dv-content-container input[type="checkbox"] {
+  margin: 0;
+  accent-color: var(--color-accent);
+}
+
+.ludenea-dock .dv-content-container input[type="range"] {
+  accent-color: var(--color-accent);
+}
+
+.ludenea-dock .dv-content-container progress {
+  accent-color: var(--color-accent);
+  vertical-align: middle;
+}
+
+.ludenea-dock .dv-content-container button {
+  height: 24px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-raised);
+  cursor: pointer;
+}
+
+.ludenea-dock .dv-content-container button:hover:not(:disabled) {
+  border-color: var(--color-muted);
+}
+
+.ludenea-dock .dv-content-container button:disabled {
+  color: var(--color-muted);
+  cursor: default;
+  opacity: 0.6;
+}
+
+.ludenea-dock .dv-content-container label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.ludenea-dock .dv-content-container .ludenea-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+}
+
+.ludenea-dock .dv-content-container .ludenea-console .ludenea-toolbar {
+  flex: none;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  gap: var(--space-4);
+}
+
+.ludenea-dock .dv-content-container form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.ludenea-dock .dv-content-container form label {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+}
+
+.ludenea-dock .dv-content-container form > button {
+  align-self: flex-start;
+}
+
+.ludenea-dock .dv-content-container .ludenea-explorer form {
+  padding: var(--space-3) var(--space-3) 0;
+}
+
+/* Rows of trees and lists */
+.ludenea-dock .dv-content-container [role="tree"] [role="treeitem"],
+.ludenea-dock .dv-content-container [role="listbox"] [role="option"],
+.ludenea-dock .dv-content-container tbody tr,
+.ludenea-dock .dv-content-container .ludenea-console-lines li,
+.ludenea-dock .dv-content-container [aria-label="Recent projects"] li {
+  min-height: var(--row-height);
+}
+
+.ludenea-dock .dv-content-container [role="treeitem"],
+.ludenea-dock .dv-content-container .ludenea-entity-list [role="option"],
+.ludenea-dock .dv-content-container tbody tr {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-3);
+  cursor: pointer;
+}
+
+.ludenea-dock .dv-content-container .ludenea-entity-list [role="option"] {
+  min-height: 0;
+}
+
+.ludenea-dock .dv-content-container [role="treeitem"]:hover,
+.ludenea-dock .dv-content-container .ludenea-entity-list [role="option"]:hover,
+.ludenea-dock .dv-content-container tbody tr:hover {
+  background: var(--color-hover);
+}
+
+.ludenea-dock .dv-content-container [role="treeitem"][aria-selected="true"],
+.ludenea-dock .dv-content-container .ludenea-entity-list [role="option"][aria-selected="true"] {
+  background: var(--color-selected);
+  box-shadow: inset 2px 0 var(--color-accent);
+}
+
+/* Explorer tabs */
+.ludenea-dock .dv-content-container [role="tablist"] {
+  display: flex;
+  flex: none;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.ludenea-dock .dv-content-container [role="tab"] {
+  height: 26px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  color: var(--color-muted);
+}
+
+.ludenea-dock .dv-content-container [role="tab"][aria-selected="true"] {
+  border-bottom-color: var(--color-accent);
+  color: var(--color-text);
+}
+
+/* Assets */
+.ludenea-dock .dv-content-container .ludenea-assets > input {
+  width: 100%;
+  margin-bottom: var(--space-3);
+}
+
+.ludenea-dock .dv-content-container .ludenea-folder {
+  display: block;
+  padding: var(--space-3) var(--space-3) var(--space-2);
+  color: var(--color-muted);
+  font-size: var(--font-size-small);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.ludenea-dock .dv-content-container [role="group"] > [role="treeitem"] {
+  position: relative;
+  padding-left: var(--space-5);
+}
+
+.ludenea-dock .dv-content-container .ludenea-open-scene {
+  color: var(--color-accent);
+  font-size: var(--font-size-small);
+}
+
+.ludenea-dock .dv-content-container .ludenea-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius);
+  background: rgba(229, 169, 61, 0.14);
+  color: var(--color-warning);
+}
+
+.ludenea-dock .dv-content-container .ludenea-banner button:first-of-type {
+  margin-left: auto;
+}
+
+.ludenea-dock .dv-content-container .ludenea-confirm {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.ludenea-dock .dv-content-container [role="menu"] {
+  position: absolute;
+  top: 100%;
+  left: var(--space-5);
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  min-width: 120px;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-raised);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.ludenea-dock .dv-content-container [role="menuitem"] {
+  height: var(--row-height);
+  border: 0;
+  background: none;
+  text-align: left;
+}
+
+.ludenea-dock .dv-content-container [role="menuitem"]:hover {
+  background: var(--color-selected);
+}
+
+/* Console */
+.ludenea-dock .dv-content-container .ludenea-console-lines {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  font-family: var(--font-mono);
+}
+
+.ludenea-dock .dv-content-container .ludenea-console-lines li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--color-hover);
+}
+
+.ludenea-dock .dv-content-container .ludenea-console-lines pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ludenea-dock .dv-content-container .ludenea-console-error {
+  color: var(--color-danger);
+}
+
+.ludenea-dock .dv-content-container .ludenea-console-warning {
+  color: var(--color-warning);
+}
+
+.ludenea-dock .dv-content-container .ludenea-console-info {
+  color: var(--color-text);
+}
+
+/* Timeline */
+.ludenea-dock .dv-content-container .ludenea-scrubber {
+  position: relative;
+}
+
+.ludenea-dock .dv-content-container .ludenea-scrubber input[type="range"] {
+  display: block;
+  width: 100%;
+  margin: 0;
+}
+
+.ludenea-dock .dv-content-container .ludenea-marks {
+  position: relative;
+  height: 12px;
+}
+
+.ludenea-dock .dv-content-container .ludenea-marks > span {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  pointer-events: none;
+}
+
+.ludenea-dock .dv-content-container .ludenea-mark-checkpoint {
+  height: 50%;
+  background: var(--color-muted);
+}
+
+.ludenea-dock .dv-content-container .ludenea-mark-edit {
+  height: 100%;
+  background: var(--color-warning);
+}
+
+.ludenea-dock .dv-content-container .ludenea-mark-divergence {
+  height: 100%;
+  background: var(--color-danger);
+}
+
+/* Inspector */
+.ludenea-dock .dv-content-container .ludenea-component {
+  margin-bottom: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.ludenea-dock .dv-content-container .ludenea-component[aria-current="true"] {
+  border-color: var(--color-accent);
+}
+
+.ludenea-dock .dv-content-container .ludenea-component > :not(h3) {
+  margin-left: var(--space-3);
+  margin-right: var(--space-3);
+}
+
+.ludenea-dock .dv-content-container .ludenea-component > pre {
+  padding: var(--space-3) 0;
+  overflow: auto;
+}
+
+.ludenea-dock .dv-content-container .ludenea-field label {
+  display: grid;
+  grid-template-columns: minmax(60px, 110px) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: var(--row-height);
+}
+
+.ludenea-dock .dv-content-container .ludenea-field label > span {
+  color: var(--color-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ludenea-dock .dv-content-container .ludenea-field input[type="checkbox"] {
+  justify-self: start;
+}
+
+.ludenea-dock .dv-content-container .ludenea-group {
+  min-width: 0;
+  margin: var(--space-2) 0;
+  padding: 0 0 0 var(--space-3);
+  border: 0;
+  border-left: 1px solid var(--color-border);
+}
+
+.ludenea-dock .dv-content-container .ludenea-group legend {
+  padding: 0;
+  color: var(--color-muted);
+  font-size: var(--font-size-small);
+}
+
+.ludenea-dock .dv-content-container .ludenea-list-row,
+.ludenea-dock .dv-content-container .ludenea-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.ludenea-dock .dv-content-container .ludenea-list-row > :first-child,
+.ludenea-dock .dv-content-container .ludenea-option > :first-child {
+  flex: 1;
+}
+
+.ludenea-dock .dv-content-container .ludenea-add-component {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+/* Schedule table */
+.ludenea-dock .dv-content-container table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.ludenea-dock .dv-content-container th {
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-muted);
+  font-size: var(--font-size-small);
+  font-weight: 600;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.ludenea-dock .dv-content-container td {
+  padding: var(--space-2) var(--space-3);
+  vertical-align: top;
+}
+
+.ludenea-dock .dv-content-container [aria-label^="Events at"] li,
+.ludenea-dock .dv-content-container [aria-label^="Commands at"] > li {
+  padding: var(--space-2) var(--space-3);
+}
+
+.ludenea-dock .dv-content-container [aria-label="Recent projects"] {
+  margin-top: var(--space-2);
 }

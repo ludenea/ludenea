@@ -42,18 +42,46 @@ describe("command palette and shortcuts", () => {
     fireEvent.keyDown(window, { key: "k", ctrlKey: true });
     fireEvent.click(screen.getByRole("combobox"));
     expect(screen.getByRole("dialog")).toBeTruthy();
+    // A drag that selects the query text and ends outside the panel is not a click outside.
+    fireEvent.mouseDown(screen.getByRole("combobox"));
+    fireEvent.click(screen.getByTestId("palette-backdrop"));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    fireEvent.mouseDown(screen.getByTestId("palette-backdrop"));
     fireEvent.click(screen.getByTestId("palette-backdrop"));
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("palette_is_modal_and_keeps_the_focus", async () => {
+    const { editor } = await testHost();
+    render(<CommandPalette editor={editor} />);
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+
+    expect(screen.getByRole("dialog").getAttribute("aria-modal")).toBe("true");
+    expect(fireEvent.keyDown(screen.getByRole("combobox"), { key: "Tab" })).toBe(false);
+    expect(fireEvent.keyDown(screen.getByRole("combobox"), { key: "Tab", shiftKey: true })).toBe(false);
+  });
+
+  it("arrow_down_without_results_keeps_the_first_row_highlighted", async () => {
+    const { editor } = await testHost();
+    const run = vi.fn();
+    const { rerender } = render(<CommandPalette editor={editor} />);
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "zzz" } });
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "ArrowDown" });
+
+    editor.commands.register({ id: "zzz", title: "Zzz", run });
+    rerender(<CommandPalette editor={editor} />);
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
+    expect(run).toHaveBeenCalledOnce();
   });
 
   it("palette_points_at_the_highlighted_option_and_keeps_it_in_view", async () => {
     const { editor } = await testHost();
     for (const title of ["Alpha", "Beta", "Gamma"]) editor.commands.register({ id: title, title, run: () => {} });
     const scrolled: string[] = [];
-    const scrollIntoView = vi.fn(function (this: Element) {
+    const scrollIntoView = vi.mocked(Element.prototype.scrollIntoView).mockImplementation(function (this: Element) {
       scrolled.push(this.textContent ?? "");
     });
-    Element.prototype.scrollIntoView = scrollIntoView;
     render(<CommandPalette editor={editor} />);
 
     fireEvent.keyDown(window, { key: "k", ctrlKey: true });
