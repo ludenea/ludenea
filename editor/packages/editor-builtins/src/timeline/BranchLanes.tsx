@@ -21,10 +21,9 @@ const at = (tick: number, scale: number) => `${(tick / scale) * 100}%`;
 // What the lanes show, as a string: a playing game sends a new timeline every tick, with the same branches.
 const laneKey = ({ list, current, compare }: BranchState) => JSON.stringify([list, current, compare]);
 
-/** One lane per branch, each under its parent, from its fork point to its last recorded tick; clicking one switches to it. */
+/** One lane per branch, each under its parent, from its fork point to its last recorded tick, with its edits; clicking one switches to it. */
 export const BranchLanes = memo(function BranchLanes({ editor, onError }: { editor: Editor; onError?: (error: string) => void }) {
   editor.branches(laneKey);
-  const editTicks = editor.timeline((state) => state.timeline?.edit_ticks.join(" ") ?? "");
   const { list, current, compare } = editor.branches.getState();
   const scale = Math.max(1, ...list.map((branch) => branch.head));
   const ordered = list.filter((branch) => branch.parent === null).flatMap((root) => [root, ...descendants(list, root.id)]);
@@ -34,7 +33,6 @@ export const BranchLanes = memo(function BranchLanes({ editor, onError }: { edit
   return (
     <ul aria-label="Branches" className="ludenea-lanes">
       {ordered.map((branch) => {
-        const edits = branch.id === current && editTicks ? editTicks.split(" ").map(Number).filter((tick) => tick >= branch.fork_tick) : [];
         return (
           <li key={branch.id}>
             <button aria-current={branch.id === current} onClick={() => switchTo(branch.id)}>
@@ -51,7 +49,7 @@ export const BranchLanes = memo(function BranchLanes({ editor, onError }: { edit
                     style={{ left: at(branch.fork_tick, scale) }}
                   />
                 )}
-                {edits.map((tick) => (
+                {branch.edit_ticks.map((tick) => (
                   <span key={tick} aria-label={`${branch.name} edit at tick ${tick}`} title={`Edit at tick ${tick}`} className="ludenea-mark-edit" style={{ left: at(tick, scale) }} />
                 ))}
               </span>

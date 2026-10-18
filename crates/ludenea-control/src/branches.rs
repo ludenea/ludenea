@@ -40,6 +40,8 @@ pub struct BranchInfo {
     pub head: u64,
     /// Recorded before a scene edit or a rebuild: resimulated when switched to.
     pub stale: bool,
+    /// The ticks of the edits the branch recorded from its fork point on, ascending.
+    pub edit_ticks: Vec<u64>,
 }
 
 /// What a branch records after its fork point.
@@ -346,19 +348,35 @@ impl BranchTree {
         }
     }
 
-    pub fn infos(&self, current_head: u64) -> Vec<BranchInfo> {
+    /// The branches as the timeline shows them; the current one's run is `current_head` and
+    /// `current_edits`.
+    pub fn infos(&self, current_head: u64, current_edits: &EditLog) -> Vec<BranchInfo> {
         self.branches
             .iter()
-            .map(|(&id, branch)| BranchInfo {
-                id,
-                name: branch.name.clone(),
-                parent: branch.parent,
-                fork_tick: branch.fork_tick,
-                head: branch
-                    .segment
-                    .as_ref()
-                    .map_or(current_head, |segment| segment.head(branch.fork_tick)),
-                stale: branch.stale.is_some(),
+            .map(|(&id, branch)| {
+                let own = match &branch.segment {
+                    Some(segment) => &segment.edits[..],
+                    None => {
+                        let log = &current_edits.edits;
+                        let end = log.partition_point(|edit| edit.tick <= branch.fork_tick);
+                        let first = log.partition_point(|edit| edit.tick < branch.fork_tick);
+                        &log[(first + branch.fork_edits).min(end)..]
+                    }
+                };
+                let mut edit_ticks: Vec<u64> = own.iter().map(|edit| edit.tick).collect();
+                edit_ticks.dedup();
+                BranchInfo {
+                    id,
+                    name: branch.name.clone(),
+                    parent: branch.parent,
+                    fork_tick: branch.fork_tick,
+                    head: branch
+                        .segment
+                        .as_ref()
+                        .map_or(current_head, |segment| segment.head(branch.fork_tick)),
+                    stale: branch.stale.is_some(),
+                    edit_ticks,
+                }
             })
             .collect()
     }

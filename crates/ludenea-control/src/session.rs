@@ -1365,7 +1365,7 @@ impl Session {
     }
 
     pub fn branches(&self) -> Vec<BranchInfo> {
-        self.tree.infos(self.head)
+        self.tree.infos(self.head, &self.edits)
     }
 
     /// The current branch, or the branch a switch goes to while its ancestors resimulate.

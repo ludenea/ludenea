@@ -10,10 +10,10 @@ import { renderPanel, settle, testEditor, testGame } from "./support";
 type Message = { type: string; [key: string]: unknown };
 
 const branches: BranchInfo[] = [
-  { id: 0, name: "Branch 1", parent: null, fork_tick: 0, head: 600, stale: false },
-  { id: 1, name: "Branch 2", parent: 0, fork_tick: 300, head: 500, stale: false },
-  { id: 2, name: "Branch 3", parent: 1, fork_tick: 400, head: 450, stale: true },
-  { id: 3, name: "Branch 4", parent: 0, fork_tick: 100, head: 200, stale: false },
+  { id: 0, name: "Branch 1", parent: null, fork_tick: 0, head: 600, stale: false, edit_ticks: [] },
+  { id: 1, name: "Branch 2", parent: 0, fork_tick: 300, head: 500, stale: false, edit_ticks: [300, 320] },
+  { id: 2, name: "Branch 3", parent: 1, fork_tick: 400, head: 450, stale: true, edit_ticks: [400] },
+  { id: 3, name: "Branch 4", parent: 0, fork_tick: 100, head: 200, stale: false, edit_ticks: [100, 150] },
 ];
 const timeline = (patch: Partial<Timeline> = {}): Timeline => ({
   head: 500,
@@ -65,8 +65,11 @@ describe("branches", () => {
     expect(screen.getByLabelText("Branch 3 forks at tick 400")).toBeTruthy();
     expect(screen.getByLabelText("Branch 4 forks at tick 100")).toBeTruthy();
     expect(screen.queryByLabelText(/^Branch 1 forks/)).toBeNull();
-    // Edit markers on the current lane.
+    // Edit markers on every lane, the current one and the others.
     expect(screen.getByLabelText("Branch 2 edit at tick 320")).toBeTruthy();
+    expect(screen.getByLabelText("Branch 4 edit at tick 150")).toBeTruthy();
+    expect(screen.getByLabelText("Branch 3 edit at tick 400")).toBeTruthy();
+    expect(screen.queryByLabelText(/^Branch 1 edit/)).toBeNull();
     expect(within(lane("Branch 2")).getByRole("button").getAttribute("aria-current")).toBe("true");
     expect(lane("Branch 1").textContent).toContain("compare");
     expect(lane("Branch 3").textContent).toContain("stale");

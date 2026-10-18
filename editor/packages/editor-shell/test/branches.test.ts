@@ -9,8 +9,8 @@ describe("branch store", () => {
     const game = await testGame((command) => (command.type === "delete_branch" ? { type: "deleted", branches: [2, 3] } : { type: "done" }));
     host.setControl(game.control);
     const branches = [
-      { id: 0, name: "main", parent: null, fork_tick: 0, head: 9, stale: false },
-      { id: 2, name: "Branch 3", parent: 0, fork_tick: 4, head: 9, stale: true },
+      { id: 0, name: "main", parent: null, fork_tick: 0, head: 9, stale: false, edit_ticks: [] },
+      { id: 2, name: "Branch 3", parent: 0, fork_tick: 4, head: 9, stale: true, edit_ticks: [4] },
     ];
 
     game.push({ type: "timeline_changed", timeline: { ...timeline(4), branch: 2, branches, compare: 0 } });

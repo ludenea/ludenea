@@ -23,7 +23,7 @@ const timeline = (patch: Partial<Timeline> = {}): Timeline => ({
   scene_dirty: false,
   resimulating: false,
   branch: 0,
-  branches: [{ id: 0, name: "Branch 1", parent: null, fork_tick: 0, head: 100, stale: false }],
+  branches: [{ id: 0, name: "Branch 1", parent: null, fork_tick: 0, head: 100, stale: false, edit_ticks: [20] }],
   compare: null,
   ...patch,
 });

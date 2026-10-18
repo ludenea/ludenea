@@ -482,6 +482,7 @@ fn every_command_and_reply_round_trips_through_json() {
             fork_tick: 2,
             head: 9,
             stale: false,
+            edit_ticks: vec![2],
         }],
         compare: Some(BranchId(0)),
     };

@@ -143,6 +143,7 @@ fn past_edit_forks_and_keeps_parent_future() {
             fork_tick: 150,
             head: 150,
             stale: false,
+            edit_ticks: vec![150],
         }
     );
     let timeline = session.timeline();
@@ -157,6 +158,9 @@ fn past_edit_forks_and_keeps_parent_future() {
     assert_eq!(hashes(&session), before);
     assert!(edits(&session).is_empty());
     assert_eq!(session.timeline().head, 399);
+    // A branch that is not the current one still shows its edits.
+    assert_eq!(branch(&session, child).edit_ticks, vec![150]);
+    assert_eq!(branch(&session, ROOT).edit_ticks, Vec::<u64>::new());
 }
 
 #[test]

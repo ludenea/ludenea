@@ -12,4 +12,8 @@ head: number,
 /**
  * Recorded before a scene edit or a rebuild: resimulated when switched to.
  */
-stale: boolean, };
+stale: boolean, 
+/**
+ * The ticks of the edits the branch recorded from its fork point on, ascending.
+ */
+edit_ticks: Array<number>, };

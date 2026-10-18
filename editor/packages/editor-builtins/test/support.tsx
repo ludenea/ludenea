@@ -54,7 +54,7 @@ export const settle = () => act(() => new Promise<void>((resolve) => setTimeout(
 
 /** Sets what the game's timeline reports about unsaved scene edits. */
 export function setSceneDirty(host: EditorHost, sceneDirty: boolean) {
-  const timeline = { head: 0, simulated: 0, current: 0, checkpoints: [], edit_ticks: [], can_undo: false, can_redo: false, undo_label: null, redo_label: null, resimulating: false, branch: 0, branches: [{ id: 0, name: "Branch 1", parent: null, fork_tick: 0, head: 0, stale: false }], compare: null };
+  const timeline = { head: 0, simulated: 0, current: 0, checkpoints: [], edit_ticks: [], can_undo: false, can_redo: false, undo_label: null, redo_label: null, resimulating: false, branch: 0, branches: [{ id: 0, name: "Branch 1", parent: null, fork_tick: 0, head: 0, stale: false, edit_ticks: [] }], compare: null };
   act(() => host.editor.timeline.setState({ timeline: { ...timeline, scene_dirty: sceneDirty } }));
 }
 
