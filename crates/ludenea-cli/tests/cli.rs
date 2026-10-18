@@ -563,6 +563,29 @@ fn undecodable_input_log_is_named() {
 }
 
 #[test]
+fn undecodable_edit_log_is_named() {
+    let dir = dir("undecodable_edits");
+    fs::write(dir.join("edits.bin"), [0xff, 0xff]).unwrap();
+    let (code, out) = cli(
+        &dir,
+        &[
+            "run",
+            "{}/scene.ron",
+            "--edits",
+            "{}/edits.bin",
+            "--ticks",
+            "1",
+        ],
+    );
+    assert_eq!(code, 2);
+    let path = dir.join("edits.bin");
+    assert!(
+        out.contains(&format!("cannot decode {}", path.display())),
+        "{out}"
+    );
+}
+
+#[test]
 fn verifying_a_replay_refuses_run_definition_options() {
     let dir = dir("replay_options");
     record_replay(&dir);

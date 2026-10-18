@@ -190,11 +190,21 @@ mod tests {
         put(&prefab, "Prefab(version: 1)");
         meta(&prefab, 7, "Prefab");
         std::os::unix::fs::symlink(&folder, folder.join("nested/loop")).unwrap();
-        std::os::unix::fs::symlink(&prefab, folder.join("linked.prefab.ron")).unwrap();
+        // A link to a file is kept: with a meta of its own, it is an asset.
+        let (_outside_guard, outside) = dir();
+        let target = outside.join("far.prefab.ron");
+        put(&target, "Prefab(version: 1, next_id: 0)");
+        let linked = folder.join("linked.prefab.ron");
+        std::os::unix::fs::symlink(&target, &linked).unwrap();
+        meta(&linked, 8, "Prefab");
         let assets = project_assets(&scene, None).unwrap();
         assert_eq!(
             assets.texts.keys().copied().collect::<Vec<_>>(),
-            [AssetId(7)]
+            [AssetId(7), AssetId(8)]
+        );
+        assert_eq!(
+            assets.text(AssetId(8)),
+            Some("Prefab(version: 1, next_id: 0)")
         );
     }
 }
