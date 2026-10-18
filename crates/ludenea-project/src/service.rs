@@ -238,10 +238,10 @@ impl ProjectService {
                 for event in self.project()?.bundle_plugins() {
                     match event {
                         PluginEvent::Rebuilt(bundle) => plugins.push(bundle),
-                        PluginEvent::Failed { name, diagnostics } => {
-                            let _ = self
-                                .events
-                                .send(ProjectEvent::PluginFailed { name, diagnostics });
+                        other => {
+                            for event in plugin_events(other) {
+                                let _ = self.events.send(event);
+                            }
                         }
                     }
                 }
@@ -329,8 +329,8 @@ impl ProjectService {
         });
         let events = self.events.clone();
         forward_while_open(&opened.alive, plugins, move |batch| {
-            for event in batch {
-                let _ = events.send(plugin_event(event));
+            for event in batch.into_iter().flat_map(plugin_events) {
+                let _ = events.send(event);
             }
         });
         self.build(&opened);
@@ -415,12 +415,26 @@ fn forward_while_open<T: Send + 'static>(
     });
 }
 
-fn plugin_event(event: PluginEvent) -> ProjectEvent {
+/// A plugin event for the editor: its warnings become one console warning each.
+fn plugin_events(event: PluginEvent) -> Vec<ProjectEvent> {
     match event {
-        PluginEvent::Rebuilt(bundle) => ProjectEvent::PluginRebuilt(bundle),
+        PluginEvent::Rebuilt(bundle) => vec![ProjectEvent::PluginRebuilt(bundle)],
         PluginEvent::Failed { name, diagnostics } => {
-            ProjectEvent::PluginFailed { name, diagnostics }
+            vec![ProjectEvent::PluginFailed { name, diagnostics }]
         }
+        PluginEvent::Warnings { name, diagnostics } => diagnostics
+            .into_iter()
+            .map(|diagnostic| {
+                let place = match (&diagnostic.file, diagnostic.line) {
+                    (Some(file), Some(line)) => format!(" ({file}:{line})"),
+                    (Some(file), None) => format!(" ({file})"),
+                    _ => String::new(),
+                };
+                ProjectEvent::Warning {
+                    message: format!("plugin {name}{place}: {}", diagnostic.message),
+                }
+            })
+            .collect(),
     }
 }
 

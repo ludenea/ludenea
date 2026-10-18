@@ -57,10 +57,12 @@ ludenea-cli = { path = "crates/ludenea-cli" }
 ludenea = { path = "crates/ludenea" }
 ludenea-project = { path = "crates/ludenea-project" }
 
-# rolldown_common 1.2.14 from crates.io with one change: its serde_json dependency no longer
-# requests the `arbitrary_precision` feature. Cargo unifies features, so that feature reached
-# every serde_json in builds that include ludenea-project and broke deserializing numbers inside
-# internally tagged protocol enums. Drop the patch once upstream makes the feature optional.
+# rolldown_common 1.2.14 from crates.io with its serde_json dependency no longer requesting the
+# `arbitrary_precision` feature. Cargo unifies features, so that feature reached every
+# serde_json in builds that include ludenea-project and broke deserializing numbers inside
+# internally tagged protocol enums. Without the feature, `json_to_program.rs` reads JSON numbers
+# with `as_f64` instead of `as_str`, and its inline test of numbers beyond f64 (which only parse
+# with the feature) is deleted. Drop the patch once upstream makes the feature optional.
 #
 # ron 0.12.2 from crates.io with one change: when it parses a number without knowing its type
 # (`RawValue`, which scenes use), it no longer searches the whole rest of the document for

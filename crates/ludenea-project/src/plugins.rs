@@ -1,20 +1,23 @@
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::{fs, io, thread};
 
-use cargo_metadata::MetadataCommand;
+use cargo_metadata::{Metadata, MetadataCommand};
+use notify::event::{AccessKind, AccessMode};
 use notify::{Event, EventKind, RecursiveMode};
 use notify_debouncer_full::new_debouncer;
 use rolldown::{
     Bundler, BundlerOptions, BundlerTransformOptions, CodeSplittingMode, Either, JsxOptions,
     OutputFormat, Platform, TsConfig,
 };
-use rolldown_common::Output;
+use rolldown_common::{Output, ResolvedExternal};
 use rolldown_error::{BuildDiagnostic, DiagnosticOptions, Severity};
-use rolldown_plugin::{HookResolveIdArgs, HookResolveIdReturn, HookUsage, Plugin, PluginContext};
+use rolldown_plugin::{
+    HookResolveIdArgs, HookResolveIdOutput, HookResolveIdReturn, HookUsage, Plugin, PluginContext,
+};
 use serde::{Deserialize, Serialize};
 use xxhash_rust::xxh3::xxh3_64;
 
@@ -29,6 +32,9 @@ const SHARED_MODULES: [&str; 4] = [
     "@ludenea/control-client",
 ];
 const ENTRY_FILES: [&str; 2] = ["index.ts", "index.tsx"];
+/// What a plugin may import besides the shared modules: no styles, images, or other assets,
+/// which the editor would never load.
+const SCRIPT_EXTENSIONS: [&str; 9] = ["js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts", "json"];
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export_to = "project/"))]
@@ -54,9 +60,16 @@ pub enum PluginEvent {
         name: String,
         diagnostics: Vec<Diagnostic>,
     },
+    /// Worth telling the user about a plugin that bundled (rolldown's warnings) or about a
+    /// crate whose plugins cannot be looked for.
+    Warnings {
+        name: String,
+        diagnostics: Vec<Diagnostic>,
+    },
 }
 
-/// A crate's `editor/` directory holding `index.ts` or `index.tsx`.
+/// A crate's `editor/` directory, holding `index.ts` or `index.tsx` (the project's may not
+/// exist yet).
 struct Entry {
     name: String,
     source: PluginSource,
@@ -69,8 +82,8 @@ impl Project {
     /// loading. If the plugins cannot be listed, the only event is a failure of the project's.
     /// An entry is `editor/index.ts` or `editor/index.tsx`; `index.ts` wins when both exist.
     pub fn bundle_plugins(&self) -> Vec<PluginEvent> {
-        let entries = match self.plugin_entries() {
-            Ok(entries) => entries,
+        let (entries, mut events) = match self.plugin_entries() {
+            Ok(listed) => listed,
             Err(diagnostic) => {
                 return vec![PluginEvent::Failed {
                     name: self.manifest.name.clone(),
@@ -78,16 +91,22 @@ impl Project {
                 }];
             }
         };
-        entries
+        for entry in entries
             .iter()
-            .map(|entry| match bundle(&self.root, entry) {
-                Ok(bundle) => PluginEvent::Rebuilt(bundle),
-                Err(diagnostics) => PluginEvent::Failed {
+            .filter(|entry| entry_file(&entry.directory).is_some())
+        {
+            match bundle(&self.root, entry) {
+                Ok((bundle, warnings)) => {
+                    events.push(PluginEvent::Rebuilt(bundle));
+                    events.extend(warnings_of(&entry.name, warnings));
+                }
+                Err(diagnostics) => events.push(PluginEvent::Failed {
                     name: entry.name.clone(),
                     diagnostics,
-                },
-            })
-            .collect()
+                }),
+            }
+        }
+        events
     }
 
     /// Rebundles a plugin whenever a file of its `editor/` directory changes, until the watch
@@ -96,18 +115,27 @@ impl Project {
     pub fn watch_plugins(&self) -> Watch<PluginEvent> {
         let (watch, sender, dropped) = Watch::new();
         let (raw_sender, raw_receiver) = mpsc::channel();
-        // ponytail: the plugin list is read once; a dependency added later needs a new watch.
-        let watched = self.plugin_entries().and_then(|entries| {
-            let mut debouncer = new_debouncer(WATCH_DEBOUNCE, None, raw_sender)
-                .map_err(|error| error_diagnostic(format!("cannot watch plugins: {error}")))?;
+        // ponytail: the dependencies are listed once; a dependency added later needs a new
+        // watch. The project's own `editor/` is watched for even before it exists.
+        let watched = self.plugin_entries().and_then(|(entries, _)| {
+            let cannot = |error| error_diagnostic(format!("cannot watch plugins: {error}"));
+            let mut debouncer = new_debouncer(WATCH_DEBOUNCE, None, raw_sender).map_err(cannot)?;
+            let mut recursive = BTreeSet::new();
             for entry in &entries {
-                debouncer
-                    .watch(&entry.directory, RecursiveMode::Recursive)
-                    .map_err(|error| error_diagnostic(format!("cannot watch plugins: {error}")))?;
+                if entry.directory.is_dir() {
+                    debouncer
+                        .watch(&entry.directory, RecursiveMode::Recursive)
+                        .map_err(cannot)?;
+                    recursive.insert(entry.directory.clone());
+                } else if let Some(parent) = entry.directory.parent() {
+                    debouncer
+                        .watch(parent, RecursiveMode::NonRecursive)
+                        .map_err(cannot)?;
+                }
             }
-            Ok((entries, debouncer))
+            Ok((entries, debouncer, recursive))
         });
-        let (entries, debouncer) = match watched {
+        let (entries, mut debouncer, mut recursive) = match watched {
             Ok(watched) => watched,
             Err(diagnostic) => {
                 let _ = sender.send(PluginEvent::Failed {
@@ -120,31 +148,46 @@ impl Project {
         let root = self.root.clone();
         // The thread owns the debouncer, which stops watching when it is dropped.
         thread::spawn(move || {
-            let _debouncer = debouncer;
             // The last bundle announced per plugin, so an unchanged rebuild stays silent.
             let mut announced: BTreeMap<String, String> = BTreeMap::new();
             while let Some(batch) = next_raw(&raw_receiver, &dropped) {
                 let Ok(events) = batch else { continue };
                 for entry in changed_entries(&entries, events.iter().map(|event| &event.event)) {
-                    let event = match bundle(&root, entry) {
-                        Ok(bundle) => {
+                    // An `editor/` created after watching started.
+                    if entry.directory.is_dir()
+                        && !recursive.contains(&entry.directory)
+                        && debouncer
+                            .watch(&entry.directory, RecursiveMode::Recursive)
+                            .is_ok()
+                    {
+                        recursive.insert(entry.directory.clone());
+                    }
+                    if entry_file(&entry.directory).is_none() {
+                        continue;
+                    }
+                    let events = match bundle(&root, entry) {
+                        Ok((bundle, warnings)) => {
                             if announced.get(&bundle.name) == Some(&bundle.url_path) {
                                 continue;
                             }
                             announced.insert(bundle.name.clone(), bundle.url_path.clone());
-                            PluginEvent::Rebuilt(bundle)
+                            let mut events = vec![PluginEvent::Rebuilt(bundle)];
+                            events.extend(warnings_of(&entry.name, warnings));
+                            events
                         }
                         Err(diagnostics) => {
                             // After a failure, the next good bundle is news even if unchanged.
                             announced.remove(&entry.name);
-                            PluginEvent::Failed {
+                            vec![PluginEvent::Failed {
                                 name: entry.name.clone(),
                                 diagnostics,
-                            }
+                            }]
                         }
                     };
-                    if sender.send(event).is_err() {
-                        return;
+                    for event in events {
+                        if sender.send(event).is_err() {
+                            return;
+                        }
                     }
                 }
             }
@@ -152,58 +195,81 @@ impl Project {
         watch
     }
 
-    /// The project's plugin, then those of its dependencies in `cargo metadata` order.
-    fn plugin_entries(&self) -> Result<Vec<Entry>, Diagnostic> {
-        let metadata = MetadataCommand::new()
-            .manifest_path(self.root.join("Cargo.toml"))
-            .exec()
-            .map_err(|error| {
-                error_diagnostic(format!("cannot list the project's dependencies: {error}"))
-            })?;
-        let project = (
-            self.manifest.name.clone(),
-            PluginSource::Project,
-            self.root.clone(),
-        );
-        let dependencies = metadata.packages.into_iter().filter_map(|package| {
-            let directory = package
-                .manifest_path
-                .parent()?
-                .as_std_path()
-                .canonicalize()
-                .ok()?;
+    /// The project's plugin, then those of its dependencies in `cargo metadata` order, with a
+    /// warning for each dependency that cannot be looked into.
+    fn plugin_entries(&self) -> Result<(Vec<Entry>, Vec<PluginEvent>), Diagnostic> {
+        let metadata = metadata(&self.root.join("Cargo.toml")).map_err(|error| {
+            error_diagnostic(format!("cannot list the project's dependencies: {error}"))
+        })?;
+        let mut entries = vec![Entry {
+            name: self.manifest.name.clone(),
+            source: PluginSource::Project,
+            directory: self.root.join("editor"),
+        }];
+        let mut warnings = Vec::new();
+        for package in metadata.packages {
             let name = package.name.to_string();
-            (directory != self.root).then(|| {
-                let source = PluginSource::Engine {
-                    crate_name: name.clone(),
-                };
-                (name, source, directory)
-            })
-        });
-        Ok(std::iter::once(project)
-            .chain(dependencies)
-            .filter_map(|(name, source, crate_directory)| {
-                let directory = crate_directory.join("editor");
-                entry_file(&directory)?;
-                Some(Entry {
+            let Some(manifest_directory) = package.manifest_path.parent() else {
+                continue;
+            };
+            let directory = match manifest_directory.as_std_path().canonicalize() {
+                Ok(directory) => directory,
+                Err(error) => {
+                    let message =
+                        format!("cannot look for a plugin in {manifest_directory}: {error}");
+                    warnings.extend(warnings_of(&name, vec![warning_diagnostic(message)]));
+                    continue;
+                }
+            };
+            let editor = directory.join("editor");
+            if directory != self.root && entry_file(&editor).is_some() {
+                entries.push(Entry {
+                    source: PluginSource::Engine {
+                        crate_name: name.clone(),
+                    },
                     name,
-                    source,
-                    directory,
-                })
-            })
-            .collect())
+                    directory: editor,
+                });
+            }
+        }
+        Ok((entries, warnings))
     }
 }
 
-/// The plugins whose `editor/` directory saw a change. Accesses are not changes: bundling opens
-/// the sources, and on Linux those openings are events too.
+/// `cargo metadata` of a project, offline when every dependency is already downloaded.
+fn metadata(manifest: &Path) -> Result<Metadata, cargo_metadata::Error> {
+    let run = |offline: bool| {
+        let mut command = MetadataCommand::new();
+        command.manifest_path(manifest);
+        if offline {
+            command.other_options(vec!["--offline".to_string()]);
+        }
+        command.exec()
+    };
+    run(true).or_else(|_| run(false))
+}
+
+/// A `Warnings` event, when there is something to tell.
+fn warnings_of(name: &str, diagnostics: Vec<Diagnostic>) -> Option<PluginEvent> {
+    (!diagnostics.is_empty()).then(|| PluginEvent::Warnings {
+        name: name.to_string(),
+        diagnostics,
+    })
+}
+
+/// The plugins whose `editor/` directory saw a change (or appeared). Accesses are not changes
+/// (bundling opens and reads the sources, and on Linux those are events too), except closing a
+/// file written to, which is how some editors save.
 fn changed_entries<'a>(
     entries: &'a [Entry],
     events: impl IntoIterator<Item = &'a Event>,
 ) -> impl Iterator<Item = &'a Entry> {
     let paths: Vec<&PathBuf> = events
         .into_iter()
-        .filter(|event| !matches!(event.kind, EventKind::Access(_)))
+        .filter(|event| match event.kind {
+            EventKind::Access(kind) => kind == AccessKind::Close(AccessMode::Write),
+            _ => true,
+        })
         .flat_map(|event| &event.paths)
         .collect();
     entries
@@ -219,8 +285,9 @@ fn entry_file(directory: &Path) -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
-/// Bundles `entry` into `.ludenea/plugins/<name>.<hash>.js`, removing its older bundles.
-fn bundle(root: &Path, entry: &Entry) -> Result<PluginBundle, Vec<Diagnostic>> {
+/// Bundles `entry` into `.ludenea/plugins/<name>.<hash>.js`, removing its older bundles. Returns
+/// the bundle with rolldown's warnings, or every error.
+fn bundle(root: &Path, entry: &Entry) -> Result<(PluginBundle, Vec<Diagnostic>), Vec<Diagnostic>> {
     let input = entry_file(&entry.directory).ok_or_else(|| {
         vec![error_diagnostic(format!(
             "the plugin {} has no editor/index.ts or editor/index.tsx",
@@ -268,19 +335,20 @@ fn bundle(root: &Path, entry: &Entry) -> Result<PluginBundle, Vec<Diagnostic>> {
         let _ = bundler.close().await;
         output
     });
-    let output = output.map_err(|errors| {
-        let rejected = std::mem::take(&mut *rejected.lock().expect("not poisoned"));
-        if rejected.is_empty() {
-            errors
-                .into_vec()
-                .iter()
-                .map(|error| rolldown_diagnostic(error, &paths))
-                .collect()
-        } else {
-            // rolldown wraps each rejection in a less precise error of its own.
-            rejected
+    let mut diagnostics = std::mem::take(&mut *rejected.lock().expect("not poisoned"));
+    let output = match output {
+        Ok(output) if diagnostics.is_empty() => output,
+        Ok(_) => return Err(diagnostics),
+        Err(errors) => {
+            let errors = errors.into_vec();
+            diagnostics.extend(
+                errors
+                    .iter()
+                    .map(|error| rolldown_diagnostic(error, &paths)),
+            );
+            return Err(diagnostics);
         }
-    })?;
+    };
     let code = output
         .assets
         .iter()
@@ -295,11 +363,17 @@ fn bundle(root: &Path, entry: &Entry) -> Result<PluginBundle, Vec<Diagnostic>> {
             entry.name
         ))]
     })?;
-    Ok(PluginBundle {
+    let warnings = output
+        .warnings
+        .iter()
+        .map(|warning| rolldown_diagnostic(warning, &paths))
+        .collect();
+    let bundle = PluginBundle {
         name: entry.name.clone(),
         url_path: format!("plugins/{}", bundle_file_name(&entry.name, &code)),
         source: entry.source.clone(),
-    })
+    };
+    Ok((bundle, warnings))
 }
 
 fn bundle_file_name(name: &str, code: &str) -> String {
@@ -367,8 +441,15 @@ fn error_diagnostic(message: String) -> Diagnostic {
     }
 }
 
+fn warning_diagnostic(message: String) -> Diagnostic {
+    Diagnostic {
+        level: "warning".to_string(),
+        ..error_diagnostic(message)
+    }
+}
+
 /// Rejects bare imports other than the shared modules, which rolldown marks external before
-/// asking plugins.
+/// asking plugins, and imports of files that are not scripts.
 #[derive(Debug)]
 struct OnlyOwnFiles {
     root: PathBuf,
@@ -386,27 +467,53 @@ impl Plugin for OnlyOwnFiles {
         args: &HookResolveIdArgs<'_>,
     ) -> HookResolveIdReturn {
         let specifier = args.specifier;
-        if specifier.starts_with('.') || Path::new(specifier).is_absolute() {
-            return Ok(None);
-        }
-        let message = format!(
-            "cannot import {specifier:?}: editor plugins may import only React, the editor \
-             packages, and their own files (react, react/jsx-runtime, @ludenea/editor-shell, \
-             @ludenea/control-client, and relative paths)"
-        );
+        let message = if specifier.starts_with('.') || Path::new(specifier).is_absolute() {
+            // A file named exactly so is what the import means (`./theme.dark` may still be
+            // `./theme.dark.ts`).
+            let named = match args
+                .importer
+                .and_then(|importer| Path::new(importer).parent())
+            {
+                Some(directory) => directory.join(specifier),
+                None => PathBuf::from(specifier),
+            };
+            let script = named
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| SCRIPT_EXTENSIONS.contains(&extension));
+            if script || !named.is_file() {
+                return Ok(None);
+            }
+            format!(
+                "cannot import {specifier:?}: editor plugins may import only JavaScript, \
+                 TypeScript, and JSON files"
+            )
+        } else {
+            format!(
+                "cannot import {specifier:?}: editor plugins may import only React, the editor \
+                 packages, and their own files (react, react/jsx-runtime, @ludenea/editor-shell, \
+                 @ludenea/control-client, and relative paths)"
+            )
+        };
         self.rejected
             .lock()
             .expect("not poisoned")
             .push(Diagnostic {
                 level: "error".to_string(),
-                message: message.clone(),
+                message,
                 file: args
                     .importer
                     .map(|importer| relative_path(&self.root, importer)),
                 line: None,
                 column: None,
             });
-        Err(io::Error::other(message).into())
+        // External rather than an error, so rolldown goes on and reports the other problems;
+        // a rejection fails the bundle, which is never written.
+        Ok(Some(HookResolveIdOutput {
+            id: specifier.into(),
+            external: Some(ResolvedExternal::Bool(true)),
+            ..Default::default()
+        }))
     }
 
     fn register_hook_usage(&self) -> HookUsage {
@@ -416,7 +523,7 @@ impl Plugin for OnlyOwnFiles {
 
 #[cfg(test)]
 mod tests {
-    use notify::event::{AccessKind, AccessMode, ModifyKind};
+    use notify::event::ModifyKind;
 
     use super::*;
 
@@ -436,5 +543,23 @@ mod tests {
             .map(|entry| entry.name.as_str())
             .collect();
         assert_eq!(changed, ["demo"]);
+    }
+
+    /// Some editors save by writing in place: the close of that write is the change.
+    #[test]
+    fn closing_a_written_plugin_source_is_a_change() {
+        let entries = [Entry {
+            name: "demo".to_string(),
+            source: PluginSource::Project,
+            directory: PathBuf::from("/project/editor"),
+        }];
+        let source = PathBuf::from("/project/editor/index.ts");
+        let closed = |mode| {
+            Event::new(EventKind::Access(AccessKind::Close(mode))).add_path(source.clone())
+        };
+        let read = closed(AccessMode::Read);
+        assert_eq!(changed_entries(&entries, [&read]).count(), 0);
+        let written = closed(AccessMode::Write);
+        assert_eq!(changed_entries(&entries, [&written]).count(), 1);
     }
 }

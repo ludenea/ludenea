@@ -48,7 +48,7 @@ fn failures(project: &Project) -> Vec<Diagnostic> {
         .into_iter()
         .flat_map(|event| match event {
             PluginEvent::Failed { diagnostics, .. } => diagnostics,
-            PluginEvent::Rebuilt(_) => Vec::new(),
+            PluginEvent::Rebuilt(_) | PluginEvent::Warnings { .. } => Vec::new(),
         })
         .collect()
 }
@@ -297,5 +297,183 @@ fn a_failing_plugin_does_not_keep_the_others_from_loading() {
     assert!(
         matches!(&listed[1], PluginEvent::Failed { name, diagnostics } if name == "broken" && diagnostics[0].line == Some(1)),
         "{listed:?}"
+    );
+}
+
+#[test]
+fn non_javascript_import_is_rejected_with_rule() {
+    let dir = TempDir::new().unwrap();
+    let project = project(
+        &dir,
+        "",
+        &[
+            (
+                "editor/index.ts",
+                "import \"./style.css\";\nexport default 1;\n",
+            ),
+            ("editor/style.css", "body { color: red; }"),
+        ],
+    );
+    let diagnostics = failures(&project);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    let diagnostic = &diagnostics[0];
+    assert_eq!(diagnostic.file.as_deref(), Some("editor/index.ts"));
+    assert!(diagnostic.message.contains("style.css"), "{diagnostic:?}");
+    assert!(
+        diagnostic
+            .message
+            .contains("may import only JavaScript, TypeScript, and JSON files"),
+        "{diagnostic:?}"
+    );
+}
+
+#[test]
+fn a_rejected_import_does_not_hide_other_errors() {
+    let dir = TempDir::new().unwrap();
+    let project = project(
+        &dir,
+        "",
+        &[
+            (
+                "editor/index.ts",
+                "import pad from \"left-pad\";\nimport { b } from \"./broken\";\nexport default [pad, b];\n",
+            ),
+            ("editor/broken.ts", "export const b = (;\n"),
+        ],
+    );
+    let diagnostics = failures(&project);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("\"left-pad\"")),
+        "{diagnostics:?}"
+    );
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.file.as_deref() == Some("editor/broken.ts") && diagnostic.line == Some(1)
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn bundling_warnings_are_reported_next_to_the_bundle() {
+    let dir = TempDir::new().unwrap();
+    let project = project(
+        &dir,
+        "",
+        &[("editor/index.ts", "export default eval(\"1\");\n")],
+    );
+    let events = project.bundle_plugins();
+    assert!(
+        matches!(&events[0], PluginEvent::Rebuilt(bundle) if bundle.name == "demo"),
+        "{events:?}"
+    );
+    assert!(
+        matches!(
+            &events[1..],
+            [PluginEvent::Warnings { name, diagnostics }]
+                if name == "demo" && diagnostics.iter().all(|diagnostic| diagnostic.level == "warning")
+        ),
+        "{events:?}"
+    );
+}
+
+#[test]
+fn index_ts_wins_over_index_tsx() {
+    let dir = TempDir::new().unwrap();
+    let project = project(
+        &dir,
+        "",
+        &[
+            ("editor/index.ts", "export const which = 'ts-entry';"),
+            ("editor/index.tsx", "export const which = 'tsx-entry';"),
+        ],
+    );
+    let code = code(&project, &bundles(&project)[0]);
+    assert!(
+        code.contains("ts-entry") && !code.contains("tsx-entry"),
+        "{code}"
+    );
+}
+
+/// The next event of `events`, failing after a generous timeout.
+fn next_event(events: &ludenea_project::Watch<PluginEvent>) -> PluginEvent {
+    events
+        .recv_timeout(Duration::from_secs(15))
+        .expect("an event arrives")
+}
+
+/// Events arriving within a second and a half.
+fn quiet(events: &ludenea_project::Watch<PluginEvent>) -> Vec<PluginEvent> {
+    std::iter::from_fn(|| events.recv_timeout(Duration::from_millis(1500)).ok()).collect()
+}
+
+#[test]
+fn a_project_plugin_created_after_watching_starts_is_bundled() {
+    let dir = TempDir::new().unwrap();
+    let project = project(&dir, "", &[]);
+    let events = project.watch_plugins();
+    std::thread::sleep(Duration::from_millis(500));
+    fs::create_dir_all(project.root().join("editor")).unwrap();
+    fs::write(
+        project.root().join("editor/index.ts"),
+        "export default 'late';",
+    )
+    .unwrap();
+    match next_event(&events) {
+        PluginEvent::Rebuilt(bundle) => {
+            assert_eq!(bundle.name, "demo");
+            assert!(code(&project, &bundle).contains("late"));
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A failure is reported; the next good bundle is announced even if it is the one announced
+/// before; a save that changes nothing announces nothing; only the changed plugin rebuilds.
+#[test]
+fn watching_reports_failures_and_only_news() {
+    let dir = TempDir::new().unwrap();
+    let other = dir.path().join("other");
+    for (path, text) in [
+        (
+            "Cargo.toml",
+            "[package]\nname = \"other\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        ),
+        ("src/lib.rs", ""),
+        ("editor/index.ts", "export default 'other';\n"),
+    ] {
+        let file = other.join(path);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(file, text).unwrap();
+    }
+    let dependency = format!(
+        "other = {{ path = {:?} }}",
+        other.to_string_lossy().replace('\\', "/")
+    );
+    let good = "export default 'good';\n";
+    let project = project(&dir, &dependency, &[("editor/index.ts", good)]);
+    let index = project.root().join("editor/index.ts");
+    let events = project.watch_plugins();
+    std::thread::sleep(Duration::from_millis(500));
+
+    fs::write(&index, "export const b = (;\n").unwrap();
+    assert!(
+        matches!(next_event(&events), PluginEvent::Failed { name, .. } if name == "demo"),
+        "a failure is reported"
+    );
+    fs::write(&index, good).unwrap();
+    let PluginEvent::Rebuilt(first) = next_event(&events) else {
+        panic!("the repaired plugin is announced");
+    };
+    assert_eq!(first.name, "demo");
+    assert_eq!(quiet(&events), [], "only the changed plugin rebuilds");
+
+    fs::write(&index, good).unwrap();
+    assert_eq!(quiet(&events), [], "an unchanged bundle is not news");
+    fs::write(&index, "export default 'better';\n").unwrap();
+    assert!(
+        matches!(next_event(&events), PluginEvent::Rebuilt(bundle) if bundle.name == "demo" && bundle.url_path != first.url_path)
     );
 }

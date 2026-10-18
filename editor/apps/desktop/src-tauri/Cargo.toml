@@ -16,7 +16,8 @@ tokio = { version = "1.53.3", features = ["sync"] }
 # Built on its own (the engine workspace excludes it), with its own lockfile.
 [workspace]
 
-# As in the engine workspace: rolldown_common 1.2.14 from crates.io forces serde_json's
-# `arbitrary_precision`, which breaks reading numbers inside internally tagged protocol enums.
+# As in the engine workspace (see its Cargo.toml for every change to the vendored copy):
+# rolldown_common 1.2.14 from crates.io forces serde_json's `arbitrary_precision`, which breaks
+# reading numbers inside internally tagged protocol enums.
 [patch.crates-io]
 rolldown_common = { path = "../../../../vendor/rolldown_common" }

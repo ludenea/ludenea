@@ -169,21 +169,6 @@ mod tests {
     assert_snapshot!(to_code(&json), @r#"({ "v": 9007199254740996 });"#);
   }
 
-  /// Regression test: numbers outside f64's finite range must not panic. With serde_json's
-  /// `arbitrary_precision` feature they parse successfully but `as_f64` returns `None`; we
-  /// saturate to a correctly-signed `±Infinity`, matching JS
-  /// `JSON.parse('{ "v": 1e400 }').v === Infinity`.
-  #[test]
-  fn test_out_of_range_number_saturates_to_infinity() {
-    let json: Value = serde_json::from_str(r#"{ "pos": 1e400, "neg": -1e400 }"#).unwrap();
-    assert_snapshot!(to_code(&json), @r#"
-    ({
-    	"pos": Infinity,
-    	"neg": -Infinity
-    });
-    "#);
-  }
-
   #[test]
   fn test_array() {
     assert_snapshot!(to_code(&serde_json::json!([])), @"[];");
