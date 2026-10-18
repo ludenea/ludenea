@@ -335,7 +335,7 @@ fn assert_rejected(scene: &str, component: &str) {
     let before = simulation.hash();
     let error = simulation.load_scene(scene).unwrap_err();
     assert!(
-        matches!(&error, SceneError::InvalidValue { entity: Some(0), name, .. } if name == component),
+        matches!(&error, SceneError::InvalidValue { entity: Some(entity), name, .. } if *entity == [0] && name == component),
         "{error:?}"
     );
     assert_eq!(simulation.hash(), before);

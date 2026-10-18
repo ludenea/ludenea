@@ -39,16 +39,17 @@ pub enum SceneError {
     #[error("scene version {0} is not supported (expected 1 or 2); convert the scene to version 2")]
     Version(u32),
     #[error(
-        "entity {entity} has component `{name}`, which this app does not register; register it or remove it from the scene"
+        "entity {} has component `{name}`, which this app does not register; register it or remove it from the scene",
+        address_text(entity)
     )]
-    UnknownComponent { entity: usize, name: String },
+    UnknownComponent { entity: LoadAddress, name: String },
     #[error(
         "scene has resource `{0}`, which this app does not register; register it or remove it from the scene"
     )]
     UnknownResource(String),
-    #[error("{} `{name}` is invalid: {reason}", subject(*.entity))]
+    #[error("{} `{name}` is invalid: {reason}", subject(entity.as_deref()))]
     InvalidValue {
-        entity: Option<usize>,
+        entity: Option<LoadAddress>,
         name: String,
         reason: String,
     },
@@ -102,9 +103,9 @@ pub enum SceneError {
     MissingTarget(String),
 }
 
-fn subject(entity: Option<usize>) -> String {
+fn subject(entity: Option<&[u32]>) -> String {
     match entity {
-        Some(index) => format!("component of entity {index}"),
+        Some(address) => format!("component of entity {}", address_text(address)),
         None => "resource".to_string(),
     }
 }
@@ -157,6 +158,9 @@ struct ResolvedV2 {
     next_id: u32,
     resources: NamedValues,
     entities: Vec<AddressedEntity>,
+    /// Read only to refuse it: a resolved scene has its instances expanded.
+    #[serde(default)]
+    instances: Vec<IgnoredAny>,
 }
 
 #[derive(Deserialize)]
@@ -259,6 +263,12 @@ fn parse_resolved(ron: &str) -> Result<ParsedScene, SceneError> {
             "an entity has an empty address; give it at least its local identifier".to_string(),
         ));
     }
+    if !file.instances.is_empty() {
+        return Err(SceneError::Parse(
+            "a scene whose entities have addresses is resolved and has no instances; remove them"
+                .to_string(),
+        ));
+    }
     let mut seen = BTreeSet::new();
     if let Some(entity) = file.entities.iter().find(|e| !seen.insert(&e.address)) {
         return Err(SceneError::Parse(format!(
@@ -348,7 +358,7 @@ impl Decoder {
         owner: Option<&[u32]>,
     ) -> Result<Pending, SceneError> {
         let owner_local = owner.and_then(|address| address.last().copied());
-        let invalid = |reason| invalid(owner_local.map(|local| local as usize), name, reason);
+        let invalid = |reason| invalid(owner, name, reason);
         let value = (codec.decode_ron)(text).map_err(invalid)?;
         let shape = self
             .shapes
@@ -878,6 +888,10 @@ impl Simulation {
                         return Err(wrong_type(&found));
                     }
                     // Already flattened, in file form: how a replay stores a prefab.
+                    let prefab: Prefab =
+                        ron::from_str(&value).map_err(|error| invalid(error.to_string()))?;
+                    let nested = self.flat_prefab_handles(id, &prefab).map_err(invalid)?;
+                    pending.extend(nested.into_iter().rev());
                     loaded.insert(id, (found, LoadedValue::Ron(value)));
                     continue;
                 }
@@ -913,6 +927,36 @@ impl Simulation {
             loaded.insert(id, (found, LoadedValue::Ron(value)));
         }
         Ok(loaded)
+    }
+
+    /// The handles inside the components of `prefab`, the already flattened asset `id`.
+    fn flat_prefab_handles(&self, id: AssetId, prefab: &Prefab) -> Result<Vec<Reference>, String> {
+        let mut references = Vec::new();
+        for entity in &prefab.entities {
+            for (name, bytes) in &entity.components {
+                let codec = self
+                    .world
+                    .component_codec(name)
+                    .ok_or_else(|| format!("component `{name}` is not registered"))?;
+                let value = (codec.decode)(bytes)
+                    .map_err(|reason| format!("component `{name}`: {reason}"))?;
+                visit_handles(
+                    &(codec.schema)(),
+                    &(codec.encode)(&*value),
+                    &mut |to, asset, field| {
+                        references.push(Reference {
+                            id: to,
+                            asset: asset.to_string(),
+                            referenced_by: format!(
+                                "asset {id}, entity {}, {name}{field}",
+                                address_text(&entity.address)
+                            ),
+                        });
+                    },
+                );
+            }
+        }
+        Ok(references)
     }
 
     /// The flattened prefab `id`, and the handles and prefabs it reaches.
@@ -1020,22 +1064,17 @@ impl Simulation {
         address: &[u32],
         values: Vec<(String, String)>,
     ) -> Result<Decoded, SceneError> {
-        let entity = *address.last().expect("an address is never empty");
         let mut decoded: Decoded = Vec::new();
         for (name, text) in values {
             let codec =
                 self.world
                     .component_codec(&name)
                     .ok_or_else(|| SceneError::UnknownComponent {
-                        entity: entity as usize,
+                        entity: address.to_vec(),
                         name: name.clone(),
                     })?;
             if decoded.iter().any(|(seen, _)| *seen == name) {
-                return Err(invalid(
-                    Some(entity as usize),
-                    &name,
-                    "listed twice".to_string(),
-                ));
+                return Err(invalid(Some(address), &name, "listed twice".to_string()));
             }
             let value = decoder.decode(codec, &name, &text, Some(address))?;
             decoded.push((name, value));
@@ -1085,9 +1124,9 @@ fn after(id: u32, count: usize) -> u32 {
         .expect("a scene has fewer than u32::MAX local identifiers")
 }
 
-fn invalid(entity: Option<usize>, name: &str, reason: String) -> SceneError {
+fn invalid(entity: Option<&[u32]>, name: &str, reason: String) -> SceneError {
     SceneError::InvalidValue {
-        entity,
+        entity: entity.map(<[u32]>::to_vec),
         name: name.to_string(),
         reason,
     }

@@ -125,7 +125,7 @@ fn scene_unknown_component_names_entity_and_component_and_leaves_state() {
     ])"#;
     let error = simulation.load_scene(scene).unwrap_err();
     assert!(
-        matches!(&error, SceneError::UnknownComponent { entity: 1, name } if name == "nope::Thing"),
+        matches!(&error, SceneError::UnknownComponent { entity, name } if *entity == [1] && name == "nope::Thing"),
         "{error:?}"
     );
     assert_eq!(simulation.hash(), before);
@@ -161,7 +161,7 @@ fn scene_malformed_value_is_invalid_value() {
     let scene = r#"Scene(version: 1, resources: {}, entities: [{ "scene::Tag": ("text") }])"#;
     let error = simulation.load_scene(scene).unwrap_err();
     assert!(
-        matches!(&error, SceneError::InvalidValue { entity: Some(0), name, .. } if name == "scene::Tag"),
+        matches!(&error, SceneError::InvalidValue { entity: Some(entity), name, .. } if *entity == [0] && name == "scene::Tag"),
         "{error:?}"
     );
     assert_eq!(simulation.hash(), before);
@@ -173,7 +173,7 @@ fn scene_duplicate_component_key_is_invalid_value() {
         r#"Scene(version: 1, resources: {}, entities: [{ "scene::Tag": (1), "scene::Tag": (2) }])"#;
     let error = simulation().load_scene(scene).unwrap_err();
     assert!(
-        matches!(&error, SceneError::InvalidValue { entity: Some(0), name, .. } if name == "scene::Tag"),
+        matches!(&error, SceneError::InvalidValue { entity: Some(entity), name, .. } if *entity == [0] && name == "scene::Tag"),
         "{error:?}"
     );
 }

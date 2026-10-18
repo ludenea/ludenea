@@ -523,3 +523,125 @@ fn resolved_scene_with_an_empty_address_is_refused() {
     let error = simulation.load_scene(&text).unwrap_err();
     assert!(matches!(error, SceneError::Parse(_)), "{error:?}");
 }
+
+#[test]
+fn errors_in_instance_entities_name_the_whole_address() {
+    let mut simulation = simulation();
+    let assets = texts(&[(A, prefab(4, &[(3, "\"nope::Thing\": ()")], ""))]);
+    let file = scene(8, &[], &instance(7, A, "", "", ""));
+    let error = simulation.load_scene_with(&file, &assets).unwrap_err();
+    assert!(
+        matches!(&error, SceneError::UnknownComponent { entity, .. } if *entity == [7, 3]),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("entity 7/3"), "{error}");
+}
+
+#[test]
+fn nested_missing_prefab_names_the_nested_instance() {
+    let mut simulation = simulation();
+    let assets = texts(&[(A, prefab(4, &[], &instance(3, C, "", "", "")))]);
+    let file = scene(8, &[], &instance(7, A, "", "", ""));
+    let error = simulation.load_scene_with(&file, &assets).unwrap_err();
+    assert!(
+        matches!(&error, SceneError::MissingAsset { referenced_by, id: AssetId(C) }
+            if referenced_by == "instance 7/3"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn self_instancing_prefab_is_a_cycle() {
+    let mut simulation = simulation();
+    let assets = texts(&[(A, prefab(1, &[], &instance(0, A, "", "", "")))]);
+    let file = scene(1, &[], &instance(0, A, "", "", ""));
+    let error = simulation.load_scene_with(&file, &assets).unwrap_err();
+    let a = AssetId(A).to_string();
+    assert!(
+        matches!(&error, SceneError::PrefabCycle(chain) if *chain == [a.clone(), a]),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn override_entity_values_name_entities_of_the_prefab() {
+    let mut simulation = simulation();
+    let first = format!("{}, {}", tag(1), target(0));
+    let assets = texts(&[(A, prefab(2, &[(0, &first), (1, &tag(2))], ""))]);
+    let overrides = "(entity: [0], component: \"prefab::Target\", path: [], value: ((index: 1, generation: 0))),";
+    let file = scene(8, &[(1, &tag(9))], &instance(7, A, overrides, "", ""));
+    let load = simulation.load_scene_with(&file, &assets).unwrap();
+    assert!(load.warnings.is_empty(), "{:?}", load.warnings);
+    let source = simulation.entity_at_address(&[7, 0]).unwrap();
+    let expected = simulation.entity_at_address(&[7, 1]).unwrap();
+    assert_eq!(
+        simulation.world().get::<Target>(source).unwrap().0,
+        expected
+    );
+}
+
+#[test]
+fn resolved_scene_with_instances_is_refused() {
+    let mut simulation = simulation();
+    let text = format!(
+        "Scene(version: 2, next_id: 1, resources: {{}}, entities: [(address: [0], components: {{{}}})], instances: [{}])",
+        tag(1),
+        instance(3, A, "", "", "")
+    );
+    let error = simulation.load_scene(&text).unwrap_err();
+    assert!(matches!(error, SceneError::Parse(_)), "{error:?}");
+}
+
+#[test]
+fn data_asset_behind_a_prefab_handle_is_the_wrong_type() {
+    let mut simulation = simulation();
+    let assets = texts(&[(
+        A,
+        "AssetFile(type: \"prefab::Stats\", value: (3))".to_string(),
+    )]);
+    let spawner = format!("\"prefab::Spawner\": (bullet: \"{}\")", AssetId(A));
+    let error = simulation
+        .load_scene_with(&scene(1, &[(0, &spawner)], ""), &assets)
+        .unwrap_err();
+    assert!(
+        matches!(&error, SceneError::WrongAssetType { expected, found, .. }
+            if expected == "ludenea::Prefab" && found == "prefab::Stats"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn flattened_prefab_in_file_form_reaches_its_assets_and_is_validated() {
+    let turret = format!("\"prefab::Turret\": (stats: \"{}\")", AssetId(C));
+    let stats = "AssetFile(type: \"prefab::Stats\", value: (3))".to_string();
+    let spawner = format!("\"prefab::Spawner\": (bullet: \"{}\")", AssetId(A));
+    let file = scene(1, &[(0, &spawner)], "");
+    let mut source = simulation();
+    source
+        .load_scene_with(
+            &file,
+            &texts(&[(A, prefab(1, &[(0, &turret)], "")), (C, stats.clone())]),
+        )
+        .unwrap();
+    let flat = source.assets_ron()[&AssetId(A)].clone();
+
+    let mut simulation = simulation();
+    simulation
+        .load_scene_with(&file, &texts(&[(A, flat.clone()), (C, stats)]))
+        .unwrap();
+    assert_eq!(simulation.world().asset_ids(), [AssetId(A), AssetId(C)]);
+
+    let error = simulation
+        .load_scene_with(&file, &texts(&[(A, flat)]))
+        .unwrap_err();
+    assert!(
+        matches!(&error, SceneError::MissingAsset { referenced_by, id: AssetId(C) }
+            if referenced_by.ends_with("entity 0, prefab::Turret.stats")),
+        "{error:?}"
+    );
+    let broken = "AssetFile(type: \"ludenea::Prefab\", value: (entities: 3))".to_string();
+    let error = simulation
+        .load_scene_with(&file, &texts(&[(A, broken)]))
+        .unwrap_err();
+    assert!(matches!(error, SceneError::InvalidAsset { .. }), "{error:?}");
+}
