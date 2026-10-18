@@ -149,11 +149,10 @@ impl Host {
         }
         if self.playing {
             let due = self.pacer.advance(elapsed_seconds);
-            // Play records the current branch's future, and a take-over forks.
             if due > 0
                 && let Some(divergence) = &mut self.divergence
             {
-                divergence.invalidate();
+                divergence.played();
             }
             for ran in 0..due {
                 match self
@@ -236,6 +235,14 @@ impl Host {
             let divergence = self.divergence.as_mut().expect("built");
             divergence.advance(&self.session, budget)
         });
+        if let Some(divergence) = &mut self.divergence {
+            for warning in divergence.take_warnings() {
+                self.console(
+                    ConsoleLevel::Warning,
+                    format!("divergence report: {warning}"),
+                );
+            }
+        }
         match advanced {
             Ok((moved, complete)) => {
                 if let Some(up_to) = moved {
@@ -258,6 +265,11 @@ impl Host {
     /// complete.
     fn get_divergence(&mut self, up_to: Option<u64>) -> Result<Reply, ProtocolError> {
         let invalid = |message| ProtocolError::new(ErrorCode::InvalidCommand, message);
+        if self.session.compare_branch().is_none() {
+            return Err(invalid(
+                "there is no compare branch to compare the current branch with".to_string(),
+            ));
+        }
         self.build_divergence().map_err(invalid)?;
         let divergence = self.divergence.as_mut().expect("built");
         divergence.request(up_to);
@@ -834,6 +846,9 @@ impl Host {
                 }
                 if topic == Topic::Divergence {
                     self.divergence_subscribed = false;
+                    if !self.divergence_asked {
+                        self.divergence = None;
+                    }
                 }
                 if topic == Topic::Introspection {
                     self.session.introspection = None;
@@ -1348,4 +1363,58 @@ fn decode_trace(bytes: &Bytes) -> Result<Trace, ProtocolError> {
 
 fn decode_edits(bytes: &Bytes) -> Result<EditLog, ProtocolError> {
     EditLog::decode(&bytes.0).map_err(|e| ProtocolError::new(ErrorCode::InvalidCommand, e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn playing_with_a_complete_report_composes_nothing() {
+        let mut host = Host::new(boxes::app).unwrap();
+        let scene = boxes::generate_scene(10, 3);
+        let document = Document::Scene;
+        host.handle(Command::LoadScene {
+            scene,
+            assets: Vec::new(),
+            document,
+        })
+        .unwrap();
+        let step = |host: &mut Host, ticks| {
+            host.handle(Command::Step {
+                ticks,
+                record_hashes: false,
+            })
+            .unwrap();
+        };
+        step(&mut host, 40);
+        host.handle(Command::Seek { tick: 20 }).unwrap();
+        host.handle(Command::Spawn {
+            components: [("boxes::Crate".to_string(), JsonValue::Null)].into(),
+        })
+        .unwrap();
+        step(&mut host, 20);
+        let report = |host: &mut Host, up_to| match host.handle(Command::GetDivergence { up_to }) {
+            Ok(Reply::Divergence(report)) => report,
+            other => panic!("{other:?}"),
+        };
+        report(&mut host, Some(30));
+        host.advance(0.0);
+        assert!(report(&mut host, Some(30)).complete);
+        host.handle(Command::Subscribe {
+            topic: Topic::Divergence,
+        })
+        .unwrap();
+        let composed = host.divergence.as_ref().unwrap().composed;
+
+        host.handle(Command::Play).unwrap();
+        for _ in 0..10 {
+            host.advance(1.0 / 60.0);
+        }
+        assert!(
+            host.tick() > 40,
+            "play recorded the current branch's future"
+        );
+        assert_eq!(host.divergence.as_ref().unwrap().composed, composed);
+    }
 }

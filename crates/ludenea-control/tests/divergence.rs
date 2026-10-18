@@ -237,11 +237,14 @@ fn collided_entity_lists_the_collision_event_as_cause() {
     let report = complete(&mut host, None);
     let collided = report.entities.iter().find(|divergence| {
         divergence.entity != pushed
+            && divergence.first_tick > FORK
             && divergence.causes.iter().any(|cause| {
                 matches!(
                     cause,
-                    Cause::Event { event, other, .. }
-                        if event == "ludenea::Collision" && *other == pushed
+                    Cause::Event { tick, event, other, .. }
+                        if event == "ludenea::Collision"
+                            && *other == pushed
+                            && (divergence.first_tick - 1..=divergence.first_tick).contains(tick)
                 )
             })
     });
@@ -334,33 +337,87 @@ fn different_component_set_is_replaced() {
 #[test]
 fn report_is_incremental_and_completes() {
     let (mut host, _) = pushed();
-    let first = report(&mut host, None);
+    let first = report(&mut host, Some(FORK + 20));
     assert_eq!((first.fork_tick, first.up_to), (FORK, FORK));
     assert!(!first.complete);
     assert!(first.entities.is_empty());
 
-    // Paused, one advance compares 240 ticks at most.
+    // While playing, one advance compares 4 ticks at most.
+    ok(&mut host, Command::Play);
     let mut reached = Vec::new();
     for _ in 0..10 {
-        reached.extend(progress(&host.advance(0.0)));
+        reached.extend(progress(&host.advance(1.0 / 60.0)));
     }
-    assert!(!reached.is_empty(), "{reached:?}");
+    ok(&mut host, Command::Pause);
+    assert!(reached.len() >= 2, "{reached:?}");
     assert!(
         reached.windows(2).all(|pair| pair[0] < pair[1]),
         "{reached:?}"
     );
-    assert_eq!(reached.last(), Some(&260));
-    let done = report(&mut host, None);
+    assert_eq!(reached.last(), Some(&(FORK + 20)));
+    let done = report(&mut host, Some(FORK + 20));
     assert!(done.complete);
-    assert_eq!(done.up_to, 260);
+    assert_eq!(done.up_to, FORK + 20);
     assert!(
         progress(&host.advance(0.0)).is_empty(),
         "nothing left to run"
     );
 
-    // A longer range keeps what is computed; here the runs end at 260.
+    // A longer range goes on from there, up to the end of the runs at 260.
     let longer = report(&mut host, Some(FORK + 600));
-    assert_eq!(longer, done);
+    assert_eq!((longer.up_to, longer.complete), (FORK + 20, false));
+    assert_eq!(longer.entities, done.entities);
+    assert_eq!(progress(&host.advance(0.0)), [260]);
+    let all = report(&mut host, Some(FORK + 600));
+    assert!(all.complete);
+    assert_eq!(all.entities[..done.entities.len()], done.entities[..]);
+}
+
+#[test]
+fn resource_edit_roots_the_earliest_divergent_entities() {
+    let mut host = small_host();
+    seek(&mut host, FORK);
+    ok(
+        &mut host,
+        Command::SetField {
+            target: FieldTarget::Resource {
+                resource: "ludenea::PhysicsSettings".to_string(),
+            },
+            path: ["gravity", "y"]
+                .into_iter()
+                .map(|name| PathSegment::Field {
+                    name: name.to_string(),
+                })
+                .collect(),
+            value: json!(-5.0),
+        },
+    );
+    step(&mut host, 60);
+
+    let report = complete(&mut host, Some(FORK + 10));
+    assert_eq!(
+        report.first_divergent,
+        Some(FORK),
+        "the resource differs first"
+    );
+    let root = report.root_cause.clone().expect("a root cause");
+    let RootCauseKind::Edit { description } = &root.kind else {
+        panic!("{root:?}");
+    };
+    assert!(
+        description.contains("ludenea::PhysicsSettings"),
+        "{description}"
+    );
+    let earliest = report.entities[0].first_tick;
+    assert!(earliest > FORK, "{report:?}");
+    let expected: Vec<Entity> = report
+        .entities
+        .iter()
+        .filter(|divergence| divergence.first_tick == earliest)
+        .map(|divergence| divergence.entity)
+        .collect();
+    assert!(!expected.is_empty());
+    assert_eq!(root.entities, expected);
 }
 
 #[test]

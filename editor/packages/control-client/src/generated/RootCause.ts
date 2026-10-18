@@ -3,7 +3,6 @@ import type { Entity } from "./Entity";
 import type { RootCauseKind } from "./RootCauseKind";
 
 /**
- * What made the branches part, at the fork tick, and the entities divergent at the first
- * divergent tick.
+ * What made the branches part, at the fork tick, and the earliest divergent entities.
  */
 export type RootCause = { tick: number, kind: RootCauseKind, entities: Array<Entity>, };

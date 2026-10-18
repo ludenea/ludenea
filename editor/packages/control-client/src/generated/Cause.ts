@@ -3,6 +3,7 @@ import type { Entity } from "./Entity";
 
 /**
  * A cause candidate, in either branch, at the entity's first divergent tick or the tick
- * before.
+ * before. Only events and commands are recorded, so interactions without either (a
+ * persistent contact, a system reading another entity) leave no candidate.
  */
 export type Cause = { "type": "event", tick: number, event: string, path: string, other: Entity, } | { "type": "command", tick: number, system: string, kind: string, };

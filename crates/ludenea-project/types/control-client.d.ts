@@ -41,7 +41,8 @@ type Entity = {
 
 /**
  * A cause candidate, in either branch, at the entity's first divergent tick or the tick
- * before.
+ * before. Only events and commands are recorded, so interactions without either (a
+ * persistent contact, a system reading another entity) leave no candidate.
  */
 type Cause = {
     "type": "event";
@@ -465,6 +466,10 @@ type EntityDivergence = {
      * The first differing component and field of a `Changed` entity.
      */
     first_difference: Difference | null;
+    /**
+     * Empty when no recorded event or command links the entity to an already divergent
+     * one, such as a resting contact: touching bodies push each other without an event.
+     */
     causes: Array<Cause>;
 };
 
@@ -476,8 +481,7 @@ type RootCauseKind = {
 };
 
 /**
- * What made the branches part, at the fork tick, and the entities divergent at the first
- * divergent tick.
+ * What made the branches part, at the fork tick, and the earliest divergent entities.
  */
 type RootCause = {
     tick: number;

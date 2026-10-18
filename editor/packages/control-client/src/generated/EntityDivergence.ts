@@ -11,4 +11,9 @@ export type EntityDivergence = { entity: Entity, kind: DivergenceKind, first_tic
 /**
  * The first differing component and field of a `Changed` entity.
  */
-first_difference: Difference | null, causes: Array<Cause>, };
+first_difference: Difference | null, 
+/**
+ * Empty when no recorded event or command links the entity to an already divergent
+ * one, such as a resting contact: touching bodies push each other without an event.
+ */
+causes: Array<Cause>, };

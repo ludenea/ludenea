@@ -11,7 +11,8 @@ use ludenea_app::{Edit, EntityRef, Simulation};
 use ludenea_ecs::schema::TypeSchema;
 use ludenea_ecs::schema::entities::entity_refs;
 use ludenea_ecs::{
-    CommandKind, CommandRecord, Difference, Entity, EntityHash, ScheduleObserver, Snapshot, World,
+    CommandKind, CommandRecord, Difference, Entity, EntityHash, ScheduleObserver, Snapshot,
+    SnapshotError, World,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -39,8 +40,7 @@ pub struct DivergenceReport {
     pub entities: Vec<EntityDivergence>,
 }
 
-/// What made the branches part, at the fork tick, and the entities divergent at the first
-/// divergent tick.
+/// What made the branches part, at the fork tick, and the earliest divergent entities.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RootCause {
@@ -68,6 +68,8 @@ pub struct EntityDivergence {
     pub first_tick: u64,
     /// The first differing component and field of a `Changed` entity.
     pub first_difference: Option<Difference>,
+    /// Empty when no recorded event or command links the entity to an already divergent
+    /// one, such as a resting contact: touching bodies push each other without an event.
     pub causes: Vec<Cause>,
 }
 
@@ -84,7 +86,8 @@ pub enum DivergenceKind {
 }
 
 /// A cause candidate, in either branch, at the entity's first divergent tick or the tick
-/// before.
+/// before. Only events and commands are recorded, so interactions without either (a
+/// persistent contact, a system reading another entity) leave no candidate.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -119,6 +122,9 @@ pub(crate) struct DivergenceRun {
     /// Whether the session may have changed the runs since they were composed.
     outdated: bool,
     progress: Option<Progress>,
+    /// How many times the runs were composed.
+    #[cfg(test)]
+    pub composed: u32,
 }
 
 /// The report as far as it is computed, for one pair of runs.
@@ -138,6 +144,8 @@ struct Progress {
     divergent: BTreeMap<(u32, u32), (Entity, u64)>,
     /// Per simulation, the records of the last two ticks run.
     records: [Vec<TickRecord>; 2],
+    /// Problems not yet reported, such as a value that failed to decode for a diff.
+    warnings: Vec<String>,
 }
 
 impl DivergenceRun {
@@ -154,6 +162,8 @@ impl DivergenceRun {
             requested: None,
             outdated: false,
             progress: None,
+            #[cfg(test)]
+            composed: 0,
         }
     }
 
@@ -161,6 +171,32 @@ impl DivergenceRun {
     /// runs share their past up to it.
     pub fn invalidate(&mut self) {
         self.outdated = true;
+    }
+
+    /// Like `invalidate` after play ran ticks: play only records the current branch's
+    /// future, which matters only while the range is capped at the end of the runs. A
+    /// take-over that forks changes the current branch, which every use checks.
+    pub fn played(&mut self) {
+        if let Some(progress) = &self.progress
+            && progress.target < self.full_target(progress.fork)
+        {
+            self.outdated = true;
+        }
+    }
+
+    /// The end of the range asked for, before capping it at the end of the runs.
+    fn full_target(&self, fork: u64) -> u64 {
+        self.requested
+            .unwrap_or(fork.saturating_add(DIVERGENCE_TICKS))
+            .max(fork)
+    }
+
+    /// The problems found since the last call, for the console.
+    pub fn take_warnings(&mut self) -> Vec<String> {
+        self.progress
+            .as_mut()
+            .map(|progress| std::mem::take(&mut progress.warnings))
+            .unwrap_or_default()
     }
 
     /// Asks for the range up to `up_to`, or the default one.
@@ -182,13 +218,18 @@ impl DivergenceRun {
             up_to: progress.at.unwrap_or(progress.fork),
             complete: progress.complete(),
             first_divergent,
-            root_cause: first_divergent.map(|tick| RootCause {
+            root_cause: first_divergent.map(|_| RootCause {
                 tick: progress.fork,
                 kind: progress.cause.clone(),
+                // The earliest divergent entities: a resource or asset edit diverges the
+                // world before any entity.
                 entities: progress
                     .entities
                     .iter()
-                    .filter(|divergence| divergence.first_tick == tick)
+                    .take_while(|divergence| {
+                        Some(divergence.first_tick)
+                            == progress.entities.first().map(|first| first.first_tick)
+                    })
                     .map(|divergence| divergence.entity)
                     .collect(),
             }),
@@ -197,8 +238,8 @@ impl DivergenceRun {
     }
 
     /// Compares at most `budget` more ticks. Returns the last tick compared when it moved,
-    /// and whether the report is complete, or there is nothing to compare. Fails on a panic of the game or a tick that
-    /// cannot run; the run is then unusable.
+    /// and whether the report is complete or there is nothing to compare. Fails on a panic
+    /// of the game or a tick that cannot run; the run is then unusable.
     pub fn advance(
         &mut self,
         session: &Session,
@@ -293,11 +334,11 @@ impl DivergenceRun {
             "the current and compare branches run the same ticks".to_string()
         })?;
         let end = runs[CURRENT].end().min(runs[COMPARE].end());
-        let target = self
-            .requested
-            .unwrap_or(fork.saturating_add(DIVERGENCE_TICKS))
-            .min(end)
-            .max(fork);
+        #[cfg(test)]
+        {
+            self.composed += 1;
+        }
+        let target = self.full_target(fork).min(end).max(fork);
         if let Some(progress) = &mut self.progress
             && same_branches
             && progress.fork == fork
@@ -323,6 +364,7 @@ impl DivergenceRun {
             entities: Vec::new(),
             divergent: BTreeMap::new(),
             records: [Vec::new(), Vec::new()],
+            warnings: Vec::new(),
         });
         Ok(())
     }
@@ -404,7 +446,12 @@ impl Progress {
             .filter(|(_, kind)| *kind == DivergenceKind::Changed)
             .map(|(entity, _)| *entity)
             .collect();
-        let mut differences = self.differences(sims, &changed);
+        let mut differences = self.differences(sims, &changed).unwrap_or_else(|error| {
+            self.warnings.push(format!(
+                "tick {tick}: the differences could not be listed: {error}"
+            ));
+            BTreeMap::new()
+        });
         for (entity, kind) in found {
             let causes = self.causes(entity, tick, event_schemas, systems);
             self.entities.push(EntityDivergence {
@@ -422,9 +469,9 @@ impl Progress {
         &self,
         sims: &[Simulation; 2],
         entities: &[Entity],
-    ) -> BTreeMap<Entity, Difference> {
+    ) -> Result<BTreeMap<Entity, Difference>, SnapshotError> {
         if entities.is_empty() {
-            return BTreeMap::new();
+            return Ok(BTreeMap::new());
         }
         let skeleton = self.skeleton.as_ref().expect("started");
         let restricted = |world: &World| Snapshot {
@@ -444,8 +491,7 @@ impl Progress {
         let world = sims[CURRENT].world();
         let (current, compare) = (restricted(world), restricted(sims[COMPARE].world()));
         let mut first = BTreeMap::new();
-        // Restricted snapshots of one registry always compare.
-        for difference in world.diff_snapshots(&current, &compare).unwrap_or_default() {
+        for difference in world.diff_snapshots(&current, &compare)? {
             if let Some(&entity) = entities
                 .iter()
                 .find(|entity| difference.subject == format!("entity {entity}"))
@@ -453,7 +499,7 @@ impl Progress {
                 first.entry(entity).or_insert(difference);
             }
         }
-        first
+        Ok(first)
     }
 
     /// The events and commands of either branch, at `tick` and the tick before, that
@@ -551,7 +597,10 @@ fn fork_point(runs: &[BranchRun; 2]) -> Option<(u64, RootCauseKind)> {
 fn describe(edit: &Edit) -> String {
     let target = |entity: &EntityRef| match entity {
         EntityRef::Runtime(entity) => entity.to_string(),
-        EntityRef::Loaded(address) => format!("the entity loaded at {address:?}"),
+        EntityRef::Loaded(address) => {
+            let address: Vec<String> = address.iter().map(u32::to_string).collect();
+            format!("the scene entity at {}", address.join("/"))
+        }
     };
     match edit {
         Edit::Spawn { components } => {
