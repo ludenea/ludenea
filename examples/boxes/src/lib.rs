@@ -29,6 +29,21 @@ pub struct BoxesInput {
 #[derive(Component, Serialize, Deserialize, Clone)]
 pub struct Crate;
 
+/// Spawns `prefab` every `stats.every_ticks` ticks, pushed by a random share of
+/// `stats.impulse`.
+#[derive(Component, Serialize, Deserialize, Clone)]
+pub struct Spawner {
+    pub prefab: Handle<Prefab>,
+    pub stats: Handle<SpawnerStats>,
+}
+
+#[derive(Asset, Serialize, Deserialize, Clone)]
+pub struct SpawnerStats {
+    pub every_ticks: u32,
+    /// Velocity change given to each spawned body, scaled by a random factor in [0.5, 1.5).
+    pub impulse: Vec2,
+}
+
 #[derive(Resource, Serialize, Deserialize, Default, Clone)]
 pub struct ContactStats {
     pub begins: u64,
@@ -42,8 +57,11 @@ impl Plugin for BoxesPlugin {
         app.input::<BoxesInput>()
             .input_mapping(map_raw_input)
             .component::<Crate>()
+            .component::<Spawner>()
+            .asset::<SpawnerStats>()
             .resource(ContactStats::default())
             .system(Sim, apply_inputs.before(physics::Step))
+            .system(Sim, spawn_crates.before(physics::Step))
             .system(Sim, count_contacts.after(physics::Step));
     }
 }
@@ -117,6 +135,26 @@ fn apply_inputs(
         && let Some(victim) = pick(&mut rng, &entities)
     {
         commands.despawn(victim);
+    }
+}
+
+/// Draws from `rng` only inside the loop, so a world without spawners draws nothing.
+fn spawn_crates(
+    spawners: Query<&Spawner>,
+    stats: Assets<SpawnerStats>,
+    time: Res<Time>,
+    mut rng: ResMut<Rng>,
+    mut commands: Commands,
+) {
+    for spawner in spawners.iter() {
+        let stats = stats.get(spawner.stats);
+        if stats.every_ticks == 0 || !time.tick.is_multiple_of(u64::from(stats.every_ticks)) {
+            continue;
+        }
+        let velocity = stats.impulse * rng.range_f32(0.5, 1.5);
+        commands.spawn_prefab(spawner.prefab, move |overrides| {
+            overrides.set::<Body>(0, move |body| body.linear_velocity += velocity);
+        });
     }
 }
 

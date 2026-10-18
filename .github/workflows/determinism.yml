@@ -27,6 +27,12 @@ jobs:
           for threads in 1 2 8; do
             cargo run --locked --release -p boxes -- verify examples/boxes/assets/boxes.scene.ron --inputs examples/boxes/assets/boxes.inputs --golden golden/boxes.trace --threads $threads
           done
+      - name: Verify the golden replay
+        shell: bash
+        run: |
+          for threads in 1 2 8; do
+            cargo run --locked --release -p boxes -- verify golden/spawner.replay --threads $threads
+          done
       - name: Upload the divergence dump
         if: failure()
         uses: actions/upload-artifact@v4
@@ -44,6 +50,7 @@ jobs:
       - uses: bytecodealliance/actions/wasmtime/setup@v1
       - run: cargo build --locked --release --target wasm32-wasip1 -p boxes --bin boxes
       - run: wasmtime run --dir=. target/wasm32-wasip1/release/boxes.wasm verify examples/boxes/assets/boxes.scene.ron --inputs examples/boxes/assets/boxes.inputs --golden golden/boxes.trace
+      - run: wasmtime run --dir=. target/wasm32-wasip1/release/boxes.wasm verify golden/spawner.replay
 
   editor:
     runs-on: ubuntu-24.04

@@ -14,6 +14,8 @@ for any thread count. The guarantee rests on:
 - a golden trace of 10,001 state hashes, which the `determinism` workflow
   verifies on macOS, Linux, and Windows at 1, 2, and 8 threads, and on
   WebAssembly under `wasmtime`;
+- a golden replay (`golden/spawner.replay`) of a scene with prefabs, a data
+  asset, and edits to both, verified the same way;
 - lints that forbid platform-dependent floating point functions, wall-clock
   time, and unordered collections in simulation code;
 - a pinned toolchain and a committed `Cargo.lock`.
@@ -58,6 +60,19 @@ cargo build --locked --release --target wasm32-wasip1 -p boxes --bin boxes
 wasmtime run --dir=. target/wasm32-wasip1/release/boxes.wasm verify \
   examples/boxes/assets/boxes.scene.ron --inputs examples/boxes/assets/boxes.inputs \
   --golden golden/boxes.trace
+```
+
+Verify the golden replay natively (use `--threads 1`, `2`, or `8`) and under WebAssembly:
+
+```sh
+cargo run --locked --release -p boxes -- verify golden/spawner.replay --threads 8
+wasmtime run --dir=. target/wasm32-wasip1/release/boxes.wasm verify golden/spawner.replay
+```
+
+Record it again after a deliberate change to the simulation (its hashes change with it):
+
+```sh
+cargo run --locked --release -p boxes --bin record-replay -- golden/spawner.replay
 ```
 
 Run the benchmark:

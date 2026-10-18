@@ -1,0 +1,8 @@
+Prefab(
+    version: 1,
+    next_id: 1,
+    entities: [
+    (id: 0, components: {"boxes::Crate": (), "ludenea::Body": (kind:Dynamic,linear_velocity:(x:0.0,y:0.0),angular_velocity:0.0,linear_damping:0.0,angular_damping:0.0,gravity_scale:1.0), "ludenea::Collider": (shape:Polygon((vertices:((x:-0.5,y:-0.5),(x:0.5,y:-0.5),(x:0.5,y:0.5),(x:-0.5,y:0.5),(x:0.0,y:0.0),(x:0.0,y:0.0),(x:0.0,y:0.0),(x:0.0,y:0.0)),normals:((x:0.0,y:-1.0),(x:1.0,y:-0.0),(x:0.0,y:1.0),(x:-1.0,y:-0.0),(x:0.0,y:0.0),(x:0.0,y:0.0),(x:0.0,y:0.0),(x:0.0,y:0.0)),count:4,centroid:(x:0.0,y:0.0),radius:0.0)),density:1.0,friction:0.6,restitution:0.0), "ludenea::Pose": (position:(x:0.0,y:26.0),rotation:(cos:1.0,sin:0.0))}),
+    ],
+    instances: [],
+)
