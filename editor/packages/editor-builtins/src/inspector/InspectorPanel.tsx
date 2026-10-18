@@ -6,7 +6,7 @@ import { edit, ResimulatingNotice, useResimulating } from "../timeline/editing";
 import { defaultValue } from "./default-value";
 import { Field } from "./fields/Field";
 import type { Edit } from "./fields/inputs";
-import { onEntity, type InspectorState } from "./index";
+import { onEntity, type AddDraft, type InspectorState } from "./index";
 
 type Values = { [name: string]: ComponentValue };
 
@@ -209,10 +209,13 @@ function AddComponent(props: {
   onAdded(): void;
 }) {
   const { editor, control, entity, schemas, present, state, onAdded } = props;
+  const adding = useStore(state).adding!;
+  const update = (patch: Partial<AddDraft>) => state.set({ adding: { ...state.get().adding!, ...patch } });
   const candidates = [...schemas.keys()].filter((name) => !(name in present));
-  const [chosen, setChosen] = useState(candidates[0] ?? "");
-  const [draft, setDraft] = useState<JsonValue | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // Components come and go while the picker shows: a choice no longer offered falls back to the first.
+  const chosen = candidates.includes(adding.chosen) ? adding.chosen : (candidates[0] ?? "");
+  const draft = adding.draft?.component === chosen ? adding.draft.value : null;
+  const { error } = adding;
   const schema = schemas.get(chosen);
 
   const insert = async () => {
@@ -220,25 +223,19 @@ function AddComponent(props: {
     const value = draft ?? defaultValue(schema);
     try {
       await onEntity(editor, edit(editor, control, { type: "insert_component", entity, component: chosen, value }));
-      state.set({ adding: false, focused: chosen });
+      state.set({ adding: null, focused: chosen });
       onAdded();
     } catch (failure) {
-      setError(errorText(failure));
-      if (failure instanceof ProtocolFailure && failure.code === "invalid_edit") setDraft(value);
+      const rejected = failure instanceof ProtocolFailure && failure.code === "invalid_edit";
+      update({ error: errorText(failure), ...(rejected ? { draft: { component: chosen, value } } : {}) });
     }
   };
+  // A change to the value makes the last failure, about the previous value, out of date.
+  const editDraft: Edit = async (path, value) => update({ draft: { component: chosen, value: setAt(state.get().adding!.draft!.value, path, value) }, error: null });
 
   return (
     <div className="ludenea-add-component">
-      <select
-        aria-label="Component"
-        value={chosen}
-        onChange={(event) => {
-          setChosen(event.target.value);
-          setDraft(null);
-          setError(null);
-        }}
-      >
+      <select aria-label="Component" value={chosen} onChange={(event) => update({ chosen: event.target.value, draft: null, error: null })}>
         {candidates.map((name) => (
           <option key={name} value={name}>
             {name}
@@ -247,7 +244,7 @@ function AddComponent(props: {
       </select>
       {schema && draft !== null && (
         <form aria-label={`New ${chosen}`} onSubmit={(event) => event.preventDefault()}>
-          <Field schema={schema} value={draft} path={[]} readOnly={false} editor={editor} edit={async (path, value) => setDraft((draft) => setAt(draft, path, value))} />
+          <Field schema={schema} value={draft} path={[]} readOnly={false} editor={editor} edit={editDraft} />
           {error && <p className="ludenea-error">{error}</p>}
         </form>
       )}
@@ -255,7 +252,7 @@ function AddComponent(props: {
       <button disabled={!schema} onClick={() => void insert()}>
         Insert
       </button>
-      <button onClick={() => state.set({ adding: false })}>Cancel</button>
+      <button onClick={() => state.set({ adding: null })}>Cancel</button>
     </div>
   );
 }

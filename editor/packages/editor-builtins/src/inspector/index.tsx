@@ -1,11 +1,17 @@
-import { ProtocolFailure } from "@ludenea/control-client";
+import { ProtocolFailure, type JsonValue } from "@ludenea/control-client";
 import { definePlugin, type Editor } from "@ludenea/editor-shell";
 import { createStore, showPanel, type Store } from "../shared";
 import { assertEditable, edit } from "../timeline/editing";
 import { InspectorPanel } from "./InspectorPanel";
 
-/** What the inspector's commands and panel share. */
-export type InspectorState = Store<{ focused: string | null; adding: boolean }>;
+/**
+ * The component being added: the one picked (the first candidate when it is no longer one), the
+ * value form's content for it once a default was rejected, and the last failure.
+ */
+export type AddDraft = { chosen: string; draft: { component: string; value: JsonValue } | null; error: string | null };
+
+/** What the inspector's commands and panel share; kept here while the panel is hidden. */
+export type InspectorState = Store<{ focused: string | null; adding: AddDraft | null }>;
 
 /** Runs a request on the selection; `NoSuchEntity` (seeked before its spawn) clears the selection. */
 export async function onEntity<T>(editor: Editor, request: Promise<T>): Promise<T> {
@@ -20,7 +26,7 @@ export async function onEntity<T>(editor: Editor, request: Promise<T>): Promise<
 export const inspectorPlugin = definePlugin({
   name: "ludenea.inspector",
   activate(editor) {
-    const state: InspectorState = createStore({ focused: null as string | null, adding: false });
+    const state: InspectorState = createStore({ focused: null as string | null, adding: null as AddDraft | null });
     const target = () => {
       const control = editor.control;
       if (!control) throw new Error("no game is running");
@@ -40,7 +46,7 @@ export const inspectorPlugin = definePlugin({
       run() {
         target();
         assertEditable(editor);
-        state.set({ adding: true });
+        state.set({ adding: state.get().adding ?? { chosen: "", draft: null, error: null } });
         showPanel(editor, "ludenea.inspector");
       },
     });

@@ -119,6 +119,8 @@ describe("inspector", () => {
     expect(screen.getByRole("form", { name: "New ludenea::Collider" }).textContent).toContain(message);
 
     edit("shape.Circle.radius", "1", within(screen.getByRole("form", { name: "New ludenea::Collider" })));
+    // The message was about the previous value.
+    expect(screen.getByRole("form", { name: "New ludenea::Collider" }).textContent).not.toContain(message);
     fireEvent.click(screen.getByRole("button", { name: "Insert" }));
     await settle();
     expect(game.sent).toContainEqual({
@@ -150,5 +152,41 @@ describe("inspector", () => {
 
     expect(component("ludenea::Collider").getByText("custom density 1")).toBeTruthy();
     expect(component("ludenea::Collider").queryByLabelText("density")).toBeNull();
+  });
+
+  it("add_component_choice_follows_the_components_present", async () => {
+    let components: Record<string, unknown> = {};
+    const { game } = await inspector((command) => (command.type === "get_entity" ? { type: "entity", entity, components } : undefined));
+    await act(() => screen.getByRole("button", { name: "Add component" }).click());
+    const picker = () => screen.getByRole("combobox", { name: "Component" }) as HTMLSelectElement;
+    fireEvent.change(picker(), { target: { value: "my_game::Score" } });
+
+    // The entity gains the chosen component elsewhere (another panel, an undo).
+    components = { "my_game::Score": json({ points: 1 }) };
+    act(() => game.push({ type: "entity_changed", entity, components, removed: [] }));
+    await settle();
+    expect(picker().value).toBe("ludenea::Collider");
+    fireEvent.click(screen.getByRole("button", { name: "Insert" }));
+    await settle();
+    expect(game.sent.filter((command) => command.type === "insert_component").map((command) => command.component)).toEqual(["ludenea::Collider"]);
+  });
+
+  it("add_component_draft_survives_hiding_the_panel", async () => {
+    const { host } = await inspector((command) => {
+      if (command.type === "get_entity") return { type: "entity", entity, components: {} };
+      if (command.type === "insert_component") return { error: { code: "invalid_edit", message: "the radius must be finite and positive" } };
+      return undefined;
+    });
+    await act(() => screen.getByRole("button", { name: "Add component" }).click());
+    fireEvent.click(screen.getByRole("button", { name: "Insert" }));
+    await settle();
+    edit("shape.Circle.radius", "3", within(screen.getByRole("form", { name: "New ludenea::Collider" })));
+
+    // The shell unmounts a panel while its tab is hidden.
+    cleanup();
+    renderPanel(host, "ludenea.inspector");
+    await settle();
+    const form = within(screen.getByRole("form", { name: "New ludenea::Collider" }));
+    expect((form.getByLabelText("shape.Circle.radius") as HTMLInputElement).value).toBe("3");
   });
 });
