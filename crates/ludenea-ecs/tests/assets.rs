@@ -340,3 +340,27 @@ fn handle_field_appears_in_the_component_schema() {
         }
     );
 }
+
+#[test]
+fn diff_of_an_asset_whose_type_changed_names_both_types() {
+    let mut left = with_assets();
+    left.insert_asset_ron(ID, "test::Stats", "(damage: 4, cooldown: 2)")
+        .unwrap();
+    let mut right = with_assets();
+    right.insert_asset_ron(ID, NoDefault::NAME, "(3)").unwrap();
+    let differences = left
+        .diff_snapshots(&left.snapshot(), &right.snapshot())
+        .unwrap();
+    assert_eq!(differences.len(), 1);
+    let difference = &differences[0];
+    assert!(
+        difference.left_text.starts_with("test::Stats "),
+        "{difference}"
+    );
+    assert!(
+        difference
+            .right_text
+            .starts_with(&format!("{} ", NoDefault::NAME)),
+        "{difference}"
+    );
+}

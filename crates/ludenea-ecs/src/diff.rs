@@ -163,7 +163,15 @@ impl World {
             let schema = same_type.then(|| (codec.schema)());
             let subject = format!("asset {id}");
             let mut found = Found::new(&subject, &type_name, &mut differences);
-            let (l, r) = (l.map(|l| l.2), r.map(|r| r.2));
+            let types_differ = !same_type && l.is_some() && r.is_some();
+            // Values of two types are named with their type, as `component` names the left one.
+            let typed = |(type_name, _, mut side): (String, Codec, Side)| {
+                if types_differ {
+                    side.ron = format!("{type_name} {}", side.ron);
+                }
+                side
+            };
+            let (l, r) = (l.map(typed), r.map(typed));
             match schema {
                 Some(schema) => found.compare(Some(&schema), l.as_ref(), r.as_ref()),
                 None => found.whole(l.as_ref(), r.as_ref()),
