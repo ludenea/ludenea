@@ -4,7 +4,7 @@
 use std::fs;
 
 use boxes::{ContactStats, Crate};
-use ludenea::app::replay::Replay;
+use ludenea::app::replay::{Replay, load_replay};
 use ludenea::cli::Trace;
 use ludenea::control::{
     Bytes, Command, Document, Host, InProcess, PROTOCOL_VERSION, Reply, Transport,
@@ -140,11 +140,13 @@ fn spawner_replay_matches_at_1_2_and_8_threads() {
     }
 }
 
-/// Runs the replay's edits and inputs from the current tick to `end`, returning the hash
-/// after each tick.
-fn play_to(simulation: &mut Simulation, replay: &Replay, end: u64) -> Vec<u64> {
-    let inputs = InputLog::decode(&replay.inputs).unwrap();
-    let edits = EditLog::decode(&replay.edits).unwrap();
+/// Runs the edits and inputs from the current tick to `end`, returning the hash after each
+/// tick.
+fn play_to(
+    simulation: &mut Simulation,
+    (inputs, edits): &(InputLog, EditLog),
+    end: u64,
+) -> Vec<u64> {
     let mut hashes = Vec::new();
     for tick in simulation.tick()..end {
         for timed in edits.at(tick) {
@@ -161,13 +163,12 @@ fn spawner_replay_survives_snapshot_restore_at_1500() {
     let replay = Replay::decode(&fs::read(SPAWNER_REPLAY).unwrap()).unwrap();
     let end = replay.hashes.len() as u64 - 1;
     let mut simulation = boxes::app().build().unwrap();
-    let assets: ludenea::app::AssetTexts = replay.assets.iter().cloned().collect();
-    simulation.load_scene_with(&replay.scene, &assets).unwrap();
-    play_to(&mut simulation, &replay, 1_500);
+    let logs = load_replay(&mut simulation, &replay).unwrap();
+    play_to(&mut simulation, &logs, 1_500);
     let snapshot = simulation.snapshot();
-    let first = play_to(&mut simulation, &replay, end);
+    let first = play_to(&mut simulation, &logs, end);
     simulation.restore(&snapshot).unwrap();
-    let second = play_to(&mut simulation, &replay, end);
+    let second = play_to(&mut simulation, &logs, end);
     assert_eq!(first, second);
     assert_eq!(first, replay.hashes[1_501..]);
     // 2 instances, plus a spawn every 60 ticks over ticks 0 to 999 (17), then every 45
