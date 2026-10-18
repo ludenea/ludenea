@@ -82,4 +82,21 @@ describe("startWorkerGame", () => {
     game.terminate();
     expect(worker.terminated).toBe(true);
   });
+
+  it("the_transport_closes_once_whatever_ends_the_game", () => {
+    const { game, worker } = start();
+    const closes: string[] = [];
+    game.transport.onClose((reason) => closes.push(reason));
+    worker.emit({ type: "crashed", message: "boom" });
+    game.terminate();
+    game.transport.close();
+    expect(closes).toEqual(["the game crashed: boom"]);
+
+    const other = start();
+    const otherCloses: string[] = [];
+    other.game.transport.onClose((reason) => otherCloses.push(reason));
+    other.game.terminate();
+    other.game.terminate();
+    expect(otherCloses).toEqual(["terminated"]);
+  });
 });

@@ -1,6 +1,6 @@
 //! The desktop editor: the project service in process, the game as a native process over
 //! stdio, and the editor front end in a webview. The front end talks to both through two
-//! channels, `project` and `control`, with the `send` and `subscribe` commands.
+//! channels, `project` and `control`, with the `send`, `subscribe`, and `unsubscribe` commands.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -72,6 +72,19 @@ impl Backend {
         service.editor_disconnected();
         lock(&self.delivery).connected = false;
         *lock(&self.project) = Some(channel);
+    }
+
+    /// The front end closed its project channel `id`: like a replaced editor, until another
+    /// subscribes and says hello, events wait. A newer channel stays.
+    fn drop_editor(&self, id: u32) {
+        let service = lock(&self.service);
+        let mut delivery = lock(&self.delivery);
+        let mut project = lock(&self.project);
+        if project.as_ref().is_some_and(|channel| channel.id() == id) {
+            *project = None;
+            delivery.connected = false;
+            service.editor_disconnected();
+        }
     }
 
     /// Takes the control channel of the game just started and relays what it prints.
@@ -147,6 +160,31 @@ async fn subscribe(
         }
         "control" => {
             *lock(&backend.control) = Some(on_message);
+            Ok(())
+        }
+        _ => Err(format!("no channel named {channel:?}")),
+    }
+}
+
+/// Detaches channel `id` from `channel`, unless a newer subscription replaced it.
+#[tauri::command]
+async fn unsubscribe(
+    channel: String,
+    id: u32,
+    backend: State<'_, Arc<Backend>>,
+) -> Result<(), String> {
+    match channel.as_str() {
+        "project" => {
+            let backend = Arc::clone(&backend);
+            tauri::async_runtime::spawn_blocking(move || backend.drop_editor(id))
+                .await
+                .map_err(|error| error.to_string())
+        }
+        "control" => {
+            let mut control = lock(&backend.control);
+            if control.as_ref().is_some_and(|channel| channel.id() == id) {
+                *control = None;
+            }
             Ok(())
         }
         _ => Err(format!("no channel named {channel:?}")),
@@ -262,7 +300,7 @@ fn main() {
 
     tauri::Builder::default()
         .manage(backend)
-        .invoke_handler(tauri::generate_handler![subscribe, send])
+        .invoke_handler(tauri::generate_handler![subscribe, unsubscribe, send])
         .register_asynchronous_uri_scheme_protocol(
             "ludenea-plugin",
             |context, request, responder| {

@@ -20,10 +20,11 @@ export function startWorkerGame(options: { workerUrl: URL; glueUrl: string }): W
   const messages = new Listeners<string>();
   const closes = new Listeners<string>();
   const crashes = new Listeners<WorkerCrash>();
-  let crashed = false;
+  // A crash or a termination ends the game: whichever comes first closes the transport, once.
+  let ended = false;
   const crash = (report: WorkerCrash) => {
-    if (crashed) return;
-    crashed = true;
+    if (ended) return;
+    ended = true;
     crashes.emit(report);
     closes.emit(`the game crashed: ${report.message}`);
   };
@@ -39,6 +40,8 @@ export function startWorkerGame(options: { workerUrl: URL; glueUrl: string }): W
   worker.postMessage({ type: "init", glueUrl: options.glueUrl });
   const terminate = () => {
     worker.terminate();
+    if (ended) return;
+    ended = true;
     closes.emit("terminated");
   };
   return {
