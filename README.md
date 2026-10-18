@@ -91,6 +91,9 @@ tick. The game always runs apart from the interface (a Web Worker in the browser
 separate process on the desktop), so the interface stays responsive while it simulates.
 Panels: scene tree, inspector, viewport with physics debug drawing, timeline, asset
 browser, entity explorer, physics, and console, all reachable from the command palette.
+A project opens with the document last open in it, or else with the `default_scene` of its
+`ludenea.toml`; without one (or with its file missing) nothing opens and the console says
+why. Double-click a scene, prefab, or replay in the asset browser to open another.
 
 Create a project from the template (the game depends on the engine at `--engine-path`):
 

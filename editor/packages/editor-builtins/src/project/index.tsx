@@ -1,12 +1,31 @@
 import type { ProjectInfo } from "@ludenea/control-client";
 import { definePlugin, type Editor } from "@ludenea/editor-shell";
 import { useState } from "react";
+import { logToConsole } from "../console";
 import { createStore, errorText, shared, showPanel, useStore, type Store } from "../shared";
 
 const PANEL = "ludenea.project";
 const ENGINE_PATH = "ludenea.engine-path";
 const RECENT = "ludenea.recent-projects";
 const RECENT_LIMIT = 10;
+/** The document last open in a project, per project root, on this installation. */
+const LAST_DOCUMENT = "ludenea.last-document.";
+
+function lastDocument(root: string): string | null {
+  try {
+    return localStorage.getItem(LAST_DOCUMENT + root);
+  } catch {
+    return null;
+  }
+}
+
+function rememberDocument(root: string, id: string): void {
+  try {
+    localStorage.setItem(LAST_DOCUMENT + root, id);
+  } catch {
+    // Not remembered: the next start opens the default scene.
+  }
+}
 
 type Form = "new" | "open" | null;
 type Ui = Store<{ form: Form; error: string | null }>;
@@ -19,10 +38,35 @@ export const projectPlugin = definePlugin({
     editor.settings.register({ id: ENGINE_PATH, title: "Engine path", default: "", kind: "path" });
     editor.settings.register<string[]>({ id: RECENT, title: "Recent projects", default: [], kind: "list" });
 
+    /**
+     * With no document open, opens the one last open in the project, else its manifest's
+     * default scene; without either, says so in the console.
+     */
+    const openStartDocument = async (info: ProjectInfo) => {
+      if (editor.document.getState().current) return;
+      const { entries } = await editor.project.request({ type: "list_files" });
+      const last = lastDocument(info.root);
+      const entry = entries.find((file) => file.id === last) ?? entries.find((file) => file.path === info.default_scene);
+      if (!entry) {
+        const why = info.default_scene ? `its default scene ${info.default_scene} is missing` : "it names no default scene in ludenea.toml";
+        return logToConsole(editor, "info", `No document opened for ${info.name}: ${why}.`);
+      }
+      // A failure is reported by the document store.
+      await editor.document.getState().open(entry.id).catch(() => {});
+    };
+    const started = (info: ProjectInfo) => openStartDocument(info).catch((error) => logToConsole(editor, "warning", `No document opened for ${info.name}: ${errorText(error)}`));
+    // The document open is the one the project starts with next time.
+    const stopRemembering = editor.document.subscribe(({ current }, previous) => {
+      const root = project.get().info?.root;
+      if (current && root && current.id !== previous.current?.id) rememberDocument(root, current.id);
+    });
+
     const opened = (info: ProjectInfo) => {
       // Documents are files of a project: another project's are not open.
-      if (info.root !== project.get().info?.root) editor.document.setState({ current: null, text: null });
+      const another = info.root !== project.get().info?.root;
+      if (another) editor.document.setState({ current: null, text: null });
       project.set({ info });
+      if (another) void started(info);
       const recent = editor.settings.get<string[]>(RECENT).filter((root) => root !== info.root);
       editor.settings.set(RECENT, [info.root, ...recent].slice(0, RECENT_LIMIT));
       ui.set({ form: null, error: null });
@@ -42,7 +86,10 @@ export const projectPlugin = definePlugin({
 
     // The service may already have a project open (`ludenea serve <project>`).
     editor.project.request({ type: "info" }).then(
-      (info) => project.set({ info }),
+      (info) => {
+        project.set({ info });
+        void started(info);
+      },
       () => {},
     );
     const stopBuild = editor.project.on("build", ({ event }) => {
@@ -78,7 +125,10 @@ export const projectPlugin = definePlugin({
       defaultPosition: "left",
       component: () => <ProjectPanel editor={editor} ui={ui} actions={actions} />,
     });
-    return stopBuild;
+    return () => {
+      stopBuild();
+      stopRemembering();
+    };
   },
 });
 

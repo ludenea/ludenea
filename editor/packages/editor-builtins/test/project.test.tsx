@@ -26,6 +26,63 @@ describe("project", () => {
     expect(screen.getByRole("heading").textContent).toBe("demo");
   });
 
+  describe("start document", () => {
+    const MAIN = "0000000000000000000000000000000a";
+    const OTHER = "0000000000000000000000000000000b";
+    const template = { ...info, default_scene: "scenes/main.scene.ron" };
+    const files = [
+      { path: "scenes/main.scene.ron", id: MAIN, kind: "Scene" },
+      { path: "scenes/other.scene.ron", id: OTHER, kind: "Scene" },
+    ];
+    async function started(projectInfo: object, entries = files, opened: object = projectInfo) {
+      const host = await testEditor(builtinPlugins, (request) => {
+        if (request.type === "info") return projectInfo;
+        if (request.type === "open") return opened;
+        if (request.type === "list_files") return { type: "files", entries };
+        if (request.type === "read_text") return { type: "text", text: `(${request.path as string})` };
+        if (request.type === "read_asset_texts") return { type: "asset_texts", assets: [], paths: [] };
+        if (request.type === "load_stored_session") return { type: "stored_session", bytes: null };
+        return { type: "done" };
+      });
+      renderPanel(host, "ludenea.console");
+      await settle();
+      await settle();
+      return host;
+    }
+
+    it("a_project_opens_its_default_scene", async () => {
+      const host = await started(template);
+      expect(host.editor.document.getState()).toMatchObject({ current: { id: MAIN, kind: "scene", path: "scenes/main.scene.ron" }, text: "(scenes/main.scene.ron)" });
+    });
+
+    it("a_project_reopens_the_document_last_open_in_it", async () => {
+      const first = await started(template);
+      await act(() => first.editor.document.getState().open(OTHER));
+      cleanup();
+
+      const second = await started(template);
+      expect(second.editor.document.getState().current?.id).toBe(OTHER);
+    });
+
+    it("a_missing_default_scene_opens_nothing_and_says_so", async () => {
+      const host = await started(template, files.slice(1));
+      expect(host.editor.document.getState().current).toBeNull();
+      expect(screen.getByText("No document opened for demo: its default scene scenes/main.scene.ron is missing.")).toBeTruthy();
+    });
+
+    it("another_project_opens_its_own_start_document", async () => {
+      const other = { ...template, root: "/work/other", name: "other", default_scene: "scenes/other.scene.ron" };
+      const host = await started(template, files, other);
+      renderPanel(host, "ludenea.project");
+      await act(() => host.editor.commands.run("project.open"));
+      fireEvent.change(screen.getByRole("textbox", { name: "Project folder" }), { target: { value: "/work/other" } });
+      fireEvent.click(screen.getByRole("button", { name: "Open" }));
+      await settle();
+      await settle();
+      expect(host.editor.document.getState().current?.id).toBe(OTHER);
+    });
+  });
+
   it("failed_build_request_leaves_building_state", async () => {
     const failure = { error: { code: "no_project", message: "no project is open" } };
     const host = await testEditor(builtinPlugins, (request) => (request.type === "build" ? failure : undefined));
