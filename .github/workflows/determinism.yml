@@ -47,11 +47,16 @@ jobs:
 
   editor:
     runs-on: ubuntu-24.04
+    # Above the end-to-end budget (six tests of at most 20 minutes each on CI) plus the builds
+    # and checks before it, so a hang is cut off without cutting a cold run short.
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
       - name: Install the pinned toolchain
         run: rustup toolchain install
-      # `target` holds the end-to-end projects' shared target directory, `target/e2e`, as well.
+      # `target` holds the end-to-end projects' shared target directory, `target/e2e`, as well:
+      # the action caches `target` whole and cleans the profiles it finds at any depth, so the
+      # nested one is kept like the others.
       - uses: Swatinem/rust-cache@v2
       # The pnpm version comes from `packageManager` in editor/package.json.
       - uses: pnpm/action-setup@v4
