@@ -1,6 +1,6 @@
 import { ControlClient, fakeTransport, type GameInfo, type WorkerCrash } from "@ludenea/control-client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { guardSession, restoreSession } from "../src/session-guard";
+import { EXPORT_COALESCE_MS, guardSession, restoreSession } from "../src/session-guard";
 
 type Command = { type: string; [key: string]: unknown };
 
@@ -109,13 +109,14 @@ describe("guardSession", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(exports(game.sent)).toBe(2);
     game.push({ type: "timeline_changed", timeline: { ...timeline, edit_ticks: [3] } });
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(EXPORT_COALESCE_MS);
     expect(exports(game.sent)).toBe(3);
 
     // While playing: once a second, not on every timeline change.
     game.push({ type: "ticked", tick: 4, hash: "0000000000000003", pending: false, playing: true, effective_rate: 1 });
     game.push({ type: "timeline_changed", timeline: { ...timeline, head: 6 } });
-    await vi.advanceTimersByTimeAsync(999);
+    // The interval started with the guard, `EXPORT_COALESCE_MS` ago.
+    await vi.advanceTimersByTimeAsync(999 - EXPORT_COALESCE_MS);
     expect(exports(game.sent)).toBe(3);
     await vi.advanceTimersByTimeAsync(1);
     expect(exports(game.sent)).toBe(4);
@@ -124,6 +125,36 @@ describe("guardSession", () => {
     guard.dispose();
     await vi.advanceTimersByTimeAsync(5000);
     expect(exports(game.sent)).toBe(4);
+  });
+
+  it("timeline_changes_while_paused_coalesce_into_one_export", async () => {
+    vi.useFakeTimers();
+    const game = await fakeGame((command) => (command.type === "export_session" ? session("scene") : command.type === "get_timeline" ? { type: "timeline", ...timeline } : { type: "done" }));
+    const guard = guardSession(game.control, fakeWorker(), async () => game.control);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(exports(game.sent)).toBe(1);
+
+    // Scrubbing the timeline while paused: one export once the changes stop.
+    for (let tick = 0; tick < 5; tick++) {
+      game.push({ type: "timeline_changed", timeline: { ...timeline, current: tick } });
+      await vi.advanceTimersByTimeAsync(EXPORT_COALESCE_MS / 2);
+    }
+    expect(exports(game.sent)).toBe(1);
+    await vi.advanceTimersByTimeAsync(EXPORT_COALESCE_MS / 2);
+    expect(exports(game.sent)).toBe(2);
+
+    // A pause exports at once, taking the pending export with it.
+    game.push({ type: "timeline_changed", timeline: { ...timeline, current: 1 } });
+    game.push({ type: "paused", reason: { type: "user" } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(exports(game.sent)).toBe(3);
+    await vi.advanceTimersByTimeAsync(EXPORT_COALESCE_MS);
+    expect(exports(game.sent)).toBe(3);
+
+    game.push({ type: "timeline_changed", timeline: { ...timeline, current: 2 } });
+    guard.dispose();
+    await vi.advanceTimersByTimeAsync(EXPORT_COALESCE_MS);
+    expect(exports(game.sent)).toBe(3);
   });
 
   it("restore_fails_when_the_game_dies_or_panics_while_resimulating", async () => {
@@ -156,7 +187,7 @@ describe("guardSession", () => {
     const logged: string[] = [];
     guardSession(first.control, worker, restart, { seed, log: (level, text) => logged.push(`${level}: ${text}`) });
     first.push({ type: "timeline_changed", timeline: { ...timeline, resimulating: false } });
-    await settle();
+    await new Promise((resolve) => setTimeout(resolve, EXPORT_COALESCE_MS));
     expect(exports(first.sent)).toBe(1);
 
     worker.crash({ tick: 4, message: "boom" });

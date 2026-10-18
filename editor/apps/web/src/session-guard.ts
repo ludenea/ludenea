@@ -2,6 +2,8 @@ import type { Command, ConsoleLevel, ControlClient, WorkerGame } from "@ludenea/
 import type { Disposable } from "@ludenea/editor-shell";
 
 const EXPORT_INTERVAL_MS = 1000;
+/** Timeline changes while paused (scrubbing, edits) closer together than this export once. */
+export const EXPORT_COALESCE_MS = 200;
 
 /** A session as `ExportSession` gave it, ready to load, and the tick the timeline showed then. */
 export interface SavedSession {
@@ -94,7 +96,8 @@ export async function restoreSession(control: ControlClient, saved: SavedSession
 
 /**
  * Keeps the latest export of the session (on every pause, after every edit once resimulated,
- * and every second while playing). When the worker crashes, reports it in the console,
+ * and every second while playing). Timeline changes while paused export once they stop for
+ * `EXPORT_COALESCE_MS`, so a crash in that window loses at most the last edit. When the worker crashes, reports it in the console,
  * restarts it, loads that export, and seeks back to the crash tick when known (else the
  * exported tick). `seed` is the session being restored into this game: it stays the latest
  * until a newer export exists, and a crash before then (the restored session crashes this
@@ -111,7 +114,9 @@ export function guardSession(
   let restoring = latest !== null;
   let playing = false;
   let disposed = false;
+  let coalescing: ReturnType<typeof setTimeout> | undefined;
   const take = () => {
+    clearTimeout(coalescing);
     exportSession(control).then(
       (saved) => {
         if (disposed) return;
@@ -131,7 +136,9 @@ export function guardSession(
       take();
     }),
     control.on("timeline_changed", ({ timeline }) => {
-      if (!playing && !timeline.resimulating) take();
+      if (playing || timeline.resimulating) return;
+      clearTimeout(coalescing);
+      coalescing = setTimeout(take, EXPORT_COALESCE_MS);
     }),
     game.onCrashed(async (crash) => {
       log("error", `The game crashed${crash.tick === undefined ? "" : ` at tick ${crash.tick}`}: ${crash.message}`);
@@ -157,6 +164,7 @@ export function guardSession(
   const dispose = () => {
     disposed = true;
     clearInterval(timer);
+    clearTimeout(coalescing);
     stops.forEach((stop) => stop());
   };
   if (!restoring) take();
