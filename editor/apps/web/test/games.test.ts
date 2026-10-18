@@ -116,9 +116,14 @@ describe("followWasmGames crash loops", () => {
     let build = 0;
     const { project, push } = await fakeProject(() => ({ ok: { type: "wasm", glue_url: builds[build] } }));
     const crashes: ((crash: WorkerCrash) => void)[] = [];
+    const terminated: string[] = [];
     const start = vi.fn((glueUrl: string): WorkerGame => {
       const host = fakeHost(glueUrl);
-      return { transport: host, onCrashed: (listener: (crash: WorkerCrash) => void) => (crashes.push(listener), () => {}), terminate: () => host.close() };
+      const terminate = () => {
+        terminated.push(glueUrl);
+        host.close();
+      };
+      return { transport: host, onCrashed: (listener: (crash: WorkerCrash) => void) => (crashes.push(listener), () => {}), terminate };
     });
     const editor = app();
     followWasmGames(project, editor, start);
@@ -132,6 +137,9 @@ describe("followWasmGames crash loops", () => {
     }
     expect(start).toHaveBeenCalledTimes(4);
     expect(editor.log).toHaveBeenLastCalledWith("error", expect.stringMatching(/^The game crashed 4 times within \d+ seconds/));
+    // Every crashed worker is gone, the last one included, and the editor shows no game.
+    expect(terminated).toHaveLength(4);
+    expect(editor.connectGame).toHaveBeenLastCalledWith(null);
 
     // The next build starts again, even an identical one, with a fresh allowance.
     push({ type: "game_ready" });
@@ -201,7 +209,8 @@ describe("followNativeGames", () => {
       restarts += 1;
       return restarts === 1 ? { error: { code: "io", message: "cannot start the game" } } : { ok: { type: "done" } };
     });
-    followNativeGames(project, app(), async () => games[restarts > 1 ? 1 : 0]!);
+    const editor = app();
+    followNativeGames(project, editor, async () => games[restarts > 1 ? 1 : 0]!);
     push({ type: "game_ready" });
     await settle();
     log = [];
@@ -214,5 +223,6 @@ describe("followNativeGames", () => {
     await settle();
     expect(log.filter((entry) => entry === "old:export_session")).toHaveLength(2);
     expect(log).toContain("new:load_session");
+    expect(editor.log).toHaveBeenCalledWith("error", "Cannot restart the rebuilt game: cannot start the game");
   });
 });

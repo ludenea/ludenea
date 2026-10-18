@@ -10,8 +10,8 @@ export interface EditorApp {
   host: EditorHost;
   /** Lists the project's plugin bundles and loads the new or changed ones. */
   loadPlugins(): Promise<void>;
-  /** Makes `control` the editor's game, after its handshake. */
-  connectGame(control: ControlClient): void;
+  /** Makes `control` the editor's game, after its handshake; `null` leaves the editor without one. */
+  connectGame(control: ControlClient | null): void;
   /** Shows a message in the Console panel. */
   log(level: ConsoleLevel, text: string): void;
 }
@@ -72,6 +72,7 @@ export function startEditor(project: ProjectClient, pluginUrl: (bundle: PluginBu
     log,
     connectGame(control) {
       host.setControl(control);
+      if (!control) return;
       project.request({ type: "write_game_types", info: control.game }).catch((error) => log("error", `Cannot write the game types: ${errorText(error)}`));
     },
   };

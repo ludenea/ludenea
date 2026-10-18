@@ -40,6 +40,10 @@ export function followWasmGames(project: ProjectClient, app: App, start: (glueUr
     crashes = [...crashes.filter((time) => now - time < CRASH_WINDOW_MS), now];
     if (crashes.length > MAX_CRASH_RESTARTS) {
       stopped = true;
+      // The crashed worker and its client are dead: the editor shows no game until a build starts.
+      running?.game.terminate();
+      running?.control.close();
+      app.connectGame(null);
       app.log("error", `The game crashed ${crashes.length} times within ${CRASH_WINDOW_MS / 1000} seconds: it restarts with the next build.`);
       return null;
     }

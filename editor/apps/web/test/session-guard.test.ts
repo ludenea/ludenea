@@ -157,6 +157,25 @@ describe("guardSession", () => {
     expect(exports(game.sent)).toBe(3);
   });
 
+  it("a_continuous_burst_of_timeline_changes_still_exports_every_second", async () => {
+    vi.useFakeTimers();
+    const game = await fakeGame((command) => (command.type === "export_session" ? session("scene") : command.type === "get_timeline" ? { type: "timeline", ...timeline } : { type: "done" }));
+    guardSession(game.control, fakeWorker(), async () => game.control);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(exports(game.sent)).toBe(1);
+
+    // Changes never stop for `EXPORT_COALESCE_MS`: the first one waits a second at most.
+    const step = EXPORT_COALESCE_MS / 2;
+    for (let elapsed = 0; elapsed < 1000 - step; elapsed += step) {
+      game.push({ type: "timeline_changed", timeline: { ...timeline, current: elapsed % 5 } });
+      await vi.advanceTimersByTimeAsync(step);
+    }
+    expect(exports(game.sent)).toBe(1);
+    game.push({ type: "timeline_changed", timeline: { ...timeline, current: 1 } });
+    await vi.advanceTimersByTimeAsync(step);
+    expect(exports(game.sent)).toBe(2);
+  });
+
   it("restore_fails_when_the_game_dies_or_panics_while_resimulating", async () => {
     const saved = { load: { type: "load_session" as const, scene: "s", saved_scene: null, inputs: "", edits: "", undo: "", expected: hashes }, tick: 4 };
     const resimulating = (command: Command) => (command.type === "get_timeline" ? { type: "timeline", ...timeline, simulated: 0, resimulating: true } : { type: "done" });
@@ -174,6 +193,7 @@ describe("guardSession", () => {
   });
 
   it("a_crash_while_restoring_reloads_only_the_restored_scene", async () => {
+    vi.useFakeTimers();
     const seed = {
       // Version 1, two players, one tick.
       load: { type: "load_session" as const, scene: "edited", saved_scene: "saved", inputs: "AQIBAQc=", edits: "AQ==", undo: "Ag==", expected: hashes },
@@ -187,11 +207,11 @@ describe("guardSession", () => {
     const logged: string[] = [];
     guardSession(first.control, worker, restart, { seed, log: (level, text) => logged.push(`${level}: ${text}`) });
     first.push({ type: "timeline_changed", timeline: { ...timeline, resimulating: false } });
-    await new Promise((resolve) => setTimeout(resolve, EXPORT_COALESCE_MS));
+    await vi.advanceTimersByTimeAsync(EXPORT_COALESCE_MS);
     expect(exports(first.sent)).toBe(1);
 
     worker.crash({ tick: 4, message: "boom" });
-    await settle();
+    await vi.advanceTimersByTimeAsync(0);
     // The input log keeps its version and two players, without ticks.
     const sceneOnly = { type: "load_session", scene: "edited", saved_scene: "saved", inputs: "AQIA", edits: "", undo: "", expected: [] };
     expect(restart).toHaveBeenCalledWith({ load: sceneOnly, tick: 0 });

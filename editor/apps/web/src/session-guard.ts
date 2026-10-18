@@ -2,7 +2,10 @@ import type { Command, ConsoleLevel, ControlClient, WorkerGame } from "@ludenea/
 import type { Disposable } from "@ludenea/editor-shell";
 
 const EXPORT_INTERVAL_MS = 1000;
-/** Timeline changes while paused (scrubbing, edits) closer together than this export once. */
+/**
+ * Timeline changes while paused (scrubbing, edits) closer together than this export once,
+ * at most `EXPORT_INTERVAL_MS` after the first of them.
+ */
 export const EXPORT_COALESCE_MS = 200;
 
 /** A session as `ExportSession` gave it, ready to load, and the tick the timeline showed then. */
@@ -99,12 +102,13 @@ export async function restoreSession(control: ControlClient, saved: SavedSession
 /**
  * Keeps the latest export of the session (on every pause, after every edit once resimulated,
  * and every second while playing). Timeline changes while paused export once they stop for
- * `EXPORT_COALESCE_MS`, so a crash in that window loses at most the last edit. When the worker crashes, reports it in the console,
- * restarts it, loads that export, and seeks back to the crash tick when known (else the
- * exported tick). `seed` is the session being restored into this game: it stays the latest
- * until a newer export exists, and a crash before then (the restored session crashes this
- * build) reloads only its scene, so the game does not crash again at once. `restart` resolves
- * to `null` when it gives up restarting.
+ * `EXPORT_COALESCE_MS`, or a second after the first of them if they do not stop, so a crash
+ * in that window loses at most the last second of edits. When the worker crashes, reports it
+ * in the console, restarts it, loads that export, and seeks back to the crash tick when known
+ * (else the exported tick). `seed` is the session being restored into this game: it stays the
+ * latest until a newer export exists, and a crash before then (the restored session crashes
+ * this build) reloads only its scene, so the game does not crash again at once. `restart`
+ * resolves to `null` when it gives up restarting.
  */
 export function guardSession(
   control: ControlClient,
@@ -118,8 +122,12 @@ export function guardSession(
   let playing = false;
   let disposed = false;
   let coalescing: ReturnType<typeof setTimeout> | undefined;
+  // The longest a burst of timeline changes waits for its export.
+  let deadline: ReturnType<typeof setTimeout> | undefined;
   const take = () => {
     clearTimeout(coalescing);
+    clearTimeout(deadline);
+    deadline = undefined;
     exportSession(control).then(
       (saved) => {
         if (disposed) return;
@@ -142,6 +150,7 @@ export function guardSession(
       if (playing || timeline.resimulating) return;
       clearTimeout(coalescing);
       coalescing = setTimeout(take, EXPORT_COALESCE_MS);
+      deadline ??= setTimeout(take, EXPORT_INTERVAL_MS);
     }),
     game.onCrashed(async (crash) => {
       log("error", `The game crashed${crash.tick === undefined ? "" : ` at tick ${crash.tick}`}: ${crash.message}`);
@@ -168,6 +177,7 @@ export function guardSession(
     disposed = true;
     clearInterval(timer);
     clearTimeout(coalescing);
+    clearTimeout(deadline);
     stops.forEach((stop) => stop());
   };
   if (!restoring) take();
