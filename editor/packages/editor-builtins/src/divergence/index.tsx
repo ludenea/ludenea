@@ -10,19 +10,22 @@ import { CausalReport } from "./CausalReport";
 import { SnapshotDiff } from "./SnapshotDiff";
 import { TraceViewer } from "./TraceViewer";
 
-/** The host's report range after the fork tick, and what "Extend" adds to it. */
+/** What "Extend" adds to the compared range. */
 const DIVERGENCE_TICKS = 600;
 const LAGGING = "#ffb000";
 
 /** A file compared with another file or, while `against` is null, with the current session. */
 export type Comparison<R> = { path: string | null; against: string | null; result: R | null; error: string | null };
 
+/** `tick`: the tick a seek from the trace strip reached, which a snapshot still has to be chosen for. */
+export type SnapshotComparison = Comparison<Difference[]> & { tick: number | null };
+
 export interface Viewer {
   trace: Store<Comparison<TraceComparison>>;
-  snapshot: Store<Comparison<Difference[]>>;
+  snapshot: Store<SnapshotComparison>;
   compareTrace(patch?: Partial<Comparison<TraceComparison>>): Promise<void>;
-  diffSnapshot(patch?: Partial<Comparison<Difference[]>>): Promise<void>;
-  /** Seeks to the traces' first divergent tick, when the current branch is one side, and compares the snapshot with it. */
+  diffSnapshot(patch?: Partial<SnapshotComparison>): Promise<void>;
+  /** Seeks to the traces' first divergent tick, when the current branch is one side, and asks for a snapshot to compare with it. */
   seekDivergence(): Promise<void>;
 }
 
@@ -80,34 +83,39 @@ export const divergencePlugin = definePlugin({
   name: "ludenea.divergence",
   activate(editor) {
     const read = async (path: string) => (await editor.project.request({ type: "read_binary", path })).bytes;
-    const comparing =
-      <R,>(store: Store<Comparison<R>>, compare: (control: ControlClient, a: string, b: string | null) => Promise<R>) =>
-      async (patch: Partial<Comparison<R>> = {}) => {
-        store.set({ ...patch, result: null, error: null });
+    const comparing = <R, C extends Comparison<R>>(store: Store<C>, compare: (control: ControlClient, a: string, b: string | null) => Promise<R>) => {
+      // Only the latest comparison's answer is shown.
+      let latest = 0;
+      return async (patch: Partial<C> = {}) => {
+        store.set({ ...patch, result: null, error: null } as Partial<C>);
         const { path, against } = store.get();
+        const request = ++latest;
         if (!path) return;
-        const current = () => store.get().path === path && store.get().against === against;
+        const current = () => request === latest;
         try {
           const result = await compare(game(editor), await read(path), against === null ? null : await read(against));
-          if (current()) store.set({ result });
+          if (current()) store.set({ result } as Partial<C>);
         } catch (error) {
-          if (current()) store.set({ error: errorText(error) });
+          if (current()) store.set({ error: errorText(error) } as Partial<C>);
         }
       };
+    };
+    const trace = createStore(empty<TraceComparison>());
+    const snapshot = createStore<SnapshotComparison>({ ...empty<Difference[]>(), tick: null });
     const viewer: Viewer = {
-      trace: createStore(empty<TraceComparison>()),
-      snapshot: createStore(empty<Difference[]>()),
-      compareTrace: (patch) =>
-        comparing(viewer.trace, async (control, a, b) => {
-          const { type: _, ...comparison } = await control.request({ type: "compare_traces", a, b });
-          return comparison;
-        })(patch),
-      diffSnapshot: (patch) => comparing(viewer.snapshot, async (control, a, b) => (await control.request({ type: "diff_snapshots", a, b })).differences)(patch),
+      trace,
+      snapshot,
+      compareTrace: comparing(trace, async (control, a, b) => {
+        const { type: _, ...comparison } = await control.request({ type: "compare_traces", a, b });
+        return comparison;
+      }),
+      diffSnapshot: comparing(snapshot, async (control, a, b) => (await control.request({ type: "diff_snapshots", a, b })).differences),
       async seekDivergence() {
-        const { against, result } = viewer.trace.get();
+        const { against, result } = trace.get();
         if (against !== null || result?.first_divergent == null) return;
         await seek(editor, result.first_divergent);
-        await viewer.diffSnapshot({ against: null });
+        // The trace holds hashes only: the user picks the snapshot taken at that tick.
+        await viewer.diffSnapshot({ path: null, against: null, tick: result.first_divergent });
       },
     };
     editor.commands.register({
@@ -118,7 +126,7 @@ export const divergencePlugin = definePlugin({
         if (typeof path !== "string") throw new Error("choose a trace or snapshot from the asset browser");
         showPanel(editor, "ludenea.divergence");
         if (path.endsWith(".trace")) await viewer.compareTrace({ path, against: null });
-        else if (path.endsWith(".snap")) await viewer.diffSnapshot({ path, against: null });
+        else if (path.endsWith(".snap")) await viewer.diffSnapshot({ path, against: null, tick: null });
         else throw new Error(`${path} is not a trace or a snapshot`);
       },
     });
@@ -149,12 +157,14 @@ export const divergencePlugin = definePlugin({
         return () => {
           watchers--;
           followReport();
+          // Nothing keeps it current any more: the explorer column empties.
+          if (watchers === 0) reportState.set({ report: null, error: null });
         };
       },
       extend() {
-        const { report: current, range } = reportState.get();
+        const current = reportState.get().report;
         if (!current) return;
-        reportState.set({ range: (range ?? current.fork_tick + DIVERGENCE_TICKS) + DIVERGENCE_TICKS });
+        reportState.set({ range: current.up_to + DIVERGENCE_TICKS });
         refreshReport();
       },
       async select(tick, entities) {
@@ -190,7 +200,9 @@ export const divergencePlugin = definePlugin({
       const control = editor.control;
       if (!control || !showsGhost()) return;
       try {
-        const reply = await control.request({ type: "get_ghost_draw", tick: editor.timeline.getState().timeline?.current ?? 0, layers: control.game.debug_layers });
+        const hidden = shared(editor).layers.get().hidden;
+        const layers = control.game.debug_layers.filter((layer) => !hidden.includes(layer));
+        const reply = await control.request({ type: "get_ghost_draw", tick: editor.timeline.getState().timeline?.current ?? 0, layers });
         // A host that answers something else (a test double) leaves the ghost as it is.
         if (reply.type !== "ghost_draw" || editor.control !== control) return;
         await loadRenderer();
@@ -220,6 +232,7 @@ export const divergencePlugin = definePlugin({
         const { frame, tick, lagging } = ghost.get();
         if (!frame || !showsGhost()) return;
         const scale = Math.abs(worldToScreen({ x: 1, y: 0 }).x - worldToScreen({ x: 0, y: 0 }).x);
+        canvas.save();
         canvas.lineWidth = 1.5;
         for (const { primitive } of Object.values(frame.layers).flat()) {
           if (primitive.type === "label") {
@@ -237,6 +250,7 @@ export const divergencePlugin = definePlugin({
           canvas.fillStyle = LAGGING;
           canvas.fillText(`Ghost lagging at tick ${tick}`, 8, 16);
         }
+        canvas.restore();
       },
     });
 
@@ -253,6 +267,7 @@ export const divergencePlugin = definePlugin({
       }),
       stopColumn,
       stopRepaint,
+      shared(editor).layers.subscribe(fetchGhost),
     ];
     const changed = editor.onGameChanged(() => {
       reportState.set({ report: null, error: null, range: null });
@@ -289,21 +304,21 @@ export const divergencePlugin = definePlugin({
 function DivergencePanel({ editor, viewer }: { editor: Editor; viewer: Viewer }) {
   const control = useGame(editor);
   const trace = useStore(viewer.trace).path;
-  const snapshot = useStore(viewer.snapshot).path;
+  const { path: snapshot, tick } = useStore(viewer.snapshot);
   const [files, setFiles] = useState<FileEntry[]>([]);
   useEffect(() => {
     editor.project.request({ type: "list_files" }).then(
       ({ entries }) => setFiles(entries),
       () => setFiles([]),
     );
-  }, [editor, trace, snapshot]);
+  }, [editor, trace, snapshot, tick]);
   if (!control) return <p className="ludenea-muted">No game is running.</p>;
-  if (!trace && !snapshot) return <p className="ludenea-muted">Open a trace or a snapshot from the asset browser.</p>;
+  if (!trace && !snapshot && tick === null) return <p className="ludenea-muted">Open a trace or a snapshot from the asset browser.</p>;
   const of = (kind: string) => files.filter((file) => file.kind === kind).map((file) => file.path);
   return (
     <div className="ludenea-divergence">
       {trace && <TraceViewer viewer={viewer} traces={of("Trace")} />}
-      {snapshot && <SnapshotDiff viewer={viewer} snapshots={of("Snapshot")} />}
+      {(snapshot || tick !== null) && <SnapshotDiff viewer={viewer} snapshots={of("Snapshot")} />}
     </div>
   );
 }

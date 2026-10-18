@@ -2,7 +2,9 @@ import type { DebugDrawFrame, DivergenceReport, Entity, Timeline } from "@ludene
 import type { OverlayContext } from "@ludenea/editor-shell";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
+import type { PluginDefinition } from "@ludenea/editor-shell";
 import { divergencePlugin } from "../src/divergence";
+import { viewportPlugin } from "../src/viewport";
 import { renderPanel, settle, testEditor, testGame } from "./support";
 
 type Message = { type: string; [key: string]: unknown };
@@ -59,8 +61,8 @@ const report: DivergenceReport = {
   ],
 };
 
-async function divergence(options: { game?: (command: Message) => object | undefined; timeline?: Partial<Timeline> } = {}) {
-  const host = await testEditor([divergencePlugin], (request) => {
+async function divergence(options: { game?: (command: Message) => object | undefined; timeline?: Partial<Timeline>; plugins?: PluginDefinition[] } = {}) {
+  const host = await testEditor([divergencePlugin, ...(options.plugins ?? [])], (request) => {
     if (request.type === "list_files") return { type: "files", entries: files };
     if (request.type === "read_binary") return { type: "bytes", bytes: `bytes of ${request.path}` };
     return undefined;
@@ -73,7 +75,7 @@ async function divergence(options: { game?: (command: Message) => object | undef
       if (command.type === "get_hash") return { type: "hash", tick: 350, hash: "00000000000000aa", pending: false };
       return { type: "done" };
     },
-    { debug_layers: ["colliders"] },
+    { debug_layers: ["colliders", "contacts"] },
   );
   act(() => host.setControl(game.client));
   act(() => host.editor.timeline.setState({ timeline: timeline(options.timeline) }));
@@ -114,6 +116,12 @@ describe("divergence", () => {
     fireEvent.click(marker);
     await settle();
     expect(sentOf(game.sent, "seek")).toEqual([{ type: "seek", tick: 42 }]);
+    // A trace holds hashes only: the snapshot taken there is the user's to choose, then diffed against the current tick.
+    expect(sentOf(game.sent, "diff_snapshots")).toEqual([]);
+    fireEvent.change(screen.getByLabelText("Choose a snapshot to compare with tick 42"), { target: { value: "assets/run.snap" } });
+    await settle();
+    expect(sentOf(game.sent, "diff_snapshots")).toEqual([{ type: "diff_snapshots", a: "bytes of assets/run.snap", b: null }]);
+    expect(screen.getByRole("heading", { name: "assets/run.snap" })).toBeTruthy();
 
     // Two trace files: nothing to seek, the marker stays but does nothing.
     fireEvent.change(screen.getByLabelText("Compare the trace with"), { target: { value: "assets/other.trace" } });
@@ -177,7 +185,7 @@ describe("divergence", () => {
     expect(sentOf(game.sent, "get_divergence")).toHaveLength(2);
     fireEvent.click(screen.getByRole("button", { name: "Extend" }));
     await settle();
-    expect(sentOf(game.sent, "get_divergence").at(-1)).toEqual({ type: "get_divergence", up_to: 1500 });
+    expect(sentOf(game.sent, "get_divergence").at(-1)).toEqual({ type: "get_divergence", up_to: 1000 });
 
     // Without a compare branch the report is not asked for: the panel says why.
     act(() => host.editor.timeline.setState({ timeline: timeline({ compare: null }) }));
@@ -220,6 +228,12 @@ describe("divergence", () => {
     const current = host.editor.explorer.columns.list().find((registered) => registered.id === "divergence.diverged-at")!;
     expect(current.value(entity(4))).toBe("301");
     expect(current.value(entity(5))).toBeNull();
+
+    // Closed, nothing keeps the report current: the column empties.
+    cleanup();
+    await settle();
+    const closed = host.editor.explorer.columns.list().find((registered) => registered.id === "divergence.diverged-at")!;
+    expect(closed.value(entity(4))).toBeNull();
   });
 
   it("ghost_overlay_draws_only_with_compare_branch", async () => {
@@ -236,11 +250,14 @@ describe("divergence", () => {
     act(() => host.editor.timeline.setState({ timeline: timeline({ compare: 0 }) }));
     await settle();
     expect(sentOf(game.sent, "subscribe")).toContainEqual({ type: "subscribe", topic: { type: "ghost" } });
-    expect(sentOf(game.sent, "get_ghost_draw").at(-1)).toEqual({ type: "get_ghost_draw", tick: 350, layers: ["colliders"] });
+    expect(sentOf(game.sent, "get_ghost_draw").at(-1)).toEqual({ type: "get_ghost_draw", tick: 350, layers: ["colliders", "contacts"] });
     const drawn = fakeContext();
     overlay.draw(drawn.context);
     expect(drawn.calls.some((call) => call.method === "stroke")).toBe(true);
     expect(drawn.calls.some((call) => call.method === "fill")).toBe(false);
+    // The canvas is left as the viewport set it.
+    expect(drawn.calls[0]!.method).toBe("save");
+    expect(drawn.calls.at(-1)!.method).toBe("restore");
 
     // The toggle hides it and stops the compare simulation.
     await act(() => host.editor.commands.run("divergence.toggle-ghost"));
@@ -261,5 +278,15 @@ describe("divergence", () => {
     const drawn = fakeContext();
     overlay.draw(drawn.context);
     expect(drawn.calls.filter((call) => call.method === "fillText").map((call) => call.args[0])).toContain("Ghost lagging at tick 340");
+  });
+
+  it("ghost_requests_only_layers_the_viewport_shows", async () => {
+    const { host, game } = await divergence({
+      plugins: [viewportPlugin],
+      game: (command) => (command.type === "get_ghost_draw" ? { type: "ghost_draw", frame: circle, tick: 350, lagging: false } : undefined),
+    });
+    await act(() => host.editor.commands.run("viewport.toggle-layer.colliders"));
+    await settle();
+    expect(sentOf(game.sent, "get_ghost_draw").at(-1)).toEqual({ type: "get_ghost_draw", tick: 350, layers: ["contacts"] });
   });
 });

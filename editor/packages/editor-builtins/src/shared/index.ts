@@ -71,6 +71,8 @@ export interface Shared {
   reveal: Store<{ path: string | null }>;
   /** Changed by a built-in viewport overlay with something new to draw: the viewport repaints. */
   overlays: Store<{ version: number }>;
+  /** The debug layers the viewport hides, by name. */
+  layers: Store<{ hidden: string[] }>;
 }
 
 const sharedState = new WeakMap<Editor, Shared>();
@@ -82,6 +84,7 @@ export function shared(editor: Editor): Shared {
       project: createStore({ info: null as ProjectInfo | null, build: { status: "idle", done: 0, total: null } as BuildState }),
       reveal: createStore({ path: null as string | null }),
       overlays: createStore({ version: 0 }),
+      layers: createStore({ hidden: [] as string[] }),
     };
     sharedState.set(editor, state);
   }

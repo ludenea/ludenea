@@ -1,6 +1,6 @@
 import type { ControlClient, DebugDrawFrame, Vec2 } from "@ludenea/control-client";
 import { definePlugin, type Disposable } from "@ludenea/editor-shell";
-import { createStore } from "../shared";
+import { createStore, shared } from "../shared";
 import { bounds, panBy, zoomAt, MAX_PIXELS_PER_METER, MIN_PIXELS_PER_METER, type Camera, type Size } from "./camera";
 import { moveBy, visibleLayers, type ViewportState } from "./state";
 import { ViewportPanel } from "./ViewportPanel";
@@ -90,7 +90,9 @@ export const viewportPlugin = definePlugin({
           title: `Toggle the "${layer}" debug layer`,
           run() {
             const { hidden } = state.get();
-            state.set({ hidden: hidden.includes(layer) ? hidden.filter((name) => name !== layer) : [...hidden, layer] });
+            const next = hidden.includes(layer) ? hidden.filter((name) => name !== layer) : [...hidden, layer];
+            state.set({ hidden: next });
+            shared(editor).layers.set({ hidden: next });
           },
         }),
       );

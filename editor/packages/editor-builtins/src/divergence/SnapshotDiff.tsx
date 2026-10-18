@@ -18,7 +18,24 @@ function grouped(differences: Difference[]): Map<string, Map<string, Difference[
 
 /** A snapshot against another snapshot or the current tick: entity, component, field, with both values as the game's schemas write them. */
 export function SnapshotDiff({ viewer, snapshots }: { viewer: Viewer; snapshots: string[] }) {
-  const { path, against, result, error } = useStore(viewer.snapshot);
+  const { path, against, result, error, tick } = useStore(viewer.snapshot);
+  // After a seek from the trace strip: the snapshot taken at that tick is the user's to choose.
+  if (!path && tick !== null)
+    return (
+      <section aria-label="Snapshot comparison">
+        <label>
+          Choose a snapshot to compare with tick {tick}{" "}
+          <select value="" onChange={(event) => void viewer.diffSnapshot({ path: event.target.value || null, against: null })}>
+            <option value="">Choose a snapshot</option>
+            {snapshots.map((snapshot) => (
+              <option key={snapshot} value={snapshot}>
+                {snapshot}
+              </option>
+            ))}
+          </select>
+        </label>
+      </section>
+    );
   return (
     <section aria-label="Snapshot comparison">
       <h3>{path}</h3>
