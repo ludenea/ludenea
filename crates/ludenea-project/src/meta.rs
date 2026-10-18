@@ -1,6 +1,8 @@
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
+use std::thread;
+use std::time::Duration;
 
 use ludenea_ecs::AssetId;
 use serde::{Deserialize, Serialize};
@@ -33,9 +35,24 @@ pub(crate) struct Meta {
     pub kind: AssetKind,
 }
 
+/// How long a lister waits for another one to finish writing a meta it just created.
+const CREATION_GRACE: Duration = Duration::from_millis(50);
+
 impl Meta {
+    /// Reads the meta. An empty one is read once more after a moment: another lister may have
+    /// created it and not written it yet.
     pub fn read(path: &Path) -> Result<Meta, String> {
         let text = fs::read_to_string(path).map_err(|error| error.to_string())?;
+        Self::parse(path, text)
+    }
+
+    fn parse(path: &Path, text: String) -> Result<Meta, String> {
+        let text = if text.is_empty() {
+            thread::sleep(CREATION_GRACE);
+            fs::read_to_string(path).map_err(|error| error.to_string())?
+        } else {
+            text
+        };
         ron::from_str(&text).map_err(|error| error.to_string())
     }
 
@@ -43,7 +60,7 @@ impl Meta {
     /// A meta that exists but cannot be read or parsed is an error and is never overwritten.
     pub fn load_or_create(path: &Path, kind: AssetKind) -> Result<Meta, String> {
         match fs::read_to_string(path) {
-            Ok(text) => return ron::from_str(&text).map_err(|error| error.to_string()),
+            Ok(text) => return Self::parse(path, text),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.to_string()),
         }
@@ -64,5 +81,32 @@ impl Meta {
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Self::read(path),
             Err(error) => Err(format!("cannot create the meta: {error}")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Another lister created the meta and writes it a moment later.
+    #[test]
+    fn a_meta_being_written_by_another_lister_is_read_once_written() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("main.scene.ron.meta");
+        fs::write(&path, "").unwrap();
+        let writer = {
+            let path = path.clone();
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(5));
+                fs::write(
+                    path,
+                    "Meta(version: 1, id: \"0000000000000000000000000000002a\", kind: Scene)\n",
+                )
+                .unwrap();
+            })
+        };
+        let meta = Meta::load_or_create(&path, AssetKind::Scene).unwrap();
+        writer.join().unwrap();
+        assert_eq!(meta.id, AssetId(42));
     }
 }

@@ -14,9 +14,14 @@ mod template;
 mod types;
 
 use std::collections::BTreeSet;
+use std::fs::{self, File};
+use std::io;
+use std::ops::Deref;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Mutex;
-use std::{fs, io};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use ludenea_ecs::AssetId;
 
@@ -128,7 +133,19 @@ impl Project {
     }
 
     /// The absolute path of a project-relative `path`, which must stay inside the project.
+    /// A symbolic link at the end is not followed: deleting or renaming acts on the link.
     fn resolve(&self, path: &str) -> Result<PathBuf, ProjectError> {
+        self.locate(path).map(|(joined, _)| joined)
+    }
+
+    /// Where `path` really is, symbolic links followed, which must be inside the project:
+    /// reading and writing act on the target of a link.
+    fn resolve_target(&self, path: &str) -> Result<PathBuf, ProjectError> {
+        self.locate(path).map(|(_, real)| real)
+    }
+
+    /// `path` joined to the root, and the same with every existing part made canonical.
+    fn locate(&self, path: &str) -> Result<(PathBuf, PathBuf), ProjectError> {
         let relative = Path::new(path);
         let inside = relative
             .components()
@@ -143,8 +160,82 @@ impl Project {
             existing = existing.parent().unwrap_or(&self.root);
         }
         match existing.canonicalize() {
-            Ok(real) if real.starts_with(&self.root) => Ok(joined),
+            Ok(real) if real.starts_with(&self.root) => {
+                let missing = joined
+                    .strip_prefix(existing)
+                    .expect("an ancestor of the path");
+                // Joining an empty path would add a trailing separator.
+                let real = if missing.as_os_str().is_empty() {
+                    real
+                } else {
+                    real.join(missing)
+                };
+                Ok((joined, real))
+            }
             _ => Err(ProjectError::OutsideProject(path.to_string())),
+        }
+    }
+}
+
+/// Opens `real`, a path [`Project::resolve_target`] checked, without following a symbolic
+/// link in its last part: a link swapped in after the check cannot lead out of the project.
+/// ponytail: a directory higher up swapped for a link between the check and the open still
+/// leads out; closing that needs a lookup relative to an open handle for every directory.
+fn open_unfollowed(real: &Path) -> io::Result<File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::custom_flags(&mut options, libc::O_NOFOLLOW);
+    options.open(real)
+}
+
+/// How often a watcher thread checks whether its [`Watch`] is gone.
+const WATCH_POLL: Duration = Duration::from_millis(100);
+
+/// What a background watcher reports, read like a [`Receiver`]. The watcher stops soon after
+/// this is dropped, whether or not anything changes.
+pub struct Watch<T> {
+    receiver: Receiver<T>,
+    dropped: Arc<AtomicBool>,
+}
+
+impl<T> Watch<T> {
+    /// A watch, the sender its watcher reports on, and the flag set when the watch is dropped.
+    fn new() -> (Watch<T>, Sender<T>, Arc<AtomicBool>) {
+        let (sender, receiver) = mpsc::channel();
+        let dropped = Arc::new(AtomicBool::new(false));
+        let watch = Watch {
+            receiver,
+            dropped: Arc::clone(&dropped),
+        };
+        (watch, sender, dropped)
+    }
+}
+
+impl<T> Deref for Watch<T> {
+    type Target = Receiver<T>;
+
+    fn deref(&self) -> &Receiver<T> {
+        &self.receiver
+    }
+}
+
+impl<T> Drop for Watch<T> {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Waits for the next raw event of a watcher, giving up once its [`Watch`] is dropped.
+fn next_raw<T>(raw: &Receiver<T>, dropped: &AtomicBool) -> Option<T> {
+    loop {
+        if dropped.load(Ordering::SeqCst) {
+            return None;
+        }
+        match raw.recv_timeout(WATCH_POLL) {
+            Ok(event) => return Some(event),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => return None,
         }
     }
 }

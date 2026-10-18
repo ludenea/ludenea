@@ -1,9 +1,11 @@
 use std::collections::BTreeSet;
+use std::fs::{self, File};
+use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
-use std::{fs, thread};
 
 use ludenea_ecs::AssetId;
 use notify::RecursiveMode;
@@ -11,17 +13,22 @@ use notify_debouncer_full::new_debouncer;
 use serde::{Deserialize, Serialize};
 
 use crate::meta::{AssetKind, Meta};
-use crate::{Project, ProjectError, ProjectWarning, io_error};
+use crate::{Project, ProjectError, ProjectWarning, Watch, io_error, next_raw, open_unfollowed};
 
 pub(crate) const WATCH_DEBOUNCE: Duration = Duration::from_millis(100);
 /// The directories whose files get identifiers.
 const ASSET_DIRECTORIES: [&str; 2] = ["scenes", "assets"];
+/// Top-level directories that hold no file of the user's: the editor's own, version
+/// control, and build outputs.
+const UNWATCHED_DIRECTORIES: [&str; 3] = [".ludenea", ".git", "target"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export_to = "project/"))]
 pub struct FileEntry {
     /// Relative to the project root, with forward slashes.
     pub path: String,
+    /// `AssetId(0)` while the file's meta is unreadable (reported once as an
+    /// `InvalidMeta` warning): every such file shares it, so it names none of them.
     #[cfg_attr(feature = "ts", ts(type = "string"))]
     pub id: AssetId,
     pub kind: AssetKind,
@@ -53,11 +60,15 @@ impl Project {
         let present: BTreeSet<&str> = all.iter().map(String::as_str).collect();
         let mut entries = Vec::new();
         let mut invalid = Vec::new();
+        let mut valid = Vec::new();
         for path in all.iter().filter(|path| !path.ends_with(".meta")) {
             let kind = AssetKind::of(path);
             let meta_file = meta_path(&self.root.join(path));
             let id = match Meta::load_or_create(&meta_file, kind) {
-                Ok(meta) => meta.id,
+                Ok(meta) => {
+                    valid.push(format!("{path}.meta"));
+                    meta.id
+                }
                 Err(reason) => {
                     invalid.push((format!("{path}.meta"), reason));
                     AssetId(0)
@@ -71,6 +82,10 @@ impl Project {
         }
         entries.sort_by(|a, b| a.path.cmp(&b.path));
         let mut warnings = self.warnings.lock().expect("warnings are not poisoned");
+        // A repaired meta that breaks again is news again.
+        for path in &valid {
+            warnings.invalid_reported.remove(path);
+        }
         for (path, reason) in invalid {
             if warnings.invalid_reported.insert(path.clone()) {
                 warnings
@@ -132,61 +147,109 @@ impl Project {
         Ok(())
     }
 
+    /// Reads a file, or the target of a symbolic link inside the project.
     pub fn read_text(&self, path: &str) -> Result<String, ProjectError> {
-        let file = self.resolve(path)?;
-        fs::read_to_string(&file).map_err(|error| io_error(&file, error))
+        let file = self.resolve_target(path)?;
+        let mut text = String::new();
+        open_unfollowed(&file)
+            .and_then(|mut opened| opened.read_to_string(&mut text))
+            .map_err(|error| io_error(&file, error))?;
+        Ok(text)
     }
 
     /// Writes `text` to a temporary file in `.ludenea/` (unwatched, on the same file system),
-    /// then renames it over `path`: a crash mid-write never leaves a truncated file.
+    /// synced to disk, then renames it over `path`: neither a crash mid-write nor a power loss
+    /// leaves a truncated file. The file keeps its permissions; through a symbolic link inside
+    /// the project, the link's target is replaced and the link kept.
     pub fn write_text(&mut self, path: &str, text: &str) -> Result<(), ProjectError> {
         static WRITES: AtomicU64 = AtomicU64::new(0);
-        let file = self.resolve(path)?;
-        if let Some(parent) = file.parent() {
-            fs::create_dir_all(parent).map_err(|error| io_error(parent, error))?;
-        }
+        let file = self.resolve_target(path)?;
+        let parent = file.parent().expect("a project file has a parent");
+        fs::create_dir_all(parent).map_err(|error| io_error(parent, error))?;
         let staging = self.root.join(".ludenea");
         fs::create_dir_all(&staging).map_err(|error| io_error(&staging, error))?;
         let write = WRITES.fetch_add(1, Ordering::Relaxed);
         let temporary = staging.join(format!("write-{}-{write}.tmp", std::process::id()));
-        let written = fs::write(&temporary, text)
+        let staged = File::create(&temporary).and_then(|mut staged| {
+            staged.write_all(text.as_bytes())?;
+            if let Ok(existing) = fs::metadata(&file) {
+                staged.set_permissions(existing.permissions())?;
+            }
+            staged.sync_all()
+        });
+        let written = staged
             .map_err(|error| io_error(&temporary, error))
             .and_then(|()| fs::rename(&temporary, &file).map_err(|error| io_error(&file, error)));
         if written.is_err() {
             let _ = fs::remove_file(&temporary);
         }
-        written
+        written?;
+        // Best effort: the rename itself reaches the disk with its directory.
+        #[cfg(unix)]
+        let _ = File::open(parent).and_then(|directory| directory.sync_all());
+        Ok(())
     }
 
-    /// Reports changes under the project root, debounced. Watching stops when the receiver is
-    /// dropped (noticed at the next change).
-    pub fn watch(&self) -> Result<Receiver<FileChange>, ProjectError> {
+    /// Reports changes under the project root, debounced, except in the editor's own
+    /// directory, version control, build outputs, installed packages, and metas.
+    pub fn watch(&self) -> Result<Watch<FileChange>, ProjectError> {
         let (raw_sender, raw_receiver) = mpsc::channel();
         let mut debouncer = new_debouncer(WATCH_DEBOUNCE, None, raw_sender)
             .map_err(|error| ProjectError::Watch(error.to_string()))?;
+        // The root alone, then each directory in it that may hold the user's files: a
+        // recursive watch of the root would walk `target/` and `.git/`.
         debouncer
-            .watch(&self.root, RecursiveMode::Recursive)
+            .watch(&self.root, RecursiveMode::NonRecursive)
             .map_err(|error| ProjectError::Watch(error.to_string()))?;
-        let (sender, receiver) = mpsc::channel();
+        let mut watched = BTreeSet::new();
+        for entry in fs::read_dir(&self.root).map_err(|error| io_error(&self.root, error))? {
+            let path = entry.map_err(|error| io_error(&self.root, error))?.path();
+            if path.is_dir() && relative_path(&self.root, &path).is_some() {
+                debouncer
+                    .watch(&path, RecursiveMode::Recursive)
+                    .map_err(|error| ProjectError::Watch(error.to_string()))?;
+                watched.insert(path);
+            }
+        }
+        let (watch, sender, dropped) = Watch::new();
         let root = self.root.clone();
         let mut known = BTreeSet::new();
         list_files(&root, &root, &mut known);
         // The thread owns the debouncer, which stops watching when it is dropped.
         thread::spawn(move || {
-            let _debouncer = debouncer;
-            for batch in raw_receiver {
+            let mut debouncer = debouncer;
+            while let Some(batch) = next_raw(&raw_receiver, &dropped) {
                 let Ok(events) = batch else { continue };
                 let mut touched = BTreeSet::new();
                 for path in events.iter().flat_map(|event| &event.paths) {
                     touched.extend(relative_path(&root, path));
                 }
+                let mut changes = Vec::new();
                 for relative in touched {
                     let file = root.join(&relative);
+                    if file.parent() == Some(root.as_path()) && file.is_dir() {
+                        // A new top-level directory: watch it, and report what it already holds.
+                        if watched.insert(file.clone())
+                            && debouncer.watch(&file, RecursiveMode::Recursive).is_ok()
+                        {
+                            let mut inside = BTreeSet::new();
+                            list_files(&root, &file, &mut inside);
+                            for relative in inside {
+                                if known.insert(relative.clone()) {
+                                    changes.push(FileChange::Created(relative));
+                                }
+                            }
+                        }
+                        continue;
+                    }
                     // The event kinds are not reliable across platforms (an atomic save can
                     // look like a creation), so compare with the files known to exist.
                     let change = if file.is_dir() {
                         continue;
                     } else if !file.exists() {
+                        if watched.remove(&file) {
+                            let _ = debouncer.unwatch(&file);
+                        }
                         if !known.remove(&relative) {
                             continue;
                         }
@@ -196,13 +259,16 @@ impl Project {
                     } else {
                         FileChange::Changed(relative)
                     };
+                    changes.push(change);
+                }
+                for change in changes {
                     if sender.send(change).is_err() {
                         return;
                     }
                 }
             }
         });
-        Ok(receiver)
+        Ok(watch)
     }
 }
 
@@ -223,25 +289,25 @@ fn collect(root: &Path, directory: &str, out: &mut Vec<String>) {
     }
 }
 
-/// `path` relative to `root` with forward slashes; none outside the root or in `.ludenea/` and `target/`.
+/// `path` relative to `root` with forward slashes; none outside the root, in an unwatched
+/// directory, in `node_modules/`, or for a meta.
 fn relative_path(root: &Path, path: &Path) -> Option<String> {
     let relative = path.strip_prefix(root).ok()?;
-    let mut parts = relative
+    let parts: Vec<_> = relative
         .components()
-        .map(|c| c.as_os_str().to_string_lossy());
-    let first = parts.next()?;
-    if first == ".ludenea" || first == "target" {
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect();
+    let first = parts.first()?;
+    if UNWATCHED_DIRECTORIES.contains(&first.as_ref())
+        || parts.iter().any(|part| part == "node_modules")
+        || parts.last()?.ends_with(".meta")
+    {
         return None;
     }
-    Some(
-        std::iter::once(first)
-            .chain(parts)
-            .collect::<Vec<_>>()
-            .join("/"),
-    )
+    Some(parts.join("/"))
 }
 
-/// Adds every file below `directory` to `out`, skipping `.ludenea/` and `target/`.
+/// Adds every file below `directory` to `out`, skipping what [`relative_path`] ignores.
 fn list_files(root: &Path, directory: &Path, out: &mut BTreeSet<String>) {
     let Ok(entries) = fs::read_dir(directory) else {
         return;
@@ -257,6 +323,43 @@ fn list_files(root: &Path, directory: &Path, out: &mut BTreeSet<String>) {
                 out.insert(relative);
             }
             _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Instant;
+
+    use super::*;
+
+    /// The watcher thread holds the dropped flag until it exits.
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn the_watcher_stops_soon_after_its_watch_is_dropped() {
+        let dir = tempfile::TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("ludenea.toml"),
+            "name = \"demo\"\nengine = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let project = Project::open(dir.path()).unwrap();
+        let watch = project.watch().unwrap();
+        let dropped = Arc::clone(&watch.dropped);
+        assert_eq!(
+            Arc::strong_count(&dropped),
+            3,
+            "the watch, the thread, and this test"
+        );
+        drop(watch);
+        let start = Instant::now();
+        while Arc::strong_count(&dropped) > 1 {
+            assert!(
+                start.elapsed() < Duration::from_secs(5),
+                "the watcher still runs"
+            );
+            thread::sleep(Duration::from_millis(10));
         }
     }
 }

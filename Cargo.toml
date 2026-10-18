@@ -27,6 +27,7 @@ proc-macro-crate = "3.5.0"
 ts-rs = { version = "12.0.1", features = ["serde-json-impl"] }
 rayon = "1.12.0"
 uuid = { version = "1.28.0", features = ["v4"] }
+libc = "0.2.191"
 toml = "1.1.8"
 notify = "8.2.0"
 notify-debouncer-full = "0.7.0"

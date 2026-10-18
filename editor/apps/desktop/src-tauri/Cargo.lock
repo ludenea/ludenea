@@ -2355,6 +2355,7 @@ name = "ludenea-project"
 version = "0.1.0"
 dependencies = [
  "cargo_metadata 0.23.1",
+ "libc",
  "ludenea-control",
  "ludenea-ecs",
  "ludenea-schema",

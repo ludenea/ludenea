@@ -129,3 +129,26 @@ fn malformed_meta_is_kept_and_reported_once() {
     project.files();
     assert!(project.take_warnings().is_empty(), "reported once");
 }
+
+#[test]
+fn a_meta_broken_again_after_its_repair_is_reported_again() {
+    let dir = TempDir::new().unwrap();
+    let project = new_project(&dir);
+    let meta = dir.path().join("demo/scenes/main.scene.ron.meta");
+    project.files();
+    let good = fs::read_to_string(&meta).unwrap();
+    let id = project.files()[0].id;
+    fs::write(&meta, "not a meta").unwrap();
+    project.files();
+    assert_eq!(project.take_warnings().len(), 1);
+
+    fs::write(&meta, &good).unwrap();
+    assert_eq!(project.files()[0].id, id);
+    assert!(project.take_warnings().is_empty());
+    fs::write(&meta, "broken again").unwrap();
+    project.files();
+    assert!(matches!(
+        project.take_warnings().as_slice(),
+        [ProjectWarning::InvalidMeta { path, .. }] if path == "scenes/main.scene.ron.meta"
+    ));
+}

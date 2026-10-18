@@ -195,6 +195,17 @@ fn watch_reports_scene_change_on_disk() {
     );
 }
 
+/// The changes that arrive until none has come for a second.
+fn settled_changes(changes: &Receiver<FileChange>) -> Vec<FileChange> {
+    std::iter::from_fn(|| changes.recv_timeout(Duration::from_secs(1)).ok()).collect()
+}
+
+fn path_of(change: &FileChange) -> &str {
+    match change {
+        FileChange::Changed(path) | FileChange::Created(path) | FileChange::Removed(path) => path,
+    }
+}
+
 #[test]
 fn atomic_save_is_reported_as_changed() {
     let dir = TempDir::new().unwrap();
@@ -205,9 +216,111 @@ fn atomic_save_is_reported_as_changed() {
     let temporary = project.root().join("scenes/.main.scene.ron.tmp");
     fs::write(&temporary, "saved atomically").unwrap();
     fs::rename(&temporary, &scene).unwrap();
+    let scene_changes: Vec<_> = settled_changes(&changes)
+        .into_iter()
+        .filter(|change| path_of(change) == "scenes/main.scene.ron")
+        .collect();
+    assert_eq!(
+        scene_changes,
+        [FileChange::Changed("scenes/main.scene.ron".into())],
+        "never a removal or a creation of the saved file"
+    );
+}
+
+#[test]
+fn removing_then_recreating_a_file_is_reported_in_order() {
+    let dir = TempDir::new().unwrap();
+    let project = new_project(&dir);
+    let changes = project.watch().unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    let scene = project.root().join("scenes/main.scene.ron");
+    fs::remove_file(&scene).unwrap();
     expect_change(
         &changes,
-        &FileChange::Changed("scenes/main.scene.ron".into()),
+        &FileChange::Removed("scenes/main.scene.ron".into()),
+    );
+    fs::write(&scene, "back").unwrap();
+    expect_change(
+        &changes,
+        &FileChange::Created("scenes/main.scene.ron".into()),
+    );
+}
+
+/// Metas, version control, installed packages, and build outputs are not the user's files.
+#[test]
+fn watch_ignores_metas_git_node_modules_and_target() {
+    let dir = TempDir::new().unwrap();
+    let project = new_project(&dir);
+    project.files();
+    let changes = project.watch().unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    let root = project.root();
+    for (path, text) in [
+        (".git/HEAD", "ref: refs/heads/main"),
+        ("editor/node_modules/react/index.js", "export {};"),
+        ("target/debug/demo", "binary"),
+        (
+            "scenes/main.scene.ron.meta",
+            "Meta(version: 1, id: \"0\", kind: Scene)",
+        ),
+        ("scenes/sentinel.scene.ron", "(entities: [])"),
+    ] {
+        fs::create_dir_all(root.join(path).parent().unwrap()).unwrap();
+        fs::write(root.join(path), text).unwrap();
+    }
+    let seen = settled_changes(&changes);
+    let paths: Vec<_> = seen.iter().map(path_of).collect();
+    assert_eq!(paths, ["scenes/sentinel.scene.ron"], "{seen:?}");
+}
+
+/// A directory created at the top of the project after watching started is watched too.
+#[test]
+fn watch_follows_new_top_level_directories() {
+    let dir = TempDir::new().unwrap();
+    let project = new_project(&dir);
+    let changes = project.watch().unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    fs::create_dir_all(project.root().join("levels/one")).unwrap();
+    fs::write(project.root().join("levels/one/a.txt"), "a").unwrap();
+    expect_change(&changes, &FileChange::Created("levels/one/a.txt".into()));
+    std::thread::sleep(Duration::from_millis(500));
+    fs::write(project.root().join("levels/one/a.txt"), "changed").unwrap();
+    expect_change(&changes, &FileChange::Changed("levels/one/a.txt".into()));
+}
+
+#[cfg(unix)]
+#[test]
+fn write_text_keeps_the_permissions_of_the_file() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().unwrap();
+    let mut project = new_project(&dir);
+    let scene = project.root().join("scenes/main.scene.ron");
+    fs::set_permissions(&scene, fs::Permissions::from_mode(0o640)).unwrap();
+    project.write_text("scenes/main.scene.ron", "new").unwrap();
+    let mode = fs::metadata(&scene).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o640);
+}
+
+/// Writing through a symbolic link inside the project replaces its target and keeps the link.
+#[cfg(unix)]
+#[test]
+fn write_text_writes_through_a_symbolic_link() {
+    let dir = TempDir::new().unwrap();
+    let mut project = new_project(&dir);
+    let link = project.root().join("scenes/link.scene.ron");
+    std::os::unix::fs::symlink("main.scene.ron", &link).unwrap();
+    project
+        .write_text("scenes/link.scene.ron", "through")
+        .unwrap();
+    assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+    assert_eq!(
+        project.read_text("scenes/main.scene.ron").unwrap(),
+        "through"
+    );
+    assert_eq!(
+        project.read_text("scenes/link.scene.ron").unwrap(),
+        "through"
     );
 }
 

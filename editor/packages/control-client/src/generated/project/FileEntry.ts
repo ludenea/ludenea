@@ -5,4 +5,9 @@ export type FileEntry = {
 /**
  * Relative to the project root, with forward slashes.
  */
-path: string, id: string, kind: AssetKind, };
+path: string, 
+/**
+ * `AssetId(0)` while the file's meta is unreadable (reported once as an
+ * `InvalidMeta` warning): every such file shares it, so it names none of them.
+ */
+id: string, kind: AssetKind, };

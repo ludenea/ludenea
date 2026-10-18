@@ -29,6 +29,9 @@ uuid.workspace = true
 wasm-bindgen-cli-support.workspace = true
 xxhash-rust.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true
 ludenea-project = { path = ".", features = ["ts"] }
