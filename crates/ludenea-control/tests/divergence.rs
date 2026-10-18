@@ -495,3 +495,54 @@ fn report_over_600_ticks_under_one_second() {
     assert!(report.entities.len() > 1);
     assert!(elapsed.as_secs_f64() < 1.0, "{elapsed:?}");
 }
+
+/// The `ludenea::Collision` events that begin during the tick ending at `tick`, as pairs.
+fn collisions(host: &mut Host, tick: u64) -> Vec<(Entity, Entity)> {
+    let Reply::TickEvents { events } = ok(host, Command::GetTickEvents { tick }) else {
+        panic!("get_tick_events replies tick events");
+    };
+    events
+        .into_iter()
+        .filter(|event| event.value.get("kind") == Some(&json!("Begin")))
+        .filter_map(|event| {
+            let entity = |key| serde_json::from_value(event.value.get(key)?.clone()).ok();
+            Some((entity("a")?, entity("b")?))
+        })
+        .collect()
+}
+
+#[test]
+fn a_collision_at_the_fork_tick_explains_a_divergence_one_tick_later() {
+    let mut host = Host::new(boxes::app).unwrap();
+    load(&mut host, boxes::generate_scene(30, 7), Vec::new());
+    ok(
+        &mut host,
+        Command::Subscribe {
+            topic: Topic::Introspection,
+        },
+    );
+    step(&mut host, 260);
+    // A crate that starts touching another body during the tick ending at the fork tick:
+    // pushing it there moves the other one at the next tick.
+    let mut found = None;
+    for tick in 100..250 {
+        for (a, b) in collisions(&mut host, tick) {
+            found.get_or_insert((tick, a, b));
+        }
+    }
+    let (fork, a, b) = found.expect("a collision begins");
+    seek(&mut host, fork);
+    push(&mut host, a);
+    step(&mut host, 30);
+    let report = complete(&mut host, None);
+    let other = entity(&report, b);
+    assert_eq!(other.first_tick, fork + 1, "{report:?}");
+    assert!(
+        other.causes.iter().any(|cause| matches!(
+            cause,
+            Cause::Event { tick, event, other, .. }
+                if *tick == fork && event == "ludenea::Collision" && *other == a
+        )),
+        "{other:?}"
+    );
+}

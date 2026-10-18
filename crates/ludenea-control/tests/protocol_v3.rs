@@ -1356,3 +1356,53 @@ fn compare_traces_against_the_session_waits_for_resimulation() {
         .unwrap_err();
     assert_eq!(error.code, ErrorCode::Resimulating);
 }
+
+/// How many more times `panic_from_33` panics.
+static PANICS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+fn panic_from_33(time: Res<Time>) {
+    use std::sync::atomic::Ordering;
+    let left = PANICS.load(Ordering::Relaxed);
+    if time.tick >= 33 && left > 0 {
+        PANICS.store(left - 1, Ordering::Relaxed);
+        panic!("boom {left}");
+    }
+}
+
+#[test]
+fn export_replay_reports_a_failed_return_on_the_console() {
+    fn app() -> App {
+        let mut app = boxes::app();
+        app.system(Sim, panic_from_33);
+        app
+    }
+    let mut host = Host::new(app).unwrap();
+    ok(
+        &mut host,
+        Command::LoadScene {
+            scene: boxes::generate_scene(10, 3),
+            assets: Vec::new(),
+            document: Document::Scene,
+        },
+    );
+    step(&mut host, 35);
+    host.advance(0.0);
+
+    // Recording panics at tick 33, then so does replaying from the checkpoint at 32 back
+    // to tick 35.
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    PANICS.store(2, std::sync::atomic::Ordering::Relaxed);
+    let error = host
+        .handle(Command::ExportReplay { branch: None })
+        .unwrap_err();
+    std::panic::set_hook(hook);
+    assert_eq!(error.code, ErrorCode::SystemPanicked);
+    assert!(error.message.contains("boom 2"), "{error:?}");
+    let events = host.advance(0.0);
+    let logged = events
+        .iter()
+        .any(|event| matches!(event, Event::Console { text, .. } if text.contains("boom 1")));
+    assert!(logged, "{events:?}");
+    assert_eq!(timeline(&mut host).current, 35);
+}

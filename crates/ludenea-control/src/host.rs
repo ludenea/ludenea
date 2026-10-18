@@ -755,10 +755,16 @@ impl Host {
                 load_addresses: load_addresses(sim),
             }),
             Command::ExportReplay { branch } => {
-                let replay = self
-                    .session
-                    .export_replay(sim, branch)
-                    .map_err(|e| self.fail(e))?;
+                let (recorded, reload) = self.session.export_replay(sim, branch);
+                if let Some(reload) = reload {
+                    // A failed recording keeps the reply and the reload goes to the console,
+                    // as for `LoadReplay`; otherwise the reload's error is the reply.
+                    if recorded.is_ok() {
+                        return Err(self.fail(reload));
+                    }
+                    self.fail_unattended(reload);
+                }
+                let replay = recorded.map_err(|e| self.fail(e))?;
                 Ok(Reply::Replay {
                     replay: Bytes(replay.encode()),
                 })
@@ -1422,6 +1428,7 @@ mod tests {
     fn asking_for_an_unknown_asset_is_an_invalid_command() {
         let mut host = Host::new(boxes::app).unwrap();
         let id = AssetId(7);
+        // `ApplyToPrefab` names an instance, whose prefab the session always holds.
         for command in [Command::GetAsset { id }, Command::SaveAsset { id }] {
             let error = host.handle(command).unwrap_err();
             assert_eq!(error.code, ErrorCode::InvalidCommand, "{error:?}");

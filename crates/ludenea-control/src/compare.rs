@@ -221,13 +221,13 @@ pub(crate) fn restore(
     apply_edits(sim, run, tick)
 }
 
-/// Applies the edits recorded at `tick`. On a stale tick, one that fails is skipped, as
-/// resimulation drops it; on a fresh tick, where it applied before, its failure is the
-/// error.
+/// Applies the edits recorded at `tick`. Where the run has not checked them on the current
+/// state, one that fails is skipped, as resimulation drops it; where it has, its failure
+/// is the error.
 pub(crate) fn apply_edits(sim: &mut Simulation, run: &BranchRun, tick: u64) -> Result<(), String> {
     for timed in run.edits.at(tick) {
         if let Err(error) = sim.apply_edit(&timed.edit)
-            && tick <= run.fresh
+            && tick < run.checked
         {
             return Err(format!(
                 "the edit recorded at tick {tick} failed on its branch's recorded state: {error}"
@@ -277,10 +277,53 @@ mod tests {
             hashes: vec![0],
             checkpoints: Checkpoints::empty(),
             fresh,
+            checked: fresh + 1,
         };
         let error = apply_edits(&mut sim, &run(5), 5).unwrap_err();
         assert!(error.contains("tick 5"), "{error}");
         apply_edits(&mut sim, &run(4), 5).unwrap();
+    }
+
+    #[test]
+    fn a_forking_edit_a_scene_edit_broke_is_skipped_on_the_stale_branch() {
+        let mut sim = boxes::app().build().unwrap();
+        let scene = boxes::generate_scene(10, 3);
+        let mut session =
+            Session::start(&mut sim, scene, AssetTexts::new(), Document::Scene).unwrap();
+        for _ in 0..40 {
+            session.step(&mut sim, None).unwrap();
+        }
+        // Branch 1 forks at tick 20 by an edit on the scene entity at [3].
+        session.seek(&mut sim, 20).unwrap();
+        let entity = sim.entity_at_address(&[3]).unwrap();
+        let value = sim
+            .world()
+            .component_bytes(entity, "ludenea::Pose")
+            .unwrap();
+        let edit = Edit::Insert {
+            entity: EntityRef::Loaded(vec![3]),
+            component: "ludenea::Pose".to_string(),
+            value,
+        };
+        session.edit(&mut sim, edit).unwrap();
+        session.switch_branch(&mut sim, BranchId::ROOT).unwrap();
+        // The scene no longer has [3]: Branch 1 is stale, its forking edit fails now.
+        session.seek(&mut sim, 0).unwrap();
+        let despawn = Edit::Despawn {
+            entity: EntityRef::Loaded(vec![3]),
+        };
+        session.edit(&mut sim, despawn).unwrap();
+        while !matches!(
+            session.resimulate(&mut sim, 1_000).unwrap(),
+            crate::session::Resimulation::Done | crate::session::Resimulation::Idle
+        ) {}
+        session.set_compare_branch(Some(BranchId(1))).unwrap();
+
+        let mut compare = CompareRun::new(boxes::app().build().unwrap());
+        compare.follow(&session, 30, COMPARE_BUDGET_PAUSED).unwrap();
+        let build = || boxes::app().build().unwrap();
+        let mut divergence = crate::divergence::DivergenceRun::new(build(), build());
+        divergence.advance(&session, COMPARE_BUDGET_PAUSED).unwrap();
     }
 
     #[test]

@@ -170,6 +170,10 @@ pub(crate) struct BranchRun {
     /// The last tick whose recorded hash and checkpoints hold for the current scene and
     /// build; those after it are stale.
     pub fresh: u64,
+    /// The first tick whose recorded edits were not applied on the current scene and build:
+    /// a stored stale branch has not checked the edits of its first stale tick (its own
+    /// edits at its fork tick, after a scene edit).
+    pub checked: u64,
 }
 
 impl BranchRun {
@@ -366,15 +370,21 @@ impl Session {
 
     /// Records the replay of `branch`, the current one when `None`, over its recorded
     /// ticks. Recording runs on `sim`, which then comes back to the current tick, also when
-    /// the game panics (a stored branch may run ticks this build never ran).
+    /// the game panics (a stored branch may run ticks this build never ran). Returns the
+    /// recording, and the error of coming back when that failed after it ran.
     pub fn export_replay(
         &mut self,
         sim: &mut Simulation,
         branch: Option<BranchId>,
-    ) -> Result<Replay, SessionError> {
-        self.ensure_resimulated()?;
+    ) -> (Result<Replay, SessionError>, Option<SessionError>) {
+        if let Err(error) = self.ensure_resimulated() {
+            return (Err(error), None);
+        }
         let (inputs, edits, simulated) = match branch {
-            Some(id) if id != self.tree.current() => self.run_of(sim, id)?,
+            Some(id) if id != self.tree.current() => match self.run_of(sim, id) {
+                Ok(run) => run,
+                Err(error) => return (Err(error), None),
+            },
             _ => (self.inputs.clone(), self.edits.clone(), self.simulated()),
         };
         let inputs_end = inputs.ticks.len() as u64;
@@ -387,16 +397,14 @@ impl Session {
         };
         let recorded = catch_unwind(AssertUnwindSafe(record));
         let tick = sim.tick();
-        let reloaded = self.reload(sim);
-        // A contained panic says more than a failed reload after it.
+        let reloaded = self.reload(sim).err();
         let recorded = recorded.unwrap_or_else(|payload| {
             Err(SessionError::Panicked {
                 tick,
                 message: panic_message(&*payload),
             })
-        })?;
-        reloaded?;
-        Ok(recorded)
+        });
+        (recorded, reloaded)
     }
 
     /// The input and edit logs of the stored branch `id`'s run, and its simulated ticks.
@@ -452,37 +460,43 @@ impl Session {
 
     /// The flattened run of branch `id`, the current one included. Its recorded hashes and
     /// checkpoints are fresh up to the first stale tick on its way: a stored branch's
-    /// staleness, or the current branch's resimulation.
-    // ponytail: copies every checkpoint on the way; hand out the one a seek needs if
-    // composing shows in profiles.
+    /// staleness, or the current branch's resimulation. Its edits are checked up to there
+    /// too, except those of a stored branch's first stale tick.
+    // ponytail: copies the logs and hashes on the way on every call (checkpoints are
+    // shared); hand out only what a seek needs if composing shows in profiles.
     pub(crate) fn branch_run(&self, id: BranchId, defaults: Option<&[u8]>) -> BranchRun {
         let (inputs, edits, hashes, checkpoints) =
             self.composed(id, &self.current_segment(), defaults);
         let path = self.tree.path(id);
-        let fresh = path
-            .iter()
-            .enumerate()
-            .filter_map(|(at, &branch)| {
-                let stale = if branch == self.tree.current() {
-                    self.resimulating
-                } else {
-                    self.tree.get(branch)?.stale
-                };
-                let until = path
-                    .get(at + 1)
-                    .and_then(|&child| self.tree.get(child))
-                    .map_or(u64::MAX, |child| child.fork_tick);
-                stale.filter(|&from| from < until)
-            })
-            .min()
-            .unwrap_or(u64::MAX)
-            .min(hashes.len() as u64 - 1);
+        let (mut fresh, mut checked) = (u64::MAX, u64::MAX);
+        for (at, &branch) in path.iter().enumerate() {
+            // Resimulation checks the edits of the tick it got to; a stored stale branch
+            // checks those of its first stale tick once resimulated.
+            let (stale, unchecked) = if branch == self.tree.current() {
+                (self.resimulating, self.resimulating.map(|from| from + 1))
+            } else {
+                let stale = self.tree.get(branch).and_then(|branch| branch.stale);
+                (stale, stale)
+            };
+            let until = path
+                .get(at + 1)
+                .and_then(|&child| self.tree.get(child))
+                .map_or(u64::MAX, |child| child.fork_tick);
+            if let Some(from) = stale.filter(|&from| from < until) {
+                fresh = fresh.min(from);
+            }
+            if let Some(from) = unchecked.filter(|&from| from <= until) {
+                checked = checked.min(from);
+            }
+        }
+        let fresh = fresh.min(hashes.len() as u64 - 1);
         BranchRun {
             inputs,
             edits,
             hashes,
             checkpoints,
             fresh,
+            checked: checked.min(fresh + 1),
         }
     }
 
@@ -2179,7 +2193,8 @@ pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
 }
 
 /// Whether an undo or redo failed for good: its entry is dropped. That includes removed
-/// branches that do not decode, which only corrupt data holds.
+/// branches that do not decode or do not fit the tree (`BranchesDecode`, such as
+/// `BranchesError::Tree` or `Fork`), which only corrupt data holds.
 fn is_dropped<T>(result: &Result<T, SessionError>) -> bool {
     matches!(
         result,
