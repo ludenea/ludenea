@@ -34,7 +34,7 @@ fn main() -> ExitCode {
 }
 
 fn wasm_game(package: &str, out_dir: &str) -> Result<(), Box<dyn Error>> {
-    let module = build(package, &["build"])?;
+    let module = build(package, &["build"], "release")?;
     Bindgen::new()
         .input_path(module)
         .web(true)?
@@ -52,6 +52,7 @@ fn wasm_renderer(out_dir: &str) -> Result<(), Box<dyn Error>> {
     let module = build(
         package,
         &["rustc", "--features", "render", "--crate-type", "cdylib"],
+        "wasm-renderer",
     )?;
     Bindgen::new()
         .input_path(module)
@@ -63,13 +64,13 @@ fn wasm_renderer(out_dir: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Runs `cargo <command>` on `package`'s library for the browser in release and returns the
+/// Runs `cargo <command>` on `package`'s library for the browser with `profile` and returns the
 /// module path.
-fn build(package: &str, command: &[&str]) -> Result<PathBuf, Box<dyn Error>> {
+fn build(package: &str, command: &[&str], profile: &str) -> Result<PathBuf, Box<dyn Error>> {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     let status = Command::new(cargo)
         .args(command)
-        .args(["--locked", "--release", "--target", TARGET])
+        .args(["--locked", "--profile", profile, "--target", TARGET])
         .args(["-p", package, "--lib"])
         .status()?;
     if !status.success() {
@@ -77,7 +78,7 @@ fn build(package: &str, command: &[&str]) -> Result<PathBuf, Box<dyn Error>> {
     }
     Ok(target_dir()?
         .join(TARGET)
-        .join("release")
+        .join(profile)
         .join(format!("{}.wasm", package.replace('-', "_"))))
 }
 

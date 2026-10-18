@@ -12,6 +12,15 @@ overflow-checks = true
 [profile.dev]
 opt-level = 1
 
+# The viewport renderer, downloaded by every browser editor: built for size (`cargo xtask
+# wasm-renderer`).
+[profile.wasm-renderer]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+
 [workspace.dependencies]
 serde = { version = "1.0.229", features = ["derive"] }
 thiserror = "2.0.21"
