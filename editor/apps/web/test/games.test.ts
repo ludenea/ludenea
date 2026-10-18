@@ -4,7 +4,7 @@ import { followNativeGames, followWasmGames } from "../src/games";
 
 type Message = { type: string; [key: string]: unknown };
 
-const info: GameInfo = { components: [], resources: [], input: null, tick_rate: 60, debug_layers: [] };
+const info: GameInfo = { components: [], resources: [], assets: [], events: [], fingerprint: "0000000000000000", input: null, tick_rate: 60, debug_layers: [] };
 const timeline = { head: 5, simulated: 5, current: 3, checkpoints: [], edit_ticks: [], can_undo: false, can_redo: false, scene_dirty: false, resimulating: false };
 const hashes = ["1", "2", "3", "4", "5", "6"].map((digit) => digit.padStart(16, "0"));
 
@@ -17,11 +17,11 @@ let loads: Message[] = [];
 function fakeHost(name: string, options: { resimulating?: boolean } = {}) {
   const transport = fakeTransport((raw) => {
     const message = JSON.parse(raw);
-    if (message.type === "hello") return [JSON.stringify({ type: "welcome", protocol_version: 2, engine_version: "0", game: info })];
+    if (message.type === "hello") return [JSON.stringify({ type: "welcome", protocol_version: 3, engine_version: "0", game: info })];
     log.push(`${name}:${message.command.type}`);
     if (message.command.type === "load_session") loads.push(message.command);
     const answers: Record<string, object> = {
-      export_session: { type: "session", scene: `${name} scene`, saved_scene: "saved", inputs: "AQEA", edits: "", undo: "", hashes },
+      export_session: { type: "session", scene: `${name} scene`, saved_scene: "saved", inputs: "AQEA", edits: "", undo: "", hashes, assets: [], branches: "", document: "Scene" },
       get_timeline: { type: "timeline", ...timeline, resimulating: options.resimulating ?? false },
     };
     return [JSON.stringify({ type: "response", id: message.id, result: { ok: answers[message.command.type] ?? { type: "done" } } })];
@@ -105,7 +105,7 @@ describe("followWasmGames crashes", () => {
     crashes.at(-1)!({ tick: 3, message: "boom" });
     await settle();
     expect(start).toHaveBeenCalledTimes(3);
-    expect(loads[1]).toEqual({ type: "load_session", scene: `${builds[0]} scene`, saved_scene: "saved", inputs: "AQEA", edits: "", undo: "", expected: [] });
+    expect(loads[1]).toEqual({ type: "load_session", scene: `${builds[0]} scene`, saved_scene: "saved", inputs: "AQEA", edits: "", undo: "", expected: [], assets: [], branches: "", document: "Scene" });
     expect(editor.log).toHaveBeenCalledWith("error", "The game crashed at tick 3: boom");
   });
 });

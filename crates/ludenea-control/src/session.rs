@@ -82,9 +82,10 @@ pub enum SessionError {
 }
 
 /// What the session edits: its scene text is a scene file or a prefab file.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Document {
+    #[default]
     Scene,
     Prefab,
 }
@@ -183,6 +184,8 @@ pub struct Session {
     /// The branch a switch goes to and the tick it asked for, while its stale ancestors
     /// resimulate first, one after the other, as the tree's current branch.
     switching: Option<(BranchId, u64)>,
+    /// The warnings of the load by `start` or the last `replace_scene`.
+    warnings: Vec<String>,
 }
 
 impl Session {
@@ -194,7 +197,7 @@ impl Session {
         assets: AssetTexts,
         document: Document,
     ) -> Result<Session, SessionError> {
-        load(sim, document, &scene, &assets)?;
+        let warnings = load(sim, document, &scene, &assets)?;
         let players = u16::try_from(sim.players()).expect("fewer than 2^16 players");
         Ok(Session {
             saved_scene: scene.clone(),
@@ -216,6 +219,7 @@ impl Session {
             introspection: None,
             tree: BranchTree::default(),
             switching: None,
+            warnings,
         })
     }
 
@@ -254,13 +258,13 @@ impl Session {
         session.inputs = inputs;
         session.edits = edits;
         session.history = history;
+        session.update_head();
         if !export.branches.is_empty() {
-            session.tree = BranchTree::decode(&export.branches)?;
+            session.tree = BranchTree::decode(&export.branches, &session.edits, session.head)?;
         }
         if !export.hashes.is_empty() {
             session.hashes = export.hashes;
         }
-        session.update_head();
         let (expected, got) = (session.hashes[0], sim.hash());
         session.start_resimulation(sim)?;
         if expected != got {
@@ -749,6 +753,16 @@ impl Session {
         &self.scene
     }
 
+    pub fn document(&self) -> Document {
+        self.document
+    }
+
+    /// The warnings of the load by `start` or the last `replace_scene`, such as stale
+    /// overrides.
+    pub fn warnings(&self) -> &[String] {
+        &self.warnings
+    }
+
     /// The prefab and data asset texts the scene loads with, in file form.
     pub fn assets(&self) -> &AssetTexts {
         &self.assets
@@ -768,7 +782,7 @@ impl Session {
         scene: String,
         assets: AssetTexts,
     ) -> Result<(), SessionError> {
-        load(sim, self.document, &scene, &assets)?;
+        self.warnings = load(sim, self.document, &scene, &assets)?;
         self.assets = assets;
         self.saved_scene = scene.clone();
         let before = std::mem::replace(&mut self.scene, scene.clone());
@@ -1783,15 +1797,17 @@ impl Session {
     }
 }
 
-/// Loads `text`, a scene or prefab file as `document` says, with `assets`.
+/// Loads `text`, a scene or prefab file as `document` says, with `assets`; returns the
+/// load warnings.
 fn load(
     sim: &mut Simulation,
     document: Document,
     text: &str,
     assets: &AssetTexts,
-) -> Result<(), SessionError> {
-    sim.load_scene_with(&scene_form(document, text)?, assets)?;
-    Ok(())
+) -> Result<Vec<String>, SessionError> {
+    Ok(sim
+        .load_scene_with(&scene_form(document, text)?, assets)?
+        .warnings)
 }
 
 /// The scene a simulation loads for `text`: a prefab file becomes a scene.

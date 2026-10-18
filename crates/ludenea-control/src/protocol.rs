@@ -3,24 +3,32 @@ use std::collections::BTreeMap;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use ludenea_app::RawInput;
+use ludenea_app::prefab::InstanceInfo;
 use ludenea_debug_draw::DebugDrawFrame;
 use ludenea_ecs::hash::hex_u64;
 use ludenea_ecs::schema::TypeSchema;
-use ludenea_ecs::{Entity, HashTree};
+use ludenea_ecs::{AssetId, Entity, HashTree};
 use ludenea_math::Vec2;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value as JsonValue;
 
+use crate::branches::BranchId;
 use crate::path::PathSegment;
-use crate::session::Timeline;
+use crate::session::{Document, Timeline};
 
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Binary data, serialized as a standard base64 string.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts", ts(type = "string"))]
 pub struct Bytes(pub Vec<u8>);
+
+impl Bytes {
+    fn empty() -> Bytes {
+        Bytes(Vec::new())
+    }
+}
 
 impl Serialize for Bytes {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -94,6 +102,8 @@ pub mod outcome {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
+// One message lives per request, briefly: boxing the command would buy nothing.
+#[allow(clippy::large_enum_variant)]
 pub enum ClientMessage {
     Hello { protocol_version: u32 },
     Request { id: u64, command: Command },
@@ -128,12 +138,16 @@ pub enum ServerMessage {
 pub struct GameInfo {
     pub components: Vec<NamedSchema>,
     pub resources: Vec<NamedSchema>,
+    pub assets: Vec<NamedSchema>,
+    pub events: Vec<NamedSchema>,
+    /// Identifies the game build's types (`Simulation::schema_fingerprint`).
+    pub fingerprint: Hash64,
     pub input: Option<TypeSchema>,
     pub tick_rate: u32,
     pub debug_layers: Vec<String>,
 }
 
-/// The schema of a component or resource type, by stable name.
+/// The schema of a component, resource, asset, or event type, by stable name.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct NamedSchema {
@@ -145,8 +159,12 @@ pub struct NamedSchema {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Command {
+    /// Loads `scene`, a scene or prefab file as `document` says, with the prefab and data
+    /// asset texts it may reach, in file form; replies `Loaded`.
     LoadScene {
-        ron: String,
+        scene: String,
+        assets: Vec<(AssetId, String)>,
+        document: Document,
     },
     /// Replaces the recorded inputs and moves to tick 0.
     LoadInputs {
@@ -243,9 +261,11 @@ pub enum Command {
     Redo,
     GetTimeline,
     ExportSession,
-    /// A new version of the scene, as saved on disk; the recorded inputs and edits stay.
+    /// A new version of the scene and its asset texts, as saved on disk; the recorded
+    /// inputs and edits stay. Replies `Loaded`.
     ReplaceScene {
-        ron: String,
+        scene: String,
+        assets: Vec<(AssetId, String)>,
     },
     /// Restarts an exported session, comparing the new hashes with `expected`. Empty
     /// `inputs`, `edits`, or `undo` bytes stand for empty logs: with all three empty, only
@@ -258,6 +278,47 @@ pub enum Command {
         edits: Bytes,
         undo: Bytes,
         expected: Vec<Hash64>,
+        #[serde(default)]
+        assets: Vec<(AssetId, String)>,
+        /// The branch tree; empty for a linear session.
+        #[serde(default = "Bytes::empty")]
+        branches: Bytes,
+        #[serde(default)]
+        document: Document,
+    },
+    /// The current value of a loaded asset.
+    GetAsset {
+        id: AssetId,
+    },
+    /// Replaces the value at `path` in a data asset: at tick 0 it changes the asset text,
+    /// later it is recorded as a `SetAsset` edit.
+    SetAssetField {
+        id: AssetId,
+        path: Vec<PathSegment>,
+        value: JsonValue,
+    },
+    /// The file text to save for an asset; replies `Text`.
+    SaveAsset {
+        id: AssetId,
+    },
+    /// Copies the current value of a data asset into its asset text, as a tick 0 edit.
+    ApplyToAsset {
+        id: AssetId,
+    },
+    /// The default value of the asset type `asset` in file form; replies `Text`.
+    NewAssetValue {
+        asset: String,
+    },
+    SwitchBranch {
+        branch: BranchId,
+    },
+    RenameBranch {
+        branch: BranchId,
+        name: String,
+    },
+    /// Deletes a branch and its descendants; replies `Deleted` with all of them.
+    DeleteBranch {
+        branch: BranchId,
     },
     GetSchedule,
     /// The events sent during the tick that ended at `tick`, recorded while `Introspection`
@@ -355,6 +416,30 @@ pub enum Reply {
         edits: Bytes,
         undo: Bytes,
         hashes: Vec<Hash64>,
+        #[serde(default)]
+        assets: Vec<(AssetId, String)>,
+        #[serde(default = "Bytes::empty")]
+        branches: Bytes,
+        #[serde(default)]
+        document: Document,
+    },
+    /// A scene load: the warnings of stale overrides, the prefab instances, and where each
+    /// entity of the scene came from.
+    Loaded {
+        warnings: Vec<String>,
+        instances: Vec<InstanceInfo>,
+        load_addresses: Vec<(Entity, Vec<u32>)>,
+    },
+    /// An asset's type name and value.
+    Asset {
+        asset: String,
+        value: ComponentValue,
+    },
+    Text {
+        text: String,
+    },
+    Deleted {
+        branches: Vec<BranchId>,
     },
     Schedule {
         systems: Vec<SystemRow>,

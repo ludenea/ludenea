@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use ludenea_app::replay::Replay;
 use ludenea_app::{App, InputLog, Rng, Sim};
 use ludenea_cli::{Trace, run};
-use ludenea_control::{Bytes, Command, Host, InProcess, PROTOCOL_VERSION, Reply, Transport};
+use ludenea_control::{
+    Bytes, Command, Document, Host, InProcess, PROTOCOL_VERSION, Reply, Transport,
+};
 use ludenea_ecs::{Component, Query, ResMut};
 use serde::{Deserialize, Serialize};
 
@@ -242,7 +244,13 @@ fn export_session_with_edits(dir: &Path) -> Vec<u64> {
     let mut client = InProcess::connect(Host::new(app()).unwrap(), PROTOCOL_VERSION).unwrap();
     let ron = fs::read_to_string(dir.join("scene.ron")).unwrap();
     let log = Bytes(fs::read(dir.join("inputs.bin")).unwrap());
-    client.request(Command::LoadScene { ron }).unwrap();
+    client
+        .request(Command::LoadScene {
+            scene: ron,
+            assets: Vec::new(),
+            document: Document::Scene,
+        })
+        .unwrap();
     client.request(Command::LoadInputs { log }).unwrap();
     client
         .request(Command::Step {

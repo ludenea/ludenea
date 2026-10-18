@@ -75,7 +75,7 @@ fn ask_game(
 ) {
     let (to_game, from_game) = service.take_control_channel().expect("a game is running");
     to_game
-        .send(r#"{"type":"hello","protocol_version":2}"#.to_string())
+        .send(r#"{"type":"hello","protocol_version":3}"#.to_string())
         .unwrap();
     let line = from_game.recv_timeout(Duration::from_secs(60)).unwrap();
     assert!(

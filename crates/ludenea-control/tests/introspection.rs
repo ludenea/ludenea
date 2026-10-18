@@ -16,7 +16,9 @@ fn with_inputs(inputs: &[BoxesInput]) -> Host {
     ok(
         &mut host,
         Command::LoadScene {
-            ron: boxes::generate_scene(30, 7),
+            scene: boxes::generate_scene(30, 7),
+            assets: Vec::new(),
+            document: Document::Scene,
         },
     );
     let mut log = InputLog::new(1);

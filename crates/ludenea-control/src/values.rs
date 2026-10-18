@@ -1,11 +1,11 @@
-//! Component and resource values in their protocol form: JSON in wire form, or RON for a
-//! value without an exact JSON form.
+//! Component, resource, and asset values in their protocol form: JSON in wire form, or RON
+//! for a value without an exact JSON form.
 
 use std::collections::BTreeMap;
 
 use ludenea_app::{EditError, Simulation, ValueKind};
-use ludenea_ecs::Entity;
 use ludenea_ecs::schema::TypeSchema;
+use ludenea_ecs::{AssetId, Entity};
 
 use crate::json::to_wire;
 use crate::protocol::ComponentValue;
@@ -101,4 +101,34 @@ pub(crate) fn value_schema(
             .ok_or_else(|| EditError::UnknownResource(name.to_string())),
     }
     .map(|codec| (codec.schema)())
+}
+
+/// The type name, schema, and JSON value (or why it has none) of the loaded asset `id`.
+pub(crate) fn asset_json(
+    sim: &Simulation,
+    id: AssetId,
+) -> Option<(String, TypeSchema, Result<serde_json::Value, String>)> {
+    let world = sim.world();
+    let (asset, bytes) = world.asset_bytes(id)?;
+    let codec = world.asset_codec(asset).expect("a loaded asset's type");
+    let value = (codec.decode)(&bytes).expect("a loaded asset's bytes decode");
+    Some((
+        asset.to_string(),
+        (codec.schema)(),
+        (codec.to_json)(&*value),
+    ))
+}
+
+/// The type name and value of the loaded asset `id`.
+pub(crate) fn asset_value(sim: &Simulation, id: AssetId) -> Option<(String, ComponentValue)> {
+    let (asset, schema, json) = asset_json(sim, id)?;
+    let value = match json {
+        Ok(value) => ComponentValue::Json {
+            value: to_wire(value, &schema),
+        },
+        Err(_) => ComponentValue::Ron {
+            text: sim.world().asset_ron(id).expect("the same asset"),
+        },
+    };
+    Some((asset, value))
 }

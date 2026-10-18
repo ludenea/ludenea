@@ -559,6 +559,7 @@ fn export_from_2a_resumes_as_root() {
         edits,
         undo,
         hashes,
+        ..
     } = serde_json::from_str(fixture).unwrap()
     else {
         panic!("the fixture is a session export");

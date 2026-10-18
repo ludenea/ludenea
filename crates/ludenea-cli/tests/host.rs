@@ -5,7 +5,7 @@ use std::process::{Command as Process, Stdio};
 use std::time::{Duration, Instant};
 
 use ludenea_app::{App, Parallel, Sim};
-use ludenea_control::{Command, PROTOCOL_VERSION};
+use ludenea_control::{Command, Document, PROTOCOL_VERSION};
 use ludenea_ecs::{Component, Query, Runtime};
 use serde::{Deserialize, Serialize};
 
@@ -55,7 +55,14 @@ fn printing_from_parallel_systems_never_blocks_the_host() {
     };
     let input = [
         serde_json::json!({ "type": "hello", "protocol_version": PROTOCOL_VERSION }).to_string(),
-        request(1, &Command::LoadScene { ron: scene }),
+        request(
+            1,
+            &Command::LoadScene {
+                scene,
+                assets: Vec::new(),
+                document: Document::Scene,
+            },
+        ),
         request(2, &step),
         request(3, &Command::SetThreads { threads: 4 }),
         request(4, &step),

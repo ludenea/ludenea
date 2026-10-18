@@ -29,7 +29,7 @@ window.runGolden = async () => {
   try {
     const client = await ControlClient.connect(game.transport);
     const ron = await (await fetch("/assets/boxes.scene.ron")).text();
-    await client.request({ type: "load_scene", ron });
+    await client.request({ type: "load_scene", scene: ron, assets: [], document: "Scene" });
     const log = toBase64(await fetchBytes("/assets/boxes.inputs"));
     await client.request({ type: "load_inputs", log });
     const initial = await client.request({ type: "get_hash" });

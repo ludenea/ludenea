@@ -56,7 +56,7 @@ export const assetsPlugin = definePlugin({
       );
     // Without a game the new text is only remembered: the next game loads it.
     const replace = async (text: string) => {
-      await editor.control?.request({ type: "replace_scene", ron: text });
+      await editor.control?.request({ type: "replace_scene", scene: text, assets: [] });
       scene.set({ text });
     };
 
@@ -71,7 +71,7 @@ export const assetsPlugin = definePlugin({
         if (entry?.kind !== "Scene") throw new Error(`${path} is not a scene`);
         // Scene files are usable before the build: the scene is remembered and loaded into each game.
         const { text } = await editor.project.request({ type: "read_text", path });
-        await editor.control?.request({ type: "load_scene", ron: text });
+        await editor.control?.request({ type: "load_scene", scene: text, assets: [], document: "Scene" });
         scene.set({ path, text });
         state.set({ banner: null, error: null });
       },
@@ -134,7 +134,7 @@ export const assetsPlugin = definePlugin({
     // A new game (first build, rebuild, restart) starts from its own state: show it the open scene.
     editor.onGameChanged((control) => {
       const { text } = scene.get();
-      if (control && text !== null) control.request({ type: "load_scene", ron: text }).catch(report);
+      if (control && text !== null) control.request({ type: "load_scene", scene: text, assets: [], document: "Scene" }).catch(report);
     });
     void refresh();
 

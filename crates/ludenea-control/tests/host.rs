@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use ludenea_app::{App, InputLog, Inputs, RawGamepad, RawInput, Rng, Sim};
 use ludenea_control::*;
 use ludenea_ecs::schema::{Schema, TypeSchema};
-use ludenea_ecs::{Component, Entity, EntityHash, HashTree, NamedHash, Query, ResMut, Runtime};
+use ludenea_ecs::{
+    AssetId, Component, Entity, EntityHash, HashTree, NamedHash, Query, ResMut, Runtime,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Component, Serialize, Deserialize)]
@@ -27,7 +29,11 @@ const SCENE: &str = r#"Scene(version: 1, resources: {}, entities: [{ "host::Scor
 fn client() -> InProcess {
     let mut client = InProcess::connect(Host::new(app()).unwrap(), PROTOCOL_VERSION).unwrap();
     client
-        .request(Command::LoadScene { ron: SCENE.into() })
+        .request(Command::LoadScene {
+            scene: SCENE.into(),
+            assets: Vec::new(),
+            document: Document::Scene,
+        })
         .unwrap();
     client
 }
@@ -63,7 +69,7 @@ fn handshake_with_version_1_is_refused() {
         .err()
         .unwrap();
     assert_eq!(error.code, ErrorCode::VersionMismatch);
-    assert_eq!(error.message, "client speaks protocol 1, engine speaks 2");
+    assert_eq!(error.message, "client speaks protocol 1, engine speaks 3");
 }
 
 #[test]
@@ -171,7 +177,9 @@ fn load_inputs_for_other_type_fails_with_invalid_inputs_on_step() {
 fn invalid_scene_returns_invalid_scene_error() {
     let error = client()
         .request(Command::LoadScene {
-            ron: "nonsense".into(),
+            scene: "nonsense".into(),
+            assets: Vec::new(),
+            document: Document::Scene,
         })
         .unwrap_err();
     assert_eq!(error.code, ErrorCode::InvalidScene);
@@ -226,7 +234,11 @@ fn every_command_and_reply_round_trips_through_json() {
     let entity: Entity = serde_json::from_str(r#"{"index":1,"generation":2}"#).unwrap();
     let bytes = Bytes(vec![0, 1, 254, 255]);
     let commands = vec![
-        Command::LoadScene { ron: "x".into() },
+        Command::LoadScene {
+            scene: "x".into(),
+            assets: Vec::new(),
+            document: Document::Scene,
+        },
         Command::LoadInputs { log: bytes.clone() },
         Command::SetThreads { threads: 4 },
         Command::Step {
@@ -304,7 +316,10 @@ fn every_command_and_reply_round_trips_through_json() {
         Command::Redo,
         Command::GetTimeline,
         Command::ExportSession,
-        Command::ReplaceScene { ron: "y".into() },
+        Command::ReplaceScene {
+            scene: "y".into(),
+            assets: Vec::new(),
+        },
         Command::LoadSession {
             scene: "z".into(),
             saved_scene: Some("w".into()),
@@ -312,6 +327,28 @@ fn every_command_and_reply_round_trips_through_json() {
             edits: bytes.clone(),
             undo: bytes.clone(),
             expected: vec![Hash64(1)],
+            assets: vec![(AssetId(7), "a".into())],
+            branches: bytes.clone(),
+            document: Document::Prefab,
+        },
+        Command::GetAsset { id: AssetId(7) },
+        Command::SetAssetField {
+            id: AssetId(7),
+            path: vec![PathSegment::Index { index: 1 }],
+            value: serde_json::json!(2),
+        },
+        Command::SaveAsset { id: AssetId(7) },
+        Command::ApplyToAsset { id: AssetId(7) },
+        Command::NewAssetValue { asset: "a".into() },
+        Command::SwitchBranch {
+            branch: BranchId(1),
+        },
+        Command::RenameBranch {
+            branch: BranchId(1),
+            name: "b".into(),
+        },
+        Command::DeleteBranch {
+            branch: BranchId(1),
         },
         Command::GetSchedule,
         Command::GetTickEvents { tick: 3 },
@@ -463,6 +500,22 @@ fn every_command_and_reply_round_trips_through_json() {
             edits: bytes.clone(),
             undo: bytes.clone(),
             hashes: vec![Hash64(3)],
+            assets: vec![(AssetId(7), "a".into())],
+            branches: bytes.clone(),
+            document: Document::Scene,
+        },
+        Reply::Loaded {
+            warnings: vec!["w".into()],
+            instances: Vec::new(),
+            load_addresses: vec![(entity, vec![5, 0])],
+        },
+        Reply::Asset {
+            asset: "a".into(),
+            value: ComponentValue::Ron { text: "()".into() },
+        },
+        Reply::Text { text: "t".into() },
+        Reply::Deleted {
+            branches: vec![BranchId(1), BranchId(2)],
         },
     ];
     for reply in replies {
@@ -624,6 +677,9 @@ fn game() -> GameInfo {
             schema: Score::schema(),
         }],
         resources: Vec::new(),
+        assets: Vec::new(),
+        events: Vec::new(),
+        fingerprint: Hash64(5),
         input: Some(TypeSchema::U8),
         tick_rate: 60,
         debug_layers: vec!["physics.colliders".into()],
@@ -732,6 +788,15 @@ fn wire_format_matches_golden_json() {
             "path":[{"type":"field","name":"shape"},{"type":"index","index":0}],
             "value":0.5})
     );
+    assert_eq!(
+        to(&Command::LoadScene {
+            scene: "s".into(),
+            assets: vec![(AssetId(0xab), "a".into())],
+            document: Document::Prefab,
+        }),
+        json!({"type":"load_scene","scene":"s",
+            "assets":[["000000000000000000000000000000ab","a"]],"document":"Prefab"})
+    );
     let error = ProtocolError {
         code: ErrorCode::NoSuchEntity,
         message: "m".into(),
@@ -753,13 +818,14 @@ fn wire_format_matches_golden_json() {
     );
     assert_eq!(
         to(&ServerMessage::Welcome {
-            protocol_version: 2,
+            protocol_version: 3,
             engine_version: "0.1.0".into(),
             game: game()
         }),
-        json!({"type":"welcome","protocol_version":2,"engine_version":"0.1.0","game":{
+        json!({"type":"welcome","protocol_version":3,"engine_version":"0.1.0","game":{
             "components":[{"name":"host::Score","schema":to(&Score::schema())}],
-            "resources":[],"input":{"kind":"u8"},"tick_rate":60,
+            "resources":[],"assets":[],"events":[],"fingerprint":"0000000000000005",
+            "input":{"kind":"u8"},"tick_rate":60,
             "debug_layers":["physics.colliders"]}})
     );
     assert_eq!(

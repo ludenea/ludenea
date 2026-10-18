@@ -6,7 +6,7 @@ import { act, render } from "@testing-library/react";
 type Message = { type: string; [key: string]: unknown };
 type Answer = (message: Message) => object | undefined;
 
-const game: GameInfo = { components: [], resources: [], input: null, tick_rate: 60, debug_layers: [] };
+const game: GameInfo = { components: [], resources: [], assets: [], events: [], fingerprint: "0000000000000000", input: null, tick_rate: 60, debug_layers: [] };
 
 /** A client over a fake peer answering each request with `answer(request)` (nothing when undefined). */
 async function fake<C>(

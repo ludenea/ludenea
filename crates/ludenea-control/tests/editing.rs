@@ -18,7 +18,14 @@ fn ok(host: &mut Host, command: Command) -> Reply {
 /// A boxes host with the scene and `ticks` idle recorded inputs loaded.
 fn loaded(ticks: u64) -> Host {
     let mut host = Host::new(boxes::app()).unwrap();
-    ok(&mut host, Command::LoadScene { ron: scene() });
+    ok(
+        &mut host,
+        Command::LoadScene {
+            scene: scene(),
+            assets: Vec::new(),
+            document: Document::Scene,
+        },
+    );
     let mut log = InputLog::new(1);
     for _ in 0..ticks {
         log.record(&[BoxesInput::default()]);
@@ -364,7 +371,8 @@ fn apply_to_scene_copies_value_and_marks_dirty() {
     ok(
         &mut fresh,
         Command::ReplaceScene {
-            ron: applied.clone(),
+            scene: applied.clone(),
+            assets: Vec::new(),
         },
     );
     resimulate(&mut fresh);

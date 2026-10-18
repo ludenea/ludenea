@@ -19,7 +19,7 @@ import type { MessageTransport } from "./transports/transport";
  * of decimal digits, in both directions: send such an integer as a string, and read
  * `u64`/`i64` fields as `number | string`. Hashes are 16-digit hex strings.
  */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 export class ProtocolFailure<C extends string = ErrorCode> extends Error {
   constructor(
@@ -66,7 +66,15 @@ export type ReplyFor<C extends Command> = C extends { type: "get_hash" }
                                 ? Extract<Reply, { type: "debug_draw" }>
                                 : C extends { type: "pick" }
                                   ? Extract<Reply, { type: "picked" }>
-                                  : Extract<Reply, { type: "done" }>;
+                                  : C extends { type: "load_scene" | "replace_scene" }
+                                    ? Extract<Reply, { type: "loaded" }>
+                                    : C extends { type: "get_asset" }
+                                      ? Extract<Reply, { type: "asset" }>
+                                      : C extends { type: "save_asset" | "new_asset_value" }
+                                        ? Extract<Reply, { type: "text" }>
+                                        : C extends { type: "delete_branch" }
+                                          ? Extract<Reply, { type: "deleted" }>
+                                          : Extract<Reply, { type: "done" }>;
 
 type Pending<O> = { resolve: (result: O) => void; reject: (error: Error) => void };
 

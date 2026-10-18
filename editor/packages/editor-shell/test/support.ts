@@ -1,7 +1,7 @@
 import { ControlClient, ProjectClient, fakeTransport, type GameInfo } from "@ludenea/control-client";
 import { createEditor } from "../src/app";
 
-const game: GameInfo = { components: [], resources: [], input: null, tick_rate: 60, debug_layers: [] };
+const game: GameInfo = { components: [], resources: [], assets: [], events: [], fingerprint: "0000000000000000", input: null, tick_rate: 60, debug_layers: [] };
 
 /** An editor on a project service that welcomes it and answers nothing else. */
 export async function testHost(importModule?: (url: string) => Promise<unknown>) {

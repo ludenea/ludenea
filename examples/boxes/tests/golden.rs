@@ -6,7 +6,9 @@ use std::fs;
 use boxes::{ContactStats, Crate};
 use ludenea::app::replay::Replay;
 use ludenea::cli::Trace;
-use ludenea::control::{Bytes, Command, Host, InProcess, PROTOCOL_VERSION, Reply, Transport};
+use ludenea::control::{
+    Bytes, Command, Document, Host, InProcess, PROTOCOL_VERSION, Reply, Transport,
+};
 use ludenea::prelude::*;
 
 const SCENE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/boxes.scene.ron");
@@ -54,7 +56,13 @@ fn connect() -> InProcess {
     let host = Host::new(boxes::app()).unwrap();
     let mut client = InProcess::connect(host, PROTOCOL_VERSION).unwrap();
     let ron = fs::read_to_string(SCENE).unwrap();
-    client.request(Command::LoadScene { ron }).unwrap();
+    client
+        .request(Command::LoadScene {
+            scene: ron,
+            assets: Vec::new(),
+            document: Document::Scene,
+        })
+        .unwrap();
     let log = Bytes(fs::read(INPUTS).unwrap());
     client.request(Command::LoadInputs { log }).unwrap();
     client

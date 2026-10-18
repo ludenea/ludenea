@@ -4,7 +4,7 @@ use ludenea_app::{
 };
 use std::collections::BTreeSet;
 
-use ludenea_ecs::{Entity, EntityFilter, FilterError, Snapshot};
+use ludenea_ecs::{AssetId, Entity, EntityFilter, FilterError, Snapshot};
 use serde_json::Value as JsonValue;
 
 use crate::json::{from_wire, to_wire};
@@ -16,7 +16,7 @@ use crate::protocol::{
 };
 use crate::session::{Document, Resimulation, Session, SessionError, SessionExport, Timeline};
 use crate::subscriptions::{INTROSPECTION_TICKS, Subscriptions, TickRecord};
-use crate::values::{entity_values, resource_values, value_schema};
+use crate::values::{asset_json, asset_value, entity_values, resource_values, value_schema};
 
 /// Most ticks one `advance` resimulates while the recorded future is stale.
 pub const RESIMULATION_BUDGET: u32 = 240;
@@ -70,6 +70,9 @@ impl Host {
         GameInfo {
             components: named(world.component_schemas()),
             resources: named(world.resource_schemas()),
+            assets: named(world.asset_schemas()),
+            events: named(world.event_schemas()),
+            fingerprint: Hash64(self.simulation.schema_fingerprint()),
             input: self.simulation.input_schema(),
             tick_rate: self.simulation.tick_rate(),
             debug_layers: self
@@ -147,10 +150,15 @@ impl Host {
     fn execute(&mut self, command: Command) -> Result<Reply, ProtocolError> {
         let sim = &mut self.simulation;
         match command {
-            Command::LoadScene { ron } => {
-                let session = Session::start(sim, ron, AssetTexts::new(), Document::Scene)
+            Command::LoadScene {
+                scene,
+                assets,
+                document,
+            } => {
+                let session = Session::start(sim, scene, assets.into_iter().collect(), document)
                     .map_err(|e| self.fail(e))?;
-                self.load(session)
+                self.load(session);
+                Ok(self.loaded())
             }
             Command::LoadInputs { log } => {
                 let log = InputLog::decode(&log.0)
@@ -357,14 +365,16 @@ impl Host {
                     edits: Bytes(export.edits),
                     undo: Bytes(export.undo),
                     hashes: export.hashes.into_iter().map(Hash64).collect(),
+                    assets: export.assets,
+                    branches: Bytes(export.branches),
+                    document: self.session.document(),
                 })
             }
-            Command::ReplaceScene { ron } => {
-                let assets = self.session.assets().clone();
+            Command::ReplaceScene { scene, assets } => {
                 self.session
-                    .replace_scene(sim, ron, assets)
+                    .replace_scene(sim, scene, assets.into_iter().collect())
                     .map_err(|e| self.fail(e))?;
-                Ok(Reply::Done)
+                Ok(self.loaded())
             }
             Command::LoadSession {
                 scene,
@@ -373,6 +383,9 @@ impl Host {
                 edits,
                 undo,
                 expected,
+                assets,
+                branches,
+                document,
             } => {
                 // Empty logs load the scene alone; the logs are checked here for their
                 // error codes.
@@ -390,12 +403,61 @@ impl Host {
                     edits: edits.0,
                     undo: undo.0,
                     hashes: expected.into_iter().map(|hash| hash.0).collect(),
-                    branches: Vec::new(),
-                    assets: Vec::new(),
+                    branches: branches.0,
+                    assets,
                 };
-                let session =
-                    Session::resume(sim, export, Document::Scene).map_err(|e| self.fail(e))?;
-                self.load(session)
+                let session = Session::resume(sim, export, document).map_err(|e| self.fail(e))?;
+                self.load(session);
+                Ok(Reply::Done)
+            }
+            Command::GetAsset { id } => {
+                let (asset, value) = asset_value(sim, id).ok_or_else(|| missing_asset(id))?;
+                Ok(Reply::Asset { asset, value })
+            }
+            Command::SetAssetField { id, path, value } => {
+                let context = format!("asset {id}, path `{}`", Path(&path));
+                self.set_asset_field(id, &path, value)
+                    .map_err(|error| in_context(error, &context))?;
+                Ok(Reply::Done)
+            }
+            Command::SaveAsset { id } => Ok(Reply::Text {
+                text: self
+                    .session
+                    .save_asset(id)
+                    .ok_or_else(|| missing_asset(id))?,
+            }),
+            Command::ApplyToAsset { id } => {
+                self.session
+                    .apply_to_asset(sim, id)
+                    .map_err(|e| in_context(self.fail(e), &format!("asset {id}")))?;
+                Ok(Reply::Done)
+            }
+            Command::NewAssetValue { asset } => Ok(Reply::Text {
+                text: sim
+                    .world()
+                    .default_asset_ron(&asset)
+                    .map_err(|e| ProtocolError::new(ErrorCode::InvalidCommand, e))?,
+            }),
+            Command::SwitchBranch { branch } => {
+                self.session
+                    .switch_branch(sim, branch)
+                    .map_err(|e| self.fail(e))?;
+                Ok(Reply::Done)
+            }
+            Command::RenameBranch { branch, name } => {
+                self.session
+                    .rename_branch(branch, name)
+                    .map_err(|e| self.fail(e))?;
+                Ok(Reply::Done)
+            }
+            Command::DeleteBranch { branch } => {
+                let descendants = self
+                    .session
+                    .delete_branch(sim, branch)
+                    .map_err(|e| self.fail(e))?;
+                Ok(Reply::Deleted {
+                    branches: std::iter::once(branch).chain(descendants).collect(),
+                })
             }
             Command::GetSchedule => {
                 let systems = sim.systems();
@@ -557,6 +619,48 @@ impl Host {
         Ok(())
     }
 
+    /// Reads the value of the data asset `id`, replaces the value at `path`, and records the
+    /// whole new value as an asset edit.
+    fn set_asset_field(
+        &mut self,
+        id: AssetId,
+        path: &[PathSegment],
+        value: JsonValue,
+    ) -> Result<(), ProtocolError> {
+        let (asset, schema, current) =
+            asset_json(&self.simulation, id).ok_or_else(|| missing_asset(id))?;
+        let current = current.map_err(|reason| {
+            ProtocolError::new(
+                ErrorCode::InvalidEdit,
+                format!("`{asset}` is read-only in the editor: {reason}"),
+            )
+        })?;
+        let mut whole = to_wire(current, &schema);
+        set_at_path(&mut whole, path, value)
+            .map_err(|reason| ProtocolError::new(ErrorCode::InvalidPath, reason))?;
+        let invalid = |reason| {
+            edit_error(&EditError::InvalidValue {
+                name: asset.clone(),
+                reason,
+            })
+        };
+        let codec = self
+            .simulation
+            .world()
+            .asset_codec(&asset)
+            .expect("a loaded asset's type");
+        let decoded =
+            (codec.from_json)(from_wire(whole, &schema).map_err(invalid)?).map_err(invalid)?;
+        let edit = Edit::SetAsset {
+            id,
+            value: (codec.encode)(&*decoded),
+        };
+        self.session
+            .edit(&mut self.simulation, edit)
+            .map_err(|e| self.fail(e))?;
+        Ok(())
+    }
+
     /// Applies `edit` through the session, naming `context` in its error.
     fn edit(&mut self, edit: Edit, context: &str) -> Result<Option<Entity>, ProtocolError> {
         self.session
@@ -565,14 +669,27 @@ impl Host {
     }
 
     /// Takes over a new session, paused.
-    fn load(&mut self, mut session: Session) -> Result<Reply, ProtocolError> {
+    fn load(&mut self, mut session: Session) {
         // Records of the old session never match the new one's hashes, unless it is the same.
         session.introspection = self.session.introspection.take();
         self.session = session;
         if self.playing {
             self.pause(PauseReason::User);
         }
-        Ok(Reply::Done)
+    }
+
+    /// What the last scene load of the session reports.
+    fn loaded(&self) -> Reply {
+        Reply::Loaded {
+            warnings: self.session.warnings().to_vec(),
+            instances: self.simulation.instances(),
+            load_addresses: self
+                .simulation
+                .load_addresses()
+                .iter()
+                .map(|(&entity, address)| (entity, address.clone()))
+                .collect(),
+        }
     }
 
     fn step(&mut self, ticks: u32, record_hashes: bool) -> Result<Reply, ProtocolError> {
@@ -745,6 +862,10 @@ fn changes_state(command: &Command) -> bool {
             | Command::SetLiveInput { .. }
             | Command::GetTimeline
             | Command::ExportSession
+            | Command::GetAsset { .. }
+            | Command::SaveAsset { .. }
+            | Command::NewAssetValue { .. }
+            | Command::RenameBranch { .. }
             | Command::GetSchedule
             | Command::GetTickEvents { .. }
             | Command::GetTickCommands { .. }
@@ -794,6 +915,10 @@ fn edit_error(error: &EditError) -> ProtocolError {
         }
     };
     ProtocolError::new(code, error)
+}
+
+fn missing_asset(id: AssetId) -> ProtocolError {
+    edit_error(&EditError::MissingAsset(id))
 }
 
 fn in_context(mut error: ProtocolError, context: &str) -> ProtocolError {

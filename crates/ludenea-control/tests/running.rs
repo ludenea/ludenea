@@ -47,7 +47,14 @@ fn error(host: &mut Host, command: Command) -> ErrorCode {
 /// A boxes host with `scene` and `inputs` loaded.
 fn loaded_with(app: App, scene: String, inputs: Bytes) -> Host {
     let mut host = Host::new(app).unwrap();
-    ok(&mut host, Command::LoadScene { ron: scene });
+    ok(
+        &mut host,
+        Command::LoadScene {
+            scene,
+            assets: Vec::new(),
+            document: Document::Scene,
+        },
+    );
     ok(&mut host, Command::LoadInputs { log: inputs });
     host
 }
@@ -101,6 +108,7 @@ fn export(host: &mut Host) -> Export {
             edits,
             undo,
             hashes,
+            ..
         } => Export {
             scene,
             saved_scene,
@@ -121,6 +129,9 @@ fn load_session(export: Export, expected: Vec<Hash64>) -> Command {
         edits: export.edits,
         undo: export.undo,
         expected,
+        assets: Vec::new(),
+        branches: Bytes(Vec::new()),
+        document: Document::Scene,
     }
 }
 
@@ -318,7 +329,13 @@ fn panicking_system_pauses_with_panicked_and_keeps_session() {
 fn replace_scene_at_a_later_tick_returns_there_after_resimulation() {
     let mut host = loaded(100);
     step(&mut host, 40);
-    ok(&mut host, Command::ReplaceScene { ron: scene_b() });
+    ok(
+        &mut host,
+        Command::ReplaceScene {
+            scene: scene_b(),
+            assets: Vec::new(),
+        },
+    );
     let during = timeline(&mut host);
     assert!(during.resimulating && during.current == 0, "{during:?}");
     resimulate(&mut host);
@@ -341,7 +358,13 @@ fn replace_scene_at_a_later_tick_returns_there_after_resimulation() {
 fn undo_and_redo_through_protocol() {
     let mut host = loaded(60);
     step(&mut host, 60);
-    ok(&mut host, Command::ReplaceScene { ron: scene_b() });
+    ok(
+        &mut host,
+        Command::ReplaceScene {
+            scene: scene_b(),
+            assets: Vec::new(),
+        },
+    );
     assert!(timeline(&mut host).can_undo);
     assert_eq!(error(&mut host, Command::Undo), ErrorCode::Resimulating);
     resimulate(&mut host);
@@ -423,7 +446,13 @@ fn replace_scene_keeps_recorded_inputs() {
     let inputs = recorded(100);
     let mut host = loaded(100);
     step(&mut host, 100);
-    ok(&mut host, Command::ReplaceScene { ron: scene_b() });
+    ok(
+        &mut host,
+        Command::ReplaceScene {
+            scene: scene_b(),
+            assets: Vec::new(),
+        },
+    );
     resimulate(&mut host);
     let replaced = export(&mut host);
     assert_eq!(replaced.inputs, inputs);
@@ -440,7 +469,13 @@ fn replace_scene_keeps_recorded_inputs() {
 fn seek_while_resimulating_is_resimulating() {
     let mut host = loaded(100);
     step(&mut host, 100);
-    ok(&mut host, Command::ReplaceScene { ron: scene_b() });
+    ok(
+        &mut host,
+        Command::ReplaceScene {
+            scene: scene_b(),
+            assets: Vec::new(),
+        },
+    );
     assert_eq!(
         error(&mut host, Command::Seek { tick: 90 }),
         ErrorCode::Resimulating
@@ -464,7 +499,13 @@ fn panic_during_resimulation_ends_it_and_keeps_undo_and_export() {
     let inputs = recorded(100);
     let mut host = loaded_with(app, scene_a(), inputs.clone());
     step(&mut host, 40);
-    ok(&mut host, Command::ReplaceScene { ron: scene_b() });
+    ok(
+        &mut host,
+        Command::ReplaceScene {
+            scene: scene_b(),
+            assets: Vec::new(),
+        },
+    );
 
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
@@ -549,7 +590,14 @@ fn ticked(events: &[Event]) -> Vec<(u64, Hash64)> {
 fn a_command_that_changes_the_state_announces_it_once() {
     let mut host = Host::new(boxes::app()).unwrap();
     host.advance(0.0);
-    ok(&mut host, Command::LoadScene { ron: scene_a() });
+    ok(
+        &mut host,
+        Command::LoadScene {
+            scene: scene_a(),
+            assets: Vec::new(),
+            document: Document::Scene,
+        },
+    );
     let loaded = hash(&mut host);
     assert_eq!(ticked(&host.advance(0.0)), vec![(0, loaded)]);
     assert!(ticked(&host.advance(0.0)).is_empty());
@@ -639,6 +687,9 @@ fn load_session_with_empty_logs_loads_only_its_scene() {
         edits: Bytes(Vec::new()),
         undo: Bytes(Vec::new()),
         expected: Vec::new(),
+        assets: Vec::new(),
+        branches: Bytes(Vec::new()),
+        document: Document::Scene,
     };
     ok(&mut host, load);
     let timeline = timeline(&mut host);

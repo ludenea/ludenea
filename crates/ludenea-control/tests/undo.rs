@@ -1,4 +1,4 @@
-use ludenea::control::{Document, Resimulation, Session, SessionError, SessionExport};
+use ludenea::control::{Bytes, Document, Resimulation, Session, SessionError, SessionExport};
 use ludenea::prelude::*;
 use ludenea_app::{AssetTexts, EntityRef, ValueKind};
 use serde_json::json;
@@ -400,6 +400,7 @@ fn session_export_from_2a_with_undo_history_resumes() {
         edits,
         undo,
         hashes,
+        ..
     } = serde_json::from_str(fixture).unwrap()
     else {
         panic!("the fixture is a session export");
@@ -423,6 +424,9 @@ fn session_export_from_2a_with_undo_history_resumes() {
         edits,
         undo,
         expected: hashes,
+        assets: Vec::new(),
+        branches: Bytes(Vec::new()),
+        document: Document::Scene,
     })
     .unwrap();
     let timeline = |host: &mut Host| match host.handle(Command::GetTimeline).unwrap() {

@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { ControlClient, ProtocolFailure, fakeTransport, type GameInfo } from "../src";
 
-const game: GameInfo = { components: [], resources: [], input: null, tick_rate: 60, debug_layers: [] };
-const welcome = JSON.stringify({ type: "welcome", protocol_version: 2, engine_version: "0", game });
+const game: GameInfo = { components: [], resources: [], assets: [], events: [], fingerprint: "0000000000000000", input: null, tick_rate: 60, debug_layers: [] };
+const welcome = JSON.stringify({ type: "welcome", protocol_version: 3, engine_version: "0", game });
 
 /** A transport whose peer welcomes the client and records every request it receives. */
 function connected() {
@@ -54,7 +54,7 @@ describe("ControlClient", () => {
       return [welcome];
     });
     const client = await ControlClient.connect(transport);
-    expect(hellos).toEqual([{ type: "hello", protocol_version: 2 }]);
+    expect(hellos).toEqual([{ type: "hello", protocol_version: 3 }]);
     expect(client.game).toEqual(game);
   });
 

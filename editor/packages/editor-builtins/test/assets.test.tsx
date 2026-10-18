@@ -39,7 +39,7 @@ describe("assets", () => {
     await openScene();
 
     expect(host.project.sent).toContainEqual({ type: "read_text", path: SCENE });
-    expect(game.sent.filter((command) => command.type === "load_scene")).toEqual([{ type: "load_scene", ron: "(scene)" }]);
+    expect(game.sent.filter((command) => command.type === "load_scene")).toEqual([{ type: "load_scene", scene: "(scene)", assets: [], document: "Scene" }]);
   });
 
   it("disk_change_with_unsaved_edits_shows_banner_and_keeps_mine", async () => {
@@ -61,7 +61,7 @@ describe("assets", () => {
     await settle();
     fireEvent.click(screen.getByRole("button", { name: "Reload" }));
     await settle();
-    expect(game.sent.filter((command) => command.type === "replace_scene")).toEqual([{ type: "replace_scene", ron: "(changed again)" }]);
+    expect(game.sent.filter((command) => command.type === "replace_scene")).toEqual([{ type: "replace_scene", scene: "(changed again)", assets: [] }]);
   });
 
   it("disk_change_without_unsaved_edits_sends_replace_scene", async () => {
@@ -74,7 +74,7 @@ describe("assets", () => {
     await settle();
 
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(game.sent.filter((command) => command.type === "replace_scene")).toEqual([{ type: "replace_scene", ron: "(changed)" }]);
+    expect(game.sent.filter((command) => command.type === "replace_scene")).toEqual([{ type: "replace_scene", scene: "(changed)", assets: [] }]);
   });
 
   it("unsaved_marker_follows_scene_dirty", async () => {
@@ -123,7 +123,7 @@ describe("assets", () => {
 
     act(() => host.setControl(game.client));
     await settle();
-    expect(game.sent.filter((command) => command.type === "load_scene")).toEqual([{ type: "load_scene", ron: "(scene)" }]);
+    expect(game.sent.filter((command) => command.type === "load_scene")).toEqual([{ type: "load_scene", scene: "(scene)", assets: [], document: "Scene" }]);
 
     disk.text = "(edited without a game)";
     act(() => host.setControl(null));
@@ -132,7 +132,7 @@ describe("assets", () => {
     const restarted = await testGame();
     act(() => host.setControl(restarted.client));
     await settle();
-    expect(restarted.sent.filter((command) => command.type === "load_scene")).toEqual([{ type: "load_scene", ron: "(edited without a game)" }]);
+    expect(restarted.sent.filter((command) => command.type === "load_scene")).toEqual([{ type: "load_scene", scene: "(edited without a game)", assets: [], document: "Scene" }]);
   });
 
   it("removing_the_open_scene_on_disk_closes_it", async () => {

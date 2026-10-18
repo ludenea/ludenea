@@ -2,6 +2,6 @@
 import type { TypeSchema } from "./TypeSchema";
 
 /**
- * The schema of a component or resource type, by stable name.
+ * The schema of a component, resource, asset, or event type, by stable name.
  */
 export type NamedSchema = { name: string, schema: TypeSchema, };

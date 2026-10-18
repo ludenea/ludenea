@@ -53,7 +53,7 @@ fn game_binary() -> &'static PathBuf {
 }
 
 fn handshake(game: &mut GameProcess, messages: &Receiver<String>) -> GameInfo {
-    game.send(r#"{"type":"hello","protocol_version":2}"#)
+    game.send(r#"{"type":"hello","protocol_version":3}"#)
         .unwrap();
     let line = messages.recv_timeout(TIMEOUT).expect("a welcome arrives");
     match serde_json::from_str(&line).unwrap() {

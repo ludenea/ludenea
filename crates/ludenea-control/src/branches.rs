@@ -409,8 +409,14 @@ impl BranchTree {
         postcard::to_allocvec(&stored).expect("a branch tree always encodes")
     }
 
-    /// Decodes `encode`'s bytes. The current branch's segment stays with the session.
-    pub fn decode(bytes: &[u8]) -> Result<BranchTree, BranchesError> {
+    /// Decodes `encode`'s bytes. The current branch's segment stays with the session, whose
+    /// run holds `current_edits` and ends at `current_head`. Every fork point must lie on
+    /// its parent's run.
+    pub fn decode(
+        bytes: &[u8],
+        current_edits: &EditLog,
+        current_head: u64,
+    ) -> Result<BranchTree, BranchesError> {
         let stored: StoredTree = postcard::from_bytes(bytes)?;
         let mut branches = BTreeMap::new();
         for branch in stored.branches {
@@ -427,11 +433,48 @@ impl BranchTree {
             return Err(BranchesError::Tree);
         }
         let next = branches.keys().next_back().map_or(1, |id| id.0 + 1);
-        Ok(BranchTree {
+        let tree = BranchTree {
             branches,
             current: stored.current,
             next: next.max(stored.next),
-        })
+        };
+        tree.check_forks(current_edits, current_head)?;
+        Ok(tree)
+    }
+
+    /// Refuses a fork point past its parent's head or inheriting more edits than the
+    /// parent records at the fork tick: replaying it would pad the run without bound.
+    /// Parents come first in identifier order, so each parent's fork is checked before
+    /// its head is computed from it.
+    fn check_forks(&self, current_edits: &EditLog, current_head: u64) -> Result<(), BranchesError> {
+        for branch in self.branches.values() {
+            let Some(parent) = branch.parent.map(|id| &self.branches[&id]) else {
+                if branch.fork() != (0, 0) {
+                    return Err(BranchesError::Fork);
+                }
+                continue;
+            };
+            let (head, edits_at_fork) = match &parent.segment {
+                None => (current_head, current_edits.at(branch.fork_tick).len()),
+                Some(segment) => {
+                    let own = segment
+                        .edits
+                        .iter()
+                        .filter(|edit| edit.tick == branch.fork_tick)
+                        .count();
+                    let inherited = if branch.fork_tick == parent.fork_tick {
+                        parent.fork_edits
+                    } else {
+                        0
+                    };
+                    (segment.head(parent.fork_tick), own + inherited)
+                }
+            };
+            if branch.fork_tick > head || branch.fork_edits > edits_at_fork {
+                return Err(BranchesError::Fork);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -443,6 +486,8 @@ pub enum BranchesError {
     Log(#[from] ludenea_app::SimError),
     #[error("a branch names a parent the tree does not have")]
     Tree,
+    #[error("a branch forks outside its parent's run")]
+    Fork,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -532,9 +577,66 @@ impl StoredBranch {
             name: self.name,
             parent: self.parent,
             fork_tick: self.fork_tick,
-            fork_edits: usize::try_from(self.fork_edits).expect("edits fit in memory"),
+            fork_edits: usize::try_from(self.fork_edits).map_err(|_| BranchesError::Fork)?,
             stale: self.stale.then_some(self.fork_tick),
             segment,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stored(id: u32, parent: Option<u32>, (fork_tick, fork_edits): (u64, u64)) -> StoredBranch {
+        StoredBranch {
+            id: BranchId(id),
+            name: BranchId(id).default_name(),
+            parent: parent.map(BranchId),
+            fork_tick,
+            fork_edits,
+            stale: false,
+            inputs: InputLog::new(1).encode(),
+            edits: EditLog::new().encode(),
+            hashes: Vec::new(),
+        }
+    }
+
+    fn decode(branches: Vec<StoredBranch>, current_head: u64) -> Result<BranchTree, BranchesError> {
+        let bytes = postcard::to_allocvec(&StoredTree {
+            current: BranchId::ROOT,
+            next: 3,
+            branches,
+        })
+        .unwrap();
+        BranchTree::decode(&bytes, &EditLog::new(), current_head)
+    }
+
+    #[test]
+    fn decode_refuses_forks_outside_the_parent_run() {
+        let root = || stored(0, None, (0, 0));
+        assert!(decode(vec![root(), stored(1, Some(0), (40, 0))], 50).is_ok());
+        for child in [
+            stored(1, Some(0), (u64::MAX, 0)),
+            stored(1, Some(0), (51, 0)),
+            stored(1, Some(0), (40, u64::MAX)),
+            stored(1, Some(0), (40, 1)),
+        ] {
+            assert!(matches!(
+                decode(vec![root(), child], 50),
+                Err(BranchesError::Fork)
+            ));
+        }
+        // A grandchild forks on its stored parent's run, which ends at the parent's fork.
+        let child = stored(1, Some(0), (40, 0));
+        let grandchild = stored(2, Some(1), (41, 0));
+        assert!(matches!(
+            decode(vec![root(), child, grandchild], 50),
+            Err(BranchesError::Fork)
+        ));
+        assert!(matches!(
+            decode(vec![stored(0, None, (3, 0))], 50),
+            Err(BranchesError::Fork)
+        ));
     }
 }
