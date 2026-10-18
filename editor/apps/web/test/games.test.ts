@@ -155,6 +155,31 @@ describe("followWasmGames crash loops", () => {
   });
 });
 
+describe("followWasmGames giving up", () => {
+  it("a_game_given_up_on_leaves_no_timer_running", async () => {
+    vi.useFakeTimers();
+    const { project } = await fakeProject(() => ({ ok: { type: "wasm", glue_url: "/game/a/game.js" } }));
+    const crashes: ((crash: WorkerCrash) => void)[] = [];
+    const hosts: ReturnType<typeof fakeHost>[] = [];
+    const start = (glueUrl: string): WorkerGame => {
+      const host = fakeHost(glueUrl);
+      hosts.push(host);
+      return { transport: host, onCrashed: (listener: (crash: WorkerCrash) => void) => (crashes.push(listener), () => {}), terminate: () => {} };
+    };
+    followWasmGames(project, app(), start);
+    await vi.advanceTimersByTimeAsync(0);
+    for (let crash = 0; crash < 4; crash++) {
+      // Playing when it crashes: its guard exports every second until disposed.
+      hosts.at(-1)!.push(JSON.stringify({ type: "event", event: { type: "ticked", tick: 1, hash: "0000000000000001", pending: false, playing: true, effective_rate: 1 } }));
+      crashes.at(-1)!({ message: "boom" });
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    // No guard's export interval or coalescing timer is left behind.
+    expect(vi.getTimerCount()).toBe(0);
+    vi.useRealTimers();
+  });
+});
+
 describe("followNativeGames", () => {
   it("desktop_rebuild_exports_before_restart_game", async () => {
     const games = [fakeHost("old"), fakeHost("new")];
