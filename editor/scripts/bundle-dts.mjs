@@ -38,7 +38,9 @@ function ambient(name, code) {
   return `declare module "${name}" {\n${body}\n}\n`;
 }
 
-execFileSync(join(editor, "node_modules/.bin/tsc"), ["-b"], { cwd: editor, stdio: "inherit" });
+// Only the packages whose declarations are rolled: the engine plugins type-check against this
+// script's output, which may be missing while it is being regenerated.
+execFileSync(join(editor, "node_modules/.bin/tsc"), ["-b", "packages/control-client", "packages/editor-shell"], { cwd: editor, stdio: "inherit" });
 
 const shared = ["@ludenea/control-client", "react", "react/jsx-runtime", "react-dom"];
 const editorShell = await roll(join(shell, "dist/src/index.d.ts"), { external: shared, respectExternal: true });
