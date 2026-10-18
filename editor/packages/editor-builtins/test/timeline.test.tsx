@@ -1,8 +1,10 @@
 import type { Timeline } from "@ludenea/control-client";
 import { installShortcuts } from "@ludenea/editor-shell";
-import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { Profiler } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { builtinPlugins } from "../src";
+import { ResimulatingNotice } from "../src/timeline/editing";
 import { renderPanel, schemas, settle, testEditor, testGame } from "./support";
 
 type Command = { type: string; [key: string]: unknown };
@@ -135,5 +137,25 @@ describe("timeline", () => {
     }
     expect(["despawn", "set_field", "undo", "redo"].flatMap((type) => sentOf(game.sent, type))).toEqual([]);
     expect(["remove_component", "apply_to_scene"].flatMap((type) => sentOf(game.sent, type))).toEqual([]);
+  });
+
+  it("resimulating_notice_renders_only_when_what_it_shows_changes", async () => {
+    const { host } = await editorWith();
+    let renders = 0;
+    render(
+      <Profiler id="notice" onRender={() => void renders++}>
+        <ResimulatingNotice editor={host.editor} />
+      </Profiler>,
+    );
+    renders = 0;
+
+    act(() => {
+      for (const current of [41, 42, 43]) host.editor.timeline.setState({ timeline: timeline({ current, head: current }) });
+    });
+    expect(renders).toBe(0);
+
+    act(() => host.editor.timeline.setState({ timeline: timeline({ resimulating: true, simulated: 60 }) }));
+    expect(screen.getByRole("status").textContent).toContain("tick 60 of 100");
+    expect(renders).toBe(1);
   });
 });
