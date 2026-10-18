@@ -1,5 +1,6 @@
 use ludenea_app::{
-    App, AppError, Edit, EditError, EditLog, InputLog, RawInput, SimError, Simulation, ValueKind,
+    App, AppError, AssetTexts, Edit, EditError, EditLog, InputLog, RawInput, SimError, Simulation,
+    ValueKind,
 };
 use std::collections::BTreeSet;
 
@@ -13,7 +14,7 @@ use crate::protocol::{
     Bytes, Command, ConsoleLevel, EntityRow, ErrorCode, Event, FieldTarget, GameInfo, Hash64,
     NamedSchema, PauseReason, ProtocolError, Reply, SyncPoint, SystemRow, Topic,
 };
-use crate::session::{Resimulation, Session, SessionError, Timeline};
+use crate::session::{Document, Resimulation, Session, SessionError, SessionExport, Timeline};
 use crate::subscriptions::{INTROSPECTION_TICKS, Subscriptions, TickRecord};
 use crate::values::{entity_values, resource_values, value_schema};
 
@@ -41,8 +42,8 @@ impl Host {
     pub fn new(app: App) -> Result<Host, AppError> {
         let mut simulation = app.build()?;
         let scene = simulation.save_scene();
-        let session =
-            Session::start(&mut simulation, scene).expect("the built world's scene loads");
+        let session = Session::start(&mut simulation, scene, AssetTexts::new(), Document::Scene)
+            .expect("the built world's scene loads");
         Ok(Host {
             pacer: Pacer::new(simulation.tick_rate()),
             timeline: session.timeline(),
@@ -147,7 +148,8 @@ impl Host {
         let sim = &mut self.simulation;
         match command {
             Command::LoadScene { ron } => {
-                let session = Session::start(sim, ron).map_err(|e| self.fail(e))?;
+                let session = Session::start(sim, ron, AssetTexts::new(), Document::Scene)
+                    .map_err(|e| self.fail(e))?;
                 self.load(session)
             }
             Command::LoadInputs { log } => {
@@ -358,8 +360,9 @@ impl Host {
                 })
             }
             Command::ReplaceScene { ron } => {
+                let assets = self.session.assets().clone();
                 self.session
-                    .replace_scene(sim, ron)
+                    .replace_scene(sim, ron, assets)
                     .map_err(|e| self.fail(e))?;
                 Ok(Reply::Done)
             }
@@ -371,31 +374,27 @@ impl Host {
                 undo,
                 expected,
             } => {
-                // Empty logs load the scene alone.
-                let inputs = if inputs.0.is_empty() {
-                    let players = u16::try_from(sim.players()).expect("fewer than 2^16 players");
-                    InputLog::new(players)
-                } else {
+                // Empty logs load the scene alone; the logs are checked here for their
+                // error codes.
+                if !inputs.0.is_empty() {
                     InputLog::decode(&inputs.0)
-                        .map_err(|e| ProtocolError::new(ErrorCode::InvalidInputs, e))?
-                };
-                let edits = if edits.0.is_empty() {
-                    EditLog::new()
-                } else {
-                    decode_edits(&edits)?
-                };
-                let expected = expected.into_iter().map(|hash| hash.0).collect();
-                let session = Session::resume(
-                    sim,
+                        .map_err(|e| ProtocolError::new(ErrorCode::InvalidInputs, e))?;
+                }
+                if !edits.0.is_empty() {
+                    decode_edits(&edits)?;
+                }
+                let export = SessionExport {
                     scene,
                     saved_scene,
-                    inputs,
-                    edits,
-                    &undo.0,
-                    &[],
-                    expected,
-                )
-                .map_err(|e| self.fail(e))?;
+                    inputs: inputs.0,
+                    edits: edits.0,
+                    undo: undo.0,
+                    hashes: expected.into_iter().map(|hash| hash.0).collect(),
+                    branches: Vec::new(),
+                    assets: Vec::new(),
+                };
+                let session =
+                    Session::resume(sim, export, Document::Scene).map_err(|e| self.fail(e))?;
                 self.load(session)
             }
             Command::GetSchedule => {
@@ -774,7 +773,9 @@ fn session_error(error: &SessionError) -> ProtocolError {
         | SessionError::RootBranch
         | SessionError::NotOnBranch { .. } => ErrorCode::InvalidCommand,
         SessionError::Edit(error) => return edit_error(error),
-        SessionError::MissingComponent { .. } => ErrorCode::InvalidEdit,
+        SessionError::MissingComponent { .. }
+        | SessionError::PrefabHasNoResources
+        | SessionError::NotDataAsset(_) => ErrorCode::InvalidEdit,
         SessionError::NotInScene(_) => ErrorCode::NoSuchEntity,
         SessionError::Sim(error) => return sim_error(error),
         SessionError::Scene(_) => ErrorCode::InvalidScene,

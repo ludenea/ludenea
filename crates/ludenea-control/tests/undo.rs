@@ -1,6 +1,6 @@
-use ludenea::control::{Resimulation, Session, SessionError};
+use ludenea::control::{Document, Resimulation, Session, SessionError, SessionExport};
 use ludenea::prelude::*;
-use ludenea_app::{EntityRef, ValueKind};
+use ludenea_app::{AssetTexts, EntityRef, ValueKind};
 use serde_json::json;
 
 fn simulation() -> Simulation {
@@ -25,7 +25,8 @@ fn recorded(ticks: u64) -> InputLog {
 
 fn started(ticks: u64) -> (Simulation, Session) {
     let mut sim = simulation();
-    let mut session = Session::start(&mut sim, small_scene()).unwrap();
+    let mut session =
+        Session::start(&mut sim, small_scene(), AssetTexts::new(), Document::Scene).unwrap();
     session.load_inputs(&mut sim, recorded(ticks)).unwrap();
     (sim, session)
 }
@@ -118,7 +119,13 @@ fn redo_reapplies_same_edit_and_hash() {
 fn undo_scene_edit_restores_scene_text() {
     let mut sim = simulation();
     let original = small_scene();
-    let mut session = Session::start(&mut sim, original.clone()).unwrap();
+    let mut session = Session::start(
+        &mut sim,
+        original.clone(),
+        AssetTexts::new(),
+        Document::Scene,
+    )
+    .unwrap();
     let original_hash = sim.hash();
     let victim = sim.world().entities().nth(5).unwrap();
     session
@@ -178,17 +185,7 @@ fn undo_survives_export_and_resume() {
     let (mut sim, session, before, _) = edited_at_300();
     let export = session.export().unwrap();
     drop(session);
-    let mut session = Session::resume(
-        &mut sim,
-        export.scene,
-        export.saved_scene,
-        InputLog::decode(&export.inputs).unwrap(),
-        EditLog::decode(&export.edits).unwrap(),
-        &export.undo,
-        &export.branches,
-        export.hashes,
-    )
-    .unwrap();
+    let mut session = Session::resume(&mut sim, export, Document::Scene).unwrap();
     assert!(matches!(
         session.undo(&mut sim),
         Err(SessionError::Resimulating { .. })
@@ -222,7 +219,8 @@ fn undo_on_empty_stack_is_nothing_to_undo() {
 #[test]
 fn scene_dirty_until_saved() {
     let mut sim = simulation();
-    let mut session = Session::start(&mut sim, small_scene()).unwrap();
+    let mut session =
+        Session::start(&mut sim, small_scene(), AssetTexts::new(), Document::Scene).unwrap();
     assert!(!session.timeline().scene_dirty);
     let victim = sim.world().entities().nth(5).unwrap();
     session
@@ -283,7 +281,9 @@ fn replace_scene_is_undoable() {
     play(&mut session, &mut sim, 50);
     let original = session.scene().to_string();
     let disk = boxes::generate_scene(31, 8);
-    session.replace_scene(&mut sim, disk.clone()).unwrap();
+    session
+        .replace_scene(&mut sim, disk.clone(), AssetTexts::new())
+        .unwrap();
     resimulate_all(&mut session, &mut sim);
     assert!(session.timeline().can_undo && !session.timeline().scene_dirty);
     session.undo(&mut sim).unwrap();
@@ -302,13 +302,12 @@ fn resume_with_empty_undo_bytes_has_empty_history() {
     let export = session.export().unwrap();
     let session = Session::resume(
         &mut sim,
-        export.scene,
-        export.saved_scene,
-        InputLog::decode(&export.inputs).unwrap(),
-        EditLog::decode(&export.edits).unwrap(),
-        &[],
-        &[],
-        export.hashes,
+        SessionExport {
+            undo: Vec::new(),
+            branches: Vec::new(),
+            ..export
+        },
+        Document::Scene,
     )
     .unwrap();
     assert!(!session.timeline().can_undo && !session.timeline().can_redo);
@@ -317,7 +316,8 @@ fn resume_with_empty_undo_bytes_has_empty_history() {
 #[test]
 fn unsaved_scene_edits_stay_unsaved_across_export_and_resume() {
     let mut sim = simulation();
-    let mut session = Session::start(&mut sim, small_scene()).unwrap();
+    let mut session =
+        Session::start(&mut sim, small_scene(), AssetTexts::new(), Document::Scene).unwrap();
     let saved = session.scene().to_string();
     let victim = sim.world().entities().nth(5).unwrap();
     session
@@ -331,17 +331,7 @@ fn unsaved_scene_edits_stay_unsaved_across_export_and_resume() {
     let export = session.export().unwrap();
     assert_eq!(export.saved_scene.as_deref(), Some(saved.as_str()));
     let resume = |sim: &mut Simulation, export: ludenea::control::SessionExport| {
-        Session::resume(
-            sim,
-            export.scene,
-            export.saved_scene,
-            InputLog::decode(&export.inputs).unwrap(),
-            EditLog::decode(&export.edits).unwrap(),
-            &export.undo,
-            &export.branches,
-            export.hashes,
-        )
-        .unwrap()
+        Session::resume(sim, export, Document::Scene).unwrap()
     };
     let mut resumed = resume(&mut sim, export);
     assert!(resumed.timeline().scene_dirty);
@@ -393,7 +383,7 @@ fn replace_scene_clears_redo() {
     session.undo(&mut sim).unwrap();
     assert!(session.timeline().can_redo);
     session
-        .replace_scene(&mut sim, boxes::generate_scene(31, 8))
+        .replace_scene(&mut sim, boxes::generate_scene(31, 8), AssetTexts::new())
         .unwrap();
     assert!(!session.timeline().can_redo);
 }
@@ -454,7 +444,7 @@ fn session_export_from_2a_with_undo_history_resumes() {
     assert!(!timeline(&mut host).can_undo);
 }
 
-use ludenea::control::{BranchId, SessionExport};
+use ludenea::control::BranchId;
 use serde::Serialize;
 
 const ROOT: BranchId = BranchId::ROOT;
@@ -471,17 +461,7 @@ fn branch_ids(session: &Session) -> Vec<BranchId> {
 }
 
 fn resume(sim: &mut Simulation, export: SessionExport) -> Session {
-    Session::resume(
-        sim,
-        export.scene,
-        export.saved_scene,
-        InputLog::decode(&export.inputs).unwrap(),
-        EditLog::decode(&export.edits).unwrap(),
-        &export.undo,
-        &export.branches,
-        export.hashes,
-    )
-    .unwrap()
+    Session::resume(sim, export, Document::Scene).unwrap()
 }
 
 /// Switches to `id` and returns its hashes up to its head.
@@ -489,7 +469,9 @@ fn branch_hashes(session: &mut Session, sim: &mut Simulation, id: BranchId) -> V
     session.switch_branch(sim, id).unwrap();
     resimulate_all(session, sim);
     let timeline = session.timeline();
-    session.seek(sim, timeline.head.max(timeline.simulated)).unwrap();
+    session
+        .seek(sim, timeline.head.max(timeline.simulated))
+        .unwrap();
     hashes(session)
 }
 
@@ -540,7 +522,13 @@ fn redo_fork_recreates_same_branch() {
     session.redo(&mut sim).unwrap();
     let info = session.branches()[1].clone();
     assert_eq!(
-        (info.id, info.name.as_str(), info.parent, info.fork_tick, info.head),
+        (
+            info.id,
+            info.name.as_str(),
+            info.parent,
+            info.fork_tick,
+            info.head
+        ),
         (BranchId(1), "Try", Some(ROOT), 150, 169)
     );
     assert_eq!(session.current_branch(), BranchId(1));
@@ -636,8 +624,14 @@ fn undo_run_keeps_descendants_forked_before_its_tick() {
     let (mut sim, mut session, expected) = descendants_of_an_edit();
     session.undo(&mut sim).unwrap();
     let kept = session.branches()[1].clone();
-    assert_eq!((kept.id, kept.fork_tick, kept.head), (BranchId(1), 200, 209));
-    assert_eq!(branch_hashes(&mut session, &mut sim, BranchId(1)), expected[1]);
+    assert_eq!(
+        (kept.id, kept.fork_tick, kept.head),
+        (BranchId(1), 200, 209)
+    );
+    assert_eq!(
+        branch_hashes(&mut session, &mut sim, BranchId(1)),
+        expected[1]
+    );
 
     // Natively, an edit at a branch's head extends it: no branch depends on it.
     let (mut sim, mut session) = started(400);
@@ -670,7 +664,9 @@ fn undo_label_names_removed_branches() {
     play(&mut session, &mut sim, 20);
     edit_at(&mut session, &mut sim, 160, 2);
     session.switch_branch(&mut sim, ROOT).unwrap();
-    session.rename_branch(BranchId(2), "Nested".to_string()).unwrap();
+    session
+        .rename_branch(BranchId(2), "Nested".to_string())
+        .unwrap();
     assert_eq!(
         session.timeline().undo_label.as_deref(),
         Some("Undo edit at tick 160 (removes Nested)")
@@ -772,16 +768,7 @@ fn undo_history_version_2_decodes() {
     // A history of a later version is refused by name, not misread as 2a bytes.
     export.undo = vec![4];
     assert!(matches!(
-        Session::resume(
-            &mut sim,
-            export.scene,
-            export.saved_scene,
-            InputLog::decode(&export.inputs).unwrap(),
-            EditLog::decode(&export.edits).unwrap(),
-            &export.undo,
-            &export.branches,
-            export.hashes,
-        ),
+        Session::resume(&mut sim, export, Document::Scene),
         Err(SessionError::UndoVersion { version: 4 })
     ));
 }

@@ -646,6 +646,68 @@ impl AssetSource for Overlay<'_> {
     }
 }
 
+/// The entities and instances of a prefab file, as written.
+#[derive(Deserialize)]
+#[serde(rename = "Prefab")]
+struct PrefabParts<'a> {
+    next_id: u32,
+    #[serde(borrow)]
+    entities: &'a RawValue,
+    #[serde(borrow, default, deserialize_with = "present")]
+    instances: Option<&'a RawValue>,
+}
+
+/// The entities and instances of a version 2 scene file, as written.
+#[derive(Deserialize)]
+#[serde(rename = "Scene")]
+struct SceneParts<'a> {
+    next_id: u32,
+    #[serde(borrow)]
+    entities: &'a RawValue,
+    #[serde(borrow, default, deserialize_with = "present")]
+    instances: Option<&'a RawValue>,
+}
+
+/// A field that may be left out, as written when present.
+fn present<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<&'de RawValue>, D::Error> {
+    <&RawValue>::deserialize(deserializer).map(Some)
+}
+
+/// A prefab file as a version 2 scene without resources, so a simulation loads it like a
+/// scene. Entities and instances are copied as written.
+pub fn prefab_as_scene(prefab_file: &str) -> Result<String, SceneError> {
+    let parse = |error: ron::error::SpannedError| SceneError::Parse(error.to_string());
+    let header: PrefabHeader = ron::from_str(prefab_file).map_err(parse)?;
+    if header.version != PREFAB_VERSION {
+        return Err(SceneError::Parse(format!(
+            "prefab version {} is not supported (expected {PREFAB_VERSION})",
+            header.version
+        )));
+    }
+    let file: PrefabParts = ron::from_str(prefab_file).map_err(parse)?;
+    let instances = file.instances.map_or("[]", RawValue::get_ron);
+    Ok(format!(
+        "Scene(\n    version: 2,\n    next_id: {},\n    resources: {{}},\n    entities: {},\n    instances: {instances},\n)\n",
+        file.next_id,
+        file.entities.get_ron()
+    ))
+}
+
+/// The prefab file of a version 2 scene, its resources left out: the reverse of
+/// `prefab_as_scene`.
+pub fn scene_as_prefab(scene: &str) -> Result<String, SceneError> {
+    let file: SceneParts =
+        ron::from_str(scene).map_err(|error| SceneError::Parse(error.to_string()))?;
+    let instances = file.instances.map_or("[]", RawValue::get_ron);
+    Ok(format!(
+        "Prefab(\n    version: {PREFAB_VERSION},\n    next_id: {},\n    entities: {},\n    instances: {instances},\n)\n",
+        file.next_id,
+        file.entities.get_ron()
+    ))
+}
+
 /// Refuses despawning an entity a prefab instance spawned (a load address of more than one
 /// element): at tick 0 its components are overridden instead, and the instance is removed
 /// as a whole.

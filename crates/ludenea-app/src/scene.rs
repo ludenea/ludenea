@@ -610,6 +610,37 @@ impl Simulation {
         self.write_scene(locals, next_id, &entries)
     }
 
+    /// The RON of `component`'s postcard `bytes` as an override or added value of the
+    /// entity at load address `address`: its `Entity` values name local identifiers of the
+    /// file that entity comes from, and one naming an entity outside that file is refused.
+    ///
+    /// # Panics
+    /// If `component` is not registered or `bytes` do not decode.
+    pub fn override_value_ron(
+        &self,
+        address: &[u32],
+        component: &str,
+        bytes: &[u8],
+    ) -> Result<String, SceneError> {
+        let codec = self.world.component_codec(component).expect("registered");
+        let scope = &address[..address.len().saturating_sub(1)];
+        value_ron(codec, bytes, &mut |index, generation| {
+            let (_, at) = self
+                .load_addresses
+                .iter()
+                .find(|(entity, _)| entity.index() == index && entity.generation() == generation)?;
+            match at.strip_prefix(scope) {
+                Some(&[local]) => Some((local, 0)),
+                _ => None,
+            }
+        })
+        .map_err(|(_, path)| SceneError::ForeignReference {
+            entity: address.last().copied().unwrap_or_default(),
+            component: component.to_string(),
+            path: Path(&path).to_string(),
+        })
+    }
+
     /// The prefab instances of the last loaded scene, nested ones included, parents first.
     pub fn instances(&self) -> Vec<InstanceInfo> {
         self.instances

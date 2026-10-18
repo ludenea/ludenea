@@ -16,13 +16,16 @@
 //! current branch lives flattened in the session's logs; the others are stored in the
 //! branch tree.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+use ludenea_app::assets::{asset_file, parse_asset_file};
+use ludenea_app::prefab;
 use ludenea_app::{
-    Edit, EditError, EditLog, InputLog, NoAssets, SceneError, SimError, Simulation, TimedEdit,
+    AssetTexts, Edit, EditError, EditLog, EntityRef, InputLog, LoadAddress, SceneError, SimError,
+    Simulation, TimedEdit,
 };
-use ludenea_ecs::{Entity, Snapshot, SnapshotError};
+use ludenea_ecs::{AssetId, Entity, Snapshot, SnapshotError};
 use serde::{Deserialize, Serialize};
 
 use crate::branches::{BranchId, BranchInfo, BranchTree, BranchesError, Segment, StoredBranch};
@@ -64,12 +67,26 @@ pub enum SessionError {
     #[error("there is no branch {}", .0.0)]
     NoSuchBranch(BranchId),
     /// The entry is dropped from the history, so the next undo goes on.
-    #[error("the edit to undo, at tick {tick}, is no longer on its branch; it was dropped from the history")]
+    #[error(
+        "the edit to undo, at tick {tick}, is no longer on its branch; it was dropped from the history"
+    )]
     NotOnBranch { tick: u64 },
     #[error("the root branch cannot be deleted")]
     RootBranch,
     #[error("the branch tree cannot be decoded: {0}")]
     BranchesDecode(#[from] BranchesError),
+    #[error("a prefab has no resources; edit them in a scene")]
+    PrefabHasNoResources,
+    #[error("asset {0} is not a data asset; open a prefab as a document to edit it")]
+    NotDataAsset(AssetId),
+}
+
+/// What the session edits: its scene text is a scene file or a prefab file.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub enum Document {
+    Scene,
+    Prefab,
 }
 
 /// What the timeline shows.
@@ -116,7 +133,7 @@ pub enum Resimulation {
 }
 
 /// Everything needed to replay a session elsewhere.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SessionExport {
     pub scene: String,
     /// The scene text as last loaded or saved, when it differs from `scene`: the unsaved
@@ -130,10 +147,16 @@ pub struct SessionExport {
     /// The other branches, the current one, and the names; empty for a linear session.
     /// `inputs`, `edits`, and `hashes` are the current branch's flattened run.
     pub branches: Vec<u8>,
+    /// The prefab and data asset texts the scene loads with, in file form.
+    #[serde(default)]
+    pub assets: Vec<(AssetId, String)>,
 }
 
 pub struct Session {
+    /// The scene file, or the prefab file of a `Document::Prefab`.
     scene: String,
+    document: Document,
+    assets: AssetTexts,
     inputs: InputLog,
     edits: EditLog,
     hashes: Vec<u64>,
@@ -157,16 +180,27 @@ pub struct Session {
     /// Records every tick run while the `Introspection` topic is subscribed.
     pub(crate) introspection: Option<Introspection>,
     tree: BranchTree,
+    /// The branch a switch goes to and the tick it asked for, while its stale ancestors
+    /// resimulate first, one after the other, as the tree's current branch.
+    switching: Option<(BranchId, u64)>,
 }
 
 impl Session {
-    /// Loads `scene` at tick 0 with empty logs.
-    pub fn start(sim: &mut Simulation, scene: String) -> Result<Session, SessionError> {
-        sim.load_scene_with(&scene, &NoAssets)?;
+    /// Loads `scene`, a scene or prefab file as `document` says, at tick 0 with empty logs.
+    /// `assets` holds the prefab and data asset texts the scene may reach, in file form.
+    pub fn start(
+        sim: &mut Simulation,
+        scene: String,
+        assets: AssetTexts,
+        document: Document,
+    ) -> Result<Session, SessionError> {
+        load(sim, document, &scene, &assets)?;
         let players = u16::try_from(sim.players()).expect("fewer than 2^16 players");
         Ok(Session {
             saved_scene: scene.clone(),
             scene,
+            document,
+            assets,
             scene_dirty: false,
             inputs: InputLog::new(players),
             edits: EditLog::new(),
@@ -181,49 +215,54 @@ impl Session {
             reports: VecDeque::new(),
             introspection: None,
             tree: BranchTree::default(),
+            switching: None,
         })
     }
 
-    /// Restarts a recorded session on a new build: the new hashes are compared with
-    /// `expected` while it resimulates. `undo` is the exported undo history and `branches`
-    /// the exported branch tree; empty bytes mean an empty history and a linear session.
-    /// `saved_scene` is the scene as last saved when it differs from `scene`. The other
-    /// branches are stale until switched to.
-    #[allow(clippy::too_many_arguments)]
+    /// Restarts an exported session on a new build: the new hashes are compared with the
+    /// exported ones while it resimulates. Empty logs, undo history, or branch tree bytes
+    /// mean empty logs, an empty history, and a linear session. The other branches are
+    /// stale until switched to.
     pub fn resume(
         sim: &mut Simulation,
-        scene: String,
-        saved_scene: Option<String>,
-        inputs: InputLog,
-        edits: EditLog,
-        undo: &[u8],
-        branches: &[u8],
-        expected: Vec<u64>,
+        export: SessionExport,
+        document: Document,
     ) -> Result<Session, SessionError> {
-        let mut history = if undo.is_empty() {
+        let mut history = if export.undo.is_empty() {
             UndoHistory::default()
         } else {
-            UndoHistory::decode(undo)?
+            UndoHistory::decode(&export.undo)?
         };
         history.mark_removed_stale()?;
+        let inputs = if export.inputs.is_empty() {
+            InputLog::new(u16::try_from(sim.players()).expect("fewer than 2^16 players"))
+        } else {
+            InputLog::decode(&export.inputs)?
+        };
+        let edits = if export.edits.is_empty() {
+            EditLog::new()
+        } else {
+            EditLog::decode(&export.edits)?
+        };
         sim.set_players(usize::from(inputs.players));
-        let mut session = Session::start(sim, scene)?;
-        if let Some(saved) = saved_scene {
+        let assets = export.assets.into_iter().collect();
+        let mut session = Session::start(sim, export.scene, assets, document)?;
+        if let Some(saved) = export.saved_scene {
             session.scene_dirty = saved != session.scene;
             session.saved_scene = saved;
         }
         session.inputs = inputs;
         session.edits = edits;
         session.history = history;
-        if !branches.is_empty() {
-            session.tree = BranchTree::decode(branches)?;
+        if !export.branches.is_empty() {
+            session.tree = BranchTree::decode(&export.branches)?;
         }
-        if !expected.is_empty() {
-            session.hashes = expected;
+        if !export.hashes.is_empty() {
+            session.hashes = export.hashes;
         }
         session.update_head();
         let (expected, got) = (session.hashes[0], sim.hash());
-        session.start_resimulation(sim);
+        session.start_resimulation(sim)?;
         if expected != got {
             session.diverged = true;
             session.reports.push_front(Resimulation::Diverged {
@@ -257,8 +296,9 @@ impl Session {
     /// default inputs are recorded.
     pub fn step(&mut self, sim: &mut Simulation, live: Option<&[u8]>) -> Result<u64, SessionError> {
         let tick = self.current;
-        if let Some(up_to) = self.resimulating
-            && tick >= up_to
+        // While stale ancestors resimulate, the world is theirs: it does not move on.
+        if let Some(up_to) = self.resimulated_to()
+            && (tick >= up_to || self.switching.is_some())
         {
             return Err(SessionError::Resimulating { up_to });
         }
@@ -290,9 +330,11 @@ impl Session {
         Ok(self.current)
     }
 
-    /// Applies `edit` at the current tick. At tick 0 it changes the scene and marks the
-    /// recorded future stale; past tick 0 it records the edit, forking a branch when the
-    /// current one has recorded ticks after it.
+    /// Applies `edit` at the current tick. At tick 0 it changes the scene (an asset edit
+    /// changes the asset text, an edit on an entity of a prefab instance becomes an
+    /// override of the instance) and marks the recorded future stale; past tick 0 it
+    /// records the edit, forking a branch when the current one has recorded ticks after
+    /// it, after a `LoadAsset` edit for each asset its values reach that is not loaded.
     /// Returns the entity a `Spawn` created.
     pub fn edit(
         &mut self,
@@ -301,14 +343,18 @@ impl Session {
     ) -> Result<Option<Entity>, SessionError> {
         self.ensure_resimulated()?;
         if self.current == 0 {
+            if let Edit::SetAsset { id, value } = &edit {
+                return self.edit_asset(sim, *id, value).map(|()| None);
+            }
             return self.record_scene_edit(sim, &edit);
         }
+        let loads = sim.assets_introduced_by(&edit, &self.assets)?;
         let edit = TimedEdit {
             tick: self.current,
             edit,
         };
         let before = self.tree.current();
-        let spawned = self.record_edit(sim, edit.clone())?;
+        let spawned = self.record_edit(sim, loads, edit.clone())?;
         self.record_entry(before, ForkCause::Edit(edit));
         Ok(spawned)
     }
@@ -365,6 +411,10 @@ impl Session {
                 self.load_scene_version(sim, before.clone())?;
                 Ok(None)
             }
+            UndoEntry::Asset { id, before, .. } => {
+                self.load_asset_version(sim, *id, before.clone())?;
+                Ok(None)
+            }
             UndoEntry::Fork {
                 branch,
                 cause,
@@ -401,6 +451,16 @@ impl Session {
                 stored.extend(self.tree.take(&dependents, players));
                 *removed = StoredBranch::encode(&stored);
                 self.remove_edit(index);
+                // The assets the edit loaded, recorded just before it, go with it.
+                let own_first = self.own_first();
+                let mut index = index;
+                while index > own_first
+                    && self.edits.edits[index - 1].tick == tick
+                    && matches!(self.edits.edits[index - 1].edit, Edit::LoadAsset { .. })
+                {
+                    index -= 1;
+                    self.remove_edit(index);
+                }
                 self.discard_after(tick);
                 Ok(Some((*branch, tick)))
             }
@@ -416,6 +476,10 @@ impl Session {
         match entry {
             UndoEntry::Scene { after, .. } => {
                 self.load_scene_version(sim, after.clone())?;
+                Ok(None)
+            }
+            UndoEntry::Asset { id, after, .. } => {
+                self.load_asset_version(sim, *id, after.clone())?;
                 Ok(None)
             }
             UndoEntry::Fork {
@@ -445,10 +509,7 @@ impl Session {
                         let defaults = sim.encoded_default_inputs();
                         self.compose(&segment, defaults.as_deref());
                         if stale {
-                            let (_, scene_state) = self.checkpoints.nearest_at_or_before(0);
-                            sim.restore(scene_state)
-                                .expect("a checkpoint restores into the world it was taken from");
-                            self.resimulate_from_scene(sim);
+                            self.resimulate_from(sim, 0, self.current)?;
                         }
                     }
                     // An entry of a history written before branches: as in 2a, within
@@ -478,6 +539,10 @@ impl Session {
             return Ok(());
         };
         self.switch_to(sim, branch, tick)?;
+        if self.switching.is_some() {
+            // The switch goes to `tick` once the ancestors are resimulated.
+            return Ok(());
+        }
         if self.resimulating.is_some() {
             self.return_to = Some(tick);
             return Ok(());
@@ -514,15 +579,21 @@ impl Session {
 
     /// The index of `edit` in the current branch's own part of the run.
     fn own_edit_index(&self, edit: &TimedEdit) -> Option<usize> {
-        let (fork_tick, fork_edits) = self.tree.current_branch().fork();
-        let first = self.edits.edits.partition_point(|e| e.tick < fork_tick) + fork_edits;
+        let first = self.own_first();
         let own = self.edits.edits.get(first..)?;
         Some(first + own.iter().rposition(|e| e == edit)?)
+    }
+
+    /// The index of the first edit of the current branch's own part of the run.
+    fn own_first(&self) -> usize {
+        let (fork_tick, fork_edits) = self.tree.current_branch().fork();
+        self.edits.edits.partition_point(|e| e.tick < fork_tick) + fork_edits
     }
 
     fn undo_label(&self) -> Option<String> {
         let (what, removes) = match self.history.next_undo()? {
             UndoEntry::Scene { .. } => return Some("Undo scene edit".to_string()),
+            UndoEntry::Asset { .. } => return Some("Undo asset edit".to_string()),
             UndoEntry::Run { branch, edit, .. } => (
                 format!("edit at tick {}", edit.tick),
                 self.tree.forked_at_or_after(*branch, edit.tick),
@@ -546,6 +617,7 @@ impl Session {
     fn redo_label(&self) -> Option<String> {
         Some(match self.history.next_redo()? {
             UndoEntry::Scene { .. } => "Redo scene edit".to_string(),
+            UndoEntry::Asset { .. } => "Redo asset edit".to_string(),
             UndoEntry::Run { edit, .. } => format!("Redo edit at tick {}", edit.tick),
             UndoEntry::Fork { cause, name, .. } => {
                 format!("Redo {} (restores {name})", cause.describe())
@@ -609,7 +681,7 @@ impl Session {
 
     /// Moves to `tick`, simulating the recorded future on the way when needed.
     pub fn seek(&mut self, sim: &mut Simulation, tick: u64) -> Result<(), SessionError> {
-        if let Some(up_to) = self.resimulating
+        if let Some(up_to) = self.resimulated_to()
             && tick > up_to
         {
             return Err(SessionError::Resimulating { up_to });
@@ -636,28 +708,116 @@ impl Session {
         !self.edits.at(self.current).is_empty()
     }
 
-    /// The scene text, that is the state at tick 0.
+    /// The scene text, that is the state at tick 0: a prefab file for `Document::Prefab`.
     pub fn scene(&self) -> &str {
         &self.scene
     }
 
-    /// Loads a new version of the scene at tick 0, as saved, and marks the recorded future
-    /// stale. Undo brings the previous version back.
+    /// The prefab and data asset texts the scene loads with, in file form.
+    pub fn assets(&self) -> &AssetTexts {
+        &self.assets
+    }
+
+    /// The file text to save for asset `id`: a data asset's value, or a prefab file.
+    pub fn save_asset(&self, id: AssetId) -> Option<String> {
+        let text = self.assets.get(&id)?;
+        Some(parse_asset_file(text).map_or_else(|_| text.clone(), |(_, value)| value))
+    }
+
+    /// Loads a new version of the scene at tick 0 with new asset texts, as saved, and marks
+    /// the recorded future stale. Undo brings the previous scene version back.
     pub fn replace_scene(
         &mut self,
         sim: &mut Simulation,
         scene: String,
+        assets: AssetTexts,
     ) -> Result<(), SessionError> {
-        sim.load_scene_with(&scene, &NoAssets)?;
+        load(sim, self.document, &scene, &assets)?;
+        self.assets = assets;
         self.saved_scene = scene.clone();
         let before = std::mem::replace(&mut self.scene, scene.clone());
         self.scene_dirty = false;
-        self.history.record(UndoEntry::Scene {
-            before,
-            after: scene,
-        });
-        self.start_resimulation(sim);
-        Ok(())
+        if before != scene {
+            self.history.record(UndoEntry::Scene {
+                before,
+                after: scene,
+            });
+        }
+        self.start_resimulation(sim)
+    }
+
+    /// Appends an instance of `prefab` to the scene, like a tick 0 edit, and returns its
+    /// local identifier.
+    pub fn place_instance(
+        &mut self,
+        sim: &mut Simulation,
+        prefab: AssetId,
+    ) -> Result<u32, SessionError> {
+        self.ensure_resimulated()?;
+        let (scene, id) = prefab::place_instance(&self.scene, prefab)?;
+        self.change_scene(sim, scene)?;
+        Ok(id)
+    }
+
+    /// Moves the scene entities `entities` into the new prefab `prefab`, whose file text is
+    /// `prefab_text`, and places an instance of it in their stead, like a tick 0 edit.
+    /// Returns the instance's local identifier.
+    pub fn replace_with_instance(
+        &mut self,
+        sim: &mut Simulation,
+        entities: &[Entity],
+        prefab: AssetId,
+        prefab_text: String,
+    ) -> Result<u32, SessionError> {
+        self.ensure_resimulated()?;
+        let locals = entities
+            .iter()
+            .map(
+                |entity| match sim.load_addresses().get(entity).map(Vec::as_slice) {
+                    Some(&[local]) => Ok(local),
+                    Some(address) => Err(SceneError::InstanceEntity(address.to_vec()).into()),
+                    None => Err(SessionError::NotInScene(*entity)),
+                },
+            )
+            .collect::<Result<Vec<u32>, SessionError>>()?;
+        prefab::save_prefab_checked(prefab, &prefab_text, &self.assets)?;
+        // Removing entities leaves `next_id` as it is: the instance gets the same identifier.
+        let (_, id) = prefab::place_instance(&self.scene, prefab)?;
+        let scene = prefab::replace_with_instance(&self.scene, &locals, prefab)?;
+        let previous = self.assets.insert(prefab, prefab_text);
+        if let Err(error) = self.change_scene(sim, scene) {
+            match previous {
+                Some(text) => self.assets.insert(prefab, text),
+                None => self.assets.remove(&prefab),
+            };
+            return Err(error);
+        }
+        Ok(id)
+    }
+
+    /// Copies the current value of the data asset `id` into its asset text, like a tick 0
+    /// asset edit: resimulation brings the session back to the current tick.
+    pub fn apply_to_asset(
+        &mut self,
+        sim: &mut Simulation,
+        id: AssetId,
+    ) -> Result<(), SessionError> {
+        self.ensure_resimulated()?;
+        let (asset, value) = sim
+            .world()
+            .asset_bytes(id)
+            .ok_or(EditError::MissingAsset(id))?;
+        let text = self.assets.get(&id).ok_or(EditError::MissingAsset(id))?;
+        let (_, file_value) = parse_asset_file(text).map_err(|_| SessionError::NotDataAsset(id))?;
+        let codec = sim
+            .world()
+            .asset_codec(asset)
+            .expect("a loaded asset's type");
+        if (codec.decode_ron)(&file_value).is_ok_and(|file| (codec.encode)(&*file) == value) {
+            // The asset text already holds this value: nothing to change or undo.
+            return Ok(());
+        }
+        self.edit_asset(sim, id, &value)
     }
 
     /// Moves to the snapshot's tick, simulating the recorded future up to it when needed,
@@ -718,6 +878,10 @@ impl Session {
         budget: u32,
     ) -> Result<Resimulation, SessionError> {
         let result = self.resimulate_within(sim, budget);
+        if result.is_err() {
+            // The switch stops on the branch that failed.
+            self.switching = None;
+        }
         if result.is_err()
             && let Some(failed) = self.resimulating.take()
         {
@@ -778,7 +942,6 @@ impl Session {
         }
         if up_to >= self.end() {
             self.resimulating = None;
-            self.reports.push_back(Resimulation::Done);
         }
         let returned = self
             .return_to
@@ -792,6 +955,14 @@ impl Session {
             sim.restore(&at_current)
                 .expect("a snapshot restores into the world it was taken from");
         }
+        if self.resimulating.is_none() {
+            // A switch goes on with the next stale branch on its way.
+            self.continue_switch(sim)?;
+            if self.resimulating.is_none() {
+                self.reports.push_back(Resimulation::Done);
+            }
+        }
+        let up_to = self.resimulated_to().unwrap_or(up_to);
         Ok(self
             .reports
             .pop_front()
@@ -812,6 +983,11 @@ impl Session {
             } else {
                 Vec::new()
             },
+            assets: self
+                .assets
+                .iter()
+                .map(|(&id, text)| (id, text.clone()))
+                .collect(),
         })
     }
 
@@ -820,7 +996,7 @@ impl Session {
         edit_ticks.dedup();
         Timeline {
             head: self.head,
-            simulated: self.simulated(),
+            simulated: self.simulated().min(self.chain_cap().unwrap_or(u64::MAX)),
             current: self.current,
             checkpoints: self.checkpoints.ticks(),
             edit_ticks,
@@ -830,7 +1006,7 @@ impl Session {
             redo_label: self.redo_label(),
             scene_dirty: self.scene_dirty,
             resimulating: self.resimulating.is_some(),
-            branch: self.tree.current(),
+            branch: self.current_branch(),
             branches: self.branches(),
         }
     }
@@ -839,12 +1015,17 @@ impl Session {
         self.tree.infos(self.head)
     }
 
+    /// The current branch, or the branch a switch goes to while its ancestors resimulate.
     pub fn current_branch(&self) -> BranchId {
-        self.tree.current()
+        self.switching
+            .map_or(self.tree.current(), |(target, _)| target)
     }
 
     /// Makes `id` the current branch, at the current tick when it covers it, otherwise at
-    /// its head. A stale branch is resimulated first, as after a scene edit.
+    /// its head. A stale branch resimulates from its first stale tick, after its stale
+    /// ancestors whose part of its run is stale, each from its own first stale tick: until
+    /// then the session shows the ticks it shares with them and seeking further fails with
+    /// `Resimulating`.
     pub fn switch_branch(
         &mut self,
         sim: &mut Simulation,
@@ -863,34 +1044,98 @@ impl Session {
         if self.tree.get(id).is_none() {
             return Err(SessionError::NoSuchBranch(id));
         }
-        if id == self.tree.current() {
+        if id == self.current_branch() {
             return Ok(());
         }
+        self.drop_reports();
+        self.switching = Some((id, tick));
+        self.switch_step(sim)?;
+        self.continue_switch(sim)
+    }
+
+    /// Drops the reports of a resimulation that starts over, except dropped edits: those
+    /// edits are gone either way.
+    fn drop_reports(&mut self) {
+        self.reports
+            .retain(|report| matches!(report, Resimulation::EditDropped { .. }));
+    }
+
+    /// Enters the next branch on the way of the switch: the first stale ancestor whose
+    /// part of the target's run is stale, otherwise the target, which ends the switch.
+    fn switch_step(&mut self, sim: &mut Simulation) -> Result<(), SessionError> {
+        let Some((target, tick)) = self.switching else {
+            return Ok(());
+        };
+        match self.first_stale_ancestor(target) {
+            Some((ancestor, shared)) => self.enter(sim, ancestor, tick.min(shared)),
+            None => {
+                self.switching = None;
+                self.enter(sim, target, tick)
+            }
+        }
+    }
+
+    /// Takes the switch on while the current branch has nothing left to resimulate.
+    fn continue_switch(&mut self, sim: &mut Simulation) -> Result<(), SessionError> {
+        while self.switching.is_some() && self.resimulating.is_none() {
+            self.switch_step(sim)?;
+        }
+        Ok(())
+    }
+
+    /// The first branch on the path to `target`, other than `target`, whose part of
+    /// `target`'s run is stale, with the last tick `target`'s run shares with it.
+    fn first_stale_ancestor(&self, target: BranchId) -> Option<(BranchId, u64)> {
+        let path = self.tree.path(target);
+        path.windows(2).find_map(|pair| {
+            let stale = if pair[0] == self.tree.current() {
+                self.resimulating
+            } else {
+                self.tree.get(pair[0])?.stale
+            };
+            let fork_tick = self.tree.get(pair[1])?.fork_tick;
+            stale
+                .filter(|&from| from < fork_tick)
+                .map(|_| (pair[0], fork_tick.saturating_sub(1)))
+        })
+    }
+
+    /// While a switch resimulates an ancestor: the last tick the target's run shares with it.
+    fn chain_cap(&self) -> Option<u64> {
+        let (target, _) = self.switching?;
+        let path = self.tree.path(target);
+        let at = path.iter().position(|&id| id == self.tree.current())?;
+        Some(
+            self.tree
+                .get(*path.get(at + 1)?)?
+                .fork_tick
+                .saturating_sub(1),
+        )
+    }
+
+    /// The last resimulated tick that may be shown, while resimulating.
+    fn resimulated_to(&self) -> Option<u64> {
+        let up_to = self.resimulating?;
+        Some(self.chain_cap().map_or(up_to, |cap| up_to.min(cap)))
+    }
+
+    /// Makes `id` the tree's current branch at `tick` (its head when it ends before), and
+    /// resimulates it from its first stale tick when it is stale.
+    fn enter(&mut self, sim: &mut Simulation, id: BranchId, tick: u64) -> Result<(), SessionError> {
         let defaults = sim.encoded_default_inputs();
-        let stale = self
-            .tree
-            .path(id)
-            .iter()
-            .any(|&b| self.tree.get(b).is_some_and(|b| b.stale));
         let segment = self.current_segment();
-        let target = self
-            .tree
-            .make_current(segment, self.resimulating.is_some(), id)
-            .expect("a branch other than the current one is stored");
+        let (target, stale) = self.tree.make_current(segment, self.resimulating, id);
         self.compose(&target, defaults.as_deref());
         self.enforce_checkpoint_budget();
         self.resimulating = None;
         self.return_to = None;
-        self.reports.clear();
-        self.current = if tick <= self.end() { tick } else { self.head };
-        if stale {
-            let (_, scene_state) = self.checkpoints.nearest_at_or_before(0);
-            sim.restore(scene_state)
-                .expect("a checkpoint restores into the world it was taken from");
-            self.resimulate_from_scene(sim);
-            Ok(())
-        } else {
-            self.replay_to(sim, self.current)
+        let at = if tick <= self.end() { tick } else { self.head };
+        match stale {
+            Some(from) => self.resimulate_from(sim, from, at),
+            None => {
+                self.current = at;
+                self.replay_to(sim, at)
+            }
         }
     }
 
@@ -915,7 +1160,7 @@ impl Session {
         let branch = self.tree.get(id).ok_or(SessionError::NoSuchBranch(id))?;
         let parent = branch.parent.ok_or(SessionError::RootBranch)?;
         let mut removed = self.tree.subtree(id);
-        if removed.contains(&self.tree.current()) {
+        if removed.contains(&self.current_branch()) {
             self.switch_branch(sim, parent)?;
         }
         self.tree.remove(&removed);
@@ -974,10 +1219,7 @@ impl Session {
             .edits
             .edits
             .partition_point(|edit| edit.tick < removed.tick);
-        let branch = self.tree.current_branch();
-        if removed.tick == branch.fork_tick && index - first < branch.fork_edits {
-            self.tree.edits_dropped_at(removed.tick, 1);
-        }
+        self.tree.edit_removed_at(removed.tick, index - first);
         removed
     }
 
@@ -987,7 +1229,7 @@ impl Session {
         if self.end() > tick {
             let segment = self.current_segment();
             let fork = (tick, self.edits.at(tick).len());
-            self.tree.fork(segment, self.resimulating.is_some(), fork);
+            self.tree.fork(segment, self.resimulating, fork);
         }
         self.discard_after(tick);
         self.enforce_checkpoint_budget();
@@ -1028,7 +1270,7 @@ impl Session {
     }
 
     fn ensure_resimulated(&self) -> Result<(), SessionError> {
-        match self.resimulating {
+        match self.resimulated_to() {
             Some(up_to) => Err(SessionError::Resimulating { up_to }),
             None => Ok(()),
         }
@@ -1067,15 +1309,20 @@ impl Session {
     /// recording the hashes and checkpoints of ticks simulated for the first time. Leaves
     /// `current` unchanged.
     fn replay_to(&mut self, sim: &mut Simulation, tick: u64) -> Result<(), SessionError> {
+        self.replay_before_edits(sim, tick)?;
+        self.apply_edits(sim, tick)
+    }
+
+    /// `replay_to`, without applying the edits of `tick` itself.
+    fn replay_before_edits(&mut self, sim: &mut Simulation, tick: u64) -> Result<(), SessionError> {
         let (mut at, snapshot) = self.checkpoints.nearest_at_or_before(tick);
         sim.restore(snapshot)
             .expect("a checkpoint restores into the world it was taken from");
-        self.apply_edits(sim, at)?;
         while at < tick {
+            self.apply_edits(sim, at)?;
             self.run_tick(sim, self.inputs.tick(at).map(<[u8]>::to_vec).as_deref())?;
             at += 1;
             self.record_tick(sim);
-            self.apply_edits(sim, at)?;
         }
         Ok(())
     }
@@ -1169,21 +1416,39 @@ impl Session {
         }
     }
 
-    /// Applies `edit` at the current tick, forks or discards the future after it, and
-    /// records it.
+    /// Applies `loads`, then `edit`, at the current tick, forks or discards the future after
+    /// it, and records them. Nothing changes when one fails.
     fn record_edit(
         &mut self,
         sim: &mut Simulation,
+        loads: Vec<Edit>,
         edit: TimedEdit,
     ) -> Result<Option<Entity>, SessionError> {
-        let checkpoint = (self.edits.at(edit.tick).is_empty()
-            && self.checkpoints.is_sparse_at(edit.tick))
-        .then(|| sim.snapshot());
-        let spawned = sim.apply_edit(&edit.edit)?;
-        self.fork_or_discard_after(edit.tick);
+        let tick = edit.tick;
+        let checkpoint = (self.edits.at(tick).is_empty() && self.checkpoints.is_sparse_at(tick))
+            .then(|| sim.snapshot());
+        let before_loads = (!loads.is_empty()).then(|| sim.snapshot());
+        let applied = loads
+            .iter()
+            .chain([&edit.edit])
+            .map(|edit| sim.apply_edit(edit))
+            .collect::<Result<Vec<_>, EditError>>();
+        let spawned = match applied {
+            Ok(applied) => applied.last().copied().flatten(),
+            Err(error) => {
+                if let Some(state) = before_loads {
+                    sim.restore(&state)
+                        .expect("a snapshot restores into the world it was taken from");
+                }
+                return Err(error.into());
+            }
+        };
+        self.fork_or_discard_after(tick);
         if let Some(checkpoint) = checkpoint {
-            self.checkpoints.pin(edit.tick, checkpoint);
+            self.checkpoints.pin(tick, checkpoint);
         }
+        let loads = loads.into_iter().map(|edit| TimedEdit { tick, edit });
+        self.edits.edits.extend(loads);
         self.edits.edits.push(edit);
         self.update_head();
         Ok(spawned)
@@ -1195,10 +1460,62 @@ impl Session {
         sim: &mut Simulation,
         scene: String,
     ) -> Result<(), SessionError> {
-        sim.load_scene_with(&scene, &NoAssets)?;
+        load(sim, self.document, &scene, &self.assets)?;
         self.set_scene(scene);
-        self.start_resimulation(sim);
+        self.start_resimulation(sim)
+    }
+
+    /// Loads `scene` like a tick 0 edit, recorded in the undo history.
+    fn change_scene(&mut self, sim: &mut Simulation, scene: String) -> Result<(), SessionError> {
+        let before = self.scene.clone();
+        self.load_scene_version(sim, scene)?;
+        let after = self.scene.clone();
+        self.history.record(UndoEntry::Scene { before, after });
         Ok(())
+    }
+
+    /// Sets the value of the data asset `id` in its asset text and reloads the scene with
+    /// it, like a tick 0 edit, recorded in the undo history.
+    fn edit_asset(
+        &mut self,
+        sim: &mut Simulation,
+        id: AssetId,
+        value: &[u8],
+    ) -> Result<(), SessionError> {
+        let before = self.assets.get(&id).ok_or(EditError::MissingAsset(id))?;
+        let (asset, _) = parse_asset_file(before).map_err(|_| SessionError::NotDataAsset(id))?;
+        let invalid = |reason: String| EditError::InvalidValue {
+            name: asset.clone(),
+            reason,
+        };
+        let codec = sim
+            .world()
+            .asset_codec(&asset)
+            .ok_or_else(|| invalid("the asset type is not registered".to_string()))?;
+        let decoded = (codec.decode)(value).map_err(invalid)?;
+        let after = asset_file(&asset, &(codec.encode_ron)(&*decoded));
+        let before = before.clone();
+        self.load_asset_version(sim, id, after.clone())?;
+        self.history.record(UndoEntry::Asset { id, before, after });
+        Ok(())
+    }
+
+    /// Replaces the asset text of `id` and reloads the scene with it, like a tick 0 edit.
+    fn load_asset_version(
+        &mut self,
+        sim: &mut Simulation,
+        id: AssetId,
+        text: String,
+    ) -> Result<(), SessionError> {
+        let previous = self.assets.insert(id, text);
+        if let Err(error) = load(sim, self.document, &self.scene, &self.assets) {
+            match previous {
+                Some(text) => self.assets.insert(id, text),
+                None => self.assets.remove(&id),
+            };
+            return Err(error);
+        }
+        self.start_resimulation(sim)
     }
 
     /// After new logs, which define a new linear run: only tick 0 stays simulated, the
@@ -1207,14 +1524,14 @@ impl Session {
         self.history
             .keep_on_root(&self.tree.path(self.tree.current()));
         self.tree = BranchTree::default();
+        self.switching = None;
         self.hashes.truncate(1);
         self.update_head();
         self.current = 0;
         let (_, scene_state) = self.checkpoints.nearest_at_or_before(0);
         sim.restore(scene_state)
             .expect("a checkpoint restores into the world it was taken from");
-        self.start_resimulation(sim);
-        Ok(())
+        self.start_resimulation(sim)
     }
 
     fn set_scene(&mut self, scene: String) {
@@ -1222,7 +1539,7 @@ impl Session {
         self.scene = scene;
     }
 
-    /// Applies `edit` to the scene and records it in the undo history.
+    /// Applies `edit` to the scene and records it in the undo history when it changed it.
     fn record_scene_edit(
         &mut self,
         sim: &mut Simulation,
@@ -1230,37 +1547,142 @@ impl Session {
     ) -> Result<Option<Entity>, SessionError> {
         let before = self.scene.clone();
         let spawned = self.edit_scene(sim, edit)?;
-        let after = self.scene.clone();
-        self.history.record(UndoEntry::Scene { before, after });
+        if self.scene != before {
+            let after = self.scene.clone();
+            self.history.record(UndoEntry::Scene { before, after });
+        }
         Ok(spawned)
     }
 
-    /// Applies `edit` to the scene: the scene is saved and reloaded so entity indices and
-    /// generations match any later load of it.
+    /// Applies `edit` to the scene: on an entity of a prefab instance it becomes an override
+    /// of the instance, otherwise the scene is saved, keeping its local identifiers, and
+    /// reloaded so entity indices and generations match any later load of it.
     fn edit_scene(
         &mut self,
         sim: &mut Simulation,
         edit: &Edit,
     ) -> Result<Option<Entity>, SessionError> {
+        if self.document == Document::Prefab && matches!(edit, Edit::SetResource { .. }) {
+            return Err(SessionError::PrefabHasNoResources);
+        }
         let (_, scene_state) = self.checkpoints.nearest_at_or_before(0);
         sim.restore(scene_state)
             .expect("a checkpoint restores into the world it was taken from");
-        let spawned = match sim.apply_edit(edit) {
-            Ok(spawned) => spawned,
-            Err(error) => {
+        let loaded: BTreeSet<LoadAddress> = sim.load_addresses().values().cloned().collect();
+        let scene = match self.scene_after(sim, edit) {
+            Ok(scene) if scene != self.scene => scene,
+            result => {
                 self.replay_to(sim, self.current)?;
-                return Err(error.into());
+                return result.map(|_| None);
             }
         };
-        // Saving renumbers the alive entities in index order.
-        let rank =
-            spawned.map(|entity| sim.world().entities().take_while(|&e| e != entity).count());
-        let scene = sim.save_scene();
-        sim.load_scene_with(&scene, &NoAssets)?;
+        if let Err(error) = load(sim, self.document, &scene, &self.assets) {
+            self.replay_to(sim, self.current)?;
+            return Err(error);
+        }
         self.set_scene(scene);
-        let spawned = rank.map(|rank| sim.world().entities().nth(rank).expect("saved entity"));
-        self.start_resimulation(sim);
+        // The scene keeps every other entity's address: a spawned one has a new address.
+        let spawned = sim
+            .load_addresses()
+            .iter()
+            .find(|(_, address)| !loaded.contains(*address))
+            .map(|(&entity, _)| entity);
+        self.start_resimulation(sim)?;
         Ok(spawned)
+    }
+
+    /// The scene text after `edit`, which the world, at tick 0, may hold applied.
+    fn scene_after(&self, sim: &mut Simulation, edit: &Edit) -> Result<String, SessionError> {
+        if let Some(scene) = self.instance_edit(sim, edit)? {
+            return Ok(scene);
+        }
+        sim.apply_edit(edit)?;
+        let scene = sim.save_scene_keeping(&scene_form(self.document, &self.scene)?);
+        Ok(match self.document {
+            Document::Scene => scene,
+            Document::Prefab => prefab::scene_as_prefab(&scene)?,
+        })
+    }
+
+    /// The scene text after `edit` when it targets an entity of a prefab instance: an
+    /// override, an added or a removed component of the instance. Despawning such an
+    /// entity is refused.
+    fn instance_edit(&self, sim: &Simulation, edit: &Edit) -> Result<Option<String>, SessionError> {
+        let (target, component) = match edit {
+            Edit::Insert {
+                entity, component, ..
+            }
+            | Edit::Remove { entity, component } => (entity, Some(component)),
+            Edit::Despawn { entity } => (entity, None),
+            _ => return Ok(None),
+        };
+        let address = match target {
+            EntityRef::Loaded(address) => address.clone(),
+            EntityRef::Runtime(entity) => match sim.load_addresses().get(entity) {
+                Some(address) => address.clone(),
+                None => return Ok(None),
+            },
+        };
+        let [instance, inner @ ..] = &address[..] else {
+            return Ok(None);
+        };
+        if inner.is_empty() {
+            return Ok(None);
+        }
+        let entity = sim.resolve_ref(&EntityRef::Loaded(address.clone()))?;
+        let Some(component) = component else {
+            return Err(SceneError::InstanceEntity(address).into());
+        };
+        if sim.world().component_codec(component).is_none() {
+            return Err(EditError::UnknownComponent(component.clone()).into());
+        }
+        let has = sim.world().has_component_named(entity, component);
+        let scene = match edit {
+            Edit::Insert { value, .. } => {
+                let value = override_value(sim, &address, component, value)?;
+                if has && self.prefab_has(sim, &address, component)? {
+                    prefab::set_override(&self.scene, &[*instance], inner, component, &[], &value)?
+                } else {
+                    prefab::add_component_override(
+                        &self.scene,
+                        &[*instance],
+                        inner,
+                        component,
+                        &value,
+                    )?
+                }
+            }
+            _ if has => {
+                prefab::remove_component_override(&self.scene, &[*instance], inner, component)?
+            }
+            _ => self.scene.clone(),
+        };
+        Ok(Some(scene))
+    }
+
+    /// Whether the prefab of the instance holding the entity at `address` gives it
+    /// `component`, before the instance's own changes.
+    fn prefab_has(
+        &self,
+        sim: &Simulation,
+        address: &[u32],
+        component: &str,
+    ) -> Result<bool, SessionError> {
+        let instance = sim
+            .instances()
+            .into_iter()
+            .find(|instance| instance.address == address[..1])
+            .expect("an instance entity's instance");
+        let text = self
+            .assets
+            .get(&instance.prefab)
+            .ok_or(EditError::MissingAsset(instance.prefab))?;
+        let resolved = ludenea_app::resolve(&prefab::prefab_as_scene(text)?, &self.assets)?;
+        Ok(resolved
+            .entities
+            .iter()
+            .find(|entity| entity.address == address[1..])
+            .is_some_and(|entity| entity.components.iter().any(|(name, _)| name == component)))
     }
 
     /// The world holds a new tick 0 state, before the edits of tick 0: the recorded future
@@ -1270,26 +1692,87 @@ impl Session {
     /// compared, since the state changed on purpose. The session shows tick 0 while it
     /// resimulates, then returns to the tick it was at (or to the last resimulated tick when
     /// the recorded future ends before it).
-    /// The other branches are marked stale.
-    fn start_resimulation(&mut self, sim: &mut Simulation) {
+    /// The other branches are marked stale, and so is the rest of a switch's way.
+    fn start_resimulation(&mut self, sim: &mut Simulation) -> Result<(), SessionError> {
         self.tree.mark_stale();
-        self.resimulate_from_scene(sim);
-    }
-
-    /// `start_resimulation` for the current branch only.
-    fn resimulate_from_scene(&mut self, sim: &mut Simulation) {
+        self.drop_reports();
         self.checkpoints = Checkpoints::new(sim.snapshot());
         self.hashes[0] = sim.hash();
-        let was_at = self.current;
-        self.current = 0;
-        self.diverged = false;
-        self.reports.clear();
-        self.apply_edits_or_drop(sim, 0);
-        let stale = self.simulated() > 0 || self.edits.last_tick().is_some_and(|tick| tick > 0);
-        self.resimulating = stale.then_some(0);
-        // Without a stale future there is nothing to return through.
-        self.return_to = (stale && was_at > 0).then_some(was_at);
+        self.resimulate_from(sim, 0, self.current)
     }
+
+    /// Resimulates the current branch from `from`, whose state and edits are known good,
+    /// up to its end: the recorded future after `from` is kept, its checkpoints dropped, and
+    /// it is resimulated when it has hashes to replace or edits to check. The session shows
+    /// `at` when it is before `from`, otherwise `from` until resimulation gets to `at`.
+    fn resimulate_from(
+        &mut self,
+        sim: &mut Simulation,
+        from: u64,
+        at: u64,
+    ) -> Result<(), SessionError> {
+        self.checkpoints.truncate_after(from);
+        self.replay_before_edits(sim, from)?;
+        self.diverged = false;
+        self.apply_edits_or_drop(sim, from);
+        let stale =
+            self.simulated() > from || self.edits.last_tick().is_some_and(|tick| tick > from);
+        self.resimulating = stale.then_some(from);
+        self.return_to = None;
+        if stale && at > from {
+            self.current = from;
+            self.return_to = Some(at);
+            Ok(())
+        } else {
+            self.current = at;
+            if at == from {
+                Ok(())
+            } else {
+                self.replay_to(sim, at)
+            }
+        }
+    }
+}
+
+/// Loads `text`, a scene or prefab file as `document` says, with `assets`.
+fn load(
+    sim: &mut Simulation,
+    document: Document,
+    text: &str,
+    assets: &AssetTexts,
+) -> Result<(), SessionError> {
+    sim.load_scene_with(&scene_form(document, text)?, assets)?;
+    Ok(())
+}
+
+/// The scene a simulation loads for `text`: a prefab file becomes a scene.
+fn scene_form(document: Document, text: &str) -> Result<String, SessionError> {
+    Ok(match document {
+        Document::Scene => text.to_string(),
+        Document::Prefab => prefab::prefab_as_scene(text)?,
+    })
+}
+
+/// The RON of `component`'s `value` as an override value of the instance entity at
+/// `address`, checked to load back, so a bad value never reaches the scene text.
+fn override_value(
+    sim: &Simulation,
+    address: &[u32],
+    component: &str,
+    value: &[u8],
+) -> Result<String, SessionError> {
+    let codec = sim
+        .world()
+        .component_codec(component)
+        .ok_or_else(|| EditError::UnknownComponent(component.to_string()))?;
+    let invalid = |reason: String| EditError::InvalidValue {
+        name: component.to_string(),
+        reason,
+    };
+    (codec.decode)(value).map_err(invalid)?;
+    let ron = sim.override_value_ron(address, component, value)?;
+    (codec.decode_ron)(&ron).map_err(invalid)?;
+    Ok(ron)
 }
 
 /// Whether an undo or redo failed for good: its entry is dropped.

@@ -1,6 +1,7 @@
 //! The undo and redo history of an editor session.
 
 use ludenea_app::TimedEdit;
+use ludenea_ecs::AssetId;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -35,6 +36,13 @@ pub(crate) enum UndoEntry {
         name: String,
         removed: Vec<u8>,
     },
+    /// A tick 0 asset edit: the asset text before and after it. Last, so histories
+    /// written before it still decode.
+    Asset {
+        id: AssetId,
+        before: String,
+        after: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -63,7 +71,7 @@ impl ForkCause {
 impl UndoEntry {
     fn branch(&self) -> Option<BranchId> {
         match self {
-            UndoEntry::Scene { .. } => None,
+            UndoEntry::Scene { .. } | UndoEntry::Asset { .. } => None,
             UndoEntry::Run { branch, .. } | UndoEntry::Fork { branch, .. } => Some(*branch),
         }
     }
@@ -130,9 +138,7 @@ impl UndoHistory {
 
     /// Drops the entries of an edit removed from `branch`'s run.
     pub fn forget(&mut self, branch: BranchId, edit: &TimedEdit) {
-        let other = |entry: &UndoEntry| {
-            !matches!(entry, UndoEntry::Run { branch: b, edit: e, .. } if *b == branch && e == edit)
-        };
+        let other = |entry: &UndoEntry| !matches!(entry, UndoEntry::Run { branch: b, edit: e, .. } if *b == branch && e == edit);
         self.undo.retain(other);
         self.redo.retain(other);
     }
@@ -151,7 +157,7 @@ impl UndoHistory {
     /// root, as in 2a.
     pub fn keep_on_root(&mut self, path: &[BranchId]) {
         let keep = |entry: &mut UndoEntry| match entry {
-            UndoEntry::Scene { .. } => true,
+            UndoEntry::Scene { .. } | UndoEntry::Asset { .. } => true,
             UndoEntry::Run {
                 branch, removed, ..
             } if path.contains(branch) => {

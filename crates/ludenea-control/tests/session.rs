@@ -2,9 +2,9 @@ use std::fs;
 
 use boxes::{BoxesInput, Crate};
 use ludenea::cli::Trace;
-use ludenea::control::{Resimulation, Session, SessionError, SessionExport};
+use ludenea::control::{Document, Resimulation, Session, SessionError, SessionExport};
 use ludenea::prelude::*;
-use ludenea_app::{EntityRef, ValueKind};
+use ludenea_app::{AssetTexts, EntityRef, ValueKind};
 use serde_json::json;
 
 const SCENE: &str = concat!(
@@ -53,7 +53,8 @@ fn recorded(ticks: u64, spawn_at: Option<u64>) -> InputLog {
 
 fn started(log: InputLog) -> (Simulation, Session) {
     let mut sim = simulation();
-    let mut session = Session::start(&mut sim, small_scene()).unwrap();
+    let mut session =
+        Session::start(&mut sim, small_scene(), AssetTexts::new(), Document::Scene).unwrap();
     session.load_inputs(&mut sim, log).unwrap();
     (sim, session)
 }
@@ -130,7 +131,13 @@ fn assert_fresh_replay_matches(export: &SessionExport) {
 #[test]
 fn golden_inputs_through_session_match_golden_trace() {
     let mut sim = simulation();
-    let mut session = Session::start(&mut sim, fs::read_to_string(SCENE).unwrap()).unwrap();
+    let mut session = Session::start(
+        &mut sim,
+        fs::read_to_string(SCENE).unwrap(),
+        AssetTexts::new(),
+        Document::Scene,
+    )
+    .unwrap();
     let log = InputLog::decode(&fs::read(INPUTS).unwrap()).unwrap();
     session.load_inputs(&mut sim, log).unwrap();
     for tick in 1..=10_000 {
@@ -143,7 +150,8 @@ fn golden_inputs_through_session_match_golden_trace() {
 #[test]
 fn replaying_recorded_ticks_matches_original_hashes() {
     let mut sim = simulation();
-    let mut session = Session::start(&mut sim, small_scene()).unwrap();
+    let mut session =
+        Session::start(&mut sim, small_scene(), AssetTexts::new(), Document::Scene).unwrap();
     for tick in 0..300 {
         let live = (tick % 50 == 0).then(|| spawn_input(tick as f32 / 50.0));
         session.step(&mut sim, live.as_deref()).unwrap();
@@ -277,7 +285,8 @@ fn seek_beyond_head_is_invalid_tick() {
 #[test]
 fn tick_zero_despawn_reloads_scene_with_matching_indices() {
     let mut sim = simulation();
-    let mut session = Session::start(&mut sim, small_scene()).unwrap();
+    let mut session =
+        Session::start(&mut sim, small_scene(), AssetTexts::new(), Document::Scene).unwrap();
     let victim = sim.world().entities().nth(5).unwrap();
     session
         .edit(
@@ -442,7 +451,8 @@ fn panic_restores_state_and_keeps_logs() {
     let mut app = boxes::app();
     app.system(Sim, panic_at_50);
     let mut sim = app.build().unwrap();
-    let mut session = Session::start(&mut sim, small_scene()).unwrap();
+    let mut session =
+        Session::start(&mut sim, small_scene(), AssetTexts::new(), Document::Scene).unwrap();
     session.load_inputs(&mut sim, recorded(100, None)).unwrap();
     play(&mut session, &mut sim, 50);
     let before = session.export().unwrap();
@@ -523,7 +533,7 @@ fn live_take_over_during_resimulation_ends_it() {
     let (mut sim, mut session) = started(recorded(200, None));
     play(&mut session, &mut sim, 120);
     session
-        .replace_scene(&mut sim, boxes::generate_scene(31, 8))
+        .replace_scene(&mut sim, boxes::generate_scene(31, 8), AssetTexts::new())
         .unwrap();
     loop {
         match session.resimulate(&mut sim, 30).unwrap() {
@@ -580,7 +590,8 @@ fn panic_during_seek_keeps_the_current_tick() {
     let mut app = boxes::app();
     app.system(Sim, seek_trap);
     let mut sim = app.build().unwrap();
-    let mut session = Session::start(&mut sim, small_scene()).unwrap();
+    let mut session =
+        Session::start(&mut sim, small_scene(), AssetTexts::new(), Document::Scene).unwrap();
     session.load_inputs(&mut sim, recorded(100, None)).unwrap();
     play(&mut session, &mut sim, 80);
     session.seek(&mut sim, 10).unwrap();
@@ -614,12 +625,13 @@ fn panic_during_resimulation_ends_it_at_the_failing_tick() {
     let mut app = boxes::app();
     app.system(Sim, resimulation_trap);
     let mut sim = app.build().unwrap();
-    let mut session = Session::start(&mut sim, small_scene()).unwrap();
+    let mut session =
+        Session::start(&mut sim, small_scene(), AssetTexts::new(), Document::Scene).unwrap();
     let inputs = recorded(100, None);
     session.load_inputs(&mut sim, inputs.clone()).unwrap();
     play(&mut session, &mut sim, 80);
     session
-        .replace_scene(&mut sim, boxes::generate_scene(31, 8))
+        .replace_scene(&mut sim, boxes::generate_scene(31, 8), AssetTexts::new())
         .unwrap();
 
     RESIMULATION_TRAP.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -652,7 +664,8 @@ fn panic_while_restoring_past_the_simulated_ticks_moves_to_the_failing_tick() {
     let mut app = boxes::app();
     app.system(Sim, restore_trap);
     let mut sim = app.build().unwrap();
-    let mut session = Session::start(&mut sim, small_scene()).unwrap();
+    let mut session =
+        Session::start(&mut sim, small_scene(), AssetTexts::new(), Document::Scene).unwrap();
     session.load_inputs(&mut sim, recorded(100, None)).unwrap();
     play(&mut session, &mut sim, 60);
     let snapshot = sim.snapshot();

@@ -116,7 +116,9 @@ pub(crate) struct Branch {
     pub parent: Option<BranchId>,
     pub fork_tick: u64,
     pub fork_edits: usize,
-    pub stale: bool,
+    /// The last tick the stored segment holds for the current scene and build (with its
+    /// edits checked), when a scene edit or a rebuild made the ticks after it stale.
+    pub stale: Option<u64>,
     /// `None` for the current branch, whose run lives in the session.
     pub segment: Option<Segment>,
 }
@@ -141,7 +143,7 @@ impl Default for BranchTree {
             parent: None,
             fork_tick: 0,
             fork_edits: 0,
-            stale: false,
+            stale: None,
             segment: None,
         };
         BranchTree {
@@ -169,9 +171,14 @@ impl BranchTree {
         &self.branches[&self.current]
     }
 
-    /// Stores the segment of the current branch and makes `id` current, taking its
-    /// segment out.
-    pub fn make_current(&mut self, segment: Segment, stale: bool, id: BranchId) -> Option<Segment> {
+    /// Stores the segment of the current branch, stale after `stale`, and makes `id`
+    /// current, taking its segment and staleness out (`id` may be the current branch).
+    pub fn make_current(
+        &mut self,
+        segment: Segment,
+        stale: Option<u64>,
+        id: BranchId,
+    ) -> (Segment, Option<u64>) {
         let current = self
             .branches
             .get_mut(&self.current)
@@ -180,13 +187,18 @@ impl BranchTree {
         current.stale = stale;
         self.current = id;
         let target = self.branches.get_mut(&id).expect("known branch");
-        target.stale = false;
-        target.segment.take()
+        let segment = target.segment.take().expect("a stored branch");
+        (segment, target.stale.take())
     }
 
-    /// Stores the segment of the current branch and makes a new child of it, forked at
-    /// `fork`, current.
-    pub fn fork(&mut self, segment: Segment, stale: bool, (fork_tick, fork_edits): (u64, usize)) {
+    /// Stores the segment of the current branch, stale after `stale`, and makes a new
+    /// child of it, forked at `fork`, current.
+    pub fn fork(
+        &mut self,
+        segment: Segment,
+        stale: Option<u64>,
+        (fork_tick, fork_edits): (u64, usize),
+    ) {
         let id = BranchId(self.next);
         self.next += 1;
         let child = Branch {
@@ -194,11 +206,17 @@ impl BranchTree {
             parent: Some(self.current),
             fork_tick,
             fork_edits,
-            stale: false,
+            stale: None,
             segment: None,
         };
+        let current = self
+            .branches
+            .get_mut(&self.current)
+            .expect("current branch");
+        current.segment = Some(segment);
+        current.stale = stale;
         self.branches.insert(id, child);
-        self.make_current(segment, stale, id);
+        self.current = id;
     }
 
     /// The branches from the root down to `id`.
@@ -250,12 +268,7 @@ impl BranchTree {
 
     /// The current branch as `segment` would store it.
     pub fn store_current(&self, segment: &Segment, players: u16) -> StoredBranch {
-        StoredBranch::new(
-            self.current,
-            self.current_branch(),
-            Some(segment),
-            players,
-        )
+        StoredBranch::new(self.current, self.current_branch(), Some(segment), players)
     }
 
     /// Takes the stored branches `ids` out of the tree.
@@ -295,11 +308,26 @@ impl BranchTree {
         }
     }
 
-    /// Marks every stored branch stale, dropping its checkpoints of the old state.
+    /// After the edit at `position` among the edits of `tick` was removed from the current
+    /// run: the current branch, and its stored children, forked at `tick` that inherited it
+    /// inherit one edit fewer.
+    pub fn edit_removed_at(&mut self, tick: u64, position: usize) {
+        let current = self.current;
+        for (&id, branch) in &mut self.branches {
+            let inherits =
+                (id == current && branch.parent.is_some()) || branch.parent == Some(current);
+            if inherits && branch.fork_tick == tick && position < branch.fork_edits {
+                branch.fork_edits -= 1;
+            }
+        }
+    }
+
+    /// Marks every stored branch stale from its fork tick, dropping its checkpoints of the
+    /// old state.
     pub fn mark_stale(&mut self) {
         for branch in self.branches.values_mut() {
             if let Some(segment) = &mut branch.segment {
-                branch.stale = true;
+                branch.stale = Some(branch.fork_tick);
                 segment.checkpoints = Checkpoints::empty();
             }
         }
@@ -317,7 +345,7 @@ impl BranchTree {
                     .segment
                     .as_ref()
                     .map_or(current_head, |segment| segment.head(branch.fork_tick)),
-                stale: branch.stale,
+                stale: branch.stale.is_some(),
             })
             .collect()
     }
@@ -455,7 +483,7 @@ impl StoredBranch {
             parent: branch.parent,
             fork_tick: branch.fork_tick,
             fork_edits: branch.fork_edits as u64,
-            stale: branch.stale,
+            stale: branch.stale.is_some(),
             inputs: inputs.encode(),
             edits: edits.encode(),
             hashes,
@@ -473,7 +501,10 @@ impl StoredBranch {
     /// Its segment, and whether it is stale.
     pub fn into_segment(self) -> Result<(Segment, bool), BranchesError> {
         let branch = self.into_branch(true)?;
-        Ok((branch.segment.expect("a stored segment"), branch.stale))
+        Ok((
+            branch.segment.expect("a stored segment"),
+            branch.stale.is_some(),
+        ))
     }
 
     /// Marks encoded branches stale, after a rebuild: their hashes are of the old build.
@@ -502,7 +533,7 @@ impl StoredBranch {
             parent: self.parent,
             fork_tick: self.fork_tick,
             fork_edits: usize::try_from(self.fork_edits).expect("edits fit in memory"),
-            stale: self.stale,
+            stale: self.stale.then_some(self.fork_tick),
             segment,
         })
     }

@@ -1,10 +1,11 @@
 use boxes::BoxesInput;
+use ludenea::control::Document;
 use ludenea::control::checkpoints::CHECKPOINT_BUDGET;
 use ludenea::control::{
     BranchId, BranchInfo, Reply, Resimulation, Session, SessionError, SessionExport,
 };
 use ludenea::prelude::*;
-use ludenea_app::ValueKind;
+use ludenea_app::{AssetTexts, ValueKind};
 use serde_json::json;
 
 fn simulation() -> Simulation {
@@ -39,7 +40,8 @@ fn recorded(ticks: u64) -> InputLog {
 /// A session with `ticks` recorded inputs, played up to `played`.
 fn played(ticks: u64, played: u64) -> (Simulation, Session) {
     let mut sim = simulation();
-    let mut session = Session::start(&mut sim, small_scene()).unwrap();
+    let mut session =
+        Session::start(&mut sim, small_scene(), AssetTexts::new(), Document::Scene).unwrap();
     session.load_inputs(&mut sim, recorded(ticks)).unwrap();
     play(&mut session, &mut sim, played);
     (sim, session)
@@ -184,7 +186,8 @@ fn forking_edit_survives_switching_away_and_back() {
 #[test]
 fn edits_recorded_before_the_fork_at_the_same_tick_stay_in_the_parent() {
     let mut sim = simulation();
-    let mut session = Session::start(&mut sim, small_scene()).unwrap();
+    let mut session =
+        Session::start(&mut sim, small_scene(), AssetTexts::new(), Document::Scene).unwrap();
     play(&mut session, &mut sim, 200);
     let edit = stats_edit(&sim, 1);
     session.edit(&mut sim, edit).unwrap();
@@ -231,7 +234,8 @@ fn take_over_forks() {
 #[test]
 fn edit_at_head_extends_current_branch() {
     let mut sim = simulation();
-    let mut session = Session::start(&mut sim, small_scene()).unwrap();
+    let mut session =
+        Session::start(&mut sim, small_scene(), AssetTexts::new(), Document::Scene).unwrap();
     play(&mut session, &mut sim, 200);
     let edit = stats_edit(&sim, 1);
     session.edit(&mut sim, edit).unwrap();
@@ -405,7 +409,13 @@ fn pinned_checkpoints_are_never_evicted() {
     let (mut sim, mut session) = played(400, 300);
     // A snapshot of another state restored at tick 40 is pinned there.
     let mut other = simulation();
-    let mut elsewhere = Session::start(&mut other, boxes::generate_scene(12, 3)).unwrap();
+    let mut elsewhere = Session::start(
+        &mut other,
+        boxes::generate_scene(12, 3),
+        AssetTexts::new(),
+        Document::Scene,
+    )
+    .unwrap();
     play(&mut elsewhere, &mut other, 40);
     edit_at(&mut session, &mut sim, 20, 1_000);
     play(&mut session, &mut sim, 20);
@@ -466,7 +476,13 @@ fn restore_at_the_fork_tick_keeps_the_branch_own_later_edits() {
     );
 
     let mut other = simulation();
-    let mut elsewhere = Session::start(&mut other, boxes::generate_scene(12, 3)).unwrap();
+    let mut elsewhere = Session::start(
+        &mut other,
+        boxes::generate_scene(12, 3),
+        AssetTexts::new(),
+        Document::Scene,
+    )
+    .unwrap();
     play(&mut elsewhere, &mut other, 200);
     session.restore(&mut sim, &other.snapshot()).unwrap();
     assert_eq!(edits(&session), [nested[2].clone()]);
@@ -496,17 +512,7 @@ fn branched_export() -> (Vec<Vec<u64>>, Vec<BranchInfo>, SessionExport) {
 }
 
 fn resume(sim: &mut Simulation, export: SessionExport) -> Session {
-    Session::resume(
-        sim,
-        export.scene,
-        export.saved_scene,
-        InputLog::decode(&export.inputs).unwrap(),
-        EditLog::decode(&export.edits).unwrap(),
-        &export.undo,
-        &export.branches,
-        export.hashes,
-    )
-    .unwrap()
+    Session::resume(sim, export, Document::Scene).unwrap()
 }
 
 #[test]
@@ -558,17 +564,17 @@ fn export_from_2a_resumes_as_root() {
         panic!("the fixture is a session export");
     };
     let mut sim = simulation();
-    let mut session = Session::resume(
-        &mut sim,
+    let export = SessionExport {
         scene,
         saved_scene,
-        InputLog::decode(&inputs.0).unwrap(),
-        EditLog::decode(&edits.0).unwrap(),
-        &undo.0,
-        &[],
-        hashes.into_iter().map(|hash| hash.0).collect(),
-    )
-    .unwrap();
+        inputs: inputs.0,
+        edits: edits.0,
+        undo: undo.0,
+        hashes: hashes.into_iter().map(|hash| hash.0).collect(),
+        branches: Vec::new(),
+        assets: Vec::new(),
+    };
+    let mut session = Session::resume(&mut sim, export, Document::Scene).unwrap();
     resimulate_all(&mut session, &mut sim);
     let branches = session.branches();
     assert_eq!(branches.len(), 1);
@@ -602,4 +608,204 @@ fn checkpoint_budget_with_20_branches_of_10000_ticks() {
         assert_seeks_match(&mut session, &mut sim, hashes_of, 997);
         assert!(session.checkpoint_count() <= CHECKPOINT_BUDGET);
     }
+}
+
+/// Edits the scene at tick 0, where the session must be.
+fn scene_edit(session: &mut Session, sim: &mut Simulation, begins: u64) {
+    session.seek(sim, 0).unwrap();
+    let edit = stats_edit(sim, begins);
+    session.edit(sim, edit).unwrap();
+}
+
+/// Every report until resimulation is done.
+fn reports_until_done(session: &mut Session, sim: &mut Simulation) -> Vec<Resimulation> {
+    let mut reports = Vec::new();
+    loop {
+        let report = session.resimulate(sim, 64).unwrap();
+        let done = matches!(report, Resimulation::Done | Resimulation::Idle);
+        reports.push(report);
+        if done {
+            return reports;
+        }
+    }
+}
+
+/// Checks the current branch's hashes against a fresh session of its run and scene, which
+/// simulates up to the head.
+fn assert_replays(session: &Session) {
+    let hashes = hashes(session);
+    let replayed = replayed_hashes(session);
+    assert_eq!(replayed.len() as u64, session.timeline().head + 1);
+    assert_eq!(hashes[..replayed.len()], replayed);
+}
+
+fn replayed_hashes(session: &Session) -> Vec<u64> {
+    let export = session.export().unwrap();
+    let mut sim = simulation();
+    let mut fresh =
+        Session::start(&mut sim, export.scene, AssetTexts::new(), Document::Scene).unwrap();
+    fresh
+        .load_inputs(&mut sim, InputLog::decode(&export.inputs).unwrap())
+        .unwrap();
+    fresh
+        .load_edits(&mut sim, EditLog::decode(&export.edits).unwrap())
+        .unwrap();
+    resimulate_all(&mut fresh, &mut sim);
+    // Inputs alone are simulated on the way to a tick.
+    let head = fresh.timeline().head;
+    fresh.seek(&mut sim, head).unwrap();
+    hashes(&fresh)[..=head as usize].to_vec()
+}
+
+#[test]
+fn scene_edit_marks_other_branches_stale_and_drops_their_checkpoints() {
+    let (mut sim, mut session) = played(400, 300);
+    edit_at(&mut session, &mut sim, 100, 1_000);
+    play(&mut session, &mut sim, 150);
+    session.switch_branch(&mut sim, ROOT).unwrap();
+    assert!(session.checkpoint_count() > 2);
+
+    scene_edit(&mut session, &mut sim, 5);
+    assert!(branch(&session, BranchId(1)).stale);
+    assert!(!branch(&session, ROOT).stale);
+    // Only the new tick 0 remains: the current branch resimulates from it.
+    assert_eq!(session.checkpoint_count(), 1);
+    assert_eq!(session.timeline().checkpoints, [0]);
+}
+
+#[test]
+fn switching_to_stale_branch_resimulates_it() {
+    let (mut sim, mut session) = played(400, 300);
+    edit_at(&mut session, &mut sim, 100, 1_000);
+    play(&mut session, &mut sim, 150);
+    session.switch_branch(&mut sim, ROOT).unwrap();
+    scene_edit(&mut session, &mut sim, 5);
+    assert!(session.timeline().resimulating);
+
+    // While the root still resimulates.
+    session.switch_branch(&mut sim, BranchId(1)).unwrap();
+    assert_eq!(session.current_branch(), BranchId(1));
+    assert_eq!(session.timeline().branch, BranchId(1));
+    assert!(session.timeline().resimulating);
+    assert!(matches!(
+        session.seek(&mut sim, 200),
+        Err(SessionError::Resimulating { .. })
+    ));
+    let first = session.resimulate(&mut sim, 30).unwrap();
+    assert!(
+        matches!(
+            first,
+            Resimulation::Progress { up_to: 30 } | Resimulation::Diverged { .. }
+        ),
+        "{first:?}"
+    );
+    assert!(matches!(
+        session.seek(&mut sim, 31),
+        Err(SessionError::Resimulating { up_to: 30 })
+    ));
+    session.seek(&mut sim, 20).unwrap();
+
+    let reports = reports_until_done(&mut session, &mut sim);
+    assert!(
+        reports
+            .iter()
+            .any(|report| matches!(report, Resimulation::Progress { .. })),
+        "{reports:?}"
+    );
+    assert_eq!(session.current_branch(), BranchId(1));
+    assert!(!branch(&session, BranchId(1)).stale);
+    assert!(!branch(&session, ROOT).stale, "the root resimulated first");
+    assert_replays(&session);
+    session.seek(&mut sim, 200).unwrap();
+
+    session.switch_branch(&mut sim, ROOT).unwrap();
+    assert!(!session.timeline().resimulating);
+    assert_replays(&session);
+}
+
+#[test]
+fn stale_ancestor_resimulates_first() {
+    let (mut sim, mut session) = played(400, 300);
+    edit_at(&mut session, &mut sim, 100, 1_000);
+    play(&mut session, &mut sim, 150);
+    edit_at(&mut session, &mut sim, 200, 2_000);
+    play(&mut session, &mut sim, 80);
+    session.switch_branch(&mut sim, ROOT).unwrap();
+    scene_edit(&mut session, &mut sim, 5);
+    resimulate_all(&mut session, &mut sim);
+    assert!(branch(&session, BranchId(1)).stale);
+    assert!(branch(&session, BranchId(2)).stale);
+
+    session.seek(&mut sim, 250).unwrap();
+    session.switch_branch(&mut sim, BranchId(2)).unwrap();
+    assert_eq!(session.current_branch(), BranchId(2));
+    // The ticks Branch 2 shares with its stale parent show while the parent resimulates.
+    assert_eq!(session.timeline().current, 100);
+    resimulate_all(&mut session, &mut sim);
+    assert!(!branch(&session, BranchId(1)).stale);
+    assert!(!branch(&session, BranchId(2)).stale);
+    assert_eq!(session.timeline().current, 250);
+    assert_replays(&session);
+
+    for id in [BranchId(1), BranchId(2)] {
+        session.switch_branch(&mut sim, id).unwrap();
+        assert!(!session.timeline().resimulating, "{id:?} stays fresh");
+        assert_replays(&session);
+    }
+}
+
+/// Inserts a pose on the scene entity at `address` at the current tick.
+fn pose_edit(session: &mut Session, sim: &mut Simulation, address: u32) {
+    let value = sim
+        .encode_json_value(
+            ValueKind::Component,
+            "ludenea::Pose",
+            json!({ "position": { "x": 1.0, "y": 5.0 }, "rotation": { "cos": 1.0, "sin": 0.0 } }),
+        )
+        .unwrap();
+    let edit = Edit::Insert {
+        entity: ludenea_app::EntityRef::Loaded(vec![address]),
+        component: "ludenea::Pose".to_string(),
+        value,
+    };
+    session.edit(sim, edit).unwrap();
+}
+
+#[test]
+fn dropped_edit_is_reported_per_branch() {
+    let mut sim = simulation();
+    let mut session =
+        Session::start(&mut sim, small_scene(), AssetTexts::new(), Document::Scene).unwrap();
+    play(&mut session, &mut sim, 120);
+    pose_edit(&mut session, &mut sim, 20);
+    play(&mut session, &mut sim, 180);
+    session.seek(&mut sim, 100).unwrap();
+    pose_edit(&mut session, &mut sim, 20);
+    play(&mut session, &mut sim, 100);
+    assert_eq!(session.current_branch(), BranchId(1));
+    session.switch_branch(&mut sim, ROOT).unwrap();
+
+    session.seek(&mut sim, 0).unwrap();
+    let despawn = Edit::Despawn {
+        entity: ludenea_app::EntityRef::Loaded(vec![20]),
+    };
+    session.edit(&mut sim, despawn).unwrap();
+    // One call past tick 120 queues the root's dropped edit behind its divergence.
+    let first = session.resimulate(&mut sim, 200).unwrap();
+    assert!(matches!(first, Resimulation::Diverged { .. }), "{first:?}");
+    session.switch_branch(&mut sim, BranchId(1)).unwrap();
+
+    let dropped: Vec<u64> = reports_until_done(&mut session, &mut sim)
+        .into_iter()
+        .filter_map(|report| match report {
+            Resimulation::EditDropped { tick, .. } => Some(tick),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(dropped, [120, 100]);
+    assert!(edits(&session).is_empty());
+    // The root resimulated past the fork before the switch: the rest resimulates now.
+    session.switch_branch(&mut sim, ROOT).unwrap();
+    reports_until_done(&mut session, &mut sim);
+    assert!(edits(&session).is_empty());
 }

@@ -28,5 +28,5 @@ pub use protocol::{
     FieldTarget, GameInfo, Hash64, NamedSchema, PROTOCOL_VERSION, PauseReason, ProtocolError,
     RecordedEvent, Reply, ServerMessage, SyncPoint, SystemRow, Topic,
 };
-pub use session::{Resimulation, Session, SessionError, SessionExport, Timeline};
+pub use session::{Document, Resimulation, Session, SessionError, SessionExport, Timeline};
 pub use subscriptions::INTROSPECTION_TICKS;
