@@ -120,6 +120,30 @@ describe("loader", () => {
     expect(screen.getByText("tools three")).toBeTruthy();
   });
 
+  it("reload_reports_the_new_error_when_restoring_the_previous_plugin_fails_too", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    let activations = 0;
+    const flaky = definePlugin({
+      name: "tools",
+      activate() {
+        activations += 1;
+        if (activations > 1) throw new Error("tools one cannot come back");
+      },
+    });
+    const broken = definePlugin({
+      name: "tools",
+      activate() {
+        throw new Error("tools two is broken");
+      },
+    });
+    const host = await testHost(async () => ({ default: broken }));
+    host.loader.activate(flaky);
+
+    await expect(host.loader.reload("tools", "/plugins/tools.2.js")).rejects.toThrow("tools two is broken");
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("tools"), expect.objectContaining({ message: "tools one cannot come back" }));
+    error.mockRestore();
+  });
+
   it("deactivate_disposes_everything_even_when_a_disposal_throws", async () => {
     const host = await testHost();
     const later = vi.fn();

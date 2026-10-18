@@ -58,8 +58,11 @@ describe("command palette and shortcuts", () => {
     fireEvent.keyDown(window, { key: "k", ctrlKey: true });
 
     expect(screen.getByRole("dialog").getAttribute("aria-modal")).toBe("true");
-    expect(fireEvent.keyDown(screen.getByRole("combobox"), { key: "Tab" })).toBe(false);
-    expect(fireEvent.keyDown(screen.getByRole("combobox"), { key: "Tab", shiftKey: true })).toBe(false);
+    const input = screen.getByRole("combobox");
+    expect(document.activeElement).toBe(input);
+    expect(fireEvent.keyDown(input, { key: "Tab" })).toBe(false);
+    expect(fireEvent.keyDown(input, { key: "Tab", shiftKey: true })).toBe(false);
+    expect(document.activeElement).toBe(input);
   });
 
   it("arrow_down_without_results_keeps_the_first_row_highlighted", async () => {

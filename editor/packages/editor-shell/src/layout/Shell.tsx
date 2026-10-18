@@ -69,7 +69,7 @@ export function Shell({ host }: { host: EditorHost }) {
     const { editor, registry } = host;
     const closed = new Set<string>();
     const openCommands = new Map<string, { title: string; command: Disposable }>();
-    // Panels whose open command another plugin holds, reported once each.
+    // Panels whose open command another plugin holds, reported once per conflict.
     const taken = new Set<string>();
     const sync = () => {
       // A panel unregistered while closed opens again if a plugin registers it later.
@@ -93,6 +93,7 @@ export function Shell({ host }: { host: EditorHost }) {
         // Another plugin holding the id must not stop the sync (it runs in a microtask).
         try {
           openCommands.set(id, { title, command: editor.commands.register({ id: `panels.open.${id}`, title: `Show ${title} panel`, run }) });
+          taken.delete(id);
         } catch (error) {
           openCommands.delete(id);
           if (taken.has(id)) continue;

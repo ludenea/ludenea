@@ -75,7 +75,13 @@ export class PluginLoader {
     try {
       this.activate(plugin);
     } catch (error) {
-      if (previous) this.activate(previous);
+      if (previous) {
+        try {
+          this.activate(previous);
+        } catch (failure) {
+          console.error(`plugin "${name}" could not be restored:`, failure);
+        }
+      }
       throw error;
     }
     return plugin;

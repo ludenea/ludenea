@@ -45,11 +45,11 @@ describe("shell", () => {
   it("panel_whose_open_command_is_taken_is_reported_and_still_shown", async () => {
     const host = await testHost();
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    host.editor.commands.register({ id: "panels.open.first", title: "Taken", run() {} });
+    const taker = host.editor.commands.register({ id: "panels.open.first", title: "Taken", run() {} });
     render(<Shell host={host} />);
     await act(() => Promise.resolve());
     // Registered after the dock is ready: synced in a microtask.
-    host.editor.panels.register({ id: "first", title: "First", component: () => <p>first</p> });
+    const first = host.editor.panels.register({ id: "first", title: "First", component: () => <p>first</p> });
     host.editor.panels.register({ id: "second", title: "Second", component: () => <p>second</p> });
     await act(() => Promise.resolve());
 
@@ -60,5 +60,17 @@ describe("shell", () => {
     host.editor.panels.register({ id: "third", title: "Third", component: () => <p>third</p> });
     await act(() => Promise.resolve());
     expect(error).toHaveBeenCalledTimes(1);
+
+    // Once the shell holds the command, a later conflict is news again.
+    taker.dispose();
+    host.editor.panels.register({ id: "fourth", title: "Fourth", component: () => <p>fourth</p> });
+    await act(() => Promise.resolve());
+    expect(host.editor.commands.list().map(({ id }) => id)).toContain("panels.open.first");
+    first.dispose();
+    await act(() => Promise.resolve());
+    host.editor.commands.register({ id: "panels.open.first", title: "Taken again", run() {} });
+    host.editor.panels.register({ id: "first", title: "First", component: () => <p>first</p> });
+    await act(() => Promise.resolve());
+    expect(error).toHaveBeenCalledTimes(2);
   });
 });
