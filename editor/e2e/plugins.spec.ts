@@ -15,7 +15,9 @@ declare global {
  * storage, workers, messaging, other windows, the global object itself) and records the ones
  * read or written by code in a plugin bundle (`/plugins/`). Access from the shared modules a
  * plugin calls is the editor's own and is not recorded. `window`, `document`, `location`,
- * and `top` cannot be redefined, so they are not probed.
+ * and `top` cannot be redefined, so they are not probed: of the document only its cookies
+ * are, and a plugin changing the page through `document` goes unseen. This checks that the
+ * plugin API is enough for a plugin, not that a plugin cannot escape it.
  */
 function installGlobalProbe() {
   const names = [
@@ -29,24 +31,26 @@ function installGlobalProbe() {
   const record = (name: string) => {
     if (new Error().stack?.split("\n")[3]?.includes("/plugins/")) accessed.push(name);
   };
-  for (const name of names) {
-    const descriptor = Object.getOwnPropertyDescriptor(window, name);
-    if (!descriptor?.configurable) continue;
+  const probe = (target: object, name: string, recorded: string) => {
+    const descriptor = Object.getOwnPropertyDescriptor(target, name);
+    if (!descriptor?.configurable) return;
     let value = descriptor.get ? undefined : descriptor.value;
-    Object.defineProperty(window, name, {
+    Object.defineProperty(target, name, {
       configurable: true,
       enumerable: descriptor.enumerable,
       get() {
-        record(name);
-        return descriptor.get ? descriptor.get.call(window) : value;
+        record(recorded);
+        return descriptor.get ? descriptor.get.call(this) : value;
       },
       set(next) {
-        record(name);
-        if (descriptor.set) descriptor.set.call(window, next);
+        record(recorded);
+        if (descriptor.set) descriptor.set.call(this, next);
         else value = next;
       },
     });
-  }
+  };
+  for (const name of names) probe(window, name, name);
+  probe(Document.prototype, "cookie", "document.cookie");
 }
 
 let served: ServedProject;
