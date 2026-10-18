@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Shell, definePlugin, type Editor } from "../src";
+import { DuplicateRegistration, Shell, definePlugin, type Editor } from "../src";
 import { testHost } from "./support";
 
 const entity = { index: 3, generation: 1 };
@@ -90,5 +90,88 @@ describe("loader", () => {
     host.loader.deactivate("outline");
     await act(async () => {});
     expect(host.editor.commands.list().map((command) => command.id)).toEqual(["panels.open.tools.panel"]);
+  });
+
+  it("reload_whose_activate_throws_restores_the_previous_plugin_in_place", async () => {
+    const broken = definePlugin({
+      name: "tools",
+      activate() {
+        throw new Error("tools two is broken");
+      },
+    });
+    const modules: Record<string, unknown> = {
+      "/plugins/tools.1.js": { default: panelPlugin("tools", "tools one", "center") },
+      "/plugins/tools.2.js": { default: broken },
+    };
+    const host = await testHost(async (url) => modules[url]);
+    host.loader.activate(panelPlugin("outline", "outline content", "left"));
+    await host.loader.load("/plugins/tools.1.js");
+    render(createElement(Shell, { host }));
+    await act(async () => {});
+    const groupBefore = screen.getByText("tools one").closest(".dv-groupview");
+
+    await act(() => expect(host.loader.reload("tools", "/plugins/tools.2.js")).rejects.toThrow("tools two is broken"));
+
+    expect(screen.getByText("tools one").closest(".dv-groupview")).toBe(groupBefore);
+    // Still active under its name: the next reload replaces it.
+    modules["/plugins/tools.3.js"] = { default: panelPlugin("tools", "tools three", "center") };
+    await act(() => host.loader.reload("tools", "/plugins/tools.3.js"));
+    expect(screen.getByText("tools three")).toBeTruthy();
+  });
+
+  it("deactivate_disposes_everything_even_when_a_disposal_throws", async () => {
+    const host = await testHost();
+    const later = vi.fn();
+    host.loader.activate(
+      definePlugin({
+        name: "tools",
+        activate(editor) {
+          editor.commands.register({ id: "tools.first", title: "First", run: () => {} });
+          host.registry.own(() => {
+            throw new Error("disposal failed");
+          });
+          editor.commands.register({ id: "tools.last", title: "Last", run: () => {} });
+          return () => {
+            later();
+            throw new Error("cleanup failed");
+          };
+        },
+      }),
+    );
+
+    const failure = (() => {
+      try {
+        host.loader.deactivate("tools");
+      } catch (error) {
+        return error;
+      }
+    })();
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors.map(String)).toEqual(["Error: disposal failed", "Error: cleanup failed"]);
+    expect(later).toHaveBeenCalledOnce();
+    expect(host.editor.commands.list()).toEqual([]);
+    host.loader.activate(definePlugin({ name: "tools", activate: (editor) => void editor.commands.register({ id: "tools.first", title: "First", run: () => {} }) }));
+  });
+
+  it("registrations_after_activate_belong_to_the_editor_until_disposed", async () => {
+    const host = await testHost();
+    let late: { dispose(): void } | undefined;
+    host.loader.activate(
+      definePlugin({
+        name: "tools",
+        activate(editor) {
+          queueMicrotask(() => (late = editor.commands.register({ id: "tools.late", title: "Late", run: () => {} })));
+          return () => late?.dispose();
+        },
+      }),
+    );
+    await Promise.resolve();
+    expect(() => host.editor.commands.register({ id: "tools.late", title: "Again", run: () => {} })).toThrow(DuplicateRegistration);
+    expect(() => host.editor.commands.register({ id: "tools.late", title: "Again", run: () => {} })).toThrow(/by "editor"/);
+
+    // Only the cleanup the plugin returned releases it.
+    host.loader.deactivate("tools");
+    expect(host.editor.commands.list()).toEqual([]);
   });
 });

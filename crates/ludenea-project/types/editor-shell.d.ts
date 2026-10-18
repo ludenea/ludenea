@@ -10,7 +10,13 @@ interface Disposable {
 /** A plugin: built-in, engine, and project plugins all take this shape and get the same `Editor`. */
 interface PluginDefinition {
     name: string;
-    /** Registers what the plugin adds; may return a cleanup called on deactivation. */
+    /**
+     * Registers what the plugin adds; may return a cleanup called on deactivation. What it
+     * registers while `activate` runs belongs to the plugin and is disposed on deactivation.
+     * Every plugin shares one `Editor`, so a registration made later (after an `await`, in a
+     * callback) cannot be told apart: it belongs to the editor, and the plugin disposes it
+     * itself, at the latest in the cleanup it returns.
+     */
     activate(editor: Editor): void | (() => void);
 }
 function definePlugin(plugin: PluginDefinition): PluginDefinition;
@@ -125,13 +131,18 @@ class PluginLoader {
     constructor(editor: Editor, registry: Registry, importModule?: (url: string) => Promise<unknown>);
     /** Activates a plugin already in memory (the built-ins); a failing `activate` leaves nothing registered. */
     activate(plugin: PluginDefinition): void;
+    /**
+     * Disposes what `name` registered, then calls its cleanup. One that throws does not stop
+     * the others: the plugin is inactive either way, and the failures come as an `AggregateError`.
+     */
     deactivate(name: string): void;
     /** Imports a bundle and activates its default export. */
     load(url: string): Promise<PluginDefinition>;
     /**
      * Deactivates `name` then activates the bundle at `url`. The import happens first, so the
      * swap is synchronous: the shell sees the same panel ids and keeps their place in the
-     * layout, and a bundle that fails to import leaves the old plugin running.
+     * layout. A bundle that fails to import leaves the old plugin running; one whose `activate`
+     * throws gets the old plugin activated again, in the same step, before the error is rethrown.
      */
     reload(name: string, url: string): Promise<PluginDefinition>;
 }

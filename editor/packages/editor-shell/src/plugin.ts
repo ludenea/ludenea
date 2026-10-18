@@ -9,7 +9,13 @@ export interface Disposable {
 /** A plugin: built-in, engine, and project plugins all take this shape and get the same `Editor`. */
 export interface PluginDefinition {
   name: string;
-  /** Registers what the plugin adds; may return a cleanup called on deactivation. */
+  /**
+   * Registers what the plugin adds; may return a cleanup called on deactivation. What it
+   * registers while `activate` runs belongs to the plugin and is disposed on deactivation.
+   * Every plugin shares one `Editor`, so a registration made later (after an `await`, in a
+   * callback) cannot be told apart: it belongs to the editor, and the plugin disposes it
+   * itself, at the latest in the cleanup it returns.
+   */
   activate(editor: Editor): void | (() => void);
 }
 
