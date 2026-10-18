@@ -276,15 +276,23 @@ fn generate(module: &Path, staging: &Path) -> Result<String, BuildError> {
 }
 
 /// Records `current` as the current build in `parent` and removes every build but it and the
-/// one current before it, which an editor may still be loading.
+/// one current before it, which an editor may still be loading. The record holds both names
+/// (current, then previous), so rebuilding the same module keeps the earlier previous build.
 fn retire_old_builds(parent: &Path, current: &str) -> io::Result<()> {
     let record = parent.join("current");
-    let previous = fs::read_to_string(&record).unwrap_or_default();
-    fs::write(&record, current)?;
+    let recorded = fs::read_to_string(&record).unwrap_or_default();
+    let mut names = recorded.lines();
+    let (was_current, was_previous) = (names.next().unwrap_or(""), names.next().unwrap_or(""));
+    let previous = if was_current == current {
+        was_previous
+    } else {
+        was_current
+    };
+    fs::write(&record, format!("{current}\n{previous}"))?;
     for entry in fs::read_dir(parent)?.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
         let is_build = name.len() == 16 && name.chars().all(|c| c.is_ascii_hexdigit());
-        if is_build && name != current && name != previous.trim() {
+        if is_build && name != current && name != previous {
             let _ = fs::remove_dir_all(entry.path());
         }
     }
@@ -333,8 +341,9 @@ mod tests {
             retire_old_builds(dir.path(), build).unwrap();
         }
         assert_eq!(present(), builds[1..]);
-        // Rebuilding the current module keeps it and nothing older.
+        // Rebuilding the current module keeps the build current before it, which an editor
+        // may still be loading.
         retire_old_builds(dir.path(), builds[2]).unwrap();
-        assert_eq!(present(), builds[2..]);
+        assert_eq!(present(), builds[1..]);
     }
 }
