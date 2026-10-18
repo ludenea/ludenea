@@ -143,9 +143,10 @@ fn scene_unknown_resource_is_named() {
 #[test]
 fn scene_with_another_version_is_rejected() {
     let error = simulation()
-        .load_scene("Scene(version: 2, resources: {}, entities: [])")
+        .load_scene("Scene(version: 3, resources: {}, entities: [])")
         .unwrap_err();
-    assert!(matches!(error, SceneError::Version(2)));
+    assert!(matches!(error, SceneError::Version(3)));
+    assert!(error.to_string().contains("expected 1 or 2"), "{error}");
 }
 
 #[test]

@@ -1,5 +1,5 @@
 use std::any::TypeId;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ludenea_debug_draw::DebugDrawFrame;
 use ludenea_ecs::Entity;
@@ -12,6 +12,7 @@ use ludenea_ecs::{
 
 use crate::app::EditorHooks;
 use crate::input::{self, Input, InputType};
+use crate::scene::LoadAddress;
 use crate::{Parallel, RawInput, Time};
 
 #[derive(Debug, thiserror::Error)]
@@ -50,6 +51,8 @@ pub struct Simulation {
     hooks: EditorHooks,
     /// The world as built, before any step.
     pub(crate) initial: Snapshot,
+    /// Where each entity of the last loaded scene came from; not part of the state.
+    pub(crate) load_addresses: BTreeMap<Entity, LoadAddress>,
 }
 
 impl Simulation {
@@ -68,6 +71,7 @@ impl Simulation {
             players: 1,
             tick_rate,
             hooks,
+            load_addresses: BTreeMap::new(),
         }
     }
 
@@ -187,6 +191,19 @@ impl Simulation {
             .flat_map(|pick| pick(&self.world, point))
             .collect();
         found.into_iter().collect()
+    }
+
+    /// The load address of every entity spawned by the last scene load.
+    pub fn load_addresses(&self) -> &BTreeMap<Entity, LoadAddress> {
+        &self.load_addresses
+    }
+
+    /// The entity the last scene load spawned at `address`.
+    pub fn entity_at_address(&self, address: &[u32]) -> Option<Entity> {
+        self.load_addresses
+            .iter()
+            .find(|(_, loaded)| loaded.as_slice() == address)
+            .map(|(&entity, _)| entity)
     }
 
     pub fn world(&self) -> &World {

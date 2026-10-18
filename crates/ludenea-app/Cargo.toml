@@ -21,4 +21,6 @@ serde_json.workspace = true
 rayon.workspace = true
 
 [dev-dependencies]
+boxes = { path = "../../examples/boxes" }
+ludenea.workspace = true
 ludenea-physics.workspace = true

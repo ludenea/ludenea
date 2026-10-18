@@ -13,7 +13,7 @@ use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use ludenea_app::{
-    Edit, EditError, EditLog, InputLog, SceneError, SimError, Simulation, TimedEdit,
+    Edit, EditError, EditLog, InputLog, NoAssets, SceneError, SimError, Simulation, TimedEdit,
 };
 use ludenea_ecs::{Entity, Snapshot, SnapshotError};
 use serde::{Deserialize, Serialize};
@@ -133,7 +133,7 @@ pub struct Session {
 impl Session {
     /// Loads `scene` at tick 0 with empty logs.
     pub fn start(sim: &mut Simulation, scene: String) -> Result<Session, SessionError> {
-        sim.load_scene(&scene)?;
+        sim.load_scene_with(&scene, &NoAssets)?;
         let players = u16::try_from(sim.players()).expect("fewer than 2^16 players");
         Ok(Session {
             saved_scene: scene.clone(),
@@ -418,7 +418,7 @@ impl Session {
         sim: &mut Simulation,
         scene: String,
     ) -> Result<(), SessionError> {
-        sim.load_scene(&scene)?;
+        sim.load_scene_with(&scene, &NoAssets)?;
         self.saved_scene = scene.clone();
         let before = std::mem::replace(&mut self.scene, scene.clone());
         self.scene_dirty = false;
@@ -764,7 +764,7 @@ impl Session {
         sim: &mut Simulation,
         scene: String,
     ) -> Result<(), SessionError> {
-        sim.load_scene(&scene)?;
+        sim.load_scene_with(&scene, &NoAssets)?;
         self.set_scene(scene);
         self.start_resimulation(sim);
         Ok(())
@@ -822,7 +822,7 @@ impl Session {
         let rank =
             spawned.map(|entity| sim.world().entities().take_while(|&e| e != entity).count());
         let scene = sim.save_scene();
-        sim.load_scene(&scene)?;
+        sim.load_scene_with(&scene, &NoAssets)?;
         self.set_scene(scene);
         let spawned = rank.map(|rank| sim.world().entities().nth(rank).expect("saved entity"));
         self.start_resimulation(sim);
