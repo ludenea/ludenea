@@ -14,7 +14,7 @@ use crate::app::EditorHooks;
 use crate::input::{self, Input, InputType};
 use crate::prefab::LoadedInstance;
 use crate::scene::LoadAddress;
-use crate::{Parallel, RawInput, Time};
+use crate::{Parallel, ParallelError, RawInput, Time};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SimError {
@@ -261,9 +261,12 @@ impl Simulation {
         self.world.restore(snapshot)
     }
 
-    /// Replaces the `Parallel` runtime resource; results never depend on `threads`.
-    pub fn set_threads(&mut self, threads: usize) {
-        self.world.insert_runtime(Parallel::new(threads));
+    /// Replaces the `Parallel` runtime resource with a pool of `threads`, from 1 to
+    /// [`Parallel::MAX_THREADS`]; results never depend on the count. On error the previous
+    /// pool stays.
+    pub fn set_threads(&mut self, threads: usize) -> Result<(), ParallelError> {
+        self.world.insert_runtime(Parallel::try_new(threads)?);
+        Ok(())
     }
 
     pub fn threads(&self) -> usize {

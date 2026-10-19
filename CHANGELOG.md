@@ -40,6 +40,13 @@ session (the editor's copy of each open document's session), and the plugin API.
   fingerprint after its version.
 - `Command::reply_type` names the reply each command gets when it succeeds, and
   `ProjectRequest::reply_types` the replies each project request may get.
+- `Parallel::try_new` replaces `Parallel::new`, which panicked when the system refused the
+  threads and ran 0 as 1: it returns a `ParallelError` for 0, for a count above the new
+  `Parallel::MAX_THREADS` (256), and for threads the system refuses. `Parallel::check`
+  refuses the first two before any thread starts.
+- `Simulation::set_threads` returns `Result<(), ParallelError>` and keeps the previous
+  pool on error. The command line tool's `--threads` takes 1 to 256, and its refusals
+  exit with code 2 instead of a panic.
 
 ### Control protocol
 
@@ -49,6 +56,10 @@ session (the editor's copy of each open document's session), and the plugin API.
   fingerprint with `version_mismatch` and says to rebuild the editor
   (`pnpm -C editor build`) and the game from the same checkout; a `hello` of an earlier
   version, without the fingerprint, is refused the same way.
+- `set_threads` refuses a count outside 1 to 256, or one the system cannot start, with
+  `invalid_command`, and the previous count stays; it ended the game process before.
+  `host --stdio` starts on every core up to 256, and on one thread with a console warning
+  when the system refuses them.
 
 ### Project protocol
 

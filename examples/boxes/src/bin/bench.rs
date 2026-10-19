@@ -22,7 +22,9 @@ fn millis_per_iteration(iterations: u32, mut work: impl FnMut()) -> f64 {
 fn warmed_up(scene: &str, threads: usize) -> Simulation {
     let mut simulation = app().build().expect("the app must build");
     simulation.load_scene(scene).expect("the scene must load");
-    simulation.set_threads(threads);
+    simulation
+        .set_threads(threads)
+        .expect("the threads must start");
     for _ in 0..WARMUP_TICKS {
         simulation.step();
     }

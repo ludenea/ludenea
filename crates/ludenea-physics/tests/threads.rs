@@ -35,7 +35,7 @@ fn scene(threads: usize) -> Simulation {
     let mut app = App::new();
     app.plugin(PhysicsPlugin);
     let mut simulation = app.build().unwrap();
-    simulation.set_threads(threads);
+    simulation.set_threads(threads).unwrap();
     spawn(&mut simulation, Vec2::ZERO, Body::fixed(), boxed(12.0, 0.5));
     spawn(
         &mut simulation,
@@ -106,7 +106,7 @@ fn row(threads: usize) -> (Simulation, Vec<Entity>) {
     let mut app = App::new();
     app.plugin(PhysicsPlugin);
     let mut simulation = app.build().unwrap();
-    simulation.set_threads(threads);
+    simulation.set_threads(threads).unwrap();
     let mut entities = vec![spawn(
         &mut simulation,
         Vec2::ZERO,

@@ -200,6 +200,9 @@ pub enum Command {
     LoadEdits {
         log: Bytes,
     },
+    /// Runs the game on `threads` threads, from 1 to 256; results never depend on the count.
+    /// A count outside that range, or one the system cannot start, is an `InvalidCommand`
+    /// and the previous count stays.
     SetThreads {
         threads: u32,
     },

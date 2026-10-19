@@ -23,7 +23,7 @@ pub use assets::{AssetSource, AssetTexts, NamedAssetTexts, NoAssets};
 pub use edit::{EDIT_LOG_VERSION, Edit, EditError, EditLog, EntityRef, TimedEdit, ValueKind};
 pub use input::{Input, Inputs};
 pub use input_log::{INPUT_LOG_VERSION, InputLog};
-pub use parallel::Parallel;
+pub use parallel::{Parallel, ParallelError};
 pub use prefab::{InstanceInfo, PREFAB_VERSION, Resolved, ResolvedEntity, resolve};
 pub use raw_input::{RawGamepad, RawInput};
 pub use rng::Rng;

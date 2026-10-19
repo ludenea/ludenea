@@ -211,7 +211,7 @@ impl App {
         if let Some(time) = self.world.resource_mut::<Time>() {
             time.dt = 1.0 / self.tick_rate as f32;
         }
-        self.world.insert_runtime(Parallel::new(1));
+        self.world.insert_runtime(Parallel::single());
         let schedule = self.schedule.build(&self.world)?;
         Ok(Simulation::new(
             self.world,

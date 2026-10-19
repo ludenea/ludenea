@@ -10,22 +10,56 @@ pub struct Parallel {
     pool: Option<rayon::ThreadPool>,
 }
 
+/// Why a pool of threads cannot start.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ParallelError {
+    /// The count is 0 or above [`Parallel::MAX_THREADS`].
+    #[error(
+        "cannot start {requested} threads: outside the supported range; use 1 to {max}",
+        max = Parallel::MAX_THREADS
+    )]
+    OutOfRange { requested: usize },
+    /// The system refused to start the threads.
+    #[error("cannot start {requested} threads: {reason}; use fewer threads")]
+    Refused { requested: usize, reason: String },
+}
+
 impl Parallel {
-    /// `threads` below 1 counts as 1.
-    ///
-    /// # Panics
-    /// If the native thread pool cannot be created.
-    pub fn new(threads: usize) -> Self {
-        let threads = threads.max(1);
-        Self {
+    /// The most threads a pool runs. Results never depend on the count, so the cap only
+    /// stops a typo from spending seconds and gigabytes starting threads.
+    pub const MAX_THREADS: usize = 256;
+
+    /// A pool of `threads`, from 1 to [`Self::MAX_THREADS`]. One thread runs every closure
+    /// on the calling thread, and so does WebAssembly whatever the count.
+    pub fn try_new(threads: usize) -> Result<Self, ParallelError> {
+        Self::check(threads)?;
+        Ok(Self {
             threads,
             #[cfg(not(target_family = "wasm"))]
-            pool: (threads > 1).then(|| {
-                rayon::ThreadPoolBuilder::new()
-                    .num_threads(threads)
-                    .build()
-                    .unwrap_or_else(|error| panic!("cannot start {threads} threads: {error}"))
-            }),
+            pool: if threads > 1 {
+                Some(start(threads, rayon::ThreadPoolBuilder::new())?)
+            } else {
+                None
+            },
+        })
+    }
+
+    /// Refuses, before anything starts, a count [`Self::try_new`] refuses: 0 or above
+    /// [`Self::MAX_THREADS`]. The system may still refuse a count this accepts.
+    pub fn check(threads: usize) -> Result<(), ParallelError> {
+        if (1..=Self::MAX_THREADS).contains(&threads) {
+            Ok(())
+        } else {
+            Err(ParallelError::OutOfRange { requested: threads })
+        }
+    }
+
+    /// One thread, which needs no pool and so cannot fail.
+    pub(crate) fn single() -> Self {
+        Self {
+            threads: 1,
+            #[cfg(not(target_family = "wasm"))]
+            pool: None,
         }
     }
 
@@ -103,16 +137,35 @@ impl Parallel {
     }
 }
 
+/// Starts the pool `builder` describes with `threads` threads.
+#[cfg(not(target_family = "wasm"))]
+fn start(
+    threads: usize,
+    builder: rayon::ThreadPoolBuilder,
+) -> Result<rayon::ThreadPool, ParallelError> {
+    builder
+        .num_threads(threads)
+        .build()
+        .map_err(|error| ParallelError::Refused {
+            requested: threads,
+            reason: error.to_string(),
+        })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Parallel;
+    use super::{Parallel, ParallelError};
 
     #[test]
     fn parallel_map_preserves_order_for_any_thread_count() {
         let items: Vec<u64> = (0..1000).collect();
         let results: Vec<Vec<u64>> = [1, 2, 8]
             .into_iter()
-            .map(|threads| Parallel::new(threads).map(&items, 7, |item| item * 3 + 1))
+            .map(|threads| {
+                Parallel::try_new(threads)
+                    .unwrap()
+                    .map(&items, 7, |item| item * 3 + 1)
+            })
             .collect();
         assert_eq!(
             results[0],
@@ -126,8 +179,41 @@ mod tests {
     fn for_each_mut_visits_every_item_for_any_thread_count() {
         for threads in [1, 4] {
             let mut items: Vec<u32> = (0..100).collect();
-            Parallel::new(threads).for_each_mut(&mut items, 8, |item| *item *= 2);
+            Parallel::try_new(threads)
+                .unwrap()
+                .for_each_mut(&mut items, 8, |item| *item *= 2);
             assert_eq!(items, (0..100).map(|item| item * 2).collect::<Vec<_>>());
         }
+    }
+
+    #[test]
+    fn a_count_outside_1_to_max_threads_is_refused_before_anything_starts() {
+        for threads in [0, Parallel::MAX_THREADS + 1, usize::MAX] {
+            let error = Parallel::try_new(threads).err().unwrap();
+            assert_eq!(error, ParallelError::OutOfRange { requested: threads });
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "cannot start {threads} threads: outside the supported range; use 1 to 256"
+                )
+            );
+        }
+        for threads in [1, Parallel::MAX_THREADS] {
+            assert_eq!(Parallel::try_new(threads).unwrap().threads(), threads);
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    fn threads_the_system_refuses_are_an_error() {
+        // No system reserves a petabyte of stack for each of two threads.
+        let builder = rayon::ThreadPoolBuilder::new().stack_size(1 << 50);
+        let Err(ParallelError::Refused { requested, reason }) = super::start(2, builder) else {
+            panic!("the system started threads with a petabyte of stack each");
+        };
+        assert_eq!(requested, 2);
+        let message = ParallelError::Refused { requested, reason }.to_string();
+        assert!(message.starts_with("cannot start 2 threads: "), "{message}");
+        assert!(message.ends_with("; use fewer threads"), "{message}");
     }
 }

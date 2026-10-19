@@ -108,6 +108,26 @@ fn live_input_without_mapping_is_refused() {
 }
 
 #[test]
+fn set_threads_beyond_the_limit_is_refused_and_the_session_goes_on() {
+    let mut client = client();
+    step(&mut client, 2);
+    // 257 first: before thread counts were checked, u32::MAX tried to start every thread.
+    for threads in [257, u32::MAX] {
+        let error = client.request(Command::SetThreads { threads }).unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidCommand);
+        assert_eq!(
+            error.message,
+            format!("cannot start {threads} threads: outside the supported range; use 1 to 256")
+        );
+    }
+    assert_eq!(step(&mut client, 3).len(), 3);
+    let Ok(Reply::Hash { tick, .. }) = client.request(Command::GetHash) else {
+        panic!()
+    };
+    assert_eq!(tick, 5);
+}
+
+#[test]
 fn hash_reports_pending_edits_and_tick() {
     let mut client = client();
     step(&mut client, 2);

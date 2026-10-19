@@ -1,4 +1,4 @@
-use ludenea_app::{App, Inputs, Rng, Sim, SimError, Simulation, Time};
+use ludenea_app::{App, Inputs, Parallel, ParallelError, Rng, Sim, SimError, Simulation, Time};
 use ludenea_ecs::schema::Schema;
 use ludenea_ecs::{
     Commands, Component, IntoSystemConfig, Query, Res, ResMut, Resource, Runtime, SystemLabel,
@@ -134,6 +134,22 @@ fn step_with_wrong_input_type_is_type_mismatch() {
         "{error:?}"
     );
     assert_eq!(simulation.tick(), 0);
+}
+
+#[test]
+fn a_refused_thread_count_keeps_the_previous_pool() {
+    let mut simulation = App::new().build().unwrap();
+    assert_eq!(simulation.threads(), 1);
+    simulation.set_threads(4).unwrap();
+    for threads in [0, Parallel::MAX_THREADS + 1] {
+        assert_eq!(
+            simulation.set_threads(threads),
+            Err(ParallelError::OutOfRange { requested: threads })
+        );
+        assert_eq!(simulation.threads(), 4);
+    }
+    simulation.step();
+    assert_eq!(simulation.tick(), 1);
 }
 
 #[test]

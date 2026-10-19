@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use clap::Args;
 use ludenea_app::replay::{Replay, ReplayOutcome, play_replay, record_replay};
 use ludenea_app::trace::{TRACE_VERSION, Trace, compare_traces, inputs_hash, scene_hash};
-use ludenea_app::{App, EditLog, InputLog, NamedAssetTexts, SimError, Simulation};
+use ludenea_app::{App, EditLog, InputLog, NamedAssetTexts, Parallel, SimError, Simulation};
 use ludenea_control::{Bytes, Command, Host, InProcess, PROTOCOL_VERSION, Reply, Transport};
 
 use crate::assets::project_assets;
@@ -29,7 +29,7 @@ impl Run {
         app: fn() -> App,
         files: &RunFiles,
         inputs: Option<&Path>,
-        threads: Option<u32>,
+        threads: Option<usize>,
     ) -> Result<Run, String> {
         let scene_bytes = read(&files.scene)?;
         let scene = String::from_utf8(scene_bytes.clone())
@@ -81,12 +81,20 @@ impl Run {
     }
 }
 
-fn simulation(app: fn() -> App, threads: Option<u32>) -> Result<Simulation, String> {
+fn simulation(app: fn() -> App, threads: Option<usize>) -> Result<Simulation, String> {
     let mut sim = app().build().map_err(|error| error.to_string())?;
     if let Some(threads) = threads {
-        sim.set_threads(threads as usize);
+        sim.set_threads(threads)
+            .map_err(|error| error.to_string())?;
     }
     Ok(sim)
+}
+
+/// Parses `--threads`, refusing a count no pool takes before any thread starts.
+fn thread_count(value: &str) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+    let threads = value.parse()?;
+    Parallel::check(threads)?;
+    Ok(threads)
 }
 
 /// Plays `replay` against its hashes and tells whether they all match; on the first
@@ -95,7 +103,7 @@ fn simulation(app: fn() -> App, threads: Option<u32>) -> Result<Simulation, Stri
 fn play(
     app: fn() -> App,
     replay: &Replay,
-    threads: Option<u32>,
+    threads: Option<usize>,
     dump_dir: &Path,
     out: &mut dyn Write,
 ) -> Result<bool, String> {
@@ -186,8 +194,9 @@ pub struct RunArgs {
     inputs: Option<PathBuf>,
     #[arg(long)]
     ticks: u32,
-    #[arg(long)]
-    threads: Option<u32>,
+    /// Threads for the game, from 1 to 256; results never depend on the count.
+    #[arg(long, value_parser = thread_count)]
+    threads: Option<usize>,
     /// Print the final state hash.
     #[arg(long)]
     hash: bool,
@@ -208,8 +217,9 @@ pub struct VerifyArgs {
     inputs: Option<PathBuf>,
     #[arg(long)]
     golden: Option<PathBuf>,
-    #[arg(long)]
-    threads: Option<u32>,
+    /// Threads for the game, from 1 to 256; results never depend on the count.
+    #[arg(long, value_parser = thread_count)]
+    threads: Option<usize>,
     /// Where to write the snapshots around the first mismatch.
     #[arg(long, default_value = "dump")]
     dump_dir: PathBuf,

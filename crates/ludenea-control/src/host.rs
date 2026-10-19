@@ -369,7 +369,8 @@ impl Host {
                 Ok(Reply::Done)
             }
             Command::SetThreads { threads } => {
-                sim.set_threads(threads as usize);
+                sim.set_threads(threads as usize)
+                    .map_err(|e| ProtocolError::new(ErrorCode::InvalidCommand, e))?;
                 Ok(Reply::Done)
             }
             Command::Step {

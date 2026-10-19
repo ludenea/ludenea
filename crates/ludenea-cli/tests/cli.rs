@@ -238,6 +238,43 @@ fn missing_file_prints_error_and_exits_2() {
 }
 
 #[test]
+fn too_many_threads_is_refused() {
+    let dir = dir("too_many_threads");
+    record_replay(&dir);
+    // 257 first: before thread counts were checked, 100000 tried to start every thread.
+    for threads in ["257", "100000"] {
+        for args in [
+            &["run", "{}/scene.ron", "--ticks", "1", "--threads", threads][..],
+            &["verify", "{}/run.replay", "--threads", threads],
+        ] {
+            let (code, out) = cli(&dir, args);
+            assert_eq!(code, 2, "{out}");
+            assert!(out.starts_with("error: "), "{out}");
+            assert!(
+                out.contains(&format!(
+                    "cannot start {threads} threads: outside the supported range; use 1 to 256"
+                )),
+                "{out}"
+            );
+        }
+    }
+}
+
+#[test]
+fn zero_threads_is_refused() {
+    let dir = dir("zero_threads");
+    let (code, out) = cli(
+        &dir,
+        &["run", "{}/scene.ron", "--ticks", "1", "--threads", "0"],
+    );
+    assert_eq!(code, 2, "{out}");
+    assert!(
+        out.contains("cannot start 0 threads: outside the supported range; use 1 to 256"),
+        "{out}"
+    );
+}
+
+#[test]
 fn trace_parent_directory_is_created() {
     let dir = dir("trace_parent");
     let (code, _) = cli(

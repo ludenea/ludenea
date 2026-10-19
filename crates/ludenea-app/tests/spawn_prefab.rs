@@ -154,7 +154,7 @@ fn overrides_apply_after_spawn() {
 fn spawn_prefab_is_deterministic_across_thread_counts() {
     let hashes = |threads| {
         let mut simulation = simulation(7);
-        simulation.set_threads(threads);
+        simulation.set_threads(threads).unwrap();
         (0..200)
             .map(|_| {
                 simulation.step();
