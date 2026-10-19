@@ -580,6 +580,10 @@ impl StoredBranch {
         }
     }
 
+    pub fn id(&self) -> BranchId {
+        self.id
+    }
+
     pub fn encode(branches: &[StoredBranch]) -> Vec<u8> {
         postcard::to_allocvec(branches).expect("branches always encode")
     }

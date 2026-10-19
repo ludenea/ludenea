@@ -76,7 +76,11 @@ session (the editor's copy of each open document's session), and the plugin API.
   when the system refuses them.
 - A command that has to restore a checkpoint the game's own types refuse, such as `seek`,
   fails with `invalid_snapshot` and names the tick, the entity, and why its type refuses
-  the value; it ended the game process before.
+  the value; it ended the game process before. A seek, undo, or redo that fails this way
+  changes nothing, and a branch switch stays on the current branch, or on the target at its
+  first stale tick. When the session cannot come back to its tick after a game panic, a
+  snapshot restore, a replay export, or resimulation, it goes to a tick it can show, tick 0
+  at worst.
 
 ### Project protocol
 

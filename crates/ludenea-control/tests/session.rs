@@ -2,7 +2,7 @@ use std::fs;
 
 use boxes::{BoxesInput, Crate};
 use ludenea::cli::Trace;
-use ludenea::control::{Document, Resimulation, Session, SessionError, SessionExport};
+use ludenea::control::{BranchId, Document, Resimulation, Session, SessionError, SessionExport};
 use ludenea::prelude::*;
 use ludenea_app::{AssetTexts, EntityRef, ValueKind};
 use serde_json::json;
@@ -792,4 +792,225 @@ fn a_checkpoint_that_does_not_restore_is_an_error_naming_why() {
     );
     assert_eq!(session.timeline().current, 40);
     assert_eq!(sim.hash(), before);
+}
+
+/// Game code writing a zero rotation during ticks 10 to 19 only: the checkpoint of tick 16
+/// does not restore, those of ticks 0, 32, and 48 do.
+fn zero_rotation_from_10_to_20(time: Res<Time>, mut poses: Query<&mut Pose, Without<Body>>) {
+    let rotation = if (10..20).contains(&time.tick) {
+        Rot { cos: 0.0, sin: 0.0 }
+    } else {
+        Rot::IDENTITY
+    };
+    for pose in poses.iter_mut() {
+        pose.rotation = rotation;
+    }
+}
+
+/// The small scene with `markers` entities that have a pose and no body.
+fn scene_with_markers(markers: usize) -> String {
+    small_scene_with(|world| {
+        for _ in 0..markers {
+            let marker = world.spawn();
+            world.insert(marker, Pose::default()).unwrap();
+        }
+    })
+}
+
+/// A session on the small scene with a marker, whose pose the systems added to `app` write.
+fn marked(app: App) -> (Simulation, Session) {
+    let mut sim = app.build().unwrap();
+    let session = Session::start(
+        &mut sim,
+        scene_with_markers(1),
+        AssetTexts::new(),
+        Document::Scene,
+    )
+    .unwrap();
+    (sim, session)
+}
+
+/// Every checkpoint after tick 0 holds a zero rotation.
+fn always_poisoned() -> (Simulation, Session) {
+    let mut app = boxes::app();
+    app.system(Sim, zero_rotation);
+    marked(app)
+}
+
+/// Only the checkpoint of tick 16 holds a zero rotation.
+fn poisoned_from_10_to_20() -> (Simulation, Session) {
+    let mut app = boxes::app();
+    app.system(Sim, zero_rotation_from_10_to_20);
+    marked(app)
+}
+
+/// Asserts that the session and the world are both at `tick`, which has no edit.
+fn assert_at(session: &Session, sim: &Simulation, tick: u64) {
+    assert_eq!(session.timeline().current, tick);
+    assert_eq!(sim.tick(), tick);
+    assert_eq!(sim.hash(), hashes(session)[tick as usize]);
+}
+
+#[test]
+fn a_switch_to_a_branch_whose_checkpoint_does_not_restore_stays_on_the_current_branch() {
+    let (mut sim, mut session) = always_poisoned();
+    play(&mut session, &mut sim, 40);
+    session.seek(&mut sim, 4).unwrap();
+    let edit = stats_edit(&sim, 1_000);
+    session.edit(&mut sim, edit).unwrap();
+    let forked = session.timeline().branch;
+    assert_ne!(forked, BranchId::ROOT);
+    play(&mut session, &mut sim, 36);
+
+    let error = session.switch_branch(&mut sim, BranchId::ROOT).unwrap_err();
+
+    assert!(
+        matches!(error, SessionError::Checkpoint { tick: 32, .. }),
+        "{error:?}"
+    );
+    assert_eq!(session.timeline().branch, forked);
+    assert_at(&session, &sim, 40);
+}
+
+#[test]
+fn a_switch_to_a_stale_branch_that_cannot_show_the_tick_stays_where_it_resimulates_from() {
+    let (mut sim, mut session) = poisoned_from_10_to_20();
+    play(&mut session, &mut sim, 60);
+    session.seek(&mut sim, 40).unwrap();
+    let edit = stats_edit(&sim, 1_000);
+    session.edit(&mut sim, edit).unwrap();
+    let forked = session.timeline().branch;
+    play(&mut session, &mut sim, 10);
+    session.switch_branch(&mut sim, BranchId::ROOT).unwrap();
+    session.seek(&mut sim, 8).unwrap();
+    // The forked branch is stale from its fork tick, 40.
+    session
+        .replace_scene(&mut sim, scene_with_markers(2), AssetTexts::new())
+        .unwrap();
+    resimulate_all(&mut session, &mut sim);
+    play(&mut session, &mut sim, 12);
+
+    let error = session.switch_branch(&mut sim, forked).unwrap_err();
+
+    assert!(
+        matches!(error, SessionError::Checkpoint { tick: 16, .. }),
+        "{error:?}"
+    );
+    let timeline = session.timeline();
+    assert_eq!((timeline.branch, timeline.current), (forked, 40));
+    assert_eq!(sim.tick(), 40);
+}
+
+#[test]
+fn an_undo_whose_checkpoint_does_not_restore_changes_nothing() {
+    let (mut sim, mut session) = always_poisoned();
+    play(&mut session, &mut sim, 40);
+    let edit = stats_edit(&sim, 1_000);
+    session.edit(&mut sim, edit).unwrap();
+    let (before, edited) = (session.export().unwrap(), sim.hash());
+
+    let error = session.undo(&mut sim).unwrap_err();
+
+    assert!(
+        matches!(error, SessionError::Checkpoint { tick: 32, .. }),
+        "{error:?}"
+    );
+    assert_eq!(session.export().unwrap(), before);
+    assert!(session.timeline().can_undo);
+    assert_eq!(session.timeline().current, 40);
+    assert_eq!(sim.hash(), edited);
+}
+
+#[test]
+fn a_redo_whose_checkpoint_does_not_restore_changes_nothing() {
+    let (mut sim, mut session) = poisoned_from_10_to_20();
+    play(&mut session, &mut sim, 30);
+    session.seek(&mut sim, 8).unwrap();
+    play(&mut session, &mut sim, 12);
+    let edit = stats_edit(&sim, 1_000);
+    session.edit(&mut sim, edit).unwrap();
+    // The forked branch keeps a checkpoint of its own at tick 32.
+    play(&mut session, &mut sim, 20);
+    let edit = stats_edit(&sim, 2_000);
+    session.edit(&mut sim, edit).unwrap();
+    session.undo(&mut sim).unwrap();
+    let before = session.export().unwrap();
+
+    // The redone run keeps no checkpoint of its own: showing tick 40 starts from tick 16.
+    let error = session.redo(&mut sim).unwrap_err();
+
+    assert!(
+        matches!(error, SessionError::Checkpoint { tick: 16, .. }),
+        "{error:?}"
+    );
+    assert_eq!(session.export().unwrap(), before);
+    assert!(session.timeline().can_redo);
+    assert_at(&session, &sim, 40);
+}
+
+#[test]
+fn a_panic_whose_tick_cannot_come_back_moves_to_tick_0() {
+    let mut app = boxes::app();
+    app.system(Sim, zero_rotation);
+    app.system(Sim, panic_at_50);
+    let (mut sim, mut session) = marked(app);
+    play(&mut session, &mut sim, 50);
+
+    let result = quietly(|| session.step(&mut sim, None));
+
+    let Err(SessionError::Panicked { tick: 50, message }) = result else {
+        panic!("unexpected result {result:?}");
+    };
+    assert!(message.contains("boom at fifty"), "{message}");
+    assert_at(&session, &sim, 0);
+}
+
+#[test]
+fn a_return_after_resimulation_that_cannot_be_replayed_stays_at_the_last_resimulated_tick() {
+    let (mut sim, mut session) = always_poisoned();
+    session.load_inputs(&mut sim, recorded(100, None)).unwrap();
+    play(&mut session, &mut sim, 40);
+    session
+        .replace_scene(&mut sim, scene_with_markers(2), AssetTexts::new())
+        .unwrap();
+
+    let error = session.resimulate(&mut sim, 240).unwrap_err();
+
+    assert!(
+        matches!(error, SessionError::Checkpoint { tick: 32, .. }),
+        "{error:?}"
+    );
+    assert!(!session.timeline().resimulating);
+    assert_at(&session, &sim, 99);
+}
+
+#[test]
+fn a_restore_whose_way_does_not_restore_comes_back_to_the_current_tick() {
+    let (mut sim, mut session) = poisoned_from_10_to_20();
+    play(&mut session, &mut sim, 21);
+    let snapshot = sim.snapshot();
+    play(&mut session, &mut sim, 19);
+
+    let error = session.restore(&mut sim, &snapshot).unwrap_err();
+
+    assert!(
+        matches!(error, SessionError::Checkpoint { tick: 16, .. }),
+        "{error:?}"
+    );
+    assert_at(&session, &sim, 40);
+}
+
+#[test]
+fn coming_back_after_a_replay_export_goes_to_tick_0_when_the_current_tick_cannot_be_replayed() {
+    let (mut sim, mut session) = always_poisoned();
+    play(&mut session, &mut sim, 40);
+
+    let (replay, back) = session.export_replay(&mut sim, None);
+
+    replay.unwrap();
+    assert!(
+        matches!(back, Some(SessionError::Checkpoint { tick: 32, .. })),
+        "{back:?}"
+    );
+    assert_at(&session, &sim, 0);
 }

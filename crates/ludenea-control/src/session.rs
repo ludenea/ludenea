@@ -65,7 +65,10 @@ pub enum SessionError {
     #[error(transparent)]
     Snapshot(#[from] SnapshotError),
     /// A system left a value its own type refuses to load in the state recorded at `tick`,
-    /// so that state cannot come back; the simulation keeps its current state.
+    /// so that state cannot come back. A seek, undo, or redo changes nothing; a branch switch
+    /// stays on the current branch, or on the target at its first stale tick. Coming back
+    /// to the current tick after the world left it goes to a tick the session can show,
+    /// tick 0 at worst.
     #[error(
         "the checkpoint of tick {tick} cannot be restored: {source}; a system wrote that value, so fix the system and load the session again"
     )]
@@ -432,7 +435,7 @@ impl Session {
     /// `sim` loaded something else.
     pub fn reload(&mut self, sim: &mut Simulation) -> Result<(), SessionError> {
         self.load_into(sim)?;
-        self.replay_to(sim, self.current)
+        self.come_back(sim, self.current)
     }
 
     /// Loads the session's scene and assets into `sim`, as every scene load of the session
@@ -678,6 +681,9 @@ impl Session {
                 let index = self
                     .own_edit_index(edit)
                     .ok_or(SessionError::NotOnBranch { tick })?;
+                // Showing `tick` starts from this checkpoint, which the undo keeps: when it
+                // does not restore, the undo is refused before anything changes.
+                self.restore_checkpoint(sim, tick)?;
                 let segment = self.current_segment();
                 let mut stored = vec![self.tree.store_current(&segment, players)];
                 let dependents = self.tree.forked_at_or_after(*branch, tick);
@@ -736,11 +742,20 @@ impl Session {
                 match stored.next() {
                     Some(own) => {
                         let (segment, stale) = own.into_segment()?;
-                        self.tree.put_back(stored.collect())?;
+                        let descendants: Vec<StoredBranch> = stored.collect();
+                        let ids: Vec<BranchId> = descendants.iter().map(StoredBranch::id).collect();
+                        self.tree.put_back(descendants)?;
+                        let undone = self.current_segment();
                         let defaults = sim.encoded_default_inputs();
                         self.compose(&segment, defaults.as_deref());
                         if stale {
                             self.resimulate_from(sim, 0, self.current)?;
+                        } else if let Err(error) = self.restore_checkpoint(sim, tick) {
+                            // Showing `tick` would start from this checkpoint: the redo is
+                            // refused, and the branch is as the undo left it.
+                            self.compose(&undone, defaults.as_deref());
+                            self.tree.remove(&ids);
+                            return Err(error);
                         }
                     }
                     // An entry of a history written before branches: as in 2a, within
@@ -780,8 +795,8 @@ impl Session {
             return Ok(());
         }
         // The ticks up to `tick` ran before with these same inputs and edits.
-        self.current = tick;
         self.replay_to(sim, tick)?;
+        self.current = tick;
         if self.edits.at(tick).is_empty() {
             self.keep_checkpoint_if_sparse(sim);
         }
@@ -1169,11 +1184,14 @@ impl Session {
         sim.restore(snapshot)?;
         let (tick, restored) = (sim.tick(), sim.hash());
         if let Err(error) = self.replay_to(sim, tick) {
-            // The ticks up to the failing one were recorded on the way: stay there.
-            if let SessionError::Panicked { tick: failed, .. } = &error {
-                self.current = *failed;
-                self.replay_to(sim, *failed)?;
-            }
+            // The ticks up to a failing one were recorded on the way: the session goes
+            // there. Otherwise it leaves the restored state for the current tick.
+            let back = match &error {
+                SessionError::Panicked { tick: failed, .. } => *failed,
+                _ => self.current,
+            };
+            // The error to report is the one that stopped the restore.
+            let _ = self.come_back(sim, back);
             return Err(error);
         }
         let kept = usize::try_from(tick + 1).expect("tick fits in memory");
@@ -1223,10 +1241,12 @@ impl Session {
             let kept = usize::try_from(failed + 1).expect("tick fits in memory");
             self.hashes.truncate(kept);
             self.checkpoints.truncate_after(failed);
-            if let Some(tick) = self.return_to.take() {
-                self.current = tick.min(failed);
-            }
-            self.replay_to(sim, self.current)?;
+            let tick = self
+                .return_to
+                .take()
+                .map_or(self.current, |tick| tick.min(failed));
+            // The error to report is the one that ended resimulation.
+            let _ = self.come_back(sim, tick);
         }
         result
     }
@@ -1284,9 +1304,12 @@ impl Session {
             .return_to
             .filter(|&tick| tick <= up_to || self.resimulating.is_none());
         if let Some(tick) = returned {
-            self.current = tick.min(up_to);
+            // The world is at `up_to` until it gets to `tick`.
+            self.current = up_to;
             self.return_to = None;
-            self.replay_to(sim, self.current)?;
+            let tick = tick.min(up_to);
+            self.replay_to(sim, tick)?;
+            self.current = tick;
         } else {
             // The ticks resimulated here are all past the current one, whose state stays.
             sim.restore(&at_current)
@@ -1495,18 +1518,28 @@ impl Session {
     /// resimulates it from its first stale tick when it is stale.
     fn enter(&mut self, sim: &mut Simulation, id: BranchId, tick: u64) -> Result<(), SessionError> {
         let defaults = sim.encoded_default_inputs();
+        let previous = self.tree.current();
         let segment = self.current_segment();
         let (target, stale) = self.tree.make_current(segment, self.resimulating, id);
         self.compose(&target, defaults.as_deref());
         self.enforce_checkpoint_budget();
+        let at = if tick <= self.end() { tick } else { self.head };
+        // The way to `at` starts from this checkpoint: when it does not restore, the
+        // session switches back and stays where it was.
+        if let Err(error) = self.restore_checkpoint(sim, stale.unwrap_or(at)) {
+            let segment = self.current_segment();
+            let (back, _) = self.tree.make_current(segment, stale, previous);
+            self.compose(&back, defaults.as_deref());
+            return Err(error);
+        }
         self.resimulating = None;
         self.return_to = None;
-        let at = if tick <= self.end() { tick } else { self.head };
         match stale {
             Some(from) => self.resimulate_from(sim, from, at),
             None => {
+                self.replay_to(sim, at)?;
                 self.current = at;
-                self.replay_to(sim, at)
+                Ok(())
             }
         }
     }
@@ -1664,8 +1697,8 @@ impl Session {
     }
 
     /// Steps once, recorded while introspection is on, catching a panic before the session
-    /// touches its logs: on a panic the state of the current tick is restored and
-    /// `Panicked` names the tick that failed.
+    /// touches its logs: on a panic the session comes back to the current tick (see
+    /// `come_back`) and `Panicked` names the tick that failed.
     fn run_tick(&mut self, sim: &mut Simulation, input: Option<&[u8]>) -> Result<(), SessionError> {
         let tick = sim.tick();
         let introspection = &mut self.introspection;
@@ -1677,15 +1710,37 @@ impl Session {
             Ok(result) => Ok(result?),
             Err(payload) => {
                 let message = panic_message(&*payload);
-                self.replay_to(sim, self.current)?;
+                // The panic is the error to report, wherever coming back ends.
+                let _ = self.come_back(sim, self.current);
                 Err(SessionError::Panicked { tick, message })
             }
         }
     }
 
+    /// Brings the world back to `tick` after it left the run (a panic tore it, or another
+    /// state was loaded), and makes `tick` current. When a tick panics on the way, the
+    /// session stays at the current tick, where `run_tick` came back to. When the replay
+    /// fails otherwise, the session goes to tick 0, whose checkpoint is the state the scene
+    /// loaded, so the world and `current` agree again; the error says why.
+    // ponytail: tick 0 rather than the latest checkpoint that restores; search back through
+    // the checkpoints if landing far behind the failing one matters.
+    fn come_back(&mut self, sim: &mut Simulation, tick: u64) -> Result<(), SessionError> {
+        let error = match self.replay_to(sim, tick) {
+            Ok(()) => {
+                self.current = tick;
+                return Ok(());
+            }
+            Err(error @ SessionError::Panicked { .. }) => return Err(error),
+            Err(error) => error,
+        };
+        self.replay_to(sim, 0)?;
+        self.current = 0;
+        Err(error)
+    }
+
     /// Restores the nearest checkpoint at or before `tick` and replays up to `tick`,
     /// recording the hashes and checkpoints of ticks simulated for the first time. Leaves
-    /// `current` unchanged.
+    /// `current` unchanged. A checkpoint that does not restore leaves the world unchanged.
     fn replay_to(&mut self, sim: &mut Simulation, tick: u64) -> Result<(), SessionError> {
         self.replay_before_edits(sim, tick)?;
         self.apply_edits(sim, tick)
@@ -1693,8 +1748,7 @@ impl Session {
 
     /// `replay_to`, without applying the edits of `tick` itself.
     fn replay_before_edits(&mut self, sim: &mut Simulation, tick: u64) -> Result<(), SessionError> {
-        let (mut at, snapshot) = self.checkpoints.nearest_at_or_before(tick);
-        restore_checkpoint(sim, at, snapshot)?;
+        let mut at = self.restore_checkpoint(sim, tick)?;
         while at < tick {
             self.apply_edits(sim, at)?;
             self.run_tick(sim, self.inputs.tick(at).map(<[u8]>::to_vec).as_deref())?;
@@ -1923,8 +1977,7 @@ impl Session {
         self.hashes.truncate(1);
         self.update_head();
         self.current = 0;
-        let (at, scene_state) = self.checkpoints.nearest_at_or_before(0);
-        restore_checkpoint(sim, at, scene_state)?;
+        self.restore_checkpoint(sim, 0)?;
         self.start_resimulation(sim)
     }
 
@@ -1959,8 +2012,7 @@ impl Session {
         if self.document == Document::Prefab && matches!(edit, Edit::SetResource { .. }) {
             return Err(SessionError::PrefabHasNoResources);
         }
-        let (at, scene_state) = self.checkpoints.nearest_at_or_before(0);
-        restore_checkpoint(sim, at, scene_state)?;
+        self.restore_checkpoint(sim, 0)?;
         let loaded: BTreeSet<LoadAddress> = sim.load_addresses().values().cloned().collect();
         let scene = match self.scene_after(sim, edit) {
             Ok(scene) if scene != self.scene => scene,
@@ -2115,29 +2167,25 @@ impl Session {
             self.simulated() > from || self.edits.last_tick().is_some_and(|tick| tick > from);
         self.resimulating = stale.then_some(from);
         self.return_to = None;
+        // The world is at `from` until it gets to `at`.
+        self.current = from;
         if stale && at > from {
-            self.current = from;
             self.return_to = Some(at);
-            Ok(())
-        } else {
+        } else if at != from {
+            self.replay_to(sim, at)?;
             self.current = at;
-            if at == from {
-                Ok(())
-            } else {
-                self.replay_to(sim, at)
-            }
         }
+        Ok(())
     }
-}
 
-/// Restores the checkpoint taken at `tick`; on error `sim` is unchanged.
-fn restore_checkpoint(
-    sim: &mut Simulation,
-    tick: u64,
-    checkpoint: &Snapshot,
-) -> Result<(), SessionError> {
-    sim.restore(checkpoint)
-        .map_err(|source| SessionError::Checkpoint { tick, source })
+    /// Restores the nearest checkpoint at or before `tick` and returns its tick; on error
+    /// `sim` is unchanged.
+    fn restore_checkpoint(&self, sim: &mut Simulation, tick: u64) -> Result<u64, SessionError> {
+        let (at, checkpoint) = self.checkpoints.nearest_at_or_before(tick);
+        sim.restore(checkpoint)
+            .map_err(|source| SessionError::Checkpoint { tick: at, source })?;
+        Ok(at)
+    }
 }
 
 /// `load`, keeping every asset of `assets` when `keeps_assets`.
