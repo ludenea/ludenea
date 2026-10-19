@@ -29,7 +29,7 @@ pub trait Resource: Schema + Serialize + DeserializeOwned + Send + 'static {
 /// A decoded value boxed as `dyn Any`, or the reason decoding failed.
 pub type DecodeResult = Result<Box<dyn Any + Send>, String>;
 
-type RemapEntities = fn(&[u8], &dyn Fn(Entity) -> Entity) -> Vec<u8>;
+type RemapEntities = fn(&[u8], &dyn Fn(Entity) -> Entity) -> Result<Vec<u8>, String>;
 
 /// Type-erased serialization of one registered component or resource type. Every function
 /// taking `&dyn Any` expects a value of that type and panics on any other.
@@ -56,10 +56,8 @@ pub struct Codec {
     pub schema: fn() -> TypeSchema,
     /// Rewrites every `Entity` value inside postcard bytes through the map, decoding and
     /// re-encoding the concrete type so every other value (non-finite floats included)
-    /// survives exactly.
-    ///
-    /// # Panics
-    /// If the bytes do not decode.
+    /// survives exactly. Fails if the bytes do not decode, or if the type refuses a mapped
+    /// entity, as a `try_from` can.
     pub remap_entities: RemapEntities,
 }
 
@@ -98,14 +96,14 @@ impl Codec {
             schema: T::schema,
             remap_entities: |bytes, map| {
                 let Remap::Collect(seen) =
-                    decode_remapping::<T>(bytes, Remap::Collect(Vec::new())).1
+                    decode_remapping::<T>(bytes, Remap::Collect(Vec::new()))?.1
                 else {
                     unreachable!("collecting stays collecting")
                 };
                 let mapped = seen.into_iter().map(map).collect::<Vec<_>>();
-                let (value, _) = decode_remapping::<T>(bytes, Remap::Replace(mapped.into_iter()));
-                postcard::to_allocvec(&value)
-                    .unwrap_or_else(|error| panic!("cannot encode {}: {error}", type_name::<T>()))
+                let (value, _) = decode_remapping::<T>(bytes, Remap::Replace(mapped.into_iter()))?;
+                Ok(postcard::to_allocvec(&value)
+                    .unwrap_or_else(|error| panic!("cannot encode {}: {error}", type_name::<T>())))
             },
         }
     }
@@ -135,7 +133,7 @@ pub(crate) fn remap_decoded(entity: Entity) -> Entity {
 }
 
 /// Decodes `bytes` with `remap` active, returning the value and the remap state after.
-fn decode_remapping<T: DeserializeOwned>(bytes: &[u8], remap: Remap) -> (T, Remap) {
+fn decode_remapping<T: DeserializeOwned>(bytes: &[u8], remap: Remap) -> Result<(T, Remap), String> {
     struct Reset;
 
     impl Drop for Reset {
@@ -146,9 +144,8 @@ fn decode_remapping<T: DeserializeOwned>(bytes: &[u8], remap: Remap) -> (T, Rema
 
     let _reset = Reset;
     REMAP.set(Some(remap));
-    let value = decode_exact::<T>(bytes)
-        .unwrap_or_else(|error| panic!("cannot decode {}: {error}", type_name::<T>()));
-    (value, REMAP.take().expect("set above"))
+    let value = decode_exact::<T>(bytes)?;
+    Ok((value, REMAP.take().expect("set above")))
 }
 
 /// Decodes postcard bytes, rejecting any bytes left unread after the value. When the type
@@ -254,17 +251,19 @@ fn typed<T: 'static>(value: &dyn Any) -> &T {
 mod tests {
     use super::*;
 
-    /// A decode that panics while replacing entities leaves no remap behind: a later plain
+    /// A decode that fails while replacing entities leaves no remap behind: a later plain
     /// decode on this thread keeps its entity.
     #[test]
-    fn a_panic_while_replacing_clears_the_remap() {
+    fn a_failure_while_replacing_clears_the_remap() {
         let other: Entity = postcard::from_bytes(&[9, 0]).unwrap();
         // (Entity 1v0, 7), then a trailing byte that fails the exact decode.
         let bytes = [1, 0, 7, 0];
-        let panicked = std::panic::catch_unwind(|| {
-            decode_remapping::<(Entity, u8)>(&bytes, Remap::Replace(vec![other].into_iter()))
-        });
-        assert!(panicked.is_err());
+        let failed =
+            decode_remapping::<(Entity, u8)>(&bytes, Remap::Replace(vec![other].into_iter()));
+        assert_eq!(
+            failed.err(),
+            Some("1 unexpected trailing bytes".to_string())
+        );
         assert!(REMAP.with_borrow(Option::is_none));
         let plain: (Entity, u8) = postcard::from_bytes(&bytes[..3]).unwrap();
         assert_eq!((plain.0.index(), plain.1), (1, 7));

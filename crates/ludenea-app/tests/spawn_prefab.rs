@@ -28,6 +28,27 @@ struct Aim {
 #[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
 struct Pair(Entity, f32, Entity);
 
+/// Accepts only an entity in the first slot, which a prefab entity pointing at itself is
+/// (position 0) until it spawns into another slot.
+#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[serde(try_from = "FirstSlotData")]
+struct FirstSlot(Entity);
+
+#[derive(Deserialize)]
+struct FirstSlotData(Entity);
+
+impl TryFrom<FirstSlotData> for FirstSlot {
+    type Error = String;
+
+    fn try_from(FirstSlotData(entity): FirstSlotData) -> Result<Self, String> {
+        if entity.index() == 0 {
+            Ok(Self(entity))
+        } else {
+            Err(format!("{entity} is not in the first slot"))
+        }
+    }
+}
+
 #[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
 struct Spawner {
     bullet: Handle<Prefab>,
@@ -76,6 +97,7 @@ fn unloaded<M>(spawn: impl IntoSystemConfig<M>) -> Simulation {
         .component::<Pos>()
         .component::<Aim>()
         .component::<Pair>()
+        .component::<FirstSlot>()
         .component::<Spawner>()
         .system(Sim, spawn)
         .system(Sim, move_bullets);
@@ -252,6 +274,32 @@ fn unknown_local_identifier_panics() {
 }
 
 #[test]
+#[should_panic(
+    expected = "prefab 0000000000000000000000000000000c: `spawn_prefab::FirstSlot` refuses \
+                the entities spawned for it: 1v0 is not in the first slot; its type must \
+                accept every entity"
+)]
+fn a_component_refusing_its_spawned_entities_names_the_prefab_and_the_component() {
+    fn spawn(spawners: Query<&Spawner>, mut commands: Commands) {
+        for spawner in spawners.iter() {
+            commands.spawn_prefab(spawner.bullet, |_| {});
+        }
+    }
+    let picky = "Prefab(version: 1, next_id: 1, entities: [\
+        (id: 0, components: {\"spawn_prefab::FirstSlot\": ((index: 0, generation: 0))})\
+        ], instances: [])";
+    let assets: AssetTexts = [(AssetId(0xc), picky.to_string())].into_iter().collect();
+    let scene = format!(
+        "Scene(version: 2, next_id: 1, resources: {{}}, entities: [\
+         (id: 0, components: {{\"spawn_prefab::Spawner\": (bullet: \"{}\", every: 1)}})], instances: [])",
+        AssetId(0xc)
+    );
+    let mut simulation = unloaded(spawn);
+    simulation.load_scene_with(&scene, &assets).unwrap();
+    simulation.step();
+}
+
+#[test]
 fn remap_keeps_non_finite_floats() {
     let mut simulation = simulation(1000);
     simulation.step();
@@ -264,7 +312,7 @@ fn remap_keeps_non_finite_floats() {
     };
     let codec = world.component_codec("spawn_prefab::Aim").unwrap();
     let bytes = postcard::to_allocvec(&aim).unwrap();
-    let remapped = (codec.remap_entities)(&bytes, &|_| other);
+    let remapped = (codec.remap_entities)(&bytes, &|_| other).unwrap();
     let back: Aim = postcard::from_bytes(&remapped).unwrap();
     assert_eq!(back.target, other);
     assert_eq!(back.angle.to_bits(), f32::NAN.to_bits());
@@ -297,7 +345,7 @@ fn spawn_records_each_inserted_component() {
 }
 
 #[test]
-fn remap_maps_each_entity_on_its_own_and_survives_a_panic() {
+fn remap_maps_each_entity_on_its_own_and_survives_a_failure() {
     let mut simulation = simulation(1000);
     simulation.step();
     let world = simulation.world();
@@ -309,10 +357,13 @@ fn remap_maps_each_entity_on_its_own_and_survives_a_panic() {
 
     let mut trailing = bytes.clone();
     trailing.push(0);
-    let panicked = std::panic::catch_unwind(|| (codec.remap_entities)(&trailing, &swap));
-    assert!(panicked.is_err());
+    assert_eq!(
+        (codec.remap_entities)(&trailing, &swap),
+        Err("1 unexpected trailing bytes".to_string())
+    );
 
-    let remapped: Pair = postcard::from_bytes(&(codec.remap_entities)(&bytes, &swap)).unwrap();
+    let remapped: Pair =
+        postcard::from_bytes(&(codec.remap_entities)(&bytes, &swap).unwrap()).unwrap();
     assert_eq!((remapped.0, remapped.2), (second, first));
     assert_eq!(remapped.1.to_bits(), f32::NAN.to_bits());
     let plain: Pair = postcard::from_bytes(&bytes).unwrap();

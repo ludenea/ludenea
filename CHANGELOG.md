@@ -132,6 +132,10 @@ session (the editor's copy of each open document's session), and the plugin API.
   those types, so a prefab can no longer leave a reference unmapped by omitting its type.
 - `TypeSchema::mentions` tells whether a schema or any type inside it satisfies a
   predicate, such as holding an `Entity`.
+- `Codec::remap_entities` returns `Result`: bytes that do not decode, or a type that
+  refuses a mapped entity as a `try_from` can, give an error instead of a panic.
+  `spawn_prefab` still panics when a component's type refuses the entities spawned for
+  it, and now names the prefab and the component.
 
 ### Control protocol
 

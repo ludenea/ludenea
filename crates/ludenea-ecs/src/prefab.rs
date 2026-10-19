@@ -138,16 +138,20 @@ pub(crate) fn spawn(
                 .get_key_value(name.as_str())
                 .map(|(&component, entry)| (component, entry.codec, entry.mentions_entity))
                 .expect("`Prefab::validate` checked that every component is registered");
-            let remapped;
-            let bytes = if mentions_entity {
-                remapped = (codec.remap_entities)(bytes, &map);
-                &remapped
+            let value = if mentions_entity {
+                // `Prefab::validate` decoded these bytes with the prefab's positions in
+                // them; the type can still refuse the spawned entities, as a `try_from` can.
+                (codec.remap_entities)(bytes, &map)
+                    .and_then(|remapped| (codec.decode)(&remapped))
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "prefab {id}: `{name}` refuses the entities spawned for it: \
+                             {error}; its type must accept every entity"
+                        )
+                    })
             } else {
-                bytes
+                (codec.decode)(bytes).expect("`Prefab::validate` decoded these bytes")
             };
-            let value = (codec.decode)(bytes).unwrap_or_else(|error| {
-                panic!("prefab {id} holds a `{name}` that does not decode: {error}")
-            });
             world
                 .insert_boxed(target, name, value)
                 .expect("spawned this command");

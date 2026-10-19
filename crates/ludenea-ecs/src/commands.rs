@@ -104,8 +104,8 @@ impl<'w> Commands<'w> {
     /// values pointing to the new entities, then applies `overrides` to them.
     ///
     /// # Panics
-    /// When applied, if the prefab is not loaded or an override names a local identifier
-    /// it does not have.
+    /// When applied, if the prefab is not loaded, a component's type refuses the entities
+    /// spawned for it, or an override names a local identifier it does not have.
     pub fn spawn_prefab(
         &mut self,
         prefab: Handle<Prefab>,
