@@ -12,8 +12,9 @@ use ludenea_control::Bytes;
 use tokio::sync::broadcast;
 
 use crate::protocol::{
-    AssetTexts, FailureCode, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo,
-    ProjectReply, ProjectRequest, ProjectServerMessage, ServiceMode, handshake,
+    AssetTexts, FailureCode, PROJECT_PROTOCOL_VERSION, ProjectClientMessage, ProjectEvent,
+    ProjectFailure, ProjectInfo, ProjectReply, ProjectRequest, ProjectServerMessage, ServiceMode,
+    handshake, hello_version, version_mismatch,
 };
 use crate::{
     BuildArtifact, BuildError, BuildEvent, BuildTarget, GameProcess, PluginEvent, Project,
@@ -153,8 +154,11 @@ impl ProjectService {
     /// requests. A message that cannot be read gets a `Refused` or an error response.
     pub fn answer(&mut self, connected: &mut bool, text: &str) -> ProjectServerMessage {
         match serde_json::from_str::<ProjectClientMessage>(text) {
-            Ok(ProjectClientMessage::Hello { protocol_version }) => {
-                let reply = handshake(protocol_version);
+            Ok(ProjectClientMessage::Hello {
+                protocol_version,
+                protocol_fingerprint,
+            }) => {
+                let reply = handshake(protocol_version, protocol_fingerprint);
                 *connected = matches!(reply, ProjectServerMessage::Welcome { .. });
                 if *connected {
                     self.editor_connected.store(true, Ordering::SeqCst);
@@ -173,7 +177,14 @@ impl ProjectService {
                     .ok()
                     .and_then(|value| value.get("id")?.as_u64());
                 match (*connected, id) {
-                    (false, _) => not_connected(),
+                    (false, _) => match hello_version(text) {
+                        Some(version) if version != PROJECT_PROTOCOL_VERSION => {
+                            ProjectServerMessage::Refused {
+                                error: version_mismatch(version),
+                            }
+                        }
+                        _ => not_connected(),
+                    },
                     (true, Some(id)) => ProjectServerMessage::Response {
                         id,
                         result: Err(ProjectFailure::new(
@@ -622,6 +633,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::protocol::PROJECT_PROTOCOL_FINGERPRINT;
 
     /// A stand-in game binary answering each line with `{"type":"<name>"}`.
     fn fake_game(dir: &Path, name: &str) -> PathBuf {
@@ -810,7 +822,20 @@ mod tests {
     fn hello_makes_desktop_rebuilds_wait() {
         let mut service = ProjectService::new(ServiceMode::Desktop, None);
         assert!(!service.editor_connected.load(Ordering::SeqCst));
-        service.answer(&mut false, r#"{"type":"hello","protocol_version":2}"#);
+        let hello = serde_json::to_string(&ProjectClientMessage::Hello {
+            protocol_version: PROJECT_PROTOCOL_VERSION,
+            protocol_fingerprint: PROJECT_PROTOCOL_FINGERPRINT,
+        })
+        .unwrap();
+        let mut connected = false;
+        assert_eq!(
+            service.answer(&mut connected, &hello),
+            ProjectServerMessage::Welcome {
+                protocol_version: PROJECT_PROTOCOL_VERSION,
+                protocol_fingerprint: PROJECT_PROTOCOL_FINGERPRINT,
+            }
+        );
+        assert!(connected);
         assert!(service.editor_connected.load(Ordering::SeqCst));
     }
 

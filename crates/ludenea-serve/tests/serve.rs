@@ -8,8 +8,8 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 use ludenea_project::protocol::{
-    PROJECT_PROTOCOL_VERSION, ProjectClientMessage, ProjectEvent, ProjectReply, ProjectRequest,
-    ProjectServerMessage,
+    PROJECT_PROTOCOL_FINGERPRINT, PROJECT_PROTOCOL_VERSION, ProjectClientMessage, ProjectEvent,
+    ProjectReply, ProjectRequest, ProjectServerMessage,
 };
 use ludenea_project::{AssetKind, FileChange};
 use tempfile::TempDir;
@@ -125,12 +125,14 @@ fn handshake(socket: &mut Socket) {
         socket,
         &ProjectClientMessage::Hello {
             protocol_version: PROJECT_PROTOCOL_VERSION,
+            protocol_fingerprint: PROJECT_PROTOCOL_FINGERPRINT,
         },
     );
     assert_eq!(
         receive(socket),
         ProjectServerMessage::Welcome {
-            protocol_version: PROJECT_PROTOCOL_VERSION
+            protocol_version: PROJECT_PROTOCOL_VERSION,
+            protocol_fingerprint: PROJECT_PROTOCOL_FINGERPRINT,
         }
     );
 }

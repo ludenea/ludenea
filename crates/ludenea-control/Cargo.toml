@@ -27,3 +27,4 @@ boxes = { path = "../../examples/boxes" }
 ludenea.workspace = true
 ludenea-control = { path = ".", features = ["ts"] }
 ts-rs.workspace = true
+xxhash-rust.workspace = true

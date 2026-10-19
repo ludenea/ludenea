@@ -1,4 +1,15 @@
-import { ControlClient, ProjectClient, fakeTransport, type GameInfo, type WorkerCrash, type WorkerGame } from "@ludenea/control-client";
+import {
+  ControlClient,
+  PROJECT_PROTOCOL_FINGERPRINT,
+  PROJECT_PROTOCOL_VERSION,
+  PROTOCOL_FINGERPRINT,
+  PROTOCOL_VERSION,
+  ProjectClient,
+  fakeTransport,
+  type GameInfo,
+  type WorkerCrash,
+  type WorkerGame,
+} from "@ludenea/control-client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { followNativeGames, followWasmGames } from "../src/games";
 import { exportSession, restoreSession, type SavedSession } from "../src/session-guard";
@@ -18,7 +29,7 @@ let loads: Message[] = [];
 function fakeHost(name: string, options: { resimulating?: boolean } = {}) {
   const transport = fakeTransport((raw) => {
     const message = JSON.parse(raw);
-    if (message.type === "hello") return [JSON.stringify({ type: "welcome", protocol_version: 3, engine_version: "0", game: info })];
+    if (message.type === "hello") return [JSON.stringify({ type: "welcome", protocol_version: PROTOCOL_VERSION, protocol_fingerprint: PROTOCOL_FINGERPRINT, engine_version: "0", game: info })];
     log.push(`${name}:${message.command.type}`);
     if (message.command.type === "load_session") loads.push(message.command);
     const answers: Record<string, object> = {
@@ -34,7 +45,7 @@ function fakeHost(name: string, options: { resimulating?: boolean } = {}) {
 async function fakeProject(answer: (request: Message) => object) {
   const transport = fakeTransport((raw) => {
     const message = JSON.parse(raw);
-    if (message.type === "hello") return [JSON.stringify({ type: "welcome", protocol_version: 2 })];
+    if (message.type === "hello") return [JSON.stringify({ type: "welcome", protocol_version: PROJECT_PROTOCOL_VERSION, protocol_fingerprint: PROJECT_PROTOCOL_FINGERPRINT })];
     log.push(`project:${message.request.type}`);
     return [JSON.stringify({ type: "response", id: message.id, result: answer(message.request) })];
   });

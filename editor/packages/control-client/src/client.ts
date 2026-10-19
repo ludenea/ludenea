@@ -1,25 +1,18 @@
-import type {
-  ClientMessage,
-  Command,
-  ErrorCode,
-  Event,
-  GameInfo,
-  Outcome,
-  Reply,
-  ServerMessage,
-  Topic,
+import {
+  PROTOCOL_FINGERPRINT,
+  PROTOCOL_VERSION,
+  type ClientMessage,
+  type Command,
+  type ErrorCode,
+  type Event,
+  type GameInfo,
+  type Outcome,
+  type Reply,
+  type ReplyTypes,
+  type ServerMessage,
+  type Topic,
 } from "./generated";
 import type { MessageTransport } from "./transports/transport";
-
-/**
- * The control protocol version this client speaks.
- *
- * Component and resource values travel as JSON in serde's externally tagged form. An
- * integer whose magnitude exceeds `Number.MAX_SAFE_INTEGER` (2^53 - 1) travels as a string
- * of decimal digits, in both directions: send such an integer as a string, and read
- * `u64`/`i64` fields as `number | string`. Hashes are 16-digit hex strings.
- */
-export const PROTOCOL_VERSION = 3;
 
 export class ProtocolFailure<C extends string = ErrorCode> extends Error {
   constructor(
@@ -32,63 +25,7 @@ export class ProtocolFailure<C extends string = ErrorCode> extends Error {
 }
 
 /** The reply variant answering a command of type `C`. */
-export type ReplyFor<C extends Command> = C extends { type: "get_hash" }
-  ? Extract<Reply, { type: "hash" }>
-  : C extends { type: "get_hash_tree" }
-    ? Extract<Reply, { type: "hash_tree" }>
-    : C extends { type: "step" }
-      ? Extract<Reply, { type: "stepped" }>
-      : C extends { type: "take_snapshot" }
-        ? Extract<Reply, { type: "snapshot" }>
-        : C extends { type: "diff_snapshots" }
-          ? Extract<Reply, { type: "differences" }>
-          : C extends { type: "query_entities" }
-            ? Extract<Reply, { type: "entities" }>
-            : C extends { type: "get_entity" }
-              ? Extract<Reply, { type: "entity" }>
-              : C extends { type: "get_resources" }
-                ? Extract<Reply, { type: "resources" }>
-                : C extends { type: "spawn" }
-                  ? Extract<Reply, { type: "spawned" }>
-                  : C extends { type: "save_scene" }
-                    ? Extract<Reply, { type: "scene" }>
-                    : C extends { type: "get_timeline" }
-                      ? Extract<Reply, { type: "timeline" }>
-                      : C extends { type: "export_session" }
-                        ? Extract<Reply, { type: "session" }>
-                        : C extends { type: "get_schedule" }
-                          ? Extract<Reply, { type: "schedule" }>
-                          : C extends { type: "get_tick_events" }
-                            ? Extract<Reply, { type: "tick_events" }>
-                            : C extends { type: "get_tick_commands" }
-                              ? Extract<Reply, { type: "tick_commands" }>
-                              : C extends { type: "get_debug_draw" }
-                                ? Extract<Reply, { type: "debug_draw" }>
-                                : C extends { type: "get_ghost_draw" }
-                                  ? Extract<Reply, { type: "ghost_draw" }>
-                                : C extends { type: "pick" }
-                                  ? Extract<Reply, { type: "picked" }>
-                                  : C extends { type: "load_scene" | "replace_scene" | "load_session" }
-                                    ? Extract<Reply, { type: "loaded" }>
-                                    : C extends { type: "get_asset" }
-                                      ? Extract<Reply, { type: "asset" }>
-                                      : C extends { type: "save_asset" | "new_asset_value" | "create_prefab" | "apply_to_prefab" }
-                                        ? Extract<Reply, { type: "text" }>
-                                        : C extends { type: "delete_branch" }
-                                          ? Extract<Reply, { type: "deleted" }>
-                                          : C extends { type: "load_replay" }
-                                            ? Extract<Reply, { type: "replay_loaded" }>
-                                            : C extends { type: "export_replay" }
-                                              ? Extract<Reply, { type: "replay" }>
-                                              : C extends { type: "get_instances" }
-                                                ? Extract<Reply, { type: "instances" }>
-                                                : C extends { type: "place_instance" | "replace_with_instance" }
-                                                  ? Extract<Reply, { type: "placed" }>
-                                                  : C extends { type: "get_divergence" }
-                                                    ? Extract<Reply, { type: "divergence" }>
-                                                    : C extends { type: "compare_traces" }
-                                                      ? Extract<Reply, { type: "trace_comparison" }>
-                                                      : Extract<Reply, { type: "done" }>;
+export type ReplyFor<C extends Command> = Extract<Reply, { type: ReplyTypes[C["type"]] }>;
 
 type Pending<O> = { resolve: (result: O) => void; reject: (error: Error) => void };
 
@@ -153,15 +90,37 @@ export function parseFrame<T>(raw: string): T | undefined {
   return undefined;
 }
 
+/** What a hello and a welcome both carry: the two must be equal. */
+type ProtocolIdentity = { protocol_version: number; protocol_fingerprint: string };
+
+const REBUILD = "rebuild the editor (pnpm -C editor build) and the engine from the same checkout";
+
+/** Why a welcome from a peer built from another revision of the protocol is refused, if it is. */
+function mismatch(hello: ProtocolIdentity, welcome: Partial<ProtocolIdentity>): ProtocolFailure<"version_mismatch"> | undefined {
+  if (welcome.protocol_version !== hello.protocol_version) {
+    return new ProtocolFailure(
+      "version_mismatch",
+      `the engine speaks protocol ${String(welcome.protocol_version)}, this client speaks ${hello.protocol_version}; ${REBUILD}`,
+    );
+  }
+  if (welcome.protocol_fingerprint !== hello.protocol_fingerprint) {
+    return new ProtocolFailure(
+      "version_mismatch",
+      `the engine speaks another revision of protocol ${hello.protocol_version} (fingerprint ${String(welcome.protocol_fingerprint)}, this client ${hello.protocol_fingerprint}); ${REBUILD}`,
+    );
+  }
+  return undefined;
+}
+
 /**
  * Sends `hello` and resolves with what `accept` makes of the peer's welcome, called as the
- * welcome arrives so the client it builds misses nothing right behind it (a close). A refusal closes
- * the transport and rejects with a `ProtocolFailure` carrying its code; a closed transport
- * rejects too.
+ * welcome arrives so the client it builds misses nothing right behind it (a close). A refusal, or
+ * a welcome of another protocol version or fingerprint than `hello`'s, closes the transport and
+ * rejects with a `ProtocolFailure` carrying its code; a closed transport rejects too.
  */
 export function handshake<M extends { type: string }, T>(
   transport: MessageTransport,
-  hello: unknown,
+  hello: ProtocolIdentity & { type: "hello" },
   accept: (welcome: Extract<M, { type: "welcome" }>) => T,
 ): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -169,16 +128,21 @@ export function handshake<M extends { type: string }, T>(
       stopMessages();
       stopClose();
     };
+    const fail = (failure: ProtocolFailure<string>) => {
+      transport.close();
+      reject(failure);
+    };
     const stopMessages = transport.onMessage((raw) => {
       const message = parseFrame<M>(raw);
       if (message?.type === "welcome") {
         stop();
-        resolve(accept(message as Extract<M, { type: "welcome" }>));
+        const failure = mismatch(hello, message as Partial<ProtocolIdentity>);
+        if (failure) fail(failure);
+        else resolve(accept(message as Extract<M, { type: "welcome" }>));
       } else if (message?.type === "refused") {
         stop();
         const { code, message: text } = (message as unknown as { error: { code: string; message: string } }).error;
-        transport.close();
-        reject(new ProtocolFailure(code, text));
+        fail(new ProtocolFailure(code, text));
       }
     });
     const stopClose = transport.onClose((reason) => reject(new Error(`connection closed: ${reason}`)));
@@ -194,6 +158,14 @@ const topicKey = (topic: Topic): string =>
     value && typeof value === "object" && !Array.isArray(value) ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))) : value,
   );
 
+/**
+ * A client of the control protocol.
+ *
+ * Component and resource values travel as JSON in serde's externally tagged form. An
+ * integer whose magnitude exceeds `Number.MAX_SAFE_INTEGER` (2^53 - 1) travels as a string
+ * of decimal digits, in both directions: send such an integer as a string, and read
+ * `u64`/`i64` fields as `number | string`. Hashes are 16-digit hex strings.
+ */
 export class ControlClient {
   private readonly listeners = new Map<string, Set<Listener>>();
   /** Subscribers per topic: the host keeps one flag per client, so only the first and last reach it. */
@@ -217,7 +189,7 @@ export class ControlClient {
   }
 
   static connect(transport: MessageTransport): Promise<ControlClient> {
-    const hello: ClientMessage = { type: "hello", protocol_version: PROTOCOL_VERSION };
+    const hello = { type: "hello", protocol_version: PROTOCOL_VERSION, protocol_fingerprint: PROTOCOL_FINGERPRINT } satisfies ClientMessage;
     return handshake<ServerMessage, ControlClient>(transport, hello, (welcome) => new ControlClient(transport, new RequestTracker(transport), welcome.game));
   }
 

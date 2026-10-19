@@ -1,7 +1,7 @@
 //! The project protocol: what the editor asks of the project service, one JSON message per
 //! frame, in the envelope of the control protocol.
 
-use ludenea_control::{Bytes, GameInfo};
+use ludenea_control::{Bytes, GameInfo, Hash64};
 use ludenea_ecs::AssetId;
 use serde::{Deserialize, Serialize};
 
@@ -10,7 +10,18 @@ use crate::{
     ProjectError,
 };
 
-pub const PROJECT_PROTOCOL_VERSION: u32 = 2;
+/// The project protocol version this build speaks: the editor and the service connect only
+/// when theirs are equal.
+pub const PROJECT_PROTOCOL_VERSION: u32 = 3;
+
+/// The wire shape of `PROJECT_PROTOCOL_VERSION`: a hash of the TypeScript declarations of
+/// every type the messages reach, without their documentation. The editor and the service
+/// connect only when theirs are equal too. `tests/typescript.rs` pins it.
+pub const PROJECT_PROTOCOL_FINGERPRINT: Hash64 = Hash64(0x227a_1de4_ad22_d2f3);
+
+/// What to do about a refused handshake: editor and service come from different checkouts.
+const REBUILD: &str =
+    "rebuild the editor (pnpm -C editor build) and the service from the same checkout";
 
 /// Serde helper: `Result<ProjectReply, ProjectFailure>` as `{"ok": reply}` or `{"error": error}`.
 pub mod outcome {
@@ -54,8 +65,16 @@ pub mod outcome {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export_to = "project/"))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProjectClientMessage {
-    Hello { protocol_version: u32 },
-    Request { id: u64, request: ProjectRequest },
+    /// Opens the connection; refused unless both are this build's
+    /// (`PROJECT_PROTOCOL_VERSION`, `PROJECT_PROTOCOL_FINGERPRINT`).
+    Hello {
+        protocol_version: u32,
+        protocol_fingerprint: Hash64,
+    },
+    Request {
+        id: u64,
+        request: ProjectRequest,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -64,6 +83,7 @@ pub enum ProjectClientMessage {
 pub enum ProjectServerMessage {
     Welcome {
         protocol_version: u32,
+        protocol_fingerprint: Hash64,
     },
     Refused {
         error: ProjectFailure,
@@ -147,6 +167,35 @@ pub enum ProjectRequest {
     /// Desktop: replaces the running game with the one `GameRebuilt` announced, once the
     /// editor has exported its session. `GameReady` follows.
     RestartGame,
+}
+
+impl ProjectRequest {
+    /// The `type` of each reply this request may get when it succeeds: one, except where the
+    /// service mode decides. The generated TypeScript bindings type each request's reply with
+    /// them (`ProjectReplyTypes`).
+    pub fn reply_types(&self) -> &'static [&'static str] {
+        match self {
+            ProjectRequest::Create { .. } | ProjectRequest::Open { .. } | ProjectRequest::Info => {
+                &["info"]
+            }
+            ProjectRequest::ListFiles => &["files"],
+            ProjectRequest::ReadText { .. } => &["text"],
+            ProjectRequest::ReadBinary { .. } => &["bytes"],
+            ProjectRequest::CreateAsset { .. } => &["file"],
+            ProjectRequest::ReadAssetTexts => &["asset_texts"],
+            ProjectRequest::LoadStoredSession { .. } => &["stored_session"],
+            ProjectRequest::ListPlugins => &["plugins"],
+            ProjectRequest::GameEndpoint => &["native", "wasm"],
+            ProjectRequest::WriteText { .. }
+            | ProjectRequest::WriteBinary { .. }
+            | ProjectRequest::StoreSession { .. }
+            | ProjectRequest::Rename { .. }
+            | ProjectRequest::Delete { .. }
+            | ProjectRequest::Build
+            | ProjectRequest::WriteGameTypes { .. }
+            | ProjectRequest::RestartGame => &["done"],
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -301,21 +350,52 @@ impl From<ProjectError> for ProjectFailure {
     }
 }
 
-/// Answers a `Hello`: welcome for this protocol version, refusal for any other.
-pub fn handshake(protocol_version: u32) -> ProjectServerMessage {
-    if protocol_version == PROJECT_PROTOCOL_VERSION {
-        ProjectServerMessage::Welcome {
-            protocol_version: PROJECT_PROTOCOL_VERSION,
+/// Answers a `Hello`: welcome for this protocol version and fingerprint, refusal for any
+/// other.
+pub fn handshake(protocol_version: u32, protocol_fingerprint: Hash64) -> ProjectServerMessage {
+    if protocol_version != PROJECT_PROTOCOL_VERSION {
+        ProjectServerMessage::Refused {
+            error: version_mismatch(protocol_version),
         }
-    } else {
+    } else if protocol_fingerprint != PROJECT_PROTOCOL_FINGERPRINT {
         ProjectServerMessage::Refused {
             error: ProjectFailure::new(
                 FailureCode::VersionMismatch,
                 format!(
-                    "client speaks project protocol {protocol_version}, service speaks \
-                     {PROJECT_PROTOCOL_VERSION}"
+                    "client speaks another revision of project protocol \
+                     {PROJECT_PROTOCOL_VERSION} (fingerprint {:016x}, service {:016x}); \
+                     {REBUILD}",
+                    protocol_fingerprint.0, PROJECT_PROTOCOL_FINGERPRINT.0
                 ),
             ),
         }
+    } else {
+        ProjectServerMessage::Welcome {
+            protocol_version: PROJECT_PROTOCOL_VERSION,
+            protocol_fingerprint: PROJECT_PROTOCOL_FINGERPRINT,
+        }
     }
+}
+
+/// The version of a hello of another shape, such as one from a protocol version before
+/// `protocol_fingerprint`, so it is refused as such.
+pub(crate) fn hello_version(text: &str) -> Option<u32> {
+    #[derive(Deserialize)]
+    #[serde(tag = "type", rename_all = "snake_case")]
+    enum AnyHello {
+        Hello { protocol_version: u32 },
+    }
+    let AnyHello::Hello { protocol_version } = serde_json::from_str(text).ok()?;
+    Some(protocol_version)
+}
+
+/// The refusal of a client of another project protocol version.
+pub(crate) fn version_mismatch(protocol_version: u32) -> ProjectFailure {
+    ProjectFailure::new(
+        FailureCode::VersionMismatch,
+        format!(
+            "client speaks project protocol {protocol_version}, service speaks \
+             {PROJECT_PROTOCOL_VERSION}; {REBUILD}"
+        ),
+    )
 }

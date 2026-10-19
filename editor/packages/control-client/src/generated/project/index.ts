@@ -18,3 +18,4 @@ export * from "./ProjectReply";
 export * from "./ProjectRequest";
 export * from "./ProjectServerMessage";
 export * from "./ServiceMode";
+export * from "./version";

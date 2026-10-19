@@ -29,8 +29,8 @@ pub use json::{from_wire, to_wire, untyped_to_wire};
 pub use path::{PathSegment, set_at_path};
 pub use protocol::{
     Bytes, ClientMessage, Command, ComponentValue, ConsoleLevel, EntityRow, ErrorCode, Event,
-    FieldTarget, GameInfo, Hash64, NamedSchema, PROTOCOL_VERSION, PauseReason, ProtocolError,
-    RecordedEvent, Reply, ServerMessage, SyncPoint, SystemRow, Topic,
+    FieldTarget, GameInfo, Hash64, NamedSchema, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION,
+    PauseReason, ProtocolError, RecordedEvent, Reply, ServerMessage, SyncPoint, SystemRow, Topic,
 };
 pub use session::{Document, Resimulation, Session, SessionError, SessionExport, Timeline};
 pub use subscriptions::{INTROSPECTION_TICKS, RESOURCE_PUSHES_PER_SECOND};

@@ -1,4 +1,14 @@
-import { ControlClient, ProjectClient, fakeTransport, type GameInfo, type Reply } from "@ludenea/control-client";
+import {
+  ControlClient,
+  PROJECT_PROTOCOL_FINGERPRINT,
+  PROJECT_PROTOCOL_VERSION,
+  PROTOCOL_FINGERPRINT,
+  PROTOCOL_VERSION,
+  ProjectClient,
+  fakeTransport,
+  type GameInfo,
+  type Reply,
+} from "@ludenea/control-client";
 import { createEditor, type DocumentLog } from "../src/app";
 
 const game: GameInfo = { components: [], resources: [], assets: [], events: [], fingerprint: "0000000000000000", input: null, tick_rate: 60, debug_layers: [] };
@@ -15,7 +25,9 @@ export async function testHost(importModule?: (url: string) => Promise<unknown>,
   const project = await ProjectClient.connect(
     fakeTransport((raw) => {
       const message = JSON.parse(raw);
-      if (message.type === "hello") return [JSON.stringify({ type: "welcome", protocol_version: 2 })];
+      if (message.type === "hello") {
+        return [JSON.stringify({ type: "welcome", protocol_version: PROJECT_PROTOCOL_VERSION, protocol_fingerprint: PROJECT_PROTOCOL_FINGERPRINT })];
+      }
       return respond(message.id, answer(message.request));
     }),
   );
@@ -28,7 +40,8 @@ export async function testGame(answer: Answer = () => undefined, info: Partial<G
   const transport = fakeTransport((raw) => {
     const message = JSON.parse(raw);
     if (message.type === "hello") {
-      return [JSON.stringify({ type: "welcome", protocol_version: 3, engine_version: "0", game: { ...game, ...info } })];
+      const welcome = { type: "welcome", protocol_version: PROTOCOL_VERSION, protocol_fingerprint: PROTOCOL_FINGERPRINT, engine_version: "0" };
+      return [JSON.stringify({ ...welcome, game: { ...game, ...info } })];
     }
     sent.push(message.command);
     return respond(message.id, answer(message.command));

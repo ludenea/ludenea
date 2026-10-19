@@ -1,36 +1,19 @@
 import { RequestTracker, handshake, parseFrame, unwrap } from "./client";
-import type {
-  ProjectClientMessage,
-  ProjectEvent,
-  ProjectOutcome,
-  ProjectReply,
-  ProjectRequest,
-  ProjectServerMessage,
+import {
+  PROJECT_PROTOCOL_FINGERPRINT,
+  PROJECT_PROTOCOL_VERSION,
+  type ProjectClientMessage,
+  type ProjectEvent,
+  type ProjectOutcome,
+  type ProjectReply,
+  type ProjectReplyTypes,
+  type ProjectRequest,
+  type ProjectServerMessage,
 } from "./generated/project";
 import type { MessageTransport } from "./transports/transport";
 
-export const PROJECT_PROTOCOL_VERSION = 2;
-
 /** The reply variant answering a project request of type `R`. */
-export type ProjectReplyFor<R extends ProjectRequest> = R extends { type: "info" | "open" | "create" }
-  ? Extract<ProjectReply, { type: "info" }>
-  : R extends { type: "list_files" }
-    ? Extract<ProjectReply, { type: "files" }>
-    : R extends { type: "read_text" }
-      ? Extract<ProjectReply, { type: "text" }>
-      : R extends { type: "list_plugins" }
-        ? Extract<ProjectReply, { type: "plugins" }>
-        : R extends { type: "game_endpoint" }
-          ? Extract<ProjectReply, { type: "native" | "wasm" }>
-          : R extends { type: "read_binary" }
-            ? Extract<ProjectReply, { type: "bytes" }>
-            : R extends { type: "create_asset" }
-              ? Extract<ProjectReply, { type: "file" }>
-              : R extends { type: "read_asset_texts" }
-                ? Extract<ProjectReply, { type: "asset_texts" }>
-                : R extends { type: "load_stored_session" }
-                  ? Extract<ProjectReply, { type: "stored_session" }>
-                  : Extract<ProjectReply, { type: "done" }>;
+export type ProjectReplyFor<R extends ProjectRequest> = Extract<ProjectReply, { type: ProjectReplyTypes[R["type"]] }>;
 
 type Listener = (event: never) => void;
 
@@ -55,7 +38,11 @@ export class ProjectClient {
   }
 
   static connect(transport: MessageTransport): Promise<ProjectClient> {
-    const hello: ProjectClientMessage = { type: "hello", protocol_version: PROJECT_PROTOCOL_VERSION };
+    const hello = {
+      type: "hello",
+      protocol_version: PROJECT_PROTOCOL_VERSION,
+      protocol_fingerprint: PROJECT_PROTOCOL_FINGERPRINT,
+    } satisfies ProjectClientMessage;
     return handshake<ProjectServerMessage, ProjectClient>(transport, hello, () => new ProjectClient(transport, new RequestTracker<ProjectOutcome>(transport)));
   }
 

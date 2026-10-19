@@ -11,7 +11,7 @@ const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
 /// Turns the 64-bit integers of `value` that JavaScript cannot hold exactly into decimal
 /// strings: those whose magnitude exceeds `2^53 - 1` (`Number.MAX_SAFE_INTEGER`), so
 /// `2^53 - 1` itself stays a number. Clients follow the same rule when they send values
-/// (see `PROTOCOL_VERSION` in the TypeScript control client).
+/// (see `ControlClient` in the TypeScript control client).
 pub fn to_wire(mut value: JsonValue, schema: &TypeSchema) -> JsonValue {
     convert(&mut value, schema, &mut |integer, _| {
         if let JsonValue::Number(number) = integer

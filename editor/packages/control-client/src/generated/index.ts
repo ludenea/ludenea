@@ -50,4 +50,5 @@ export * from "./TypeSchema";
 export * from "./VariantFields";
 export * from "./VariantSchema";
 export * from "./Vec2";
+export * from "./version";
 export * from "./serde_json/JsonValue";

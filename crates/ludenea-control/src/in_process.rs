@@ -1,8 +1,12 @@
 use crate::host::Host;
 use crate::protocol::{
-    ClientMessage, Command, ErrorCode, Event, GameInfo, PROTOCOL_VERSION, ProtocolError, Reply,
-    ServerMessage,
+    ClientMessage, Command, ErrorCode, Event, GameInfo, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION,
+    ProtocolError, Reply, ServerMessage,
 };
+
+/// What to do about a refused handshake: client and engine come from different checkouts.
+const REBUILD: &str =
+    "rebuild the editor (pnpm -C editor build) and the game from the same checkout";
 
 /// How a client sends commands to an engine host.
 pub trait Transport {
@@ -17,9 +21,14 @@ pub struct InProcess {
 }
 
 impl InProcess {
-    /// Performs the handshake; a client speaking another protocol version is refused.
+    /// Performs the handshake with this build's fingerprint; a client speaking another
+    /// protocol version is refused.
     pub fn connect(host: Host, protocol_version: u32) -> Result<InProcess, ProtocolError> {
-        match handshake(&host, ClientMessage::Hello { protocol_version }) {
+        let hello = ClientMessage::Hello {
+            protocol_version,
+            protocol_fingerprint: PROTOCOL_FINGERPRINT,
+        };
+        match handshake(&host, hello) {
             ServerMessage::Welcome { game, .. } => Ok(InProcess {
                 host,
                 game,
@@ -50,25 +59,43 @@ impl InProcess {
 /// Answers a message that arrives before the connection is established.
 pub(crate) fn handshake(host: &Host, hello: ClientMessage) -> ServerMessage {
     match hello {
-        ClientMessage::Hello { protocol_version } if protocol_version == PROTOCOL_VERSION => {
-            ServerMessage::Welcome {
-                protocol_version: PROTOCOL_VERSION,
-                engine_version: env!("CARGO_PKG_VERSION").to_string(),
-                game: host.game_info(),
-            }
-        }
-        ClientMessage::Hello { protocol_version } => ServerMessage::Refused {
+        ClientMessage::Hello {
+            protocol_version, ..
+        } if protocol_version != PROTOCOL_VERSION => ServerMessage::Refused {
+            error: version_mismatch(protocol_version),
+        },
+        ClientMessage::Hello {
+            protocol_fingerprint,
+            ..
+        } if protocol_fingerprint != PROTOCOL_FINGERPRINT => ServerMessage::Refused {
             error: ProtocolError::new(
                 ErrorCode::VersionMismatch,
                 format!(
-                    "client speaks protocol {protocol_version}, engine speaks {PROTOCOL_VERSION}"
+                    "client speaks another revision of protocol {PROTOCOL_VERSION} (fingerprint \
+                     {:016x}, engine {:016x}); {REBUILD}",
+                    protocol_fingerprint.0, PROTOCOL_FINGERPRINT.0
                 ),
             ),
+        },
+        ClientMessage::Hello { .. } => ServerMessage::Welcome {
+            protocol_version: PROTOCOL_VERSION,
+            protocol_fingerprint: PROTOCOL_FINGERPRINT,
+            engine_version: env!("CARGO_PKG_VERSION").to_string(),
+            game: host.game_info(),
         },
         ClientMessage::Request { .. } => ServerMessage::Refused {
             error: ProtocolError::new(ErrorCode::NotConnected, "send Hello before any request"),
         },
     }
+}
+
+fn version_mismatch(protocol_version: u32) -> ProtocolError {
+    ProtocolError::new(
+        ErrorCode::VersionMismatch,
+        format!(
+            "client speaks protocol {protocol_version}, engine speaks {PROTOCOL_VERSION}; {REBUILD}"
+        ),
+    )
 }
 
 /// Answers one protocol line of a text transport: the handshake until `connected`, then
@@ -98,12 +125,27 @@ pub(crate) fn answer(host: &mut Host, connected: &mut bool, line: &str) -> Serve
     all(target_arch = "wasm32", target_os = "unknown")
 ))]
 fn malformed(connected: bool, line: &str, error: &serde_json::Error) -> ServerMessage {
+    /// The version of a hello of another shape, such as one from a protocol version before
+    /// `protocol_fingerprint`, so it is refused as such.
+    fn hello_version(line: &str) -> Option<u32> {
+        #[derive(serde::Deserialize)]
+        #[serde(tag = "type", rename_all = "snake_case")]
+        enum AnyHello {
+            Hello { protocol_version: u32 },
+        }
+        let AnyHello::Hello { protocol_version } = serde_json::from_str(line).ok()?;
+        Some(protocol_version)
+    }
+
     let id = serde_json::from_str::<serde_json::Value>(line)
         .ok()
         .and_then(|value| value.get("id")?.as_u64());
     match (connected, id) {
         (false, _) => ServerMessage::Refused {
-            error: ProtocolError::new(ErrorCode::NotConnected, "send Hello before any request"),
+            error: match hello_version(line) {
+                Some(version) if version != PROTOCOL_VERSION => version_mismatch(version),
+                _ => ProtocolError::new(ErrorCode::NotConnected, "send Hello before any request"),
+            },
         },
         (true, Some(id)) => ServerMessage::Response {
             id,

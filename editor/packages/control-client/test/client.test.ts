@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { ControlClient, ProtocolFailure, fakeTransport, type GameInfo } from "../src";
+import { ControlClient, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION, ProtocolFailure, fakeTransport, type GameInfo } from "../src";
 
 const game: GameInfo = { components: [], resources: [], assets: [], events: [], fingerprint: "0000000000000000", input: null, tick_rate: 60, debug_layers: [] };
-const welcome = JSON.stringify({ type: "welcome", protocol_version: 3, engine_version: "0", game });
+const identity = { protocol_version: PROTOCOL_VERSION, protocol_fingerprint: PROTOCOL_FINGERPRINT };
+const welcome = JSON.stringify({ type: "welcome", ...identity, engine_version: "0", game });
 
 /** A transport whose peer welcomes the client and records every request it receives. */
 function connected() {
@@ -21,20 +22,45 @@ const ok = (id: number, reply: object) => JSON.stringify({ type: "response", id,
 describe("ControlClient", () => {
   it("connect_rejects_version_mismatch_with_message", async () => {
     const transport = fakeTransport(() => [
-      JSON.stringify({ type: "refused", error: { code: "unsupported_version", message: "need protocol 2" } }),
+      JSON.stringify({ type: "refused", error: { code: "version_mismatch", message: "need protocol 2" } }),
     ]);
     await expect(ControlClient.connect(transport)).rejects.toThrow("need protocol 2");
   });
 
   it("refused_handshake_closes_the_transport_and_rejects_with_the_code", async () => {
     const transport = fakeTransport(() => [
-      JSON.stringify({ type: "refused", error: { code: "unsupported_version", message: "need protocol 2" } }),
+      JSON.stringify({ type: "refused", error: { code: "version_mismatch", message: "need protocol 2" } }),
     ]);
     const closes: string[] = [];
     transport.onClose((reason) => closes.push(reason));
     const failure = await ControlClient.connect(transport).catch((error) => error);
     expect(failure).toBeInstanceOf(ProtocolFailure);
-    expect(failure.code).toBe("unsupported_version");
+    expect(failure.code).toBe("version_mismatch");
+    expect(closes).toEqual(["closed"]);
+  });
+
+  it("connect_rejects_a_welcome_of_another_protocol_version", async () => {
+    const older = { ...identity, protocol_version: PROTOCOL_VERSION - 1 };
+    const transport = fakeTransport(() => [JSON.stringify({ type: "welcome", ...older, engine_version: "0", game })]);
+    const closes: string[] = [];
+    transport.onClose((reason) => closes.push(reason));
+    const failure = await ControlClient.connect(transport).catch((error) => error);
+    expect(failure).toBeInstanceOf(ProtocolFailure);
+    expect(failure.code).toBe("version_mismatch");
+    expect(failure.message).toContain(`protocol ${PROTOCOL_VERSION - 1}, this client speaks ${PROTOCOL_VERSION}`);
+    expect(failure.message).toContain("pnpm -C editor build");
+    expect(closes).toEqual(["closed"]);
+  });
+
+  it("connect_rejects_a_welcome_of_another_revision_of_the_protocol", async () => {
+    const other = { ...identity, protocol_fingerprint: "0123456789abcdef" };
+    const transport = fakeTransport(() => [JSON.stringify({ type: "welcome", ...other, engine_version: "0", game })]);
+    const closes: string[] = [];
+    transport.onClose((reason) => closes.push(reason));
+    const failure = await ControlClient.connect(transport).catch((error) => error);
+    expect(failure).toBeInstanceOf(ProtocolFailure);
+    expect(failure.code).toBe("version_mismatch");
+    expect(failure.message).toContain(`fingerprint 0123456789abcdef, this client ${PROTOCOL_FINGERPRINT}`);
     expect(closes).toEqual(["closed"]);
   });
 
@@ -54,7 +80,7 @@ describe("ControlClient", () => {
       return [welcome];
     });
     const client = await ControlClient.connect(transport);
-    expect(hellos).toEqual([{ type: "hello", protocol_version: 3 }]);
+    expect(hellos).toEqual([{ type: "hello", ...identity }]);
     expect(client.game).toEqual(game);
   });
 
@@ -75,11 +101,11 @@ describe("ControlClient", () => {
     const client = await connecting;
     const pending = client.request({ type: "play" });
     transport.push(
-      JSON.stringify({ type: "response", id: 1, result: { error: { code: "unknown_entity", message: "gone" } } }),
+      JSON.stringify({ type: "response", id: 1, result: { error: { code: "no_such_entity", message: "gone" } } }),
     );
     const failure = await pending.catch((error) => error);
     expect(failure).toBeInstanceOf(ProtocolFailure);
-    expect(failure.code).toBe("unknown_entity");
+    expect(failure.code).toBe("no_such_entity");
     expect(failure.message).toBe("gone");
   });
 

@@ -377,6 +377,7 @@ type Command = {
 type ClientMessage = {
     "type": "hello";
     protocol_version: number;
+    protocol_fingerprint: Hash64;
 } | {
     "type": "request";
     id: number;
@@ -982,6 +983,7 @@ type Outcome = {
 type ServerMessage = {
     "type": "welcome";
     protocol_version: number;
+    protocol_fingerprint: Hash64;
     engine_version: string;
     game: GameInfo;
 } | {
@@ -994,6 +996,73 @@ type ServerMessage = {
 } | {
     "type": "event";
     event: Event;
+};
+
+/** The control protocol version this build speaks: a client and a host connect only when theirs are equal. */
+const PROTOCOL_VERSION = 4;
+/** The wire shape of `PROTOCOL_VERSION`, a hash of the protocol's types: a client and a host connect only when theirs are equal too. */
+const PROTOCOL_FINGERPRINT = "3e9ffb591ec1ae7f";
+/** The `type` of the reply each command type gets when it succeeds. */
+type ReplyTypes = {
+    apply_override: "done";
+    apply_to_asset: "done";
+    apply_to_prefab: "text";
+    apply_to_scene: "done";
+    compare_traces: "trace_comparison";
+    create_prefab: "text";
+    delete_branch: "deleted";
+    despawn: "done";
+    diff_snapshots: "differences";
+    export_replay: "replay";
+    export_session: "session";
+    get_asset: "asset";
+    get_debug_draw: "debug_draw";
+    get_divergence: "divergence";
+    get_entity: "entity";
+    get_ghost_draw: "ghost_draw";
+    get_hash: "hash";
+    get_hash_tree: "hash_tree";
+    get_instances: "instances";
+    get_resources: "resources";
+    get_schedule: "schedule";
+    get_tick_commands: "tick_commands";
+    get_tick_events: "tick_events";
+    get_timeline: "timeline";
+    insert_component: "done";
+    load_edits: "done";
+    load_inputs: "done";
+    load_replay: "replay_loaded";
+    load_scene: "loaded";
+    load_session: "loaded";
+    new_asset_value: "text";
+    pause: "done";
+    pick: "picked";
+    place_instance: "placed";
+    play: "done";
+    query_entities: "entities";
+    redo: "done";
+    remove_component: "done";
+    rename_branch: "done";
+    replace_scene: "loaded";
+    replace_with_instance: "placed";
+    restore: "done";
+    revert_override: "done";
+    save_asset: "text";
+    save_scene: "scene";
+    seek: "done";
+    set_asset_field: "done";
+    set_compare_branch: "done";
+    set_field: "done";
+    set_live_input: "done";
+    set_speed: "done";
+    set_threads: "done";
+    spawn: "spawned";
+    step: "stepped";
+    subscribe: "done";
+    switch_branch: "done";
+    take_snapshot: "snapshot";
+    undo: "done";
+    unsubscribe: "done";
 };
 
 /**
@@ -1171,6 +1240,7 @@ type ProjectRequest = {
 type ProjectClientMessage = {
     "type": "hello";
     protocol_version: number;
+    protocol_fingerprint: Hash64;
 } | {
     "type": "request";
     id: number;
@@ -1262,6 +1332,7 @@ type ProjectOutcome = {
 type ProjectServerMessage = {
     "type": "welcome";
     protocol_version: number;
+    protocol_fingerprint: Hash64;
 } | {
     "type": "refused";
     error: ProjectFailure;
@@ -1274,6 +1345,33 @@ type ProjectServerMessage = {
     event: ProjectEvent;
 };
 
+/** The project protocol version this build speaks: the editor and the service connect only when theirs are equal. */
+const PROJECT_PROTOCOL_VERSION = 3;
+/** The wire shape of `PROJECT_PROTOCOL_VERSION`, a hash of the protocol's types: the editor and the service connect only when theirs are equal too. */
+const PROJECT_PROTOCOL_FINGERPRINT = "227a1de4ad22d2f3";
+/** The `type` of the replies each request type may get when it succeeds. */
+type ProjectReplyTypes = {
+    build: "done";
+    create: "info";
+    create_asset: "file";
+    delete: "done";
+    game_endpoint: "native" | "wasm";
+    info: "info";
+    list_files: "files";
+    list_plugins: "plugins";
+    load_stored_session: "stored_session";
+    open: "info";
+    read_asset_texts: "asset_texts";
+    read_binary: "bytes";
+    read_text: "text";
+    rename: "done";
+    restart_game: "done";
+    store_session: "done";
+    write_binary: "done";
+    write_game_types: "done";
+    write_text: "done";
+};
+
 /** A bidirectional channel of text messages (one JSON document each). */
 interface MessageTransport {
     send(message: string): void;
@@ -1282,134 +1380,13 @@ interface MessageTransport {
     close(): void;
 }
 
-/**
- * The control protocol version this client speaks.
- *
- * Component and resource values travel as JSON in serde's externally tagged form. An
- * integer whose magnitude exceeds `Number.MAX_SAFE_INTEGER` (2^53 - 1) travels as a string
- * of decimal digits, in both directions: send such an integer as a string, and read
- * `u64`/`i64` fields as `number | string`. Hashes are 16-digit hex strings.
- */
-const PROTOCOL_VERSION = 3;
 class ProtocolFailure<C extends string = ErrorCode> extends Error {
     readonly code: C;
     constructor(code: C, message: string);
 }
 /** The reply variant answering a command of type `C`. */
-type ReplyFor<C extends Command> = C extends {
-    type: "get_hash";
-} ? Extract<Reply, {
-    type: "hash";
-}> : C extends {
-    type: "get_hash_tree";
-} ? Extract<Reply, {
-    type: "hash_tree";
-}> : C extends {
-    type: "step";
-} ? Extract<Reply, {
-    type: "stepped";
-}> : C extends {
-    type: "take_snapshot";
-} ? Extract<Reply, {
-    type: "snapshot";
-}> : C extends {
-    type: "diff_snapshots";
-} ? Extract<Reply, {
-    type: "differences";
-}> : C extends {
-    type: "query_entities";
-} ? Extract<Reply, {
-    type: "entities";
-}> : C extends {
-    type: "get_entity";
-} ? Extract<Reply, {
-    type: "entity";
-}> : C extends {
-    type: "get_resources";
-} ? Extract<Reply, {
-    type: "resources";
-}> : C extends {
-    type: "spawn";
-} ? Extract<Reply, {
-    type: "spawned";
-}> : C extends {
-    type: "save_scene";
-} ? Extract<Reply, {
-    type: "scene";
-}> : C extends {
-    type: "get_timeline";
-} ? Extract<Reply, {
-    type: "timeline";
-}> : C extends {
-    type: "export_session";
-} ? Extract<Reply, {
-    type: "session";
-}> : C extends {
-    type: "get_schedule";
-} ? Extract<Reply, {
-    type: "schedule";
-}> : C extends {
-    type: "get_tick_events";
-} ? Extract<Reply, {
-    type: "tick_events";
-}> : C extends {
-    type: "get_tick_commands";
-} ? Extract<Reply, {
-    type: "tick_commands";
-}> : C extends {
-    type: "get_debug_draw";
-} ? Extract<Reply, {
-    type: "debug_draw";
-}> : C extends {
-    type: "get_ghost_draw";
-} ? Extract<Reply, {
-    type: "ghost_draw";
-}> : C extends {
-    type: "pick";
-} ? Extract<Reply, {
-    type: "picked";
-}> : C extends {
-    type: "load_scene" | "replace_scene" | "load_session";
-} ? Extract<Reply, {
-    type: "loaded";
-}> : C extends {
-    type: "get_asset";
-} ? Extract<Reply, {
-    type: "asset";
-}> : C extends {
-    type: "save_asset" | "new_asset_value" | "create_prefab" | "apply_to_prefab";
-} ? Extract<Reply, {
-    type: "text";
-}> : C extends {
-    type: "delete_branch";
-} ? Extract<Reply, {
-    type: "deleted";
-}> : C extends {
-    type: "load_replay";
-} ? Extract<Reply, {
-    type: "replay_loaded";
-}> : C extends {
-    type: "export_replay";
-} ? Extract<Reply, {
-    type: "replay";
-}> : C extends {
-    type: "get_instances";
-} ? Extract<Reply, {
-    type: "instances";
-}> : C extends {
-    type: "place_instance" | "replace_with_instance";
-} ? Extract<Reply, {
-    type: "placed";
-}> : C extends {
-    type: "get_divergence";
-} ? Extract<Reply, {
-    type: "divergence";
-}> : C extends {
-    type: "compare_traces";
-} ? Extract<Reply, {
-    type: "trace_comparison";
-}> : Extract<Reply, {
-    type: "done";
+type ReplyFor<C extends Command> = Extract<Reply, {
+    type: ReplyTypes[C["type"]];
 }>;
 /** Matches responses to requests by increasing id; shared by the control and project clients. */
 class RequestTracker<O = Outcome> {
@@ -1434,17 +1411,32 @@ function unwrap<R, C extends string>(result: {
  * ignored with a warning, so it cannot break delivery or hang requests.
  */
 function parseFrame<T>(raw: string): T | undefined;
+/** What a hello and a welcome both carry: the two must be equal. */
+type ProtocolIdentity = {
+    protocol_version: number;
+    protocol_fingerprint: string;
+};
 /**
  * Sends `hello` and resolves with what `accept` makes of the peer's welcome, called as the
- * welcome arrives so the client it builds misses nothing right behind it (a close). A refusal closes
- * the transport and rejects with a `ProtocolFailure` carrying its code; a closed transport
- * rejects too.
+ * welcome arrives so the client it builds misses nothing right behind it (a close). A refusal, or
+ * a welcome of another protocol version or fingerprint than `hello`'s, closes the transport and
+ * rejects with a `ProtocolFailure` carrying its code; a closed transport rejects too.
  */
 function handshake<M extends {
     type: string;
-}, T>(transport: MessageTransport, hello: unknown, accept: (welcome: Extract<M, {
+}, T>(transport: MessageTransport, hello: ProtocolIdentity & {
+    type: "hello";
+}, accept: (welcome: Extract<M, {
     type: "welcome";
 }>) => T): Promise<T>;
+/**
+ * A client of the control protocol.
+ *
+ * Component and resource values travel as JSON in serde's externally tagged form. An
+ * integer whose magnitude exceeds `Number.MAX_SAFE_INTEGER` (2^53 - 1) travels as a string
+ * of decimal digits, in both directions: send such an integer as a string, and read
+ * `u64`/`i64` fields as `number | string`. Hashes are 16-digit hex strings.
+ */
 class ControlClient {
     private readonly transport;
     private readonly requests;
@@ -1472,46 +1464,9 @@ class ControlClient {
     private dispatch;
 }
 
-const PROJECT_PROTOCOL_VERSION = 2;
 /** The reply variant answering a project request of type `R`. */
-type ProjectReplyFor<R extends ProjectRequest> = R extends {
-    type: "info" | "open" | "create";
-} ? Extract<ProjectReply, {
-    type: "info";
-}> : R extends {
-    type: "list_files";
-} ? Extract<ProjectReply, {
-    type: "files";
-}> : R extends {
-    type: "read_text";
-} ? Extract<ProjectReply, {
-    type: "text";
-}> : R extends {
-    type: "list_plugins";
-} ? Extract<ProjectReply, {
-    type: "plugins";
-}> : R extends {
-    type: "game_endpoint";
-} ? Extract<ProjectReply, {
-    type: "native" | "wasm";
-}> : R extends {
-    type: "read_binary";
-} ? Extract<ProjectReply, {
-    type: "bytes";
-}> : R extends {
-    type: "create_asset";
-} ? Extract<ProjectReply, {
-    type: "file";
-}> : R extends {
-    type: "read_asset_texts";
-} ? Extract<ProjectReply, {
-    type: "asset_texts";
-}> : R extends {
-    type: "load_stored_session";
-} ? Extract<ProjectReply, {
-    type: "stored_session";
-}> : Extract<ProjectReply, {
-    type: "done";
+type ProjectReplyFor<R extends ProjectRequest> = Extract<ProjectReply, {
+    type: ProjectReplyTypes[R["type"]];
 }>;
 /** Client of the project protocol, in the same shape as the control client. */
 class ProjectClient {
@@ -1561,6 +1516,6 @@ function startWorkerGame(options: {
     glueUrl: string;
 }): WorkerGame;
 
-export { ControlClient, PROJECT_PROTOCOL_VERSION, PROTOCOL_VERSION, ProjectClient, ProtocolFailure, RequestTracker, fakeTransport, handshake, parseFrame, postMessageTransport, startWorkerGame, tauriTransport, unwrap, webSocketTransport };
-export type { AssetId, AssetKind, AssetTexts, BranchId, BranchInfo, BuildEvent, Bytes, Cause, ClientMessage, Color, Command, ComponentValue, ConsoleLevel, DebugDrawFrame, Diagnostic, Difference, DivergenceKind, DivergenceReport, Document, Entity, EntityDivergence, EntityHash, EntityRow, ErrorCode, Event, FailureCode, FieldSchema, FieldTarget, FileChange, FileEntry, GameInfo, GameOutput, Hash64, HashTree, InstanceInfo, Item, JsonValue, MessageTransport, NamedHash, NamedSchema, Outcome, OutputStream, OverrideInfo, PathSegment, PauseReason, PluginBundle, PluginSource, Primitive, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo, ProjectOutcome, ProjectReply, ProjectReplyFor, ProjectRequest, ProjectServerMessage, ProtocolError, RawGamepad, RawInput, RecordedEvent, Reply, ReplyFor, RootCause, RootCauseKind, ServerMessage, ServiceMode, SyncPoint, SystemRow, Timeline, Topic, TraceComparison, TypeSchema, VariantFields, VariantSchema, Vec2, WorkerCrash, WorkerGame };
+export { ControlClient, PROJECT_PROTOCOL_FINGERPRINT, PROJECT_PROTOCOL_VERSION, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION, ProjectClient, ProtocolFailure, RequestTracker, fakeTransport, handshake, parseFrame, postMessageTransport, startWorkerGame, tauriTransport, unwrap, webSocketTransport };
+export type { AssetId, AssetKind, AssetTexts, BranchId, BranchInfo, BuildEvent, Bytes, Cause, ClientMessage, Color, Command, ComponentValue, ConsoleLevel, DebugDrawFrame, Diagnostic, Difference, DivergenceKind, DivergenceReport, Document, Entity, EntityDivergence, EntityHash, EntityRow, ErrorCode, Event, FailureCode, FieldSchema, FieldTarget, FileChange, FileEntry, GameInfo, GameOutput, Hash64, HashTree, InstanceInfo, Item, JsonValue, MessageTransport, NamedHash, NamedSchema, Outcome, OutputStream, OverrideInfo, PathSegment, PauseReason, PluginBundle, PluginSource, Primitive, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo, ProjectOutcome, ProjectReply, ProjectReplyFor, ProjectReplyTypes, ProjectRequest, ProjectServerMessage, ProtocolError, RawGamepad, RawInput, RecordedEvent, Reply, ReplyFor, ReplyTypes, RootCause, RootCauseKind, ServerMessage, ServiceMode, SyncPoint, SystemRow, Timeline, Topic, TraceComparison, TypeSchema, VariantFields, VariantSchema, Vec2, WorkerCrash, WorkerGame };
 }

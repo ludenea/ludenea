@@ -2,13 +2,15 @@ use std::collections::BTreeMap;
 
 use ludenea_app::prefab::InstanceInfo;
 use ludenea_app::trace::TraceComparison;
-use ludenea_app::{App, InputLog, Inputs, RawGamepad, RawInput, Rng, Sim};
+use ludenea_app::{App, InputLog, Inputs, RawInput, Rng, Sim};
 use ludenea_control::*;
 use ludenea_ecs::schema::{Schema, TypeSchema};
 use ludenea_ecs::{
     AssetId, Component, Difference, Entity, EntityHash, HashTree, NamedHash, Query, ResMut, Runtime,
 };
 use serde::{Deserialize, Serialize};
+
+mod support;
 
 #[derive(Component, Serialize, Deserialize)]
 struct Score(u32);
@@ -71,7 +73,11 @@ fn handshake_with_version_1_is_refused() {
         .err()
         .unwrap();
     assert_eq!(error.code, ErrorCode::VersionMismatch);
-    assert_eq!(error.message, "client speaks protocol 1, engine speaks 3");
+    assert_eq!(
+        error.message,
+        "client speaks protocol 1, engine speaks 4; rebuild the editor (pnpm -C editor build) \
+         and the game from the same checkout"
+    );
 }
 
 #[test]
@@ -240,208 +246,7 @@ fn diff_snapshots_returns_differences() {
 fn every_command_and_reply_round_trips_through_json() {
     let entity: Entity = serde_json::from_str(r#"{"index":1,"generation":2}"#).unwrap();
     let bytes = Bytes(vec![0, 1, 254, 255]);
-    let commands = vec![
-        Command::LoadScene {
-            scene: "x".into(),
-            assets: Vec::new(),
-            document: Document::Scene,
-        },
-        Command::LoadInputs { log: bytes.clone() },
-        Command::SetThreads { threads: 4 },
-        Command::Step {
-            ticks: 3,
-            record_hashes: true,
-        },
-        Command::GetHash,
-        Command::GetHashTree,
-        Command::TakeSnapshot,
-        Command::Restore {
-            snapshot: bytes.clone(),
-        },
-        Command::DiffSnapshots {
-            a: bytes.clone(),
-            b: Some(bytes.clone()),
-        },
-        Command::DiffSnapshots {
-            a: bytes.clone(),
-            b: None,
-        },
-        Command::CompareTraces {
-            a: bytes.clone(),
-            b: None,
-        },
-        Command::QueryEntities {
-            filter: "With<Score>".into(),
-            offset: 2,
-            limit: 3,
-        },
-        Command::GetEntity { entity },
-        Command::GetResources,
-        Command::Spawn {
-            components: BTreeMap::from([("n".to_string(), serde_json::json!(1))]),
-        },
-        Command::Despawn { entity },
-        Command::InsertComponent {
-            entity,
-            component: "n".into(),
-            value: serde_json::json!({"x": 0.1}),
-        },
-        Command::RemoveComponent {
-            entity,
-            component: "n".into(),
-        },
-        Command::SetField {
-            target: FieldTarget::Component {
-                entity,
-                component: "n".into(),
-            },
-            path: vec![
-                PathSegment::Field { name: "a".into() },
-                PathSegment::Index { index: 2 },
-            ],
-            value: serde_json::json!(null),
-        },
-        Command::SetField {
-            target: FieldTarget::Resource {
-                resource: "r".into(),
-            },
-            path: vec![],
-            value: serde_json::json!("1"),
-        },
-        Command::SaveScene,
-        Command::ApplyToScene {
-            entity,
-            component: "n".into(),
-        },
-        Command::LoadEdits { log: bytes.clone() },
-        Command::Play,
-        Command::Pause,
-        Command::Seek { tick: 9 },
-        Command::SetSpeed { speed: 1.5 },
-        Command::SetLiveInput {
-            players: vec![RawInput {
-                keys: ["KeyA".to_string()].into(),
-                gamepads: vec![RawGamepad {
-                    buttons: vec![0.25],
-                    axes: vec![-0.5],
-                }],
-            }],
-        },
-        Command::Undo,
-        Command::Redo,
-        Command::GetTimeline,
-        Command::ExportSession,
-        Command::ReplaceScene {
-            scene: "y".into(),
-            assets: Vec::new(),
-        },
-        Command::LoadSession {
-            scene: "z".into(),
-            saved_scene: Some("w".into()),
-            inputs: bytes.clone(),
-            edits: bytes.clone(),
-            undo: bytes.clone(),
-            expected: vec![Hash64(1)],
-            assets: vec![(AssetId(7), "a".into())],
-            branches: bytes.clone(),
-            document: Document::Prefab,
-            keeps_assets: false,
-        },
-        Command::GetAsset { id: AssetId(7) },
-        Command::SetAssetField {
-            id: AssetId(7),
-            path: vec![PathSegment::Index { index: 1 }],
-            value: serde_json::json!(2),
-        },
-        Command::SaveAsset { id: AssetId(7) },
-        Command::ApplyToAsset { id: AssetId(7) },
-        Command::NewAssetValue { asset: "a".into() },
-        Command::SwitchBranch {
-            branch: BranchId(1),
-        },
-        Command::RenameBranch {
-            branch: BranchId(1),
-            name: "b".into(),
-        },
-        Command::DeleteBranch {
-            branch: BranchId(1),
-        },
-        Command::CreatePrefab {
-            entities: vec![entity],
-        },
-        Command::PlaceInstance { prefab: AssetId(7) },
-        Command::ReplaceWithInstance {
-            entities: vec![entity],
-            prefab: AssetId(7),
-            prefab_text: "p".into(),
-        },
-        Command::ApplyOverride {
-            instance: vec![5],
-            entity: vec![0],
-            component: "n".into(),
-            path: vec![PathSegment::Field { name: "a".into() }],
-            value: ComponentValue::Json {
-                value: serde_json::json!(1),
-            },
-        },
-        Command::RevertOverride {
-            instance: vec![5, 1],
-            entity: vec![0],
-            component: "n".into(),
-            path: vec![],
-        },
-        Command::ApplyToPrefab {
-            instance: vec![5],
-            entity: vec![0],
-            component: "n".into(),
-            path: vec![],
-        },
-        Command::GetInstances,
-        Command::ExportReplay {
-            branch: Some(BranchId(1)),
-        },
-        Command::ExportReplay { branch: None },
-        Command::LoadReplay {
-            replay: bytes.clone(),
-        },
-        Command::GetSchedule,
-        Command::GetTickEvents { tick: 3 },
-        Command::GetTickCommands { tick: 4 },
-        Command::GetDebugDraw {
-            layers: vec!["physics.colliders".into()],
-        },
-        Command::Pick {
-            point: serde_json::from_str(r#"{"x":1.5,"y":-2.0}"#).unwrap(),
-        },
-        Command::Subscribe {
-            topic: Topic::Entities {
-                filter: "With<Score>".into(),
-            },
-        },
-        Command::Subscribe {
-            topic: Topic::Entity { entity },
-        },
-        Command::Subscribe {
-            topic: Topic::Resource {
-                name: "ludenea::Time".into(),
-            },
-        },
-        Command::Unsubscribe {
-            topic: Topic::Introspection,
-        },
-        Command::SetCompareBranch {
-            branch: Some(BranchId(2)),
-        },
-        Command::SetCompareBranch { branch: None },
-        Command::GetGhostDraw {
-            tick: 9,
-            layers: vec!["physics.colliders".into()],
-        },
-        Command::Subscribe {
-            topic: Topic::Ghost,
-        },
-    ];
-    for command in commands {
+    for command in support::every_command() {
         let message = ClientMessage::Request { id: 7, command };
         let json = serde_json::to_string(&message).unwrap();
         assert_eq!(
@@ -451,9 +256,13 @@ fn every_command_and_reply_round_trips_through_json() {
     }
     let hello = ClientMessage::Hello {
         protocol_version: 2,
+        protocol_fingerprint: Hash64(0xab),
     };
     let json = serde_json::to_string(&hello).unwrap();
-    assert_eq!(json, r#"{"type":"hello","protocol_version":2}"#);
+    assert_eq!(
+        json,
+        r#"{"type":"hello","protocol_version":2,"protocol_fingerprint":"00000000000000ab"}"#
+    );
 
     let tree = Host::new(app)
         .map(|mut host| host.handle(Command::GetHashTree))
@@ -637,6 +446,7 @@ fn every_command_and_reply_round_trips_through_json() {
             },
             ServerMessage::Welcome {
                 protocol_version: 2,
+                protocol_fingerprint: Hash64(0xab),
                 engine_version: "0.1.0".into(),
                 game: game(),
             },
@@ -924,11 +734,13 @@ fn wire_format_matches_golden_json() {
     );
     assert_eq!(
         to(&ServerMessage::Welcome {
-            protocol_version: 3,
+            protocol_version: 4,
+            protocol_fingerprint: Hash64(0xab),
             engine_version: "0.1.0".into(),
             game: game()
         }),
-        json!({"type":"welcome","protocol_version":3,"engine_version":"0.1.0","game":{
+        json!({"type":"welcome","protocol_version":4,"protocol_fingerprint":"00000000000000ab",
+            "engine_version":"0.1.0","game":{
             "components":[{"name":"host::Score","schema":to(&Score::schema())}],
             "resources":[],"assets":[],"events":[],"fingerprint":"0000000000000005",
             "input":{"kind":"u8"},"tick_rate":60,

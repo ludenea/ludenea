@@ -3,14 +3,20 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use ludenea_control::stdio::serve_stdio;
-use ludenea_control::{Command, ErrorCode, Event, PROTOCOL_VERSION, Reply, ServerMessage};
+use ludenea_control::{
+    ClientMessage, Command, ErrorCode, Event, Hash64, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION,
+    Reply, ServerMessage,
+};
 
 fn line(value: serde_json::Value) -> String {
     format!("{value}\n")
 }
 
 fn hello() -> String {
-    line(serde_json::json!({ "type": "hello", "protocol_version": PROTOCOL_VERSION }))
+    line(serde_json::json!(ClientMessage::Hello {
+        protocol_version: PROTOCOL_VERSION,
+        protocol_fingerprint: PROTOCOL_FINGERPRINT,
+    }))
 }
 
 fn request(id: u64, command: &Command) -> String {
@@ -76,6 +82,49 @@ fn malformed_line_gets_error_not_panic() {
             result: Ok(_)
         }
     ));
+}
+
+#[test]
+fn a_hello_with_another_fingerprint_is_refused() {
+    let other = Hash64(PROTOCOL_FINGERPRINT.0 ^ 1);
+    let stale = line(serde_json::json!(ClientMessage::Hello {
+        protocol_version: PROTOCOL_VERSION,
+        protocol_fingerprint: other,
+    }));
+    let messages = serve(stale + &hello());
+    let ServerMessage::Refused { error } = &messages[0] else {
+        panic!("{:?}", messages[0]);
+    };
+    assert_eq!(error.code, ErrorCode::VersionMismatch);
+    assert_eq!(
+        error.message,
+        format!(
+            "client speaks another revision of protocol {PROTOCOL_VERSION} (fingerprint \
+             {:016x}, engine {:016x}); rebuild the editor (pnpm -C editor build) and the game \
+             from the same checkout",
+            other.0, PROTOCOL_FINGERPRINT.0
+        )
+    );
+    assert!(matches!(messages[1], ServerMessage::Welcome { .. }));
+}
+
+#[test]
+fn a_hello_of_an_earlier_version_is_refused_as_such() {
+    // Version 3 had no fingerprint, so its hello is not a message of this version.
+    let messages = serve(line(
+        serde_json::json!({ "type": "hello", "protocol_version": 3 }),
+    ));
+    let ServerMessage::Refused { error } = &messages[0] else {
+        panic!("{:?}", messages[0]);
+    };
+    assert_eq!(error.code, ErrorCode::VersionMismatch);
+    assert_eq!(
+        error.message,
+        format!(
+            "client speaks protocol 3, engine speaks {PROTOCOL_VERSION}; rebuild the editor \
+             (pnpm -C editor build) and the game from the same checkout"
+        )
+    );
 }
 
 /// Delivers its chunks one after another, waiting before each, then ends.

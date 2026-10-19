@@ -7,7 +7,10 @@ use std::path::Path;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
-use ludenea_control::{Bytes, Command, Document, Host, Reply, ServerMessage};
+use ludenea_control::{
+    Bytes, ClientMessage, Command, Document, Host, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION, Reply,
+    ServerMessage,
+};
 use ludenea_ecs::AssetId;
 use ludenea_project::protocol::{
     AssetTexts, FailureCode, ProjectReply, ProjectRequest, ServiceMode,
@@ -401,7 +404,11 @@ fn template_project_loads_with_prefab_and_data_asset() {
         game.send(&message).unwrap();
         receive(&messages)
     };
-    ask(r#"{"type":"hello","protocol_version":3}"#.to_string());
+    ask(serde_json::to_string(&ClientMessage::Hello {
+        protocol_version: PROTOCOL_VERSION,
+        protocol_fingerprint: PROTOCOL_FINGERPRINT,
+    })
+    .unwrap());
     let load = serde_json::json!({
         "type": "request",
         "id": 1,

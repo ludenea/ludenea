@@ -13,8 +13,8 @@ this table in the same commit.
 
 | Format                 | Constant                   | Current | Oldest readable               |
 | ---------------------- | -------------------------- | ------- | ----------------------------- |
-| Control protocol       | `PROTOCOL_VERSION`         | 3       | 3                             |
-| Project protocol       | `PROJECT_PROTOCOL_VERSION` | 2       | 2                             |
+| Control protocol       | `PROTOCOL_VERSION`         | 4       | 4                             |
+| Project protocol       | `PROJECT_PROTOCOL_VERSION` | 3       | 3                             |
 | Scene (`.scene.ron`)   | `SCENE_VERSION`            | 2       | 1                             |
 | Prefab (`.prefab.ron`) | `PREFAB_VERSION`           | 1       | 1                             |
 | Meta (`.meta`)         | `META_VERSION`             | 1       | 1                             |
@@ -34,18 +34,36 @@ session (the editor's copy of each open document's session), and the plugin API.
 ### Rust API
 
 - `ludenea_app::scene::SCENE_VERSION` is public, like the other format versions.
+- `ludenea_control::PROTOCOL_FINGERPRINT` and
+  `ludenea_project::protocol::PROJECT_PROTOCOL_FINGERPRINT` hold the wire shape of each
+  protocol version, and `ludenea_project::protocol::handshake` takes the client's
+  fingerprint after its version.
+- `Command::reply_type` names the reply each command gets when it succeeds, and
+  `ProjectRequest::reply_types` the replies each project request may get.
 
 ### Control protocol
 
-No changes yet.
+- Control protocol 4, fingerprint `3e9ffb591ec1ae7f`.
+- `hello` and `welcome` carry `protocol_fingerprint`, a hash of the TypeScript declarations
+  of every type the messages reach. The host refuses a client of another version or
+  fingerprint with `version_mismatch` and says to rebuild the editor
+  (`pnpm -C editor build`) and the game from the same checkout; a `hello` of an earlier
+  version, without the fingerprint, is refused the same way.
 
 ### Project protocol
 
-No changes yet.
+- Project protocol 3, fingerprint `227a1de4ad22d2f3`.
+- `hello` and `welcome` carry `protocol_fingerprint`, as in the control protocol, and the
+  service refuses a client of another version or fingerprint the same way.
 
 ### Plugin API
 
-No changes yet.
+- `@ludenea/control-client` takes `PROTOCOL_VERSION` and `PROJECT_PROTOCOL_VERSION` from
+  the bindings generated from Rust, with the new `PROTOCOL_FINGERPRINT`,
+  `PROJECT_PROTOCOL_FINGERPRINT`, `ReplyTypes` and `ProjectReplyTypes`; `ReplyFor` and
+  `ProjectReplyFor` are built from the last two. `handshake` takes a hello with both the
+  version and the fingerprint, and refuses a welcome of another version or fingerprint
+  with `version_mismatch`, so `ControlClient.connect` and `ProjectClient.connect` do too.
 
 ### Formats
 

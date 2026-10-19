@@ -1,4 +1,14 @@
-import { ControlClient, ProjectClient, fakeTransport, type GameInfo, type WorkerCrash } from "@ludenea/control-client";
+import {
+  ControlClient,
+  PROJECT_PROTOCOL_FINGERPRINT,
+  PROJECT_PROTOCOL_VERSION,
+  PROTOCOL_FINGERPRINT,
+  PROTOCOL_VERSION,
+  ProjectClient,
+  fakeTransport,
+  type GameInfo,
+  type WorkerCrash,
+} from "@ludenea/control-client";
 import { createEditor } from "@ludenea/editor-shell/app";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EXPORT_COALESCE_MS, exportSession, guardSession, restoreSession, type SavedSession } from "../src/session-guard";
@@ -16,7 +26,7 @@ async function fakeGame(answer: (command: Command) => object | null = () => ({ t
   const sent: Command[] = [];
   const transport = fakeTransport((raw) => {
     const message = JSON.parse(raw);
-    if (message.type === "hello") return [JSON.stringify({ type: "welcome", protocol_version: 3, engine_version: "0", game: info })];
+    if (message.type === "hello") return [JSON.stringify({ type: "welcome", protocol_version: PROTOCOL_VERSION, protocol_fingerprint: PROTOCOL_FINGERPRINT, engine_version: "0", game: info })];
     sent.push(message.command);
     const reply = answer(message.command);
     const result = reply === null ? { error: { code: "resimulating", message: "still resimulating" } } : { ok: reply };
@@ -321,7 +331,7 @@ describe("guardSession with documents", () => {
     const project = await ProjectClient.connect(
       fakeTransport((raw) => {
         const message = JSON.parse(raw);
-        if (message.type === "hello") return [JSON.stringify({ type: "welcome", protocol_version: 2 })];
+        if (message.type === "hello") return [JSON.stringify({ type: "welcome", protocol_version: PROJECT_PROTOCOL_VERSION, protocol_fingerprint: PROJECT_PROTOCOL_FINGERPRINT })];
         const request: Command = message.request;
         requests.push(request);
         const reply =

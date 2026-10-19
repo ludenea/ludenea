@@ -6,7 +6,9 @@ use std::sync::OnceLock;
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
-use ludenea_control::{GameInfo, NamedSchema, ServerMessage};
+use ludenea_control::{
+    ClientMessage, GameInfo, NamedSchema, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION, ServerMessage,
+};
 use ludenea_project::{
     BuildArtifact, BuildError, BuildEvent, BuildTarget, GameProcess, OutputStream, Project,
 };
@@ -53,8 +55,11 @@ fn game_binary() -> &'static PathBuf {
 }
 
 fn handshake(game: &mut GameProcess, messages: &Receiver<String>) -> GameInfo {
-    game.send(r#"{"type":"hello","protocol_version":3}"#)
-        .unwrap();
+    let hello = ClientMessage::Hello {
+        protocol_version: PROTOCOL_VERSION,
+        protocol_fingerprint: PROTOCOL_FINGERPRINT,
+    };
+    game.send(&serde_json::to_string(&hello).unwrap()).unwrap();
     let line = messages.recv_timeout(TIMEOUT).expect("a welcome arrives");
     match serde_json::from_str(&line).unwrap() {
         ServerMessage::Welcome { game, .. } => game,

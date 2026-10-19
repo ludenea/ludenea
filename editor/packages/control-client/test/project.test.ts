@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { ProjectClient, ProtocolFailure, fakeTransport } from "../src";
+import { PROJECT_PROTOCOL_FINGERPRINT, PROJECT_PROTOCOL_VERSION, ProjectClient, ProtocolFailure, fakeTransport } from "../src";
 
-const welcome = JSON.stringify({ type: "welcome", protocol_version: 2 });
+const identity = { protocol_version: PROJECT_PROTOCOL_VERSION, protocol_fingerprint: PROJECT_PROTOCOL_FINGERPRINT };
+const welcome = JSON.stringify({ type: "welcome", ...identity });
 
 /** A transport whose peer welcomes the client and records every request it receives. */
 function connected() {
@@ -23,7 +24,18 @@ describe("ProjectClient", () => {
       return [welcome];
     });
     await ProjectClient.connect(transport);
-    expect(hellos).toEqual([{ type: "hello", protocol_version: 2 }]);
+    expect(hellos).toEqual([{ type: "hello", ...identity }]);
+  });
+
+  it("connect_rejects_a_welcome_of_another_protocol_version", async () => {
+    const transport = fakeTransport(() => [JSON.stringify({ type: "welcome", ...identity, protocol_version: PROJECT_PROTOCOL_VERSION - 1 })]);
+    const closes: string[] = [];
+    transport.onClose((reason) => closes.push(reason));
+    const failure = await ProjectClient.connect(transport).catch((error) => error);
+    expect(failure).toBeInstanceOf(ProtocolFailure);
+    expect(failure.code).toBe("version_mismatch");
+    expect(failure.message).toContain("pnpm -C editor build");
+    expect(closes).toEqual(["closed"]);
   });
 
   it("connect_rejects_a_refusal_with_its_message", async () => {

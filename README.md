@@ -111,9 +111,11 @@ the plugin API, in the commit that makes it. The rules:
   edit log's `version_1` module.
 - Editor state (the stored session, its undo history, and its branch tree) may drop what
   is older than N-1. A stored file the editor refuses is set aside, never overwritten.
-- The control and project protocols require the same version on both sides. Their changes
+- The control and project protocols require the same version on both sides, and the same
+  fingerprint: a hash of the TypeScript declarations of every type their messages reach,
+  so builds from different revisions of one version refuse each other. Their changes
   accumulate under the next version, which is bumped once per release; its changelog entry
-  lists the commands, messages, and fields that changed.
+  names its fingerprint and lists the commands, messages, and fields that changed.
 
 ## Editor
 
@@ -268,7 +270,10 @@ cargo test --locked --release -p ludenea-control --test branches --test divergen
 ```
 
 After changing protocol types, regenerate the TypeScript bindings and the declarations
-project plugins check against (CI fails when they are stale):
+project plugins check against (CI fails when they are stale). The `typescript` tests also
+pin each protocol's fingerprint: when the shape changes they fail with the new value, which
+goes into `PROTOCOL_FINGERPRINT` (or `PROJECT_PROTOCOL_FINGERPRINT`) and into the
+changelog entry of that protocol version.
 
 ```sh
 cargo test --locked -p ludenea-control --test typescript

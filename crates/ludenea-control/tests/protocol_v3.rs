@@ -1,15 +1,16 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
 use boxes::SpawnerStats;
-use ludenea::app::EntityRef;
 use ludenea::app::prefab::InstanceInfo;
 use ludenea::app::replay::{Replay, ReplayOutcome, play_replay};
 use ludenea::app::trace::{TRACE_VERSION, Trace, TraceComparison};
+use ludenea::app::{EntityRef, RawInput};
 use ludenea::cli::assets::project_assets;
 use ludenea::control::{
     BranchId, Bytes, Command, ComponentValue, Document, ErrorCode, Event, FieldTarget, Hash64,
-    Host, InProcess, PROTOCOL_VERSION, PathSegment, ProtocolError, Reply, Timeline,
+    Host, InProcess, PROTOCOL_VERSION, PathSegment, ProtocolError, Reply, Timeline, Topic,
 };
 use ludenea::ecs::diff::Difference;
 use ludenea::ecs::{Asset, AssetId, Entity, Snapshot};
@@ -18,6 +19,8 @@ use ludenea::prelude::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+
+mod support;
 
 const SPAWNER_SCENE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -81,7 +84,7 @@ fn timeline(host: &mut Host) -> Timeline {
 
 #[test]
 fn handshake_refuses_version_2() {
-    assert_eq!(PROTOCOL_VERSION, 3);
+    assert_eq!(PROTOCOL_VERSION, 4);
     let Err(error) = InProcess::connect(Host::new(boxes::app).unwrap(), 2) else {
         panic!("a version 2 client connects");
     };
@@ -89,9 +92,294 @@ fn handshake_refuses_version_2() {
         error,
         ProtocolError {
             code: ErrorCode::VersionMismatch,
-            message: "client speaks protocol 2, engine speaks 3".to_string(),
+            message: "client speaks protocol 2, engine speaks 4; rebuild the editor (pnpm -C \
+                      editor build) and the game from the same checkout"
+                .to_string(),
         }
     );
+}
+
+/// The `type` a command or a reply travels with.
+fn type_of(value: &impl Serialize) -> String {
+    let value = serde_json::to_value(value).unwrap();
+    match value["type"].as_str() {
+        Some(name) => name.to_owned(),
+        None => panic!("{value} travels without a type"),
+    }
+}
+
+/// A host whose commands must succeed with the reply `Command::reply_type` names.
+struct Checked {
+    host: Host,
+    ran: BTreeSet<String>,
+}
+
+impl Checked {
+    fn run(&mut self, command: Command) -> Reply {
+        let name = type_of(&command);
+        let expected = command.reply_type();
+        let reply = self
+            .host
+            .handle(command)
+            .unwrap_or_else(|error| panic!("{name} failed: {error:?}"));
+        assert_eq!(type_of(&reply), expected, "the reply to {name}");
+        self.ran.insert(name);
+        reply
+    }
+}
+
+#[test]
+fn every_command_names_the_reply_it_gets() {
+    let scene = fs::read_to_string(SPAWNER_SCENE).unwrap();
+    let mut checked = Checked {
+        host: Host::new(boxes::app).unwrap(),
+        ran: BTreeSet::new(),
+    };
+    let Reply::Loaded { load_addresses, .. } = checked.run(Command::LoadScene {
+        scene: scene.clone(),
+        assets: assets(),
+        document: Document::Scene,
+    }) else {
+        unreachable!("checked by run");
+    };
+    let loaded = |id: u32| {
+        load_addresses
+            .iter()
+            .find(|(_, address)| address == &[id])
+            .unwrap()
+            .0
+    };
+    let ground = loaded(0);
+    checked.run(Command::SetThreads { threads: 1 });
+    checked.run(Command::LoadInputs {
+        log: Bytes(InputLog::new(1).encode()),
+    });
+    checked.run(Command::LoadEdits {
+        log: Bytes(EditLog::new().encode()),
+    });
+
+    // Tick 0: scene, prefab and asset edits.
+    checked.run(Command::GetHash);
+    checked.run(Command::GetHashTree);
+    let Reply::Snapshot {
+        snapshot: start, ..
+    } = checked.run(Command::TakeSnapshot)
+    else {
+        unreachable!("checked by run");
+    };
+    let Reply::Entity { components, .. } = checked.run(Command::GetEntity { entity: ground })
+    else {
+        unreachable!("checked by run");
+    };
+    let Some(ComponentValue::Json { value: pose }) = components.get("ludenea::Pose").cloned()
+    else {
+        panic!("{components:?}");
+    };
+    checked.run(Command::GetResources);
+    checked.run(Command::QueryEntities {
+        filter: "With<boxes::Crate>".to_string(),
+        offset: 0,
+        limit: 10,
+    });
+    checked.run(Command::CreatePrefab {
+        entities: vec![ground],
+    });
+    checked.run(Command::PlaceInstance { prefab: PREFAB });
+    let pose_y = vec![field("position"), field("y")];
+    checked.run(Command::ApplyOverride {
+        instance: vec![5],
+        entity: vec![0],
+        component: "ludenea::Pose".to_string(),
+        path: pose_y.clone(),
+        value: ComponentValue::Json { value: json!(3.0) },
+    });
+    checked.run(Command::RevertOverride {
+        instance: vec![5],
+        entity: vec![0],
+        component: "ludenea::Pose".to_string(),
+        path: pose_y.clone(),
+    });
+    checked.run(Command::ApplyToPrefab {
+        instance: vec![6],
+        entity: vec![0],
+        component: "ludenea::Pose".to_string(),
+        path: vec![field("position"), field("x")],
+    });
+    checked.run(Command::GetInstances);
+    checked.run(Command::ReplaceWithInstance {
+        entities: vec![loaded(1)],
+        prefab: AssetId(7),
+        prefab_text: fs::read_to_string(CRATE_PREFAB).unwrap(),
+    });
+    checked.run(Command::GetAsset { id: STATS });
+    checked.run(Command::SetAssetField {
+        id: STATS,
+        path: vec![field("every_ticks")],
+        value: json!(30),
+    });
+    checked.run(Command::SaveAsset { id: STATS });
+    checked.run(Command::ApplyToAsset { id: STATS });
+    checked.run(Command::SaveScene);
+
+    // Past tick 0: recorded edits, snapshots and traces.
+    let Reply::Stepped { .. } = checked.run(Command::Step {
+        ticks: 20,
+        record_hashes: true,
+    }) else {
+        unreachable!("checked by run");
+    };
+    checked.run(Command::DiffSnapshots { a: start, b: None });
+    let Reply::Snapshot { snapshot, .. } = checked.run(Command::TakeSnapshot) else {
+        unreachable!("checked by run");
+    };
+    checked.run(Command::Restore { snapshot });
+    let Reply::Session {
+        scene: session_scene,
+        saved_scene,
+        inputs,
+        edits,
+        undo,
+        hashes,
+        assets: session_assets,
+        branches,
+        document,
+        keeps_assets,
+    } = checked.run(Command::ExportSession)
+    else {
+        unreachable!("checked by run");
+    };
+    let trace = Trace {
+        version: TRACE_VERSION,
+        scene_hash: 0,
+        inputs_hash: 0,
+        hashes: hashes.iter().map(|hash| hash.0).collect(),
+    };
+    checked.run(Command::CompareTraces {
+        a: Bytes(trace.encode()),
+        b: None,
+    });
+    let Reply::Spawned { entity } = checked.run(Command::Spawn {
+        components: [("boxes::Crate".to_string(), json!(null))].into(),
+    }) else {
+        unreachable!("checked by run");
+    };
+    checked.run(Command::InsertComponent {
+        entity,
+        component: "ludenea::Pose".to_string(),
+        value: pose,
+    });
+    checked.run(Command::SetField {
+        target: FieldTarget::Component {
+            entity,
+            component: "ludenea::Pose".to_string(),
+        },
+        path: pose_y,
+        value: json!(5.0),
+    });
+    checked.run(Command::RemoveComponent {
+        entity,
+        component: "ludenea::Pose".to_string(),
+    });
+    checked.run(Command::Despawn { entity });
+    checked.run(Command::Undo);
+    checked.run(Command::Redo);
+    checked.run(Command::ApplyToScene {
+        entity: ground,
+        component: "ludenea::Pose".to_string(),
+    });
+    settle(&mut checked.host);
+
+    // Branches, and what compares them.
+    checked.run(Command::Seek { tick: 10 });
+    checked.run(Command::Spawn {
+        components: [("boxes::Crate".to_string(), json!(null))].into(),
+    });
+    let Reply::Timeline(forked) = checked.run(Command::GetTimeline) else {
+        unreachable!("checked by run");
+    };
+    let child = forked.branch;
+    assert_ne!(child, BranchId::ROOT);
+    checked.run(Command::RenameBranch {
+        branch: child,
+        name: "spawned".to_string(),
+    });
+    checked.run(Command::SwitchBranch {
+        branch: BranchId::ROOT,
+    });
+    checked.run(Command::SetCompareBranch {
+        branch: Some(child),
+    });
+    checked.run(Command::GetGhostDraw {
+        tick: 10,
+        layers: Vec::new(),
+    });
+    checked.run(Command::GetDivergence { up_to: None });
+    checked.run(Command::DeleteBranch { branch: child });
+    let Reply::Replay { replay } = checked.run(Command::ExportReplay { branch: None }) else {
+        unreachable!("checked by run");
+    };
+
+    // Introspection and drawing.
+    checked.run(Command::Subscribe {
+        topic: Topic::Introspection,
+    });
+    let Reply::Stepped { tick, .. } = checked.run(Command::Step {
+        ticks: 1,
+        record_hashes: false,
+    }) else {
+        unreachable!("checked by run");
+    };
+    checked.run(Command::GetTickEvents { tick });
+    checked.run(Command::GetTickCommands { tick });
+    checked.run(Command::Unsubscribe {
+        topic: Topic::Introspection,
+    });
+    checked.run(Command::GetSchedule);
+    checked.run(Command::GetDebugDraw { layers: Vec::new() });
+    checked.run(Command::Pick {
+        point: serde_json::from_value(json!({"x": 0.0, "y": 0.0})).unwrap(),
+    });
+
+    // Play.
+    checked.run(Command::Play);
+    checked.run(Command::SetSpeed { speed: 2.0 });
+    checked.run(Command::SetLiveInput {
+        players: vec![RawInput::default()],
+    });
+    checked.run(Command::Pause);
+
+    // Whole sessions.
+    checked.run(Command::ReplaceScene {
+        scene,
+        assets: assets(),
+    });
+    checked.run(Command::LoadSession {
+        scene: session_scene,
+        saved_scene,
+        inputs,
+        edits,
+        undo,
+        expected: hashes,
+        assets: session_assets,
+        branches,
+        document,
+        keeps_assets,
+    });
+    settle(&mut checked.host);
+    checked.run(Command::LoadReplay { replay });
+
+    fn tuning_app() -> App {
+        let mut app = App::new();
+        app.asset_with_default::<Tuning>();
+        app
+    }
+    checked.host = Host::new(tuning_app).unwrap();
+    checked.run(Command::NewAssetValue {
+        asset: Tuning::NAME.to_string(),
+    });
+
+    let every_type: BTreeSet<String> = support::every_command().iter().map(type_of).collect();
+    assert_eq!(checked.ran, every_type, "the commands this test runs");
 }
 
 #[test]

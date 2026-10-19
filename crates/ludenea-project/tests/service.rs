@@ -5,12 +5,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use ludenea_control::ServerMessage;
+use ludenea_control::{
+    Bytes, ClientMessage, GameInfo, Hash64, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION, ServerMessage,
+};
+use ludenea_ecs::AssetId;
 use ludenea_project::protocol::{
-    FailureCode, ProjectEvent, ProjectReply, ProjectRequest, ServiceMode,
+    FailureCode, PROJECT_PROTOCOL_FINGERPRINT, PROJECT_PROTOCOL_VERSION, ProjectClientMessage,
+    ProjectEvent, ProjectReply, ProjectRequest, ProjectServerMessage, ServiceMode,
 };
 use ludenea_project::service::ProjectService;
-use ludenea_project::{BuildEvent, Project};
+use ludenea_project::{AssetKind, BuildEvent, Project};
 use tempfile::TempDir;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::error::TryRecvError;
@@ -74,8 +78,12 @@ fn ask_game(
     std::sync::mpsc::Receiver<String>,
 ) {
     let (to_game, from_game) = service.take_control_channel().expect("a game is running");
+    let hello = ClientMessage::Hello {
+        protocol_version: PROTOCOL_VERSION,
+        protocol_fingerprint: PROTOCOL_FINGERPRINT,
+    };
     to_game
-        .send(r#"{"type":"hello","protocol_version":3}"#.to_string())
+        .send(serde_json::to_string(&hello).unwrap())
         .unwrap();
     let line = from_game.recv_timeout(Duration::from_secs(60)).unwrap();
     assert!(
@@ -114,6 +122,148 @@ fn list_and_read_without_build() {
     );
     let endpoint = service.handle(ProjectRequest::GameEndpoint).unwrap_err();
     assert_eq!(endpoint.code, FailureCode::NoGame);
+}
+
+fn hello(protocol_version: u32, protocol_fingerprint: Hash64) -> String {
+    serde_json::to_string(&ProjectClientMessage::Hello {
+        protocol_version,
+        protocol_fingerprint,
+    })
+    .unwrap()
+}
+
+/// Answers `hello` to a new service, asserting it is refused as another version, and returns
+/// the refusal's message.
+fn refused_hello(hello: &str) -> String {
+    let mut service = ProjectService::new(ServiceMode::Desktop, None);
+    let mut connected = false;
+    let ProjectServerMessage::Refused { error } = service.answer(&mut connected, hello) else {
+        panic!("{hello} is welcomed");
+    };
+    assert_eq!(error.code, FailureCode::VersionMismatch);
+    assert!(!connected);
+    error.message
+}
+
+#[test]
+fn hello_with_another_project_protocol_version_is_refused() {
+    let message = refused_hello(&hello(
+        PROJECT_PROTOCOL_VERSION + 1,
+        PROJECT_PROTOCOL_FINGERPRINT,
+    ));
+    assert_eq!(
+        message,
+        format!(
+            "client speaks project protocol {}, service speaks {PROJECT_PROTOCOL_VERSION}; \
+             rebuild the editor (pnpm -C editor build) and the service from the same checkout",
+            PROJECT_PROTOCOL_VERSION + 1
+        )
+    );
+}
+
+#[test]
+fn hello_of_an_earlier_version_is_refused_as_such() {
+    // Version 2 had no fingerprint, so its hello is not a message of this version.
+    let message = refused_hello(r#"{"type":"hello","protocol_version":2}"#);
+    assert_eq!(
+        message,
+        format!(
+            "client speaks project protocol 2, service speaks {PROJECT_PROTOCOL_VERSION}; \
+             rebuild the editor (pnpm -C editor build) and the service from the same checkout"
+        )
+    );
+}
+
+#[test]
+fn hello_with_another_fingerprint_is_refused() {
+    let other = Hash64(PROJECT_PROTOCOL_FINGERPRINT.0 ^ 1);
+    let message = refused_hello(&hello(PROJECT_PROTOCOL_VERSION, other));
+    assert_eq!(
+        message,
+        format!(
+            "client speaks another revision of project protocol {PROJECT_PROTOCOL_VERSION} \
+             (fingerprint {:016x}, service {:016x}); rebuild the editor (pnpm -C editor build) \
+             and the service from the same checkout",
+            other.0, PROJECT_PROTOCOL_FINGERPRINT.0
+        )
+    );
+}
+
+/// Each request a minimal project answers succeeds with a reply `ProjectRequest::reply_types`
+/// names. `Create` builds a real project, so `Open` stands for it (both reply through the
+/// same install); `GameEndpoint` and `RestartGame` need a built game, and the ignored build
+/// tests and the service's own tests check their replies.
+#[test]
+fn every_request_names_the_replies_it_gets() {
+    let dir = TempDir::new().unwrap();
+    let root = minimal_project(&dir);
+    let mut service = ProjectService::new(ServiceMode::Browser, None);
+    let scene = || "scenes/main.scene.ron".to_string();
+    let requests = [
+        ProjectRequest::Open {
+            path: root.to_string_lossy().into_owned(),
+        },
+        ProjectRequest::Info,
+        ProjectRequest::ListFiles,
+        ProjectRequest::ReadText { path: scene() },
+        ProjectRequest::WriteText {
+            path: scene(),
+            text: "(entities: [])\n".to_string(),
+        },
+        ProjectRequest::WriteBinary {
+            path: "assets/blob.bin".to_string(),
+            bytes: Bytes(vec![1, 2]),
+        },
+        ProjectRequest::ReadBinary {
+            path: "assets/blob.bin".to_string(),
+        },
+        ProjectRequest::CreateAsset {
+            path: "scenes/other.scene.ron".to_string(),
+            kind: AssetKind::Scene,
+            text: "(entities: [])\n".to_string(),
+        },
+        ProjectRequest::ReadAssetTexts,
+        ProjectRequest::StoreSession {
+            document: AssetId(7),
+            bytes: Bytes(vec![3]),
+        },
+        ProjectRequest::LoadStoredSession {
+            document: AssetId(7),
+        },
+        ProjectRequest::Rename {
+            from: "scenes/other.scene.ron".to_string(),
+            to: "scenes/renamed.scene.ron".to_string(),
+        },
+        ProjectRequest::Delete {
+            path: "scenes/renamed.scene.ron".to_string(),
+        },
+        ProjectRequest::ListPlugins,
+        ProjectRequest::WriteGameTypes {
+            info: GameInfo {
+                components: Vec::new(),
+                resources: Vec::new(),
+                assets: Vec::new(),
+                events: Vec::new(),
+                fingerprint: Hash64(0),
+                input: None,
+                tick_rate: 60,
+                debug_layers: Vec::new(),
+            },
+        },
+        ProjectRequest::Build,
+    ];
+    for request in requests {
+        let name = format!("{request:?}");
+        let expected = request.reply_types();
+        let reply = service
+            .handle(request)
+            .unwrap_or_else(|failure| panic!("{name} failed: {failure:?}"));
+        let reply_type = serde_json::to_value(&reply).unwrap()["type"].clone();
+        assert!(
+            expected.iter().any(|expected| reply_type == *expected),
+            "{name} replied {reply_type}, not one of {expected:?}"
+        );
+    }
 }
 
 #[test]

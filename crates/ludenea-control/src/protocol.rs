@@ -18,7 +18,15 @@ use crate::divergence::DivergenceReport;
 use crate::path::PathSegment;
 use crate::session::{Document, Timeline};
 
-pub const PROTOCOL_VERSION: u32 = 3;
+/// The control protocol version this build speaks: a client and a host connect only when
+/// theirs are equal.
+pub const PROTOCOL_VERSION: u32 = 4;
+
+/// The wire shape of `PROTOCOL_VERSION`: a hash of the TypeScript declarations of every type
+/// the messages reach, without their documentation. A client and a host connect only when
+/// theirs are equal too, so builds from different revisions of one version refuse each other
+/// instead of misreading fields. `tests/typescript.rs` pins it.
+pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0x3e9f_fb59_1ec1_ae7f);
 
 /// Binary data, serialized as a standard base64 string.
 #[derive(Clone, Debug, PartialEq)]
@@ -113,8 +121,16 @@ pub mod outcome {
     )
 )]
 pub enum ClientMessage {
-    Hello { protocol_version: u32 },
-    Request { id: u64, command: Command },
+    /// Opens the connection; refused unless both are this build's (`PROTOCOL_VERSION`,
+    /// `PROTOCOL_FINGERPRINT`).
+    Hello {
+        protocol_version: u32,
+        protocol_fingerprint: Hash64,
+    },
+    Request {
+        id: u64,
+        command: Command,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -123,6 +139,7 @@ pub enum ClientMessage {
 pub enum ServerMessage {
     Welcome {
         protocol_version: u32,
+        protocol_fingerprint: Hash64,
         engine_version: String,
         game: GameInfo,
     },
@@ -431,6 +448,73 @@ pub enum Command {
     Unsubscribe {
         topic: Topic,
     },
+}
+
+impl Command {
+    /// The `type` of the reply this command gets when it succeeds. The generated TypeScript
+    /// bindings type each command's reply with it (`ReplyTypes`).
+    pub fn reply_type(&self) -> &'static str {
+        match self {
+            Command::LoadScene { .. }
+            | Command::ReplaceScene { .. }
+            | Command::LoadSession { .. } => "loaded",
+            Command::Step { .. } => "stepped",
+            Command::GetHash => "hash",
+            Command::GetHashTree => "hash_tree",
+            Command::TakeSnapshot => "snapshot",
+            Command::DiffSnapshots { .. } => "differences",
+            Command::CompareTraces { .. } => "trace_comparison",
+            Command::QueryEntities { .. } => "entities",
+            Command::GetEntity { .. } => "entity",
+            Command::GetResources => "resources",
+            Command::Spawn { .. } => "spawned",
+            Command::SaveScene => "scene",
+            Command::GetTimeline => "timeline",
+            Command::ExportSession => "session",
+            Command::GetAsset { .. } => "asset",
+            Command::SaveAsset { .. }
+            | Command::NewAssetValue { .. }
+            | Command::CreatePrefab { .. }
+            | Command::ApplyToPrefab { .. } => "text",
+            Command::DeleteBranch { .. } => "deleted",
+            Command::PlaceInstance { .. } | Command::ReplaceWithInstance { .. } => "placed",
+            Command::GetInstances => "instances",
+            Command::ExportReplay { .. } => "replay",
+            Command::LoadReplay { .. } => "replay_loaded",
+            Command::GetSchedule => "schedule",
+            Command::GetTickEvents { .. } => "tick_events",
+            Command::GetTickCommands { .. } => "tick_commands",
+            Command::GetDebugDraw { .. } => "debug_draw",
+            Command::Pick { .. } => "picked",
+            Command::GetGhostDraw { .. } => "ghost_draw",
+            Command::GetDivergence { .. } => "divergence",
+            Command::LoadInputs { .. }
+            | Command::LoadEdits { .. }
+            | Command::SetThreads { .. }
+            | Command::Restore { .. }
+            | Command::Despawn { .. }
+            | Command::InsertComponent { .. }
+            | Command::RemoveComponent { .. }
+            | Command::SetField { .. }
+            | Command::ApplyToScene { .. }
+            | Command::Play
+            | Command::Pause
+            | Command::Seek { .. }
+            | Command::SetSpeed { .. }
+            | Command::SetLiveInput { .. }
+            | Command::Undo
+            | Command::Redo
+            | Command::SetAssetField { .. }
+            | Command::ApplyToAsset { .. }
+            | Command::SwitchBranch { .. }
+            | Command::RenameBranch { .. }
+            | Command::ApplyOverride { .. }
+            | Command::RevertOverride { .. }
+            | Command::SetCompareBranch { .. }
+            | Command::Subscribe { .. }
+            | Command::Unsubscribe { .. } => "done",
+        }
+    }
 }
 
 /// What a client can subscribe to. Changes are pushed as events from `Host::advance`.

@@ -1,4 +1,14 @@
-import { ControlClient, ProjectClient, fakeTransport, type GameInfo, type TypeSchema } from "@ludenea/control-client";
+import {
+  ControlClient,
+  PROJECT_PROTOCOL_FINGERPRINT,
+  PROJECT_PROTOCOL_VERSION,
+  PROTOCOL_FINGERPRINT,
+  PROTOCOL_VERSION,
+  ProjectClient,
+  fakeTransport,
+  type GameInfo,
+  type TypeSchema,
+} from "@ludenea/control-client";
 import type { PluginDefinition } from "@ludenea/editor-shell";
 import { createEditor, type EditorHost } from "@ludenea/editor-shell/app";
 import { act, render } from "@testing-library/react";
@@ -36,10 +46,20 @@ async function fake<C>(
 }
 
 export const testProject = (answer: Answer = () => undefined) =>
-  fake({ type: "welcome", protocol_version: 1 }, "request", answer, ProjectClient.connect);
+  fake(
+    { type: "welcome", protocol_version: PROJECT_PROTOCOL_VERSION, protocol_fingerprint: PROJECT_PROTOCOL_FINGERPRINT },
+    "request",
+    answer,
+    ProjectClient.connect,
+  );
 
 export const testGame = (answer: Answer = () => ({ type: "done" }), info: Partial<GameInfo> = {}) =>
-  fake({ type: "welcome", protocol_version: 2, engine_version: "0", game: { ...game, ...info } }, "command", answer, ControlClient.connect);
+  fake(
+    { type: "welcome", protocol_version: PROTOCOL_VERSION, protocol_fingerprint: PROTOCOL_FINGERPRINT, engine_version: "0", game: { ...game, ...info } },
+    "command",
+    answer,
+    ControlClient.connect,
+  );
 
 /** An editor on a fake project service with `plugins` active. */
 export async function testEditor(plugins: PluginDefinition[], answer?: Answer) {
