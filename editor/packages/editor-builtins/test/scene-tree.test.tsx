@@ -116,14 +116,15 @@ describe("scene tree", () => {
     const { host, game } = await sceneTree((request) => (request.type === "write_text" ? refused : { type: "done" }));
     host.editor.document.setState({ current: { id: "0000000000000000000000000000000c", kind: "scene", path: "scenes/main.scene.ron" }, text: "(on disk)" });
 
-    // As the palette and Mod+S run it.
-    expect(await runReported(host.editor, "scene.save")).toBeNull();
+    // A plugin running it sees the failure.
+    await expect(host.editor.commands.run("scene.save")).rejects.toThrow("Cannot save scenes/main.scene.ron: permission denied");
+    // The palette and Mod+S report it once.
+    expect(await runReported(host.editor, "scene.save")).toBe("Save scene failed: Cannot save scenes/main.scene.ron: permission denied");
 
     expect(game.sent.filter((command) => command.type === "mark_scene_saved")).toEqual([]);
     expect(host.editor.document.getState().text).toBe("(on disk)");
-    // Once: the palette and Mod+S add nothing.
     const errors = host.editor.console.list().filter(({ level }) => level === "error");
-    expect(errors.map(({ text }) => text)).toEqual(["Cannot save scenes/main.scene.ron: permission denied"]);
+    expect(errors.map(({ text }) => text)).toEqual(["Save scene failed: Cannot save scenes/main.scene.ron: permission denied"]);
   });
 
   it("space_selects_a_row", async () => {

@@ -36,7 +36,7 @@ export const sceneTreePlugin = definePlugin({
           await editor.project.request({ type: "write_text", path: open.path, text: ron });
         } catch (error) {
           // The game still holds the edits as unsaved.
-          return editor.console.log("error", `Cannot save ${open.path}: ${errorText(error)}`);
+          throw new Error(`Cannot save ${open.path}: ${errorText(error)}`);
         }
         editor.document.setState({ text: ron });
         // Saved only if the scene still is the text written: an edit made meanwhile stays unsaved.

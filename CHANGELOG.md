@@ -283,8 +283,9 @@ session (the editor's copy of each open document's session), and the plugin API.
   asset whose identifier it is given, a prefab included, and the selected data asset
   without one.
 - "Save scene" (`scene.save`) and `inspector.save-asset` mark the scene or asset saved only
-  after the file is written. A failed scene write is reported in the editor console as
-  `Cannot save <path>: <reason>`, and the scene stays unsaved.
+  after the file is written. A failed scene write fails the command with
+  `Cannot save <path>: <reason>`, which the palette and Mod+S show in the editor console,
+  and the scene stays unsaved.
 - Removed: `DocumentState.unsavedAssets`, `SavedSession.unsavedAssets` and
   `DocumentSessions.restore`. The game's timeline lists the unsaved assets
   (`unsaved_assets`), a saved session carries them in `load.saved_assets`, and
