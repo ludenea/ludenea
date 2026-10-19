@@ -104,3 +104,66 @@ fn events_sharing_a_stable_name_are_refused() {
         })
     ));
 }
+
+/// A dialogue line, whose replies lead to further lines.
+#[derive(ludenea_ecs::schema::Schema, Serialize, Deserialize, Default)]
+struct Line {
+    replies: Vec<Reply>,
+}
+
+#[derive(ludenea_ecs::schema::Schema, Serialize, Deserialize, Default)]
+struct Reply {
+    next: Vec<Line>,
+}
+
+fn assert_recursive<T>(result: Result<(), ludenea_ecs::EcsError>) {
+    let error = result.expect_err("a type holding a recursive type is refused");
+    assert!(
+        matches!(
+            &error,
+            ludenea_ecs::EcsError::RecursiveType { name, recursive }
+                if *name == std::any::type_name::<T>() && recursive == "schema::Line"
+        ),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "`{}` cannot be registered: `schema::Line` contains itself, and recursive types \
+             have no schema yet; store children as `Entity` references until recursive \
+             schemas are supported",
+            std::any::type_name::<T>()
+        )
+    );
+}
+
+#[test]
+fn every_registration_refuses_a_type_holding_a_recursive_type() {
+    #[derive(Component, Serialize, Deserialize)]
+    #[component(name = "test::Speaker")]
+    struct Speaker(Line);
+
+    #[derive(Resource, Serialize, Deserialize)]
+    #[resource(name = "test::Script")]
+    struct Script(Line);
+
+    #[derive(ludenea_ecs::Asset, Serialize, Deserialize, Default)]
+    #[asset(name = "test::Dialogue")]
+    struct Dialogue(Line);
+
+    #[derive(Event, Serialize)]
+    #[event(name = "test::Said")]
+    struct Said(Line);
+
+    let mut world = World::new();
+    assert_recursive::<Speaker>(world.register_component::<Speaker>());
+    assert_recursive::<Script>(world.register_resource(Script(Line::default())));
+    assert_recursive::<Dialogue>(world.register_asset::<Dialogue>());
+    assert_recursive::<Dialogue>(world.register_asset_with_default::<Dialogue>());
+    assert_recursive::<Said>(world.register_event::<Said>());
+
+    assert!(world.component_schemas().is_empty());
+    assert!(world.resource_schemas().is_empty());
+    assert!(world.asset_schemas().is_empty());
+    assert!(world.event_schemas().is_empty());
+}

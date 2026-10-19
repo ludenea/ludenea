@@ -17,7 +17,7 @@ pub const PROJECT_PROTOCOL_VERSION: u32 = 3;
 /// The wire shape of `PROJECT_PROTOCOL_VERSION`: a hash of the TypeScript declarations of
 /// every type the messages reach, without their documentation. The editor and the service
 /// connect only when theirs are equal too. `tests/typescript.rs` pins it.
-pub const PROJECT_PROTOCOL_FINGERPRINT: Hash64 = Hash64(0x227a_1de4_ad22_d2f3);
+pub const PROJECT_PROTOCOL_FINGERPRINT: Hash64 = Hash64(0xf0f1_300d_4dc3_1f00);
 
 /// What to do about a refused handshake: editor and service come from different checkouts.
 const REBUILD: &str =

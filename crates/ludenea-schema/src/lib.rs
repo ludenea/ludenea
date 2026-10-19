@@ -6,6 +6,7 @@ extern crate self as ludenea_schema;
 pub mod entities;
 mod typescript;
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub use ludenea_macros::Schema;
@@ -14,10 +15,48 @@ pub use typescript::typescript_declarations;
 
 /// The serde shape of a type.
 ///
-/// `schema()` recurses through field types, so a recursive type (a struct holding a `Vec`
-/// of itself) overflows the stack: do not derive `Schema` for one.
+/// Recursive types have no schema yet. The derive refuses a type that names itself in a
+/// field, and a derived `schema()` that comes back to a type it is describing, through
+/// other types, gives a `TypeSchema::Recursive` marker there instead of describing it again;
+/// registering such a type with the ECS fails. A hand-written `schema()` must not recurse
+/// into its own type.
 pub trait Schema {
     fn schema() -> TypeSchema;
+}
+
+thread_local! {
+    /// The named types whose derived `schema()` is running on this thread, outermost first.
+    static DESCRIBING: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The schema `describe` gives for the named type `name`, or a `TypeSchema::Recursive`
+/// marker when this thread is already describing `name`, so a recursive type ends instead
+/// of overflowing the stack. Called by `#[derive(Schema)]`.
+#[doc(hidden)]
+pub fn __named_schema(name: &'static str, describe: impl FnOnce() -> TypeSchema) -> TypeSchema {
+    /// Leaves `name` when `describe` returns or panics.
+    struct Leave;
+
+    impl Drop for Leave {
+        fn drop(&mut self) {
+            DESCRIBING.with_borrow_mut(Vec::pop);
+        }
+    }
+
+    let entered = DESCRIBING.with_borrow_mut(|describing| {
+        let entered = !describing.contains(&name);
+        if entered {
+            describing.push(name);
+        }
+        entered
+    });
+    if !entered {
+        return TypeSchema::Recursive {
+            name: name.to_owned(),
+        };
+    }
+    let _leave = Leave;
+    describe()
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -81,6 +120,58 @@ pub enum TypeSchema {
     Handle {
         asset: String,
     },
+    /// Where a type comes back to `name`, a type it is inside of: recursive types have no
+    /// schema yet, and registration refuses one that holds this marker.
+    Recursive {
+        name: String,
+    },
+}
+
+impl TypeSchema {
+    /// The name of the first type this schema comes back to, marked `Recursive`, if any.
+    pub fn recursive_type(&self) -> Option<&str> {
+        use TypeSchema::*;
+        match self {
+            Recursive { name } => Some(name),
+            Option { item } | List { item } | Array { item, .. } | Newtype { item, .. } => {
+                item.recursive_type()
+            }
+            Map { key, value } => key.recursive_type().or_else(|| value.recursive_type()),
+            Tuple { items } | TupleStruct { items, .. } => {
+                items.iter().find_map(TypeSchema::recursive_type)
+            }
+            Struct { fields, .. } => recursive_field(fields),
+            Enum { variants, .. } => variants.iter().find_map(|variant| match &variant.fields {
+                VariantFields::Unit => None,
+                VariantFields::Newtype { item } => item.recursive_type(),
+                VariantFields::Tuple { items } => items.iter().find_map(TypeSchema::recursive_type),
+                VariantFields::Struct { fields } => recursive_field(fields),
+            }),
+            Bool
+            | U8
+            | U16
+            | U32
+            | U64
+            | I8
+            | I16
+            | I32
+            | I64
+            | F32
+            | F64
+            | String
+            | Unit
+            | UnitStruct { .. }
+            | Entity
+            | AssetId
+            | Handle { .. } => None,
+        }
+    }
+}
+
+fn recursive_field(fields: &[FieldSchema]) -> Option<&str> {
+    fields
+        .iter()
+        .find_map(|field| field.schema.recursive_type())
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -285,6 +376,29 @@ tuple!(A, B, C, D);
 ///     inner: T,
 /// }
 /// ```
+///
+/// A type that holds itself is rejected too: recursive types have no schema yet.
+///
+/// ```compile_fail
+/// use ludenea_schema::Schema;
+///
+/// #[derive(Schema)]
+/// struct Node {
+///     children: Vec<Node>,
+/// }
+/// ```
+///
+/// Likewise when it names itself `Self`.
+///
+/// ```compile_fail
+/// use ludenea_schema::Schema;
+///
+/// #[derive(Schema)]
+/// enum Tree {
+///     Leaf(u8),
+///     Branch(Vec<Self>),
+/// }
+/// ```
 #[cfg(doctest)]
 struct _CompileFail;
 
@@ -401,6 +515,93 @@ mod tests {
             }
         );
         assert_eq!(usize::schema(), TypeSchema::U64);
+    }
+
+    /// A dialogue line, whose replies lead to further lines.
+    #[derive(Schema)]
+    struct Line {
+        text: String,
+        replies: Vec<Reply>,
+    }
+
+    #[derive(Schema)]
+    struct Reply {
+        next: Option<Line>,
+    }
+
+    fn struct_fields(schema: &TypeSchema) -> &[FieldSchema] {
+        match schema {
+            TypeSchema::Struct { fields, .. } => fields,
+            other => panic!("expected a struct: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_type_coming_back_to_itself_is_marked_recursive_where_it_does() {
+        let line = Line::schema();
+        let TypeSchema::List { item: reply } = &struct_fields(&line)[1].schema else {
+            panic!("expected a list: {line:?}");
+        };
+        let TypeSchema::Option { item: next } = &struct_fields(reply)[0].schema else {
+            panic!("expected an option: {reply:?}");
+        };
+        let TypeSchema::Recursive { name } = &**next else {
+            panic!("expected a recursive marker: {next:?}");
+        };
+        assert_eq!(name, name_of(&line));
+        assert_eq!(line.recursive_type(), Some(name.as_str()));
+        assert_eq!(Line::schema(), line, "a second call gives the same schema");
+        assert_eq!(Vec2::schema().recursive_type(), None);
+    }
+
+    #[test]
+    fn a_type_used_twice_side_by_side_is_not_recursive() {
+        #[derive(Schema)]
+        struct Segment {
+            from: Vec2,
+            to: Vec2,
+        }
+
+        let segment = Segment::schema();
+        assert_eq!(struct_fields(&segment)[1].schema, Vec2::schema());
+        assert_eq!(segment.recursive_type(), None);
+    }
+
+    #[test]
+    fn a_panicking_schema_leaves_its_type() {
+        struct Refused;
+
+        impl Schema for Refused {
+            fn schema() -> TypeSchema {
+                panic!("refused")
+            }
+        }
+
+        #[derive(Schema)]
+        struct Holder {
+            refused: Refused,
+        }
+
+        for _ in 0..2 {
+            let panic = std::panic::catch_unwind(Holder::schema).unwrap_err();
+            assert_eq!(panic.downcast_ref::<&str>(), Some(&"refused"));
+        }
+    }
+
+    mod other {
+        #[derive(crate::Schema)]
+        pub struct Node(pub u8);
+    }
+
+    /// Holds a type of its own name from another module, which is not itself.
+    #[derive(Schema)]
+    struct Node {
+        other: other::Node,
+    }
+
+    #[test]
+    fn a_type_holding_another_of_its_name_is_not_recursive() {
+        assert_eq!(Node::schema().recursive_type(), None);
     }
 
     #[test]

@@ -105,10 +105,21 @@ session (the editor's copy of each open document's session), and the plugin API.
   a session has handed out its last branch identifier, an edit or take-over that would
   fork is refused with the new `SessionError::CannotFork` and changes nothing; it
   panicked, or, built without overflow checks, reused an identifier.
+- A type that contains itself, such as a tree node holding a `Vec` of nodes, has no schema
+  yet. `#[derive(Schema)]`, and so the `Component`, `Resource`, `Asset` and `Event`
+  derives, refuses a field that names the type itself or `Self` inside `Option`, `Vec`,
+  `BTreeSet`, `BTreeMap`, an array or a tuple. Where a derived `schema()` comes back to a
+  type it is describing through other types, it gives the new
+  `TypeSchema::Recursive { name }` marker instead of overflowing the stack, and
+  `TypeSchema::recursive_type` finds it. The `World` registrations, `App::input` (through
+  `App::build`) and the new `ludenea_ecs::check_not_recursive` refuse a type holding one
+  with the new `EcsError::RecursiveType`, which names both types and says to store
+  children as `Entity` references. Listing the schemas of such a type ended the game
+  process.
 
 ### Control protocol
 
-- Control protocol 4, fingerprint `3e9ffb591ec1ae7f`.
+- Control protocol 4, fingerprint `bbbbeec8251a0960`.
 - `hello` and `welcome` carry `protocol_fingerprint`, a hash of the TypeScript declarations
   of every type the messages reach. The host refuses a client of another version or
   fingerprint with `version_mismatch` and says to rebuild the editor
@@ -141,15 +152,22 @@ session (the editor's copy of each open document's session), and the plugin API.
   `invalid_command`; it ended the game process. An edit or take-over that would fork a
   branch after the session has handed out its last identifier fails with
   `invalid_command` and changes nothing.
+- `TypeSchema` has a `recursive` kind, `{ "kind": "recursive", "name": ... }`, marking
+  where a type comes back to the type `name` it is inside of. No game sends one: a game
+  holding such a type fails to build with an error that names it, where it ended with a
+  stack overflow.
 
 ### Project protocol
 
-- Project protocol 3, fingerprint `227a1de4ad22d2f3`.
+- Project protocol 3, fingerprint `f0f1300d4dc31f00`.
 - `hello` and `welcome` carry `protocol_fingerprint`, as in the control protocol, and the
   service refuses a client of another version or fingerprint the same way.
 - `game_output` events and the `line` events of a build carry a line that is not UTF-8
   with replacement characters. Such a line used to end the relay of its stream: on the
   game's standard output, every later protocol message was lost.
+- `TypeSchema` in `GameInfo` (`write_game_types`) has the `recursive` kind of the control
+  protocol; the game types declare it as the alias of the type it names, or `unknown`
+  when that type is not among them.
 
 ### Plugin API
 

@@ -1349,6 +1349,9 @@ impl Rewriter<'_> {
                 write_varint(&mut self.out, index.into());
                 write_varint(&mut self.out, generation.into());
             }
+            TypeSchema::Recursive { name } => {
+                unreachable!("registration refuses `{name}`, a recursive type")
+            }
         }
         Ok(())
     }

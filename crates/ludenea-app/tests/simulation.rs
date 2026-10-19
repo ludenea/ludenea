@@ -183,6 +183,51 @@ fn duplicate_names_fail_at_build() {
     assert!(matches!(app.build(), Err(ludenea_app::AppError::Ecs(_))));
 }
 
+/// A dialogue line, whose replies lead to further lines: a type that holds itself through
+/// another type.
+#[derive(Schema, Serialize, Deserialize, Default, Clone)]
+struct Line {
+    replies: Vec<Reply>,
+}
+
+#[derive(Schema, Serialize, Deserialize, Default, Clone)]
+struct Reply {
+    next: Vec<Line>,
+}
+
+fn assert_refuses_recursive_line(app: App, registered: &str) {
+    let Err(error) = app.build() else {
+        panic!("an app holding a recursive type built");
+    };
+    let message = error.to_string();
+    assert!(
+        message.contains(&format!("`{registered}` cannot be registered"))
+            && message.contains("`simulation::Line` contains itself")
+            && message.contains("store children as `Entity` references"),
+        "{message}"
+    );
+}
+
+#[test]
+fn an_indirectly_recursive_asset_type_fails_at_build() {
+    #[derive(ludenea_ecs::Asset, Serialize, Deserialize)]
+    #[asset(name = "test::Dialogue")]
+    struct Dialogue {
+        start: Line,
+    }
+
+    let mut app = App::new();
+    app.asset::<Dialogue>();
+    assert_refuses_recursive_line(app, std::any::type_name::<Dialogue>());
+}
+
+#[test]
+fn a_recursive_input_type_fails_at_build() {
+    let mut app = App::new();
+    app.input::<Line>();
+    assert_refuses_recursive_line(app, "simulation::Line");
+}
+
 #[test]
 fn simulation_is_send() {
     fn assert_send<T: Send>() {}

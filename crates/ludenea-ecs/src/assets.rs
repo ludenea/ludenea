@@ -12,7 +12,7 @@ use xxhash_rust::xxh3::Xxh3;
 use crate::component::decode_exact;
 use crate::query::Access;
 use crate::system::{ASSET, Accesses, Missing, SystemParam, declare_cell};
-use crate::world::check_same_type;
+use crate::world::{check_not_recursive, check_same_type};
 use crate::{Asset, AssetId, Codec, EcsError, Handle, World, hash_value};
 
 /// A decoded asset; `Sync` so systems may share it across threads, and shared so a
@@ -38,11 +38,13 @@ pub(crate) struct LoadedAsset {
 }
 
 impl World {
-    /// Registers the asset type `T`; registering the same type again is a no-op.
+    /// Registers the asset type `T`; registering the same type again is a no-op. Fails with
+    /// `EcsError::RecursiveType` when `T` holds a type that contains itself.
     pub fn register_asset<T: Asset>(&mut self) -> Result<(), EcsError> {
         if let Some(entry) = self.asset_types.get(T::NAME) {
             return check_same_type::<T>(T::NAME, entry.type_id, entry.type_name);
         }
+        check_not_recursive::<T>()?;
         self.asset_types.insert(
             T::NAME,
             AssetType {

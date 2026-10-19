@@ -44,4 +44,4 @@ pub use schedule::{
 };
 pub use snapshot::{ComponentValues, SNAPSHOT_VERSION, Snapshot, SnapshotError};
 pub use system::{IntoSystem, Res, ResMut, Runtime, System, SystemParam};
-pub use world::World;
+pub use world::{World, check_not_recursive};

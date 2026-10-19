@@ -26,7 +26,7 @@ pub const PROTOCOL_VERSION: u32 = 4;
 /// the messages reach, without their documentation. A client and a host connect only when
 /// theirs are equal too, so builds from different revisions of one version refuse each other
 /// instead of misreading fields. `tests/typescript.rs` pins it.
-pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0x3e9f_fb59_1ec1_ae7f);
+pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0xbbbb_eec8_251a_0960);
 
 /// Binary data, serialized as a standard base64 string.
 #[derive(Clone, Debug, PartialEq)]

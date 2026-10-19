@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use ludenea_debug_draw::DebugDrawFrame;
 use ludenea_ecs::{
     Asset, BuildError, Component, EcsError, Event, IntoSystemConfig, Prefab, Resource,
-    ScheduleBuilder, World,
+    ScheduleBuilder, World, check_not_recursive,
 };
 
 use ludenea_ecs::Entity;
@@ -137,8 +137,12 @@ impl App {
         self
     }
 
-    /// Sets the per-player input type; a later call replaces it.
+    /// Sets the per-player input type; a later call replaces it. `build` fails when `I`
+    /// holds a type that contains itself.
     pub fn input<I: Input>(&mut self) -> &mut Self {
+        if let Err(error) = check_not_recursive::<I>() {
+            self.errors.push(error);
+        }
         self.world.insert_runtime(Inputs {
             players: vec![I::default()],
         });

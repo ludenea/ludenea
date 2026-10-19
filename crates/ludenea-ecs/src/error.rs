@@ -26,6 +26,13 @@ pub enum EcsError {
         "asset type `{0}` has no default value; register it with `World::register_asset_with_default`"
     )]
     NoDefault(String),
+    #[error(
+        "`{name}` cannot be registered: `{recursive}` contains itself, and recursive types have no schema yet; store children as `Entity` references until recursive schemas are supported"
+    )]
+    RecursiveType {
+        name: &'static str,
+        recursive: String,
+    },
     #[error("asset {id} is not a valid `{type_name}`: {reason}")]
     InvalidAsset {
         id: AssetId,

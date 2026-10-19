@@ -90,7 +90,9 @@ fn walk(schema: &TypeSchema, value: &Value, path: String, found: &mut Vec<Entity
         | Unit
         | UnitStruct { .. }
         | AssetId
-        | Handle { .. } => {}
+        | Handle { .. }
+        // Registration refuses a type holding this marker.
+        | Recursive { .. } => {}
     }
 }
 

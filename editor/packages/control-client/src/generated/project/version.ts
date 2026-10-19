@@ -4,7 +4,7 @@
 export const PROJECT_PROTOCOL_VERSION = 3;
 
 /** The wire shape of `PROJECT_PROTOCOL_VERSION`, a hash of the protocol's types: the editor and the service connect only when theirs are equal too. */
-export const PROJECT_PROTOCOL_FINGERPRINT = "227a1de4ad22d2f3";
+export const PROJECT_PROTOCOL_FINGERPRINT = "f0f1300d4dc31f00";
 
 /** The `type` of the replies each request type may get when it succeeds. */
 export type ProjectReplyTypes = {

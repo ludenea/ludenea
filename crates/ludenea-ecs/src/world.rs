@@ -2,7 +2,7 @@ use std::any::{Any, TypeId, type_name};
 use std::cell::{Ref, RefCell};
 use std::collections::BTreeMap;
 
-use ludenea_schema::TypeSchema;
+use ludenea_schema::{Schema, TypeSchema};
 
 use crate::assets::{AssetType, LoadedAsset};
 use crate::commands::CommandQueue;
@@ -152,11 +152,13 @@ impl World {
         Self::default()
     }
 
-    /// Registers `T`; registering the same type again is a no-op.
+    /// Registers `T`; registering the same type again is a no-op. Fails with
+    /// `EcsError::RecursiveType` when `T` holds a type that contains itself.
     pub fn register_component<T: Component>(&mut self) -> Result<(), EcsError> {
         if let Some(entry) = self.components.get(T::NAME) {
             return check_same_type::<T>(T::NAME, entry.type_id, entry.type_name);
         }
+        check_not_recursive::<T>()?;
         self.components.insert(
             T::NAME,
             ComponentEntry {
@@ -169,11 +171,13 @@ impl World {
         Ok(())
     }
 
-    /// Registers `T` and stores `value`, replacing any previous value of `T`.
+    /// Registers `T` and stores `value`, replacing any previous value of `T`. Fails with
+    /// `EcsError::RecursiveType` when `T` holds a type that contains itself.
     pub fn register_resource<T: Resource>(&mut self, value: T) -> Result<(), EcsError> {
         if let Some(entry) = self.resources.get(T::NAME) {
             check_same_type::<T>(T::NAME, entry.type_id, entry.type_name)?;
         }
+        check_not_recursive::<T>()?;
         self.resources.insert(
             T::NAME,
             ResourceEntry {
@@ -209,12 +213,14 @@ impl World {
     }
 
     /// Registers the event type `T`; registering it again is a no-op. Fails with
-    /// `EcsError::DuplicateName` when another type already has `T::NAME`.
+    /// `EcsError::DuplicateName` when another type already has `T::NAME`, and with
+    /// `EcsError::RecursiveType` when `T` holds a type that contains itself.
     pub fn register_event<T: Event>(&mut self) -> Result<(), EcsError> {
         if let Some(queue) = self.events.get(T::NAME) {
             let (type_id, type_name) = queue.event_type();
             return check_same_type::<T>(T::NAME, type_id, type_name);
         }
+        check_not_recursive::<T>()?;
         self.events
             .insert(T::NAME, Box::new(RefCell::new(Vec::<T>::new())));
         Ok(())
@@ -540,6 +546,18 @@ impl World {
     fn storage_mut<T: Component>(&mut self) -> Option<&mut Vec<Option<T>>> {
         let storage = self.components.get_mut(T::NAME)?.storage.as_any_mut();
         Some(storage.downcast_mut::<ComponentStorage<T>>()?.0.get_mut())
+    }
+}
+
+/// Refuses `T` when its schema holds a type that contains itself: recursive types have no
+/// schema yet, so tools could not describe its values. Every registration checks it.
+pub fn check_not_recursive<T: Schema>() -> Result<(), EcsError> {
+    match T::schema().recursive_type() {
+        None => Ok(()),
+        Some(recursive) => Err(EcsError::RecursiveType {
+            name: type_name::<T>(),
+            recursive: recursive.to_owned(),
+        }),
     }
 }
 

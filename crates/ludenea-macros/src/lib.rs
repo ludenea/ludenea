@@ -77,7 +77,8 @@ fn expand(input: &DeriveInput, trait_name: &str, attribute: &str) -> syn::Result
 /// `deserialize_with`, `transparent`, `rename_all_fields`) fail to compile. The container
 /// attributes `try_from`, `from`, and `into` are accepted: the mirror type must have
 /// identical fields. Generic types fail to compile too: every instantiation would share one
-/// schema name.
+/// schema name. So does a type with a field that names itself, by its name or as `Self`:
+/// recursive types have no schema yet.
 #[proc_macro_derive(Schema)]
 pub fn derive_schema(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -98,14 +99,26 @@ fn expand_schema(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let schema = schema_path();
     let ident = &input.ident;
     let name = ident.to_string();
-    let name = quote!(::std::string::String::from(
-        ::core::concat!(::core::module_path!(), "::", #name)
-    ));
+    let full_name = quote!(::core::concat!(::core::module_path!(), "::", #name));
+    let name = quote!(::std::string::String::from(#full_name));
+    let check_field = |field: &syn::Field| {
+        check_serde_attributes(&field.attrs)?;
+        if names_itself(&field.ty, ident) {
+            return Err(syn::Error::new_spanned(
+                &field.ty,
+                format!(
+                    "`{ident}` holds itself, and recursive types have no schema yet; store \
+                     children as `Entity` references until recursive schemas are supported"
+                ),
+            ));
+        }
+        Ok(())
+    };
     let named_fields = |fields: &syn::punctuated::Punctuated<syn::Field, Token![,]>| {
         fields
             .iter()
             .map(|field| {
-                check_serde_attributes(&field.attrs)?;
+                check_field(field)?;
                 let field_name = field
                     .ident
                     .as_ref()
@@ -126,7 +139,7 @@ fn expand_schema(input: &DeriveInput) -> syn::Result<TokenStream2> {
         fields
             .iter()
             .map(|field| {
-                check_serde_attributes(&field.attrs)?;
+                check_field(field)?;
                 let ty = &field.ty;
                 Ok(quote!(<#ty as #schema::Schema>::schema()))
             })
@@ -194,10 +207,46 @@ fn expand_schema(input: &DeriveInput) -> syn::Result<TokenStream2> {
     Ok(quote! {
         impl #schema::Schema for #ident {
             fn schema() -> #schema::TypeSchema {
-                #body
+                #schema::__named_schema(#full_name, || #body)
             }
         }
     })
+}
+
+/// The generic types whose schema describes their items, as `ludenea_schema` implements it.
+/// A `Handle<T>` is not one: its schema names the asset type without describing it.
+const ITEM_CONTAINERS: [&str; 4] = ["Option", "Vec", "BTreeSet", "BTreeMap"];
+
+/// Whether the schema of the field type `ty` describes the type `ident` being derived,
+/// named by that bare name or as `Self`: `Node`, `Vec<Node>`, `[Option<Self>; 2]`. A path to
+/// another type of the same name (`other::Node`) is not it; through an alias or another type,
+/// the derived `schema()` marks the recursion instead.
+fn names_itself(ty: &Type, ident: &Ident) -> bool {
+    match ty {
+        Type::Path(path) if path.qself.is_none() => {
+            let segments = &path.path.segments;
+            let is_itself = path.path.leading_colon.is_none()
+                && segments.first().is_some_and(|first| {
+                    first.ident == "Self" || (segments.len() == 1 && first.ident == *ident)
+                });
+            is_itself
+                || segments.iter().any(|segment| match &segment.arguments {
+                    PathArguments::AngleBracketed(arguments)
+                        if ITEM_CONTAINERS.contains(&segment.ident.to_string().as_str()) =>
+                    {
+                        arguments.args.iter().any(|argument| {
+                            matches!(argument, GenericArgument::Type(item) if names_itself(item, ident))
+                        })
+                    }
+                    _ => false,
+                })
+        }
+        Type::Array(array) => names_itself(&array.elem, ident),
+        Type::Paren(paren) => names_itself(&paren.elem, ident),
+        Type::Group(group) => names_itself(&group.elem, ident),
+        Type::Tuple(tuple) => tuple.elems.iter().any(|elem| names_itself(elem, ident)),
+        _ => false,
+    }
 }
 
 /// Serde attributes that change the serialized shape, which a schema cannot follow.

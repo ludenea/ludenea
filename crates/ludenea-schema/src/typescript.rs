@@ -104,7 +104,8 @@ fn collect<'a>(schema: &'a TypeSchema, named: &mut BTreeMap<String, &'a TypeSche
         | Unit
         | Entity
         | AssetId
-        | Handle { .. } => {}
+        | Handle { .. }
+        | Recursive { .. } => {}
     }
 }
 
@@ -182,6 +183,13 @@ fn reference(schema: &TypeSchema, names: &Names) -> String {
         | Enum { name, .. } => names.of(name).to_string(),
         Entity => "{ index: number; generation: number }".into(),
         AssetId | Handle { .. } => "string".into(),
+        // A derived marker is inside the type it names, so that type has an alias. A marker
+        // outside it (never derived) has nothing to refer to.
+        Recursive { name } => names
+            .0
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| "unknown".into()),
     }
 }
 
@@ -271,5 +279,31 @@ mod tests {
             text.contains("export interface ComponentTypes {\n  \"game::Weapon\": Weapon;\n}\n"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn a_recursive_marker_refers_to_the_type_it_names() {
+        let line = TypeSchema::Struct {
+            name: "game::Line".into(),
+            fields: vec![FieldSchema {
+                name: "replies".into(),
+                schema: TypeSchema::List {
+                    item: Box::new(TypeSchema::Recursive {
+                        name: "game::Line".into(),
+                    }),
+                },
+            }],
+        };
+        let alone = TypeSchema::Recursive {
+            name: "game::Lost".into(),
+        };
+
+        let text = typescript_declarations(&[("game::Line", &line), ("game::Lost", &alone)], &[]);
+
+        assert!(
+            text.contains("export type Line = { replies: Array<Line> };"),
+            "{text}"
+        );
+        assert!(text.contains("  \"game::Lost\": unknown;\n"), "{text}");
     }
 }

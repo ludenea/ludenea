@@ -727,6 +727,9 @@ type TypeSchema = {
 } | {
     "kind": "handle";
     asset: string;
+} | {
+    "kind": "recursive";
+    name: string;
 };
 
 type FieldSchema = {
@@ -1001,7 +1004,7 @@ type ServerMessage = {
 /** The control protocol version this build speaks: a client and a host connect only when theirs are equal. */
 const PROTOCOL_VERSION = 4;
 /** The wire shape of `PROTOCOL_VERSION`, a hash of the protocol's types: a client and a host connect only when theirs are equal too. */
-const PROTOCOL_FINGERPRINT = "3e9ffb591ec1ae7f";
+const PROTOCOL_FINGERPRINT = "bbbbeec8251a0960";
 /** The `type` of the reply each command type gets when it succeeds. */
 type ReplyTypes = {
     apply_override: "done";
@@ -1348,7 +1351,7 @@ type ProjectServerMessage = {
 /** The project protocol version this build speaks: the editor and the service connect only when theirs are equal. */
 const PROJECT_PROTOCOL_VERSION = 3;
 /** The wire shape of `PROJECT_PROTOCOL_VERSION`, a hash of the protocol's types: the editor and the service connect only when theirs are equal too. */
-const PROJECT_PROTOCOL_FINGERPRINT = "227a1de4ad22d2f3";
+const PROJECT_PROTOCOL_FINGERPRINT = "f0f1300d4dc31f00";
 /** The `type` of the replies each request type may get when it succeeds. */
 type ProjectReplyTypes = {
     build: "done";
