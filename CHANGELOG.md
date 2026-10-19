@@ -58,19 +58,28 @@ session (the editor's copy of each open document's session), and the plugin API.
   field, and its value when it leaves a state that loading would refuse.
 - `PhysicsSettings` refuses to load, from a scene, a snapshot, or a `set_field`, a gravity
   component that is not finite or whose magnitude is above the new `MAX_GRAVITY` (1e6),
-  `substeps` outside 1 to the new `MAX_SUBSTEPS` (64), and a contact hertz, damping ratio,
-  push velocity, or restitution threshold that is not finite or below zero. NaN gravity
-  ended the game process at the next step, and 400,000,000 substeps hung it. The step
-  brings substeps that game code writes back within 1 to 64.
+  `substeps` outside 1 to the new `MAX_SUBSTEPS` (64), a contact damping ratio above the
+  new `MAX_CONTACT_DAMPING_RATIO` (1000), and a contact hertz, damping ratio, push
+  velocity, or restitution threshold that is not finite or below zero. NaN gravity or a
+  huge damping ratio ended the game process at the next step, and 400,000,000 substeps
+  hung it. The step brings substeps and a damping ratio that game code writes back within
+  these limits.
 - `Body` refuses a `gravity_scale` whose magnitude is above the new `MAX_GRAVITY_SCALE`
-  (1000), and `Collider` a density above the new `MAX_DENSITY` (1e6); both overflowed the
-  step.
+  (1000). `Collider` refuses a density above the new `MAX_DENSITY` (1e6), a friction or
+  restitution above the new `MAX_FRICTION` and `MAX_RESTITUTION` (1000), and, unless its
+  density is 0, a mass below the new `MIN_MASS` (1e-9 kg) or an infinite one. All of them
+  overflowed the step.
 - `Time` refuses to load a `dt` that is not finite, below 2^-32 second (the step of the
   fastest tick rate, `u32::MAX` Hz), or above 1 second (the step of the slowest). A scene
   with a NaN or subnormal `dt` ended the game process at the next physics step.
 - The physics step limits the linear speed of a kinematic body to 400 m/s, as it does a
   dynamic one's, and writes the limited value back to `Body`. A velocity so large that its
   square overflows keeps its direction at 400 m/s; it dropped to zero.
+- The physics step applies the speed limits before it prepares the contacts, so a body
+  that starts a step faster than them bounces at the limited speed; the bounce impulse
+  overflowed. A contact spring so soft that its stiffness underflows to zero (a contact
+  hertz near the smallest float with a damping ratio of 0) no longer gives NaN at zero
+  separation.
 - The panic for an invalid state after the physics step also gives the step inputs: `dt`,
   gravity, and the body's gravity scale and velocities at the start of the step.
 - `SessionError::Checkpoint` is returned when a checkpoint cannot be restored because a

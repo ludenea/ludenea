@@ -1,9 +1,10 @@
-use ludenea_app::{App, SceneError, Simulation};
+use ludenea_app::{App, SceneError, Simulation, Time};
 use ludenea_ecs::Entity;
 use ludenea_math::{Aabb, Rot, Vec2};
 use ludenea_physics::{
-    Body, BodyKind, Circle, Collider, PhysicsPlugin, PhysicsSettings, Polygon, Pose, Proxy, Shape,
-    find_pairs,
+    Body, BodyKind, Capsule, Circle, Collider, MAX_CONTACT_DAMPING_RATIO, MAX_DENSITY,
+    MAX_FRICTION, MAX_GRAVITY, MAX_GRAVITY_SCALE, MAX_RESTITUTION, MAX_SUBSTEPS, MIN_MASS,
+    PhysicsPlugin, PhysicsSettings, Polygon, Pose, Proxy, Shape, find_pairs, mass_data,
 };
 
 fn simulation() -> Simulation {
@@ -486,6 +487,7 @@ fn scene_with_physics_settings_out_of_range_is_rejected() {
         ("substeps", "65"),
         ("contact_hertz", "-1.0"),
         ("contact_damping_ratio", "NaN"),
+        ("contact_damping_ratio", "1001.0"),
         ("contact_push_max_velocity", "inf"),
         ("restitution_threshold", "-0.5"),
     ] {
@@ -505,6 +507,7 @@ fn scene_with_physics_settings_at_their_limits_loads() {
         ("substeps", "64"),
         ("contact_hertz", "0.0"),
         ("contact_damping_ratio", "0.0"),
+        ("contact_damping_ratio", "1000.0"),
         ("contact_push_max_velocity", "0.0"),
         ("restitution_threshold", "0.0"),
     ] {
@@ -522,6 +525,60 @@ fn scene_with_huge_density_is_rejected() {
         reason.ends_with("density must be at most 1000000.0, got 3e38"),
         "{reason}"
     );
+}
+
+#[test]
+fn scene_with_a_huge_damping_ratio_is_rejected() {
+    assert_resource_rejected(
+        &scene_with_resources(&settings("contact_damping_ratio", "3.4e38")),
+        "ludenea::PhysicsSettings",
+        "contact_damping_ratio must be at most 1000.0, got 3.4e38",
+    );
+}
+
+#[test]
+fn scene_with_collider_values_out_of_range_is_rejected() {
+    let mass = "mass must be finite and at least 1e-9 kg unless density is 0, got";
+    for (from, to, reason) in [
+        (
+            "friction: 0.6",
+            "friction: 1000.5",
+            "friction must be at most 1000.0, got 1000.5",
+        ),
+        (
+            "restitution: 0.0",
+            "restitution: 3e38",
+            "restitution must be at most 1000.0, got 3e38",
+        ),
+        ("density: 1.0", "density: 1.27e-9", mass),
+        ("density: 1.0", "density: 1e-45", mass),
+        ("radius: 0.5", "radius: 1e-20", mass),
+        (
+            "radius: 0.5",
+            "radius: 1e20",
+            &format!("{mass} inf from density 1.0"),
+        ),
+    ] {
+        let scene = one_body_scene("1.0", "0.0", "0.6").replace(from, to);
+        let refused = assert_rejected(&scene, "ludenea::Collider");
+        assert!(refused.contains(reason), "{to}: {refused}");
+    }
+}
+
+#[test]
+fn scene_with_collider_values_at_their_limits_loads() {
+    for (from, to) in [
+        ("friction: 0.6", "friction: 1000.0"),
+        ("restitution: 0.0", "restitution: 1000.0"),
+        // A mass just above `MIN_MASS`.
+        ("density: 1.0", "density: 1.28e-9"),
+        // A body without mass gets mass 1, whatever its size.
+        ("density: 1.0, friction: 0.6", "density: 0.0, friction: 0.6"),
+    ] {
+        simulation()
+            .load_scene(&one_body_scene("1.0", "0.0", "0.6").replace(from, to))
+            .unwrap();
+    }
 }
 
 #[test]
@@ -563,45 +620,205 @@ fn kinematic_body_at_huge_finite_speed_stays_finite() {
     );
 }
 
-/// Bodies at the largest gravity, gravity scale, density, time step, and velocities that
-/// loading accepts, around a static one.
+/// Bodies in contact, each moving into the next one, at the edges of what loading accepts:
+/// the largest gravity, contact values, gravity scale, friction, restitution, velocities and
+/// density, and the smallest mass.
 const LIMITS_SCENE: &str = r#"Scene(version: 1, resources: {"ludenea::PhysicsSettings": (
-        gravity: (x: 1000000.0, y: -1000000.0), substeps: SUBSTEPS, contact_hertz: 0.0,
-        contact_damping_ratio: 0.0, contact_push_max_velocity: 0.0, restitution_threshold: 0.0),
-        "ludenea::Time": (tick: 0, dt: 1.0)}, entities: [
+        gravity: (x: 1000000.0, y: -1000000.0), substeps: SUBSTEPS, contact_hertz: 3.4e38,
+        contact_damping_ratio: 1000.0, contact_push_max_velocity: 3.4e38,
+        restitution_threshold: 0.0),
+        "ludenea::Time": (tick: 0, dt: DT)}, entities: [
     {
         "ludenea::Pose": (position: (x: 0.0, y: 0.0), rotation: (cos: 1.0, sin: 0.0)),
         "ludenea::Body": (kind: Static, linear_velocity: (x: 0.0, y: 0.0), angular_velocity: 0.0,
             linear_damping: 0.0, angular_damping: 0.0, gravity_scale: 1.0),
         "ludenea::Collider": (shape: Circle((center: (x: 0.0, y: 0.0), radius: 10.0)),
-            density: 0.0, friction: 1.0, restitution: 1.0),
+            density: 0.0, friction: 1000.0, restitution: 1000.0),
     },
     {
         "ludenea::Pose": (position: (x: 0.0, y: 10.5), rotation: (cos: 1.0, sin: 0.0)),
-        "ludenea::Body": (kind: Dynamic, linear_velocity: (x: -3.4e38, y: 3.4e38),
+        "ludenea::Body": (kind: Dynamic, linear_velocity: (x: 3.4e38, y: -3.4e38),
             angular_velocity: 3.4e38, linear_damping: 0.0, angular_damping: 0.0,
             gravity_scale: 1000.0),
         "ludenea::Collider": (shape: Circle((center: (x: 0.0, y: 0.0), radius: 0.5)),
-            density: 1000000.0, friction: 1.0, restitution: 1.0),
+            density: 1000000.0, friction: 1000.0, restitution: 1000.0),
     },
     {
-        "ludenea::Pose": (position: (x: 3.0, y: 10.5), rotation: (cos: 1.0, sin: 0.0)),
-        "ludenea::Body": (kind: Kinematic, linear_velocity: (x: 3.4e38, y: -3.4e38),
+        "ludenea::Pose": (position: (x: 0.75, y: 10.5), rotation: (cos: 1.0, sin: 0.0)),
+        "ludenea::Body": (kind: Kinematic, linear_velocity: (x: -3.4e38, y: -3.4e38),
             angular_velocity: -3.4e38, linear_damping: 0.0, angular_damping: 0.0,
             gravity_scale: -1000.0),
         "ludenea::Collider": (shape: Circle((center: (x: 0.0, y: 0.0), radius: 0.25)),
-            density: 1000000.0, friction: 1.0, restitution: 1.0),
+            density: 1000000.0, friction: 1000.0, restitution: 1000.0),
+    },
+    {
+        "ludenea::Pose": (position: (x: -1.0, y: 10.5), rotation: (cos: 1.0, sin: 0.0)),
+        "ludenea::Body": (kind: Dynamic, linear_velocity: (x: 3.4e38, y: -3.4e38),
+            angular_velocity: -3.4e38, linear_damping: 0.0, angular_damping: 0.0,
+            gravity_scale: -1000.0),
+        "ludenea::Collider": (shape: Circle((center: (x: 0.0, y: 0.0), radius: 0.5)),
+            density: 1.28e-9, friction: 1000.0, restitution: 1000.0),
     },
 ])"#;
 
 #[test]
-fn bodies_at_every_limit_stay_finite() {
+fn bodies_meeting_at_every_limit_stay_finite() {
     for substeps in ["1", "64"] {
+        for dt in ["2.3283064e-10", "1.0"] {
+            let mut simulation = simulation();
+            simulation
+                .load_scene(&LIMITS_SCENE.replace("SUBSTEPS", substeps).replace("DT", dt))
+                .unwrap();
+            step(&mut simulation, 100);
+        }
+    }
+}
+
+#[test]
+fn a_resting_contact_with_the_softest_spring_stays_finite() {
+    let mut simulation = simulation();
+    let settings = PhysicsSettings {
+        contact_hertz: f32::from_bits(1),
+        contact_damping_ratio: 0.0,
+        ..PhysicsSettings::default()
+    };
+    *simulation
+        .world_mut()
+        .resource_mut::<PhysicsSettings>()
+        .unwrap() = settings;
+    ground(&mut simulation);
+    let resting = spawn(
+        &mut simulation,
+        Vec2::new(0.0, GROUND_TOP + 0.5),
+        Body::dynamic(),
+        Some(boxed(0.5, 0.5)),
+    );
+    step(&mut simulation, 10);
+    assert!(pose(&simulation, resting).position.y.is_finite());
+}
+
+#[test]
+fn settings_that_game_code_writes_beyond_their_limits_step_as_at_the_limits() {
+    let run = |substeps, contact_damping_ratio| {
         let mut simulation = simulation();
-        simulation
-            .load_scene(&LIMITS_SCENE.replace("SUBSTEPS", substeps))
-            .unwrap();
-        step(&mut simulation, 100);
+        *simulation
+            .world_mut()
+            .resource_mut::<PhysicsSettings>()
+            .unwrap() = PhysicsSettings {
+            substeps,
+            contact_damping_ratio,
+            ..PhysicsSettings::default()
+        };
+        ground(&mut simulation);
+        let sinking = spawn(
+            &mut simulation,
+            Vec2::new(0.0, GROUND_TOP + 0.4),
+            Body::dynamic(),
+            Some(boxed(0.5, 0.5)),
+        );
+        step(&mut simulation, 30);
+        (pose(&simulation, sinking), body(&simulation, sinking))
+    };
+    assert_eq!(
+        run(u32::MAX, f32::MAX),
+        run(MAX_SUBSTEPS, MAX_CONTACT_DAMPING_RATIO)
+    );
+}
+
+/// A deterministic stream of choices; one seed replays one case.
+struct Picker(u64);
+
+impl Picker {
+    fn pick<T: Copy>(&mut self, values: &[T]) -> T {
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        values[(self.0 >> 33) as usize % values.len()]
+    }
+}
+
+/// Five bodies in a heap. The settings, the time step, and each body and collider value are
+/// picked among the edges of what loading accepts, and loading them from a snapshot proves
+/// that it accepts them. Shape sizes, which loading does not bound, stay within 0.005 to
+/// 20 m.
+fn scene_at_the_load_limits(picker: &mut Picker) -> Simulation {
+    let mut built = simulation();
+    let huge = f32::MAX;
+    let gravity = [0.0, -10.0, MAX_GRAVITY, -MAX_GRAVITY];
+    let settings = PhysicsSettings {
+        gravity: Vec2::new(picker.pick(&gravity), picker.pick(&gravity)),
+        substeps: picker.pick(&[1, 4, MAX_SUBSTEPS]),
+        contact_hertz: picker.pick(&[0.0, f32::from_bits(1), 30.0, huge]),
+        contact_damping_ratio: picker.pick(&[
+            0.0,
+            f32::from_bits(1),
+            10.0,
+            MAX_CONTACT_DAMPING_RATIO,
+        ]),
+        contact_push_max_velocity: picker.pick(&[0.0, 3.0, huge]),
+        restitution_threshold: picker.pick(&[0.0, 1.0, huge]),
+    };
+    let dt = picker.pick(&[1.0 / u32::MAX as f32, 1.0 / 60.0, 1.0]);
+    let world = built.world_mut();
+    *world.resource_mut::<PhysicsSettings>().unwrap() = settings;
+    world.resource_mut::<Time>().unwrap().dt = dt;
+    for i in 0..5 {
+        let size = picker.pick(&[0.005, 0.5, 20.0]);
+        let center = Vec2::new(picker.pick(&[0.0, 0.3 * size]), 0.0);
+        let shape = match picker.pick(&[0, 1, 2]) {
+            0 => Shape::Circle(Circle {
+                center,
+                radius: size,
+            }),
+            1 => Shape::Polygon(Polygon::make_box(size, 0.5 * size)),
+            _ => Shape::Capsule(Capsule {
+                center1: center - Vec2::new(size, 0.0),
+                center2: center + Vec2::new(size, 0.0),
+                radius: size,
+            }),
+        };
+        // Just above `MIN_MASS`.
+        let lightest = MIN_MASS / mass_data(&shape, 1.0).mass * 1.001;
+        let collider = Collider {
+            density: picker.pick(&[0.0, lightest, 1.0, MAX_DENSITY]),
+            friction: picker.pick(&[0.0, 0.6, MAX_FRICTION]),
+            restitution: picker.pick(&[0.0, 0.8, MAX_RESTITUTION]),
+            shape,
+        };
+        let speed = [0.0, 1.0, huge, -huge];
+        let damping = [0.0, 1.0, huge];
+        let body = Body {
+            kind: picker.pick(&[
+                BodyKind::Static,
+                BodyKind::Kinematic,
+                BodyKind::Dynamic,
+                BodyKind::Dynamic,
+            ]),
+            linear_velocity: Vec2::new(picker.pick(&speed), picker.pick(&speed)),
+            angular_velocity: picker.pick(&speed),
+            linear_damping: picker.pick(&damping),
+            angular_damping: picker.pick(&damping),
+            gravity_scale: picker.pick(&[0.0, 1.0, MAX_GRAVITY_SCALE, -MAX_GRAVITY_SCALE]),
+        };
+        let position = Vec2::new(0.4 * i as f32, 0.7 * i as f32);
+        spawn(&mut built, position, body, Some(collider));
+    }
+    let mut loaded = simulation();
+    loaded.restore(&built.snapshot()).unwrap();
+    loaded
+}
+
+#[test]
+fn random_scenes_at_the_load_limits_stay_finite() {
+    for seed in 0..2000 {
+        let mut simulation = scene_at_the_load_limits(&mut Picker(seed));
+        let stepped =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| step(&mut simulation, 30)));
+        if let Err(panic) = stepped {
+            let message = panic.downcast_ref::<String>().cloned().unwrap_or_default();
+            panic!("seed {seed}: {message}");
+        }
     }
 }
 

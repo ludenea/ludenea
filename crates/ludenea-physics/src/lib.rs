@@ -14,8 +14,8 @@ pub mod step;
 
 pub use broad_phase::{Proxy, find_pairs};
 pub use components::{
-    Body, BodyKind, Collider, MAX_DENSITY, MAX_GRAVITY, MAX_GRAVITY_SCALE, MAX_SUBSTEPS,
-    PhysicsSettings, Pose, PoseError,
+    Body, BodyKind, Collider, MAX_CONTACT_DAMPING_RATIO, MAX_DENSITY, MAX_FRICTION, MAX_GRAVITY,
+    MAX_GRAVITY_SCALE, MAX_RESTITUTION, MAX_SUBSTEPS, MIN_MASS, PhysicsSettings, Pose, PoseError,
 };
 pub use contacts::{CachedContact, CachedPoint, ContactCache};
 pub use events::{Collision, CollisionKind};

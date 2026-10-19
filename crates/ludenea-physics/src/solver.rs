@@ -3,7 +3,7 @@
 //! array and a constraint array.
 
 use crate::coloring::{GRAPH_COLOR_COUNT, SOLVER_CHUNK, color_constraints};
-use crate::components::{BodyKind, MAX_SUBSTEPS};
+use crate::components::{BodyKind, MAX_CONTACT_DAMPING_RATIO, MAX_SUBSTEPS};
 use ludenea_app::Parallel;
 use ludenea_math::{PI, Rot, Vec2, clamp, max, min};
 
@@ -48,7 +48,9 @@ pub(crate) fn softness(hertz: f32, zeta: f32, h: f32) -> Softness {
     let a2 = h * omega * a1;
     let a3 = 1.0 / (1.0 + a2);
     Softness {
-        bias_rate: omega / a1,
+        // A spring so soft that `a1` underflows to 0 pushes nothing: `mass_scale` is 0. Its
+        // rate would be infinite, and NaN at zero separation.
+        bias_rate: if a1 > 0.0 { omega / a1 } else { 0.0 },
         mass_scale: a2 * a3,
         impulse_scale: a3,
     }
@@ -115,6 +117,7 @@ impl StepContext {
         let substeps = substeps.clamp(1, MAX_SUBSTEPS);
         let h = dt / substeps as f32;
         let contact_hertz = min(contact_hertz, 0.25 / h);
+        let damping_ratio = min(damping_ratio, MAX_CONTACT_DAMPING_RATIO);
         StepContext {
             h,
             inv_h: 1.0 / h,
@@ -142,6 +145,8 @@ pub(crate) fn solve(
         .collect();
     let is_dynamic: Vec<bool> = bodies.iter().map(|b| b.kind == BodyKind::Dynamic).collect();
     let colors = color_constraints(&pairs, &is_dynamic);
+    // `prepare` reads the velocities for restitution, so the speed limits apply first.
+    parallel.for_each_mut(bodies, SOLVER_CHUNK, |body| limit_velocity(body, context));
     let read: &[SolverBody] = bodies;
     parallel.for_each_mut(constraints, SOLVER_CHUNK, |c| {
         prepare(c, &read[c.body_a], &read[c.body_b], context)
@@ -259,28 +264,31 @@ fn prepare(c: &mut ContactConstraint, a: &SolverBody, b: &SolverBody, context: &
     }
 }
 
-/// Applies gravity and damping to a dynamic body, and the speed limits to every moving body:
-/// a kinematic body moves and spins as fast as a dynamic one at most.
+/// Applies gravity and damping to a dynamic body, then the speed limits.
 fn integrate_velocity(body: &mut SolverBody, context: &StepContext) {
+    if body.kind == BodyKind::Dynamic {
+        let h = context.h;
+        body.linear_velocity = context.gravity * (h * body.gravity_scale)
+            + body.linear_velocity * (1.0 / (1.0 + h * body.linear_damping));
+        body.angular_velocity *= 1.0 / (1.0 + h * body.angular_damping);
+    }
+    limit_velocity(body, context);
+}
+
+/// Applies the speed limits to every moving body: a kinematic body moves and spins as fast
+/// as a dynamic one at most.
+fn limit_velocity(body: &mut SolverBody, context: &StepContext) {
     if body.kind == BodyKind::Static {
         return;
     }
-    let h = context.h;
-    let mut v = body.linear_velocity;
-    let mut w = body.angular_velocity;
-    if body.kind == BodyKind::Dynamic {
-        v = context.gravity * (h * body.gravity_scale)
-            + v * (1.0 / (1.0 + h * body.linear_damping));
-        w *= 1.0 / (1.0 + h * body.angular_damping);
-    }
-    body.linear_velocity = limit_speed(v);
+    body.linear_velocity = limit_speed(body.linear_velocity);
     // At most an eighth of a turn per substep keeps the small-angle rotation integration
     // accurate.
     let max_angular_speed = 0.25 * PI * context.inv_h;
+    let w = body.angular_velocity;
     if w * w > max_angular_speed * max_angular_speed {
-        w *= max_angular_speed / w.abs();
+        body.angular_velocity = w * (max_angular_speed / w.abs());
     }
-    body.angular_velocity = w;
 }
 
 /// `v`, scaled down to `MAX_LINEAR_SPEED` when it is faster.

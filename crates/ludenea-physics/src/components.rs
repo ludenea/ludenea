@@ -1,3 +1,4 @@
+use crate::mass::mass_data;
 use crate::shape::Shape;
 use ludenea_ecs::schema::Schema;
 use ludenea_ecs::{Component, Resource};
@@ -19,6 +20,20 @@ pub const MAX_DENSITY: f32 = 1e6;
 
 /// Most solver substeps per tick that `PhysicsSettings` accepts.
 pub const MAX_SUBSTEPS: u32 = 64;
+
+/// Largest `PhysicsSettings::contact_damping_ratio`, a hundred times the default: a larger
+/// ratio overflows the contact softness.
+pub const MAX_CONTACT_DAMPING_RATIO: f32 = 1e3;
+
+/// Largest `Collider::friction`: a larger coefficient overflows the friction mix.
+pub const MAX_FRICTION: f32 = 1e3;
+
+/// Largest `Collider::restitution`: a larger coefficient overflows the bounce impulse.
+pub const MAX_RESTITUTION: f32 = 1e3;
+
+/// Smallest mass, in kg, of a `Collider` whose density is not 0: the inverse of a smaller
+/// mass overflows the contact solver.
+pub const MIN_MASS: f32 = 1e-9;
 
 /// Body origin in world space. Deserialization rejects what `validate` refuses: a
 /// non-finite position or a rotation that is not unit length.
@@ -194,9 +209,10 @@ impl Body {
     }
 }
 
-/// One collider per entity. Deserialization validates the shape and rejects
-/// non-finite or negative density, friction, and restitution, and a density above
-/// `MAX_DENSITY`.
+/// One collider per entity. Deserialization validates the shape and rejects non-finite or
+/// negative density, friction, and restitution, values above `MAX_DENSITY`, `MAX_FRICTION`,
+/// and `MAX_RESTITUTION`, and a density other than 0 that gives a mass below `MIN_MASS` or
+/// an infinite one.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[component(name = "ludenea::Collider")]
 #[serde(try_from = "ColliderData", into = "ColliderData")]
@@ -251,9 +267,20 @@ impl TryFrom<ColliderData> for Collider {
                 "density, friction, and restitution must be finite and zero or more".to_string(),
             );
         }
-        if data.density > MAX_DENSITY {
+        for (name, value, limit) in [
+            ("density", data.density, MAX_DENSITY),
+            ("friction", data.friction, MAX_FRICTION),
+            ("restitution", data.restitution, MAX_RESTITUTION),
+        ] {
+            if value > limit {
+                return Err(format!("{name} must be at most {limit:?}, got {value:?}"));
+            }
+        }
+        let mass = mass_data(&data.shape, data.density).mass;
+        if data.density > 0.0 && !(MIN_MASS <= mass && mass.is_finite()) {
             return Err(format!(
-                "density must be at most {MAX_DENSITY:?}, got {:?}",
+                "mass must be finite and at least {MIN_MASS:?} kg unless density is 0, got \
+                 {mass:?} from density {:?}",
                 data.density
             ));
         }
@@ -267,8 +294,9 @@ impl TryFrom<ColliderData> for Collider {
 }
 
 /// How the physics step solves. Deserialization rejects a gravity component that is not
-/// finite or beyond `±MAX_GRAVITY`, `substeps` outside 1 to `MAX_SUBSTEPS`, and the other
-/// values when they are not finite or below zero.
+/// finite or beyond `±MAX_GRAVITY`, `substeps` outside 1 to `MAX_SUBSTEPS`, a
+/// `contact_damping_ratio` above `MAX_CONTACT_DAMPING_RATIO`, and the other values when they
+/// are not finite or below zero.
 #[derive(Resource, Serialize, Deserialize, Copy, Clone, Debug, PartialEq)]
 #[resource(name = "ludenea::PhysicsSettings")]
 #[serde(try_from = "PhysicsSettingsData", into = "PhysicsSettingsData")]
@@ -278,6 +306,8 @@ pub struct PhysicsSettings {
     /// `MAX_SUBSTEPS` back within it.
     pub substeps: u32,
     pub contact_hertz: f32,
+    /// The step brings a value that game code writes above `MAX_CONTACT_DAMPING_RATIO` down
+    /// to it.
     pub contact_damping_ratio: f32,
     pub contact_push_max_velocity: f32,
     pub restitution_threshold: f32,
@@ -335,6 +365,12 @@ impl TryFrom<PhysicsSettingsData> for PhysicsSettings {
                     "{name} must be finite and zero or more, got {value:?}"
                 ));
             }
+        }
+        if data.contact_damping_ratio > MAX_CONTACT_DAMPING_RATIO {
+            return Err(format!(
+                "contact_damping_ratio must be at most {MAX_CONTACT_DAMPING_RATIO:?}, got {:?}",
+                data.contact_damping_ratio
+            ));
         }
         Ok(PhysicsSettings {
             gravity,
