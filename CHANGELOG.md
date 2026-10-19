@@ -56,6 +56,9 @@ session (the editor's copy of each open document's session), and the plugin API.
 - `Pose::validate` checks a pose as loading does and returns the new `PoseError`, which
   carries the refused position or rotation. The physics step panics with the entity, the
   field, and its value when it leaves a state that loading would refuse.
+- `Time` refuses to load a `dt` that is not above 0 and at most 1 second, the step of the
+  slowest tick rate. A scene with a NaN `dt` ended the game process at the next physics
+  step.
 - `SessionError::Checkpoint` is returned when a checkpoint cannot be restored because a
   system wrote a value its type refuses to load; the session used to panic.
 - A component that a snapshot cannot restore is named with its entity, and

@@ -183,3 +183,29 @@ fn scene_that_is_not_ron_is_a_parse_error() {
     let error = simulation().load_scene("not a scene").unwrap_err();
     assert!(matches!(error, SceneError::Parse(_)));
 }
+
+#[test]
+fn scene_with_a_time_step_outside_zero_to_one_second_is_rejected() {
+    for dt in ["NaN", "inf", "0.0", "-0.0166", "1.5"] {
+        let mut simulation = loaded();
+        let before = simulation.hash();
+        let scene = format!(
+            r#"Scene(version: 1, resources: {{"ludenea::Time": (tick: 0, dt: {dt})}}, entities: [])"#
+        );
+        let error = simulation.load_scene(&scene).unwrap_err();
+        assert!(
+            matches!(&error, SceneError::InvalidValue { entity: None, name, reason } if name == "ludenea::Time" && reason.contains(&format!("dt must be above 0 and at most 1 second, got {dt}"))),
+            "{dt}: {error:?}"
+        );
+        assert_eq!(simulation.hash(), before);
+    }
+}
+
+#[test]
+fn scene_with_a_time_step_of_one_second_loads() {
+    simulation()
+        .load_scene(
+            r#"Scene(version: 1, resources: {"ludenea::Time": (tick: 0, dt: 1.0)}, entities: [])"#,
+        )
+        .unwrap();
+}
