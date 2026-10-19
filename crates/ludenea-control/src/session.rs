@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 use crate::branches::{BranchId, BranchInfo, BranchTree, BranchesError, Segment, StoredBranch};
 use crate::checkpoints::{CHECKPOINT_BUDGET, Checkpoints};
 use crate::subscriptions::Introspection;
-use crate::undo::{ForkCause, UndoEntry, UndoError, UndoHistory};
+use crate::undo::{ForkCause, UndoEntry, UndoError, UndoHistory, removed_by_run};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
@@ -767,7 +767,7 @@ impl Session {
                 let tick = edit.tick;
                 self.switch_to(sim, *branch, tick)?;
                 self.ensure_resimulated()?;
-                let mut stored = StoredBranch::decode(removed)?.into_iter();
+                let mut stored = removed_by_run(removed)?.into_iter();
                 match stored.next() {
                     Some(own) => {
                         let (segment, stale) = own.into_segment()?;
@@ -793,8 +793,9 @@ impl Session {
                         }
                     }
                     // An entry of a history written before branches: as in 2a, within
-                    // the branch.
+                    // the branch, whose run is cut after `tick`.
                     None => {
+                        self.tree.check_redo_within(*branch, tick)?;
                         self.seek(sim, tick)?;
                         sim.apply_edit(&edit.edit)?;
                         self.discard_after(tick);
@@ -2363,5 +2364,45 @@ mod tests {
             Err(SessionError::NoSuchBranch(BranchId::ROOT))
         ));
         assert!(!session.timeline().can_undo);
+    }
+
+    #[test]
+    fn redo_within_a_branch_that_would_cut_a_child_off_is_dropped() {
+        let mut sim = boxes::app().build().unwrap();
+        let scene = boxes::generate_scene(10, 3);
+        let mut session =
+            Session::start(&mut sim, scene, AssetTexts::new(), Document::Scene).unwrap();
+        for _ in 0..100 {
+            session.step(&mut sim, None).unwrap();
+        }
+        let value = sim
+            .encode_json_value(
+                ValueKind::Resource,
+                "boxes::ContactStats",
+                json!({ "begins": 1, "ends": 0 }),
+            )
+            .unwrap();
+        let resource = "boxes::ContactStats".to_string();
+        let edit = Edit::SetResource { resource, value };
+        session.seek(&mut sim, 50).unwrap();
+        // Forks Branch 1 from the root at tick 50.
+        session.edit(&mut sim, edit.clone()).unwrap();
+        session.switch_branch(&mut sim, BranchId::ROOT).unwrap();
+        // An entry of a history written before branches, which no check let in.
+        let entry = UndoEntry::Run {
+            branch: BranchId::ROOT,
+            edit: TimedEdit { tick: 40, edit },
+            removed: Vec::new(),
+            restores: Vec::new(),
+        };
+        session.history.redone(entry, false);
+
+        assert!(matches!(
+            session.redo(&mut sim),
+            Err(SessionError::BranchesDecode(BranchesError::Fork))
+        ));
+        assert!(!session.timeline().can_redo);
+        let export = session.export().unwrap();
+        Session::resume(&mut sim, export, Document::Scene).unwrap();
     }
 }

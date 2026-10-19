@@ -129,15 +129,20 @@ impl UndoEntry {
                 known(tree, *branch).inspect_err(|_| tree.remove(&ids))
             }
             UndoEntry::Run {
-                branch, removed, ..
+                branch,
+                edit,
+                removed,
+                ..
             } => {
-                let mut stored = StoredBranch::decode(removed).map_err(unfit)?.into_iter();
+                let mut stored = removed_by_run(removed).map_err(unfit)?.into_iter();
                 let Some(target) = tree.get_mut(*branch) else {
                     return Err(unknown(*branch));
                 };
                 // An entry of a history written before branches redoes within its branch.
                 let Some(own) = stored.next() else {
-                    return Ok(());
+                    return tree
+                        .check_redo_within(*branch, edit.tick)
+                        .map_err(|error| format!("cannot be redone within its branch: {error}"));
                 };
                 let (segment, _) = own.into_segment().map_err(unfit)?;
                 // Redo brings the branch's run back as `own` holds it, and puts back the
@@ -153,6 +158,15 @@ impl UndoEntry {
             }
         }
     }
+}
+
+/// The branches the undo of a `Run` entry removed, its branch's own first. An entry of a
+/// history written before branches holds none, and redoes within its branch.
+pub(crate) fn removed_by_run(removed: &[u8]) -> Result<Vec<StoredBranch>, BranchesError> {
+    if removed.is_empty() {
+        return Ok(Vec::new());
+    }
+    StoredBranch::decode(removed)
 }
 
 fn known(tree: &BranchTree, branch: BranchId) -> Result<(), String> {
@@ -274,10 +288,11 @@ impl UndoHistory {
     /// Drops, after a resume, the entries the session cannot undo or redo: those naming a
     /// branch the session does not have or the root as the branch a fork made, and the redo
     /// entries whose branches do not fit back, such as one forked past its parent's run,
-    /// which redo would pad without bound. `tree` is a copy of the session's tree, whose
-    /// current branch's run records `current_edits` up to `current_head`. Redo takes the
-    /// last entry first, so each redo entry is checked on `tree` as the redo entries after
-    /// it leave it. Returns a warning naming each dropped entry.
+    /// which redo would pad without bound, or that would cut a branch off by redoing within
+    /// theirs. `tree` is a copy of the session's tree, whose current branch's run records
+    /// `current_edits` up to `current_head`. Redo takes the last entry first, so each redo
+    /// entry is checked on `tree` as the redo entries after it leave it. Returns a warning
+    /// naming each dropped entry.
     pub fn drop_unfit(
         &mut self,
         mut tree: BranchTree,

@@ -329,6 +329,24 @@ impl BranchTree {
         Ok(())
     }
 
+    /// Refuses to redo an edit at `tick` within the run of `id` by cutting the run after
+    /// `tick`, as an undo entry of a history written before branches does, when the edit
+    /// lies before the branch's fork or the cut leaves a child forking past the run.
+    pub fn check_redo_within(&self, id: BranchId, tick: u64) -> Result<(), BranchesError> {
+        let branch = self.branches.get(&id).ok_or(BranchesError::Tree)?;
+        if tick < branch.fork_tick {
+            return Err(BranchesError::Run);
+        }
+        let cut_off = self
+            .branches
+            .values()
+            .any(|child| child.parent == Some(id) && child.fork_tick > tick);
+        if cut_off {
+            return Err(BranchesError::Fork);
+        }
+        Ok(())
+    }
+
     /// After `count` edits were removed at `tick` from the front of that tick's edits in
     /// the current run: the current branch inherits that many fewer at its fork tick.
     pub fn edits_dropped_at(&mut self, tick: u64, count: usize) {
@@ -623,12 +641,7 @@ impl StoredBranch {
         postcard::to_allocvec(branches).expect("branches always encode")
     }
 
-    /// Decodes `encode`'s bytes; empty bytes hold no branches, as an undo entry of a
-    /// history written before branches.
     pub fn decode(bytes: &[u8]) -> Result<Vec<StoredBranch>, BranchesError> {
-        if bytes.is_empty() {
-            return Ok(Vec::new());
-        }
         Ok(postcard::from_bytes(bytes)?)
     }
 

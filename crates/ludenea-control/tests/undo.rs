@@ -1102,3 +1102,79 @@ fn removed_branches_of_an_entry_not_undone_never_refuse_the_session() {
         Some("Undo edit at tick 30")
     );
 }
+
+#[test]
+fn a_redo_entry_redoing_within_its_branch_never_cuts_a_branch_off() {
+    let (mut sim, mut session) = started(100);
+    play(&mut session, &mut sim, 100);
+    // Branch 1 forks from the root at tick 50.
+    edit_at(&mut session, &mut sim, 50, 1);
+    session.switch_branch(&mut sim, ROOT).unwrap();
+    resimulate_all(&mut session, &mut sim);
+    let run = |branch, tick| UndoEntryV3::Run {
+        branch,
+        edit: TimedEdit {
+            tick,
+            edit: stats_edit(&sim, 2),
+        },
+        removed: Vec::new(),
+    };
+    // Redo takes the last entry first. Each redoes within its branch, cutting the run
+    // after its tick: at 40 the root's run would end before Branch 1 forks, and Branch 1's
+    // run would record an edit before its fork; at 50 nothing is cut off.
+    let redo = vec![run(ROOT, 50), run(BranchId(1), 40), run(ROOT, 40)];
+    let export = SessionExport {
+        undo: undo_history_v3(Vec::new(), redo),
+        ..session.export().unwrap()
+    };
+    let mut session = resume(&mut sim, export);
+    assert_eq!(
+        session.warnings(),
+        [
+            "the undo history's `Redo edit at tick 40` cannot be redone within its branch: a branch forks outside its parent's run; it was dropped",
+            "the undo history's `Redo edit at tick 40` cannot be redone within its branch: a branch records an edit outside its run; it was dropped",
+        ]
+    );
+    resimulate_all(&mut session, &mut sim);
+    session.redo(&mut sim).unwrap();
+    resimulate_all(&mut session, &mut sim);
+    assert!(!session.timeline().can_redo);
+    assert_eq!(session.current_branch(), ROOT);
+    // The tree keeps every fork on its parent's run, so the session loads again.
+    let session = resume(&mut sim, session.export().unwrap());
+    assert_eq!(branch_ids(&session), [ROOT, BranchId(1)]);
+}
+
+#[test]
+fn a_redo_entry_of_a_fork_restoring_no_branch_is_dropped() {
+    let (mut sim, mut session) = started(100);
+    play(&mut session, &mut sim, 100);
+    edit_at(&mut session, &mut sim, 50, 1);
+    session.switch_branch(&mut sim, ROOT).unwrap();
+    resimulate_all(&mut session, &mut sim);
+    // An undone fork holds the branches it removed: the forked one at least.
+    let fork = UndoEntryV3::Fork {
+        branch: BranchId(1),
+        cause: ForkCauseV3::TakeOver {
+            tick: 30,
+            input: Vec::new(),
+        },
+        name: "Branch 2".to_string(),
+        removed: Vec::new(),
+    };
+    let export = SessionExport {
+        undo: undo_history_v3(Vec::new(), vec![fork]),
+        ..session.export().unwrap()
+    };
+    let session = resume(&mut sim, export);
+    let [warning] = session.warnings() else {
+        panic!("one warning: {:?}", session.warnings());
+    };
+    assert!(
+        warning.starts_with(
+            "the undo history's `Redo take-over at tick 30` restores branches that do not fit: "
+        ),
+        "{warning}"
+    );
+    assert!(!session.timeline().can_redo);
+}

@@ -92,7 +92,9 @@ session (the editor's copy of each open document's session), and the plugin API.
   session does not have, name the root as the branch a fork made, or restore branches
   that do not fit the tree, such as one forked past its parent's run. `Session::warnings`
   names each. Redo puts branches back only where they fork on their parent's run, and a
-  fork never takes the identifier of a branch redo put back.
+  fork never takes the identifier of a branch redo put back. A redo entry of a version 2
+  history redoes within its branch only where cutting the run after its tick leaves every
+  child forking on it; otherwise it is dropped.
 
 ### Control protocol
 
@@ -121,7 +123,7 @@ session (the editor's copy of each open document's session), and the plugin API.
   ended the game process, redoing a branch forked past its parent's run exhausted its
   memory, and a fork after redoing one in a reloaded session could reuse a branch
   identifier, making a branch its own parent and hanging the game. A redo entry of a
-  version 2 history redoes again; it failed to decode.
+  version 2 history redoes again where it cuts no branch off; it failed to decode.
 
 ### Project protocol
 
