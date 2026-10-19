@@ -315,10 +315,12 @@ API.
 - The asset browser keeps the open document open when its file is moved or renamed outside
   the editor: `DocumentState.current` follows the file's identifier to its new path, or,
   when the meta stayed behind, the file created with the document's text, under that file's
-  identifier. When the file is deleted outside the editor, the document's session is stored
-  and the document stays open, with a banner offering "Save again" (`scene.save`) and
-  "Close" (the new `Assets.close`, which stores the session again first); it used to close
-  and drop the session. "Save scene" without an open document no longer advises opening one.
+  identifier. A move the watcher reports in several batches, as a branch checkout does, is
+  followed too, and a moved file whose text changed on the way shows as changed on disk.
+  When the file is deleted outside the editor, the document's session is stored and the
+  document stays open, with a banner offering "Save again" (`scene.save`) and "Close" (the
+  new `Assets.close`, which stores the session again first); it used to close and drop the
+  session. "Save scene" without an open document no longer advises opening one.
 - A `refused` from the project service after the handshake (a message over its size limit)
   fails the requests `ProjectClient` is waiting on with the service's message, instead of
   `connection closed: ...` once the connection closes.

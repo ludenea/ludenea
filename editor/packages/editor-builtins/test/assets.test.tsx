@@ -329,6 +329,58 @@ describe("assets", () => {
       expect(host.editor.document.getState().current).toEqual({ id: SCENE_ID, kind: "scene", path: SCENE });
     });
 
+    // A checkout removes every file before it writes them back, so the watcher can report the
+    // removal and the creation of a moved scene in two batches.
+    const removeThenCreate = async (host: Awaited<ReturnType<typeof browser>>["host"], disk: Awaited<ReturnType<typeof browser>>["disk"], level: (typeof entries)[number]) => {
+      disk.files = [entries[1]!];
+      act(() => host.project.push({ type: "files_changed", changes: [{ Removed: { path: SCENE, kind: "Scene" } }] }));
+      await settle();
+      expect(screen.getByRole("alert").textContent).toContain(`${SCENE} was deleted on disk`);
+      disk.files = [level, entries[1]!];
+      act(() => host.project.push({ type: "files_changed", changes: [{ Created: { path: LEVEL, kind: "Scene" } }] }));
+      await settle();
+      await settle();
+    };
+
+    it("a_scene_moved_with_its_meta_across_two_batches_follows_its_identifier", async () => {
+      const { host, disk } = await browser();
+      await openScene();
+      setSceneDirty(host, true);
+
+      await removeThenCreate(host, disk, { ...entries[0]!, path: LEVEL });
+
+      expect(host.editor.document.getState().current).toEqual({ id: SCENE_ID, kind: "scene", path: LEVEL });
+      expect(screen.queryByRole("alert")).toBeNull();
+      await host.editor.commands.run("scene.save");
+      expect(writes(host)).toEqual([{ type: "write_text", path: LEVEL, text: "(saved)" }]);
+    });
+
+    it("a_scene_moved_without_its_meta_across_two_batches_follows_the_file_holding_its_text", async () => {
+      const LEVEL_ID = "0000000000000000000000000000001a";
+      const { host, disk } = await browser();
+      await openScene();
+
+      await removeThenCreate(host, disk, { path: LEVEL, id: LEVEL_ID, kind: "Scene" });
+
+      expect(host.editor.document.getState().current).toEqual({ id: LEVEL_ID, kind: "scene", path: LEVEL });
+      // Stored on removal, then under the new identifier.
+      expect(stores(host)).toEqual([expect.objectContaining({ document: SCENE_ID }), expect.objectContaining({ document: LEVEL_ID })]);
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("a_dirty_scene_moved_and_changed_across_two_batches_shows_the_change_on_disk", async () => {
+      const { host, game, disk } = await browser();
+      await openScene();
+      setSceneDirty(host, true);
+      disk.texts = { [LEVEL]: "(checked out)" };
+
+      await removeThenCreate(host, disk, { ...entries[0]!, path: LEVEL });
+
+      expect(host.editor.document.getState().current).toEqual({ id: SCENE_ID, kind: "scene", path: LEVEL });
+      expect(screen.getByRole("alert").textContent).toContain(`${LEVEL} changed on disk`);
+      expect(game.sent.filter((command) => command.type === "replace_scene")).toEqual([]);
+    });
+
     it("closing_a_scene_removed_on_disk_stores_its_session_first", async () => {
       const { host, disk } = await browser();
       await openScene();

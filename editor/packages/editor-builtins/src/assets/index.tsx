@@ -186,12 +186,14 @@ export const assetsPlugin = definePlugin({
       else await replace(text);
     };
     /**
-     * Finds the file of `open` in the fresh listing, after `changes` removed its path or brought
-     * it back: the document follows its identifier, else a file `changes` created that holds its
-     * text (moved without its meta, the file has an identifier of its own, under which the
-     * session is stored at once, where the next open and crash recovery look for it). When the
-     * file is really gone, the session is stored and the document stays open as deleted on disk
-     * until it is saved again or closed.
+     * Finds the file of `open` in the fresh listing, after any batch of `changes`: a move can
+     * arrive in several batches (a checkout removes every file before it writes them back).
+     * The document follows its identifier, then takes the moved file's text as any change on
+     * disk; else it follows a file `changes` created that holds its text (moved without its
+     * meta, the file has an identifier of its own, under which the session is stored at once,
+     * where the next open and crash recovery look for it). When `changes` removed the file and
+     * it is really gone, the session is stored and the document stays open as deleted on disk
+     * until it is saved again, closed, or found by a later batch.
      */
     const follow = async (open: OpenDocument, changes: FileChange[]) => {
       // Another document, or this one renamed in the editor, is open now.
@@ -213,10 +215,13 @@ export const assetsPlugin = definePlugin({
       }
       if (!still()) return;
       if (found) {
-        state.set({ banners: state.get().banners.filter((banner) => !("removed" in banner && banner.path === open.path)) });
+        const { banners } = state.get();
+        const kept = banners.filter((banner) => !("removed" in banner && banner.path === open.path));
+        if (kept.length < banners.length) state.set({ banners: kept });
         if (found.id === open.id && found.path === open.path) return;
         documents.setState({ current: { ...open, id: found.id, path: found.path } });
         if (found.id !== open.id) await documents.getState().store();
+        else if (text !== null) await onDiskChange(found.path);
         return;
       }
       if (!changes.some((change) => removedPath(change) === open.path)) return;
@@ -239,8 +244,7 @@ export const assetsPlugin = definePlugin({
         const listed = refresh();
         const open = documents.getState().current;
         if (!open) return;
-        const removedOrBack = changes.some((change) => removedPath(change) === open.path || createdPath(change) === open.path);
-        if (removedOrBack && !renaming.has(open.path)) listed.then(() => follow(open, changes)).catch(report);
+        if (!renaming.has(open.path)) listed.then(() => follow(open, changes)).catch(report);
         if (changes.some((change) => changedPath(change) === open.path)) onDiskChange(open.path).catch(report);
       }),
       // A deleted document's banner goes once another document, or none, is open.
