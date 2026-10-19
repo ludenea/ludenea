@@ -90,6 +90,19 @@ describe("explorer", () => {
     expect(rows[0]!.textContent).toContain("0000000000000000");
   });
 
+  it("a_list_taller_than_the_window_requests_only_the_pages_the_window_shows", async () => {
+    // A layout that lets the list grow to its 2,000 rows puts every row in range.
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", { configurable: true, get: () => 2000 * 22 });
+    try {
+      const { game } = await explorer(2000);
+      const offsets = game.sent.filter((message) => message.type === "query_entities").map((message) => message.offset as number);
+      // jsdom's 768 pixel window shows 35 rows, 55 with the overscan: the first two pages.
+      expect(Math.max(...offsets)).toBe(200);
+    } finally {
+      Object.defineProperty(HTMLElement.prototype, "offsetHeight", { configurable: true, get: () => 400 });
+    }
+  });
+
   it("introspection_subscribed_only_while_tab_visible", async () => {
     const { game } = await explorer();
     const sent = () => game.sent.filter((message) => JSON.stringify(message.topic) === JSON.stringify(INTROSPECTION)).map((message) => message.type);

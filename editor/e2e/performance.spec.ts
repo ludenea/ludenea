@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
-import { button, collectErrors, expectNoErrors, expectTick, openScene, repository, seek, serveProject, timeline, waitForGame, type ServedProject } from "./project";
+import { button, collectErrors, expectNoErrors, expectTick, openScene, repository, runCommand, seek, serveProject, timeline, waitForGame, type ServedProject } from "./project";
 
 declare global {
   interface Window {
@@ -150,6 +150,93 @@ async function playWithBranchAndGhost(page: Page, beforePlay: () => Promise<void
 test("the UI stays at 60 fps with 100,000 entities, a branch, and the ghost", async ({ page }) => {
   const { interactiveMs, report } = await playWithBranchAndGhost(page);
   if (strict) expect(interactiveMs, report).toBeLessThan(2000);
+});
+
+test("the_explorer_lists_100000_entities_with_only_the_visible_rows_while_playing", async ({ page }) => {
+  const errors = collectErrors(page);
+  await page.goto(served.url);
+  await openScene(page, "bench.scene.ron");
+  await waitForGame(page);
+  await page.getByRole("tab", { name: "Explorer" }).click();
+  await page.getByRole("tablist", { name: "Explorer" }).getByRole("tab", { name: "Entities" }).click();
+  const list = page.getByRole("listbox", { name: "Matching entities" });
+  // The bench scene, not the template's four entities.
+  await expect(list.getByRole("option").nth(20)).toBeVisible({ timeout: 60_000 });
+
+  // Only the rows the panel shows are in the page, and the list fits in the panel: it scrolls.
+  const layout = () =>
+    page.evaluate(() => {
+      const panel = document.querySelector(".ludenea-explorer")!;
+      const scroller = panel.querySelector(".ludenea-entity-list")!;
+      const listbox = panel.querySelector('[role="listbox"]')!;
+      const option = listbox.querySelector('[role="option"]')!;
+      return {
+        options: listbox.querySelectorAll('[role="option"]').length,
+        scrollerHeight: scroller.clientHeight,
+        viewportHeight: window.innerHeight,
+        listboxWidth: listbox.getBoundingClientRect().width,
+        panelWidth: panel.getBoundingClientRect().width,
+        optionHeight: option.getBoundingClientRect().height,
+        contentHeight: option.firstElementChild!.getBoundingClientRect().height,
+        contentCut: option.firstElementChild!.scrollWidth > option.firstElementChild!.clientWidth,
+      };
+    });
+  const shown = await layout();
+  expect(shown.options).toBeGreaterThan(0);
+  expect(shown.options).toBeLessThan(100);
+  expect(shown.scrollerHeight).toBeLessThan(shown.viewportHeight);
+  expect(shown.listboxWidth).toBeGreaterThan(shown.panelWidth / 2);
+  // A row's entity and hash stay on its one line, cut short in a narrow panel.
+  expect(shown.contentHeight).toBeLessThanOrEqual(shown.optionHeight);
+  const size = page.viewportSize()!;
+  await page.setViewportSize({ width: 230, height: size.height });
+  await expect.poll(async () => (await layout()).panelWidth).toBeLessThanOrEqual(230);
+  const narrow = await layout();
+  expect(narrow.contentHeight).toBeLessThanOrEqual(narrow.optionHeight);
+  expect(narrow.contentCut).toBe(true);
+  await page.setViewportSize(size);
+  await expect.poll(async () => (await layout()).panelWidth).toBeGreaterThan(230);
+
+  await page.evaluate(() => {
+    const times: number[] = [];
+    let last = performance.now();
+    let running = true;
+    const frame = (now: number) => {
+      if (!running) return;
+      times.push(now - last);
+      last = now;
+      requestAnimationFrame(frame);
+    };
+    requestAnimationFrame((now) => {
+      last = now;
+      requestAnimationFrame(frame);
+    });
+    window.__frameTimes = times;
+    window.__stopFrames = () => {
+      running = false;
+    };
+  });
+  // The timeline shares the bottom dock with the explorer: played from the command palette.
+  await runCommand(page, "Play or pause");
+  await page.waitForTimeout(PLAY_MS);
+  const frames = await page.evaluate(() => {
+    window.__stopFrames!();
+    return window.__frameTimes!;
+  });
+  const playing = await layout();
+  await runCommand(page, "Play or pause");
+  await page.getByRole("tab", { name: "Timeline" }).click();
+  await expect(button(page, "Play")).toBeVisible();
+  expect((await timeline(page)).current).toBeGreaterThan(0);
+
+  expect(playing.options).toBeLessThan(100);
+  const p95 = percentile(frames, 0.95);
+  const report = `explorer while playing: ${frames.length} frames, 95th percentile ${p95.toFixed(1)} ms, worst ${Math.max(...frames).toFixed(1)} ms`;
+  console.log(`performance: ${report}`);
+  test.info().annotations.push({ type: "performance", description: report });
+  expect(frames.length).toBeGreaterThan(0);
+  await expectNoErrors(page, errors);
+  if (strict) expect(p95, report).toBeLessThanOrEqual(17);
 });
 
 test("the UI stays at 60 fps while the inspector follows the contact cache", async ({ page }) => {

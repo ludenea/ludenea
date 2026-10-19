@@ -6,6 +6,7 @@ import { errorText, useKeptScroll, type Scroll } from ".";
 
 const PAGE = 200;
 const ROW_HEIGHT = 22;
+const OVERSCAN = 10;
 
 export const entityKey = (entity: Entity) => `${entity.index}v${entity.generation}`;
 
@@ -33,10 +34,13 @@ export function EntityList(props: {
   const report = useRef(onError);
   report.current = onError;
   const selection = editor.selection((state) => state.entities);
-  const virtualizer = useVirtualizer({ count: total, getScrollElement: () => scroller.current, estimateSize: () => ROW_HEIGHT, overscan: 10 });
+  const virtualizer = useVirtualizer({ count: total, getScrollElement: () => scroller.current, estimateSize: () => ROW_HEIGHT, overscan: OVERSCAN });
   const items = virtualizer.getVirtualItems();
   const firstPage = Math.floor((items[0]?.index ?? 0) / PAGE);
-  const lastPage = Math.floor((items.at(-1)?.index ?? 0) / PAGE);
+  // No more pages than the window's rows and the overscan span: a list laid out taller than its
+  // panel shows placeholders past them instead of fetching every page on every refresh.
+  const pages = Math.ceil((Math.ceil(window.innerHeight / ROW_HEIGHT) + 2 * OVERSCAN) / PAGE) + 1;
+  const lastPage = Math.min(Math.floor((items.at(-1)?.index ?? 0) / PAGE), firstPage + pages - 1);
 
   useEffect(() => {
     setTotal(0);

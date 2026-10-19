@@ -32,25 +32,37 @@
 }
 
 .ludenea-dock .dv-content-container .ludenea-explorer,
-.ludenea-dock .dv-content-container .ludenea-entities,
 .ludenea-dock .dv-content-container .ludenea-scene-tree {
   display: flex;
   flex-direction: column;
   height: 100%;
 }
 
+/* The shown tab takes the height the tabs leave, so the entity list scrolls inside it. */
 .ludenea-dock .dv-content-container .ludenea-explorer [role="tabpanel"],
-/* Plugin columns: the entity first, taking the room left, then each column at its width. */
+.ludenea-dock .dv-content-container .ludenea-entities {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Plugin columns: the entity first, taking the room left, then each column at its width.
+   The header row has the entity rows' padding and gap, so each title sits over its column. */
 .ludenea-dock .dv-content-container .ludenea-columns,
 .ludenea-dock .dv-content-container .ludenea-entities [role="option"] {
   display: flex;
-  gap: var(--space-2);
+  gap: var(--space-3);
+  padding: 0 var(--space-3);
 }
 
 .ludenea-dock .dv-content-container .ludenea-columns > :first-child,
 .ludenea-dock .dv-content-container .ludenea-entities [role="option"] > :first-child {
   flex: 1;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ludenea-dock .dv-content-container .ludenea-columns > span,
