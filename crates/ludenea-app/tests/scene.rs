@@ -185,8 +185,17 @@ fn scene_that_is_not_ron_is_a_parse_error() {
 }
 
 #[test]
-fn scene_with_a_time_step_outside_zero_to_one_second_is_rejected() {
-    for dt in ["NaN", "inf", "0.0", "-0.0166", "1.5"] {
+fn scene_with_a_time_step_outside_the_tick_rates_is_rejected() {
+    for dt in [
+        "NaN",
+        "inf",
+        "0.0",
+        "-0.0166",
+        "1.5",
+        "1e-45",
+        "1e-30",
+        "2.3283062e-10",
+    ] {
         let mut simulation = loaded();
         let before = simulation.hash();
         let scene = format!(
@@ -194,7 +203,7 @@ fn scene_with_a_time_step_outside_zero_to_one_second_is_rejected() {
         );
         let error = simulation.load_scene(&scene).unwrap_err();
         assert!(
-            matches!(&error, SceneError::InvalidValue { entity: None, name, reason } if name == "ludenea::Time" && reason.contains(&format!("dt must be above 0 and at most 1 second, got {dt}"))),
+            matches!(&error, SceneError::InvalidValue { entity: None, name, reason } if name == "ludenea::Time" && reason.contains(&format!("dt must be at least 2.3283064e-10 and at most 1 second, got {dt}"))),
             "{dt}: {error:?}"
         );
         assert_eq!(simulation.hash(), before);
@@ -202,10 +211,12 @@ fn scene_with_a_time_step_outside_zero_to_one_second_is_rejected() {
 }
 
 #[test]
-fn scene_with_a_time_step_of_one_second_loads() {
-    simulation()
-        .load_scene(
-            r#"Scene(version: 1, resources: {"ludenea::Time": (tick: 0, dt: 1.0)}, entities: [])"#,
-        )
-        .unwrap();
+fn scene_with_the_time_step_of_the_slowest_or_fastest_tick_rate_loads() {
+    for dt in ["1.0", "2.3283064e-10"] {
+        simulation()
+            .load_scene(&format!(
+                r#"Scene(version: 1, resources: {{"ludenea::Time": (tick: 0, dt: {dt})}}, entities: [])"#
+            ))
+            .unwrap();
+    }
 }

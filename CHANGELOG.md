@@ -65,9 +65,9 @@ session (the editor's copy of each open document's session), and the plugin API.
 - `Body` refuses a `gravity_scale` whose magnitude is above the new `MAX_GRAVITY_SCALE`
   (1000), and `Collider` a density above the new `MAX_DENSITY` (1e6); both overflowed the
   step.
-- `Time` refuses to load a `dt` that is not above 0 and at most 1 second, the step of the
-  slowest tick rate. A scene with a NaN `dt` ended the game process at the next physics
-  step.
+- `Time` refuses to load a `dt` that is not finite, below 2^-32 second (the step of the
+  fastest tick rate, `u32::MAX` Hz), or above 1 second (the step of the slowest). A scene
+  with a NaN or subnormal `dt` ended the game process at the next physics step.
 - The physics step limits the linear speed of a kinematic body to 400 m/s, as it does a
   dynamic one's, and writes the limited value back to `Body`. A velocity so large that its
   square overflows keeps its direction at 400 m/s; it dropped to zero.
