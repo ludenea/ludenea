@@ -140,6 +140,45 @@ fn place_instance_uses_next_id() {
 }
 
 #[test]
+fn place_instance_at_the_last_identifier_is_refused() {
+    // A `next_id` of `u32::MAX` leaves no identifier, and one below it would become it.
+    for next_id in [u32::MAX, u32::MAX - 1] {
+        let scene = format!("Scene(version: 2, next_id: {next_id}, resources: {{}}, entities: [])");
+        let error = place_instance(&scene, AssetId(A)).unwrap_err();
+        assert!(
+            matches!(error, SceneError::IdentifiersExhausted { next_id: at } if at == next_id),
+            "{next_id}: {error:?}"
+        );
+    }
+    let scene = format!(
+        "Scene(version: 2, next_id: {}, resources: {{}}, entities: [])",
+        u32::MAX - 2
+    );
+    let (text, id) = place_instance(&scene, AssetId(A)).unwrap();
+    assert_eq!(id, u32::MAX - 2);
+    assert!(
+        text.contains(&format!("next_id: {}", u32::MAX - 1)),
+        "{text}"
+    );
+}
+
+#[test]
+fn override_value_ron_of_an_unregistered_component_is_refused() {
+    let mut simulation = simulation();
+    simulation
+        .load_scene_with(&scene_with_instance(), &texts(&[(A, PREFAB)]))
+        .unwrap();
+    let error = simulation
+        .override_value_ron(&[3, 0], "other_game::Gone", &[])
+        .unwrap_err();
+    assert!(
+        matches!(&error, SceneError::UnknownComponent { entity, name }
+            if entity == &[3, 0] && name == "other_game::Gone"),
+        "{error:?}"
+    );
+}
+
+#[test]
 fn replace_with_instance_removes_entities() {
     let scene = "Scene(\n    version: 2,\n    next_id: 3,\n    resources: {},\n    entities: [\n        (id: 0, components: {\"prefab_editing::Tag\": (10)}),\n        (id: 1, components: {\"prefab_editing::Tag\": (11)}),\n        (id: 2, components: {\"prefab_editing::Tag\": (12)}),\n    ],\n)\n";
     let (text, instance) = replace_with_instance(scene, &[0, 2], AssetId(A)).unwrap();

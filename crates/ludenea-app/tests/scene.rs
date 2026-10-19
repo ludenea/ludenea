@@ -1,6 +1,6 @@
 use ludenea_app::{App, SceneError, Simulation};
 use ludenea_ecs::schema::Schema;
-use ludenea_ecs::{Component, Resource};
+use ludenea_ecs::{Component, Entity, Resource};
 use serde::{Deserialize, Serialize};
 
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -24,6 +24,9 @@ struct Feeling(Mood);
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 struct Tag(u32);
 
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+struct Watch(Vec<Entity>);
+
 #[derive(Resource, Serialize, Deserialize, Clone, Debug, PartialEq)]
 struct Score(i64);
 
@@ -32,6 +35,7 @@ fn simulation() -> Simulation {
     app.component::<Bulk>()
         .component::<Feeling>()
         .component::<Tag>()
+        .component::<Watch>()
         .resource(Score(0));
     app.build().unwrap()
 }
@@ -74,7 +78,7 @@ fn loaded() -> Simulation {
 fn scene_round_trip_save_then_load_gives_same_hash() {
     let first = loaded();
     let mut second = simulation();
-    second.load_scene(&first.save_scene()).unwrap();
+    second.load_scene(&first.save_scene().unwrap()).unwrap();
     assert_eq!(first.hash(), second.hash());
 }
 
@@ -97,7 +101,7 @@ fn scene_round_trip_is_bit_exact() {
         .unwrap();
 
     let mut second = simulation();
-    second.load_scene(&first.save_scene()).unwrap();
+    second.load_scene(&first.save_scene().unwrap()).unwrap();
     assert_eq!(bytes(&first), bytes(&second));
 }
 
@@ -218,5 +222,48 @@ fn scene_with_the_time_step_of_the_slowest_or_fastest_tick_rate_loads() {
                 r#"Scene(version: 1, resources: {{"ludenea::Time": (tick: 0, dt: {dt})}}, entities: [])"#
             ))
             .unwrap();
+    }
+}
+
+#[test]
+fn a_save_that_needs_more_local_identifiers_than_remain_is_refused() {
+    // The two watched entities are stale: each needs a local identifier of its own.
+    let scene = r#"Scene(version: 2, next_id: 4294967294, resources: {}, entities: [
+        (id: 0, components: {"scene::Watch": ([(index: 5, generation: 0), (index: 6, generation: 0)])}),
+    ])"#;
+    let mut simulation = simulation();
+    simulation.load_scene(scene).unwrap();
+    simulation.world_mut().spawn();
+
+    let error = simulation.save_scene_keeping(scene).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            SceneError::IdentifiersExhausted {
+                next_id: 4294967294
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("renumber the scene"), "{error}");
+}
+
+#[test]
+fn a_local_identifier_at_or_above_next_id_is_refused_at_load() {
+    for scene in [
+        "Scene(version: 2, next_id: 0, resources: {}, entities: [(id: 4294967295, components: {})])",
+        "Scene(version: 2, next_id: 3, resources: {}, entities: [(id: 3, components: {})])",
+        "Scene(version: 2, next_id: 3, resources: {}, entities: [], instances: [\
+            (id: 7, prefab: \"0000000000000000000000000000000a\", overrides: [], added: [], removed: []),\
+        ])",
+    ] {
+        let mut simulation = loaded();
+        let before = simulation.hash();
+        let error = simulation.load_scene(scene).unwrap_err();
+        assert!(
+            matches!(&error, SceneError::Parse(reason) if reason.contains("not below `next_id`")),
+            "{scene}: {error}"
+        );
+        assert_eq!(simulation.hash(), before);
     }
 }

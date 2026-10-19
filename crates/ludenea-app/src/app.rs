@@ -11,7 +11,7 @@ use ludenea_ecs::Entity;
 use ludenea_math::Vec2;
 
 use crate::input::{Input, InputType, Inputs};
-use crate::{Parallel, RawInput, Rng, Simulation, Time};
+use crate::{Parallel, RawInput, Rng, SceneError, Simulation, Time};
 
 /// Draws the requested layers of a world into a frame; skips layers not in the set.
 pub type DebugDrawFn = fn(&World, &BTreeSet<String>, &mut DebugDrawFrame);
@@ -58,6 +58,9 @@ pub enum AppError {
         mapping: &'static str,
         input: String,
     },
+    /// The built world cannot be written as the scene a session starts from.
+    #[error("the built world cannot be written as a scene: {0}")]
+    Scene(#[from] SceneError),
 }
 
 /// Collects registrations, plugins, and systems, then builds a `Simulation`.

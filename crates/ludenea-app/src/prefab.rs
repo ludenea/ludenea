@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::Simulation;
 use crate::assets::{AssetSource, parse_asset_file};
 use crate::path::{Path, PathSegment};
-use crate::scene::{LoadAddress, NamedValues, SceneEntity, SceneError, parse_scene};
+use crate::scene::{LoadAddress, NamedValues, SceneEntity, SceneError, after, parse_scene};
 
 pub const PREFAB_VERSION: u32 = 1;
 
@@ -418,14 +418,16 @@ pub fn create_prefab(sim: &Simulation, entities: &[Entity]) -> Result<String, Sc
 }
 
 /// Appends an instance of `prefab` to the scene or prefab `file` with the identifier
-/// `next_id` gives, and returns the new text and that identifier.
+/// `next_id` gives, and returns the new text and that identifier. Refused with
+/// `SceneError::IdentifiersExhausted` when `next_id` leaves no identifier for it.
 pub fn place_instance(file: &str, prefab: AssetId) -> Result<(String, u32), SceneError> {
     let root = parse_file(file)?;
     let missing =
         || SceneError::Parse("the file has no `next_id`; save it as version 2 first".to_string());
     let next = field(file, &root, "next_id").ok_or_else(missing)?;
     let id: u32 = file[next.span.clone()].parse().map_err(|_| missing())?;
-    let text = splice(file, next.span.clone(), &(id + 1).to_string());
+    let next_id = after(id).ok_or(SceneError::IdentifiersExhausted { next_id: id })?;
+    let text = splice(file, next.span.clone(), &next_id.to_string());
     let entry = format!("(id: {id}, prefab: \"{prefab}\", overrides: [], added: [], removed: [])");
     Ok((append(&text, ROOT_INSTANCES, &entry)?, id))
 }

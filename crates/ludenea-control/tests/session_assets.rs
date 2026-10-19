@@ -675,8 +675,13 @@ fn an_edit_whose_loads_are_taken_back_where_the_state_does_not_restore_replays_t
     let mut app = boxes::app();
     app.system(Sim, zero_rotation_from_10);
     let mut sim = app.build().unwrap();
-    let mut session =
-        Session::start(&mut sim, loader.save_scene(), assets(), Document::Scene).unwrap();
+    let mut session = Session::start(
+        &mut sim,
+        loader.save_scene().unwrap(),
+        assets(),
+        Document::Scene,
+    )
+    .unwrap();
     play(&mut session, &mut sim, 12);
     let before = sim.hash();
     let spawner = component(

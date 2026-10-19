@@ -576,3 +576,42 @@ fn ticked_after_an_edit_says_the_edit_is_pending() {
         "{events:?}"
     );
 }
+
+#[test]
+fn a_spawn_that_needs_more_local_identifiers_than_remain_is_an_invalid_edit() {
+    // The new entity alone would take the last `next_id`; in the second scene, the cached
+    // contact also names two stale entities, which need a local identifier each.
+    let contact = r#""ludenea::ContactCache": (pairs: {((index: 5, generation: 0), (index: 6, generation: 0)): (touching: false, points: [])})"#;
+    for resources in ["", contact] {
+        let scene = format!(
+            "Scene(version: 2, next_id: 4294967294, resources: {{{resources}}}, entities: [])"
+        );
+        let mut host = Host::new(boxes::app).unwrap();
+        ok(
+            &mut host,
+            Command::LoadScene {
+                scene: scene.clone(),
+                assets: Vec::new(),
+                document: Document::Scene,
+            },
+        );
+        let before = hash(&mut host);
+        let error = host
+            .handle(Command::Spawn {
+                components: BTreeMap::new(),
+            })
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidEdit, "{resources}");
+        assert!(
+            error.message.contains("renumber the scene"),
+            "{}",
+            error.message
+        );
+        assert_eq!(hash(&mut host), before);
+        assert!(timeline(&mut host).edit_ticks.is_empty());
+        match ok(&mut host, Command::SaveScene) {
+            Reply::Scene { ron } => assert_eq!(ron, scene),
+            other => panic!("{other:?}"),
+        }
+    }
+}

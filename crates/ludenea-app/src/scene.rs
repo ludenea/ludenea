@@ -2,7 +2,7 @@
 //! reach through handles.
 
 use std::any::Any;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -101,6 +101,13 @@ pub enum SceneError {
     InstanceEntity(LoadAddress),
     #[error("{0} is not in the file; pick one it has")]
     MissingTarget(String),
+    /// Writing the scene needs more local identifiers than remain from `next_id`: new
+    /// entities, a new instance, and stale references each take one, and identifiers are
+    /// never reused.
+    #[error(
+        "the scene needs more local identifiers than remain from its `next_id` {next_id}; renumber the scene from 0 and lower its `next_id`"
+    )]
+    IdentifiersExhausted { next_id: u32 },
 }
 
 fn subject(entity: Option<&[u32]>) -> String {
@@ -231,16 +238,22 @@ pub(crate) fn parse_scene(ron: &str) -> Result<ParsedScene, SceneError> {
                 Ok(file) => file,
                 Err(error) => return parse_resolved(ron).map_err(|_| parse(error)),
             };
+            let next_id = growable(file.next_id)?;
             let mut seen = BTreeSet::new();
             let locals = file.entities.iter().map(|entity| entity.id);
-            if let Some(local) = locals
-                .chain(file.instances.iter().map(|instance| instance.id))
-                .find(|&local| !seen.insert(local))
-            {
-                return Err(SceneError::DuplicateLocal(local));
+            for local in locals.chain(file.instances.iter().map(|instance| instance.id)) {
+                if !seen.insert(local) {
+                    return Err(SceneError::DuplicateLocal(local));
+                }
+                // A new entity takes `next_id`, so it must not be taken already.
+                if local >= next_id {
+                    return Err(SceneError::Parse(format!(
+                        "local identifier {local} is not below `next_id` {next_id}; give `next_id` a value above every entity and instance identifier"
+                    )));
+                }
             }
             Ok(ParsedScene {
-                next_id: growable(file.next_id)?,
+                next_id,
                 checked: true,
                 resources: file.resources,
                 entities: file
@@ -564,11 +577,11 @@ impl Simulation {
     /// kept: use it on freshly built worlds, such as scene generators, not to save a
     /// running game. An `Entity` value naming an entity that is not saved (a stale
     /// reference) gets an identifier of its own that no entity has, so it loads as a
-    /// reference to a dead entity.
-    pub fn save_scene(&self) -> String {
-        let alive: Vec<Entity> = self.world.entities().collect();
-        let next_id = u32::try_from(alive.len()).expect("fewer than u32::MAX entities");
-        self.write_scene(alive.into_iter().zip(0..).collect(), next_id, &[])
+    /// reference to a dead entity. Refused with `SceneError::IdentifiersExhausted` when
+    /// they need `u32::MAX` identifiers or more.
+    pub fn save_scene(&self) -> Result<String, SceneError> {
+        let alive = self.world.entities().map(|entity| (entity, None)).collect();
+        self.write_scene(alive, 0, &[])
     }
 
     /// Like `save_scene`, but entities that still have a load address keep their local
@@ -576,7 +589,9 @@ impl Simulation {
     /// identifiers from `previous`'s `next_id`, so an identifier is never reused. An
     /// instance of `previous` whose entities are all alive and unchanged keeps its entry
     /// byte for byte; the entities of other instances are written as scene entities.
-    pub fn save_scene_keeping(&self, previous: &str) -> String {
+    /// Refused with `SceneError::IdentifiersExhausted` when the new entities and stale
+    /// references need more identifiers than remain from `previous`'s `next_id`.
+    pub fn save_scene_keeping(&self, previous: &str) -> Result<String, SceneError> {
         let kept = |entity: &Entity| match self.load_addresses.get(entity).map(Vec::as_slice) {
             Some(&[local]) => Some(local),
             _ => None,
@@ -604,20 +619,15 @@ impl Simulation {
             .entities()
             .filter(|entity| !in_instances.contains(entity))
             .collect();
-        let mut next_id = alive
+        let next_id = next_id_of(previous);
+        let next_id = alive
             .iter()
             .filter_map(kept)
-            .map(|local| after(local, 1))
-            .fold(next_id_of(previous), u32::max);
+            .try_fold(next_id, |next_id, local| Some(after(local)?.max(next_id)))
+            .ok_or(SceneError::IdentifiersExhausted { next_id })?;
         let locals = alive
             .into_iter()
-            .map(|entity| {
-                let local = kept(&entity).unwrap_or_else(|| {
-                    next_id = after(next_id, 1);
-                    next_id - 1
-                });
-                (entity, local)
-            })
+            .map(|entity| (entity, kept(&entity)))
             .collect();
         self.write_scene(locals, next_id, &entries)
     }
@@ -625,16 +635,24 @@ impl Simulation {
     /// The RON of `component`'s postcard `bytes` as an override or added value of the
     /// entity at load address `address`: its `Entity` values name local identifiers of the
     /// file that entity comes from, and one naming an entity outside that file is refused.
+    /// A `component` the app does not register is refused with
+    /// `SceneError::UnknownComponent`.
     ///
     /// # Panics
-    /// If `component` is not registered or `bytes` do not decode.
+    /// If `bytes` do not decode.
     pub fn override_value_ron(
         &self,
         address: &[u32],
         component: &str,
         bytes: &[u8],
     ) -> Result<String, SceneError> {
-        let codec = self.world.component_codec(component).expect("registered");
+        let codec =
+            self.world
+                .component_codec(component)
+                .ok_or_else(|| SceneError::UnknownComponent {
+                    entity: address.to_vec(),
+                    name: component.to_string(),
+                })?;
         let scope = &address[..address.len().saturating_sub(1)];
         value_ron(codec, bytes, &mut |index, generation| {
             let (_, at) = self
@@ -686,31 +704,49 @@ impl Simulation {
             .collect()
     }
 
-    /// Writes `locals` (alive entities in index order with their local identifiers), then
-    /// the instance entries `instances` as they are.
+    /// Writes `locals` (alive entities in index order with their local identifier, none for
+    /// a new entity), then the instance entries `instances` as they are. New entities, then
+    /// stale references in write order, get identifiers from `next_id` on.
     fn write_scene(
         &self,
-        locals: Vec<(Entity, u32)>,
+        locals: Vec<(Entity, Option<u32>)>,
         next_id: u32,
         instances: &[String],
-    ) -> String {
+    ) -> Result<String, SceneError> {
+        let exhausted = || SceneError::IdentifiersExhausted { next_id };
+        // `previous` may be any text: one whose `next_id` cannot grow would not load back.
+        let free = Cell::new(growable(next_id).map_err(|_| exhausted())?);
+        let fresh = || {
+            let local = free.get();
+            free.set(after(local)?);
+            Some(local)
+        };
+        let locals: Vec<(Entity, u32)> = locals
+            .into_iter()
+            .map(|(entity, local)| Some((entity, local.or_else(fresh)?)))
+            .collect::<Option<_>>()
+            .ok_or_else(exhausted)?;
         let by_entity: BTreeMap<(u32, u32), u32> = locals
             .iter()
             .map(|(entity, local)| ((entity.index(), entity.generation()), *local))
             .collect();
-        // Stale references, each with an identifier from `next_id` on, in write order.
         let stale: RefCell<BTreeMap<(u32, u32), u32>> = RefCell::default();
+        // Only `fresh` refuses an entity, once the identifiers run out.
         let ron = |codec: Codec, bytes: &[u8]| {
             value_ron(codec, bytes, &mut |index, generation| {
-                let local = by_entity.get(&(index, generation)).copied();
-                let local = local.unwrap_or_else(|| {
-                    let mut stale = stale.borrow_mut();
-                    let fresh = after(next_id, stale.len());
-                    *stale.entry((index, generation)).or_insert(fresh)
-                });
+                let key = (index, generation);
+                let mut stale = stale.borrow_mut();
+                let local = match by_entity.get(&key).or(stale.get(&key)) {
+                    Some(&local) => local,
+                    None => {
+                        let local = fresh()?;
+                        stale.insert(key, local);
+                        local
+                    }
+                };
                 Some((local, 0))
             })
-            .expect("every entity is mapped")
+            .map_err(|_| exhausted())
         };
 
         let snapshot = self.world.snapshot();
@@ -719,22 +755,21 @@ impl Simulation {
             .iter()
             .map(|(name, bytes)| {
                 let codec = self.world.resource_codec(name).expect("snapshotted name");
-                format!("{name:?}: {}", ron(codec, bytes))
+                Ok(format!("{name:?}: {}", ron(codec, bytes)?))
             })
-            .collect::<Vec<_>>()
+            .collect::<Result<Vec<_>, SceneError>>()?
             .join(", ");
         let entities = locals
             .iter()
             .map(|&(entity, local)| {
-                let components = self
-                    .components_ron(&snapshot, entity, |_, codec, bytes| {
-                        Ok::<_, ()>(ron(codec, bytes))
-                    })
-                    .expect("writing a scene never fails");
-                format!("    (id: {local}, components: {{{components}}}),\n")
+                let components =
+                    self.components_ron(&snapshot, entity, |_, codec, bytes| ron(codec, bytes))?;
+                Ok(format!(
+                    "    (id: {local}, components: {{{components}}}),\n"
+                ))
             })
-            .collect::<String>();
-        let next_id = after(next_id, stale.borrow().len());
+            .collect::<Result<String, SceneError>>()?;
+        let next_id = free.get();
         let instances = if instances.is_empty() {
             String::new()
         } else {
@@ -744,9 +779,9 @@ impl Simulation {
                 .collect();
             format!("    instances: [\n{entries}    ],\n")
         };
-        format!(
+        Ok(format!(
             "Scene(\n    version: {SCENE_VERSION},\n    next_id: {next_id},\n    resources: {{{resources}}},\n    entities: [\n{entities}    ],\n{instances})\n"
-        )
+        ))
     }
 
     /// Writes `entities` as a prefab file with local identifiers `0..n` in that order, each
@@ -1130,15 +1165,10 @@ fn growable(next_id: u32) -> Result<u32, SceneError> {
     Ok(next_id)
 }
 
-/// The local identifier `count` after `id`.
-///
-/// # Panics
-/// When it does not fit in `u32`, rather than reuse identifiers.
-fn after(id: u32, count: usize) -> u32 {
-    u32::try_from(count)
-        .ok()
-        .and_then(|count| id.checked_add(count))
-        .expect("a scene has fewer than u32::MAX local identifiers")
+/// The local identifier after `id`, or `None` when it would be `u32::MAX`: no scene holds
+/// it, as `growable` refuses it as a `next_id`.
+pub(crate) fn after(id: u32) -> Option<u32> {
+    id.checked_add(1).filter(|&after| after < u32::MAX)
 }
 
 fn invalid(entity: Option<&[u32]>, name: &str, reason: String) -> SceneError {

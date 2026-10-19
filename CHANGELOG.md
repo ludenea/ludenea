@@ -136,6 +136,18 @@ session (the editor's copy of each open document's session), and the plugin API.
   refuses a mapped entity as a `try_from` can, give an error instead of a panic.
   `spawn_prefab` still panics when a component's type refuses the entities spawned for
   it, and now names the prefab and the component.
+- `Simulation::save_scene` and `Simulation::save_scene_keeping` return
+  `Result<String, SceneError>`. When the new entities and stale references need more
+  local identifiers than remain from `next_id`, they are refused with the new
+  `SceneError::IdentifiersExhausted { next_id }`, which says to renumber the scene; they
+  panicked. A written `next_id` is always below `u32::MAX`, so the scene loads back.
+- `prefab::place_instance` refuses a `next_id` that leaves no identifier for the instance
+  with `SceneError::IdentifiersExhausted`; it panicked, or, built without overflow checks,
+  gave the identifier 0 again.
+- `Simulation::override_value_ron` refuses a component the app does not register with
+  `SceneError::UnknownComponent`; it panicked.
+- `Host::new` returns the new `AppError::Scene` when the built world cannot be written as
+  a scene.
 
 ### Control protocol
 
@@ -179,6 +191,10 @@ session (the editor's copy of each open document's session), and the plugin API.
 - `restore` refuses a snapshot holding a prefab the game cannot spawn with
   `invalid_snapshot`, naming the asset, the entity and the component; the game process
   ended at the next spawn of that prefab.
+- A tick 0 edit, such as `spawn`, or a `place_instance` that needs more local identifiers
+  than the scene's `next_id` leaves fails with `invalid_edit` and changes nothing. With
+  stale references in the scene it ended the game process; otherwise it failed with
+  `invalid_scene`.
 
 ### Project protocol
 
@@ -220,3 +236,6 @@ session (the editor's copy of each open document's session), and the plugin API.
   `ludenea::Prefab` changed with it, so every game's schema fingerprint changed, and the
   tick hashes of a replay holding a prefab, recorded before, no longer match from tick
   0: record such replays again. Replays and their version are otherwise unchanged.
+- Scene 2: loading refuses an entity or instance identifier that is not below the scene's
+  `next_id`, naming both. Such a scene loaded, and the next tick 0 edit could end the game
+  process; raise `next_id` above every identifier.

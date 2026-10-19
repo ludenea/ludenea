@@ -2130,7 +2130,7 @@ impl Session {
             return Ok(scene);
         }
         sim.apply_edit(edit)?;
-        let scene = sim.save_scene_keeping(&scene_form(self.document, &self.scene)?);
+        let scene = sim.save_scene_keeping(&scene_form(self.document, &self.scene)?)?;
         Ok(match self.document {
             Document::Scene => scene,
             Document::Prefab => prefab::scene_as_prefab(&scene)?,

@@ -39,6 +39,9 @@ fn main() {
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target"));
     let path = target.join("editor-bench.scene.ron");
     fs::create_dir_all(&target).expect("cannot create the target directory");
-    fs::write(&path, simulation.save_scene()).expect("cannot write the scene");
+    let scene = simulation
+        .save_scene()
+        .expect("100,000 entities leave local identifiers to spare");
+    fs::write(&path, scene).expect("cannot write the scene");
     println!("wrote {}", path.display());
 }

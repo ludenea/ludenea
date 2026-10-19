@@ -19,7 +19,9 @@ pub fn generate_scene(crates: usize, seed: u64) -> String {
     for entity in spawn_container(world, crates, seed) {
         world.insert(entity, Crate).expect("Crate is registered");
     }
-    simulation.save_scene()
+    simulation
+        .save_scene()
+        .expect("a few crates leave local identifiers to spare")
 }
 
 /// The bodies of `generate_scene` with engine components only (no `Crate` marker); returns

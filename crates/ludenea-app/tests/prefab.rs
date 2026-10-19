@@ -385,7 +385,7 @@ fn stale_override_warns_and_is_kept_on_save() {
         Pos { x: 4.0, y: 2.0 }
     );
 
-    let saved = simulation.save_scene_keeping(&file);
+    let saved = simulation.save_scene_keeping(&file).unwrap();
     assert!(saved.contains(entry), "{saved}");
     assert_eq!(saved.matches("prefab::Pos").count(), 2, "{saved}");
     let mut reloaded = self::simulation();

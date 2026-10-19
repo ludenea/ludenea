@@ -724,7 +724,7 @@ fn small_scene_with(add: impl FnOnce(&mut World)) -> String {
     let mut sim = simulation();
     sim.load_scene(&small_scene()).unwrap();
     add(sim.world_mut());
-    sim.save_scene()
+    sim.save_scene().unwrap()
 }
 
 #[test]

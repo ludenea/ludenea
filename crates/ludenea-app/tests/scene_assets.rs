@@ -116,7 +116,7 @@ fn version_2_scene_round_trips_through_save() {
         ],
     );
     first.load_scene(&ron).unwrap();
-    let saved = first.save_scene();
+    let saved = first.save_scene().unwrap();
     assert!(
         saved.contains("version: 2") && saved.contains("next_id: 2"),
         "{saved}"
@@ -124,7 +124,7 @@ fn version_2_scene_round_trips_through_save() {
     let mut second = simulation();
     second.load_scene(&saved).unwrap();
     assert_eq!(first.hash(), second.hash());
-    assert_eq!(second.save_scene(), saved);
+    assert_eq!(second.save_scene().unwrap(), saved);
 }
 
 #[test]
@@ -315,7 +315,7 @@ fn save_keeping_preserves_identifiers_after_despawn() {
     let one = simulation.entity_at_address(&[1]).unwrap();
     simulation.world_mut().despawn(one).unwrap();
 
-    let saved = simulation.save_scene_keeping(&previous);
+    let saved = simulation.save_scene_keeping(&previous).unwrap();
     assert!(saved.contains("next_id: 10"), "{saved}");
     simulation.load_scene(&saved).unwrap();
     assert_eq!(addresses(&simulation), [vec![4], vec![6]]);
@@ -336,7 +336,7 @@ fn deleted_local_identifier_is_never_reused() {
     let spawned = world.spawn();
     world.insert(spawned, Tag(99)).unwrap();
 
-    let saved = simulation.save_scene_keeping(&previous);
+    let saved = simulation.save_scene_keeping(&previous).unwrap();
     assert!(saved.contains("next_id: 4"), "{saved}");
     simulation.load_scene(&saved).unwrap();
     assert_eq!(
@@ -398,8 +398,8 @@ fn stale_reference_survives_save_and_reload() {
     world.insert(spawned, Target(despawned)).unwrap();
 
     for saved in [
-        simulation.save_scene(),
-        simulation.save_scene_keeping(&scene(2, &[])),
+        simulation.save_scene().unwrap(),
+        simulation.save_scene_keeping(&scene(2, &[])).unwrap(),
     ] {
         let mut reloaded = self::simulation();
         reloaded.load_scene(&saved).unwrap();
@@ -408,7 +408,7 @@ fn stale_reference_survives_save_and_reload() {
         let second = world.get::<Target>(tagged(&reloaded, 2)).unwrap().0;
         assert!(!world.is_alive(first), "{saved}");
         assert_eq!(first, second, "one stale entity stays one: {saved}");
-        let again = reloaded.save_scene();
+        let again = reloaded.save_scene().unwrap();
         self::simulation().load_scene(&again).unwrap();
     }
 }
@@ -526,11 +526,11 @@ fn entities_inside_mixed_values_are_remapped_and_round_trip() {
     assert_eq!(value, expected);
     assert_eq!(world.resource::<Boss>().unwrap().0, Some(a));
 
-    let saved = first.save_scene();
+    let saved = first.save_scene().unwrap();
     let mut second = mixed_simulation();
     second.load_scene_with(&saved, &assets).unwrap();
     assert_eq!(second.hash(), first.hash());
-    assert_eq!(second.save_scene(), saved);
+    assert_eq!(second.save_scene().unwrap(), saved);
 }
 
 #[test]
@@ -595,12 +595,32 @@ fn a_next_id_that_cannot_grow_is_refused_at_load() {
 }
 
 #[test]
-#[should_panic(expected = "fewer than u32::MAX local identifiers")]
-fn saving_past_the_last_local_identifier_panics_rather_than_reuse_one() {
+fn saving_past_the_last_local_identifier_is_refused_rather_than_reuse_one() {
     let mut simulation = simulation();
-    let ron = scene(u32::MAX - 1, &[(u32::MAX - 2, &tag(1))]);
+    let ron = scene(u32::MAX - 2, &[(u32::MAX - 3, &tag(1))]);
     simulation.load_scene(&ron).unwrap();
     simulation.world_mut().spawn();
+    let saved = simulation.save_scene_keeping(&ron).unwrap();
+    assert!(
+        saved.contains(&format!("next_id: {}", u32::MAX - 1)),
+        "{saved}"
+    );
+
+    simulation.load_scene(&saved).unwrap();
     simulation.world_mut().spawn();
-    simulation.save_scene_keeping(&ron);
+    let error = simulation.save_scene_keeping(&saved).unwrap_err();
+    assert!(
+        matches!(error, SceneError::IdentifiersExhausted { next_id } if next_id == u32::MAX - 1),
+        "{error:?}"
+    );
+    let error = self::simulation()
+        .save_scene_keeping(&scene(u32::MAX, &[]))
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            SceneError::IdentifiersExhausted { next_id: u32::MAX }
+        ),
+        "{error:?}"
+    );
 }

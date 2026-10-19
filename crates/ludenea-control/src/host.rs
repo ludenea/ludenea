@@ -65,7 +65,7 @@ impl Host {
     /// the game again for the compare simulation.
     pub fn new(build: fn() -> App) -> Result<Host, AppError> {
         let mut simulation = build().build()?;
-        let scene = simulation.save_scene();
+        let scene = simulation.save_scene()?;
         let session = Session::start(&mut simulation, scene, AssetTexts::new(), Document::Scene)
             .expect("the built world's scene loads");
         Ok(Host {
@@ -1365,7 +1365,8 @@ fn session_error(error: &SessionError) -> ProtocolError {
         SessionError::Edit(error) => return edit_error(error),
         SessionError::MissingComponent { .. }
         | SessionError::PrefabHasNoResources
-        | SessionError::NotDataAsset(_) => ErrorCode::InvalidEdit,
+        | SessionError::NotDataAsset(_)
+        | SessionError::Scene(SceneError::IdentifiersExhausted { .. }) => ErrorCode::InvalidEdit,
         SessionError::NotInScene(_) => ErrorCode::NoSuchEntity,
         SessionError::Sim(error) => return sim_error(error),
         SessionError::Scene(_) => ErrorCode::InvalidScene,
