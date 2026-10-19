@@ -5,7 +5,7 @@ use ludenea_ecs::AssetId;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use crate::branches::{BranchId, BranchesError, StoredBranch};
+use crate::branches::{BranchId, BranchTree, BranchesError, StoredBranch};
 
 /// The version `UndoHistory::encode` writes first. Milestone 2a wrote no version.
 pub const UNDO_VERSION: u32 = 3;
@@ -85,6 +85,91 @@ impl UndoEntry {
             UndoEntry::Scene { .. } | UndoEntry::Asset { .. } => None,
             UndoEntry::Run { branch, .. } | UndoEntry::Fork { branch, .. } => Some(*branch),
         }
+    }
+
+    /// What the timeline calls it, as in "Undo edit at tick 300".
+    pub fn describe(&self) -> String {
+        match self {
+            UndoEntry::Scene { .. } => "scene edit".to_string(),
+            UndoEntry::Asset { .. } => "asset edit".to_string(),
+            UndoEntry::Run { edit, .. } => format!("edit at tick {}", edit.tick),
+            UndoEntry::Fork { cause, .. } => cause.describe(),
+        }
+    }
+
+    /// Whether undoing it works on `tree`, or why not.
+    fn undo_fits(&self, tree: &BranchTree) -> Result<(), String> {
+        match self {
+            UndoEntry::Scene { .. } | UndoEntry::Asset { .. } => Ok(()),
+            UndoEntry::Run { branch, .. } => known(tree, *branch),
+            UndoEntry::Fork { branch, .. } => not_root(*branch).and_then(|()| known(tree, *branch)),
+        }
+    }
+
+    /// Whether redoing it works on `tree`, whose current branch's run records
+    /// `current_edits` up to `current_head`, or why not. When it works, `tree` is left with
+    /// the branches the redo puts back.
+    fn redo_fits(
+        &self,
+        tree: &mut BranchTree,
+        current_edits: &EditLog,
+        current_head: u64,
+    ) -> Result<(), String> {
+        let unfit = |error: BranchesError| format!("restores branches that do not fit: {error}");
+        match self {
+            UndoEntry::Scene { .. } | UndoEntry::Asset { .. } => Ok(()),
+            UndoEntry::Fork {
+                branch, removed, ..
+            } => {
+                not_root(*branch)?;
+                let stored = StoredBranch::decode(removed).map_err(unfit)?;
+                let ids: Vec<BranchId> = stored.iter().map(StoredBranch::id).collect();
+                tree.put_back(stored, current_edits, current_head)
+                    .map_err(unfit)?;
+                known(tree, *branch).inspect_err(|_| tree.remove(&ids))
+            }
+            UndoEntry::Run {
+                branch, removed, ..
+            } => {
+                let mut stored = StoredBranch::decode(removed).map_err(unfit)?.into_iter();
+                let Some(target) = tree.get_mut(*branch) else {
+                    return Err(unknown(*branch));
+                };
+                // An entry of a history written before branches redoes within its branch.
+                let Some(own) = stored.next() else {
+                    return Ok(());
+                };
+                let (segment, _) = own.into_segment().map_err(unfit)?;
+                // Redo brings the branch's run back as `own` holds it, and puts back the
+                // descendants forked on that run.
+                let undone = target.segment.replace(segment);
+                let result = tree.put_back(stored.collect(), current_edits, current_head);
+                if result.is_err()
+                    && let Some(target) = tree.get_mut(*branch)
+                {
+                    target.segment = undone;
+                }
+                result.map_err(unfit)
+            }
+        }
+    }
+}
+
+fn known(tree: &BranchTree, branch: BranchId) -> Result<(), String> {
+    match tree.get(branch) {
+        Some(_) => Ok(()),
+        None => Err(unknown(branch)),
+    }
+}
+
+fn unknown(branch: BranchId) -> String {
+    format!("names branch {}, which the session does not have", branch.0)
+}
+
+fn not_root(branch: BranchId) -> Result<(), String> {
+    match branch {
+        BranchId::ROOT => Err("names the root branch as the branch it forked".to_string()),
+        _ => Ok(()),
     }
 }
 
@@ -186,10 +271,44 @@ impl UndoHistory {
         self.redo.retain_mut(keep);
     }
 
+    /// Drops, after a resume, the entries the session cannot undo or redo: those naming a
+    /// branch the session does not have or the root as the branch a fork made, and the redo
+    /// entries whose branches do not fit back, such as one forked past its parent's run,
+    /// which redo would pad without bound. `tree` is a copy of the session's tree, whose
+    /// current branch's run records `current_edits` up to `current_head`. Redo takes the
+    /// last entry first, so each redo entry is checked on `tree` as the redo entries after
+    /// it leave it. Returns a warning naming each dropped entry.
+    pub fn drop_unfit(
+        &mut self,
+        mut tree: BranchTree,
+        current_edits: &EditLog,
+        current_head: u64,
+    ) -> Vec<String> {
+        let mut warnings = Vec::new();
+        let mut keep = |action: &str, entry: &UndoEntry, fits: Result<(), String>| {
+            fits.map_err(|reason| {
+                let what = entry.describe();
+                warnings.push(format!(
+                    "the undo history's `{action} {what}` {reason}; it was dropped"
+                ));
+            })
+            .is_ok()
+        };
+        self.undo
+            .retain(|entry| keep("Undo", entry, entry.undo_fits(&tree)));
+        self.redo.reverse();
+        self.redo.retain(|entry| {
+            let fits = entry.redo_fits(&mut tree, current_edits, current_head);
+            keep("Redo", entry, fits)
+        });
+        self.redo.reverse();
+        warnings
+    }
+
     /// After a rebuild: the branches undo removed hold hashes of the previous build, so
-    /// they resimulate when redo brings them back.
+    /// they resimulate when redo brings them back. Only redo entries hold removed branches.
     pub fn mark_removed_stale(&mut self) -> Result<(), BranchesError> {
-        for entry in self.undo.iter_mut().chain(&mut self.redo) {
+        for entry in &mut self.redo {
             if let UndoEntry::Run { removed, .. } | UndoEntry::Fork { removed, .. } = entry
                 && !removed.is_empty()
             {

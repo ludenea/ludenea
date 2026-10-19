@@ -771,12 +771,20 @@ fn undo_history_version_2_decodes() {
     assert_eq!(edits(&session).len(), 1);
     assert!(session.is_pending());
 
-    // A history of a later version is refused by name, not misread as 2a bytes.
+    // A history of a later version is dropped by name, not misread as 2a bytes, and the
+    // session resumes without it.
     export.undo = vec![4];
-    assert!(matches!(
-        Session::resume(&mut sim, export, Document::Scene),
-        Err(SessionError::Undo(UndoError::Version { version: 4 }))
-    ));
+    let mut session = resume(&mut sim, export);
+    resimulate_all(&mut session, &mut sim);
+    assert_eq!(
+        session.warnings(),
+        [format!(
+            "{}; it was dropped, so undo and redo start empty",
+            UndoError::Version { version: 4 }
+        )]
+    );
+    assert!(!session.timeline().can_undo && !session.timeline().can_redo);
+    assert_eq!(edits(&session).len(), 1);
 }
 
 #[test]
@@ -842,4 +850,255 @@ fn new_logs_keep_only_the_undo_entries_of_edits_on_the_current_run() {
     // Its undo discards the future after tick 100, Branch 1's edit at 150 included.
     session.undo(&mut sim).unwrap();
     assert!(edits(&session).is_empty());
+}
+
+/// The undo entries of the current version, to write histories a session never records.
+#[derive(Serialize)]
+#[expect(
+    dead_code,
+    reason = "`Scene` keeps the variant indices of the encoded entries"
+)]
+enum UndoEntryV3 {
+    Scene {
+        before: String,
+        after: String,
+    },
+    Run {
+        branch: BranchId,
+        edit: TimedEdit,
+        removed: Vec<u8>,
+    },
+    Fork {
+        branch: BranchId,
+        cause: ForkCauseV3,
+        name: String,
+        removed: Vec<u8>,
+    },
+}
+
+#[derive(Serialize)]
+enum ForkCauseV3 {
+    Edit(TimedEdit),
+    TakeOver { tick: u64, input: Vec<u8> },
+}
+
+/// A branch as an undone entry stores it, with nothing recorded after its fork point.
+#[derive(Serialize)]
+struct StoredBranchV3 {
+    id: BranchId,
+    name: String,
+    parent: Option<BranchId>,
+    fork_tick: u64,
+    fork_edits: u64,
+    stale: bool,
+    inputs: Vec<u8>,
+    edits: Vec<u8>,
+    hashes: Vec<u64>,
+}
+
+fn removed_branch(id: u32, parent: BranchId, fork_tick: u64) -> Vec<u8> {
+    let branch = StoredBranchV3 {
+        id: BranchId(id),
+        name: format!("Branch {}", id + 1),
+        parent: Some(parent),
+        fork_tick,
+        fork_edits: 0,
+        stale: false,
+        inputs: InputLog::new(1).encode(),
+        edits: EditLog::new().encode(),
+        hashes: Vec::new(),
+    };
+    postcard::to_allocvec(&vec![branch]).unwrap()
+}
+
+fn undo_history_v3(undo: Vec<UndoEntryV3>, redo: Vec<UndoEntryV3>) -> Vec<u8> {
+    postcard::to_allocvec(&(3u32, undo, redo)).unwrap()
+}
+
+/// A linear session of 100 ticks resumed with the undo history `undo`.
+fn resumed_with_undo(undo: Vec<u8>) -> (Simulation, Session) {
+    let (mut sim, mut session) = started(100);
+    play(&mut session, &mut sim, 50);
+    let export = SessionExport {
+        undo,
+        ..session.export().unwrap()
+    };
+    let mut session = resume(&mut sim, export);
+    resimulate_all(&mut session, &mut sim);
+    (sim, session)
+}
+
+#[test]
+fn a_fork_entry_naming_the_root_is_dropped_not_a_panic() {
+    let take_over = UndoEntryV3::Fork {
+        branch: ROOT,
+        cause: ForkCauseV3::TakeOver {
+            tick: 5,
+            input: Vec::new(),
+        },
+        name: String::new(),
+        removed: Vec::new(),
+    };
+    let undo = undo_history_v3(vec![take_over], Vec::new());
+    // The bytes of a crafted history that ended the game process at its undo.
+    assert_eq!(undo, [3, 1, 2, 0, 1, 5, 0, 0, 0, 0]);
+    let (mut sim, mut session) = resumed_with_undo(undo);
+    let timeline = session.timeline();
+    assert!(!timeline.can_undo, "{:?}", timeline.undo_label);
+    assert_eq!(
+        session.warnings(),
+        [
+            "the undo history's `Undo take-over at tick 5` names the root branch as the branch it forked; it was dropped"
+        ]
+    );
+    assert!(matches!(
+        session.undo(&mut sim),
+        Err(SessionError::NothingToUndo)
+    ));
+}
+
+#[test]
+fn a_redo_entry_forking_past_its_parent_is_refused() {
+    let far = 1 << 36;
+    let fork = UndoEntryV3::Fork {
+        branch: BranchId(1),
+        cause: ForkCauseV3::TakeOver {
+            tick: far,
+            input: Vec::new(),
+        },
+        name: "Branch 2".to_string(),
+        removed: removed_branch(1, ROOT, far),
+    };
+    let (mut sim, mut session) = resumed_with_undo(undo_history_v3(Vec::new(), vec![fork]));
+    let timeline = session.timeline();
+    assert!(!timeline.can_redo, "{:?}", timeline.redo_label);
+    assert_eq!(
+        session.warnings(),
+        [format!(
+            "the undo history's `Redo take-over at tick {far}` restores branches that do not fit: a branch forks outside its parent's run; it was dropped"
+        )]
+    );
+    assert!(matches!(
+        session.redo(&mut sim),
+        Err(SessionError::NothingToRedo)
+    ));
+}
+
+#[test]
+fn a_redone_fork_after_a_resume_keeps_branch_identifiers_unique() {
+    let (mut sim, mut session) = started(100);
+    play(&mut session, &mut sim, 100);
+    edit_at(&mut session, &mut sim, 50, 1);
+    session.undo(&mut sim).unwrap();
+    // The tree is linear again, so the export carries none.
+    let mut session = resume(&mut sim, session.export().unwrap());
+    resimulate_all(&mut session, &mut sim);
+    session.redo(&mut sim).unwrap();
+    resimulate_all(&mut session, &mut sim);
+    edit_at(&mut session, &mut sim, 20, 2);
+    let tree: Vec<(BranchId, Option<BranchId>)> = session
+        .branches()
+        .iter()
+        .map(|branch| (branch.id, branch.parent))
+        .collect();
+    assert_eq!(
+        tree,
+        [
+            (ROOT, None),
+            (BranchId(1), Some(ROOT)),
+            (BranchId(2), Some(BranchId(1)))
+        ]
+    );
+    assert_eq!(session.timeline().branch, BranchId(2));
+}
+
+#[test]
+fn entries_naming_a_branch_the_session_does_not_have_are_dropped_on_resume() {
+    let (sim, _) = started(0);
+    let edit = TimedEdit {
+        tick: 30,
+        edit: stats_edit(&sim, 1),
+    };
+    let run = |branch| UndoEntryV3::Run {
+        branch,
+        edit: edit.clone(),
+        removed: Vec::new(),
+    };
+    // A redo of a fork restores branch 1 under a parent the tree does not have.
+    let orphan = UndoEntryV3::Fork {
+        branch: BranchId(1),
+        cause: ForkCauseV3::Edit(edit.clone()),
+        name: "Branch 2".to_string(),
+        removed: removed_branch(1, BranchId(9), 30),
+    };
+    let undo = undo_history_v3(
+        vec![run(ROOT), run(BranchId(7))],
+        vec![orphan, run(BranchId(8))],
+    );
+    let (_, session) = resumed_with_undo(undo);
+    assert_eq!(
+        session.warnings(),
+        [
+            "the undo history's `Undo edit at tick 30` names branch 7, which the session does not have; it was dropped",
+            "the undo history's `Redo edit at tick 30` names branch 8, which the session does not have; it was dropped",
+            "the undo history's `Redo edit at tick 30` restores branches that do not fit: a branch's parent is missing or not older than it, or its identifier is taken; it was dropped",
+        ]
+    );
+    let timeline = session.timeline();
+    assert_eq!(timeline.undo_label.as_deref(), Some("Undo edit at tick 30"));
+    assert!(!timeline.can_redo);
+}
+
+#[test]
+fn an_undo_history_that_does_not_decode_resumes_empty_with_a_warning() {
+    // Version 3 and an entry of a variant this build does not have.
+    let (_, session) = resumed_with_undo(vec![3, 1, 9]);
+    let timeline = session.timeline();
+    assert!(!timeline.can_undo && !timeline.can_redo);
+    let [warning] = session.warnings() else {
+        panic!("one warning: {:?}", session.warnings());
+    };
+    assert!(
+        warning.starts_with("the undo history cannot be decoded: ")
+            && warning.ends_with("; it was dropped, so undo and redo start empty"),
+        "{warning}"
+    );
+}
+
+#[test]
+fn a_redo_entry_of_version_2_redoes_within_its_branch() {
+    let edit = TimedEdit {
+        tick: 40,
+        edit: stats_edit(&simulation(), 1_000),
+    };
+    let redo = vec![UndoEntryV2::Run { edit: edit.clone() }];
+    let undo = postcard::to_allocvec(&(2u32, Vec::<UndoEntryV2>::new(), redo)).unwrap();
+    let (mut sim, mut session) = resumed_with_undo(undo);
+    assert_eq!(
+        session.timeline().redo_label.as_deref(),
+        Some("Redo edit at tick 40")
+    );
+    session.redo(&mut sim).unwrap();
+    assert_eq!(edits(&session), [edit]);
+    assert_eq!(session.timeline().current, 40);
+}
+
+#[test]
+fn removed_branches_of_an_entry_not_undone_never_refuse_the_session() {
+    // Only an undone entry holds the branches its undo removed: the undo writes them, so
+    // bytes there that do not decode are never read.
+    let entry = UndoEntryV3::Run {
+        branch: ROOT,
+        edit: TimedEdit {
+            tick: 30,
+            edit: stats_edit(&simulation(), 1),
+        },
+        removed: vec![0xff; 3],
+    };
+    let (_, session) = resumed_with_undo(undo_history_v3(vec![entry], Vec::new()));
+    assert!(session.warnings().is_empty(), "{:?}", session.warnings());
+    assert_eq!(
+        session.timeline().undo_label.as_deref(),
+        Some("Undo edit at tick 30")
+    );
 }

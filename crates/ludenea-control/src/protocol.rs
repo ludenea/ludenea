@@ -305,7 +305,8 @@ pub enum Command {
     },
     /// Restarts an exported session, comparing the new hashes with `expected`. Empty
     /// `inputs`, `edits`, or `undo` bytes stand for empty logs: with all three empty, only
-    /// the scene loads.
+    /// the scene loads. An `undo` history that does not decode, and its entries that do not
+    /// fit the branch tree, are dropped with a warning in `Loaded`.
     LoadSession {
         scene: String,
         /// The scene as last saved, when `scene` holds unsaved edits.
@@ -604,8 +605,8 @@ pub enum Reply {
         #[serde(default)]
         keeps_assets: bool,
     },
-    /// A scene load: the warnings of stale overrides, the prefab instances, and where each
-    /// entity of the scene came from.
+    /// A scene load: the warnings of stale overrides and of a dropped undo history, the
+    /// prefab instances, and where each entity of the scene came from.
     Loaded {
         warnings: Vec<String>,
         instances: Vec<InstanceInfo>,

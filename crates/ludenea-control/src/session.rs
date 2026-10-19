@@ -225,7 +225,8 @@ pub struct Session {
     /// The branch a switch goes to and the tick it asked for, while its stale ancestors
     /// resimulate first, one after the other, as the tree's current branch.
     switching: Option<(BranchId, u64)>,
-    /// The warnings of the last load of a new scene or asset version.
+    /// The warnings of the last load of a new scene or asset version, and of the undo
+    /// history a resume dropped.
     warnings: Vec<String>,
     /// Whether every scene load keeps every asset of `assets`, reached or not, as a
     /// replay's resolved scene needs: it reaches no prefab.
@@ -294,18 +295,26 @@ impl Session {
     /// Restarts an exported session on a new build: the new hashes are compared with the
     /// exported ones while it resimulates. Empty logs, undo history, or branch tree bytes
     /// mean empty logs, an empty history, and a linear session. The other branches are
-    /// stale until switched to.
+    /// stale until switched to. The undo history is a convenience: one that does not
+    /// decode, and the entries that name a branch the session does not have or the root as
+    /// the branch a fork made, or that restore branches that do not fit the tree, are
+    /// dropped with a warning in `warnings` instead of refusing the session.
     pub fn resume(
         sim: &mut Simulation,
         export: SessionExport,
         document: Document,
     ) -> Result<Session, SessionError> {
+        let mut dropped = Vec::new();
         let mut history = if export.undo.is_empty() {
             UndoHistory::default()
         } else {
-            UndoHistory::decode(&export.undo)?
+            UndoHistory::decode(&export.undo).unwrap_or_else(|error| {
+                dropped.push(format!(
+                    "{error}; it was dropped, so undo and redo start empty"
+                ));
+                UndoHistory::default()
+            })
         };
-        history.mark_removed_stale()?;
         let inputs = if export.inputs.is_empty() {
             InputLog::new(u16::try_from(sim.players()).expect("fewer than 2^16 players"))
         } else {
@@ -327,11 +336,20 @@ impl Session {
         }
         session.inputs = inputs;
         session.edits = edits;
-        session.history = history;
         session.update_head();
-        if !export.branches.is_empty() {
-            session.tree = BranchTree::decode(&export.branches, &session.edits, session.head)?;
-        }
+        let tree = |session: &Session| {
+            if export.branches.is_empty() {
+                Ok(BranchTree::default())
+            } else {
+                BranchTree::decode(&export.branches, &session.edits, session.head)
+            }
+        };
+        session.tree = tree(&session)?;
+        // A second copy of the tree, which the checks change as redo would.
+        dropped.extend(history.drop_unfit(tree(&session)?, &session.edits, session.head));
+        history.mark_removed_stale()?;
+        session.history = history;
+        session.warnings.extend(dropped);
         if !export.hashes.is_empty() {
             session.hashes = export.hashes;
         }
@@ -660,7 +678,8 @@ impl Session {
                     .tree
                     .get(*branch)
                     .ok_or(SessionError::NoSuchBranch(*branch))?;
-                let parent = forked.parent.expect("a forked branch has a parent");
+                // The root forks from nothing: an entry naming it is dropped.
+                let parent = forked.parent.ok_or(SessionError::NoSuchBranch(*branch))?;
                 name.clone_from(&forked.name);
                 let (subtree, tick) = (self.tree.subtree(*branch), cause.tick());
                 self.switch_to(sim, parent, tick)?;
@@ -729,7 +748,7 @@ impl Session {
             } => {
                 let stored = StoredBranch::decode(removed)?;
                 let ids: Vec<BranchId> = stored.iter().map(StoredBranch::id).collect();
-                self.tree.put_back(stored)?;
+                self.tree.put_back(stored, &self.edits, self.head)?;
                 if let Err(error) = self.switch_to(sim, *branch, cause.tick()) {
                     // The branch cannot be shown: the redo is refused, and the branches go
                     // back to the entry.
@@ -754,10 +773,15 @@ impl Session {
                         let (segment, stale) = own.into_segment()?;
                         let descendants: Vec<StoredBranch> = stored.collect();
                         let ids: Vec<BranchId> = descendants.iter().map(StoredBranch::id).collect();
-                        self.tree.put_back(descendants)?;
                         let undone = self.current_segment();
                         let defaults = sim.encoded_default_inputs();
                         self.compose(&segment, defaults.as_deref());
+                        // The descendants fork on the run the redo brings back.
+                        if let Err(error) = self.tree.put_back(descendants, &self.edits, self.head)
+                        {
+                            self.compose(&undone, defaults.as_deref());
+                            return Err(error.into());
+                        }
                         if stale {
                             self.resimulate_from(sim, 0, self.current)?;
                         } else if let Err(error) = self.restore_checkpoint(sim, tick) {
@@ -892,22 +916,16 @@ impl Session {
     }
 
     fn undo_label(&self) -> Option<String> {
-        let (what, removes) = match self.history.next_undo()? {
-            UndoEntry::Scene { .. } => return Some("Undo scene edit".to_string()),
-            UndoEntry::Asset { .. } => return Some("Undo asset edit".to_string()),
-            UndoEntry::Run { branch, edit, .. } => (
-                format!("edit at tick {}", edit.tick),
-                self.tree.forked_at_or_after(*branch, edit.tick),
-            ),
-            UndoEntry::Fork { branch, cause, .. } => {
-                let removes = match self.tree.get(*branch) {
-                    Some(_) => self.tree.subtree(*branch),
-                    None => Vec::new(),
-                };
-                (cause.describe(), removes)
-            }
+        let entry = self.history.next_undo()?;
+        let removes = match entry {
+            UndoEntry::Scene { .. } | UndoEntry::Asset { .. } => Vec::new(),
+            UndoEntry::Run { branch, edit, .. } => self.tree.forked_at_or_after(*branch, edit.tick),
+            UndoEntry::Fork { branch, .. } => match self.tree.get(*branch) {
+                Some(_) => self.tree.subtree(*branch),
+                None => Vec::new(),
+            },
         };
-        let names = self.tree.names(&removes).join(", ");
+        let (what, names) = (entry.describe(), self.tree.names(&removes).join(", "));
         Some(if names.is_empty() {
             format!("Undo {what}")
         } else {
@@ -916,22 +934,14 @@ impl Session {
     }
 
     fn redo_label(&self) -> Option<String> {
-        Some(match self.history.next_redo()? {
-            UndoEntry::Scene { .. } => "Redo scene edit".to_string(),
-            UndoEntry::Asset { .. } => "Redo asset edit".to_string(),
-            UndoEntry::Run { edit, restores, .. } if restores.is_empty() => {
-                format!("Redo edit at tick {}", edit.tick)
+        let entry = self.history.next_redo()?;
+        let what = entry.describe();
+        Some(match entry {
+            UndoEntry::Run { restores, .. } if !restores.is_empty() => {
+                format!("Redo {what} (restores {})", restores.join(", "))
             }
-            UndoEntry::Run { edit, restores, .. } => {
-                format!(
-                    "Redo edit at tick {} (restores {})",
-                    edit.tick,
-                    restores.join(", ")
-                )
-            }
-            UndoEntry::Fork { cause, name, .. } => {
-                format!("Redo {} (restores {name})", cause.describe())
-            }
+            UndoEntry::Fork { name, .. } => format!("Redo {what} (restores {name})"),
+            _ => format!("Redo {what}"),
         })
     }
 
@@ -1039,7 +1049,7 @@ impl Session {
     }
 
     /// The warnings of the last load of a new scene or asset version, such as stale
-    /// overrides.
+    /// overrides, and of the undo history a resume dropped.
     pub fn warnings(&self) -> &[String] {
         &self.warnings
     }
@@ -2330,5 +2340,28 @@ mod tests {
             Err(SessionError::BranchesDecode(_))
         ));
         assert!(!session.timeline().can_redo);
+    }
+
+    #[test]
+    fn undo_of_a_fork_entry_naming_the_root_is_dropped() {
+        let mut sim = boxes::app().build().unwrap();
+        let scene = boxes::generate_scene(10, 3);
+        let mut session =
+            Session::start(&mut sim, scene, AssetTexts::new(), Document::Scene).unwrap();
+        session.history.record(UndoEntry::Fork {
+            branch: BranchId::ROOT,
+            cause: ForkCause::TakeOver {
+                tick: 5,
+                input: Vec::new(),
+            },
+            name: String::new(),
+            removed: Vec::new(),
+        });
+
+        assert!(matches!(
+            session.undo(&mut sim),
+            Err(SessionError::NoSuchBranch(BranchId::ROOT))
+        ));
+        assert!(!session.timeline().can_undo);
     }
 }

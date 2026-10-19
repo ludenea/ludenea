@@ -87,6 +87,12 @@ session (the editor's copy of each open document's session), and the plugin API.
 - A component that a snapshot cannot restore is named with its entity, and
   `ludenea_ecs::decode_exact` keeps the message of a type that refuses its value, where
   postcard gave "Serde Deserialization Error".
+- `Session::resume` drops an undo history that does not decode or has a later version,
+  instead of failing with `SessionError::Undo`, and the entries that name a branch the
+  session does not have, name the root as the branch a fork made, or restore branches
+  that do not fit the tree, such as one forked past its parent's run. `Session::warnings`
+  names each. Redo puts branches back only where they fork on their parent's run, and a
+  fork never takes the identifier of a branch redo put back.
 
 ### Control protocol
 
@@ -109,6 +115,13 @@ session (the editor's copy of each open document's session), and the plugin API.
   to a tick it can show, tick 0 at worst. While the current state itself holds such a
   value, resimulation and an edit whose asset loads are taken back replay the current tick
   instead of ending the game process.
+- `load_session` loads a session whose `undo` history does not decode or has a later
+  version without that history, and drops the history entries that do not fit the branch
+  tree; `loaded` lists each in its `warnings`. Undoing a fork entry that named the root
+  ended the game process, redoing a branch forked past its parent's run exhausted its
+  memory, and a fork after redoing one in a reloaded session could reuse a branch
+  identifier, making a branch its own parent and hanging the game. A redo entry of a
+  version 2 history redoes again; it failed to decode.
 
 ### Project protocol
 

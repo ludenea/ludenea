@@ -205,6 +205,11 @@ impl BranchTree {
         (fork_tick, fork_edits): (u64, usize),
     ) {
         let id = BranchId(self.next);
+        debug_assert!(
+            !self.branches.contains_key(&id),
+            "branch {} is in the tree already: identifiers are never reused",
+            id.0
+        );
         self.next += 1;
         let child = Branch {
             name: id.default_name(),
@@ -287,20 +292,40 @@ impl BranchTree {
             .collect()
     }
 
-    /// Puts back branches `take` took, parents first: all of them, or none on an error.
-    pub fn put_back(&mut self, branches: Vec<StoredBranch>) -> Result<(), BranchesError> {
+    /// Puts back branches `take` took, parents first: all of them, or none on an error. Each
+    /// must fork on its parent's run, as `decode` checks, the current branch's run holding
+    /// `current_edits` up to `current_head`. Their identifiers are never handed out again.
+    pub fn put_back(
+        &mut self,
+        branches: Vec<StoredBranch>,
+        current_edits: &EditLog,
+        current_head: u64,
+    ) -> Result<(), BranchesError> {
         let mut back: Vec<(BranchId, Branch)> = Vec::new();
         for stored in branches {
             let id = stored.id;
             let branch = stored.into_branch(true)?;
             let parent = branch.parent.ok_or(BranchesError::Tree)?;
             let known = |id| self.branches.contains_key(&id) || back.iter().any(|(b, _)| *b == id);
-            if !known(parent) || known(id) {
+            // A parent is older than its children, so the tree has no cycle; the last
+            // identifier has no next one to hand out.
+            if !known(parent) || known(id) || parent >= id || id.0 == u32::MAX {
                 return Err(BranchesError::Tree);
             }
             back.push((id, branch));
         }
+        let ids: Vec<BranchId> = back.iter().map(|&(id, _)| id).collect();
         self.branches.extend(back);
+        let forks = ids
+            .iter()
+            .try_for_each(|&id| self.check_fork(id, current_edits, current_head));
+        if let Err(error) = forks {
+            self.remove(&ids);
+            return Err(error);
+        }
+        if let Some(last) = ids.iter().max() {
+            self.next = self.next.max(last.0 + 1);
+        }
         Ok(())
     }
 
@@ -473,26 +498,36 @@ impl BranchTree {
         Ok(tree)
     }
 
-    /// Refuses a fork point past its parent's head or inheriting more edits than the
-    /// parent's run records at the fork tick: replaying it would pad the run without bound.
-    /// Parents come first in identifier order, so every fork point `edits_at` reads on the
-    /// way is checked before.
+    /// `check_fork` for every branch. Parents come first in identifier order, so every fork
+    /// point `edits_at` reads on the way is checked before.
     fn check_forks(&self, current_edits: &EditLog, current_head: u64) -> Result<(), BranchesError> {
-        for branch in self.branches.values() {
-            let Some(parent) = branch.parent else {
-                if branch.fork() != (0, 0) {
-                    return Err(BranchesError::Fork);
-                }
-                continue;
+        self.branches
+            .keys()
+            .try_for_each(|&id| self.check_fork(id, current_edits, current_head))
+    }
+
+    /// Refuses a fork point of `id` past its parent's head or inheriting more edits than the
+    /// parent's run records at the fork tick: replaying it would pad the run without bound.
+    fn check_fork(
+        &self,
+        id: BranchId,
+        current_edits: &EditLog,
+        current_head: u64,
+    ) -> Result<(), BranchesError> {
+        let branch = &self.branches[&id];
+        let Some(parent) = branch.parent else {
+            return match branch.fork() {
+                (0, 0) => Ok(()),
+                _ => Err(BranchesError::Fork),
             };
-            let head = match &self.branches[&parent].segment {
-                None => current_head,
-                Some(segment) => segment.head(self.branches[&parent].fork_tick),
-            };
-            let edits = self.edits_at(parent, branch.fork_tick, current_edits);
-            if branch.fork_tick > head || branch.fork_edits > edits {
-                return Err(BranchesError::Fork);
-            }
+        };
+        let head = match &self.branches[&parent].segment {
+            None => current_head,
+            Some(segment) => segment.head(self.branches[&parent].fork_tick),
+        };
+        let edits = self.edits_at(parent, branch.fork_tick, current_edits);
+        if branch.fork_tick > head || branch.fork_edits > edits {
+            return Err(BranchesError::Fork);
         }
         Ok(())
     }
@@ -527,7 +562,7 @@ pub enum BranchesError {
     Postcard(#[from] postcard::Error),
     #[error(transparent)]
     Log(#[from] ludenea_app::SimError),
-    #[error("a branch names a parent the tree does not have")]
+    #[error("a branch's parent is missing or not older than it, or its identifier is taken")]
     Tree,
     #[error("a branch forks outside its parent's run")]
     Fork,
@@ -588,7 +623,12 @@ impl StoredBranch {
         postcard::to_allocvec(branches).expect("branches always encode")
     }
 
+    /// Decodes `encode`'s bytes; empty bytes hold no branches, as an undo entry of a
+    /// history written before branches.
     pub fn decode(bytes: &[u8]) -> Result<Vec<StoredBranch>, BranchesError> {
+        if bytes.is_empty() {
+            return Ok(Vec::new());
+        }
         Ok(postcard::from_bytes(bytes)?)
     }
 
@@ -719,12 +759,88 @@ mod tests {
     #[test]
     fn put_back_puts_back_nothing_when_one_branch_does_not_fit() {
         let mut tree = BranchTree::default();
-        let branches = vec![stored(1, Some(0), (0, 0)), stored(2, Some(9), (0, 0))];
-        assert!(matches!(tree.put_back(branches), Err(BranchesError::Tree)));
-        assert!(tree.get(BranchId(1)).is_none());
-        tree.put_back(vec![stored(1, Some(0), (0, 0)), stored(2, Some(1), (0, 0))])
-            .unwrap();
+        let put_back =
+            |tree: &mut BranchTree, branches| tree.put_back(branches, &EditLog::new(), 50);
+        for unfit in [
+            stored(2, Some(9), (0, 0)),
+            // A parent younger than its child, or a branch the tree has.
+            stored(2, Some(3), (0, 0)),
+            stored(0, Some(1), (0, 0)),
+            StoredBranch {
+                id: BranchId(u32::MAX),
+                ..stored(2, Some(1), (0, 0))
+            },
+        ] {
+            let branches = vec![
+                stored(1, Some(0), (0, 0)),
+                stored(3, Some(1), (0, 0)),
+                unfit,
+            ];
+            let result = put_back(&mut tree, branches);
+            assert!(matches!(result, Err(BranchesError::Tree)), "{result:?}");
+            assert!(tree.get(BranchId(1)).is_none());
+        }
+        put_back(
+            &mut tree,
+            vec![stored(1, Some(0), (0, 0)), stored(2, Some(1), (0, 0))],
+        )
+        .unwrap();
         assert!(tree.get(BranchId(2)).is_some());
+    }
+
+    #[test]
+    fn put_back_refuses_forks_outside_the_parent_run() {
+        let mut tree = BranchTree::default();
+        // The root's run ends at tick 50 and records no edit there; branch 1's segment
+        // records nothing, so its run ends at its fork tick.
+        for (child, grandchild) in [
+            ((1 << 36, 0), (1 << 36, 0)),
+            ((51, 0), (51, 0)),
+            ((40, 1), (40, 0)),
+            ((40, 0), (41, 0)),
+            ((40, 0), (40, 1)),
+        ] {
+            let branches = vec![stored(1, Some(0), child), stored(2, Some(1), grandchild)];
+            let result = tree.put_back(branches, &EditLog::new(), 50);
+            assert!(matches!(result, Err(BranchesError::Fork)), "{result:?}");
+            assert_eq!(tree.infos(50, &EditLog::new()).len(), 1);
+        }
+        let branches = vec![stored(1, Some(0), (40, 0)), stored(2, Some(1), (40, 0))];
+        tree.put_back(branches, &EditLog::new(), 50).unwrap();
+        assert_eq!(tree.infos(50, &EditLog::new()).len(), 3);
+    }
+
+    #[test]
+    fn a_fork_after_put_back_never_reuses_a_restored_identifier() {
+        let mut tree = BranchTree::default();
+        tree.put_back(vec![stored(4, Some(0), (10, 0))], &EditLog::new(), 50)
+            .unwrap();
+        let segment = || Segment {
+            inputs: Vec::new(),
+            edits: Vec::new(),
+            hashes: Vec::new(),
+            checkpoints: Checkpoints::empty(),
+        };
+        tree.fork(segment(), None, (20, 0));
+        assert_eq!(tree.current(), BranchId(5));
+        assert_eq!(tree.path(BranchId(5)), [BranchId::ROOT, BranchId(5)]);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "branch 1 is in the tree already: identifiers are never reused")]
+    fn fork_asserts_that_its_identifier_is_new() {
+        let mut tree = BranchTree::default();
+        tree.put_back(vec![stored(1, Some(0), (10, 0))], &EditLog::new(), 50)
+            .unwrap();
+        tree.next = 1;
+        let segment = Segment {
+            inputs: Vec::new(),
+            edits: Vec::new(),
+            hashes: Vec::new(),
+            checkpoints: Checkpoints::empty(),
+        };
+        tree.fork(segment, None, (20, 0));
     }
 
     #[test]
