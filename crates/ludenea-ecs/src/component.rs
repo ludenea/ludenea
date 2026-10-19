@@ -1,9 +1,10 @@
 use std::any::{Any, type_name};
 use std::cell::RefCell;
+use std::fmt;
 
 use ludenea_schema::{Schema, TypeSchema};
-use serde::Serialize;
-use serde::de::DeserializeOwned;
+use serde::de::{DeserializeOwned, Visitor};
+use serde::{Deserializer, Serialize};
 
 use crate::Entity;
 
@@ -150,13 +151,96 @@ fn decode_remapping<T: DeserializeOwned>(bytes: &[u8], remap: Remap) -> (T, Rema
     (value, REMAP.take().expect("set above"))
 }
 
-/// Decodes postcard bytes, rejecting any bytes left unread after the value.
+/// Decodes postcard bytes, rejecting any bytes left unread after the value. When the type
+/// refuses the value, as a failing `try_from` does, the error is the type's own message.
 pub fn decode_exact<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, String> {
-    let (value, rest) = postcard::take_from_bytes(bytes).map_err(|error| error.to_string())?;
+    let mut deserializer = postcard::Deserializer::from_bytes(bytes);
+    let value = T::deserialize(KeepMessage(&mut deserializer)).map_err(|error| error.0)?;
+    let rest = deserializer.finalize().map_err(|error| error.to_string())?;
     if rest.is_empty() {
         Ok(value)
     } else {
         Err(format!("{} unexpected trailing bytes", rest.len()))
+    }
+}
+
+/// The postcard deserializer with an error that keeps the message of a custom error, which
+/// postcard replaces with "Serde Deserialization Error".
+// ponytail: only the outermost type's own message is kept, since the values nested in it
+// decode through postcard directly; wrap the visitors and accesses too if a nested type
+// has to name why it refuses a value.
+struct KeepMessage<'a, 'de>(&'a mut postcard::Deserializer<'de, postcard::de_flavors::Slice<'de>>);
+
+#[derive(Debug)]
+struct Message(String);
+
+impl fmt::Display for Message {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Message {}
+
+impl serde::de::Error for Message {
+    fn custom<T: fmt::Display>(message: T) -> Self {
+        Message(message.to_string())
+    }
+}
+
+macro_rules! forward_to_postcard {
+    ($($method:ident($($argument:ident: $type:ty),*);)*) => {$(
+        fn $method<V: Visitor<'de>>(
+            self,
+            $($argument: $type,)*
+            visitor: V,
+        ) -> Result<V::Value, Message> {
+            self.0
+                .$method($($argument,)* visitor)
+                .map_err(|error| Message(error.to_string()))
+        }
+    )*};
+}
+
+impl<'de> Deserializer<'de> for KeepMessage<'_, 'de> {
+    type Error = Message;
+
+    forward_to_postcard! {
+        deserialize_any();
+        deserialize_bool();
+        deserialize_i8();
+        deserialize_i16();
+        deserialize_i32();
+        deserialize_i64();
+        deserialize_i128();
+        deserialize_u8();
+        deserialize_u16();
+        deserialize_u32();
+        deserialize_u64();
+        deserialize_u128();
+        deserialize_f32();
+        deserialize_f64();
+        deserialize_char();
+        deserialize_str();
+        deserialize_string();
+        deserialize_bytes();
+        deserialize_byte_buf();
+        deserialize_option();
+        deserialize_unit();
+        deserialize_unit_struct(name: &'static str);
+        deserialize_newtype_struct(name: &'static str);
+        deserialize_seq();
+        deserialize_tuple(len: usize);
+        deserialize_tuple_struct(name: &'static str, len: usize);
+        deserialize_map();
+        deserialize_struct(name: &'static str, fields: &'static [&'static str]);
+        deserialize_enum(name: &'static str, variants: &'static [&'static str]);
+        deserialize_identifier();
+        deserialize_ignored_any();
+    }
+
+    fn is_human_readable(&self) -> bool {
+        self.0.is_human_readable()
     }
 }
 

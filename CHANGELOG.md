@@ -56,6 +56,9 @@ session (the editor's copy of each open document's session), and the plugin API.
 - `Pose::validate` checks a pose as loading does and returns the new `PoseError`, which
   carries the refused position or rotation. The physics step panics with the entity, the
   field, and its value when it leaves a state that loading would refuse.
+- A component that a snapshot cannot restore is named with its entity, and
+  `ludenea_ecs::decode_exact` keeps the message of a type that refuses its value, where
+  postcard gave "Serde Deserialization Error".
 
 ### Control protocol
 

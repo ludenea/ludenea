@@ -148,7 +148,8 @@ impl World {
                 if !snapshot.entities.is_alive(*entity) {
                     return Err(decode_error(name)(format!("entity {entity} is not alive")));
                 }
-                let value = (entry.codec.decode)(bytes).map_err(decode_error(name))?;
+                let value = (entry.codec.decode)(bytes)
+                    .map_err(|reason| decode_error(name)(format!("entity {entity}: {reason}")))?;
                 decoded.push((entity.index(), value));
             }
             components.push((key, decoded));

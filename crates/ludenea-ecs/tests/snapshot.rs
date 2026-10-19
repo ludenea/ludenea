@@ -32,6 +32,22 @@ struct Extra;
 #[derive(Resource, Serialize, Deserialize, Debug, PartialEq, Clone)]
 struct Score(u64);
 
+/// Refuses a negative amount on load, as a game component validating with `try_from` does.
+#[derive(Component, Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[serde(try_from = "i32")]
+struct Fuel(i32);
+
+impl TryFrom<i32> for Fuel {
+    type Error = String;
+
+    fn try_from(amount: i32) -> Result<Self, String> {
+        if amount < 0 {
+            return Err(format!("fuel must be zero or more, got {amount}"));
+        }
+        Ok(Fuel(amount))
+    }
+}
+
 #[derive(Resource, Serialize, Deserialize, Debug, PartialEq, Clone)]
 struct Gravity(f32);
 
@@ -633,4 +649,27 @@ fn snapshots_with_other_fingerprints_are_refused() {
     // An unknown fingerprint (0) compares with any.
     right.fingerprint = 0;
     assert!(world.diff_snapshots(&left, &right).unwrap().is_empty());
+}
+
+#[test]
+fn restore_names_the_entity_and_why_its_component_refuses_the_value() {
+    let fuel_world = || {
+        let mut world = World::new();
+        world.register_component::<Fuel>().unwrap();
+        world
+    };
+    let mut source = fuel_world();
+    let tank = source.spawn();
+    source.insert(tank, Fuel(-3)).unwrap();
+    let mut target = fuel_world();
+    let before = target.hash_tree();
+
+    let error = target.restore(&source.snapshot()).unwrap_err();
+
+    assert!(
+        matches!(&error, SnapshotError::Decode { name, reason } if name == Fuel::NAME
+            && *reason == format!("entity {tank}: fuel must be zero or more, got -3")),
+        "{error}"
+    );
+    assert_eq!(target.hash_tree(), before);
 }
