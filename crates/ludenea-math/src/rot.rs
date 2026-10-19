@@ -2,7 +2,9 @@ use crate::{Vec2, atan2, sin_cos};
 use ludenea_schema::Schema;
 use serde::{Deserialize, Serialize};
 
-/// Rotation stored as cosine and sine of the angle.
+/// Rotation stored as cosine and sine of the angle, unit length (`cos² + sin² = 1`).
+/// `from_angle`, `integrate`, and `normalize` give `IDENTITY` for an input they cannot turn
+/// into a unit rotation; code that writes the fields directly keeps them unit length.
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize, Schema)]
 pub struct Rot {
     pub cos: f32,
@@ -18,6 +20,7 @@ impl Default for Rot {
 impl Rot {
     pub const IDENTITY: Rot = Rot { cos: 1.0, sin: 0.0 };
 
+    /// `IDENTITY` when the angle is not finite or too large to reduce, as `sin_cos`.
     pub fn from_angle(angle: f32) -> Rot {
         let (sin, cos) = sin_cos(angle);
         Rot { cos, sin }
@@ -67,9 +70,15 @@ impl Rot {
         .normalize()
     }
 
+    /// Scales to unit length; `IDENTITY` when the magnitude is zero or not finite (a NaN
+    /// or infinite component, or one so large that its square overflows), which has no
+    /// direction to keep.
     pub fn normalize(self) -> Rot {
         let mag = (self.sin * self.sin + self.cos * self.cos).sqrt();
-        let inv = if mag > 0.0 { 1.0 / mag } else { 0.0 };
+        if !(mag > 0.0 && mag.is_finite()) {
+            return Rot::IDENTITY;
+        }
+        let inv = 1.0 / mag;
         Rot {
             cos: self.cos * inv,
             sin: self.sin * inv,
@@ -104,5 +113,30 @@ mod tests {
             r = r.integrate(0.01);
         }
         assert!((r.cos * r.cos + r.sin * r.sin - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn normalize_gives_identity_for_a_zero_or_non_finite_magnitude() {
+        for (cos, sin) in [
+            (0.0, 0.0),
+            (f32::NAN, 0.5),
+            (f32::INFINITY, 0.0),
+            (3e38, 3e38),
+        ] {
+            assert_eq!(Rot { cos, sin }.normalize(), Rot::IDENTITY, "{cos}, {sin}");
+        }
+    }
+
+    #[test]
+    fn from_angle_gives_identity_for_an_angle_it_cannot_reduce() {
+        for angle in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1e30] {
+            assert_eq!(Rot::from_angle(angle), Rot::IDENTITY, "{angle}");
+        }
+    }
+
+    #[test]
+    fn integrate_by_a_non_finite_angle_gives_identity() {
+        assert_eq!(Rot::IDENTITY.integrate(f32::NAN), Rot::IDENTITY);
+        assert_eq!(Rot::from_angle(0.5).integrate(f32::INFINITY), Rot::IDENTITY);
     }
 }

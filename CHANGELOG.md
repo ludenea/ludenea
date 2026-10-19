@@ -47,6 +47,10 @@ session (the editor's copy of each open document's session), and the plugin API.
 - `Simulation::set_threads` returns `Result<(), ParallelError>` and keeps the previous
   pool on error. The command line tool's `--threads` takes 1 to 256, and its refusals
   exit with code 2 instead of a panic.
+- `Rot::normalize` returns `Rot::IDENTITY` when the magnitude is zero or not finite, and
+  `sin_cos` returns `(0, 1)` for an angle that is not finite or too large to reduce, so
+  `Rot::from_angle` and `Rot::integrate` give the identity there too. All of them returned
+  `(0, 0)`, a rotation that loading a `Pose` refuses.
 
 ### Control protocol
 

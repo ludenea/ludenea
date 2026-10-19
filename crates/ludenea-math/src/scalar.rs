@@ -47,7 +47,9 @@ pub fn unwind_angle(angle: f32) -> f32 {
     }
 }
 
-/// Returns `(sin, cos)` using the Box2D v3 rational approximation, normalized.
+/// Returns `(sin, cos)` using the Box2D v3 rational approximation, normalized. Gives
+/// `(0, 1)`, the identity rotation, when the angle is not finite or so large that reducing
+/// it to `[-PI, PI]` overflows.
 pub fn sin_cos(angle: f32) -> (f32, f32) {
     let x = unwind_angle(angle);
     let pi2 = PI * PI;
@@ -65,10 +67,10 @@ pub fn sin_cos(angle: f32) -> (f32, f32) {
     let s = if x < 0.0 { -sine(x + PI) } else { sine(x) };
 
     let magnitude = (s * s + c * c).sqrt();
-    if magnitude > 0.0 {
+    if magnitude > 0.0 && magnitude.is_finite() {
         (s / magnitude, c / magnitude)
     } else {
-        (0.0, 0.0)
+        (0.0, 1.0)
     }
 }
 
@@ -180,6 +182,13 @@ mod tests {
     #[test]
     fn atan2_of_origin_is_zero() {
         assert_eq!(atan2(0.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn sin_cos_gives_zero_and_one_for_an_angle_it_cannot_reduce() {
+        for angle in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1e30, -1e30] {
+            assert_eq!(sin_cos(angle), (0.0, 1.0), "{angle}");
+        }
     }
 
     #[test]
