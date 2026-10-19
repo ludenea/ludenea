@@ -1,7 +1,7 @@
 import { copyFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "@playwright/test";
-import { button, cli, collectErrors, DIVERGENCE_FIXTURES, openScene, play, repository, seek, serveBoxes, serveProject, waitForGame, type ServedProject } from "./project";
+import { button, cli, collectErrors, DIVERGENCE_FIXTURES, expectNoErrors, openScene, play, repository, seek, serveBoxes, serveProject, waitForGame, type ServedProject } from "./project";
 
 test.describe("a saved branch", () => {
   let served: ServedProject;
@@ -38,7 +38,7 @@ test.describe("a saved branch", () => {
     expect(replays).toHaveLength(1);
     // Exits with an error, which throws, unless every recorded hash matches.
     expect(cli(served.root, ["verify", join(served.root, "assets/replays", replays[0]!)])).toContain("hashes match");
-    expect(errors).toEqual([]);
+    await expectNoErrors(page, errors);
   });
 });
 

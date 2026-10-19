@@ -1,7 +1,7 @@
 import { copyFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
-import { button, collectErrors, DIVERGENCE_FIXTURES, openScene, play, repository, runCommand, seek, serveBoxes, serveProject, waitForGame, type ServedProject } from "./project";
+import { button, collectErrors, DIVERGENCE_FIXTURES, expectNoErrors, openScene, play, repository, runCommand, seek, serveBoxes, serveProject, waitForGame, type ServedProject } from "./project";
 
 /** Opens the project file `name` from the asset browser. */
 async function openAsset(page: Page, name: string): Promise<void> {
@@ -47,7 +47,7 @@ test.describe("the trace and snapshot viewer", () => {
     await expect(pose.getByRole("treeitem")).toHaveCount(1);
     await expect(pose.getByRole("treeitem")).toContainText("position.x");
     await expect(differences.locator(":scope > li")).toHaveCount(1);
-    expect(errors).toEqual([]);
+    await expectNoErrors(page, errors);
   });
 });
 
@@ -111,6 +111,6 @@ test.describe("the ghost and the causal report", () => {
     const collided = report.getByRole("treeitem", { name: new RegExp(`^${hit} at tick \\d+$`) });
     await expect(collided).toContainText(`ludenea::Collision`);
     await expect(collided).toContainText(`with ${thrown}`);
-    expect(errors).toEqual([]);
+    await expectNoErrors(page, errors);
   });
 });

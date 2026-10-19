@@ -57,6 +57,19 @@ export function collectErrors(page: Page): string[] {
   return errors;
 }
 
+/**
+ * Fails on the `errors` that `collectErrors` collected, then on the errors the editor reported
+ * in its Console panel (failed commands, viewport and divergence actions, builds, the game),
+ * which never reach the devtools console.
+ */
+export async function expectNoErrors(page: Page, errors: string[]): Promise<void> {
+  expect(errors).toEqual([]);
+  await page.getByRole("tab", { name: "Console", exact: true }).click();
+  const lines = page.getByRole("list", { name: "Console" });
+  await expect(lines).toBeVisible();
+  expect(await lines.locator(".ludenea-console-error").allTextContents(), "errors in the editor console").toEqual([]);
+}
+
 /** The first build of the engine for the browser takes minutes, more on a cold CI runner. */
 export const FIRST_BUILD_MS = (process.env.CI ? 18 : 9) * 60 * 1000;
 

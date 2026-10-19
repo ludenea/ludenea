@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { button, collectErrors, expectTick, openScene, play, seek, serveProject, settledTimeline, waitForGame, type ServedProject } from "./project";
+import { button, collectErrors, expectNoErrors, expectTick, openScene, play, seek, serveProject, settledTimeline, waitForGame, type ServedProject } from "./project";
 
 let served: ServedProject;
 
@@ -58,5 +58,5 @@ test("fork_switch_and_keep_parent_future", async ({ page }) => {
   expect((await settledTimeline(page)).head).toBe(parent.head);
   await button(page, "Redo").click();
   await expect(lanes).toHaveCount(2);
-  expect(errors).toEqual([]);
+  await expectNoErrors(page, errors);
 });

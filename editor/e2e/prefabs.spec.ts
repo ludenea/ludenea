@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { collectErrors, openScene, play, runCommand, serveProject, settledTimeline, waitForGame, type ServedProject } from "./project";
+import { collectErrors, expectNoErrors, openScene, play, runCommand, serveProject, settledTimeline, waitForGame, type ServedProject } from "./project";
 
 let served: ServedProject;
 
@@ -64,5 +64,5 @@ test("place_override_and_edit_prefab", async ({ page }) => {
   await expect(marks).toHaveCount(2);
   const labels = await marks.evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-label")));
   expect(labels.sort()).toEqual(["Collider overridden", "shape.Circle.radius overridden"]);
-  expect(errors).toEqual([]);
+  await expectNoErrors(page, errors);
 });

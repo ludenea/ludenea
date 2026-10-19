@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "@playwright/test";
-import { button, cli, collectErrors, expectTick, openScene, play, seek, serveProject, settledTimeline, waitForGame, type ServedProject } from "./project";
+import { button, cli, collectErrors, expectNoErrors, expectTick, openScene, play, seek, serveProject, settledTimeline, waitForGame, type ServedProject } from "./project";
 import { decodeTrace } from "./trace";
 
 interface ExportedSession {
@@ -104,5 +104,5 @@ test("an editor session replays in the CLI", async ({ page }) => {
   } finally {
     rmSync(files, { recursive: true, force: true });
   }
-  expect(errors).toEqual([]);
+  await expectNoErrors(page, errors);
 });

@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "@playwright/test";
-import { collectErrors, FIRST_BUILD_MS, serveProject, type ServedProject } from "./project";
+import { collectErrors, expectNoErrors, FIRST_BUILD_MS, serveProject, type ServedProject } from "./project";
 
 declare global {
   interface Window {
@@ -58,5 +58,5 @@ test("web editor opens the template project", async ({ page }) => {
   // The project opened its default scene: the scene tree lists its entities without a double click.
   await page.getByRole("tab", { name: "Scene" }).click();
   await expect(page.getByRole("listbox", { name: "Entities" }).getByRole("option").first()).toBeVisible();
-  expect(errors).toEqual([]);
+  await expectNoErrors(page, errors);
 });

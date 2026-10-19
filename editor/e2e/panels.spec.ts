@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "@playwright/test";
-import { collectErrors, openScene, serveProject, waitForGame, type ServedProject } from "./project";
+import { collectErrors, expectNoErrors, openScene, serveProject, waitForGame, type ServedProject } from "./project";
 
 const ENTITIES = 300;
 const SCROLLED = 3000;
@@ -41,5 +41,5 @@ test("the scene tree keeps its scroll position while its tab is hidden", async (
   await expect(row).toBeVisible();
   await expect(row).toBeInViewport();
   expect(await list.evaluate((element) => element.scrollTop)).toBe(SCROLLED);
-  expect(errors).toEqual([]);
+  await expectNoErrors(page, errors);
 });

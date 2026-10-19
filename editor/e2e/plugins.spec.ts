@@ -1,7 +1,7 @@
 import { copyFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "@playwright/test";
-import { collectErrors, expectTick, openScene, serveProject, timeline, waitForGame, type ServedProject } from "./project";
+import { collectErrors, expectNoErrors, expectTick, openScene, serveProject, timeline, waitForGame, type ServedProject } from "./project";
 
 declare global {
   interface Window {
@@ -90,5 +90,5 @@ test("a project plugin has the same API as built-ins", async ({ page }) => {
   await page.getByRole("tab", { name: "Timeline" }).click();
   expect(await timeline(page)).toEqual(before);
   expect(await page.evaluate(() => window.__pluginGlobalAccess)).toEqual([]);
-  expect(errors).toEqual([]);
+  await expectNoErrors(page, errors);
 });

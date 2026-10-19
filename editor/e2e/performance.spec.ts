@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
-import { button, collectErrors, expectTick, openScene, repository, seek, serveProject, timeline, waitForGame, type ServedProject } from "./project";
+import { button, collectErrors, expectNoErrors, expectTick, openScene, repository, seek, serveProject, timeline, waitForGame, type ServedProject } from "./project";
 
 declare global {
   interface Window {
@@ -142,7 +142,7 @@ async function playWithBranchAndGhost(page: Page, beforePlay: () => Promise<void
   test.info().annotations.push({ type: "performance", description: report });
 
   expect(frames.length).toBeGreaterThan(0);
-  expect(errors).toEqual([]);
+  await expectNoErrors(page, errors);
   if (strict) expect(p95, report).toBeLessThanOrEqual(17);
   return { interactiveMs, report, cacheChanges };
 }
