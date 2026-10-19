@@ -348,7 +348,7 @@ describe("guardSession with documents", () => {
         return [JSON.stringify({ type: "response", id: message.id, result: { ok: reply } })];
       }),
     );
-    const host = createEditor({ project, log: () => {} });
+    const host = createEditor({ project });
     // A game whose session is the scene it loaded last.
     const game = async () => {
       let scene = "";

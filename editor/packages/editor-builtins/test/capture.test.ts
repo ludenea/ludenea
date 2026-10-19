@@ -67,6 +67,25 @@ describe("live input capture", () => {
     stop();
   });
 
+  it("live_input_the_game_refuses_is_reported_in_the_editor_console", async () => {
+    const host = await testEditor([]);
+    const game = await testGame((command) => (command.type === "set_live_input" ? { error: { code: "invalid_command", message: "the game is resimulating" } } : { type: "done" }), {
+      input: { kind: "unit" },
+    });
+    act(() => host.setControl(game.client));
+    const element = document.body.appendChild(document.createElement("div"));
+    element.tabIndex = 0;
+    const stop = captureInput(host.editor, element);
+    element.focus();
+    act(() => host.editor.timeline.setState({ playing: true }));
+
+    fireEvent.keyDown(element, { code: "KeyD", key: "d" });
+    await waitFor(() =>
+      expect(host.editor.console.list().map(({ level, text }) => [level, text])).toContainEqual(["error", "Sending the live input to the game failed: the game is resimulating"]),
+    );
+    stop();
+  });
+
   it("a_game_without_an_input_type_captures_nothing", async () => {
     const host = await testEditor([]);
     const game = await testGame();

@@ -1,7 +1,7 @@
 import { ProtocolFailure, type TypeSchema } from "@ludenea/control-client";
 import { describe, expect, it, vi } from "vitest";
 import { AssetFailure } from "../src";
-import { fakeProject, gameWithSession, ids, settle, testGame, testHost, timeline, type Session } from "./support";
+import { fakeProject, gameWithSession, ids, logged, settle, testGame, testHost, timeline, type Session } from "./support";
 
 const session = (scene: string, extra: Partial<Session> = {}): Session => ({
   scene,
@@ -135,8 +135,7 @@ describe("document store", () => {
 
   it("a_root_branch_that_cannot_be_named_still_opens_the_document", async () => {
     const project = fakeProject();
-    const log = vi.fn();
-    const host = await testHost(undefined, project.answer, log);
+    const host = await testHost(undefined, project.answer);
     const game = await testGame((command) => {
       if (command.type === "get_timeline") return timeline(0);
       if (command.type === "rename_branch") return { error: { code: "invalid_command", message: "no such branch" } };
@@ -148,13 +147,12 @@ describe("document store", () => {
     await host.editor.document.getState().open(ids.main);
 
     expect(host.editor.document.getState()).toMatchObject({ current: { id: ids.main }, error: null });
-    expect(log).toHaveBeenCalledWith("warning", "Cannot name the root branch main: no such branch");
+    expect(logged(host)).toContainEqual(["warning", "Cannot name the root branch main: no such branch", undefined]);
   });
 
   it("a_stored_session_that_fails_to_restore_leaves_the_document_open_from_its_file", async () => {
     const project = fakeProject();
-    const log = vi.fn();
-    const host = await testHost(undefined, project.answer, log);
+    const host = await testHost(undefined, project.answer);
     const loaded = { type: "loaded", warnings: ["from the file"], instances: [], load_addresses: [] };
     const game = await testGame((command) => {
       if (command.type === "get_timeline") return timeline(0);
@@ -169,7 +167,7 @@ describe("document store", () => {
 
     expect(host.editor.document.getState()).toMatchObject({ current: { id: ids.main }, unsavedAssets: [], loaded: { warnings: ["from the file"] } });
     const refused = "The game refused the stored session of scenes/main.scene.ron; the document opened from its file: the branch tree cannot be decoded";
-    expect(log).toHaveBeenCalledWith("error", refused, undefined);
+    expect(logged(host)).toContainEqual(["error", refused, undefined]);
     // Shown on the scene tree as well.
     expect(host.editor.document.getState().error).toBe(refused);
   });
@@ -310,8 +308,7 @@ describe("document store", () => {
 
   it("an_open_waiting_for_a_resimulation_says_so_and_keeps_a_reload_from_seeking", async () => {
     const project = fakeProject();
-    const log = vi.fn();
-    const host = await testHost(undefined, project.answer, log);
+    const host = await testHost(undefined, project.answer);
     const game = await resimulatingGame();
     host.setControl(game.control);
     await host.editor.document.getState().open(ids.main);
@@ -321,7 +318,7 @@ describe("document store", () => {
 
     const opened = [host.editor.document.getState().open(ids.ball), host.editor.document.getState().open(ids.ball)];
     expect(opened[0]).toBe(opened[1]);
-    await vi.waitFor(() => expect(log).toHaveBeenCalledWith("info", "Opening assets/ball.prefab.ron once the game finishes resimulating."));
+    await vi.waitFor(() => expect(logged(host)).toContainEqual(["info", "Opening assets/ball.prefab.ron once the game finishes resimulating.", undefined]));
     game.finish();
     await Promise.all([reloaded, ...opened]);
 
@@ -356,7 +353,7 @@ describe("document store", () => {
 
   it("a_replay_that_fails_to_open_leaves_the_open_one_for_the_next_game", async () => {
     const project = fakeProject();
-    const host = await testHost(undefined, project.answer, vi.fn());
+    const host = await testHost(undefined, project.answer);
     const game = await testGame((command) =>
       command.type === "load_replay" && command.replay === btoa("replays/second.replay") ? { error: { code: "invalid_replay", message: "edit of tick 3 failed to decode" } } : { type: "done" },
     );
@@ -373,8 +370,7 @@ describe("document store", () => {
 
   it("a_document_a_new_game_refuses_is_logged_at_the_asset", async () => {
     const project = fakeProject();
-    const log = vi.fn();
-    const host = await testHost(undefined, project.answer, log);
+    const host = await testHost(undefined, project.answer);
     await host.editor.document.getState().open(ids.main);
     const message = `asset ${ids.settings} is invalid: 3:5: Expected comma`;
 
@@ -382,12 +378,12 @@ describe("document store", () => {
     host.setControl(game.control);
     await settle();
 
-    expect(log).toHaveBeenCalledWith("error", expect.stringContaining("Expected comma"), { file: "assets/settings.ron", line: 3, column: 5 });
+    expect(logged(host)).toContainEqual(["error", expect.stringContaining("Expected comma"), { file: "assets/settings.ron", line: 3, column: 5 }]);
   });
 
   it("an_error_names_the_file_of_each_asset_without_a_position", async () => {
     const project = fakeProject();
-    const host = await testHost(undefined, project.answer, vi.fn());
+    const host = await testHost(undefined, project.answer);
     const message = `asset ${ids.ball} is a \`demo::Settings\`, but entity 2 expects a \`ludenea::Prefab\``;
     const game = await testGame((command) => (command.type === "load_scene" ? { error: { code: "invalid_scene", message } } : { type: "done" }));
     host.setControl(game.control);
@@ -482,8 +478,7 @@ describe("document store", () => {
 
   it("broken_asset_error_names_path_line_and_column", async () => {
     const project = fakeProject();
-    const log = vi.fn();
-    const host = await testHost(undefined, project.answer, log);
+    const host = await testHost(undefined, project.answer);
     const message = `asset ${ids.settings} is invalid: 2:17-2:18: Expected integer`;
     const game = await testGame((command) => (command.type === "replace_scene" ? { error: { code: "invalid_scene", message } } : { type: "done" }));
     host.setControl(game.control);
@@ -495,7 +490,7 @@ describe("document store", () => {
     expect(failure).toBeInstanceOf(ProtocolFailure);
     expect(failure).toMatchObject({ code: "invalid_scene", path: "assets/settings.ron", line: 2, column: 17 });
     expect((failure as Error).message).toBe(`assets/settings.ron:2:17: asset ${ids.settings} (assets/settings.ron) is invalid: 2:17-2:18: Expected integer`);
-    expect(log).toHaveBeenCalledWith("error", expect.stringContaining("Expected integer"), { file: "assets/settings.ron", line: 2, column: 17 });
+    expect(logged(host)).toContainEqual(["error", expect.stringContaining("Expected integer"), { file: "assets/settings.ron", line: 2, column: 17 }]);
   });
 });
 

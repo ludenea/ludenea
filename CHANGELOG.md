@@ -64,6 +64,18 @@ session (the editor's copy of each open document's session), and the plugin API.
   `ProjectReplyFor` are built from the last two. `handshake` takes a hello with both the
   version and the fingerprint, and refuses a welcome of another version or fingerprint
   with `version_mismatch`, so `ControlClient.connect` and `ProjectClient.connect` do too.
+- `Editor.console` is the editor's log, which the Console panel shows: `log(level, text,
+  location?)`, `report(error, context)` (logs `<context> failed: <message>`), and the
+  entries through `list()` and `subscribe()`. Entries logged before the Console panel
+  activates wait for it. `runReported(editor, id)` runs a command and reports its failure
+  there under the command's title.
+- A command that fails from the command palette, a shortcut, or a key in the viewport is
+  reported in the editor console (the palette also shows it in an alert for a few
+  seconds), and so are the failures of viewport gestures, plugin overlays (once per
+  registration), divergence seeks, timeline refreshes, entity watches, settings, and
+  plugin reloads; none of them reach only the browser's developer tools any more.
+- Removed: `logToConsole` from `@ludenea/editor-builtins` and the `log` option of
+  `createEditor` with its `DocumentLog` type; use `editor.console`.
 
 ### Formats
 

@@ -44,7 +44,7 @@ describe("shell", () => {
 
   it("panel_whose_open_command_is_taken_is_reported_and_still_shown", async () => {
     const host = await testHost();
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const errors = () => host.editor.console.list().filter((entry) => entry.level === "error");
     const taker = host.editor.commands.register({ id: "panels.open.first", title: "Taken", run() {} });
     render(<Shell host={host} />);
     await act(() => Promise.resolve());
@@ -53,13 +53,15 @@ describe("shell", () => {
     host.editor.panels.register({ id: "second", title: "Second", component: () => <p>second</p> });
     await act(() => Promise.resolve());
 
-    expect(error).toHaveBeenCalledWith(expect.stringContaining('"panels.open.first"'));
+    expect(errors().map((entry) => entry.text)).toEqual([
+      'Adding the command that shows panel "first" failed: command "panels.open.first" is already registered by "editor"; "editor" cannot register it again',
+    ]);
     expect(host.editor.commands.list().map(({ id }) => id)).toContain("panels.open.second");
 
     // Later syncs try again, without repeating the report.
     host.editor.panels.register({ id: "third", title: "Third", component: () => <p>third</p> });
     await act(() => Promise.resolve());
-    expect(error).toHaveBeenCalledTimes(1);
+    expect(errors()).toHaveLength(1);
 
     // Once the shell holds the command, a later conflict is news again.
     taker.dispose();
@@ -71,6 +73,6 @@ describe("shell", () => {
     host.editor.commands.register({ id: "panels.open.first", title: "Taken again", run() {} });
     host.editor.panels.register({ id: "first", title: "First", component: () => <p>first</p> });
     await act(() => Promise.resolve());
-    expect(error).toHaveBeenCalledTimes(2);
+    expect(errors()).toHaveLength(2);
   });
 });

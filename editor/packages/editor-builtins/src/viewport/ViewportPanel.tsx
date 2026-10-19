@@ -1,6 +1,6 @@
 import init, { ViewportRenderer } from "@ludenea/debug-draw-wasm";
 import type { Entity, Vec2 } from "@ludenea/control-client";
-import type { Editor } from "@ludenea/editor-shell";
+import { runReported, type Editor, type ViewportOverlay } from "@ludenea/editor-shell";
 import { useEffect, useRef, useState } from "react";
 import { captureInput } from "../input/capture";
 import { errorText, shared, useGame } from "../shared";
@@ -36,9 +36,21 @@ type Press = {
 };
 
 const same = (a: Entity, b: Entity) => a.index === b.index && a.generation === b.generation;
-const report = (what: string) => (error: unknown) => console.error(`viewport: ${what} failed:`, error);
 
-export function ViewportPanel({ editor, state }: { editor: Editor; state: ViewportState }) {
+/** Reports the failure of work repeated every frame once, until it works again. */
+function reportedOnce(editor: Editor, context: string) {
+  let failing = false;
+  return {
+    failed(error: unknown) {
+      if (!failing) editor.console.report(error, context);
+      failing = true;
+    },
+    worked: () => void (failing = false),
+  };
+}
+
+/** `failedOverlays`: the plugin overlays whose failure is reported already, kept across mounts: once per registration. */
+export function ViewportPanel({ editor, state, failedOverlays }: { editor: Editor; state: ViewportState; failedOverlays: Set<ViewportOverlay> }) {
   const game = useGame(editor);
   const root = useRef<HTMLDivElement>(null);
   const gpu = useRef<HTMLCanvasElement>(null);
@@ -59,6 +71,14 @@ export function ViewportPanel({ editor, state }: { editor: Editor; state: Viewpo
     let press: Press | null = null;
     let space = false;
     let seen = state.get();
+    const report = (context: string) => (error: unknown) => editor.console.report(error, context);
+    const fetching = reportedOnce(editor, "Fetching the debug draw");
+    const drawing = reportedOnce(editor, "Drawing the viewport");
+    const overlayFailed = (overlay: ViewportOverlay, error: unknown) => {
+      if (failedOverlays.has(overlay)) return;
+      failedOverlays.add(overlay);
+      editor.console.report(error, `Drawing the viewport overlay "${overlay.id}"`);
+    };
 
     const measure = () => {
       const size = { width: element.clientWidth, height: element.clientHeight };
@@ -87,11 +107,12 @@ export function ViewportPanel({ editor, state }: { editor: Editor; state: Viewpo
         .request({ type: "get_debug_draw", layers: visibleLayers(control, state) })
         .then(
           ({ tick, frame }) => {
+            fetching.worked();
             if (!disposed && editor.control === control) state.set({ frame, tick });
           },
           // A game being replaced refuses its last request: only the current game's failures count.
           (error) => {
-            if (!disposed && editor.control === control) report("fetching the debug draw")(error);
+            if (!disposed && editor.control === control) fetching.failed(error);
           },
         )
         .finally(() => (inFlight = false));
@@ -111,8 +132,9 @@ export function ViewportPanel({ editor, state }: { editor: Editor; state: Viewpo
           renderer.set_camera(camera.center.x, camera.center.y, camera.pixelsPerMeter);
           // No surface texture this time: draw again on the next animation frame.
           if (!renderer.draw(JSON.stringify(frame ?? { layers: {} }), JSON.stringify(layers), JSON.stringify(selection))) repaint = true;
+          drawing.worked();
         } catch (error) {
-          report("drawing")(error);
+          drawing.failed(error);
         }
       }
       if (!context) return;
@@ -120,7 +142,10 @@ export function ViewportPanel({ editor, state }: { editor: Editor; state: Viewpo
       if (canvas.width !== Math.round(size.width * ratio)) canvas.width = Math.round(size.width * ratio);
       if (canvas.height !== Math.round(size.height * ratio)) canvas.height = Math.round(size.height * ratio);
       const drag = press?.mode === "select" && press.moved && press.target ? { entity: press.target, offset: dragOffset(press) } : null;
-      drawOverlay(context, { camera, size, frame, layers, tick, selection, overlays: editor.overlays.list(), drag }, ratio);
+      const overlays = editor.overlays.list();
+      // One unregistered then registered again is a new registration: its failure is news.
+      for (const overlay of failedOverlays) if (!overlays.includes(overlay)) failedOverlays.delete(overlay);
+      drawOverlay(context, { camera, size, frame, layers, tick, selection, overlays, drag }, ratio, overlayFailed);
     };
 
     // One request in flight at most: every animation frame while playing, on change otherwise.
@@ -146,6 +171,8 @@ export function ViewportPanel({ editor, state }: { editor: Editor; state: Viewpo
       editor.selection.subscribe(() => (repaint = true)),
       shared(editor).overlays.subscribe(() => (repaint = true)),
       subscribeGame(editor, () => {
+        // Another game: its failures are news.
+        fetching.worked();
         state.set({ frame: null, tick: 0 });
         dirty = true;
       }),
@@ -177,7 +204,7 @@ export function ViewportPanel({ editor, state }: { editor: Editor; state: Viewpo
           if (!target && entities[0] && !current.shift) selection.select([entities[0]]);
           current.target = target ?? (current.shift ? null : (entities[0] ?? null));
           repaint = true;
-        }, report("picking"));
+        }, report("Picking an entity in the viewport"));
         press = current;
       } else return;
       event.preventDefault();
@@ -209,7 +236,7 @@ export function ViewportPanel({ editor, state }: { editor: Editor; state: Viewpo
           const hit = entities[0];
           if (!released.shift) selection.getState().select(hit ? [hit] : []);
           else if (hit) selection.getState().add(hit);
-        }, report("picking"));
+        }, report("Picking an entity in the viewport"));
         return;
       }
       // A drag moves the selected entity it started on, as one edit on release.
@@ -218,7 +245,7 @@ export function ViewportPanel({ editor, state }: { editor: Editor; state: Viewpo
         .then(() => {
           if (released.target && control) return moveBy(editor, control, released.target, offset, state);
         })
-        .catch(report("moving"));
+        .catch(report("Moving the entity dragged in the viewport"));
     };
 
     // The browser took the pointer (a gesture, a lost touch): drop the press, move nothing.
@@ -244,14 +271,14 @@ export function ViewportPanel({ editor, state }: { editor: Editor; state: Viewpo
       if (!editor.control) return;
       if (event.key === "Delete" && !playing) {
         event.preventDefault();
-        editor.commands.run("scene.despawn-selection").catch(report("despawning"));
+        void runReported(editor, "scene.despawn-selection");
         return;
       }
       const direction = ARROWS[event.key];
       if (!direction || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
       if (playing) return;
       event.preventDefault();
-      editor.commands.run(`viewport.nudge-${direction}`).catch(report("nudging"));
+      void runReported(editor, `viewport.nudge-${direction}`);
     };
     const onKeyUp = (event: KeyboardEvent) => {
       if (event.key === " ") space = false;

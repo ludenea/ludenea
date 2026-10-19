@@ -1,6 +1,6 @@
 import { ProtocolFailure, type AssetId, type JsonValue } from "@ludenea/control-client";
 import { definePlugin, type Editor } from "@ludenea/editor-shell";
-import { createStore, showPanel, type Store } from "../shared";
+import { createStore, errorText, showPanel, type Store } from "../shared";
 import { assertEditable, edit, onEdited } from "../timeline/editing";
 import { InspectorPanel } from "./InspectorPanel";
 
@@ -142,7 +142,7 @@ async function markDiffering(editor: Editor, current: () => boolean): Promise<vo
       }),
     );
   } catch (error) {
-    console.warn(`unsaved data assets not checked: ${String(error)}`);
+    editor.console.log("warning", `Cannot check which data assets are unsaved: ${errorText(error)}`);
   }
 }
 

@@ -1,5 +1,5 @@
 import type { ConsoleLevel, ControlClient, Diagnostic } from "@ludenea/control-client";
-import { definePlugin, type Editor } from "@ludenea/editor-shell";
+import { definePlugin } from "@ludenea/editor-shell";
 import { ASSET_FOLDERS, createStore, shared, showPanel } from "../shared";
 import { ConsolePanel, where, type Entry, type Levels, type Location } from "./ConsolePanel";
 
@@ -38,18 +38,6 @@ function projectPath(file: string, root: string | undefined): string {
   return path.replace(/^(\.\/)+/, "");
 }
 
-/** Where each editor's Console panel takes messages from the application around it. */
-const sinks = new WeakMap<Editor, (level: ConsoleLevel, text: string, location?: Location) => void>();
-
-/** Shows `text` (from `location` when given) in the editor's Console panel; in the devtools console when there is none. */
-export function logToConsole(editor: Editor, level: ConsoleLevel, text: string, location?: Location): void {
-  const sink = sinks.get(editor);
-  if (sink) sink(level, text, location);
-  else if (level === "error") console.error(text);
-  else if (level === "warning") console.warn(text);
-  else console.info(text);
-}
-
 export const consolePlugin = definePlugin({
   name: "ludenea.console",
   activate(editor) {
@@ -60,7 +48,17 @@ export const consolePlugin = definePlugin({
     const add = (level: ConsoleLevel, text: string, source: Entry["source"] = "editor", location?: Location) =>
       update((entries) => [...entries, { id: next(), level, source, text, location }]);
 
-    sinks.set(editor, (level, text, location) => add(level, text, "editor", location));
+    // What the editor console holds, from its first entry: those logged before this plugin
+    // activated waited there.
+    let seen = 0;
+    const take = () => {
+      const fresh = editor.console.list().filter((entry) => entry.id > seen);
+      if (fresh.length === 0) return;
+      seen = fresh.at(-1)!.id;
+      update((entries) => [...entries, ...fresh.map(({ level, text, location }) => ({ id: next(), level, source: "editor" as const, text, location }))]);
+    };
+    take();
+    const stopEditor = editor.console.subscribe(take);
     // Kept here, not in the panel: the shell unmounts a panel while its tab is hidden.
     const scroll = { top: 0 };
     const project = editor.project;
@@ -112,7 +110,7 @@ export const consolePlugin = definePlugin({
       component: () => <ConsolePanel state={state} scroll={scroll} onLocation={open} />,
     });
     return () => {
-      sinks.delete(editor);
+      stopEditor();
       stops.forEach((stop) => stop());
       stopHost?.();
     };

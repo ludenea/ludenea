@@ -6,5 +6,5 @@ export { mountShell } from "./layout/mount";
 export { PluginLoader } from "./loader";
 export { CommandPalette } from "./palette/CommandPalette";
 export { type Registry } from "./registry";
-export { exportSession, restoreSession, type DocumentLog, type DocumentSessions, type SavedSession } from "./stores/document";
+export { exportSession, restoreSession, type DocumentSessions, type SavedSession } from "./stores/document";
 export { installShortcuts } from "./shortcuts";

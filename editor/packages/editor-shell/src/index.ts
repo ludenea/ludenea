@@ -1,5 +1,6 @@
 // `@ludenea/editor-shell`: the API plugins extend the editor through. The applications also
 // import `@ludenea/editor-shell/app`.
+export { runReported, type ConsoleEntry, type ConsoleLocation, type EditorConsole } from "./console";
 export type { Editor, Observed } from "./editor";
 export { AssetFailure, type AssetAccess, type AssetTypes } from "./assets";
 export type { ComponentTypes, EntityAccess } from "./entities";

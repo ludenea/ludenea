@@ -20,8 +20,8 @@ export type OverlayScene = {
 export const css = (color: Color) => `rgba(${color >>> 24}, ${(color >>> 16) & 255}, ${(color >>> 8) & 255}, ${(color & 255) / 255})`;
 const same = (a: Entity | null, b: Entity) => a !== null && a.index === b.index && a.generation === b.generation;
 
-/** Draws what the GPU renderer does not: labels, the drag outline, and plugin overlays. */
-export function drawOverlay(context: CanvasRenderingContext2D, scene: OverlayScene, pixelRatio: number): void {
+/** Draws what the GPU renderer does not: labels, the drag outline, and plugin overlays; `failed` hears each overlay that throws. */
+export function drawOverlay(context: CanvasRenderingContext2D, scene: OverlayScene, pixelRatio: number, failed: (overlay: ViewportOverlay, error: unknown) => void): void {
   const { camera, size, frame, layers, drag } = scene;
   context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
   context.clearRect(0, 0, size.width, size.height);
@@ -54,7 +54,7 @@ export function drawOverlay(context: CanvasRenderingContext2D, scene: OverlaySce
     try {
       overlay.draw({ canvas: context, worldToScreen: toScreen, tick: scene.tick, selection: scene.selection });
     } catch (error) {
-      console.error(`viewport overlay "${overlay.id}" failed:`, error);
+      failed(overlay, error);
     }
   }
 }

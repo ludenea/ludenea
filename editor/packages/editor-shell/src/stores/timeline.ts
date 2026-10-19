@@ -1,5 +1,6 @@
 import type { ControlClient, Timeline } from "@ludenea/control-client";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
+import type { EditorConsole } from "../console";
 
 export interface TimelineState {
   timeline: Timeline | null;
@@ -12,7 +13,7 @@ export interface TimelineState {
   divergence: { tick: number } | null;
   /**
    * Fetches the timeline and the hash with its pending flag: run after an edit, a seek, a
-   * step, or an undo. Failures are logged, never thrown.
+   * step, or an undo. Failures go to the editor console, never thrown.
    */
   refresh(): Promise<void>;
 }
@@ -22,7 +23,7 @@ export type TimelineStore = UseBoundStore<StoreApi<TimelineState>>;
 
 const EMPTY = { timeline: null, hash: null, pending: false, playing: false, effectiveRate: 0, divergence: null };
 
-export function createTimelineStore(control: () => ControlClient | null): TimelineStore {
+export function createTimelineStore(control: () => ControlClient | null, report: EditorConsole["report"]): TimelineStore {
   return create<TimelineState>()((set) => ({
     ...EMPTY,
     async refresh() {
@@ -38,7 +39,7 @@ export function createTimelineStore(control: () => ControlClient | null): Timeli
         }
         if (hash.type === "hash") set({ hash: hash.hash, pending: hash.pending });
       } catch (error) {
-        console.warn(`timeline not refreshed: ${String(error)}`);
+        report(error, "Refreshing the timeline");
       }
     },
   }));

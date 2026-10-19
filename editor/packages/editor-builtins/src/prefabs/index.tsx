@@ -1,6 +1,5 @@
 import type { ControlClient, Entity, FileEntry, InstanceInfo, OverrideInfo, PathSegment } from "@ludenea/control-client";
 import { definePlugin, type Editor, type Loaded, type TimelineState } from "@ludenea/editor-shell";
-import { logToConsole } from "../console";
 import { createStore, errorText, showPanel, type Store } from "../shared";
 import { entityKey } from "../shared/EntityList";
 import { assertEditable, edit, onEdited } from "../timeline/editing";
@@ -98,7 +97,7 @@ export const prefabsPlugin = definePlugin({
     };
     const onLoaded = (loaded: Loaded | null) => {
       if (!loaded) return clear();
-      for (const warning of loaded.warnings) logToConsole(editor, "warning", warning);
+      for (const warning of loaded.warnings) editor.console.log("warning", warning);
       version++;
       state.set({ instances: loaded.instances, addresses: addressMap(loaded.load_addresses) });
       void listPrefabs();
@@ -159,7 +158,7 @@ export const prefabsPlugin = definePlugin({
         } catch (error) {
           // Refused: the new file is no one's prefab.
           await editor.project.request({ type: "delete", path }).catch((failure: unknown) =>
-            logToConsole(editor, "warning", `Cannot remove ${path}, created for the refused prefab: ${errorText(failure)}`),
+            editor.console.log("warning", `Cannot remove ${path}, created for the refused prefab: ${errorText(failure)}`),
           );
           throw error;
         }

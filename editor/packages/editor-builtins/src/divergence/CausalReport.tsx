@@ -13,8 +13,6 @@ const KINDS: { [kind in EntityDivergence["kind"]]: string } = {
   replaced: "replaced (other components)",
 };
 
-const failed = (error: unknown) => console.error("divergence: seeking failed:", error);
-
 /** How the current branch diverges from the compare branch: the root cause, then each entity by tick with its cause candidates. */
 export function CausalReport({ editor, report }: { editor: Editor; report: Report }) {
   const control = useGame(editor);
@@ -23,7 +21,7 @@ export function CausalReport({ editor, report }: { editor: Editor; report: Repor
   useEffect(() => report.watch(), [report]);
   if (!control) return <p className="ludenea-muted">No game is running.</p>;
   if (compare === null) return <p className="ludenea-muted">No compare branch: choose one in the timeline to see how the branches diverge.</p>;
-  const select = (tick: number, ...entities: Entity[]) => report.select(tick, entities).catch(failed);
+  const select = (tick: number, ...entities: Entity[]) => report.select(tick, entities).catch((error) => editor.console.report(error, `Seeking to tick ${tick}`));
   const cause = (owner: EntityDivergence, cause: Cause) =>
     cause.type === "event" ? (
       <button onClick={() => select(cause.tick, owner.entity, cause.other)}>

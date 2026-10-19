@@ -33,7 +33,7 @@ export class PluginLoader {
       try {
         dispose(activation);
       } catch (failure) {
-        console.error(`plugin "${plugin.name}" left registrations behind:`, failure);
+        this.editor.console.report(failure, `Cleaning up the failed activation of plugin "${plugin.name}"`);
       }
       throw error;
     }
@@ -70,7 +70,7 @@ export class PluginLoader {
     try {
       this.deactivate(name);
     } catch (failure) {
-      console.error(`plugin "${name}" did not deactivate cleanly:`, failure);
+      this.editor.console.report(failure, `Deactivating the previous plugin "${name}"`);
     }
     try {
       this.activate(plugin);
@@ -79,7 +79,7 @@ export class PluginLoader {
         try {
           this.activate(previous);
         } catch (failure) {
-          console.error(`plugin "${name}" could not be restored:`, failure);
+          this.editor.console.report(failure, `Restoring the previous plugin "${name}"`);
         }
       }
       throw error;

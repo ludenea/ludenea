@@ -1,6 +1,7 @@
-import type { AssetId, Command, ConsoleLevel, ControlClient, FileChange, ProjectClient, Reply } from "@ludenea/control-client";
+import type { AssetId, Command, ControlClient, FileChange, ProjectClient, Reply } from "@ludenea/control-client";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import { AssetFailure, locateAssetError } from "../assets";
+import type { EditorConsole } from "../console";
 
 /** What the game reports about the scene it loaded: stale override warnings, prefab instances, and load addresses. */
 export type Loaded = Extract<Reply, { type: "loaded" }>;
@@ -60,9 +61,6 @@ export interface DocumentSessions {
   /** `restoreSession` that also marks the session's unsaved assets unsaved again. */
   restore(control: ControlClient, saved: SavedSession, tick?: number): Promise<Loaded | null>;
 }
-
-/** Where the store reports failures: the editor's console, at the asset's file when known. */
-export type DocumentLog = (level: ConsoleLevel, text: string, location?: { file: string; line: number; column: number }) => void;
 
 /** A Zustand store: one document at a time, as the game keeps one session. */
 export type DocumentStore = UseBoundStore<StoreApi<DocumentState>>;
@@ -179,7 +177,8 @@ export function createDocumentStore(options: {
   project: ProjectClient;
   control: () => ControlClient | null;
   onGameChanged(listener: (control: ControlClient | null) => void): void;
-  log: DocumentLog;
+  /** Where the store reports failures: the editor's console, at the asset's file when known. */
+  log: EditorConsole["log"];
   /** Whether the game plays: a reload of the assets plays on once it is back. */
   playing?: () => boolean;
 }): { store: DocumentStore; sessions: DocumentSessions } {

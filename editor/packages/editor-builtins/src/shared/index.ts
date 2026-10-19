@@ -1,5 +1,5 @@
 import type { ControlClient, ProjectInfo } from "@ludenea/control-client";
-import type { Editor } from "@ludenea/editor-shell";
+import { runReported, type Editor } from "@ludenea/editor-shell";
 import { useLayoutEffect, useRef, useSyncExternalStore, type UIEvent } from "react";
 
 /** The project folders the asset browser lists. */
@@ -91,11 +91,11 @@ export function shared(editor: Editor): Shared {
   return state;
 }
 
-/** Brings a panel forward through the shell's `panels.open.<id>` command, when a shell provides it. */
+/** Brings a panel forward through the shell's `panels.open.<id>` command, when a shell provides it; a failure goes to the editor console. */
 export function showPanel(editor: Editor, id: string): void {
   const command = `panels.open.${id}`;
   if (!editor.commands.list().some((registered) => registered.id === command)) return;
-  editor.commands.run(command).catch((error) => console.error(`command "${command}" failed:`, error));
+  void runReported(editor, command);
 }
 
 /** A failure as one line for a panel to show. */

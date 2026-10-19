@@ -1,10 +1,11 @@
+import type { Editor } from "@ludenea/editor-shell";
 import { useStore } from "../shared";
 import type { Viewer } from ".";
 
 const percent = (tick: number, total: number) => `${(100 * tick) / Math.max(total, 1)}%`;
 
 /** A trace against another trace or the current branch: a strip of ticks with the first divergent one marked. */
-export function TraceViewer({ viewer, traces }: { viewer: Viewer; traces: string[] }) {
+export function TraceViewer({ editor, viewer, traces }: { editor: Editor; viewer: Viewer; traces: string[] }) {
   const { path, against, result, error } = useStore(viewer.trace);
   const total = result ? result.common + result.only_in_longer : 0;
   const divergent = result?.first_divergent ?? null;
@@ -41,7 +42,7 @@ export function TraceViewer({ viewer, traces }: { viewer: Viewer; traces: string
                 aria-label={`First divergent tick ${divergent}`}
                 title={against === null ? `Seek to tick ${divergent}` : "Open one side as the document to seek there"}
                 disabled={against !== null}
-                onClick={() => viewer.seekDivergence().catch((error) => console.error("divergence: seeking failed:", error))}
+                onClick={() => viewer.seekDivergence().catch((error) => editor.console.report(error, `Seeking to the first divergent tick ${divergent}`))}
                 style={{ position: "absolute", top: -2, bottom: -2, left: percent(divergent, total), width: 4, padding: 0, border: 0, background: "var(--color-warning)" }}
               />
             )}

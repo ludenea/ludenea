@@ -1,5 +1,5 @@
 import type { ControlClient, DebugDrawFrame, Vec2 } from "@ludenea/control-client";
-import { definePlugin, type Disposable } from "@ludenea/editor-shell";
+import { definePlugin, type Disposable, type ViewportOverlay } from "@ludenea/editor-shell";
 import { createStore, shared } from "../shared";
 import { bounds, panBy, zoomAt, MAX_PIXELS_PER_METER, MIN_PIXELS_PER_METER, type Camera, type Size } from "./camera";
 import { moveBy, visibleLayers, type ViewportState } from "./state";
@@ -101,11 +101,12 @@ export const viewportPlugin = definePlugin({
     editor.onGameChanged(registerToggles);
     const stopLayers = layers.subscribe(() => state.set({ hidden: layers.get().hidden }));
 
+    const failedOverlays = new Set<ViewportOverlay>();
     editor.panels.register({
       id: "ludenea.viewport",
       title: "Viewport",
       defaultPosition: "center",
-      component: ({ editor }) => <ViewportPanel editor={editor} state={state} />,
+      component: ({ editor }) => <ViewportPanel editor={editor} state={state} failedOverlays={failedOverlays} />,
     });
     return () => {
       stopLayers();

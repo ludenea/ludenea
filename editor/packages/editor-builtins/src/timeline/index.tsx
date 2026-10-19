@@ -1,6 +1,5 @@
 import type { BranchId, FileEntry } from "@ludenea/control-client";
 import { definePlugin, type Editor } from "@ludenea/editor-shell";
-import { logToConsole } from "../console";
 import { createStore, errorText, shared, showPanel, type Store } from "../shared";
 import type { BranchAction, BranchForms } from "./BranchLanes";
 import { edit } from "./editing";
@@ -51,7 +50,7 @@ async function saveReplay(editor: Editor, branch: BranchId | null): Promise<stri
     await editor.project.request({ type: "write_binary", path, bytes: replay });
   } catch (error) {
     await editor.project.request({ type: "delete", path }).catch((failure: unknown) =>
-      logToConsole(editor, "warning", `Cannot remove ${path}, left empty by the failed save: ${errorText(failure)}`),
+      editor.console.log("warning", `Cannot remove ${path}, left empty by the failed save: ${errorText(failure)}`),
     );
     throw error;
   }

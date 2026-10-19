@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { testGame, testHost } from "./support";
+import { logged, testGame, testHost } from "./support";
 
 const timeline = { head: 5, simulated: 5, current: 5, checkpoints: [0], edit_ticks: [], can_undo: false, can_redo: false, scene_dirty: false, resimulating: false };
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -35,5 +35,14 @@ describe("timeline store", () => {
     host.setControl(second.control);
     expect(store.getState()).toMatchObject({ timeline: null, hash: null, pending: false, playing: false, divergence: null });
     expect(second.sent.map((command) => command.type)).toEqual(["get_timeline", "get_hash"]);
+  });
+
+  it("a_failed_refresh_is_reported_in_the_editor_console", async () => {
+    const host = await testHost();
+    const game = await testGame(() => ({ error: { code: "internal", message: "the game is closing" } }));
+    host.setControl(game.control);
+    await settle();
+
+    expect(logged(host)).toEqual([["error", "Refreshing the timeline failed: the game is closing", undefined]]);
   });
 });

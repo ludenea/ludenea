@@ -144,9 +144,9 @@ describe("scene tree", () => {
   });
 
   it("a_failed_label_read_is_retried_on_the_next_hash_change", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    const { game, held } = await sceneTree(undefined, { ...world(), failing: true });
+    const { host, game, held } = await sceneTree(undefined, { ...world(), failing: true });
     expect(screen.queryByText("Collider")).toBeNull();
+    expect(host.editor.console.list().map(({ level, text }) => [level, text])).toContainEqual(["warning", "Cannot read the components of entity 1v0 for its label: not alive"]);
     held.failing = false;
     held.hash = "00000000000000b1";
     act(() => game.push({ type: "entities_changed", filter: "", total: 2 }));
@@ -156,7 +156,6 @@ describe("scene tree", () => {
   });
 
   it("a_failed_label_read_waits_for_a_pause_to_retry_while_playing", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
     const held = { ...world(), failing: true };
     const { host, game } = await sceneTree(undefined, held);
     const labelReads = () => game.sent.filter((command) => command.type === "get_entity" && (command.entity as { index: number }).index === 1).length;

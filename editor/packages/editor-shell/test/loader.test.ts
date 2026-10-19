@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DuplicateRegistration, definePlugin, type Editor } from "../src";
 import { Shell } from "../src/app";
-import { testHost } from "./support";
+import { logged, testHost } from "./support";
 
 const entity = { index: 3, generation: 1 };
 
@@ -121,7 +121,6 @@ describe("loader", () => {
   });
 
   it("reload_reports_the_new_error_when_restoring_the_previous_plugin_fails_too", async () => {
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
     let activations = 0;
     const flaky = definePlugin({
       name: "tools",
@@ -140,8 +139,7 @@ describe("loader", () => {
     host.loader.activate(flaky);
 
     await expect(host.loader.reload("tools", "/plugins/tools.2.js")).rejects.toThrow("tools two is broken");
-    expect(error).toHaveBeenCalledWith(expect.stringContaining("tools"), expect.objectContaining({ message: "tools one cannot come back" }));
-    error.mockRestore();
+    expect(logged(host)).toEqual([["error", 'Restoring the previous plugin "tools" failed: tools one cannot come back', undefined]]);
   });
 
   it("deactivate_disposes_everything_even_when_a_disposal_throws", async () => {
@@ -177,6 +175,38 @@ describe("loader", () => {
     expect(later).toHaveBeenCalledOnce();
     expect(host.editor.commands.list()).toEqual([]);
     host.loader.activate(definePlugin({ name: "tools", activate: (editor) => void editor.commands.register({ id: "tools.first", title: "First", run: () => {} }) }));
+  });
+
+  it("cleanup_failures_around_activation_and_reload_are_reported_in_the_editor_console", async () => {
+    const leaky = (name: string, failure: string) =>
+      definePlugin({
+        name,
+        activate: () => () => {
+          throw new Error(failure);
+        },
+      });
+    const host = await testHost(async () => ({ default: definePlugin({ name: "tools", activate() {} }) }));
+    host.loader.activate(leaky("tools", "the old panel would not close"));
+
+    await host.loader.reload("tools", "/plugins/tools.2.js");
+    expect(() =>
+      host.loader.activate(
+        definePlugin({
+          name: "broken",
+          activate() {
+            host.registry.own(() => {
+              throw new Error("the half-made panel would not close");
+            });
+            throw new Error("broken cannot start");
+          },
+        }),
+      ),
+    ).toThrow("broken cannot start");
+
+    expect(logged(host)).toEqual([
+      ["error", 'Deactivating the previous plugin "tools" failed: plugin "tools" did not deactivate cleanly: the old panel would not close', undefined],
+      ["error", 'Cleaning up the failed activation of plugin "broken" failed: plugin "broken" did not deactivate cleanly: the half-made panel would not close', undefined],
+    ]);
   });
 
   it("registrations_after_activate_belong_to_the_editor_until_disposed", async () => {

@@ -1,6 +1,8 @@
 import { act, cleanup, fireEvent, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { builtinPlugins, logToConsole } from "../src";
+import { definePlugin } from "@ludenea/editor-shell";
+import { builtinPlugins } from "../src";
+import { consolePlugin } from "../src/console";
 import { renderPanel, settle, testEditor, testGame } from "./support";
 
 const RENDERED = "error[E0425]: cannot find value `speed` in this scope\n --> src/lib.rs:12:5\n";
@@ -82,8 +84,29 @@ describe("console", () => {
   it("console_shows_what_the_application_reports", async () => {
     const host = await testEditor(builtinPlugins);
     renderPanel(host, "ludenea.console");
-    act(() => logToConsole(host.editor, "error", "The game crashed at tick 4: boom"));
+    act(() => host.editor.console.log("error", "The game crashed at tick 4: boom"));
     expect(screen.getByText("The game crashed at tick 4: boom")).toBeTruthy();
+  });
+
+  it("a_project_plugin_logs_to_the_console_through_the_public_editor", async () => {
+    // What a project plugin can import: `@ludenea/editor-shell` only.
+    const project = definePlugin({
+      name: "my_game",
+      activate(editor) {
+        editor.console.log("warning", "my_game: the level has no spawn point", { file: "assets/level.ron", line: 4, column: null });
+        editor.console.report(new Error("no game is connected"), "Reset the level");
+      },
+    });
+    // It activates before the Console: what it logged waits for the panel.
+    const host = await testEditor([project, consolePlugin]);
+    renderPanel(host, "ludenea.console");
+
+    expect(screen.getByText("my_game: the level has no spawn point")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "assets/level.ron:4" })).toBeTruthy();
+    expect(screen.getByText("Reset the level failed: no game is connected")).toBeTruthy();
+    act(() => host.editor.console.log("info", "my_game: level reset"));
+    expect(screen.getByText("my_game: level reset")).toBeTruthy();
+    expect(screen.getAllByRole("listitem")).toHaveLength(3);
   });
 
   it("scroll_position_survives_hiding_the_panel", async () => {

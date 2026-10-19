@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { runReported } from "../console";
 import type { Editor } from "../editor";
 import type { CommandDefinition } from "../plugin";
 import type { Registry } from "../registry";
@@ -16,17 +17,26 @@ export function fuzzyMatch(query: string, text: string): boolean {
 
 const optionId = (index: number) => `ludenea-palette-option-${index}`;
 
+/** How long the line naming a failed command stays; the editor console keeps it. */
+const ALERT_MS = 6000;
+
 function matching(commands: CommandDefinition[], query: string): CommandDefinition[] {
   return commands
     .filter((command) => fuzzyMatch(query, command.title) || fuzzyMatch(query, command.id))
     .sort((a, b) => a.title.localeCompare(b.title));
 }
 
-/** Every registered command, opened with `Ctrl+K` or `Cmd+K` (also from text fields). */
+/**
+ * Every registered command, opened with `Ctrl+K` or `Cmd+K` (also from text fields). A command
+ * that fails is reported in the editor console and, for a few seconds, in an alert.
+ */
 export function CommandPalette({ editor, registry }: { editor: Editor; registry?: Registry }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [highlighted, setHighlighted] = useState(0);
+  // Shown while the palette is closed, until it opens again. A new object per failure, so the
+  // same failure twice shows for the full time again.
+  const [failure, setFailure] = useState<{ text: string } | null>(null);
   const list = useRef<HTMLUListElement>(null);
   // Where the pointer went down: a drag that starts in the panel and ends outside is no click outside.
   const pressedOutside = useRef(false);
@@ -43,19 +53,31 @@ export function CommandPalette({ editor, registry }: { editor: Editor; registry?
         setOpen((open) => !open);
         setQuery("");
         setHighlighted(0);
+        setFailure(null);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  if (!open) return null;
+  useEffect(() => {
+    if (!failure) return;
+    const timer = setTimeout(() => setFailure(null), ALERT_MS);
+    return () => clearTimeout(timer);
+  }, [failure]);
+
+  const alert = failure && (
+    <p role="alert" className="ludenea-palette-alert">
+      {failure.text}
+    </p>
+  );
+  if (!open) return alert;
   const commands = matching(editor.commands.list(), query);
   const shortcutOf = new Map(registry?.shortcuts.entries().map(([key, command]) => [command, key]));
   const run = (command: CommandDefinition | undefined) => {
     if (!command) return;
     setOpen(false);
-    editor.commands.run(command.id).catch((error) => console.error(`command "${command.id}" failed:`, error));
+    void runReported(editor, command.id).then((text) => text !== null && setFailure({ text }));
   };
   const onKeyDown = (event: ReactKeyboardEvent) => {
     if (event.key === "Escape") setOpen(false);

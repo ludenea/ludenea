@@ -1,3 +1,4 @@
+import { runReported } from "./console";
 import type { Editor } from "./editor";
 import type { Registry } from "./registry";
 
@@ -95,6 +96,7 @@ export function isTextField(target: EventTarget | null): boolean {
 /**
  * Runs registered shortcuts on key presses in `target`, except while a text field has focus.
  * While `editor.shortcuts.captured`, every key but `F5` and `Mod` combinations is the game's.
+ * A command that fails is reported in the editor console.
  */
 export function installShortcuts(editor: Editor, registry: Registry, target: Window = window): () => void {
   const onKeyDown = (event: KeyboardEvent) => {
@@ -104,7 +106,7 @@ export function installShortcuts(editor: Editor, registry: Registry, target: Win
     const command = registry.shortcuts.get(shortcut);
     if (!command) return;
     event.preventDefault();
-    editor.commands.run(command).catch((error) => console.error(`command "${command}" failed:`, error));
+    void runReported(editor, command);
   };
   target.addEventListener("keydown", onKeyDown);
   return () => target.removeEventListener("keydown", onKeyDown);

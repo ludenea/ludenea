@@ -258,6 +258,31 @@ describe("divergence", () => {
     expect(host.editor.selection.getState().entities).toEqual([entity(7), entity(4)]);
   });
 
+  it("a_refused_seek_is_reported_in_the_editor_console", async () => {
+    const { host } = await divergence({
+      game: (command) => {
+        if (command.type === "get_divergence") return { type: "divergence", ...report };
+        if (command.type === "compare_traces") return { type: "trace_comparison", common: 500, first_divergent: 42, only_in_longer: 0 };
+        if (command.type === "seek") return { error: { code: "invalid_command", message: "the game is resimulating" } };
+        return undefined;
+      },
+    });
+    renderPanel(host, "ludenea.divergence-report");
+    renderPanel(host, "ludenea.divergence");
+    await act(() => host.editor.commands.run("divergence.open-file", { path: "assets/run.trace" }));
+    await settle();
+
+    fireEvent.click(screen.getByRole("button", { name: "4v0 at tick 301" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "First divergent tick 42" }));
+    await settle();
+
+    expect(host.editor.console.list().map(({ level, text }) => [level, text])).toEqual([
+      ["error", "Seeking to tick 301 failed: the game is resimulating"],
+      ["error", "Seeking to the first divergent tick 42 failed: the game is resimulating"],
+    ]);
+  });
+
   it("explorer_column_shows_divergence_tick", async () => {
     const { host } = await divergence({ game: (command) => (command.type === "get_divergence" ? { type: "divergence", ...report } : undefined) });
     const column = host.editor.explorer.columns.list().find((registered) => registered.id === "divergence.diverged-at")!;

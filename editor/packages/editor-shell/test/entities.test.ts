@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
-import { testGame, testHost } from "./support";
+import { logged, settle, testGame, testHost } from "./support";
 
 type Pose = { position: { x: number; y: number }; rotation: { cos: number; sin: number } };
 
@@ -86,6 +86,17 @@ describe("entities", () => {
 
     expect(changed).not.toHaveBeenCalled();
     expect(own(game.sent)).toEqual([{ type: "subscribe", topic: { type: "entity", entity } }]);
+  });
+
+  it("a_watch_the_game_refuses_is_reported_in_the_editor_console", async () => {
+    const host = await testHost();
+    const game = await testGame((command) => (command.type === "subscribe" ? { error: { code: "invalid_command", message: "no such entity" } } : { type: "done" }));
+    host.setControl(game.control);
+
+    host.editor.entities.watch(entity, () => {});
+    await settle();
+
+    expect(logged(host)).toEqual([["error", "Watching entity 4v2 failed: no such entity", undefined]]);
   });
 
   it("entities_need_a_game", async () => {

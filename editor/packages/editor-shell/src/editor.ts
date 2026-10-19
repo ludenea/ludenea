@@ -1,5 +1,6 @@
 import type { ControlClient, ProjectClient } from "@ludenea/control-client";
 import { createAssetAccess, type AssetAccess } from "./assets";
+import { createConsole, type EditorConsole } from "./console";
 import { createEntityAccess, type ComponentTypes, type EntityAccess } from "./entities";
 import { PluginLoader } from "./loader";
 import type {
@@ -15,7 +16,7 @@ import type {
 import { Registry } from "./registry";
 import { normalizeShortcut } from "./shortcuts";
 import { createBranchStore, type BranchStore } from "./stores/branches";
-import { createDocumentStore, type DocumentLog, type DocumentSessions, type DocumentStore } from "./stores/document";
+import { createDocumentStore, type DocumentSessions, type DocumentStore } from "./stores/document";
 import { createSelectionStore, type SelectionStore } from "./stores/selection";
 import { feedTimeline, createTimelineStore, type TimelineStore } from "./stores/timeline";
 
@@ -58,6 +59,8 @@ export interface Editor {
   document: DocumentStore;
   branches: BranchStore;
   assets: AssetAccess;
+  /** What the Console panel shows: plugins report their failures here, as the shell reports those of commands. */
+  console: EditorConsole;
   onGameChanged(listener: (control: ControlClient | null) => void): Disposable;
 }
 
@@ -89,11 +92,11 @@ function readSetting(id: string): string | null {
   }
 }
 
-function writeSetting(id: string, value: unknown): void {
+function writeSetting(id: string, value: unknown, report: EditorConsole["report"]): void {
   try {
     localStorage.setItem(SETTINGS_PREFIX + id, JSON.stringify(value));
   } catch (error) {
-    console.warn(`setting "${id}" not saved: ${String(error)}`);
+    report(error, `Saving the setting "${id}"`);
   }
 }
 
@@ -102,8 +105,6 @@ export function createEditor(options: {
   control?: ControlClient | null;
   /** Imports a plugin bundle; tests replace it. */
   importModule?: (url: string) => Promise<unknown>;
-  /** Where documents that fail to load are reported; the devtools console by default. */
-  log?: DocumentLog;
 }): EditorHost {
   const registry = new Registry();
   const { commands, inspectors, overlays, settings, decorations, columns } = registry;
@@ -116,13 +117,14 @@ export function createEditor(options: {
 
   let control = options.control ?? null;
   let captures = 0;
-  const timeline = createTimelineStore(() => control);
+  const editorConsole = createConsole();
+  const timeline = createTimelineStore(() => control, editorConsole.report);
   // Its listener comes first, so a new game loads the document before plugins hear of it.
   const documents = createDocumentStore({
     project: options.project,
     control: () => control,
     onGameChanged: (listener) => gameListeners.add(listener),
-    log: options.log ?? ((level, text) => (level === "error" ? console.error(text) : console.warn(text))),
+    log: editorConsole.log,
     playing: () => timeline.getState().playing,
   });
   const editor: Editor = {
@@ -134,6 +136,7 @@ export function createEditor(options: {
       () => control,
       (listener) => gameListeners.add(listener),
       (dispose) => registry.own(dispose),
+      editorConsole.report,
     ),
     panels: { register: (panel) => registry.panels.register(panel.id, panel) },
     inspectors: {
@@ -177,7 +180,7 @@ export function createEditor(options: {
       },
       set(id, value) {
         setting(id);
-        writeSetting(id, value);
+        writeSetting(id, value, editorConsole.report);
       },
     },
     selection: createSelectionStore(),
@@ -185,6 +188,7 @@ export function createEditor(options: {
     document: documents.store,
     branches: createBranchStore(() => control, timeline),
     assets: createAssetAccess(() => control, options.project),
+    console: editorConsole,
     onGameChanged(listener) {
       // A fresh entry per call, so registering one function twice needs two disposals.
       const entry = (control: ControlClient | null) => listener(control);

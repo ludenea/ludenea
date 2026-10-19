@@ -98,7 +98,7 @@ export function Shell({ host }: { host: EditorHost }) {
           openCommands.delete(id);
           if (taken.has(id)) continue;
           taken.add(id);
-          console.error(`panel "${id}" has no "panels.open.${id}" command: ${error instanceof Error ? error.message : String(error)}`);
+          editor.console.report(error, `Adding the command that shows panel "${id}"`);
         }
       }
     };

@@ -334,7 +334,6 @@ describe("viewport", () => {
   });
 
   it("expected_misses_stay_out_of_the_error_log", async () => {
-    const error = vi.spyOn(console, "error");
     let refuse = false;
     const { host, view } = await viewport((command) => (refuse && command.type === "get_debug_draw" ? { error: { code: "internal", message: "game closed" } } : undefined));
     // Nothing selected to frame.
@@ -348,7 +347,95 @@ describe("viewport", () => {
     fireEvent.keyDown(view, { key: "ArrowRight" });
     fireEvent.keyDown(view, { key: "Delete" });
     await settle();
-    expect(error).not.toHaveBeenCalled();
+    expect(host.editor.console.list()).toEqual([]);
+  });
+
+  it("a_refused_drag_and_a_refused_key_are_reported_in_the_editor_console", async () => {
+    const { host, view } = await viewport((command) => {
+      if (command.type === "pick") return { type: "picked", entities: [entity(1)] };
+      if (command.type === "get_entity") return { type: "entity", entity: entity(1), components: { "ludenea::Pose": pose(1, 1) } };
+      if (command.type === "set_field") return { error: { code: "invalid_command", message: "the entity is locked" } };
+      return undefined;
+    });
+    host.editor.commands.register({
+      id: "scene.despawn-selection",
+      title: "Despawn selected entities",
+      run() {
+        throw new Error("select the entities to despawn first");
+      },
+    });
+    act(() => host.editor.selection.getState().select([entity(1)]));
+    fireEvent.pointerDown(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    await settle();
+    fireEvent.pointerMove(view, { buttons: 1, clientX: 300, clientY: 150, pointerId: 1 });
+    fireEvent.pointerUp(view, { button: 0, clientX: 300, clientY: 150, pointerId: 1 });
+    await settle();
+    fireEvent.keyDown(view, { key: "Delete" });
+    await settle();
+
+    expect(host.editor.console.list().map(({ level, text }) => [level, text])).toEqual([
+      ["error", "Moving the entity dragged in the viewport failed: the entity is locked"],
+      ["error", "Despawn selected entities failed: select the entities to despawn first"],
+    ]);
+  });
+
+  it("a_debug_draw_failing_every_frame_is_reported_once_until_it_works_again", async () => {
+    let refuse = true;
+    const { host, game } = await viewport((command) =>
+      refuse && command.type === "get_debug_draw" ? { error: { code: "internal", message: "the debug draw panicked" } } : undefined,
+    );
+    const fetched = () => sentOf(game.sent, "get_debug_draw").length;
+    const moreFrames = async () => {
+      const before = fetched();
+      await waitFor(() => expect(fetched()).toBeGreaterThan(before + 2));
+    };
+    const reported = "Fetching the debug draw failed: the debug draw panicked";
+    // Playing fetches every frame.
+    act(() => host.editor.timeline.setState({ playing: true }));
+    await moreFrames();
+    expect(host.editor.console.list().map(({ text }) => text)).toEqual([reported]);
+
+    refuse = false;
+    await moreFrames();
+    refuse = true;
+    await moreFrames();
+    expect(host.editor.console.list().map(({ text }) => text)).toEqual([reported, reported]);
+  });
+
+  it("a_failing_overlay_is_reported_once_per_registration", async () => {
+    const { host } = await viewport();
+    const broken = {
+      id: "my_game.broken",
+      draw() {
+        throw new Error("no font loaded");
+      },
+    };
+    const reports = () => host.editor.console.list().map(({ text }) => text);
+    const painted = () => drawn.calls.filter((call) => call.method === "clearRect").length;
+    // Three more paints of the overlay canvas.
+    const frames = async () => {
+      for (const index of [1, 2, 3]) {
+        const before = painted();
+        act(() => host.editor.selection.getState().select([entity(index)]));
+        await waitFor(() => expect(painted()).toBeGreaterThan(before));
+      }
+    };
+    const registration = host.editor.overlays.register(broken);
+    await frames();
+    expect(reports()).toEqual(['Drawing the viewport overlay "my_game.broken" failed: no font loaded']);
+
+    // Drawn again by a viewport mounted anew: still reported.
+    cleanup();
+    renderPanel(host, "ludenea.viewport");
+    await frames();
+    expect(reports()).toHaveLength(1);
+
+    // Registered again: a new registration.
+    registration.dispose();
+    await frames();
+    host.editor.overlays.register(broken);
+    await frames();
+    expect(reports()).toEqual(['Drawing the viewport overlay "my_game.broken" failed: no font loaded', 'Drawing the viewport overlay "my_game.broken" failed: no font loaded']);
   });
 
   it("nudging_waits_for_a_pause", async () => {

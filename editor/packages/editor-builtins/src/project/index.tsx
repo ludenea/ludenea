@@ -1,7 +1,6 @@
 import type { ProjectInfo } from "@ludenea/control-client";
 import { definePlugin, type Editor } from "@ludenea/editor-shell";
 import { useState } from "react";
-import { logToConsole } from "../console";
 import { createStore, errorText, shared, showPanel, useStore, type Store } from "../shared";
 
 const PANEL = "ludenea.project";
@@ -49,12 +48,12 @@ export const projectPlugin = definePlugin({
       const entry = entries.find((file) => file.id === last) ?? entries.find((file) => file.path === info.default_scene);
       if (!entry) {
         const why = info.default_scene ? `its default scene ${info.default_scene} is missing` : "it names no default scene in ludenea.toml";
-        return logToConsole(editor, "info", `No document opened for ${info.name}: ${why}.`);
+        return editor.console.log("info", `No document opened for ${info.name}: ${why}.`);
       }
       // A failure is reported by the document store.
       await editor.document.getState().open(entry.id).catch(() => {});
     };
-    const started = (info: ProjectInfo) => openStartDocument(info).catch((error) => logToConsole(editor, "warning", `No document opened for ${info.name}: ${errorText(error)}`));
+    const started = (info: ProjectInfo) => openStartDocument(info).catch((error) => editor.console.log("warning", `No document opened for ${info.name}: ${errorText(error)}`));
     // The document open is the one the project starts with next time.
     const stopRemembering = editor.document.subscribe(({ current }, previous) => {
       const root = project.get().info?.root;

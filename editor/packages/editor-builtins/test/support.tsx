@@ -12,7 +12,6 @@ import {
 import type { PluginDefinition } from "@ludenea/editor-shell";
 import { createEditor, type EditorHost } from "@ludenea/editor-shell/app";
 import { act, render } from "@testing-library/react";
-import { logToConsole } from "../src";
 
 type Message = { type: string; [key: string]: unknown };
 /** A reply, `{ error }` to fail, a promise of either to answer later (out of order), or nothing when undefined. */
@@ -64,7 +63,7 @@ export const testGame = (answer: Answer = () => ({ type: "done" }), info: Partia
 /** An editor on a fake project service with `plugins` active. */
 export async function testEditor(plugins: PluginDefinition[], answer?: Answer) {
   const project = await testProject(answer);
-  const host: EditorHost = createEditor({ project: project.client, log: (level, text, location) => logToConsole(host.editor, level, text, location) });
+  const host = createEditor({ project: project.client });
   for (const plugin of plugins) host.loader.activate(plugin);
   return { ...host, project };
 }

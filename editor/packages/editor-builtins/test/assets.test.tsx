@@ -384,7 +384,7 @@ describe("data assets, replays, traces, and snapshots", () => {
 
   async function project(options: { current?: number; answer?: (command: { type: string; [key: string]: unknown }) => object | undefined } = {}) {
     const { current = 0, answer = () => undefined } = options;
-    const onDisk = { scene: "(scene)", files: {} as { [path: string]: string } };
+    const onDisk = { scene: "(scene)", files: {} as { [path: string]: string }, unreadable: false };
     const game = await testGame(
       (command) => {
         const reply = answer(command);
@@ -419,7 +419,7 @@ describe("data assets, replays, traces, and snapshots", () => {
     );
     const host = await testEditor(builtinPlugins, (request) => {
       if (request.type === "list_files") return { type: "files", entries: files };
-      if (request.type === "read_text") return { type: "text", text: onDisk.files[request.path as string] ?? onDisk.scene };
+      if (request.type === "read_text") return onDisk.unreadable ? { error: { code: "io", message: "permission denied" } } : { type: "text", text: onDisk.files[request.path as string] ?? onDisk.scene };
       if (request.type === "read_binary") return { type: "bytes", bytes: "cmVwbGF5" };
       if (request.type === "read_asset_texts") return { type: "asset_texts", assets: disk, paths: [] };
       if (request.type === "load_stored_session") return { type: "stored_session", bytes: null };
@@ -564,6 +564,16 @@ describe("data assets, replays, traces, and snapshots", () => {
     await act(() => host.editor.commands.run("edit.redo"));
     await settle();
     expect(host.editor.document.getState().unsavedAssets).toEqual([SETTINGS]);
+  });
+
+  it("an_unsaved_check_that_cannot_read_a_file_is_reported_in_the_editor_console", async () => {
+    const { host, onDisk } = await project();
+    onDisk.unreadable = true;
+
+    await act(() => host.editor.commands.run("edit.undo"));
+    await settle();
+
+    expect(host.editor.console.list().map(({ level, text }) => [level, text])).toContainEqual(["warning", "Cannot check which data assets are unsaved: permission denied"]);
   });
 
   it("an_unsaved_check_answered_after_a_later_edit_is_dropped", async () => {

@@ -1,11 +1,76 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { ProtocolFailure } from "@ludenea/control-client";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeShortcut } from "../src";
 import { CommandPalette, installShortcuts } from "../src/app";
-import { testHost } from "./support";
+import { logged, settle, testHost } from "./support";
 
 describe("command palette and shortcuts", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("a_failing_command_run_from_the_palette_is_logged_in_the_editor_console", async () => {
+    const devtools = vi.spyOn(console, "error");
+    const host = await testHost();
+    const { editor } = host;
+    editor.commands.register({
+      id: "scene.despawn-selection",
+      title: "Despawn selected entities",
+      run() {
+        throw new Error("nothing selected");
+      },
+    });
+    render(<CommandPalette editor={editor} />);
+
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
+    await act(settle);
+
+    expect(logged(host)).toEqual([["error", "Despawn selected entities failed: nothing selected", undefined]]);
+    expect(screen.getByRole("alert").textContent).toBe("Despawn selected entities failed: nothing selected");
+    expect(devtools).not.toHaveBeenCalled();
+  });
+
+  it("the_palette_alert_of_a_failed_command_goes_away", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { editor } = await testHost();
+    editor.commands.register({ id: "scene.save", title: "Save scene", run: () => Promise.reject(new Error("the disk is full")) });
+    render(<CommandPalette editor={editor} />);
+
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
+    await act(() => Promise.resolve());
+    expect(screen.getByRole("alert").textContent).toBe("Save scene failed: the disk is full");
+
+    act(() => vi.runAllTimers());
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("a_failing_command_run_from_a_shortcut_is_logged_in_the_editor_console", async () => {
+    const devtools = vi.spyOn(console, "error");
+    const host = await testHost();
+    const { editor, registry } = host;
+    editor.commands.register({ id: "edit.undo", title: "Undo", run: () => Promise.reject(new ProtocolFailure("nothing_to_undo", "there is nothing to undo")) });
+    editor.shortcuts.register({ key: "Ctrl+Z", command: "edit.undo" });
+    editor.shortcuts.register({ key: "Ctrl+Y", command: "edit.unknown" });
+    const uninstall = installShortcuts(editor, registry, window);
+
+    fireEvent.keyDown(document.body, { key: "z", ctrlKey: true });
+    await settle();
+    // A shortcut whose command is not registered fails the same way.
+    fireEvent.keyDown(document.body, { key: "y", ctrlKey: true });
+    await settle();
+
+    expect(logged(host)).toEqual([
+      ["error", "Undo failed: there is nothing to undo", undefined],
+      ["error", 'edit.unknown failed: no command "edit.unknown" is registered', undefined],
+    ]);
+    expect(devtools).not.toHaveBeenCalled();
+    uninstall();
+  });
 
   it("palette_lists_and_runs_registered_commands", async () => {
     const { editor } = await testHost();

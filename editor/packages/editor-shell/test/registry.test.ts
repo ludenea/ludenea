@@ -1,11 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DuplicateRegistration, definePlugin } from "../src";
-import { testGame, testHost } from "./support";
+import { logged, testGame, testHost } from "./support";
 
 const Empty = () => null;
 
 describe("registry", () => {
   beforeEach(() => localStorage.clear());
+  afterEach(() => vi.restoreAllMocks());
 
   it("registrations_are_disposed_on_deactivate", async () => {
     const { editor, loader, setControl } = await testHost();
@@ -96,5 +97,17 @@ describe("registry", () => {
 
     localStorage.setItem("ludenea.settings.ludenea.engine-path", "{not json");
     expect(second.editor.settings.get("ludenea.engine-path")).toBe("");
+  });
+
+  it("a_setting_the_browser_cannot_store_is_reported_in_the_editor_console", async () => {
+    const host = await testHost();
+    host.editor.settings.register({ id: "ludenea.engine-path", title: "Engine", default: "", kind: "path" });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("the storage quota is exceeded");
+    });
+
+    host.editor.settings.set("ludenea.engine-path", "/engine");
+
+    expect(logged(host)).toEqual([["error", 'Saving the setting "ludenea.engine-path" failed: the storage quota is exceeded', undefined]]);
   });
 });

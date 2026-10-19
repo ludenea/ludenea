@@ -228,6 +228,9 @@ export default definePlugin({
 });
 ```
 
+`editor.console` writes to the Console panel: `log` shows a message, `report` a failure.
+A command that fails from the palette or a shortcut is reported there under its title.
+
 ### Development
 
 The front end lives in `editor/` (pnpm workspace; Node.js 24 and the pnpm version in

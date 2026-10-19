@@ -1,4 +1,5 @@
 import type { ComponentValue, ControlClient, Entity, JsonValue, PathSegment } from "@ludenea/control-client";
+import type { EditorConsole } from "./console";
 import type { Disposable } from "./plugin";
 
 /**
@@ -30,6 +31,7 @@ export function createEntityAccess(
   control: () => ControlClient | null,
   onGameChanged: (listener: (control: ControlClient | null) => void) => void,
   own: (dispose: () => void) => Disposable,
+  report: EditorConsole["report"],
 ): EntityAccess {
   const watches = new Set<Watch>();
   let stopEvents: (() => void) | undefined;
@@ -43,7 +45,7 @@ export function createEntityAccess(
   const subscription = (type: "subscribe" | "unsubscribe", entity: Entity) =>
     void control()
       ?.request({ type, topic: { type: "entity", entity } })
-      .catch((error) => console.warn(`${type} entity ${key(entity)}: ${String(error)}`));
+      .catch((error) => report(error, `${type === "subscribe" ? "Watching" : "Unwatching"} entity ${key(entity)}`));
   const watched = (entity: Entity) => [...watches].filter((watch) => key(watch.entity) === key(entity));
   const listen = (current: ControlClient | null) => {
     stopEvents?.();

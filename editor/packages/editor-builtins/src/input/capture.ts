@@ -28,7 +28,7 @@ export function captureInput(editor: Editor, element: HTMLElement): () => void {
     const text = JSON.stringify(input);
     if (text === sent) return;
     sent = text;
-    control.request({ type: "set_live_input", players: [input] }).catch((error) => console.error("live input not sent:", error));
+    control.request({ type: "set_live_input", players: [input] }).catch((error) => editor.console.report(error, "Sending the live input to the game"));
   };
   const release = () => {
     capture?.dispose();

@@ -42,7 +42,6 @@ export interface Report {
 }
 
 const empty = <R,>(): Comparison<R> => ({ path: null, against: null, result: null, error: null });
-const report = (what: string) => (error: unknown) => console.error(`divergence: ${what} failed:`, error);
 
 function game(editor: Editor): ControlClient {
   if (!editor.control) throw new Error("no game is running");
@@ -60,7 +59,7 @@ function follower(editor: Editor, topic: Topic, event: Event["type"], wanted: ()
       following.control.request({ type: "unsubscribe", topic }).catch(() => {});
     }
     following = control && { control, stop: control.on(event, listener) };
-    control?.request({ type: "subscribe", topic }).catch(report(`subscribing to ${topic.type}`));
+    control?.request({ type: "subscribe", topic }).catch((error) => editor.console.report(error, `Following the ${topic.type} of the compare branch`));
   };
 }
 
@@ -235,7 +234,7 @@ export const divergencePlugin = definePlugin({
         await loadRenderer();
         ghost.set({ frame: JSON.parse(ghost_frame(JSON.stringify(reply.frame))) as DebugDrawFrame, tick: reply.tick, lagging: reply.lagging });
       } catch (error) {
-        if (editor.control === control) report("fetching the ghost")(error);
+        if (editor.control === control) editor.console.report(error, "Fetching the ghost of the compare branch");
       }
     });
     const followGhost = follower(editor, { type: "ghost" }, "ghost_advanced", () => showsGhost(), fetchGhost);
@@ -345,7 +344,7 @@ function DivergencePanel({ editor, viewer }: { editor: Editor; viewer: Viewer })
   const of = (kind: string) => files.filter((file) => file.kind === kind).map((file) => file.path);
   return (
     <div className="ludenea-divergence">
-      {trace && <TraceViewer viewer={viewer} traces={of("Trace")} />}
+      {trace && <TraceViewer editor={editor} viewer={viewer} traces={of("Trace")} />}
       {(snapshot || tick !== null) && <SnapshotDiff viewer={viewer} snapshots={of("Snapshot")} />}
     </div>
   );

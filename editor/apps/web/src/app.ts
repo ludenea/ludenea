@@ -2,7 +2,7 @@ import "dockview-react/dist/styles/dockview.css";
 import "../../../packages/editor-shell/src/theme.css";
 import "../../../packages/editor-builtins/src/panels.css";
 import type { ConsoleLevel, ControlClient, PluginBundle, ProjectClient } from "@ludenea/control-client";
-import { builtinPlugins, logToConsole } from "@ludenea/editor-builtins";
+import { builtinPlugins } from "@ludenea/editor-builtins";
 import { createEditor, mountShell, type DocumentSessions, type EditorHost } from "@ludenea/editor-shell/app";
 
 /** What the web and desktop applications share: the shell, its plugins, and the game switch. */
@@ -12,7 +12,7 @@ export interface EditorApp {
   loadPlugins(): Promise<void>;
   /** Makes `control` the editor's game, after its handshake; `null` leaves the editor without one. */
   connectGame(control: ControlClient | null): void;
-  /** Shows a message in the Console panel. */
+  /** Shows a message in the Console panel, through the editor console. */
   log(level: ConsoleLevel, text: string): void;
   /** The documents' sessions, stored under `.ludenea/`. */
   sessions: DocumentSessions;
@@ -27,11 +27,10 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
  * application serves a bundle.
  */
 export function startEditor(project: ProjectClient, pluginUrl: (bundle: PluginBundle) => string): EditorApp {
-  // A document that fails to load is reported in the Console panel, at the asset at fault.
-  const host: EditorHost = createEditor({ project, log: (level, text, location) => logToConsole(host.editor, level, text, location) });
+  const host = createEditor({ project });
   for (const plugin of builtinPlugins) host.loader.activate(plugin);
   mountShell(document.getElementById("root")!, host);
-  const log = (level: ConsoleLevel, text: string) => logToConsole(host.editor, level, text);
+  const log = (level: ConsoleLevel, text: string) => host.editor.console.log(level, text);
 
   // Bundle name -> the plugin it activated and from which URL: a plugin may name itself
   // differently from its bundle (the crate name).

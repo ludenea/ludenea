@@ -53,7 +53,7 @@ function Entities({ editor, control, scroll }: { editor: Editor; control: Contro
         scroll={scroll}
         row={(row) => (
           <>
-            <Label control={control} row={row} labels={labels} playing={playing} /> <span className="ludenea-muted ludenea-mono">{entityKey(row.entity)}</span>
+            <Label editor={editor} control={control} row={row} labels={labels} playing={playing} /> <span className="ludenea-muted ludenea-mono">{entityKey(row.entity)}</span>
           </>
         )}
       />
@@ -64,7 +64,7 @@ function Entities({ editor, control, scroll }: { editor: Editor; control: Contro
 /** A label and the entity hash it was read at. */
 type Cached = { hash: string; label: string };
 
-function Label({ control, row, labels, playing }: { control: ControlClient; row: EntityRow; labels: Map<string, Cached>; playing: boolean }) {
+function Label({ editor, control, row, labels, playing }: { editor: Editor; control: ControlClient; row: EntityRow; labels: Map<string, Cached>; playing: boolean }) {
   const { entity, hash } = row;
   const key = entityKey(entity);
   const [, setRead] = useState(0);
@@ -88,7 +88,7 @@ function Label({ control, row, labels, playing }: { control: ControlClient; row:
         if (current) setRead((read) => read + 1);
       },
       (error) => {
-        console.warn(`entity ${key}: ${String(error)}`);
+        editor.console.log("warning", `Cannot read the components of entity ${key} for its label: ${errorText(error)}`);
         if (current) setFailedAt(hash);
       },
     );
@@ -96,6 +96,6 @@ function Label({ control, row, labels, playing }: { control: ControlClient; row:
       current = false;
     };
     // `hash` is read through `wanted`: a change while playing must not send the read again.
-  }, [control, key, wanted, labels, entity.index, entity.generation]);
+  }, [editor, control, key, wanted, labels, entity.index, entity.generation]);
   return <span>{cached?.label ?? ""}</span>;
 }

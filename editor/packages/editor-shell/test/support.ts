@@ -9,7 +9,7 @@ import {
   type GameInfo,
   type Reply,
 } from "@ludenea/control-client";
-import { createEditor, type DocumentLog } from "../src/app";
+import { createEditor, type EditorHost } from "../src/app";
 
 const game: GameInfo = { components: [], resources: [], assets: [], events: [], fingerprint: "0000000000000000", input: null, tick_rate: 60, debug_layers: [] };
 
@@ -21,7 +21,7 @@ const respond = (id: number, reply: object | undefined) =>
   reply ? [JSON.stringify({ type: "response", id, result: "error" in reply ? reply : { ok: reply } })] : [];
 
 /** An editor on a project service that welcomes it and answers with `answer` (nothing by default). */
-export async function testHost(importModule?: (url: string) => Promise<unknown>, answer: Answer = () => undefined, log?: DocumentLog) {
+export async function testHost(importModule?: (url: string) => Promise<unknown>, answer: Answer = () => undefined) {
   const project = await ProjectClient.connect(
     fakeTransport((raw) => {
       const message = JSON.parse(raw);
@@ -31,8 +31,11 @@ export async function testHost(importModule?: (url: string) => Promise<unknown>,
       return respond(message.id, answer(message.request));
     }),
   );
-  return createEditor({ project, importModule, log });
+  return createEditor({ project, importModule });
 }
+
+/** What the editor console of `host` holds, as `[level, text, location]`. */
+export const logged = (host: EditorHost) => host.editor.console.list().map(({ level, text, location }) => [level, text, location]);
 
 /** A game whose host answers each command with `answer(command)` (nothing when undefined). */
 export async function testGame(answer: Answer = () => undefined, info: Partial<GameInfo> = {}) {
