@@ -6,10 +6,11 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::CommandQueue;
+use crate::component::decode_exact;
 use crate::hash::ENTITIES_LEAF;
-use crate::{AssetId, EntitiesState, Entity, World};
+use crate::{Asset, AssetId, EntitiesState, Entity, Prefab, PrefabEntity, World};
 
-pub const SNAPSHOT_VERSION: u32 = 2;
+pub const SNAPSHOT_VERSION: u32 = 3;
 
 /// Postcard bytes of one component type, per entity.
 pub type ComponentValues = Vec<(Entity, Vec<u8>)>;
@@ -66,17 +67,37 @@ impl Snapshot {
         postcard::to_allocvec(self).expect("a snapshot always encodes")
     }
 
-    /// Reads the version first, so a snapshot of another version fails as such.
+    /// Reads the version first, so a snapshot of another version fails as such. Version 2
+    /// is read as the current version.
     pub fn decode(bytes: &[u8]) -> Result<Snapshot, SnapshotError> {
         let (version, _) = postcard::take_from_bytes::<u32>(bytes)
             .map_err(|error| decode_error("snapshot")(error.to_string()))?;
-        if version != SNAPSHOT_VERSION {
+        if version != SNAPSHOT_VERSION && version != 2 {
             return Err(SnapshotError::Version {
                 found: version,
                 expected: SNAPSHOT_VERSION,
             });
         }
-        crate::component::decode_exact(bytes).map_err(decode_error("snapshot"))
+        let mut snapshot: Snapshot = decode_exact(bytes).map_err(decode_error("snapshot"))?;
+        if version == 2 {
+            snapshot.upgrade_version_2()?;
+        }
+        Ok(snapshot)
+    }
+
+    /// Version 2 wrote each prefab followed by the names of its component types that hold
+    /// an `Entity`, which registration now computes.
+    fn upgrade_version_2(&mut self) -> Result<(), SnapshotError> {
+        for (id, type_name, bytes) in &mut self.assets {
+            if type_name == Prefab::NAME {
+                let (entities, _): (Vec<PrefabEntity>, BTreeSet<String>) =
+                    decode_exact(bytes).map_err(decode_error(&format!("asset {id}")))?;
+                *bytes =
+                    postcard::to_allocvec(&Prefab { entities }).expect("a prefab always encodes");
+            }
+        }
+        self.version = SNAPSHOT_VERSION;
+        Ok(())
     }
 }
 

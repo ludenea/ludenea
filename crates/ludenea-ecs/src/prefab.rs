@@ -13,12 +13,39 @@ use crate::{Asset, CommandKind, CommandRecord, Component, Entity, Handle, World}
 /// order. Every `Entity` value inside a component names the position of its target in
 /// `entities` (generation 0); a reference to an entity the prefab does not have names
 /// position `u32::MAX`.
-#[derive(Asset, Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[asset(name = "ludenea::Prefab")]
+#[derive(Schema, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Prefab {
     pub entities: Vec<PrefabEntity>,
-    /// The component types present whose schema contains `Entity`.
-    pub entity_components: BTreeSet<String>,
+}
+
+impl Asset for Prefab {
+    const NAME: &'static str = "ludenea::Prefab";
+
+    /// Refuses a prefab this world cannot spawn: an entity address listed twice, or a
+    /// component that is not registered or whose bytes do not decode exactly.
+    fn validate(&self, world: &World) -> Result<(), String> {
+        let mut addresses = BTreeSet::new();
+        for entity in &self.entities {
+            let address = &entity.address;
+            if !addresses.insert(address) {
+                return Err(format!(
+                    "entity {address:?} is listed twice; give each entity its own address"
+                ));
+            }
+            for (name, bytes) in &entity.components {
+                let codec = world.component_codec(name).ok_or_else(|| {
+                    format!(
+                        "entity {address:?}: component `{name}` is not registered; register it, \
+                         or load the prefab into the game that made it"
+                    )
+                })?;
+                (codec.decode)(bytes).map_err(|reason| {
+                    format!("entity {address:?}: component `{name}` does not decode: {reason}")
+                })?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// One entity of a flattened prefab: its address inside the prefab (local identifiers,
@@ -106,13 +133,13 @@ pub(crate) fn spawn(
             component: None,
         });
         for (name, bytes) in &entity.components {
-            let (component, codec) = world
+            let (component, codec, mentions_entity) = world
                 .components
                 .get_key_value(name.as_str())
-                .map(|(&component, entry)| (component, entry.codec))
-                .unwrap_or_else(|| panic!("prefab {id} has the unregistered component {name}"));
+                .map(|(&component, entry)| (component, entry.codec, entry.mentions_entity))
+                .expect("`Prefab::validate` checked that every component is registered");
             let remapped;
-            let bytes = if flat.entity_components.contains(name) {
+            let bytes = if mentions_entity {
                 remapped = (codec.remap_entities)(bytes, &map);
                 &remapped
             } else {

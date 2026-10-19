@@ -128,6 +128,33 @@ pub enum TypeSchema {
 }
 
 impl TypeSchema {
+    /// Whether this schema or any type inside it satisfies `matches`, such as
+    /// `|schema| matches!(schema, TypeSchema::Entity)` for a type that holds an entity.
+    pub fn mentions(&self, matches: &dyn Fn(&TypeSchema) -> bool) -> bool {
+        let any = |items: &[TypeSchema]| items.iter().any(|item| item.mentions(matches));
+        let any_field =
+            |fields: &[FieldSchema]| fields.iter().any(|field| field.schema.mentions(matches));
+        matches(self)
+            || match self {
+                TypeSchema::Option { item }
+                | TypeSchema::List { item }
+                | TypeSchema::Array { item, .. }
+                | TypeSchema::Newtype { item, .. } => item.mentions(matches),
+                TypeSchema::Map { key, value } => key.mentions(matches) || value.mentions(matches),
+                TypeSchema::Tuple { items } | TypeSchema::TupleStruct { items, .. } => any(items),
+                TypeSchema::Struct { fields, .. } => any_field(fields),
+                TypeSchema::Enum { variants, .. } => {
+                    variants.iter().any(|variant| match &variant.fields {
+                        VariantFields::Unit => false,
+                        VariantFields::Newtype { item } => item.mentions(matches),
+                        VariantFields::Tuple { items } => any(items),
+                        VariantFields::Struct { fields } => any_field(fields),
+                    })
+                }
+                _ => false,
+            }
+    }
+
     /// The name of the first type this schema comes back to, marked `Recursive`, if any.
     pub fn recursive_type(&self) -> Option<&str> {
         use TypeSchema::*;

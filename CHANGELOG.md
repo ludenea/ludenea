@@ -20,7 +20,7 @@ this table in the same commit.
 | Meta (`.meta`)         | `META_VERSION`             | 1       | 1                             |
 | Replay (`.replay`)     | `REPLAY_VERSION`           | 1       | 1                             |
 | Trace (`.trace`)       | `TRACE_VERSION`            | 1       | 1                             |
-| Snapshot (`.snap`)     | `SNAPSHOT_VERSION`         | 2       | 2                             |
+| Snapshot (`.snap`)     | `SNAPSHOT_VERSION`         | 3       | 2                             |
 | Input log (`.inputs`)  | `INPUT_LOG_VERSION`        | 1       | 1                             |
 | Edit log               | `EDIT_LOG_VERSION`         | 2       | 1                             |
 | Undo history           | `UNDO_VERSION`             | 3       | the unversioned form before 2 |
@@ -116,6 +116,22 @@ session (the editor's copy of each open document's session), and the plugin API.
   with the new `EcsError::RecursiveType`, which names both types and says to store
   children as `Entity` references. Listing the schemas of such a type ended the game
   process.
+- `Asset` has a provided method, `validate(&self, world: &World) -> Result<(), String>`,
+  that accepts every value by default. `World::insert_asset` and
+  `World::insert_asset_ron` refuse a value it refuses with `EcsError::InvalidAsset`, and
+  `World::restore` with `SnapshotError::Decode` naming the asset, both changing nothing.
+  To give it, derive `Schema` and implement `Asset` by hand.
+- `Prefab` implements `validate`: a prefab whose entity address is listed twice, or whose
+  component is not registered or does not decode exactly, is refused with the entity and
+  the component, such as ``entity [0]: component `other_game::Gone` is not registered``.
+  Such a prefab loaded, and the next `spawn_prefab` ended the game process mid-tick. A
+  replay whose prefab holds a component that changed since it was recorded is refused
+  the same way, with `ReplayError::Decode` naming the asset.
+- Removed: the field `Prefab::entity_components`. Each component type records whether its
+  schema holds an `Entity` when it is registered, and `spawn_prefab` remaps the values of
+  those types, so a prefab can no longer leave a reference unmapped by omitting its type.
+- `TypeSchema::mentions` tells whether a schema or any type inside it satisfies a
+  predicate, such as holding an `Entity`.
 
 ### Control protocol
 
@@ -156,6 +172,9 @@ session (the editor's copy of each open document's session), and the plugin API.
   where a type comes back to the type `name` it is inside of. No game sends one: a game
   holding such a type fails to build with an error that names it, where it ended with a
   stack overflow.
+- `restore` refuses a snapshot holding a prefab the game cannot spawn with
+  `invalid_snapshot`, naming the asset, the entity and the component; the game process
+  ended at the next spawn of that prefab.
 
 ### Project protocol
 
@@ -192,4 +211,8 @@ session (the editor's copy of each open document's session), and the plugin API.
 
 ### Formats
 
-No changes yet.
+- Snapshot 3: a `ludenea::Prefab` asset holds only its entities; version 2 also listed the
+  component types that hold an `Entity`. Version 2 snapshots still read. The schema of
+  `ludenea::Prefab` changed with it, so every game's schema fingerprint changed, and the
+  tick hashes of a replay holding a prefab, recorded before, no longer match from tick
+  0: record such replays again. Replays and their version are otherwise unchanged.

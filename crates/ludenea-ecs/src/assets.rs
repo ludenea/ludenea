@@ -20,13 +20,15 @@ use crate::{Asset, AssetId, Codec, EcsError, Handle, World, hash_value};
 pub(crate) type AssetValue = Arc<dyn Any + Send + Sync>;
 
 /// One registered asset type. `decode` and `decode_ron` mirror the codec's, which give
-/// values that are only `Send` (components need not be `Sync`), as shared `Sync` values.
+/// values that are only `Send` (components need not be `Sync`), as shared `Sync` values;
+/// `validate` is the type's `Asset::validate`.
 pub(crate) struct AssetType {
     type_id: TypeId,
     type_name: &'static str,
     codec: Codec,
     decode: fn(&[u8]) -> Result<AssetValue, String>,
     decode_ron: fn(&str) -> Result<AssetValue, String>,
+    validate: fn(&World, &AssetValue) -> Result<(), String>,
     default: Option<fn() -> AssetValue>,
 }
 
@@ -55,6 +57,12 @@ impl World {
                 decode_ron: |text| {
                     let value: T = ron::from_str(text).map_err(|error| error.to_string())?;
                     Ok(Arc::new(value))
+                },
+                validate: |world, value| {
+                    value
+                        .downcast_ref::<T>()
+                        .expect("decoded by this type")
+                        .validate(world)
                 },
                 default: None,
             },
@@ -95,6 +103,8 @@ impl World {
     }
 
     /// Inserts or replaces the asset `id` from postcard `bytes` of the type `type_name`.
+    /// Fails with `EcsError::InvalidAsset`, changing nothing, when the bytes do not decode
+    /// exactly or the type's `Asset::validate` refuses the value.
     pub fn insert_asset(
         &mut self,
         id: AssetId,
@@ -105,8 +115,9 @@ impl World {
         self.store_asset(id, type_name, decode(bytes))
     }
 
-    /// Inserts or replaces the asset `id` from a RON text of the type `type_name`. On a
-    /// parse error the reason starts with the line and column.
+    /// Inserts or replaces the asset `id` from a RON text of the type `type_name`, refused
+    /// as `insert_asset` refuses bytes. On a parse error the reason starts with the line
+    /// and column.
     pub fn insert_asset_ron(
         &mut self,
         id: AssetId,
@@ -151,7 +162,7 @@ impl World {
         hasher.digest()
     }
 
-    /// Decodes `bytes` of `type_name` into a loaded asset, without storing it.
+    /// Decodes and validates `bytes` of `type_name` into a loaded asset, without storing it.
     pub(crate) fn decode_asset(
         &self,
         id: AssetId,
@@ -188,11 +199,13 @@ impl World {
             .asset_types
             .get_key_value(type_name)
             .ok_or_else(|| EcsError::UnknownAsset(type_name.to_string()))?;
-        let value = decoded.map_err(|reason| EcsError::InvalidAsset {
-            id,
-            type_name: type_name.to_string(),
-            reason,
-        })?;
+        let value = decoded
+            .and_then(|value| (entry.validate)(self, &value).map(|()| value))
+            .map_err(|reason| EcsError::InvalidAsset {
+                id,
+                type_name: type_name.to_string(),
+                reason,
+            })?;
         let bytes = (entry.codec.encode)(&*value);
         Ok((
             id,

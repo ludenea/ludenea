@@ -6,13 +6,24 @@ use ludenea_schema::{Schema, TypeSchema};
 use serde::de::{self, DeserializeOwned, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::World;
+
 /// Read-only simulation data loaded by identifier, shared by every handle to it. `NAME` is
-/// its stable identifier; derive it with `#[derive(Asset)]`.
+/// its stable identifier; derive it with `#[derive(Asset)]`, or, to give `validate`,
+/// derive `Schema` and implement it by hand.
 ///
 /// Snapshots encode assets with postcard, which cannot decode `#[serde(flatten)]` or
 /// `#[serde(skip_serializing_if = "...")]`: asset types must not use them.
 pub trait Asset: Schema + Serialize + DeserializeOwned + Send + Sync + 'static {
     const NAME: &'static str;
+
+    /// Checks a decoded value before it enters `world` (`World::insert_asset`,
+    /// `World::insert_asset_ron`, `World::restore`), so systems never meet a value the
+    /// world cannot use; the error says why. Every value is accepted by default.
+    fn validate(&self, world: &World) -> Result<(), String> {
+        let _ = world;
+        Ok(())
+    }
 }
 
 /// A typed reference to an asset of type `T`, serialized exactly as its `AssetId`.

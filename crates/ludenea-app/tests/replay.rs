@@ -180,10 +180,24 @@ fn inputs(ticks: u64) -> InputLog {
 /// A replay of a scene with one counter and a prefab instance holding another.
 fn recorded(ticks: u64, edits: &EditLog) -> Replay {
     let assets = texts(&[(A, prefab(&counter(1, 10)))]);
-    record_replay(
-        &mut game::simulation(),
+    record(
         &scene(&counter(3, 0), &instance(5, A)),
         &assets,
+        ticks,
+        edits,
+    )
+}
+
+/// A replay of a scene with one counter, and no prefab.
+fn recorded_without_prefab(ticks: u64, edits: &EditLog) -> Replay {
+    record(&scene(&counter(3, 0), ""), &AssetTexts::new(), ticks, edits)
+}
+
+fn record(scene: &str, assets: &AssetTexts, ticks: u64, edits: &EditLog) -> Replay {
+    record_replay(
+        &mut game::simulation(),
+        scene,
+        assets,
         &inputs(ticks),
         edits,
         ticks,
@@ -378,7 +392,7 @@ fn changed_input_type_fails_with_decode_naming_the_tick() {
 
 #[test]
 fn added_optional_component_field_still_plays_and_flags_fingerprint() {
-    let replay = recorded(60, &EditLog::new());
+    let replay = recorded_without_prefab(60, &EditLog::new());
     let mut sim = added_field::simulation();
     assert_ne!(sim.schema_fingerprint(), replay.fingerprint);
     let report = play_replay(&mut sim, &replay, |_, _| {}).unwrap();
@@ -415,10 +429,23 @@ fn changed_component_fails_with_decode_naming_the_edit() {
         }],
         ..EditLog::new()
     };
-    let replay = recorded(60, &edits);
+    let replay = recorded_without_prefab(60, &edits);
     let error = play_replay(&mut added_field::simulation(), &replay, |_, _| {}).unwrap_err();
     assert!(
         matches!(&error, ReplayError::Decode { what, .. } if what == "edit of tick 30"),
+        "{error:?}"
+    );
+}
+
+/// The flattened prefab holds the canonical bytes of its components, which a changed type
+/// may no longer decode: spawning it would fail mid-tick, so the replay is refused.
+#[test]
+fn changed_component_in_a_prefab_fails_with_decode_naming_the_asset() {
+    let replay = recorded(60, &EditLog::new());
+    let error = play_replay(&mut added_field::simulation(), &replay, |_, _| {}).unwrap_err();
+    assert!(
+        matches!(&error, ReplayError::Decode { what, reason } if *what == format!("asset {}", AssetId(A))
+            && reason.contains("entity [1]: component `replay::Counter` does not decode")),
         "{error:?}"
     );
 }

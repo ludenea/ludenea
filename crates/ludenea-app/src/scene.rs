@@ -338,10 +338,8 @@ impl Shape {
     fn of(codec: Codec) -> Self {
         let schema = (codec.schema)();
         Self {
-            handles: mentions(&schema, &|schema| {
-                matches!(schema, TypeSchema::Handle { .. })
-            }),
-            entities: mentions(&schema, &|schema| matches!(schema, TypeSchema::Entity)),
+            handles: schema.mentions(&|schema| matches!(schema, TypeSchema::Handle { .. })),
+            entities: schema.mentions(&|schema| matches!(schema, TypeSchema::Entity)),
             schema,
         }
     }
@@ -997,7 +995,6 @@ impl Simulation {
             references: Vec::new(),
         };
         let mut flat = Vec::with_capacity(entities.len());
-        let mut entity_components = BTreeSet::new();
         for entity in &entities {
             let scope = &entity.address[..entity.address.len() - 1];
             let decoded = self
@@ -1010,7 +1007,6 @@ impl Simulation {
                     let bytes = match value {
                         Pending::Ready(value) => (codec.encode)(&*value),
                         Pending::Local(bytes) => {
-                            entity_components.insert(name.clone());
                             let schema = &decoder.shapes[&(false, name.clone())].schema;
                             rewrite_entities(schema, &bytes, &mut |local, _| {
                                 let address = [scope, &[local]].concat();
@@ -1045,11 +1041,7 @@ impl Simulation {
             asset: Prefab::NAME.to_string(),
             referenced_by: format!("asset {id}, instance {}", address_text(&address)),
         }));
-        let prefab = Prefab {
-            entities: flat,
-            entity_components,
-        };
-        Ok((prefab, references))
+        Ok((Prefab { entities: flat }, references))
     }
 
     fn decode_resources(
@@ -1165,41 +1157,13 @@ fn value_ron(
     map: &mut dyn FnMut(u32, u32) -> Option<(u32, u32)>,
 ) -> Result<String, Refused> {
     let schema = (codec.schema)();
-    let bytes = if mentions(&schema, &|schema| matches!(schema, TypeSchema::Entity)) {
+    let bytes = if schema.mentions(&|schema| matches!(schema, TypeSchema::Entity)) {
         rewrite_entities(&schema, bytes, map)?
     } else {
         bytes.to_vec()
     };
     let value = (codec.decode)(&bytes).expect("snapshot bytes decode");
     Ok((codec.encode_ron)(&*value))
-}
-
-/// Whether `schema` or any type inside it satisfies `matches`.
-fn mentions(schema: &TypeSchema, matches: &dyn Fn(&TypeSchema) -> bool) -> bool {
-    let any = |items: &[TypeSchema]| items.iter().any(|item| mentions(item, matches));
-    matches(schema)
-        || match schema {
-            TypeSchema::Option { item }
-            | TypeSchema::List { item }
-            | TypeSchema::Array { item, .. }
-            | TypeSchema::Newtype { item, .. } => mentions(item, matches),
-            TypeSchema::Map { key, value } => mentions(key, matches) || mentions(value, matches),
-            TypeSchema::Tuple { items } | TypeSchema::TupleStruct { items, .. } => any(items),
-            TypeSchema::Struct { fields, .. } => {
-                fields.iter().any(|field| mentions(&field.schema, matches))
-            }
-            TypeSchema::Enum { variants, .. } => {
-                variants.iter().any(|variant| match &variant.fields {
-                    VariantFields::Unit => false,
-                    VariantFields::Newtype { item } => mentions(item, matches),
-                    VariantFields::Tuple { items } => any(items),
-                    VariantFields::Struct { fields } => {
-                        fields.iter().any(|field| mentions(&field.schema, matches))
-                    }
-                })
-            }
-            _ => false,
-        }
 }
 
 /// Copies the postcard `bytes` of a value of `schema`, replacing every `Entity` (index,

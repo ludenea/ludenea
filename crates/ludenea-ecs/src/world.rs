@@ -119,6 +119,8 @@ pub(crate) struct ComponentEntry {
     pub(crate) type_id: TypeId,
     pub(crate) type_name: &'static str,
     pub(crate) codec: Codec,
+    /// Whether the type's schema holds an `Entity`, whose values a prefab spawn remaps.
+    pub(crate) mentions_entity: bool,
     pub(crate) storage: Box<dyn Storage + Send>,
 }
 
@@ -165,6 +167,8 @@ impl World {
                 type_id: TypeId::of::<T>(),
                 type_name: type_name::<T>(),
                 codec: Codec::of::<T>(),
+                mentions_entity: T::schema()
+                    .mentions(&|schema| matches!(schema, TypeSchema::Entity)),
                 storage: Box::new(ComponentStorage::<T>(RefCell::new(Vec::new()))),
             },
         );

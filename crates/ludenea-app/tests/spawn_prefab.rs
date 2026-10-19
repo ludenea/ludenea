@@ -297,26 +297,6 @@ fn spawn_records_each_inserted_component() {
 }
 
 #[test]
-fn components_outside_entity_components_are_not_remapped() {
-    let mut simulation = simulation(1000);
-    let id = AssetId(BULLET);
-    let (_, bytes) = simulation.world().asset_bytes(id).unwrap();
-    let mut prefab: Prefab = postcard::from_bytes(&bytes).unwrap();
-    prefab.entity_components.clear();
-    let bytes = postcard::to_allocvec(&prefab).unwrap();
-    simulation
-        .world_mut()
-        .insert_asset(id, "ludenea::Prefab", &bytes)
-        .unwrap();
-    simulation.step();
-    let world = simulation.world();
-    let first = tagged(world, 1)[0];
-    // Position 1 is written as is: the raw entity 1v0, which is `first` itself here.
-    assert_eq!(world.get::<Target>(first).unwrap().0, first);
-    assert_ne!(tagged(world, 2)[0], first);
-}
-
-#[test]
 fn remap_maps_each_entity_on_its_own_and_survives_a_panic() {
     let mut simulation = simulation(1000);
     simulation.step();

@@ -197,7 +197,7 @@ fn snapshot_version_1_is_refused_as_version() {
             error,
             SnapshotError::Version {
                 found: 1,
-                expected: 2
+                expected: 3
             }
         ),
         "{error}"

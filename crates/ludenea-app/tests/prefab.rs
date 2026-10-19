@@ -344,8 +344,6 @@ fn nested_prefabs_reusing_local_identifiers_do_not_collide() {
         .unwrap();
     let value: Target = postcard::from_bytes(bytes).unwrap();
     assert_eq!((value.0.index(), value.0.generation()), (2, 0));
-    assert!(flat.entity_components.contains("prefab::Target"));
-    assert!(!flat.entity_components.contains("prefab::Tag"));
 }
 
 #[test]

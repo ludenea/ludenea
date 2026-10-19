@@ -1,9 +1,11 @@
+use std::collections::BTreeSet;
 use std::panic::AssertUnwindSafe;
 
 use ludenea_ecs::schema::Schema;
 use ludenea_ecs::{
-    Commands, Component, Difference, EcsError, Entity, Event, EventWriter, Events, ResMut,
-    Resource, SNAPSHOT_VERSION, ScheduleBuilder, Snapshot, SnapshotError, World, hash_value,
+    Asset, AssetId, Commands, Component, Difference, EcsError, Entity, Event, EventWriter, Events,
+    Prefab, PrefabEntity, ResMut, Resource, SNAPSHOT_VERSION, ScheduleBuilder, Snapshot,
+    SnapshotError, World, hash_value,
 };
 use serde::{Deserialize, Serialize};
 
@@ -672,4 +674,135 @@ fn restore_names_the_entity_and_why_its_component_refuses_the_value() {
         "{error}"
     );
     assert_eq!(target.hash_tree(), before);
+}
+
+const PREFAB: AssetId = AssetId(1);
+
+fn entity(address: &[u32], components: &[(&str, Vec<u8>)]) -> PrefabEntity {
+    PrefabEntity {
+        address: address.to_vec(),
+        components: components
+            .iter()
+            .map(|(name, bytes)| (name.to_string(), bytes.clone()))
+            .collect(),
+    }
+}
+
+fn prefab_world() -> World {
+    let mut world = base_world();
+    world.register_asset::<Prefab>().unwrap();
+    world
+}
+
+#[test]
+fn restoring_a_prefab_asset_with_an_unregistered_component_is_refused() {
+    let (mut source, _) = populated_world();
+    source.register_asset::<Prefab>().unwrap();
+    let mut snapshot = source.snapshot();
+    let gone = Prefab {
+        entities: vec![entity(&[0], &[("other_game::Gone", vec![1])])],
+    };
+    snapshot.assets.push((
+        PREFAB,
+        Prefab::NAME.to_string(),
+        postcard::to_allocvec(&gone).unwrap(),
+    ));
+    let mut target = prefab_world();
+    let before = target.hash_tree();
+
+    let error = target.restore(&snapshot).unwrap_err();
+
+    assert!(
+        matches!(&error, SnapshotError::Decode { name, reason } if *name == format!("asset {PREFAB}")
+            && reason.contains("entity [0]: component `other_game::Gone` is not registered")),
+        "{error}"
+    );
+    assert_eq!(target.hash_tree(), before);
+}
+
+#[test]
+fn inserting_a_prefab_asset_this_world_cannot_spawn_is_refused() {
+    let mut world = prefab_world();
+    let mut trailing = postcard::to_allocvec(&Health { hp: 1 }).unwrap();
+    trailing.push(0);
+    let cases = [
+        (
+            Prefab {
+                entities: vec![entity(&[0], &[("other_game::Gone", vec![1])])],
+            },
+            "entity [0]: component `other_game::Gone` is not registered".to_string(),
+        ),
+        (
+            Prefab {
+                entities: vec![entity(&[0], &[(Health::NAME, trailing)])],
+            },
+            format!(
+                "entity [0]: component `{}` does not decode: 1 unexpected trailing bytes",
+                Health::NAME
+            ),
+        ),
+        (
+            Prefab {
+                entities: vec![
+                    entity(&[2, 0], &[]),
+                    entity(&[1], &[]),
+                    entity(&[2, 0], &[]),
+                ],
+            },
+            "entity [2, 0] is listed twice".to_string(),
+        ),
+    ];
+    for (prefab, expected) in cases {
+        let bytes = postcard::to_allocvec(&prefab).unwrap();
+        let ron = ron::to_string(&prefab).unwrap();
+        for error in [
+            world
+                .insert_asset(PREFAB, Prefab::NAME, &bytes)
+                .unwrap_err(),
+            world
+                .insert_asset_ron(PREFAB, Prefab::NAME, &ron)
+                .unwrap_err(),
+        ] {
+            assert!(
+                matches!(&error, EcsError::InvalidAsset { id, type_name, reason }
+                    if *id == PREFAB && type_name == Prefab::NAME && reason.starts_with(&expected)),
+                "{error}"
+            );
+        }
+        assert!(world.asset_ids().is_empty());
+    }
+}
+
+#[test]
+fn a_version_2_snapshot_reads_its_prefab_assets() {
+    let mut world = prefab_world();
+    let health = postcard::to_allocvec(&Health { hp: 4 }).unwrap();
+    let flat = Prefab {
+        entities: vec![entity(&[0], &[(Health::NAME, health)])],
+    };
+    world
+        .insert_asset(PREFAB, Prefab::NAME, &postcard::to_allocvec(&flat).unwrap())
+        .unwrap();
+    let snapshot = world.snapshot();
+    // Version 2 wrote each prefab followed by the names of its component types that hold
+    // an `Entity`.
+    let mut old = snapshot.clone();
+    old.version = 2;
+    old.assets[0].2 =
+        postcard::to_allocvec(&(&flat.entities, BTreeSet::from(["snapshot::Target"]))).unwrap();
+
+    let decoded = Snapshot::decode(&old.encode()).unwrap();
+
+    assert_eq!(decoded, snapshot);
+    let mut target = prefab_world();
+    target.restore(&decoded).unwrap();
+    assert_eq!(target.hash_tree(), world.hash_tree());
+
+    // A version 2 prefab without that list does not decode.
+    old.assets[0].2 = postcard::to_allocvec(&flat).unwrap();
+    let error = Snapshot::decode(&old.encode()).unwrap_err();
+    assert!(
+        matches!(&error, SnapshotError::Decode { name, .. } if *name == format!("asset {PREFAB}")),
+        "{error}"
+    );
 }
