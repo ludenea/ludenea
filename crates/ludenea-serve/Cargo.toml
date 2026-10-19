@@ -6,6 +6,8 @@ edition.workspace = true
 [[bin]]
 name = "ludenea"
 path = "src/main.rs"
+# Its documentation would land at `ludenea/index.html`, over the engine facade's.
+doc = false
 
 [features]
 # Embeds the editor build (`editor/apps/web/dist`, which must exist) instead of serving

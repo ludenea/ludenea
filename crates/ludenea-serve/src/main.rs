@@ -38,7 +38,7 @@ enum Command {
         engine_path: Option<PathBuf>,
         /// Another host name the editor may be reached by, for remote use (repeatable).
         /// Requests naming any other host are refused, which stops DNS rebinding; localhost,
-        /// 127.0.0.1, [::1], and the --host value are always accepted.
+        /// 127.0.0.1, `[::1]`, and the --host value are always accepted.
         #[arg(long = "allow-host", value_name = "NAME")]
         allow_host: Vec<String>,
         /// Another origin whose pages may open the project connection, such as a development
