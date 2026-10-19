@@ -1,7 +1,6 @@
 //! Regenerates the TypeScript types of the protocol into the control client, and pins the
 //! protocol's wire shape to its version.
 
-use std::any::TypeId;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -9,79 +8,20 @@ use std::path::{Path, PathBuf};
 use ludenea_control::protocol::{
     ClientMessage, Command, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION, ServerMessage,
 };
-use ts_rs::{Config, TS, TypeVisitor};
-use xxhash_rust::xxh3::xxh3_64;
+use ts_rs::{Config, TS};
 
+#[path = "support/fingerprint.rs"]
+mod fingerprint;
 mod support;
-
-const CHANGELOG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../CHANGELOG.md");
 
 #[test]
 fn the_wire_shape_is_pinned_to_its_protocol_version() {
-    let fingerprint = wire_fingerprint(&Config::from_env());
-    assert!(
-        fingerprint == PROTOCOL_FINGERPRINT.0,
-        "the wire shape of control protocol {PROTOCOL_VERSION} changed (fingerprint \
-         {fingerprint:016x}, pinned {:016x}): set PROTOCOL_FINGERPRINT to it, bump \
-         PROTOCOL_VERSION unless this version is unreleased, and record the change in \
-         CHANGELOG.md",
-        PROTOCOL_FINGERPRINT.0
+    fingerprint::assert_wire_shape_is_pinned::<ClientMessage, ServerMessage>(
+        "Control protocol",
+        PROTOCOL_VERSION,
+        PROTOCOL_FINGERPRINT,
+        "PROTOCOL",
     );
-    let entry = format!("Control protocol {PROTOCOL_VERSION}, fingerprint `{fingerprint:016x}`");
-    let changelog = fs::read_to_string(CHANGELOG)
-        .unwrap_or_else(|error| panic!("{CHANGELOG} cannot be read: {error}"));
-    assert!(
-        changelog.contains(&entry),
-        "{CHANGELOG} does not name this wire shape: write {entry} in the entry of control \
-         protocol {PROTOCOL_VERSION}"
-    );
-}
-
-/// xxh3 of the TypeScript declarations of every type the messages reach, in sorted order and
-/// without their documentation, so only a change to what travels moves it.
-fn wire_fingerprint(config: &Config) -> u64 {
-    let mut declarations = Declarations {
-        config,
-        seen: BTreeSet::new(),
-        texts: Vec::new(),
-    };
-    declarations.visit::<ClientMessage>();
-    declarations.visit::<ServerMessage>();
-    declarations.texts.sort();
-    xxh3_64(declarations.texts.join("\n").as_bytes())
-}
-
-/// Walks the types `export_all` writes, collecting their declarations.
-struct Declarations<'a> {
-    config: &'a Config,
-    seen: BTreeSet<TypeId>,
-    texts: Vec<String>,
-}
-
-impl TypeVisitor for Declarations<'_> {
-    fn visit<T: TS + 'static + ?Sized>(&mut self) {
-        if T::output_path().is_none() || !self.seen.insert(TypeId::of::<T>()) {
-            return;
-        }
-        self.texts.push(without_docs(&T::decl(self.config)));
-        T::visit_dependencies(self);
-    }
-}
-
-/// `declaration` without the JSDoc blocks ts-rs writes for documented fields and variants,
-/// and with its whitespace collapsed, so editing a doc comment leaves it unchanged.
-fn without_docs(declaration: &str) -> String {
-    let mut rest = declaration;
-    let mut text = String::new();
-    while let Some(start) = rest.find("/**") {
-        text.push_str(&rest[..start]);
-        let end = rest[start..]
-            .find("*/")
-            .unwrap_or_else(|| panic!("an unterminated doc comment in {declaration}"));
-        rest = &rest[start + end + 2..];
-    }
-    text.push_str(rest);
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[test]

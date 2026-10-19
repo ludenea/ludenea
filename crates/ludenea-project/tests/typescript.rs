@@ -1,7 +1,6 @@
 //! Regenerates the TypeScript types of the project protocol into the control client, and pins
 //! the protocol's wire shape to its version.
 
-use std::any::TypeId;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,79 +12,20 @@ use ludenea_project::protocol::{
     PROJECT_PROTOCOL_FINGERPRINT, PROJECT_PROTOCOL_VERSION, ProjectClientMessage, ProjectRequest,
     ProjectServerMessage,
 };
-use ts_rs::{Config, TS, TypeVisitor};
-use xxhash_rust::xxh3::xxh3_64;
+use ts_rs::{Config, TS};
 
-const CHANGELOG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../CHANGELOG.md");
+#[path = "../../ludenea-control/tests/support/fingerprint.rs"]
+mod fingerprint;
 
 #[test]
 fn the_wire_shape_is_pinned_to_its_protocol_version() {
-    let fingerprint = wire_fingerprint(&Config::from_env());
-    assert!(
-        fingerprint == PROJECT_PROTOCOL_FINGERPRINT.0,
-        "the wire shape of project protocol {PROJECT_PROTOCOL_VERSION} changed (fingerprint \
-         {fingerprint:016x}, pinned {:016x}): set PROJECT_PROTOCOL_FINGERPRINT to it, bump \
-         PROJECT_PROTOCOL_VERSION unless this version is unreleased, and record the change in \
-         CHANGELOG.md",
-        PROJECT_PROTOCOL_FINGERPRINT.0
+    // The control types the messages reach are part of the shape.
+    fingerprint::assert_wire_shape_is_pinned::<ProjectClientMessage, ProjectServerMessage>(
+        "Project protocol",
+        PROJECT_PROTOCOL_VERSION,
+        PROJECT_PROTOCOL_FINGERPRINT,
+        "PROJECT_PROTOCOL",
     );
-    let entry =
-        format!("Project protocol {PROJECT_PROTOCOL_VERSION}, fingerprint `{fingerprint:016x}`");
-    let changelog = fs::read_to_string(CHANGELOG)
-        .unwrap_or_else(|error| panic!("{CHANGELOG} cannot be read: {error}"));
-    assert!(
-        changelog.contains(&entry),
-        "{CHANGELOG} does not name this wire shape: write {entry} in the entry of project \
-         protocol {PROJECT_PROTOCOL_VERSION}"
-    );
-}
-
-/// xxh3 of the TypeScript declarations of every type the messages reach, the control types
-/// among them, in sorted order and without their documentation, so only a change to what
-/// travels moves it.
-fn wire_fingerprint(config: &Config) -> u64 {
-    let mut declarations = Declarations {
-        config,
-        seen: BTreeSet::new(),
-        texts: Vec::new(),
-    };
-    declarations.visit::<ProjectClientMessage>();
-    declarations.visit::<ProjectServerMessage>();
-    declarations.texts.sort();
-    xxh3_64(declarations.texts.join("\n").as_bytes())
-}
-
-/// Walks the types `export_all` writes, collecting their declarations.
-struct Declarations<'a> {
-    config: &'a Config,
-    seen: BTreeSet<TypeId>,
-    texts: Vec<String>,
-}
-
-impl TypeVisitor for Declarations<'_> {
-    fn visit<T: TS + 'static + ?Sized>(&mut self) {
-        if T::output_path().is_none() || !self.seen.insert(TypeId::of::<T>()) {
-            return;
-        }
-        self.texts.push(without_docs(&T::decl(self.config)));
-        T::visit_dependencies(self);
-    }
-}
-
-/// `declaration` without the JSDoc blocks ts-rs writes for documented fields and variants,
-/// and with its whitespace collapsed, so editing a doc comment leaves it unchanged.
-fn without_docs(declaration: &str) -> String {
-    let mut rest = declaration;
-    let mut text = String::new();
-    while let Some(start) = rest.find("/**") {
-        text.push_str(&rest[..start]);
-        let end = rest[start..]
-            .find("*/")
-            .unwrap_or_else(|| panic!("an unterminated doc comment in {declaration}"));
-        rest = &rest[start + end + 2..];
-    }
-    text.push_str(rest);
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[test]
