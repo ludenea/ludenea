@@ -236,6 +236,8 @@ session (the editor's copy of each open document's session), and the plugin API.
   `ludenea::Prefab` changed with it, so every game's schema fingerprint changed, and the
   tick hashes of a replay holding a prefab, recorded before, no longer match from tick
   0: record such replays again. Replays and their version are otherwise unchanged.
-- Scene 2: loading refuses an entity or instance identifier that is not below the scene's
-  `next_id`, naming both. Such a scene loaded, and the next tick 0 edit could end the game
-  process; raise `next_id` above every identifier.
+- Scene 2: loading refuses an entity or instance identifier, or the first identifier of an
+  entity's address, that is not below the scene's `next_id`, naming both. Such a scene
+  loaded, and the next tick 0 edit could end the game process or be refused; raise
+  `next_id` above every identifier. A scene whose entities have addresses now reports its
+  own fault (an empty or repeated address, instances) instead of a missing `id`.

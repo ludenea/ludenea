@@ -579,12 +579,12 @@ fn ticked_after_an_edit_says_the_edit_is_pending() {
 
 #[test]
 fn a_spawn_that_needs_more_local_identifiers_than_remain_is_an_invalid_edit() {
-    // The new entity alone would take the last `next_id`; in the second scene, the cached
-    // contact also names two stale entities, which need a local identifier each.
+    // The new entity alone would take the last `next_id`. In the second scene it fits, but
+    // the cached contact names two stale entities, which need a local identifier each.
     let contact = r#""ludenea::ContactCache": (pairs: {((index: 5, generation: 0), (index: 6, generation: 0)): (touching: false, points: [])})"#;
-    for resources in ["", contact] {
+    for (next_id, resources) in [(4294967294u32, ""), (4294967293, contact)] {
         let scene = format!(
-            "Scene(version: 2, next_id: 4294967294, resources: {{{resources}}}, entities: [])"
+            "Scene(version: 2, next_id: {next_id}, resources: {{{resources}}}, entities: [])"
         );
         let mut host = Host::new(boxes::app).unwrap();
         ok(

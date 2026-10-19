@@ -227,25 +227,58 @@ fn scene_with_the_time_step_of_the_slowest_or_fastest_tick_rate_loads() {
 
 #[test]
 fn a_save_that_needs_more_local_identifiers_than_remain_is_refused() {
-    // The two watched entities are stale: each needs a local identifier of its own.
-    let scene = r#"Scene(version: 2, next_id: 4294967294, resources: {}, entities: [
-        (id: 0, components: {"scene::Watch": ([(index: 5, generation: 0), (index: 6, generation: 0)])}),
-    ])"#;
-    let mut simulation = simulation();
-    simulation.load_scene(scene).unwrap();
-    simulation.world_mut().spawn();
+    // The new entity takes `next_id`; the watched entities are stale, and each needs a local
+    // identifier of its own (entity 5 once, though watched twice). The last one a saved
+    // scene can hold is 4294967293, as its `next_id` must stay below `u32::MAX`.
+    let scene = |next_id: u32| {
+        format!(
+            r#"Scene(version: 2, next_id: {next_id}, resources: {{}}, entities: [
+        (id: 0, components: {{"scene::Watch": ([(index: 5, generation: 0), (index: 5, generation: 0), (index: 6, generation: 0)])}}),
+    ])"#
+        )
+    };
+    let save = |next_id: u32| {
+        let mut simulation = simulation();
+        simulation.load_scene(&scene(next_id)).unwrap();
+        simulation.world_mut().spawn();
+        simulation.save_scene_keeping(&scene(next_id))
+    };
 
-    let error = simulation.save_scene_keeping(scene).unwrap_err();
-    assert!(
-        matches!(
-            error,
-            SceneError::IdentifiersExhausted {
-                next_id: 4294967294
-            }
+    let saved = save(4294967291).unwrap();
+    assert!(saved.contains("next_id: 4294967294"), "{saved}");
+    // The second, then the first stale entity runs out, while the new entity still fits.
+    for next_id in [4294967292, 4294967293] {
+        let error = save(next_id).unwrap_err();
+        assert!(
+            matches!(error, SceneError::IdentifiersExhausted { next_id: n } if n == next_id),
+            "{next_id}: {error:?}"
+        );
+        assert!(error.to_string().contains("renumber the scene"), "{error}");
+    }
+}
+
+#[test]
+fn a_resolved_scene_that_breaks_its_rules_says_which() {
+    for (scene, expected) in [
+        (
+            "Scene(version: 2, next_id: 1, resources: {}, entities: [(address: [], components: {})])",
+            "an entity has an empty address",
         ),
-        "{error:?}"
-    );
-    assert!(error.to_string().contains("renumber the scene"), "{error}");
+        (
+            "Scene(version: 2, next_id: 1, resources: {}, entities: [(address: [0], components: {})], instances: [()])",
+            "is resolved and has no instances",
+        ),
+        (
+            "Scene(version: 2, next_id: 1, resources: {}, entities: [(address: [0], components: {}), (address: [0], components: {})])",
+            "address [0] is given to two entities",
+        ),
+    ] {
+        let error = loaded().load_scene(scene).unwrap_err();
+        assert!(
+            matches!(&error, SceneError::Parse(reason) if reason.contains(expected)),
+            "{scene}: {error}"
+        );
+    }
 }
 
 #[test]
@@ -256,6 +289,7 @@ fn a_local_identifier_at_or_above_next_id_is_refused_at_load() {
         "Scene(version: 2, next_id: 3, resources: {}, entities: [], instances: [\
             (id: 7, prefab: \"0000000000000000000000000000000a\", overrides: [], added: [], removed: []),\
         ])",
+        "Scene(version: 2, next_id: 0, resources: {}, entities: [(address: [4294967295], components: {})])",
     ] {
         let mut simulation = loaded();
         let before = simulation.hash();

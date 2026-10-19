@@ -236,7 +236,13 @@ pub(crate) fn parse_scene(ron: &str) -> Result<ParsedScene, SceneError> {
         2 => {
             let file: SceneV2 = match ron::from_str(ron) {
                 Ok(file) => file,
-                Err(error) => return parse_resolved(ron).map_err(|_| parse(error)),
+                // A text in neither form is reported against the usual one.
+                Err(error) => {
+                    return match ron::from_str(ron) {
+                        Ok(resolved) => parse_resolved(resolved),
+                        Err(_) => Err(parse(error)),
+                    };
+                }
             };
             let next_id = growable(file.next_id)?;
             let mut seen = BTreeSet::new();
@@ -247,9 +253,7 @@ pub(crate) fn parse_scene(ron: &str) -> Result<ParsedScene, SceneError> {
                 }
                 // A new entity takes `next_id`, so it must not be taken already.
                 if local >= next_id {
-                    return Err(SceneError::Parse(format!(
-                        "local identifier {local} is not below `next_id` {next_id}; give `next_id` a value above every entity and instance identifier"
-                    )));
+                    return Err(not_below_next_id(local, next_id));
                 }
             }
             Ok(ParsedScene {
@@ -268,9 +272,7 @@ pub(crate) fn parse_scene(ron: &str) -> Result<ParsedScene, SceneError> {
     }
 }
 
-fn parse_resolved(ron: &str) -> Result<ParsedScene, SceneError> {
-    let file: ResolvedV2 =
-        ron::from_str(ron).map_err(|error| SceneError::Parse(error.to_string()))?;
+fn parse_resolved(file: ResolvedV2) -> Result<ParsedScene, SceneError> {
     if file.entities.iter().any(|entity| entity.address.is_empty()) {
         return Err(SceneError::Parse(
             "an entity has an empty address; give it at least its local identifier".to_string(),
@@ -289,8 +291,18 @@ fn parse_resolved(ron: &str) -> Result<ParsedScene, SceneError> {
             entity.address
         )));
     }
+    let next_id = growable(file.next_id)?;
+    // An address starts with the local identifier of its entity or instance in this scene.
+    if let Some(&local) = file
+        .entities
+        .iter()
+        .filter_map(|entity| entity.address.first())
+        .find(|&&local| local >= next_id)
+    {
+        return Err(not_below_next_id(local, next_id));
+    }
     Ok(ParsedScene {
-        next_id: growable(file.next_id)?,
+        next_id,
         checked: false,
         resources: file.resources,
         entities: file
@@ -300,6 +312,12 @@ fn parse_resolved(ron: &str) -> Result<ParsedScene, SceneError> {
             .collect(),
         instances: Vec::new(),
     })
+}
+
+fn not_below_next_id(local: u32, next_id: u32) -> SceneError {
+    SceneError::Parse(format!(
+        "local identifier {local} is not below `next_id` {next_id}; give `next_id` a value above every entity and instance identifier"
+    ))
 }
 
 /// The `next_id` of a scene file: the entity count for version 1, 0 when it does not parse.
