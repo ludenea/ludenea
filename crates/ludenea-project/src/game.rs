@@ -1,4 +1,5 @@
-use std::io::{self, BufRead, BufReader, Write};
+use std::borrow::Cow;
+use std::io::{self, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -7,7 +8,7 @@ use std::thread;
 use ludenea_control::ServerMessage;
 use serde::{Deserialize, Serialize};
 
-use crate::{ProjectError, io_error};
+use crate::{ProjectError, io_error, output_lines};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export_to = "project/"))]
@@ -48,10 +49,10 @@ impl GameProcess {
         let (output_sender, output) = mpsc::channel();
         let stdout_output = output_sender.clone();
         thread::spawn(move || {
-            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            for line in output_lines(stdout) {
                 let (printed, message) = split_stdout_line(&line);
                 if let Some(printed) = printed {
-                    forward(&stdout_output, OutputStream::Stdout, printed.to_string());
+                    forward(&stdout_output, OutputStream::Stdout, printed.into_owned());
                 }
                 if let Some(message) = message {
                     let _ = message_sender.send(message.to_string());
@@ -59,7 +60,8 @@ impl GameProcess {
             }
         });
         thread::spawn(move || {
-            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            for line in output_lines(stderr) {
+                let line = String::from_utf8_lossy(&line).into_owned();
                 forward(&output_sender, OutputStream::Stderr, line);
             }
         });
@@ -123,43 +125,137 @@ fn forward(sender: &Sender<GameOutput>, stream: OutputStream, line: String) {
 /// printing such a line itself confuses the editor. Text the game printed without a trailing
 /// newline ends up in front of the next protocol line; it is split off only where the rest of
 /// the line is a whole protocol message, so a game printing `{"type":` mid-line keeps its line.
-fn split_stdout_line(line: &str) -> (Option<&str>, Option<&str>) {
+/// The host writes JSON, so a message is UTF-8: bytes that are not UTF-8 are printed text,
+/// shown with replacement characters, and a message is looked for only after the last of them.
+fn split_stdout_line(line: &[u8]) -> (Option<Cow<'_, str>>, Option<&str>) {
     const START: &str = r#"{"type":"#;
-    if line.starts_with(START) {
-        return (None, Some(line));
+    // What follows the last bytes that are not UTF-8: the only place a message can be.
+    let tail = match line.utf8_chunks().last() {
+        Some(chunk) if chunk.invalid().is_empty() => chunk.valid(),
+        _ => "",
+    };
+    if tail.len() == line.len() && tail.starts_with(START) {
+        return (None, Some(tail));
     }
-    let message = line
+    let message = tail
         .match_indices(START)
         .map(|(at, _)| at)
-        .find(|&at| serde_json::from_str::<ServerMessage>(&line[at..]).is_ok());
+        .find(|&at| serde_json::from_str::<ServerMessage>(&tail[at..]).is_ok());
     match message {
-        Some(at) => (Some(&line[..at]), Some(&line[at..])),
-        None => (Some(line), None),
+        Some(at) => {
+            let printed = &line[..line.len() - tail.len() + at];
+            (Some(String::from_utf8_lossy(printed)), Some(&tail[at..]))
+        }
+        None => (Some(String::from_utf8_lossy(line)), None),
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::split_stdout_line;
+pub(crate) mod tests {
+    use super::*;
+
+    /// A stand-in game binary running the shell `body`.
+    #[cfg(unix)]
+    pub(crate) fn script(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = dir.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    /// Bytes that are not UTF-8 are output with replacement characters, never a protocol
+    /// message, and reading goes on, on both streams.
+    #[cfg(unix)]
+    #[test]
+    fn a_line_that_is_not_utf8_is_output_and_protocol_lines_still_arrive() {
+        use std::time::Duration;
+
+        const TIMEOUT: Duration = Duration::from_secs(10);
+        let dir = tempfile::TempDir::new().unwrap();
+        let message = r#"{"type":"event","event":{"type":"resimulated","up_to":3}}"#;
+        for (stream, redirect) in [(OutputStream::Stdout, ""), (OutputStream::Stderr, " >&2")] {
+            let body = format!(
+                "printf 'caf\\351\\n'{redirect}\n\
+                 printf '{{\"type\":\"pong\",\"note\":\"\\377\"}}\\n'{redirect}\n\
+                 printf 'then\\r\\n'{redirect}\n\
+                 echo '{message}'\n\
+                 read -r line"
+            );
+            let binary = script(dir.path(), &format!("{stream:?}"), &body);
+            let mut game = GameProcess::start(&binary).unwrap();
+            let messages = game.take_messages().unwrap();
+            let output = game.take_output().unwrap();
+            assert_eq!(messages.recv_timeout(TIMEOUT).as_deref(), Ok(message));
+            let printed: Vec<_> = (0..3)
+                .map(|_| {
+                    output
+                        .recv_timeout(TIMEOUT)
+                        .expect("the game's output arrives")
+                })
+                .collect();
+            let lines = [
+                "caf\u{FFFD}",
+                "{\"type\":\"pong\",\"note\":\"\u{FFFD}\"}",
+                "then",
+            ];
+            let expected = lines.map(|line| GameOutput {
+                stream,
+                line: line.to_string(),
+            });
+            assert_eq!(printed, expected, "{stream:?}");
+            assert_eq!(game.wait(), None, "the game still runs");
+            assert_eq!(
+                messages.try_recv(),
+                Err(mpsc::TryRecvError::Empty),
+                "{stream:?}: messages still arrive"
+            );
+        }
+    }
 
     #[test]
     fn printed_text_without_a_newline_is_split_from_the_next_message() {
         let message = r#"{"type":"event","event":{"type":"resimulated","up_to":3}}"#;
-        assert_eq!(split_stdout_line(message), (None, Some(message)));
+        assert_eq!(split_stdout_line(message.as_bytes()), (None, Some(message)));
         assert_eq!(
-            split_stdout_line(&format!("loading...{message}")),
-            (Some("loading..."), Some(message))
+            split_stdout_line(format!("loading...{message}").as_bytes()),
+            (Some("loading...".into()), Some(message))
         );
         assert_eq!(
-            split_stdout_line(&format!(r#"saw {{"type":"jump"}} then {message}"#)),
-            (Some(r#"saw {"type":"jump"} then "#), Some(message))
+            split_stdout_line(format!(r#"saw {{"type":"jump"}} then {message}"#).as_bytes()),
+            (Some(r#"saw {"type":"jump"} then "#.into()), Some(message))
         );
-        assert_eq!(split_stdout_line("hello"), (Some("hello"), None));
+        assert_eq!(split_stdout_line(b"hello"), (Some("hello".into()), None));
+        let mut line = b"caf\xe9".to_vec();
+        line.extend_from_slice(message.as_bytes());
+        assert_eq!(
+            split_stdout_line(&line),
+            (Some("caf\u{FFFD}".into()), Some(message))
+        );
     }
 
     #[test]
     fn printed_json_mid_line_stays_the_games_output() {
         let line = r#"state: {"type":"jump"}"#;
-        assert_eq!(split_stdout_line(line), (Some(line), None));
+        assert_eq!(
+            split_stdout_line(line.as_bytes()),
+            (Some(line.into()), None)
+        );
+    }
+
+    #[test]
+    fn a_line_that_is_not_utf8_is_never_a_message() {
+        let cases: [(&[u8], &str); 3] = [
+            (
+                b"{\"type\":\"pong\",\"note\":\"\xff\"}",
+                "{\"type\":\"pong\",\"note\":\"\u{FFFD}\"}",
+            ),
+            (b"\xff{\"type\":\"jump\"}", "\u{FFFD}{\"type\":\"jump\"}"),
+            (b"{\"type\":\xff", "{\"type\":\u{FFFD}"),
+        ];
+        for (line, printed) in cases {
+            assert_eq!(split_stdout_line(line), (Some(printed.into()), None));
+        }
     }
 }

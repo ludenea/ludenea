@@ -15,7 +15,7 @@ mod types;
 
 use std::collections::BTreeSet;
 use std::fs::{self, File};
-use std::io;
+use std::io::{self, BufRead, BufReader, Read};
 use std::ops::Deref;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -242,6 +242,21 @@ fn next_raw<T>(raw: &Receiver<T>, dropped: &AtomicBool) -> Option<T> {
             Err(mpsc::RecvTimeoutError::Disconnected) => return None,
         }
     }
+}
+
+/// The lines a child process writes, as bytes without their `\n` or `\r\n`, until it closes
+/// the stream or reading fails. Unlike [`BufRead::lines`], a line that is not UTF-8 does not
+/// end the reading.
+fn output_lines(output: impl Read) -> impl Iterator<Item = Vec<u8>> {
+    BufReader::new(output)
+        .split(b'\n')
+        .map_while(Result::ok)
+        .map(|mut line| {
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+            line
+        })
 }
 
 fn io_error(path: &Path, source: io::Error) -> ProjectError {

@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen_cli_support::Bindgen;
 use xxhash_rust::xxh3::xxh3_64;
 
-use crate::Project;
+use crate::{Project, output_lines};
 
 const WASM_TARGET: &str = "wasm32-unknown-unknown";
 
@@ -135,11 +135,7 @@ fn run(
         .spawn()?;
     let stderr = child.stderr.take().expect("stderr is piped");
     let stderr_output = output.clone();
-    let lines = thread::spawn(move || {
-        for text in BufReader::new(stderr).lines().map_while(Result::ok) {
-            let _ = stderr_output.send(BuildEvent::Line { text });
-        }
-    });
+    let lines = thread::spawn(move || relay_lines(stderr, &stderr_output));
 
     let stdout = BufReader::new(child.stdout.take().expect("stdout is piped"));
     let mut done = 0;
@@ -203,6 +199,14 @@ fn run(
             let module = produced.ok_or(BuildError::MissingArtifact("module"))?;
             bind(root, &module).map(|dir| BuildArtifact::Wasm { dir })
         }
+    }
+}
+
+/// Relays cargo's own output, line by line, until it ends.
+fn relay_lines(stderr: impl Read, output: &Sender<BuildEvent>) {
+    for line in output_lines(stderr) {
+        let text = String::from_utf8_lossy(&line).into_owned();
+        let _ = output.send(BuildEvent::Line { text });
     }
 }
 
@@ -320,6 +324,17 @@ mod tests {
             names,
             ["ice", "error", "warning", "failure-note", "note", "help"]
         );
+    }
+
+    #[test]
+    fn cargo_lines_that_are_not_utf8_are_relayed_as_text() {
+        let (sender, events) = std::sync::mpsc::channel();
+        relay_lines(&b"caf\xe9\r\n   Compiling demo\n"[..], &sender);
+        drop(sender);
+        let lines = ["caf\u{FFFD}", "   Compiling demo"].map(|text| BuildEvent::Line {
+            text: text.to_string(),
+        });
+        assert_eq!(events.iter().collect::<Vec<_>>(), lines);
     }
 
     #[test]

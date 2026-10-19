@@ -627,12 +627,12 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(all(test, unix))]
 mod tests {
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
     use std::time::Duration;
 
     use tempfile::TempDir;
 
     use super::*;
+    use crate::game::tests::script;
     use crate::protocol::PROJECT_PROTOCOL_FINGERPRINT;
 
     /// A stand-in game binary answering each line with `{"type":"<name>"}`.
@@ -642,14 +642,6 @@ mod tests {
             name,
             &format!("while IFS= read -r line; do echo '{{\"type\":\"{name}\"}}'; done"),
         )
-    }
-
-    /// A stand-in game binary running the shell `body`.
-    fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
-        let path = dir.join(name);
-        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-        path
     }
 
     /// Waits for the first `GameExited` and returns its code with how long it took.

@@ -66,6 +66,9 @@ session (the editor's copy of each open document's session), and the plugin API.
 - Project protocol 3, fingerprint `227a1de4ad22d2f3`.
 - `hello` and `welcome` carry `protocol_fingerprint`, as in the control protocol, and the
   service refuses a client of another version or fingerprint the same way.
+- `game_output` events and the `line` events of a build carry a line that is not UTF-8
+  with replacement characters. Such a line used to end the relay of its stream: on the
+  game's standard output, every later protocol message was lost.
 
 ### Plugin API
 
