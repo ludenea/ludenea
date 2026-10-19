@@ -236,11 +236,12 @@ pub(crate) fn parse_scene(ron: &str) -> Result<ParsedScene, SceneError> {
         2 => {
             let file: SceneV2 = match ron::from_str(ron) {
                 Ok(file) => file,
-                // A text in neither form is reported against the usual one.
+                // A text in neither form is reported against the usual one. Without
+                // entities, a text is not resolved even if it reads as one.
                 Err(error) => {
-                    return match ron::from_str(ron) {
-                        Ok(resolved) => parse_resolved(resolved),
-                        Err(_) => Err(parse(error)),
+                    return match ron::from_str::<ResolvedV2>(ron) {
+                        Ok(resolved) if !resolved.entities.is_empty() => parse_resolved(resolved),
+                        _ => Err(parse(error)),
                     };
                 }
             };

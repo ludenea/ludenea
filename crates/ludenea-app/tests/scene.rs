@@ -282,6 +282,30 @@ fn a_resolved_scene_that_breaks_its_rules_says_which() {
 }
 
 #[test]
+fn a_malformed_instance_in_a_scene_without_entities_reports_its_own_error() {
+    // With no entity, the text also reads as a resolved scene; its error is the instance's.
+    for (instance, expected) in [
+        (
+            r#"(id: 1, prefab: "zz", overrides: [], added: [], removed: [])"#,
+            r#"Expected 32 lowercase hexadecimal digits but found the string "zz""#,
+        ),
+        (
+            "(id: 1)",
+            "Unexpected missing field named `prefab` in `Instance`",
+        ),
+    ] {
+        let scene = format!(
+            "Scene(version: 2, next_id: 3, resources: {{}}, entities: [], instances: [{instance}])"
+        );
+        let error = loaded().load_scene(&scene).unwrap_err();
+        assert!(
+            matches!(&error, SceneError::Parse(reason) if reason.contains(expected)),
+            "{scene}: {error}"
+        );
+    }
+}
+
+#[test]
 fn a_local_identifier_at_or_above_next_id_is_refused_at_load() {
     for scene in [
         "Scene(version: 2, next_id: 0, resources: {}, entities: [(id: 4294967295, components: {})])",
