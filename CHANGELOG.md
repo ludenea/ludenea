@@ -79,8 +79,10 @@ session (the editor's copy of each open document's session), and the plugin API.
   the value; it ended the game process before. A seek, undo, or redo that fails this way
   changes nothing, and a branch switch stays on the current branch, or on the target at its
   first stale tick. When the session cannot come back to its tick after a game panic, a
-  snapshot restore, a replay export, or resimulation, it goes to a tick it can show, tick 0
-  at worst.
+  snapshot restore, a replay export, resimulation, or a failed apply to the scene, it goes
+  to a tick it can show, tick 0 at worst. While the current state itself holds such a
+  value, resimulation and an edit whose asset loads are taken back replay the current tick
+  instead of ending the game process.
 
 ### Project protocol
 

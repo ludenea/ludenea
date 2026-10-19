@@ -662,12 +662,15 @@ impl Session {
                     .ok_or(SessionError::NoSuchBranch(*branch))?;
                 let parent = forked.parent.expect("a forked branch has a parent");
                 name.clone_from(&forked.name);
-                let subtree = self.tree.subtree(*branch);
-                if subtree.contains(&self.tree.current()) {
-                    self.switch_to(sim, parent, cause.tick())?;
+                let (subtree, tick) = (self.tree.subtree(*branch), cause.tick());
+                self.switch_to(sim, parent, tick)?;
+                // Showing `tick` starts from this checkpoint: when it does not restore, the
+                // undo is refused before anything changes.
+                if self.resimulated_to().is_none() {
+                    self.restore_checkpoint(sim, tick)?;
                 }
                 *removed = StoredBranch::encode(&self.tree.take(&subtree, players));
-                Ok(Some((parent, cause.tick())))
+                Ok(Some((parent, tick)))
             }
             UndoEntry::Run {
                 branch,
@@ -725,7 +728,14 @@ impl Session {
                 ..
             } => {
                 let stored = StoredBranch::decode(removed)?;
+                let ids: Vec<BranchId> = stored.iter().map(StoredBranch::id).collect();
                 self.tree.put_back(stored)?;
+                if let Err(error) = self.switch_to(sim, *branch, cause.tick()) {
+                    // The branch cannot be shown: the redo is refused, and the branches go
+                    // back to the entry.
+                    self.tree.remove(&ids);
+                    return Err(error);
+                }
                 removed.clear();
                 Ok(Some((*branch, cause.tick())))
             }
@@ -1312,8 +1322,7 @@ impl Session {
             self.current = tick;
         } else {
             // The ticks resimulated here are all past the current one, whose state stays.
-            sim.restore(&at_current)
-                .expect("a snapshot restores into the world it was taken from");
+            self.restore_current(sim, &at_current)?;
         }
         // A switch goes on with the next stale branch on its way.
         self.continue_switch(sim)?;
@@ -1738,6 +1747,20 @@ impl Session {
         Err(error)
     }
 
+    /// Puts the world back to `state`, a snapshot of the current tick taken before the world
+    /// left it. When a system left a value in it that its type refuses to load, comes back
+    /// by replaying instead (see `come_back`).
+    fn restore_current(
+        &mut self,
+        sim: &mut Simulation,
+        state: &Snapshot,
+    ) -> Result<(), SessionError> {
+        match sim.restore(state) {
+            Ok(()) => Ok(()),
+            Err(_) => self.come_back(sim, self.current),
+        }
+    }
+
     /// Restores the nearest checkpoint at or before `tick` and replays up to `tick`,
     /// recording the hashes and checkpoints of ticks simulated for the first time. Leaves
     /// `current` unchanged. A checkpoint that does not restore leaves the world unchanged.
@@ -1868,8 +1891,8 @@ impl Session {
             Ok(applied) => applied.last().copied().flatten(),
             Err(error) => {
                 if let Some(state) = before_loads {
-                    sim.restore(&state)
-                        .expect("a snapshot restores into the world it was taken from");
+                    // The error to report is the edit's, wherever coming back ends.
+                    let _ = self.restore_current(sim, &state);
                 }
                 return Err(error.into());
             }
@@ -2014,17 +2037,18 @@ impl Session {
         }
         self.restore_checkpoint(sim, 0)?;
         let loaded: BTreeSet<LoadAddress> = sim.load_addresses().values().cloned().collect();
+        // The edit's error is the one to report, wherever coming back ends.
         let scene = match self.scene_after(sim, edit) {
             Ok(scene) if scene != self.scene => scene,
             result => {
-                self.replay_to(sim, self.current)?;
-                return result.map(|_| None);
+                let back = self.come_back(sim, self.current);
+                return result.and(back).map(|()| None);
             }
         };
         match self.load_scene(sim, &scene, &self.assets) {
             Ok(warnings) => self.warnings = warnings,
             Err(error) => {
-                self.replay_to(sim, self.current)?;
+                let _ = self.come_back(sim, self.current);
                 return Err(error);
             }
         }

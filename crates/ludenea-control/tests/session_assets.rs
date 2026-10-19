@@ -656,3 +656,46 @@ fn tick_0_edit_on_an_instance_entity_in_a_prefab_document_overrides_it() {
     save_prefab_checked(OUTER, &text, &assets).unwrap();
     assert!(pose_at(&sim, &[0, 0]).contains("x:2.5"));
 }
+
+/// Game code writing a rotation that is not unit length, which loading refuses, from tick 10.
+fn zero_rotation_from_10(time: Res<Time>, mut poses: Query<&mut Pose, Without<Body>>) {
+    if time.tick >= 10 {
+        for pose in poses.iter_mut() {
+            pose.rotation = Rot { cos: 0.0, sin: 0.0 };
+        }
+    }
+}
+
+#[test]
+fn an_edit_whose_loads_are_taken_back_where_the_state_does_not_restore_replays_the_tick() {
+    let mut loader = simulation();
+    loader.load_scene(&boxes::generate_scene(10, 3)).unwrap();
+    let marker = loader.world_mut().spawn();
+    loader.world_mut().insert(marker, Pose::default()).unwrap();
+    let mut app = boxes::app();
+    app.system(Sim, zero_rotation_from_10);
+    let mut sim = app.build().unwrap();
+    let mut session =
+        Session::start(&mut sim, loader.save_scene(), assets(), Document::Scene).unwrap();
+    play(&mut session, &mut sim, 12);
+    let before = sim.hash();
+    let spawner = component(
+        &sim,
+        "boxes::Spawner",
+        json!({ "prefab": PREFAB.to_string(), "stats": STATS.to_string() }),
+    );
+    // The loads apply, then the edit fails: no entity has that address.
+    let insert = Edit::Insert {
+        entity: EntityRef::Loaded(vec![999]),
+        component: "boxes::Spawner".to_string(),
+        value: spawner,
+    };
+
+    let error = session.edit(&mut sim, insert).unwrap_err();
+
+    assert!(matches!(error, SessionError::Edit(_)), "{error:?}");
+    assert!(edits(&session).is_empty());
+    assert_eq!(session.timeline().current, 12);
+    assert_eq!(sim.tick(), 12);
+    assert_eq!(sim.hash(), before);
+}

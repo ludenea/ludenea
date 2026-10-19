@@ -1014,3 +1014,99 @@ fn coming_back_after_a_replay_export_goes_to_tick_0_when_the_current_tick_cannot
     );
     assert_at(&session, &sim, 0);
 }
+
+/// The entity of the only marker, the pose without a body.
+fn marker(sim: &Simulation) -> Entity {
+    let (marker, _) = Query::<(Entity, &Pose), Without<Body>>::new(sim.world())
+        .unwrap()
+        .iter()
+        .next()
+        .unwrap();
+    marker
+}
+
+#[test]
+fn applying_a_refused_value_to_the_scene_where_the_tick_cannot_come_back_goes_to_tick_0() {
+    let (mut sim, mut session) = poisoned_from_10_to_20();
+    play(&mut session, &mut sim, 17);
+    let (scene, marker) = (session.scene().to_string(), marker(&sim));
+
+    let error = session
+        .apply_to_scene(&mut sim, marker, "ludenea::Pose")
+        .unwrap_err();
+
+    // The edit's refusal is reported, not the way back.
+    assert!(matches!(error, SessionError::Edit(_)), "{error:?}");
+    assert_eq!(session.scene(), scene);
+    assert!(!session.timeline().can_undo);
+    assert_at(&session, &sim, 0);
+}
+
+#[test]
+fn an_undo_of_a_fork_whose_tick_cannot_be_shown_changes_nothing() {
+    let (mut sim, mut session) = poisoned_from_10_to_20();
+    play(&mut session, &mut sim, 30);
+    session.seek(&mut sim, 8).unwrap();
+    play(&mut session, &mut sim, 9);
+    let edit = stats_edit(&sim, 1_000);
+    session.edit(&mut sim, edit).unwrap();
+    session.seek(&mut sim, 5).unwrap();
+    session.switch_branch(&mut sim, BranchId::ROOT).unwrap();
+    let before = session.export().unwrap();
+
+    // Showing the root at the fork tick, 17, starts from the checkpoint of tick 16.
+    let error = session.undo(&mut sim).unwrap_err();
+
+    assert!(
+        matches!(error, SessionError::Checkpoint { tick: 16, .. }),
+        "{error:?}"
+    );
+    assert_eq!(session.export().unwrap(), before);
+    assert!(session.timeline().can_undo);
+    assert_eq!(session.timeline().branch, BranchId::ROOT);
+    assert_at(&session, &sim, 5);
+}
+
+#[test]
+fn a_redo_of_a_fork_whose_tick_cannot_be_shown_changes_nothing() {
+    let (mut sim, mut session) = poisoned_from_10_to_20();
+    // Far enough for the checkpoint of tick 16 to be thinned out.
+    play(&mut session, &mut sim, 160);
+    session.seek(&mut sim, 17).unwrap();
+    let edit = stats_edit(&sim, 1_000);
+    session.edit(&mut sim, edit).unwrap();
+    // Showing the root at tick 17 keeps its state there, which does not restore.
+    session.undo(&mut sim).unwrap();
+    let before = session.export().unwrap();
+
+    let error = session.redo(&mut sim).unwrap_err();
+
+    assert!(
+        matches!(error, SessionError::Checkpoint { tick: 17, .. }),
+        "{error:?}"
+    );
+    assert_eq!(session.export().unwrap(), before);
+    assert!(session.timeline().can_redo);
+    assert_eq!(session.timeline().branches.len(), 1);
+    assert_at(&session, &sim, 17);
+}
+
+#[test]
+fn resimulating_while_the_current_state_does_not_restore_replays_it() {
+    let (mut sim, mut session) = poisoned_from_10_to_20();
+    play(&mut session, &mut sim, 40);
+    session
+        .replace_scene(&mut sim, scene_with_markers(2), AssetTexts::new())
+        .unwrap();
+    session.resimulate(&mut sim, 35).unwrap();
+    // Tick 15 holds a zero rotation and replays from the checkpoint of tick 0.
+    session.seek(&mut sim, 15).unwrap();
+    let before = sim.hash();
+
+    let report = session.resimulate(&mut sim, 1).unwrap();
+
+    assert_eq!(report, Resimulation::Progress { up_to: 36 });
+    assert_eq!(session.timeline().current, 15);
+    assert_eq!(sim.tick(), 15);
+    assert_eq!(sim.hash(), before);
+}
