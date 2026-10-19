@@ -362,3 +362,61 @@ fn scene_with_nan_velocity_is_rejected() {
 fn scene_with_non_unit_rotation_is_rejected() {
     assert_rejected(&one_body_scene("2.0", "0.0", "0.6"), "ludenea::Pose");
 }
+
+#[test]
+fn kinematic_spin_keeps_a_unit_rotation_and_restores() {
+    let mut simulation = simulation();
+    let mut spinning = Body::kinematic();
+    spinning.angular_velocity = 1e30;
+    let spinner = spawn(&mut simulation, Vec2::ZERO, spinning, Some(boxed(0.5, 0.5)));
+    simulation.step();
+    let Rot { cos, sin } = pose(&simulation, spinner).rotation;
+    assert!(
+        (cos * cos + sin * sin - 1.0).abs() < 1e-4,
+        "rotation {cos}, {sin}"
+    );
+    let mut fresh = self::simulation();
+    fresh.restore(&simulation.snapshot()).unwrap();
+}
+
+#[test]
+fn kinematic_spin_is_clamped_like_a_dynamic_one() {
+    let mut simulation = simulation();
+    let ball = || {
+        Some(Collider::new(Shape::Circle(Circle {
+            center: Vec2::ZERO,
+            radius: 0.5,
+        })))
+    };
+    let mut spinning = Body::dynamic();
+    spinning.angular_velocity = 1e30;
+    spinning.gravity_scale = 0.0;
+    let dynamic = spawn(&mut simulation, Vec2::ZERO, spinning, ball());
+    spinning.kind = BodyKind::Kinematic;
+    let kinematic = spawn(&mut simulation, Vec2::new(5.0, 0.0), spinning, ball());
+    simulation.step();
+    let clamped = body(&simulation, dynamic).angular_velocity;
+    assert!(clamped < 1e3, "dynamic angular velocity {clamped}");
+    assert_eq!(body(&simulation, kinematic).angular_velocity, clamped);
+    let rotation = pose(&simulation, kinematic).rotation;
+    assert_eq!(rotation, pose(&simulation, dynamic).rotation);
+    assert_ne!(rotation, Rot::IDENTITY);
+}
+
+#[test]
+fn an_invalid_pose_after_the_step_names_the_entity_and_the_field() {
+    let mut simulation = simulation();
+    let lost = spawn(
+        &mut simulation,
+        Vec2::new(f32::NAN, 0.0),
+        Body::dynamic(),
+        None,
+    );
+    let panic =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| simulation.step())).unwrap_err();
+    let message = panic.downcast_ref::<String>().unwrap();
+    assert!(
+        message.contains(&format!("entity {lost}")) && message.contains("position must be finite"),
+        "{message}"
+    );
+}

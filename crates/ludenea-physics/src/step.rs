@@ -220,20 +220,28 @@ pub(crate) fn physics_step(
         pose.rotation = rotation;
         body.linear_velocity = solved.linear_velocity;
         body.angular_velocity = solved.angular_velocity;
-        let finite = [
-            pose.position.x,
-            pose.position.y,
-            pose.rotation.cos,
-            pose.rotation.sin,
-            body.linear_velocity.x,
-            body.linear_velocity.y,
-            body.angular_velocity,
-        ]
-        .iter()
-        .all(|value| value.is_finite());
-        assert!(
-            finite,
-            "physics produced a non-finite state for entity {entity}"
-        );
+        if let Err(problem) = check_state(pose, body) {
+            panic!("physics produced an invalid state for entity {entity}: {problem}");
+        }
     }
+}
+
+/// Fails, naming the field, unless the step left a pose that loading accepts and finite
+/// velocities.
+fn check_state(pose: &Pose, body: &Body) -> Result<(), String> {
+    pose.validate().map_err(|error| error.to_string())?;
+    let velocity = body.linear_velocity;
+    if !(velocity.x.is_finite() && velocity.y.is_finite()) {
+        return Err(format!(
+            "linear_velocity must be finite, got ({}, {})",
+            velocity.x, velocity.y
+        ));
+    }
+    if !body.angular_velocity.is_finite() {
+        return Err(format!(
+            "angular_velocity must be finite, got {}",
+            body.angular_velocity
+        ));
+    }
+    Ok(())
 }

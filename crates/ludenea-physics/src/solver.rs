@@ -259,24 +259,30 @@ fn prepare(c: &mut ContactConstraint, a: &SolverBody, b: &SolverBody, context: &
     }
 }
 
+/// Applies gravity, damping, and the linear speed limit to a dynamic body, and the angular
+/// speed limit to every moving body: a kinematic body spins as fast as a dynamic one at most.
 fn integrate_velocity(body: &mut SolverBody, context: &StepContext) {
-    if body.kind != BodyKind::Dynamic {
+    if body.kind == BodyKind::Static {
         return;
     }
     let h = context.h;
-    let mut v = context.gravity * (h * body.gravity_scale)
-        + body.linear_velocity * (1.0 / (1.0 + h * body.linear_damping));
-    let mut w = body.angular_velocity * (1.0 / (1.0 + h * body.angular_damping));
-    let speed_squared = v.dot(v);
-    if speed_squared > MAX_LINEAR_SPEED * MAX_LINEAR_SPEED {
-        v *= MAX_LINEAR_SPEED / speed_squared.sqrt();
+    let mut w = body.angular_velocity;
+    if body.kind == BodyKind::Dynamic {
+        let mut v = context.gravity * (h * body.gravity_scale)
+            + body.linear_velocity * (1.0 / (1.0 + h * body.linear_damping));
+        w *= 1.0 / (1.0 + h * body.angular_damping);
+        let speed_squared = v.dot(v);
+        if speed_squared > MAX_LINEAR_SPEED * MAX_LINEAR_SPEED {
+            v *= MAX_LINEAR_SPEED / speed_squared.sqrt();
+        }
+        body.linear_velocity = v;
     }
-    // Keeps the small-angle rotation integration accurate.
+    // At most an eighth of a turn per substep keeps the small-angle rotation integration
+    // accurate.
     let max_angular_speed = 0.25 * PI * context.inv_h;
     if w * w > max_angular_speed * max_angular_speed {
         w *= max_angular_speed / w.abs();
     }
-    body.linear_velocity = v;
     body.angular_velocity = w;
 }
 

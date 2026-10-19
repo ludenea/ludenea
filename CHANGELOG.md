@@ -51,6 +51,11 @@ session (the editor's copy of each open document's session), and the plugin API.
   `sin_cos` returns `(0, 1)` for an angle that is not finite or too large to reduce, so
   `Rot::from_angle` and `Rot::integrate` give the identity there too. All of them returned
   `(0, 0)`, a rotation that loading a `Pose` refuses.
+- The physics step clamps the angular velocity of a kinematic body as it does a dynamic
+  one's, to an eighth of a turn per substep, and writes the clamped value back to `Body`.
+- `Pose::validate` checks a pose as loading does and returns the new `PoseError`, which
+  carries the refused position or rotation. The physics step panics with the entity, the
+  field, and its value when it leaves a state that loading would refuse.
 
 ### Control protocol
 

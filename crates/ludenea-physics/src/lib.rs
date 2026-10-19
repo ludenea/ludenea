@@ -13,7 +13,7 @@ mod solver;
 pub mod step;
 
 pub use broad_phase::{Proxy, find_pairs};
-pub use components::{Body, BodyKind, Collider, PhysicsSettings, Pose};
+pub use components::{Body, BodyKind, Collider, PhysicsSettings, Pose, PoseError};
 pub use contacts::{CachedContact, CachedPoint, ContactCache};
 pub use events::{Collision, CollisionKind};
 pub use manifold::{Manifold, ManifoldPoint, collide};
