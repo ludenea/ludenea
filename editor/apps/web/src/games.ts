@@ -1,6 +1,6 @@
 import { ControlClient, type MessageTransport, type ProjectClient, type WorkerGame } from "@ludenea/control-client";
 import type { EditorApp } from "./app";
-import { guardSession, restoreSession, type SavedSession, type SessionGuard } from "./session-guard";
+import { guardSession, type SavedSession, type SessionGuard } from "./session-guard";
 
 type App = Pick<EditorApp, "connectGame" | "log" | "sessions">;
 
@@ -14,9 +14,12 @@ function sequence(app: App): (what: string, step: () => Promise<void>) => void {
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-/** Restores off the queue: a restore waiting for resimulation never holds up the next game. */
+/**
+ * Restores off the queue: a restore waiting for resimulation never holds up the next game.
+ * Through the document sessions, which set aside a stored session the game refuses.
+ */
 function restoreInBackground(app: App, control: ControlClient, saved: SavedSession): void {
-  restoreSession(control, saved).catch((error: unknown) => app.log("error", `Cannot restore the session: ${errorText(error)}`));
+  app.sessions.restore(control, saved).catch((error: unknown) => app.log("error", `Cannot restore the session: ${errorText(error)}`));
 }
 
 /** Crashes closer together than this count as one loop. */

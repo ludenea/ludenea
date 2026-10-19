@@ -272,6 +272,87 @@ describe("document store", () => {
     expect(project.sessions.get(kept)).toBe("not base64!");
   });
 
+  it("a_stored_session_own_gives_is_set_aside_when_the_next_game_refuses_it", async () => {
+    const project = fakeProject();
+    const host = await testHost(undefined, project.answer);
+    const game = await gameWithSession(session("(main)"));
+    host.setControl(game.control);
+    await host.editor.document.getState().open(ids.main);
+    project.store(ids.main, mainSession);
+    const bytes = project.sessions.get(file);
+    // The latest export was taken while another document was open: the stored session carries over.
+    const other = { ...(await host.sessions.export(game.control)), document: ids.ball };
+    const own = await host.sessions.own(other);
+    const next = await refusingGame();
+    host.setControl(next.control);
+
+    // The next game's first export is stored while the game answers the restore.
+    const restoring = host.sessions.restore(next.control, own!);
+    await host.sessions.store();
+    expect(await restoring).toBeNull();
+
+    const refused = `The game refused the stored session of scenes/main.scene.ron (${file}): the branch tree cannot be decoded; the document opened from its file, and the session is kept as ${kept}.`;
+    expect(logged(host)).toContainEqual(["warning", refused, undefined]);
+    expect(host.editor.document.getState().error).toBe(refused);
+    expect(project.sessions.get(kept)).toBe(bytes);
+    expect(project.stored(ids.main)?.saved.load.scene).toBe("(edited)");
+    expect(projectRequests(project, ["set_aside_stored_session", "store_session"])).toEqual(["set_aside_stored_session", "store_session"]);
+  });
+
+  it("a_stored_session_own_gives_is_not_stored_over_until_the_game_answers_its_restore", async () => {
+    const project = fakeProject();
+    const host = await testHost(undefined, project.answer);
+    const game = await gameWithSession(session("(main)"));
+    host.setControl(game.control);
+    await host.editor.document.getState().open(ids.main);
+    project.store(ids.main, mainSession);
+    const bytes = project.sessions.get(file);
+    const other = { ...(await host.sessions.export(game.control)), document: ids.ball };
+    const own = await host.sessions.own(other);
+    // A game that never answers the stored session's load.
+    const next = await testGame((command) => {
+      if (command.type === "export_session") return { type: "session", ...session("(next)") };
+      if (command.type === "get_timeline") return timeline(0);
+      return command.type === "load_session" ? undefined : { type: "done" };
+    });
+    host.setControl(next.control);
+
+    void host.sessions.restore(next.control, own!);
+    void host.sessions.store();
+    await vi.waitFor(() => expect(next.sent.some((command) => command.type === "export_session")).toBe(true));
+    await settle();
+
+    expect(projectRequests(project, ["store_session"])).toEqual([]);
+    expect(project.sessions.get(file)).toBe(bytes);
+  });
+
+  it("a_stored_session_that_cannot_be_set_aside_stays_unstored_once_own_reads_it", async () => {
+    const project = fakeProject();
+    const answer: typeof project.answer = (request) =>
+      request.type === "set_aside_stored_session" ? (project.sent.push(request), { error: { code: "io", message: "permission denied" } }) : project.answer(request);
+    const host = await testHost(undefined, answer);
+    const game = await refusingGame();
+    host.setControl(game.control);
+    project.store(ids.main, mainSession);
+    const bytes = project.sessions.get(file);
+    await host.editor.document.getState().open(ids.main);
+    const other = { ...(await host.sessions.export(game.control)), document: ids.ball };
+
+    const own = await host.sessions.own(other);
+    await host.sessions.store();
+
+    expect(own?.document).toBe(ids.main);
+    expect(projectRequests(project, ["store_session"])).toEqual([]);
+    expect(project.sessions.get(file)).toBe(bytes);
+
+    // A game that takes it holds it: the document's sessions are stored again.
+    const next = await gameWithSession(session("(next)"));
+    host.setControl(next.control);
+    await host.sessions.restore(next.control, own!);
+    await host.sessions.store();
+    expect(project.stored(ids.main)?.saved.load.scene).toBe("(next)");
+  });
+
   it("a_stored_session_that_cannot_be_set_aside_is_never_overwritten", async () => {
     const project = fakeProject();
     const answer: typeof project.answer = (request) =>

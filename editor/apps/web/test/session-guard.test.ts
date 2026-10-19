@@ -1,17 +1,8 @@
-import {
-  ControlClient,
-  PROJECT_PROTOCOL_FINGERPRINT,
-  PROJECT_PROTOCOL_VERSION,
-  PROTOCOL_FINGERPRINT,
-  PROTOCOL_VERSION,
-  ProjectClient,
-  fakeTransport,
-  type GameInfo,
-  type WorkerCrash,
-} from "@ludenea/control-client";
+import { ControlClient, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION, fakeTransport, type GameInfo, type WorkerCrash } from "@ludenea/control-client";
 import { createEditor } from "@ludenea/editor-shell/app";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EXPORT_COALESCE_MS, exportSession, guardSession, restoreSession, type SavedSession } from "../src/session-guard";
+import { documentProject, sessionFile, storedBytes } from "./support";
 
 type Command = { type: string; [key: string]: unknown };
 
@@ -21,7 +12,7 @@ const timeline = { head: 5, simulated: 5, current: 3, checkpoints: [], edit_tick
 const hashes = ["1", "2", "3", "4", "5", "6"].map((digit) => digit.padStart(16, "0"));
 const session = (scene: string) => ({ type: "session", scene, saved_scene: null, inputs: "AA==", edits: "", undo: "", hashes, assets: [], saved_assets: [], branches: "", document: "Scene", keeps_assets: false });
 
-/** A game whose host answers with `answer(command)` (`null` fails), recording every command. */
+/** A game whose host answers with `answer(command)` (`null` fails, as does `{ error }`), recording every command. */
 async function fakeGame(answer: (command: Command) => object | null = () => ({ type: "done" })) {
   const sent: Command[] = [];
   const transport = fakeTransport((raw) => {
@@ -29,7 +20,7 @@ async function fakeGame(answer: (command: Command) => object | null = () => ({ t
     if (message.type === "hello") return [JSON.stringify({ type: "welcome", protocol_version: PROTOCOL_VERSION, protocol_fingerprint: PROTOCOL_FINGERPRINT, engine_version: "0", game: info })];
     sent.push(message.command);
     const reply = answer(message.command);
-    const result = reply === null ? { error: { code: "resimulating", message: "still resimulating" } } : { ok: reply };
+    const result = reply === null ? { error: { code: "resimulating", message: "still resimulating" } } : "error" in reply ? reply : { ok: reply };
     return [JSON.stringify({ type: "response", id: message.id, result })];
   });
   const control = await ControlClient.connect(transport);
@@ -143,7 +134,7 @@ describe("guardSession", () => {
     vi.useFakeTimers();
     const game = await fakeGame((command) => (command.type === "export_session" ? session("scene") : command.type === "get_timeline" ? { type: "timeline", ...timeline } : { type: "done" }));
     const store = vi.fn(async () => {});
-    const sessions = { export: exportSession, store, own: async () => null };
+    const sessions = { export: exportSession, store, own: async () => null, restore: restoreSession };
     guardSession(game.control, fakeWorker(), async () => game.control, { sessions });
     await vi.advanceTimersByTimeAsync(0);
     expect(store).toHaveBeenCalledTimes(1);
@@ -284,7 +275,7 @@ describe("guardSession with documents", () => {
       command.type === "export_session" ? (answering ? session("paused") : null) : command.type === "get_timeline" ? { type: "timeline", ...timeline } : { type: "done" },
     );
     const store = vi.fn(async (_?: SavedSession) => {});
-    const sessions = { export: exportSession, store, own: async () => null };
+    const sessions = { export: exportSession, store, own: async () => null, restore: restoreSession };
     const guard = guardSession(game.control, fakeWorker(), async () => game.control, { sessions, log: () => {} });
     await settle();
     store.mockClear();
@@ -307,7 +298,7 @@ describe("guardSession with documents", () => {
     const first = await fakeGame((command) => (command.type === "export_session" ? unsaved : command.type === "get_timeline" ? { type: "timeline", ...timeline } : { type: "done" }));
     const worker = fakeWorker();
     const second = await fakeGame((command) => (command.type === "get_timeline" ? { type: "timeline", ...timeline } : { type: "done" }));
-    const sessions = { export: exportSession, store: async () => {}, own: async (saved: SavedSession | null) => saved };
+    const sessions = { export: exportSession, store: async () => {}, own: async (saved: SavedSession | null) => saved, restore: restoreSession };
     guardSession(first.control, worker, async () => second.control, { sessions, log: () => {} });
     await settle();
 
@@ -317,49 +308,31 @@ describe("guardSession with documents", () => {
     expect(second.sent.find((command) => command.type === "load_session")).toMatchObject({ assets: [[asset, "(edited)"]], saved_assets: [[asset, "(on disk)"]] });
   });
 
+  /**
+   * A game whose session is the scene it loaded last. One that `exited` exports nothing; one
+   * that `refuses` refuses every stored session.
+   */
+  const documentGame = (options: { exited?: boolean; refuses?: boolean } = {}) => {
+    let scene = "";
+    return fakeGame((command) => {
+      if (command.type === "load_scene") scene = command.scene as string;
+      if (command.type === "load_session" && options.refuses) return { error: { code: "invalid_command", message: "the component demo::Gone is not registered" } };
+      if (command.type === "export_session") return options.exited ? null : session(scene);
+      if (command.type === "get_timeline") return { type: "timeline", ...timeline, branch: 0, branches: [], compare: null };
+      return { type: "done" };
+    });
+  };
+
   it("a_crash_after_a_document_switch_restores_only_the_open_document", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
-    const files = { "scenes/a.scene.ron": "(A)", "scenes/b.scene.ron": "(B)" };
-    const entries = Object.keys(files).map((path, index) => ({ path, id: String(index + 1).padStart(32, "0"), kind: "Scene" }));
-    const [a, b] = entries.map((entry) => entry.id) as [string, string];
-    const requests: Command[] = [];
-    const stored = new Map<string, string>();
-    const project = await ProjectClient.connect(
-      fakeTransport((raw) => {
-        const message = JSON.parse(raw);
-        if (message.type === "hello") return [JSON.stringify({ type: "welcome", protocol_version: PROJECT_PROTOCOL_VERSION, protocol_fingerprint: PROJECT_PROTOCOL_FINGERPRINT })];
-        const request: Command = message.request;
-        requests.push(request);
-        const reply =
-          request.type === "list_files"
-            ? { type: "files", entries }
-            : request.type === "read_text"
-              ? { type: "text", text: files[request.path as keyof typeof files] }
-              : request.type === "read_asset_texts"
-                ? { type: "asset_texts", assets: [], paths: [] }
-                : request.type === "load_stored_session"
-                  ? { type: "stored_session", bytes: stored.get(request.document as string) ?? null }
-                  : { type: "done" };
-        if (request.type === "store_session") stored.set(request.document as string, request.bytes as string);
-        return [JSON.stringify({ type: "response", id: message.id, result: { ok: reply } })];
-      }),
-    );
+    const { project, ids, requests, sessions } = await documentProject();
+    const [a, b] = ids;
     const host = createEditor({ project });
-    // A game whose session is the scene it loaded last.
-    const game = async () => {
-      let scene = "";
-      return fakeGame((command) => {
-        if (command.type === "load_scene") scene = command.scene as string;
-        if (command.type === "export_session") return session(scene);
-        if (command.type === "get_timeline") return { type: "timeline", ...timeline, branch: 0, branches: [], compare: null };
-        return { type: "done" };
-      });
-    };
-    const first = await game();
+    const first = await documentGame();
     host.setControl(first.control);
     await host.editor.document.getState().open(a);
     const worker = fakeWorker();
-    const second = await game();
+    const second = await documentGame();
     const restart = vi.fn(async () => {
       host.setControl(second.control);
       return second.control;
@@ -377,8 +350,45 @@ describe("guardSession with documents", () => {
     expect(restart).toHaveBeenCalledWith(null);
     expect(second.sent.filter((command) => command.type === "load_session")).toEqual([]);
     expect(second.sent.find((command) => command.type === "load_scene")).toMatchObject({ scene: "(B)" });
-    const decode = (bytes: string) => JSON.parse(atob(bytes));
-    expect(stored.has(b) ? decode(stored.get(b)!).saved.load.scene : "(B)").toBe("(B)");
+    const stored = sessions.get(sessionFile(b));
+    expect(stored === undefined ? "(B)" : JSON.parse(atob(stored)).saved.load.scene).toBe("(B)");
     expect(requests.filter((request) => request.type === "write_text")).toEqual([]);
+  });
+
+  it("a_stored_session_the_restarted_game_refuses_is_set_aside_before_the_next_store", async () => {
+    const { project, ids, requests, sessions } = await documentProject();
+    const [a] = ids;
+    const bytes = storedBytes({
+      load: { type: "load_session", scene: "(A edited)", saved_scene: "(A)", inputs: "AA==", edits: "", undo: "", expected: hashes, assets: [], saved_assets: [], branches: "", document: "Scene", keeps_assets: false },
+      tick: 2,
+      document: a,
+    });
+    sessions.set(sessionFile(a), bytes);
+    const host = createEditor({ project });
+    // The game exits before it exports anything: the crash restores A's stored session.
+    const first = await documentGame({ exited: true });
+    host.setControl(first.control);
+    await host.editor.document.getState().open(a);
+    const worker = fakeWorker();
+    // It restarts refusing that session, as a game rebuilt without one of its components does.
+    const second = await documentGame({ refuses: true });
+    const restart = async () => {
+      host.setControl(second.control);
+      return second.control;
+    };
+    const logged: string[] = [];
+    guardSession(first.control, worker, restart, { sessions: host.sessions, log: (level, text) => logged.push(`${level}: ${text}`) });
+    await settle();
+
+    worker.crash({ tick: 2, message: "boom" });
+    await vi.waitFor(() => expect(requests.some((request) => request.type === "set_aside_stored_session")).toBe(true));
+    await host.sessions.store();
+
+    expect(second.sent.find((command) => command.type === "load_session")).toMatchObject({ scene: "(A edited)" });
+    const kept = `.ludenea/sessions/${a}.1.rejected.session`;
+    expect(sessions.get(kept)).toBe(bytes);
+    expect(requests.map((request) => request.type).filter((type) => type === "set_aside_stored_session" || type === "store_session")).toEqual(["set_aside_stored_session", "store_session"]);
+    expect(host.editor.console.list().map(({ level, text }) => `${level}: ${text}`)).toContainEqual(expect.stringMatching(`^warning: The game refused the stored session of scenes/a.scene.ron .*kept as ${kept}`));
+    expect(logged).toEqual(["error: The game crashed at tick 2: boom"]);
   });
 });

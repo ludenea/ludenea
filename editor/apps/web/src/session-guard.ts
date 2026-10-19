@@ -54,8 +54,9 @@ function withoutTicks(inputs: string): string {
  * this build) reloads only its scene, so the game does not crash again at once. `restart`
  * resolves to `null` when it gives up restarting. With `sessions`, exports are tagged with
  * their document and stored as its session (except those taken while playing, kept in memory), and a crash restores only a session of the open
- * document: an export taken before switching documents gives way to the open one's stored session.
- * Closing the page then stores the latest export, and a fresh one if the game answers in time.
+ * document: an export taken before switching documents gives way to the open one's stored session,
+ * which is set aside if the restarted game refuses it. Closing the page then stores the latest
+ * export, and a fresh one if the game answers in time.
  */
 export function guardSession(
   control: ControlClient,
@@ -119,7 +120,7 @@ export function guardSession(
           log("warning", "The game crashed while restoring the session: only its scene was reloaded, without its recorded inputs and edits.");
         }
         const next = await restart(saved);
-        if (next && saved) await restoreSession(next, saved, tick);
+        if (next && saved) await (options.sessions?.restore ?? restoreSession)(next, saved, tick);
       } catch (error) {
         log("error", `Cannot restore the session after the crash: ${error instanceof Error ? error.message : String(error)}`);
       }

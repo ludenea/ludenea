@@ -296,14 +296,18 @@ API.
   after the file is written. A failed scene write fails the command with
   `Cannot save <path>: <reason>`, which the palette and Mod+S show in the editor console,
   and the scene stays unsaved.
-- Removed: `DocumentState.unsavedAssets`, `SavedSession.unsavedAssets` and
-  `DocumentSessions.restore`. The game's timeline lists the unsaved assets
-  (`unsaved_assets`), a saved session carries them in `load.saved_assets`, and
-  `restoreSession` restores one. `DocumentState.reloadAssets` takes the unsaved assets to
-  discard, which take their file's text.
+- Removed: `DocumentState.unsavedAssets` and `SavedSession.unsavedAssets`. The game's
+  timeline lists the unsaved assets (`unsaved_assets`), and a saved session carries them in
+  `load.saved_assets`, so `DocumentSessions.restore` no longer marks them unsaved.
+  `DocumentState.reloadAssets` takes the unsaved assets to discard, which take their file's
+  text.
 - `@ludenea/editor-shell/app` exports `STORED_SESSION_VERSION`. A stored session that the
   game refuses, and one that loads into a new game but cannot go back to its tick, are
   reported as warnings; the latter used to fail as `Cannot load <path> into the game`.
+- `DocumentSessions.restore` is how an application restores what `DocumentSessions.own`
+  gives: a stored session the game refuses is set aside with that warning, before any later
+  store of its document, and the restore resolves to null instead of failing. Other sessions
+  restore as with `restoreSession`.
 
 ### Formats
 
