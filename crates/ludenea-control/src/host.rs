@@ -1358,6 +1358,7 @@ fn session_error(error: &SessionError) -> ProtocolError {
         SessionError::NothingToRedo => ErrorCode::NothingToRedo,
         SessionError::Undo(_)
         | SessionError::BranchesDecode(_)
+        | SessionError::CannotFork { .. }
         | SessionError::NoSuchBranch(_)
         | SessionError::RootBranch
         | SessionError::NotOnBranch { .. } => ErrorCode::InvalidCommand,

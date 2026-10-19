@@ -84,6 +84,12 @@ pub enum SessionError {
     RootBranch,
     #[error("the branch tree cannot be decoded: {0}")]
     BranchesDecode(#[from] BranchesError),
+    /// Branch identifiers are never reused: once the session handed out the last one, the
+    /// edit or take-over at `tick` changes nothing.
+    #[error(
+        "the edit or take-over at tick {tick} would fork a branch, but {source}; record it at the head of a branch, or load the scene again to start a new session"
+    )]
+    CannotFork { tick: u64, source: BranchesError },
     #[error("a prefab has no resources; edit them in a scene")]
     PrefabHasNoResources,
     #[error("asset {0} is not a data asset; open a prefab as a document to edit it")]
@@ -561,7 +567,12 @@ impl Session {
         self.run_tick(sim, take_over.or(recorded.as_deref()))?;
         if let Some(live) = take_over {
             let before = self.tree.current();
-            self.fork_or_discard_after(tick);
+            if let Err(error) = self.fork_or_discard_after(tick) {
+                // The take-over is refused. The error to report is the fork's, wherever
+                // coming back ends.
+                let _ = self.come_back(sim, tick);
+                return Err(error);
+            }
             self.record_input(sim, tick, live.to_vec());
             if self.tree.current() != before {
                 let input = live.to_vec();
@@ -1688,16 +1699,20 @@ impl Session {
     }
 
     /// Before recording at `tick`: forks a branch when the current one has recorded ticks
-    /// after it (the fork rule), then drops the future after `tick` from the run.
-    fn fork_or_discard_after(&mut self, tick: u64) {
+    /// after it (the fork rule), then drops the future after `tick` from the run. A refused
+    /// fork changes nothing.
+    fn fork_or_discard_after(&mut self, tick: u64) -> Result<(), SessionError> {
         if self.end() > tick {
             let segment = self.current_segment();
             let fork = (tick, self.edits.at(tick).len());
+            self.tree
+                .fork(segment, self.resimulating, fork)
+                .map_err(|source| SessionError::CannotFork { tick, source })?;
             self.compare = CompareChoice::Parent;
-            self.tree.fork(segment, self.resimulating, fork);
         }
         self.discard_after(tick);
         self.enforce_checkpoint_budget();
+        Ok(())
     }
 
     /// Evicts checkpoints past `CHECKPOINT_BUDGET`, oldest first: those of stored branches
@@ -1938,7 +1953,12 @@ impl Session {
                 return Err(error.into());
             }
         };
-        self.fork_or_discard_after(tick);
+        if let Err(error) = self.fork_or_discard_after(tick) {
+            // The edit is refused. The error to report is the fork's, wherever coming back
+            // ends.
+            let _ = self.come_back(sim, tick);
+            return Err(error);
+        }
         if let Some(checkpoint) = checkpoint {
             self.checkpoints.pin(tick, checkpoint);
         }

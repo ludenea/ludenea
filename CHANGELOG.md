@@ -100,6 +100,11 @@ session (the editor's copy of each open document's session), and the plugin API.
   rebuilt the ticks before the fork from the other branches' stale hashes. A branch part
   recorded by a previous build resimulates from the branch's fork tick, not from tick 0,
   and a game panic while replaying up to that tick refuses the redo and changes nothing.
+- `Session::resume` refuses a branch tree that holds the branch identifier `u32::MAX` with
+  `SessionError::BranchesDecode` and the new `BranchesError::Exhausted`; it panicked. Once
+  a session has handed out its last branch identifier, an edit or take-over that would
+  fork is refused with the new `SessionError::CannotFork` and changes nothing; it
+  panicked, or, built without overflow checks, reused an identifier.
 
 ### Control protocol
 
@@ -132,6 +137,10 @@ session (the editor's copy of each open document's session), and the plugin API.
 - `redo` of an edit on a branch keeps the recorded hashes of the ticks before the branch's
   fork true. After a tick 0 edit on a forked branch they were stale, so a later
   `load_session` on the same build reported a divergence that did not exist.
+- `load_session` refuses a branch tree that holds the branch identifier 4294967295 with
+  `invalid_command`; it ended the game process. An edit or take-over that would fork a
+  branch after the session has handed out its last identifier fails with
+  `invalid_command` and changes nothing.
 
 ### Project protocol
 

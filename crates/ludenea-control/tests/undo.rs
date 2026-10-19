@@ -450,6 +450,7 @@ fn session_export_from_2a_with_undo_history_resumes() {
 }
 
 use ludenea::control::BranchId;
+use ludenea::control::branches::BranchesError;
 use ludenea::control::undo::UndoError;
 use serde::Serialize;
 
@@ -1259,4 +1260,108 @@ fn a_redo_entry_of_a_fork_restoring_no_branch_is_dropped() {
         "{warning}"
     );
     assert!(!session.timeline().can_redo);
+}
+
+/// The branch tree a session export carries.
+#[derive(Serialize)]
+struct StoredTree {
+    current: BranchId,
+    next: u32,
+    branches: Vec<StoredBranchV3>,
+}
+
+/// A branch of a crafted tree, with nothing recorded after its fork point.
+fn tree_branch(id: u32, parent: Option<BranchId>, fork_tick: u64) -> StoredBranchV3 {
+    StoredBranchV3 {
+        id: BranchId(id),
+        name: format!("Branch {}", u64::from(id) + 1),
+        parent,
+        fork_tick,
+        fork_edits: 0,
+        stale: false,
+        inputs: InputLog::new(1).encode(),
+        edits: EditLog::new().encode(),
+        hashes: Vec::new(),
+    }
+}
+
+/// A linear session of 100 ticks played to tick 50, exported with the branch tree `tree`.
+fn exported_with_tree(tree: StoredTree) -> (Simulation, SessionExport) {
+    let (mut sim, mut session) = started(100);
+    play(&mut session, &mut sim, 50);
+    let export = SessionExport {
+        branches: postcard::to_allocvec(&tree).unwrap(),
+        ..session.export().unwrap()
+    };
+    (sim, export)
+}
+
+#[test]
+fn a_branch_tree_holding_the_last_identifier_is_refused_not_a_panic() {
+    let tree = StoredTree {
+        current: ROOT,
+        next: 1,
+        branches: vec![
+            tree_branch(0, None, 0),
+            tree_branch(u32::MAX, Some(ROOT), 20),
+        ],
+    };
+    let (mut sim, export) = exported_with_tree(tree);
+
+    let result = Session::resume(&mut sim, export, Document::Scene);
+
+    let Err(error) = result else {
+        panic!("the branch tree was accepted");
+    };
+    assert!(
+        matches!(
+            error,
+            SessionError::BranchesDecode(BranchesError::Exhausted)
+        ),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "the branch tree cannot be decoded: branch identifiers are exhausted: they are never reused, and none is left for a new branch"
+    );
+}
+
+#[test]
+fn an_edit_or_a_take_over_that_would_fork_once_identifiers_are_exhausted_changes_nothing() {
+    let tree = StoredTree {
+        current: ROOT,
+        next: u32::MAX,
+        branches: vec![tree_branch(0, None, 0)],
+    };
+    let (mut sim, export) = exported_with_tree(tree);
+    let mut session = resume(&mut sim, export);
+    resimulate_all(&mut session, &mut sim);
+    session.seek(&mut sim, 20).unwrap();
+    let (before, hash) = (session.export().unwrap(), sim.hash());
+    let edit = stats_edit(&sim, 1_000);
+    type Attempt<'a> = &'a dyn Fn(&mut Session, &mut Simulation) -> Result<(), SessionError>;
+    let edit: Attempt = &|session, sim| session.edit(sim, edit.clone()).map(|_| ());
+    let take_over: Attempt = &|session, sim| session.step(sim, Some(&live_spawn())).map(|_| ());
+
+    for attempt in [edit, take_over] {
+        let result = attempt(&mut session, &mut sim);
+
+        let Err(error) = result else {
+            panic!("a branch forked");
+        };
+        assert!(
+            matches!(
+                error,
+                SessionError::CannotFork {
+                    tick: 20,
+                    source: BranchesError::Exhausted
+                }
+            ),
+            "{error:?}"
+        );
+        assert_eq!(session.export().unwrap(), before);
+        assert_eq!(branch_ids(&session), [ROOT]);
+        assert_eq!(session.timeline().current, 20);
+        assert_eq!(sim.hash(), hash);
+    }
 }

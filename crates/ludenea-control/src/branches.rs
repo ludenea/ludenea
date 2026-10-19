@@ -21,6 +21,8 @@ pub struct BranchId(pub u32);
 
 impl BranchId {
     pub const ROOT: BranchId = BranchId(0);
+    /// Never handed out: a tree holding it would have no next identifier.
+    const LAST: BranchId = BranchId(u32::MAX);
 
     /// Branches are named after their number, counting the root as the first.
     fn default_name(self) -> String {
@@ -197,14 +199,18 @@ impl BranchTree {
     }
 
     /// Stores the segment of the current branch, stale after `stale`, and makes a new
-    /// child of it, forked at `fork`, current.
+    /// child of it, forked at `fork`, current. Once the identifiers are exhausted, refuses
+    /// and changes nothing.
     pub fn fork(
         &mut self,
         segment: Segment,
         stale: Option<u64>,
         (fork_tick, fork_edits): (u64, usize),
-    ) {
+    ) -> Result<(), BranchesError> {
         let id = BranchId(self.next);
+        if id == BranchId::LAST {
+            return Err(BranchesError::Exhausted);
+        }
         debug_assert!(
             !self.branches.contains_key(&id),
             "branch {} is in the tree already: identifiers are never reused",
@@ -227,6 +233,7 @@ impl BranchTree {
         current.stale = stale;
         self.branches.insert(id, child);
         self.current = id;
+        Ok(())
     }
 
     /// The branches from the root down to `id`.
@@ -307,10 +314,12 @@ impl BranchTree {
             let branch = stored.into_branch(true)?;
             let parent = branch.parent.ok_or(BranchesError::Tree)?;
             let known = |id| self.branches.contains_key(&id) || back.iter().any(|(b, _)| *b == id);
-            // A parent is older than its children, so the tree has no cycle; the last
-            // identifier has no next one to hand out.
-            if !known(parent) || known(id) || parent >= id || id.0 == u32::MAX {
+            // A parent is older than its children, so the tree has no cycle.
+            if !known(parent) || known(id) || parent >= id {
                 return Err(BranchesError::Tree);
+            }
+            if id == BranchId::LAST {
+                return Err(BranchesError::Exhausted);
             }
             back.push((id, branch));
         }
@@ -506,6 +515,9 @@ impl BranchTree {
         if !known(BranchId::ROOT) || !known(stored.current) || !linked {
             return Err(BranchesError::Tree);
         }
+        if known(BranchId::LAST) {
+            return Err(BranchesError::Exhausted);
+        }
         let next = branches.keys().next_back().map_or(1, |id| id.0 + 1);
         let tree = BranchTree {
             branches,
@@ -582,6 +594,10 @@ pub enum BranchesError {
     Log(#[from] ludenea_app::SimError),
     #[error("a branch's parent is missing or not older than it, or its identifier is taken")]
     Tree,
+    #[error(
+        "branch identifiers are exhausted: they are never reused, and none is left for a new branch"
+    )]
+    Exhausted,
     #[error("a branch forks outside its parent's run")]
     Fork,
     #[error("a branch records an edit outside its run")]
@@ -774,15 +790,16 @@ mod tests {
         let mut tree = BranchTree::default();
         let put_back =
             |tree: &mut BranchTree, branches| tree.put_back(branches, &EditLog::new(), 50);
-        for unfit in [
-            stored(2, Some(9), (0, 0)),
+        let last = StoredBranch {
+            id: BranchId::LAST,
+            ..stored(2, Some(1), (0, 0))
+        };
+        for (unfit, refusal) in [
+            (stored(2, Some(9), (0, 0)), BranchesError::Tree),
             // A parent younger than its child, or a branch the tree has.
-            stored(2, Some(3), (0, 0)),
-            stored(0, Some(1), (0, 0)),
-            StoredBranch {
-                id: BranchId(u32::MAX),
-                ..stored(2, Some(1), (0, 0))
-            },
+            (stored(2, Some(3), (0, 0)), BranchesError::Tree),
+            (stored(0, Some(1), (0, 0)), BranchesError::Tree),
+            (last, BranchesError::Exhausted),
         ] {
             let branches = vec![
                 stored(1, Some(0), (0, 0)),
@@ -790,7 +807,10 @@ mod tests {
                 unfit,
             ];
             let result = put_back(&mut tree, branches);
-            assert!(matches!(result, Err(BranchesError::Tree)), "{result:?}");
+            assert_eq!(
+                result.map_err(|error| error.to_string()),
+                Err(refusal.to_string())
+            );
             assert!(tree.get(BranchId(1)).is_none());
         }
         put_back(
@@ -834,9 +854,35 @@ mod tests {
             hashes: Vec::new(),
             checkpoints: Checkpoints::empty(),
         };
-        tree.fork(segment(), None, (20, 0));
+        tree.fork(segment(), None, (20, 0)).unwrap();
         assert_eq!(tree.current(), BranchId(5));
         assert_eq!(tree.path(BranchId(5)), [BranchId::ROOT, BranchId(5)]);
+    }
+
+    #[test]
+    fn a_fork_once_identifiers_are_exhausted_is_refused_and_changes_nothing() {
+        let mut tree = BranchTree {
+            next: u32::MAX,
+            ..BranchTree::default()
+        };
+        let segment = Segment {
+            inputs: vec![Vec::new()],
+            edits: Vec::new(),
+            hashes: Vec::new(),
+            checkpoints: Checkpoints::empty(),
+        };
+
+        let result = tree.fork(segment, Some(3), (20, 0));
+
+        assert!(
+            matches!(result, Err(BranchesError::Exhausted)),
+            "{result:?}"
+        );
+        assert_eq!(tree.next, u32::MAX);
+        assert_eq!(tree.current(), BranchId::ROOT);
+        let root = tree.current_branch();
+        assert!(root.segment.is_none() && root.stale.is_none());
+        assert_eq!(tree.infos(50, &EditLog::new()).len(), 1);
     }
 
     #[test]
@@ -853,7 +899,7 @@ mod tests {
             hashes: Vec::new(),
             checkpoints: Checkpoints::empty(),
         };
-        tree.fork(segment, None, (20, 0));
+        tree.fork(segment, None, (20, 0)).unwrap();
     }
 
     #[test]
