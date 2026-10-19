@@ -277,8 +277,9 @@ pub enum Command {
     /// cycle or an entity reference outside the prefab fails with `invalid_scene`. The scene
     /// stays unsaved until `MarkSceneSaved` says the text was written.
     SaveScene,
-    /// The text `SaveScene` gave is written to the scene's file: the scene is saved if it
-    /// still is that text, so an edit made during the write stays unsaved.
+    /// The text `SaveScene` gave is written to the scene's file, which holds it from then on:
+    /// the scene is saved if it still is that text, so an edit made during the write stays
+    /// unsaved until undone.
     MarkSceneSaved {
         text: String,
     },
@@ -354,8 +355,9 @@ pub enum Command {
     SaveAsset {
         id: AssetId,
     },
-    /// The text `SaveAsset` gave is written to the asset's file: the asset is saved if
-    /// `SaveAsset` still gives that text, so an edit made during the write stays unsaved.
+    /// The text `SaveAsset` gave is written to the asset's file, which holds it from then on:
+    /// the asset is saved if `SaveAsset` still gives that text, so an edit made during the
+    /// write stays unsaved until undone.
     MarkAssetSaved {
         id: AssetId,
         text: String,

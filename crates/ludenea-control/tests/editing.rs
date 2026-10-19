@@ -403,6 +403,38 @@ fn save_scene_keeps_the_scene_dirty_until_marked_saved() {
 }
 
 #[test]
+fn a_mark_made_after_a_later_edit_still_records_the_written_text() {
+    let mut host = loaded(0);
+    let entity = first_crate(&mut host);
+    ok(&mut host, set_pose(entity, &["position", "x"], json!(3.0)));
+    let written = save_scene(&mut host);
+    resimulate(&mut host);
+    ok(&mut host, set_pose(entity, &["position", "y"], json!(4.0)));
+    ok(
+        &mut host,
+        Command::MarkSceneSaved {
+            text: written.clone(),
+        },
+    );
+
+    // Back to the written text, which the file holds.
+    resimulate(&mut host);
+    ok(&mut host, Command::Undo);
+    assert_eq!(save_scene(&mut host), written);
+    assert!(!timeline(&mut host).scene_dirty);
+
+    // Back to the text loaded before the save, which the file no longer holds.
+    resimulate(&mut host);
+    ok(&mut host, Command::Undo);
+    assert_eq!(save_scene(&mut host), scene());
+    assert!(timeline(&mut host).scene_dirty);
+    match ok(&mut host, Command::ExportSession) {
+        Reply::Session { saved_scene, .. } => assert_eq!(saved_scene, Some(written)),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
 fn apply_to_scene_copies_value_and_marks_dirty() {
     let mut host = loaded(30);
     step(&mut host, 20);

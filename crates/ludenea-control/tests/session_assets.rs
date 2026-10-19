@@ -519,6 +519,31 @@ fn an_asset_stays_unsaved_until_its_written_text_is_marked_saved() {
 }
 
 #[test]
+fn a_mark_made_after_a_later_edit_still_records_the_written_asset_text() {
+    let (mut sim, mut session) = spawner_session();
+    let file = session.assets()[&STATS].clone();
+    edit_stats(&mut session, &mut sim, 30);
+    let edited = session.assets()[&STATS].clone();
+    let written = session.save_asset(STATS).unwrap();
+    resimulate_all(&mut session, &mut sim);
+    edit_stats(&mut session, &mut sim, 40);
+    session.mark_asset_saved(STATS, &written).unwrap();
+    assert_eq!(session.timeline().unsaved_assets, [STATS]);
+    resimulate_all(&mut session, &mut sim);
+    assert_eq!(session.export().unwrap().saved_assets, [(STATS, edited)]);
+
+    // Back to the written text, which the file holds.
+    session.undo(&mut sim).unwrap();
+    assert!(session.timeline().unsaved_assets.is_empty());
+
+    // Back to the text loaded before the save, which the file no longer holds.
+    resimulate_all(&mut session, &mut sim);
+    session.undo(&mut sim).unwrap();
+    assert_eq!(session.assets()[&STATS], file);
+    assert_eq!(session.timeline().unsaved_assets, [STATS]);
+}
+
+#[test]
 fn unsaved_assets_stay_unsaved_after_a_resume() {
     let (mut sim, mut session) = spawner_session();
     let file = session.assets()[&STATS].clone();

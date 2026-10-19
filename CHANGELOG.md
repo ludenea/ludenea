@@ -161,12 +161,12 @@ session (the editor's copy of each open document's session), and the plugin API.
   session on such a file. It was accepted, and the saved prefab then failed to load in
   every scene using it. The serde helper `protocol::outcome::Wire::Ok` holds a
   `Box<Reply>`, since a reply carrying the document outgrew an unboxed variant.
-- `Session::mark_scene_saved` takes the text written to the scene's file and marks the scene
-  saved only while it still is that text; the new `Session::mark_asset_saved` does the same
-  for an asset. The session tracks which prefab and data assets differ from their file,
-  listed in the new `Timeline::unsaved_assets` and carried by the new
-  `SessionExport::saved_assets`, and `Session::replace_scene` keeps the text of an unsaved
-  asset over the new one.
+- `Session::mark_scene_saved` takes the text written to the scene's file, records it as the
+  saved text, and marks the scene saved only while it still is that text; the new
+  `Session::mark_asset_saved` does the same for an asset. The session tracks which prefab
+  and data assets differ from their file, listed in the new `Timeline::unsaved_assets` and
+  carried by the new `SessionExport::saved_assets`, and `Session::replace_scene` keeps the
+  text of an unsaved asset over the new one.
 
 ### Control protocol
 
@@ -233,10 +233,11 @@ session (the editor's copy of each open document's session), and the plugin API.
   fails with `invalid_scene`.
 - Saving is two-phase. `save_scene` and `save_asset` give the text to write and leave the
   scene or asset unsaved; the new `mark_scene_saved { text }` and
-  `mark_asset_saved { id, text }` (reply `done`) mark it saved once the client has
-  written the text, only while the session still holds that text, so an edit made during
-  the write stays unsaved. `save_scene` marked the scene saved before the editor wrote the
-  file, so a failed write lost the edits when the document opened again.
+  `mark_asset_saved { id, text }` (reply `done`) record the text the client has written as
+  the file's, and mark the scene or asset saved only while the session still holds that
+  text, so an edit made during the write stays unsaved until undone. `save_scene` marked
+  the scene saved before the editor wrote the file, so a failed write lost the edits when
+  the document opened again.
 - The host owns which prefab and data assets differ from their file: `timeline` lists them
   in the new `unsaved_assets`, a tick 0 asset edit, "Apply to asset" and `apply_to_prefab`
   add one, undo and redo back to the saved text remove it, and the `session` reply and

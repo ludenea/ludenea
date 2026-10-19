@@ -1059,22 +1059,29 @@ impl Session {
         self.record_scene_edit(sim, &edit).map(drop)
     }
 
-    /// Marks the scene saved if it still is `text`, the text written to its file, so an
-    /// edit made during the write stays unsaved.
+    /// Records `text`, the text written to the scene file, as saved: the scene is saved if it
+    /// still is `text`, so an edit made during the write stays unsaved, and undoing it back
+    /// to `text` is saved.
     pub fn mark_scene_saved(&mut self, text: &str) {
-        if self.scene == text {
-            self.saved_scene = text.to_string();
-            self.scene_dirty = false;
-        }
+        self.saved_scene = text.to_string();
+        self.scene_dirty = self.scene != text;
     }
 
-    /// Marks the asset `id` saved if `text`, written to its file, still is what `save_asset`
-    /// gives, so an edit made during the write stays unsaved. `None` when the session does
-    /// not hold `id`.
+    /// Records `text`, the text written to the file of asset `id`, as saved: the asset is
+    /// saved if `save_asset` still gives `text`, so an edit made during the write stays
+    /// unsaved, and undoing it back to `text` is saved. `None` when the session does not hold
+    /// `id`.
     pub fn mark_asset_saved(&mut self, id: AssetId, text: &str) -> Option<()> {
-        if self.save_asset(id)? == text {
-            self.saved_assets.remove(&id);
-        }
+        let current = self.assets.get(&id)?;
+        // A data asset's file holds its value, which the session holds in file form.
+        let unsaved = match parse_asset_file(current) {
+            Ok((type_name, value)) => (value != text).then(|| asset_file(&type_name, text)),
+            Err(_) => (current != text).then(|| text.to_string()),
+        };
+        match unsaved {
+            Some(saved) => self.saved_assets.insert(id, saved),
+            None => self.saved_assets.remove(&id),
+        };
         Some(())
     }
 
