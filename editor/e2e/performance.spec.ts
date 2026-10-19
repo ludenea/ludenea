@@ -21,6 +21,10 @@ const PLAY_MS = 5000;
 // Assertions hold on the reference machine (an Apple M-series); elsewhere the numbers are only reported.
 const strict = process.env.PERF_STRICT === "1";
 
+// The configuration's launch arguments, with scrollbars shown as users see them (headless
+// Chromium hides them), so a test can give the page scrollbars that take room.
+test.use({ launchOptions: { args: ["--use-angle=swiftshader"], ignoreDefaultArgs: ["--hide-scrollbars"] } });
+
 let served: ServedProject;
 
 // A project each: a stored session of the bench scene would bring its branches back.
@@ -196,6 +200,25 @@ test("the_explorer_lists_100000_entities_with_only_the_visible_rows_while_playin
   expect(narrow.contentCut).toBe(true);
   await page.setViewportSize(size);
   await expect.poll(async () => (await layout()).panelWidth).toBeGreaterThan(230);
+
+  // Each column title sits over its cells, also beside a scrollbar that takes room, as on
+  // Windows, Linux, or macOS with a mouse.
+  const scrollbars = await page.addStyleTag({ content: "::-webkit-scrollbar { width: 15px; height: 15px; }" });
+  const columns = () =>
+    page.evaluate(() => {
+      const panel = document.querySelector(".ludenea-explorer")!;
+      const scroller = panel.querySelector<HTMLElement>(".ludenea-entity-list")!;
+      const edges = (element: Element) => element.getBoundingClientRect();
+      const headers = [...panel.querySelectorAll('[role="columnheader"]')].map(edges);
+      const cells = [...panel.querySelector('[role="option"]')!.children].map(edges);
+      return {
+        scrollbar: scroller.offsetWidth - scroller.clientWidth,
+        columns: headers.length,
+        offsets: headers.map((header, index) => [Math.round(header.left - cells[index]!.left), Math.round(header.right - cells[index]!.right)]),
+      };
+    });
+  await expect.poll(columns).toEqual({ scrollbar: 15, columns: 2, offsets: [[0, 0], [0, 0]] });
+  await scrollbars.evaluate((style) => style.parentNode?.removeChild(style));
 
   await page.evaluate(() => {
     const times: number[] = [];

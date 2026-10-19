@@ -1,6 +1,6 @@
 import type { ControlClient, Entity } from "@ludenea/control-client";
 import { PluginBoundary, type Editor, type ExplorerColumn } from "@ludenea/editor-shell";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useGame, useStore, type Store } from "../shared";
 import { EntityList, entityKey } from "../shared/EntityList";
 import { failureMark } from "../shared/FailureMark";
@@ -43,6 +43,22 @@ function Entities({ editor, control, state, failedColumns }: { editor: Editor; c
   const columns = useSyncExternalStore(editor.explorer.columns.subscribe, editor.explorer.columns.list);
   // A column whose values changed: the rows read them again.
   const [values, setValues] = useState(0);
+  // The room a scrollbar beside the rows takes, none where scrollbars overlay the content: the
+  // header row leaves it free, so each title stays over its column.
+  const list = useRef<HTMLDivElement>(null);
+  const [scrollbar, setScrollbar] = useState(0);
+  useEffect(() => {
+    const scroller = list.current?.querySelector<HTMLElement>(".ludenea-entity-list");
+    if (!scroller) return;
+    const measure = () => setScrollbar(scroller.offsetWidth - scroller.clientWidth);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    // The rows' width changes as the scrollbar comes and goes, and with the panel's width.
+    const resizes = new ResizeObserver(measure);
+    resizes.observe(scroller);
+    if (scroller.firstElementChild) resizes.observe(scroller.firstElementChild);
+    return () => resizes.disconnect();
+  }, []);
   // A subscribe or unsubscribe that throws costs only that column's subscription, reported once.
   useEffect(() => {
     const stops = columns.map((column) => {
@@ -85,7 +101,7 @@ function Entities({ editor, control, state, failedColumns }: { editor: Editor; c
         </p>
       )}
       {columns.length > 0 && (
-        <div role="row" className="ludenea-columns">
+        <div role="row" className="ludenea-columns" style={{ marginRight: scrollbar }}>
           <span role="columnheader">Entity</span>
           {columns.map((column) => (
             <span key={column.id} role="columnheader" style={{ width: column.width }}>
@@ -94,7 +110,7 @@ function Entities({ editor, control, state, failedColumns }: { editor: Editor; c
           ))}
         </div>
       )}
-      <div className="ludenea-entities-list">
+      <div ref={list} className="ludenea-entities-list">
         <EntityList
           editor={editor}
           control={control}
