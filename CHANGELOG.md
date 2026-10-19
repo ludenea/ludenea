@@ -98,7 +98,8 @@ session (the editor's copy of each open document's session), and the plugin API.
 - `Session::redo` of a recorded edit puts back only its branch's own part of the run,
   after the run it forks from as it is now. After a tick 0 edit on a forked branch, it
   rebuilt the ticks before the fork from the other branches' stale hashes. A branch part
-  recorded by a previous build resimulates from the branch's fork tick, not from tick 0.
+  recorded by a previous build resimulates from the branch's fork tick, not from tick 0,
+  and a game panic while replaying up to that tick refuses the redo and changes nothing.
 
 ### Control protocol
 

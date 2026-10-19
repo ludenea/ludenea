@@ -977,6 +977,53 @@ fn a_redo_of_a_previous_build_whose_checkpoint_does_not_restore_changes_nothing(
     assert_at(&session, &sim, at);
 }
 
+static FORK_REPLAY_TRAP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Panics at tick 18, once each time it is armed.
+fn fork_replay_trap(time: Res<Time>) {
+    if time.tick == 18 && FORK_REPLAY_TRAP.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        panic!("fork replay trap");
+    }
+}
+
+#[test]
+fn a_redo_of_a_previous_build_whose_replay_to_the_fork_panics_changes_nothing() {
+    let mut app = boxes::app();
+    app.system(Sim, fork_replay_trap);
+    let (mut sim, mut session) = marked(app);
+    play(&mut session, &mut sim, 30);
+    session.seek(&mut sim, 20).unwrap();
+    let edit = stats_edit(&sim, 1_000);
+    session.edit(&mut sim, edit).unwrap();
+    play(&mut session, &mut sim, 20);
+    let edit = stats_edit(&sim, 2_000);
+    session.edit(&mut sim, edit).unwrap();
+    session.undo(&mut sim).unwrap();
+    // A resume stands for a rebuild: the redone run resimulates from its fork tick, 20,
+    // which the world reaches from the checkpoint of tick 16.
+    let export = session.export().unwrap();
+    let mut session = Session::resume(&mut sim, export, Document::Scene).unwrap();
+    resimulate_all(&mut session, &mut sim);
+    session.seek(&mut sim, 40).unwrap();
+    let before = session.export().unwrap();
+
+    FORK_REPLAY_TRAP.store(true, std::sync::atomic::Ordering::Relaxed);
+    let result = quietly(|| session.redo(&mut sim));
+    FORK_REPLAY_TRAP.store(false, std::sync::atomic::Ordering::Relaxed);
+
+    assert!(
+        matches!(result, Err(SessionError::Panicked { tick: 18, .. })),
+        "{result:?}"
+    );
+    assert_eq!(session.export().unwrap(), before);
+    assert!(session.timeline().can_redo);
+    assert_at(&session, &sim, 40);
+    session.redo(&mut sim).unwrap();
+    resimulate_all(&mut session, &mut sim);
+    assert_eq!(session.timeline().current, 40);
+    assert_eq!(session.timeline().edit_ticks, [20, 40]);
+}
+
 #[test]
 fn a_panic_whose_tick_cannot_come_back_moves_to_tick_0() {
     let mut app = boxes::app();

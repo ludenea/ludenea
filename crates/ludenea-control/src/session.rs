@@ -797,8 +797,15 @@ impl Session {
                             self.tree.remove(&ids);
                             return Err(error);
                         }
-                        if stale {
-                            self.resimulate_from(sim, fork_tick, tick)?;
+                        if stale && let Err(error) = self.resimulate_from(sim, fork_tick, tick) {
+                            // The replay up to the fork failed, as only a game that does not
+                            // repeat itself makes it: the redo is refused, and the branch is
+                            // as the undo left it. The error to report is the replay's,
+                            // wherever coming back ends.
+                            self.splice(&undone, defaults.as_deref());
+                            self.tree.remove(&ids);
+                            let _ = self.come_back(sim, self.current);
+                            return Err(error);
                         }
                     }
                     // An entry of a history written before branches: as in 2a, within
