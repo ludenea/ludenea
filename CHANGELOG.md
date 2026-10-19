@@ -56,6 +56,8 @@ session (the editor's copy of each open document's session), and the plugin API.
 - `Pose::validate` checks a pose as loading does and returns the new `PoseError`, which
   carries the refused position or rotation. The physics step panics with the entity, the
   field, and its value when it leaves a state that loading would refuse.
+- `SessionError::Checkpoint` is returned when a checkpoint cannot be restored because a
+  system wrote a value its type refuses to load; the session used to panic.
 - A component that a snapshot cannot restore is named with its entity, and
   `ludenea_ecs::decode_exact` keeps the message of a type that refuses its value, where
   postcard gave "Serde Deserialization Error".
@@ -72,6 +74,9 @@ session (the editor's copy of each open document's session), and the plugin API.
   `invalid_command`, and the previous count stays; it ended the game process before.
   `host --stdio` starts on every core up to 256, and on one thread with a console warning
   when the system refuses them.
+- A command that has to restore a checkpoint the game's own types refuse, such as `seek`,
+  fails with `invalid_snapshot` and names the tick, the entity, and why its type refuses
+  the value; it ended the game process before.
 
 ### Project protocol
 

@@ -718,3 +718,78 @@ fn hashes_of_a_tick_with_an_edit_are_taken_before_it() {
     assert!(session.is_pending());
     assert_ne!(sim.hash(), hashes(&session)[0]);
 }
+
+/// The small scene with what `add` spawns.
+fn small_scene_with(add: impl FnOnce(&mut World)) -> String {
+    let mut sim = simulation();
+    sim.load_scene(&small_scene()).unwrap();
+    add(sim.world_mut());
+    sim.save_scene()
+}
+
+#[test]
+fn a_kinematic_body_spinning_at_1e30_seeks_back() {
+    let scene = small_scene_with(|world| {
+        let spinner = world.spawn();
+        let pose = Pose {
+            position: Vec2::new(0.0, 20.0),
+            rotation: Rot::IDENTITY,
+        };
+        world.insert(spinner, pose).unwrap();
+        let body = Body {
+            angular_velocity: 1e30,
+            ..Body::kinematic()
+        };
+        world.insert(spinner, body).unwrap();
+        let shape = Shape::Polygon(Polygon::make_box(0.5, 0.5));
+        world.insert(spinner, Collider::new(shape)).unwrap();
+    });
+    let mut sim = simulation();
+    let mut session = Session::start(&mut sim, scene, AssetTexts::new(), Document::Scene).unwrap();
+    play(&mut session, &mut sim, 40);
+
+    session.seek(&mut sim, 20).unwrap();
+
+    assert_eq!(sim.hash(), hashes(&session)[20]);
+}
+
+/// Game code writing a rotation that is not unit length, which loading refuses.
+fn zero_rotation(mut poses: Query<&mut Pose, Without<Body>>) {
+    for pose in poses.iter_mut() {
+        pose.rotation = Rot { cos: 0.0, sin: 0.0 };
+    }
+}
+
+#[test]
+fn a_checkpoint_that_does_not_restore_is_an_error_naming_why() {
+    let scene = small_scene_with(|world| {
+        let marker = world.spawn();
+        world.insert(marker, Pose::default()).unwrap();
+    });
+    let mut app = boxes::app();
+    app.system(Sim, zero_rotation);
+    let mut sim = app.build().unwrap();
+    let mut session = Session::start(&mut sim, scene, AssetTexts::new(), Document::Scene).unwrap();
+    let (marker, _) = Query::<(Entity, &Pose), Without<Body>>::new(sim.world())
+        .unwrap()
+        .iter()
+        .next()
+        .unwrap();
+    play(&mut session, &mut sim, 40);
+    let before = sim.hash();
+
+    let error = session.seek(&mut sim, 20).unwrap_err();
+
+    assert!(
+        matches!(error, SessionError::Checkpoint { tick: 16, .. }),
+        "{error:?}"
+    );
+    let message = error.to_string();
+    assert!(message.contains(&format!("entity {marker}")), "{message}");
+    assert!(
+        message.contains("rotation must be finite with cos² + sin² = 1"),
+        "{message}"
+    );
+    assert_eq!(session.timeline().current, 40);
+    assert_eq!(sim.hash(), before);
+}

@@ -64,6 +64,12 @@ pub enum SessionError {
     Scene(#[from] SceneError),
     #[error(transparent)]
     Snapshot(#[from] SnapshotError),
+    /// A system left a value its own type refuses to load in the state recorded at `tick`,
+    /// so that state cannot come back; the simulation keeps its current state.
+    #[error(
+        "the checkpoint of tick {tick} cannot be restored: {source}; a system wrote that value, so fix the system and load the session again"
+    )]
+    Checkpoint { tick: u64, source: SnapshotError },
     #[error("there is no branch {}", .0.0)]
     NoSuchBranch(BranchId),
     /// The entry is dropped from the history, so the next undo goes on.
@@ -1688,8 +1694,7 @@ impl Session {
     /// `replay_to`, without applying the edits of `tick` itself.
     fn replay_before_edits(&mut self, sim: &mut Simulation, tick: u64) -> Result<(), SessionError> {
         let (mut at, snapshot) = self.checkpoints.nearest_at_or_before(tick);
-        sim.restore(snapshot)
-            .expect("a checkpoint restores into the world it was taken from");
+        restore_checkpoint(sim, at, snapshot)?;
         while at < tick {
             self.apply_edits(sim, at)?;
             self.run_tick(sim, self.inputs.tick(at).map(<[u8]>::to_vec).as_deref())?;
@@ -1918,9 +1923,8 @@ impl Session {
         self.hashes.truncate(1);
         self.update_head();
         self.current = 0;
-        let (_, scene_state) = self.checkpoints.nearest_at_or_before(0);
-        sim.restore(scene_state)
-            .expect("a checkpoint restores into the world it was taken from");
+        let (at, scene_state) = self.checkpoints.nearest_at_or_before(0);
+        restore_checkpoint(sim, at, scene_state)?;
         self.start_resimulation(sim)
     }
 
@@ -1955,9 +1959,8 @@ impl Session {
         if self.document == Document::Prefab && matches!(edit, Edit::SetResource { .. }) {
             return Err(SessionError::PrefabHasNoResources);
         }
-        let (_, scene_state) = self.checkpoints.nearest_at_or_before(0);
-        sim.restore(scene_state)
-            .expect("a checkpoint restores into the world it was taken from");
+        let (at, scene_state) = self.checkpoints.nearest_at_or_before(0);
+        restore_checkpoint(sim, at, scene_state)?;
         let loaded: BTreeSet<LoadAddress> = sim.load_addresses().values().cloned().collect();
         let scene = match self.scene_after(sim, edit) {
             Ok(scene) if scene != self.scene => scene,
@@ -2125,6 +2128,16 @@ impl Session {
             }
         }
     }
+}
+
+/// Restores the checkpoint taken at `tick`; on error `sim` is unchanged.
+fn restore_checkpoint(
+    sim: &mut Simulation,
+    tick: u64,
+    checkpoint: &Snapshot,
+) -> Result<(), SessionError> {
+    sim.restore(checkpoint)
+        .map_err(|source| SessionError::Checkpoint { tick, source })
 }
 
 /// `load`, keeping every asset of `assets` when `keeps_assets`.

@@ -1368,7 +1368,7 @@ fn session_error(error: &SessionError) -> ProtocolError {
         SessionError::NotInScene(_) => ErrorCode::NoSuchEntity,
         SessionError::Sim(error) => return sim_error(error),
         SessionError::Scene(_) => ErrorCode::InvalidScene,
-        SessionError::Snapshot(_) => ErrorCode::InvalidSnapshot,
+        SessionError::Snapshot(_) | SessionError::Checkpoint { .. } => ErrorCode::InvalidSnapshot,
         SessionError::Replay(_) => ErrorCode::InvalidReplay,
     };
     ProtocolError::new(code, error)

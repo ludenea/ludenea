@@ -654,6 +654,57 @@ fn failing_step_names_the_tick_and_keeps_earlier_ticks() {
     assert_eq!(tick, 1);
 }
 
+/// Refuses a negative level on load; `drain` writes one, as a faulty game system would.
+#[derive(Component, Serialize, Deserialize)]
+#[serde(try_from = "i32")]
+struct Level(i32);
+
+impl TryFrom<i32> for Level {
+    type Error = String;
+
+    fn try_from(level: i32) -> Result<Self, String> {
+        if level < 0 {
+            return Err(format!("level must be zero or more, got {level}"));
+        }
+        Ok(Level(level))
+    }
+}
+
+fn drain(mut levels: Query<&mut Level>) {
+    for level in levels.iter_mut() {
+        level.0 -= 1;
+    }
+}
+
+#[test]
+fn seek_to_a_checkpoint_the_game_cannot_load_is_refused_and_the_session_goes_on() {
+    let app = || {
+        let mut app = App::new();
+        app.component::<Level>().system(Sim, drain);
+        app
+    };
+    let mut client = InProcess::connect(Host::new(app).unwrap(), PROTOCOL_VERSION).unwrap();
+    client
+        .request(Command::LoadScene {
+            scene: r#"Scene(version: 1, resources: {}, entities: [{ "host::Level": 10 }])"#.into(),
+            assets: Vec::new(),
+            document: Document::Scene,
+        })
+        .unwrap();
+    step(&mut client, 40);
+
+    let error = client.request(Command::Seek { tick: 20 }).unwrap_err();
+
+    assert_eq!(error.code, ErrorCode::InvalidSnapshot);
+    assert!(
+        error.message.contains("checkpoint of tick 16")
+            && error.message.contains("level must be zero or more, got -6"),
+        "{}",
+        error.message
+    );
+    assert_eq!(step(&mut client, 1).len(), 1);
+}
+
 #[test]
 fn hash64_rejects_uppercase_and_plus_sign() {
     for bad in ["\"00000000000000AB\"", "\"+00000000000000a\"", "\"ab\""] {
