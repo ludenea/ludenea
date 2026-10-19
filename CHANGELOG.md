@@ -312,6 +312,9 @@ API.
   gives: a stored session the game refuses is set aside with that warning, before any later
   store of its document, and the restore resolves to null instead of failing. Other sessions
   restore as with `restoreSession`.
+- A `refused` from the project service after the handshake (a message over its size limit)
+  fails the requests `ProjectClient` is waiting on with the service's message, instead of
+  `connection closed: ...` once the connection closes.
 
 ### Formats
 

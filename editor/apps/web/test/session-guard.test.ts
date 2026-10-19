@@ -292,6 +292,21 @@ describe("guardSession with documents", () => {
     expect(store).not.toHaveBeenCalled();
   });
 
+  it("a_store_the_project_service_refuses_is_reported_with_its_reason", async () => {
+    const game = await fakeGame((command) =>
+      command.type === "export_session" ? session("edited") : command.type === "get_timeline" ? { type: "timeline", ...timeline } : { type: "done" },
+    );
+    // What the project client rejects with when the service refuses a session too large to take.
+    const reason = "the project service refused a message of at least 300 bytes: it takes up to 256 bytes";
+    const sessions = { export: exportSession, store: () => Promise.reject(new Error(reason)), own: async () => null, restore: restoreSession };
+    const log = vi.fn();
+    const guard = guardSession(game.control, fakeWorker(), async () => game.control, { sessions, log });
+    await settle();
+
+    expect(log).toHaveBeenCalledWith("warning", `Cannot store the session: ${reason}`);
+    guard.dispose();
+  });
+
   it("a_crash_restore_keeps_the_unsaved_assets", async () => {
     const asset = "3".padStart(32, "0");
     const unsaved = { ...session("edited"), assets: [[asset, "(edited)"]], saved_assets: [[asset, "(on disk)"]] };

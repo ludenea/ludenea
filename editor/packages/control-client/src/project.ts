@@ -30,6 +30,9 @@ export class ProjectClient {
       const message = parseFrame<ProjectServerMessage>(raw);
       if (message?.type === "response") requests.resolve(message.id, message.result);
       else if (message?.type === "event") this.dispatch(message.event);
+      // A message the service cannot read whole (one over its size limit) has no request id:
+      // it refuses it, then closes the connection, so no waiting request will be answered.
+      else if (message?.type === "refused") requests.rejectAll(message.error.message);
     });
     transport.onClose((reason) => {
       this.closed = true;

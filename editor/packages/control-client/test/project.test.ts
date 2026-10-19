@@ -106,6 +106,17 @@ describe("ProjectClient", () => {
     expect(changes).toEqual([[{ Created: { path: "scenes/a.scene.ron", kind: "Scene" } }]]);
   });
 
+  it("a_refused_message_fails_the_pending_requests_with_the_service_reason", async () => {
+    const { transport, client: connecting } = connected();
+    const client = await connecting;
+    const pending = client.request({ type: "store_session", document: "1", bytes: "" });
+    const reason = "the project service refused a message of at least 300 bytes: it takes up to 256 bytes";
+    // The service answers a message it cannot read whole with a refusal, then closes.
+    transport.push(JSON.stringify({ type: "refused", error: { code: "invalid_request", message: reason } }));
+    transport.drop("message of at least 300 bytes, over the limit of 256 bytes");
+    await expect(pending).rejects.toThrow(reason);
+  });
+
   it("rejects_pending_requests_when_the_transport_closes", async () => {
     const { transport, client: connecting } = connected();
     const client = await connecting;
