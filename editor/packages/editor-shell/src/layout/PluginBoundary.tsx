@@ -16,6 +16,12 @@ export interface PluginBoundaryProps {
   name: string;
   /** Shown instead of the slot once it threw; by default the failure and a "Reload panel" button. */
   fallback?(failure: PluginFailure): ReactNode;
+  /**
+   * What the slot shows, such as the entity and the component a decoration marks: once the slot
+   * threw, a change to any of them (compared with `Object.is`) renders it again. A slot that did
+   * not throw keeps its state.
+   */
+  resetKeys?: readonly unknown[];
   children?: ReactNode;
 }
 
@@ -23,6 +29,7 @@ interface State {
   /** Wrapped: a plugin may throw `undefined`. */
   failed: { thrown: unknown } | null;
   registration: object;
+  resetKeys: readonly unknown[];
 }
 
 const reloadPanel = ({ text, retry }: PluginFailure) => (
@@ -35,16 +42,18 @@ const reloadPanel = ({ text, retry }: PluginFailure) => (
 // The registrations whose failure each editor reported: one line however many slots render it.
 const reported = new WeakMap<Editor, WeakSet<object>>();
 
+const changed = (keys: readonly unknown[], previous: readonly unknown[]) => keys.length !== previous.length || keys.some((key, at) => !Object.is(key, previous[at]));
+
 /** The error boundary behind `PluginBoundary`. */
 class Boundary extends Component<PluginBoundaryProps, State> {
-  state: State = { failed: null, registration: this.props.registration };
+  state: State = { failed: null, registration: this.props.registration, resetKeys: this.props.resetKeys ?? [] };
 
   static getDerivedStateFromError(thrown: unknown): Partial<State> {
     return { failed: { thrown } };
   }
 
-  static getDerivedStateFromProps(props: PluginBoundaryProps, state: State): Partial<State> | null {
-    return props.registration === state.registration ? null : { failed: null, registration: props.registration };
+  static getDerivedStateFromProps({ registration, resetKeys = [] }: PluginBoundaryProps, state: State): Partial<State> | null {
+    return registration === state.registration && !changed(resetKeys, state.resetKeys) ? null : { failed: null, registration, resetKeys };
   }
 
   componentDidCatch(thrown: unknown): void {
@@ -74,7 +83,7 @@ class Boundary extends Component<PluginBoundaryProps, State> {
 /**
  * Renders plugin code so that what throws while rendering costs only its own slot: the slot
  * shows `fallback` instead, and the editor console gets the failure once per registration.
- * Another registration (the plugin reloaded) renders the slot again.
+ * Another registration (the plugin reloaded) or a change to `resetKeys` renders the slot again.
  */
 export function PluginBoundary(props: PluginBoundaryProps): ReactNode {
   return <Boundary {...props} />;

@@ -12,8 +12,8 @@ export interface FieldProps {
   edit: Edit;
   readOnly: boolean;
   editor: Editor;
-  /** The component the value belongs to; only its fields get the plugins' decorations. */
-  owner?: { entity: Entity; component: string };
+  /** The component the value belongs to, with its whole value; only its fields get the plugins' decorations. */
+  owner?: { entity: Entity; component: string; value: JsonValue };
   /** The value a new list item, a set option, or a chosen variant's content starts from; the type's default value by default. */
   seed?: (schema: TypeSchema) => JsonValue;
 }
@@ -23,7 +23,8 @@ const index = (index: number): PathSegment => ({ type: "index", index });
 
 /**
  * One value rendered from its schema, with the decorations beside it; every change goes through
- * `edit` with its path. A decoration that throws shows a mark instead.
+ * `edit` with its path. A decoration that throws shows a mark instead, until its entity or its
+ * component changes.
  */
 export function Field(props: FieldProps) {
   const { editor, owner, path } = props;
@@ -37,8 +38,8 @@ export function Field(props: FieldProps) {
       </div>
       <span className="ludenea-decorations">
         {decorations.map((decoration) => (
-          <PluginBoundary key={decoration.id} editor={editor} registration={decoration} name={`The "${decoration.id}" decoration`} fallback={failureMark}>
-            <Decoration decoration={decoration} editor={editor} {...owner} path={path} />
+          <PluginBoundary key={decoration.id} editor={editor} registration={decoration} name={`The "${decoration.id}" decoration`} fallback={failureMark} resetKeys={[owner.entity, owner.value]}>
+            <Decoration decoration={decoration} editor={editor} entity={owner.entity} component={owner.component} path={path} />
           </PluginBoundary>
         ))}
       </span>

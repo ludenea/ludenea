@@ -2,7 +2,7 @@
 // Plugins import `@ludenea/editor-shell`, which leaves all of this out.
 export { createEditor, type EditorHost } from "./editor";
 export { Shell } from "./layout/Shell";
-export { mountShell } from "./layout/mount";
+export { mountShell, reportCaughtErrors } from "./layout/mount";
 export { PluginLoader } from "./loader";
 export { CommandPalette } from "./palette/CommandPalette";
 export { type Registry } from "./registry";

@@ -356,12 +356,18 @@ interface PluginBoundaryProps {
     name: string;
     /** Shown instead of the slot once it threw; by default the failure and a "Reload panel" button. */
     fallback?(failure: PluginFailure): ReactNode;
+    /**
+     * What the slot shows, such as the entity and the component a decoration marks: once the slot
+     * threw, a change to any of them (compared with `Object.is`) renders it again. A slot that did
+     * not throw keeps its state.
+     */
+    resetKeys?: readonly unknown[];
     children?: ReactNode;
 }
 /**
  * Renders plugin code so that what throws while rendering costs only its own slot: the slot
  * shows `fallback` instead, and the editor console gets the failure once per registration.
- * Another registration (the plugin reloaded) renders the slot again.
+ * Another registration (the plugin reloaded) or a change to `resetKeys` renders the slot again.
  */
 function PluginBoundary(props: PluginBoundaryProps): ReactNode;
 

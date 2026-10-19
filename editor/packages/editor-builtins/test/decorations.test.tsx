@@ -1,8 +1,9 @@
 // Decorations and columns are registered on the shell's `Editor` and rendered by the built-in
 // inspector and explorer, so their rendering is tested here, next to those panels.
-import type { ExplorerColumn } from "@ludenea/editor-shell";
+import { definePlugin, type ExplorerColumn } from "@ludenea/editor-shell";
 import { act, cleanup, screen, within } from "@testing-library/react";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { useEffect } from "react";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { builtinPlugins } from "../src";
 import { renderPanel, schemas, settle, testEditor, testGame } from "./support";
 
@@ -18,7 +19,10 @@ beforeAll(() => {
 const reported = (host: Awaited<ReturnType<typeof testEditor>>) => host.editor.console.list().map(({ text }) => text);
 
 describe("decorations and columns", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
 
   it("decorations_render_beside_fields", async () => {
     const host = await testEditor(builtinPlugins);
@@ -75,6 +79,7 @@ describe("decorations and columns", () => {
   });
 
   it("a_decoration_that_throws_marks_the_fields_and_is_reported_once", async () => {
+    const devtools = vi.spyOn(console, "error");
     const host = await testEditor(builtinPlugins);
     const game = await testGame(
       (command) => (command.type === "get_entity" ? { type: "entity", entity, components: { "ludenea::Collider": { type: "json", value: collider } } } : { type: "done" }),
@@ -100,9 +105,70 @@ describe("decorations and columns", () => {
     expect(section.getAllByRole("img", { name: failure })).toHaveLength(8);
     expect((section.getByLabelText("density") as HTMLInputElement).value).toBe("1");
     expect(reported(host)).toEqual([failure]);
+    expect(devtools).not.toHaveBeenCalled();
+  });
+
+  it("a_decoration_that_threw_renders_again_for_another_entity_or_a_changed_component", async () => {
+    const devtools = vi.spyOn(console, "error");
+    let density = 1;
+    const value = () => ({ "ludenea::Collider": { type: "json", value: { ...collider, density } } });
+    const host = await testEditor(builtinPlugins);
+    const game = await testGame((command) => (command.type === "get_entity" ? { type: "entity", entity: command.entity, components: value() } : { type: "done" }), {
+      components: [{ name: "ludenea::Collider", schema: schemas.collider }],
+    });
+    act(() => host.setControl(game.client));
+    act(() => host.editor.selection.getState().select([entity]));
+    renderPanel(host, "ludenea.inspector");
+    await settle();
+
+    let loaded = false;
+    let mounts = 0;
+    function Counted() {
+      useEffect(() => void (mounts += 1), []);
+      return null;
+    }
+    act(() => {
+      host.editor.inspectors.decorate({ id: "test.counted", render: () => <Counted /> });
+      host.editor.inspectors.decorate({
+        id: "test.prefab",
+        render: ({ entity, path }) => {
+          if (entity.index === 4 && !loaded) throw new Error("the prefab state is not loaded");
+          return path.length === 0 ? <span aria-label="prefab state">{entity.index}</span> : null;
+        },
+      });
+    });
+    const failure = 'The "test.prefab" decoration of plugin "editor" failed: the prefab state is not loaded';
+    const section = () => within(screen.getByRole("region", { name: "ludenea::Collider" }));
+    expect(section().getAllByRole("img", { name: failure })).toHaveLength(8);
+
+    // Another entity: the decoration renders again.
+    act(() => host.editor.selection.getState().select([{ index: 5, generation: 1 }]));
+    await settle();
+    expect(section().queryByRole("img")).toBeNull();
+    expect(section().getByLabelText("prefab state").textContent).toBe("5");
+
+    // Back on the first, which still fails: marked again, not reported twice.
+    act(() => host.editor.selection.getState().select([entity]));
+    await settle();
+    expect(section().getAllByRole("img", { name: failure })).toHaveLength(8);
+
+    // The state loads, then the component changes: every field's decoration renders again, and
+    // the decorations that did not fail keep their state.
+    const counted = mounts;
+    loaded = true;
+    density = 2;
+    act(() => game.push({ type: "entity_changed", entity, components: value(), removed: [] }));
+    await settle();
+    expect((section().getByLabelText("density") as HTMLInputElement).value).toBe("2");
+    expect(section().queryByRole("img")).toBeNull();
+    expect(section().getByLabelText("prefab state").textContent).toBe("4");
+    expect(mounts).toBe(counted);
+    expect(reported(host)).toEqual([failure]);
+    expect(devtools).not.toHaveBeenCalled();
   });
 
   it("an_explorer_column_that_throws_marks_its_cells_until_it_answers", async () => {
+    const devtools = vi.spyOn(console, "error");
     const host = await testEditor(builtinPlugins);
     const game = await testGame((command) =>
       command.type === "query_entities" ? { type: "entities", total: 2, rows: [0, 1].map((index) => ({ entity: { index, generation: 0 }, hash: "0000000000000000" })) } : { type: "done" },
@@ -141,5 +207,57 @@ describe("decorations and columns", () => {
     expect(within(rows()[1]!).getByText("ball")).toBeTruthy();
     expect(within(rows()[1]!).queryByRole("img")).toBeNull();
     expect(reported(host)).toHaveLength(1);
+    expect(devtools).not.toHaveBeenCalled();
+  });
+
+  it("an_explorer_column_whose_subscription_throws_costs_only_that_subscription", async () => {
+    const devtools = vi.spyOn(console, "error");
+    const listeners = new Set<() => void>();
+    const column = (title: string, subscribe: ExplorerColumn["subscribe"]): ExplorerColumn => ({ id: `my_game.${title}`, title, width: 80, value: () => title.toLowerCase(), subscribe });
+    const plugin = definePlugin({
+      name: "my_game",
+      activate(editor) {
+        editor.explorer.columns.register(
+          column("Unloaded", () => {
+            throw new Error("the prefab list is not loaded");
+          }),
+        );
+        editor.explorer.columns.register(
+          column("Healthy", (listener) => {
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+          }),
+        );
+        editor.explorer.columns.register(
+          column("Sticky", () => () => {
+            throw new Error("the listener is already gone");
+          }),
+        );
+      },
+    });
+    const host = await testEditor([...builtinPlugins, plugin]);
+    const game = await testGame((command) =>
+      command.type === "query_entities" ? { type: "entities", total: 2, rows: [0, 1].map((index) => ({ entity: { index, generation: 0 }, hash: "0000000000000000" })) } : { type: "done" },
+    );
+    act(() => host.setControl(game.client));
+    renderPanel(host, "ludenea.explorer");
+    await settle();
+
+    const subscribing = 'Subscribing to the "Unloaded" explorer column of plugin "my_game" failed: the prefab list is not loaded';
+    for (const title of ["Unloaded", "Healthy", "Sticky"]) expect(screen.getAllByText(title.toLowerCase())).toHaveLength(2);
+    expect(listeners.size).toBe(1);
+    expect(reported(host)).toEqual([subscribing]);
+
+    // Another column: the explorer subscribes again, and each failure is reported once.
+    act(() => void host.editor.explorer.columns.register({ id: "test.other", title: "Other", width: 80, value: () => null }));
+    await settle();
+    const unsubscribing = 'Unsubscribing from the "Sticky" explorer column of plugin "my_game" failed: the listener is already gone';
+    expect(listeners.size).toBe(1);
+    expect(reported(host)).toEqual([subscribing, unsubscribing]);
+
+    cleanup();
+    expect(listeners.size).toBe(0);
+    expect(reported(host)).toHaveLength(2);
+    expect(devtools).not.toHaveBeenCalled();
   });
 });

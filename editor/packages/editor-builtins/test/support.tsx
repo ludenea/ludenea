@@ -10,7 +10,7 @@ import {
   type TypeSchema,
 } from "@ludenea/control-client";
 import type { PluginDefinition } from "@ludenea/editor-shell";
-import { createEditor, type EditorHost } from "@ludenea/editor-shell/app";
+import { createEditor, reportCaughtErrors, type EditorHost } from "@ludenea/editor-shell/app";
 import { act, render } from "@testing-library/react";
 
 type Message = { type: string; [key: string]: unknown };
@@ -68,9 +68,10 @@ export async function testEditor(plugins: PluginDefinition[], answer?: Answer) {
   return { ...host, project };
 }
 
+/** Renders the panel `id` with the error handling of the shell's root, as the applications show it. */
 export function renderPanel(host: EditorHost, id: string): void {
   const Panel = host.registry.panels.get(id)!.component;
-  render(<Panel editor={host.editor} />);
+  render(<Panel editor={host.editor} />, { onCaughtError: reportCaughtErrors(host.editor) });
 }
 
 /** Lets pending replies and the renders they cause settle. */

@@ -11,7 +11,11 @@ export type Tab = (typeof TABS)[number];
 /** The shown tab, the entity query as typed and as applied, and the list's scroll position. */
 export type ExplorerState = Store<{ tab: Tab; text: string; filter: string; scroll: { top: number } }>;
 
-export function ExplorerPanel({ editor, state }: { editor: Editor; state: ExplorerState }) {
+/**
+ * `failedColumns`: the columns whose subscription failed and is reported already, kept across
+ * mounts: once per registration.
+ */
+export function ExplorerPanel({ editor, state, failedColumns }: { editor: Editor; state: ExplorerState; failedColumns: WeakSet<ExplorerColumn> }) {
   const control = useGame(editor);
   const { tab } = useStore(state);
   const setTab = (tab: Tab) => state.set({ tab });
@@ -26,23 +30,45 @@ export function ExplorerPanel({ editor, state }: { editor: Editor; state: Explor
         ))}
       </div>
       <div role="tabpanel" aria-label={tab}>
-        {tab === "Entities" ? <Entities editor={editor} control={control} state={state} /> : <Introspection editor={editor} control={control} tab={tab as IntrospectionTab} />}
+        {tab === "Entities" ? <Entities editor={editor} control={control} state={state} failedColumns={failedColumns} /> : <Introspection editor={editor} control={control} tab={tab as IntrospectionTab} />}
       </div>
     </div>
   );
 }
 
 /** The entities matching a query written like the code, such as `With<Body>, Without<Dead>`. */
-function Entities({ editor, control, state }: { editor: Editor; control: ControlClient; state: ExplorerState }) {
+function Entities({ editor, control, state, failedColumns }: { editor: Editor; control: ControlClient; state: ExplorerState; failedColumns: WeakSet<ExplorerColumn> }) {
   const { text, filter, scroll } = useStore(state);
   const [error, setError] = useState<string | null>(null);
   const columns = useSyncExternalStore(editor.explorer.columns.subscribe, editor.explorer.columns.list);
   // A column whose values changed: the rows read them again.
   const [values, setValues] = useState(0);
+  // A subscribe or unsubscribe that throws costs only that column's subscription, reported once.
   useEffect(() => {
-    const stops = columns.map((column) => column.subscribe?.(() => setValues((version) => version + 1)));
-    return () => stops.forEach((stop) => stop?.());
-  }, [columns]);
+    const stops = columns.map((column) => {
+      const plugin = editor.pluginOf(column);
+      const slot = `the "${column.title}" explorer column${plugin === undefined ? "" : ` of plugin "${plugin}"`}`;
+      const failed = (doing: string, error: unknown) => {
+        if (failedColumns.has(column)) return;
+        failedColumns.add(column);
+        editor.console.report(error, `${doing} ${slot}`);
+      };
+      try {
+        const stop = column.subscribe?.(() => setValues((version) => version + 1));
+        return () => {
+          try {
+            stop?.();
+          } catch (error) {
+            failed("Unsubscribing from", error);
+          }
+        };
+      } catch (error) {
+        failed("Subscribing to", error);
+        return () => {};
+      }
+    });
+    return () => stops.forEach((stop) => stop());
+  }, [editor, columns, failedColumns]);
   return (
     <div className="ludenea-entities">
       <form

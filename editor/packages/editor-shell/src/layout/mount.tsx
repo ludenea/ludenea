@@ -1,9 +1,19 @@
-import { createRoot } from "react-dom/client";
-import type { EditorHost } from "../editor";
+import { createRoot, type RootOptions } from "react-dom/client";
+import type { Editor, EditorHost } from "../editor";
 import { isPluginBoundary } from "./PluginBoundary";
 import { Shell } from "./Shell";
 
 const CONTEXT = "Rendering the editor";
+
+/**
+ * A root's `onCaughtError` for the editor: a `PluginBoundary` reports what it caught, and any
+ * other caught render error goes to the editor console.
+ */
+export const reportCaughtErrors =
+  (editor: Editor): NonNullable<RootOptions["onCaughtError"]> =>
+  (error, { errorBoundary }) => {
+    if (!isPluginBoundary(errorBoundary)) editor.console.report(error, CONTEXT);
+  };
 
 /**
  * Renders the shell into `element`; returns the unmount. `react-dom/client` lives in the shared
@@ -14,9 +24,7 @@ const CONTEXT = "Rendering the editor";
 export function mountShell(element: Element, host: EditorHost): () => void {
   const { console: editorConsole } = host.editor;
   const root = createRoot(element, {
-    onCaughtError(error, { errorBoundary }) {
-      if (!isPluginBoundary(errorBoundary)) editorConsole.report(error, CONTEXT);
-    },
+    onCaughtError: reportCaughtErrors(host.editor),
     onUncaughtError(error) {
       const text = editorConsole.report(error, CONTEXT);
       root.render(

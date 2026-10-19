@@ -253,10 +253,12 @@ A command that fails from the palette or a shortcut is reported there under its 
 
 A panel, custom inspector, field decoration, or explorer column that throws while rendering
 costs only its own place: a panel shows the failure with a "Reload panel" button, a custom
-inspector gives way to the generic fields, and a decoration or cell shows a mark. The failure
-is reported in the Console once, naming the plugin (`editor.pluginOf`), and a new
-registration (the plugin rebuilt) renders it again. A plugin that renders other plugins'
-registrations wraps each in `PluginBoundary` for the same isolation.
+inspector gives way to the generic fields, and a decoration or cell shows a mark until what it
+shows (its entity, component, or column values) changes. An explorer column whose `subscribe`
+or unsubscribe throws is left unsubscribed. The failure is reported in the Console once,
+naming the plugin (`editor.pluginOf`), and a new registration (the plugin rebuilt) renders it
+again. A plugin that renders other plugins' registrations wraps each in `PluginBoundary` for
+the same isolation, with `resetKeys` to render a failed slot again once what it shows changes.
 
 ### Development
 

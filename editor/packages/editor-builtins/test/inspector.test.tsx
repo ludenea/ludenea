@@ -1,6 +1,6 @@
 import { definePlugin } from "@ludenea/editor-shell";
 import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { builtinPlugins } from "../src";
 import { renderPanel, schemas, settle, testEditor, testGame } from "./support";
 
@@ -48,7 +48,10 @@ function edit(label: string, value: string, inside = component("ludenea::Collide
 }
 
 describe("inspector", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
 
   /** The resource topics subscribed and unsubscribed, in order. */
   const resourceTopics = (game: { sent: Command[] }) =>
@@ -216,6 +219,7 @@ describe("inspector", () => {
   });
 
   it("a_custom_inspector_that_throws_falls_back_to_the_generic_fields", async () => {
+    const devtools = vi.spyOn(console, "error");
     let broken = true;
     const Custom = ({ value }: { value: { density: number } }) => {
       if (broken) throw new Error("value.shape.Box is undefined");
@@ -252,6 +256,7 @@ describe("inspector", () => {
     act(() => component("ludenea::Collider").getByRole("button", { name: "Reload inspector" }).click());
     expect(component("ludenea::Collider").getByText("custom density 1")).toBeTruthy();
     expect(component("ludenea::Collider").queryByRole("alert")).toBeNull();
+    expect(devtools).not.toHaveBeenCalled();
   });
 
   it("add_component_choice_follows_the_components_present", async () => {

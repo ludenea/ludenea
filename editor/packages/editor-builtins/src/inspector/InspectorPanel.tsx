@@ -268,7 +268,7 @@ function Section({ editor, name, title, value, schema, edit, entity, state, focu
   if (value.type === "ron") body = <RonText name={name} text={value.text} />;
   else {
     const generic = schema ? (
-      <Field schema={schema} value={value.value} path={[]} edit={edit} readOnly={readOnly} editor={editor} owner={entity && { entity, component: name }} />
+      <Field schema={schema} value={value.value} path={[]} edit={edit} readOnly={readOnly} editor={editor} owner={entity && { entity, component: name, value: value.value }} />
     ) : (
       <pre>{JSON.stringify(value.value, null, 2)}</pre>
     );
