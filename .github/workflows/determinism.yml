@@ -170,6 +170,7 @@ jobs:
           cargo test --locked -p ludenea-project --test typescript
           rm crates/ludenea-project/types/*.d.ts
           node editor/scripts/bundle-dts.mjs
+          node editor/shared/scripts/export-lists.mjs
           git diff --exit-code
           test -z "$(git status --porcelain)" || { git status --porcelain; exit 1; }
       - run: cargo test --locked -p ludenea-project -- --ignored
