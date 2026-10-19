@@ -1,7 +1,9 @@
 //! The golden trace was recorded in release; these tests run in the debug profile, so
 //! passing them also proves that debug and release builds agree.
 
+use std::ffi::OsString;
 use std::fs;
+use std::path::PathBuf;
 
 use boxes::{ContactStats, Crate};
 use ludenea::app::replay::{Replay, load_replay};
@@ -16,9 +18,32 @@ const INPUTS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/boxes.inputs")
 const GOLDEN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../golden/boxes.trace");
 const SPAWNER_REPLAY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../golden/spawner.replay");
 
+/// Where the golden runs write the snapshots around a divergence, given the value of
+/// `LUDENEA_DUMP_DIR`: that folder when it is set and not empty (CI uploads it), else the
+/// temporary directory.
+fn dump_dir(ludenea_dump_dir: Option<OsString>) -> PathBuf {
+    ludenea_dump_dir
+        .filter(|dir| !dir.is_empty())
+        .map_or_else(std::env::temp_dir, PathBuf::from)
+}
+
+/// The dump folder of the golden run `name`, as a command line argument.
+fn run_dump_dir(name: &str) -> String {
+    let dir = dump_dir(std::env::var_os("LUDENEA_DUMP_DIR")).join(name);
+    dir.into_os_string()
+        .into_string()
+        .expect("LUDENEA_DUMP_DIR or the temporary directory is UTF-8")
+}
+
+#[test]
+fn dump_dir_follows_ludenea_dump_dir() {
+    assert_eq!(dump_dir(Some("ci/dump".into())), PathBuf::from("ci/dump"));
+    assert_eq!(dump_dir(Some(OsString::new())), std::env::temp_dir());
+    assert_eq!(dump_dir(None), std::env::temp_dir());
+}
+
 fn verify(threads: &str) {
-    let dump_dir = std::env::temp_dir().join(format!("boxes-golden-{threads}-threads"));
-    let dump_dir = dump_dir.to_str().expect("UTF-8 temporary directory");
+    let dump_dir = run_dump_dir(&format!("boxes-golden-{threads}-threads"));
     let mut out = Vec::new();
     let args = [
         "boxes",
@@ -31,7 +56,7 @@ fn verify(threads: &str) {
         "--threads",
         threads,
         "--dump-dir",
-        dump_dir,
+        &dump_dir,
     ];
     let code = ludenea::cli::run(boxes::app, &args, &mut out);
     assert_eq!(code, 0, "{}", String::from_utf8_lossy(&out));
@@ -124,7 +149,7 @@ fn scenario_exercises_spawn_despawn_and_contacts() {
 #[test]
 fn spawner_replay_matches_at_1_2_and_8_threads() {
     for threads in ["1", "2", "8"] {
-        let dump_dir = std::env::temp_dir().join(format!("boxes-spawner-{threads}-threads"));
+        let dump_dir = run_dump_dir(&format!("boxes-spawner-{threads}-threads"));
         let args = [
             "boxes",
             "verify",
@@ -132,7 +157,7 @@ fn spawner_replay_matches_at_1_2_and_8_threads() {
             "--threads",
             threads,
             "--dump-dir",
-            dump_dir.to_str().expect("UTF-8 temporary directory"),
+            &dump_dir,
         ];
         let mut out = Vec::new();
         let code = ludenea::cli::run(boxes::app, &args, &mut out);
