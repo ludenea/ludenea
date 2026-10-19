@@ -3,7 +3,7 @@
 //! array and a constraint array.
 
 use crate::coloring::{GRAPH_COLOR_COUNT, SOLVER_CHUNK, color_constraints};
-use crate::components::BodyKind;
+use crate::components::{BodyKind, MAX_SUBSTEPS};
 use ludenea_app::Parallel;
 use ludenea_math::{PI, Rot, Vec2, clamp, max, min};
 
@@ -112,7 +112,7 @@ impl StepContext {
         push_max_velocity: f32,
         restitution_threshold: f32,
     ) -> Self {
-        let substeps = substeps.max(1);
+        let substeps = substeps.clamp(1, MAX_SUBSTEPS);
         let h = dt / substeps as f32;
         let contact_hertz = min(contact_hertz, 0.25 / h);
         StepContext {
@@ -259,24 +259,21 @@ fn prepare(c: &mut ContactConstraint, a: &SolverBody, b: &SolverBody, context: &
     }
 }
 
-/// Applies gravity, damping, and the linear speed limit to a dynamic body, and the angular
-/// speed limit to every moving body: a kinematic body spins as fast as a dynamic one at most.
+/// Applies gravity and damping to a dynamic body, and the speed limits to every moving body:
+/// a kinematic body moves and spins as fast as a dynamic one at most.
 fn integrate_velocity(body: &mut SolverBody, context: &StepContext) {
     if body.kind == BodyKind::Static {
         return;
     }
     let h = context.h;
+    let mut v = body.linear_velocity;
     let mut w = body.angular_velocity;
     if body.kind == BodyKind::Dynamic {
-        let mut v = context.gravity * (h * body.gravity_scale)
-            + body.linear_velocity * (1.0 / (1.0 + h * body.linear_damping));
+        v = context.gravity * (h * body.gravity_scale)
+            + v * (1.0 / (1.0 + h * body.linear_damping));
         w *= 1.0 / (1.0 + h * body.angular_damping);
-        let speed_squared = v.dot(v);
-        if speed_squared > MAX_LINEAR_SPEED * MAX_LINEAR_SPEED {
-            v *= MAX_LINEAR_SPEED / speed_squared.sqrt();
-        }
-        body.linear_velocity = v;
     }
+    body.linear_velocity = limit_speed(v);
     // At most an eighth of a turn per substep keeps the small-angle rotation integration
     // accurate.
     let max_angular_speed = 0.25 * PI * context.inv_h;
@@ -284,6 +281,23 @@ fn integrate_velocity(body: &mut SolverBody, context: &StepContext) {
         w *= max_angular_speed / w.abs();
     }
     body.angular_velocity = w;
+}
+
+/// `v`, scaled down to `MAX_LINEAR_SPEED` when it is faster.
+fn limit_speed(v: Vec2) -> Vec2 {
+    let speed_squared = v.dot(v);
+    if speed_squared <= MAX_LINEAR_SPEED * MAX_LINEAR_SPEED {
+        return v;
+    }
+    // The square of a finite velocity can overflow: dividing by its largest component first
+    // keeps its direction.
+    let v = if speed_squared.is_finite() {
+        v
+    } else {
+        let largest = max(v.x.abs(), v.y.abs());
+        Vec2::new(v.x / largest, v.y / largest)
+    };
+    v * (MAX_LINEAR_SPEED / v.dot(v).sqrt())
 }
 
 fn integrate_position(body: &mut SolverBody, h: f32) {

@@ -261,6 +261,33 @@ fn set_field_on_time_is_invalid_edit() {
 }
 
 #[test]
+fn set_field_with_huge_substeps_is_invalid_edit_and_records_nothing() {
+    let mut host = loaded(20);
+    step(&mut host, 3);
+    let before = hash(&mut host);
+    let error = host
+        .handle(Command::SetField {
+            target: FieldTarget::Resource {
+                resource: "ludenea::PhysicsSettings".to_string(),
+            },
+            path: vec![field("substeps")],
+            value: json!(400_000_000),
+        })
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidEdit);
+    assert!(
+        error.message.contains("ludenea::PhysicsSettings")
+            && error
+                .message
+                .contains("substeps must be within 1 to 64, got 400000000"),
+        "{}",
+        error.message
+    );
+    assert_eq!(hash(&mut host), before);
+    assert!(timeline(&mut host).edit_ticks.is_empty());
+}
+
+#[test]
 fn rng_state_round_trips_as_decimal_string() {
     let mut host = loaded(20);
     step(&mut host, 2);

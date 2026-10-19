@@ -7,6 +7,19 @@ use serde::{Deserialize, Serialize};
 /// Tolerance on `cos² + sin² = 1` when validating a rotation.
 const UNIT_ROTATION_TOLERANCE: f32 = 1e-4;
 
+/// Largest magnitude of each gravity component `PhysicsSettings` accepts, in m/s².
+pub const MAX_GRAVITY: f32 = 1e6;
+
+/// Largest magnitude of `Body::gravity_scale`, so that a body's gravity stays within
+/// `MAX_GRAVITY * MAX_GRAVITY_SCALE` and its velocity finite.
+pub const MAX_GRAVITY_SCALE: f32 = 1e3;
+
+/// Largest `Collider::density`, in kg/m²: denser colliders overflow the contact solver.
+pub const MAX_DENSITY: f32 = 1e6;
+
+/// Most solver substeps per tick that `PhysicsSettings` accepts.
+pub const MAX_SUBSTEPS: u32 = 64;
+
 /// Body origin in world space. Deserialization rejects what `validate` refuses: a
 /// non-finite position or a rotation that is not unit length.
 #[derive(Component, Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Default)]
@@ -79,7 +92,8 @@ pub enum BodyKind {
     Dynamic,
 }
 
-/// Deserialization rejects non-finite values and negative damping.
+/// Deserialization rejects non-finite values, negative damping, and a `gravity_scale`
+/// beyond `±MAX_GRAVITY_SCALE`.
 #[derive(Component, Serialize, Deserialize, Copy, Clone, Debug, PartialEq)]
 #[component(name = "ludenea::Body")]
 #[serde(try_from = "BodyData", into = "BodyData")]
@@ -128,8 +142,11 @@ impl TryFrom<BodyData> for Body {
         if !(non_negative(data.linear_damping) && non_negative(data.angular_damping)) {
             return Err("damping must be finite and zero or more".to_string());
         }
-        if !data.gravity_scale.is_finite() {
-            return Err("gravity_scale must be finite".to_string());
+        if !within(data.gravity_scale, MAX_GRAVITY_SCALE) {
+            return Err(format!(
+                "gravity_scale must be finite and within ±{MAX_GRAVITY_SCALE:?}, got {:?}",
+                data.gravity_scale
+            ));
         }
         Ok(Body {
             kind: data.kind,
@@ -145,6 +162,11 @@ impl TryFrom<BodyData> for Body {
 /// Finite and `>= 0` (NaN fails both).
 fn non_negative(value: f32) -> bool {
     value.is_finite() && value >= 0.0
+}
+
+/// Within `±limit` (NaN fails).
+fn within(value: f32, limit: f32) -> bool {
+    -limit <= value && value <= limit
 }
 
 impl Body {
@@ -173,7 +195,8 @@ impl Body {
 }
 
 /// One collider per entity. Deserialization validates the shape and rejects
-/// non-finite or negative density, friction, and restitution.
+/// non-finite or negative density, friction, and restitution, and a density above
+/// `MAX_DENSITY`.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[component(name = "ludenea::Collider")]
 #[serde(try_from = "ColliderData", into = "ColliderData")]
@@ -228,6 +251,12 @@ impl TryFrom<ColliderData> for Collider {
                 "density, friction, and restitution must be finite and zero or more".to_string(),
             );
         }
+        if data.density > MAX_DENSITY {
+            return Err(format!(
+                "density must be at most {MAX_DENSITY:?}, got {:?}",
+                data.density
+            ));
+        }
         Ok(Collider {
             shape: data.shape,
             density: data.density,
@@ -237,15 +266,85 @@ impl TryFrom<ColliderData> for Collider {
     }
 }
 
+/// How the physics step solves. Deserialization rejects a gravity component that is not
+/// finite or beyond `±MAX_GRAVITY`, `substeps` outside 1 to `MAX_SUBSTEPS`, and the other
+/// values when they are not finite or below zero.
 #[derive(Resource, Serialize, Deserialize, Copy, Clone, Debug, PartialEq)]
 #[resource(name = "ludenea::PhysicsSettings")]
+#[serde(try_from = "PhysicsSettingsData", into = "PhysicsSettingsData")]
 pub struct PhysicsSettings {
     pub gravity: Vec2,
+    /// Solver substeps per tick; the step brings a value that game code writes outside 1 to
+    /// `MAX_SUBSTEPS` back within it.
     pub substeps: u32,
     pub contact_hertz: f32,
     pub contact_damping_ratio: f32,
     pub contact_push_max_velocity: f32,
     pub restitution_threshold: f32,
+}
+
+/// Serialization mirror of `PhysicsSettings` so loading can validate.
+#[derive(Serialize, Deserialize)]
+struct PhysicsSettingsData {
+    gravity: Vec2,
+    substeps: u32,
+    contact_hertz: f32,
+    contact_damping_ratio: f32,
+    contact_push_max_velocity: f32,
+    restitution_threshold: f32,
+}
+
+impl From<PhysicsSettings> for PhysicsSettingsData {
+    fn from(s: PhysicsSettings) -> Self {
+        PhysicsSettingsData {
+            gravity: s.gravity,
+            substeps: s.substeps,
+            contact_hertz: s.contact_hertz,
+            contact_damping_ratio: s.contact_damping_ratio,
+            contact_push_max_velocity: s.contact_push_max_velocity,
+            restitution_threshold: s.restitution_threshold,
+        }
+    }
+}
+
+impl TryFrom<PhysicsSettingsData> for PhysicsSettings {
+    type Error = String;
+
+    fn try_from(data: PhysicsSettingsData) -> Result<Self, String> {
+        let gravity = data.gravity;
+        if !(within(gravity.x, MAX_GRAVITY) && within(gravity.y, MAX_GRAVITY)) {
+            return Err(format!(
+                "gravity must be finite with each component within ±{MAX_GRAVITY:?}, got ({:?}, {:?})",
+                gravity.x, gravity.y
+            ));
+        }
+        if !(1..=MAX_SUBSTEPS).contains(&data.substeps) {
+            return Err(format!(
+                "substeps must be within 1 to {MAX_SUBSTEPS}, got {}",
+                data.substeps
+            ));
+        }
+        for (name, value) in [
+            ("contact_hertz", data.contact_hertz),
+            ("contact_damping_ratio", data.contact_damping_ratio),
+            ("contact_push_max_velocity", data.contact_push_max_velocity),
+            ("restitution_threshold", data.restitution_threshold),
+        ] {
+            if !non_negative(value) {
+                return Err(format!(
+                    "{name} must be finite and zero or more, got {value:?}"
+                ));
+            }
+        }
+        Ok(PhysicsSettings {
+            gravity,
+            substeps: data.substeps,
+            contact_hertz: data.contact_hertz,
+            contact_damping_ratio: data.contact_damping_ratio,
+            contact_push_max_velocity: data.contact_push_max_velocity,
+            restitution_threshold: data.restitution_threshold,
+        })
+    }
 }
 
 impl Default for PhysicsSettings {

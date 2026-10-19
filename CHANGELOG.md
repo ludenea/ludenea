@@ -56,9 +56,23 @@ session (the editor's copy of each open document's session), and the plugin API.
 - `Pose::validate` checks a pose as loading does and returns the new `PoseError`, which
   carries the refused position or rotation. The physics step panics with the entity, the
   field, and its value when it leaves a state that loading would refuse.
+- `PhysicsSettings` refuses to load, from a scene, a snapshot, or a `set_field`, a gravity
+  component that is not finite or whose magnitude is above the new `MAX_GRAVITY` (1e6),
+  `substeps` outside 1 to the new `MAX_SUBSTEPS` (64), and a contact hertz, damping ratio,
+  push velocity, or restitution threshold that is not finite or below zero. NaN gravity
+  ended the game process at the next step, and 400,000,000 substeps hung it. The step
+  brings substeps that game code writes back within 1 to 64.
+- `Body` refuses a `gravity_scale` whose magnitude is above the new `MAX_GRAVITY_SCALE`
+  (1000), and `Collider` a density above the new `MAX_DENSITY` (1e6); both overflowed the
+  step.
 - `Time` refuses to load a `dt` that is not above 0 and at most 1 second, the step of the
   slowest tick rate. A scene with a NaN `dt` ended the game process at the next physics
   step.
+- The physics step limits the linear speed of a kinematic body to 400 m/s, as it does a
+  dynamic one's, and writes the limited value back to `Body`. A velocity so large that its
+  square overflows keeps its direction at 400 m/s; it dropped to zero.
+- The panic for an invalid state after the physics step also gives the step inputs: `dt`,
+  gravity, and the body's gravity scale and velocities at the start of the step.
 - `SessionError::Checkpoint` is returned when a checkpoint cannot be restored because a
   system wrote a value its type refuses to load; the session used to panic.
 - A component that a snapshot cannot restore is named with its entity, and

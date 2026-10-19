@@ -214,6 +214,7 @@ pub(crate) fn physics_step(
         if body.kind == BodyKind::Static {
             continue;
         }
+        let start = *body;
         let rotation = solved.delta_rotation.mul(item.pose.rotation).normalize();
         let center = item.center + solved.delta_position;
         pose.position = center - rotation.rotate(item.local_center);
@@ -221,7 +222,19 @@ pub(crate) fn physics_step(
         body.linear_velocity = solved.linear_velocity;
         body.angular_velocity = solved.angular_velocity;
         if let Err(problem) = check_state(pose, body) {
-            panic!("physics produced an invalid state for entity {entity}: {problem}");
+            let (gravity, velocity) = (settings.gravity, start.linear_velocity);
+            panic!(
+                "physics produced an invalid state for entity {entity}: {problem}; step inputs: \
+                 dt {:?}, gravity ({:?}, {:?}) at scale {:?}, linear velocity ({:?}, {:?}), \
+                 angular velocity {:?}",
+                time.dt,
+                gravity.x,
+                gravity.y,
+                start.gravity_scale,
+                velocity.x,
+                velocity.y,
+                start.angular_velocity
+            );
         }
     }
 }
