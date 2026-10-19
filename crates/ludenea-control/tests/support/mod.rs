@@ -116,7 +116,7 @@ pub fn every_command() -> Vec<Command> {
             expected: vec![Hash64(1)],
             assets: vec![(AssetId(7), "a".into())],
             branches: bytes.clone(),
-            document: Document::Prefab,
+            document: Document::Prefab { id: AssetId(7) },
             keeps_assets: false,
         },
         Command::GetAsset { id: AssetId(7) },

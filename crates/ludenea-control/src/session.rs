@@ -24,8 +24,8 @@ use ludenea_app::path::PathSegment;
 use ludenea_app::prefab;
 use ludenea_app::replay::{Replay, ReplayError, keep_assets, load_replay, record_loaded_replay};
 use ludenea_app::{
-    AssetTexts, Edit, EditError, EditLog, EntityRef, InputLog, LoadAddress, SceneError, SimError,
-    Simulation, TimedEdit,
+    AssetSource, AssetTexts, Edit, EditError, EditLog, EntityRef, InputLog, LoadAddress,
+    SceneError, SimError, Simulation, TimedEdit,
 };
 use ludenea_ecs::{AssetId, Entity, Snapshot, SnapshotError};
 use serde::{Deserialize, Serialize};
@@ -104,7 +104,10 @@ pub enum SessionError {
 pub enum Document {
     #[default]
     Scene,
-    Prefab,
+    /// The prefab file of asset `id`. Every load of the session reads its text, not the
+    /// asset text, for `id`, so an instance of the prefab inside itself, even a nested one,
+    /// is a cycle.
+    Prefab { id: AssetId },
 }
 
 /// What the timeline shows.
@@ -612,7 +615,7 @@ impl Session {
             }
             return self.record_scene_edit(sim, &edit);
         }
-        let loads = sim.assets_introduced_by(&edit, &self.assets)?;
+        let loads = self.with_sources(|sources| sim.assets_introduced_by(&edit, sources))?;
         let edit = TimedEdit {
             tick: self.current,
             edit,
@@ -937,7 +940,7 @@ impl Session {
             .iter()
             .take_while(|edit| edit.tick == tick);
         for edit in later {
-            match sim.assets_introduced_by(&edit.edit, &self.assets) {
+            match self.with_sources(|sources| sim.assets_introduced_by(&edit.edit, sources)) {
                 Ok(loads) => needed.extend(loads.into_iter().filter_map(|load| match load {
                     Edit::LoadAsset { id, .. } => Some(id),
                     _ => None,
@@ -1169,7 +1172,7 @@ impl Session {
                 },
             )
             .collect::<Result<Vec<u32>, SessionError>>()?;
-        prefab::save_prefab_checked(prefab, &prefab_text, &self.assets)?;
+        self.with_sources(|sources| prefab::save_prefab_checked(prefab, &prefab_text, sources))?;
         let (scene, id) = prefab::replace_with_instance(&self.scene, &locals, prefab)?;
         let previous = self.assets.insert(prefab, prefab_text);
         if let Err(error) = self.change_scene(sim, scene) {
@@ -1231,15 +1234,17 @@ impl Session {
         path: &[PathSegment],
     ) -> Result<String, SessionError> {
         self.ensure_resimulated()?;
-        let (id, after, scene) = prefab::move_overrides_to_prefab(
-            &self.scene,
-            &self.assets,
-            instance,
-            entity,
-            component,
-            path,
-        )?;
-        prefab::save_prefab_checked(id, &after, &self.assets)?;
+        let (id, after, scene) = self.with_sources(|sources| {
+            prefab::move_overrides_to_prefab(
+                &self.scene,
+                sources,
+                instance,
+                entity,
+                component,
+                path,
+            )
+        })?;
+        self.with_sources(|sources| prefab::save_prefab_checked(id, &after, sources))?;
         let before = self
             .assets
             .get(&id)
@@ -2059,6 +2064,11 @@ impl Session {
         load_kept(sim, self.document, text, assets, self.keeps_assets)
     }
 
+    /// Runs `read` on the session's asset texts as its loads read them (see `Document`).
+    fn with_sources<T>(&self, read: impl FnOnce(&dyn AssetSource) -> T) -> T {
+        with_sources(self.document, &self.scene, &self.assets, read)
+    }
+
     /// Loads a scene version from the undo history, like a tick 0 edit.
     fn load_scene_version(
         &mut self,
@@ -2185,7 +2195,9 @@ impl Session {
         sim: &mut Simulation,
         edit: &Edit,
     ) -> Result<Option<Entity>, SessionError> {
-        if self.document == Document::Prefab && matches!(edit, Edit::SetResource { .. }) {
+        if matches!(self.document, Document::Prefab { .. })
+            && matches!(edit, Edit::SetResource { .. })
+        {
             return Err(SessionError::PrefabHasNoResources);
         }
         self.restore_checkpoint(sim, 0)?;
@@ -2225,7 +2237,7 @@ impl Session {
         let scene = sim.save_scene_keeping(&scene_form(self.document, &self.scene)?)?;
         Ok(match self.document {
             Document::Scene => scene,
-            Document::Prefab => prefab::scene_as_prefab(&scene)?,
+            Document::Prefab { .. } => prefab::scene_as_prefab(&scene)?,
         })
     }
 
@@ -2302,7 +2314,8 @@ impl Session {
             .assets
             .get(&instance.prefab)
             .ok_or(EditError::MissingAsset(instance.prefab))?;
-        let resolved = ludenea_app::resolve(&prefab::prefab_as_scene(text)?, &self.assets)?;
+        let scene = prefab::prefab_as_scene(text)?;
+        let resolved = self.with_sources(|sources| ludenea_app::resolve(&scene, sources))?;
         Ok(resolved
             .entities
             .iter()
@@ -2388,16 +2401,36 @@ fn load(
     text: &str,
     assets: &AssetTexts,
 ) -> Result<Vec<String>, SessionError> {
-    Ok(sim
-        .load_scene_with(&scene_form(document, text)?, assets)?
-        .warnings)
+    let scene = scene_form(document, text)?;
+    let load = with_sources(document, text, assets, |sources| {
+        sim.load_scene_with(&scene, sources)
+    })?;
+    Ok(load.warnings)
+}
+
+/// Runs `read` on the asset texts that `text`, the file of `document`, is read with: a
+/// prefab document's text stands for its own asset (see `Document::Prefab`).
+fn with_sources<T>(
+    document: Document,
+    text: &str,
+    assets: &AssetTexts,
+    read: impl FnOnce(&dyn AssetSource) -> T,
+) -> T {
+    match document {
+        Document::Scene => read(assets),
+        Document::Prefab { id } => read(&prefab::Overlay {
+            id,
+            file: text,
+            assets,
+        }),
+    }
 }
 
 /// The scene a simulation loads for `text`: a prefab file becomes a scene.
 fn scene_form(document: Document, text: &str) -> Result<String, SessionError> {
     Ok(match document {
         Document::Scene => text.to_string(),
-        Document::Prefab => prefab::prefab_as_scene(text)?,
+        Document::Prefab { .. } => prefab::prefab_as_scene(text)?,
     })
 }
 

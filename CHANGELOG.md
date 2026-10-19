@@ -154,10 +154,17 @@ session (the editor's copy of each open document's session), and the plugin API.
   override into the session's text of the instance's prefab and out of the scene, as one
   tick 0 edit that one undo takes back; `ludenea_app::prefab::move_overrides_to_prefab` is
   its text operation.
+- `Document::Prefab { id }` names the prefab's asset. Every load of a prefab session reads
+  the document's text for `id`, through the now public `ludenea_app::prefab::Overlay`, so
+  an edit that puts the prefab inside itself, directly or through another prefab, fails
+  with `SceneError::PrefabCycle` and changes nothing, and so does starting or resuming a
+  session on such a file. It was accepted, and the saved prefab then failed to load in
+  every scene using it. The serde helper `protocol::outcome::Wire::Ok` holds a
+  `Box<Reply>`, since a reply carrying the document outgrew an unboxed variant.
 
 ### Control protocol
 
-- Control protocol 4, fingerprint `bbbbeec8251a0960`.
+- Control protocol 4, fingerprint `8c1f6be87e649d47`.
 - `hello` and `welcome` carry `protocol_fingerprint`, a hash of the TypeScript declarations
   of every type the messages reach. The host refuses a client of another version or
   fingerprint with `version_mismatch` and says to rebuild the editor
@@ -210,6 +217,14 @@ session (the editor's copy of each open document's session), and the plugin API.
   instance without that override is refused with `invalid_scene`. It still replies the new
   prefab text. It used to take the instance's value at the current tick, simulated past
   tick 0, and to change neither the scene nor the session's prefab text.
+- The `document` of `load_scene`, `load_session` and the `session` reply names a prefab
+  document's asset: `{ "Prefab": { "id": "<asset id>" } }` replaces `"Prefab"`. Its
+  instances resolve against the document's text, so a `place_instance` or another tick 0
+  edit that puts the prefab inside itself, directly or through another prefab, fails with
+  `invalid_scene` and changes nothing; it was accepted, and the saved prefab then failed
+  to load in every scene using it. `save_scene` checks a prefab document as a prefab file
+  before it marks it saved: an instance cycle or an entity reference outside the prefab
+  fails with `invalid_scene`.
 
 ### Project protocol
 

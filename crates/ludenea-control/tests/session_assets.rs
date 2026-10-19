@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use boxes::SpawnerStats;
-use ludenea::app::prefab::{create_prefab, save_prefab_checked};
+use ludenea::app::prefab::{create_prefab, place_instance, save_prefab_checked};
 use ludenea::cli::assets::project_assets;
 use ludenea::control::session::Document;
 use ludenea::control::{Resimulation, Session, SessionError};
@@ -524,7 +524,8 @@ fn apply_to_asset_copies_value() {
 fn prefab_session() -> (Simulation, Session) {
     let mut sim = simulation();
     let prefab = fs::read_to_string(CRATE_PREFAB).unwrap();
-    let session = Session::start(&mut sim, prefab, assets(), Document::Prefab).unwrap();
+    let session =
+        Session::start(&mut sim, prefab, assets(), Document::Prefab { id: PREFAB }).unwrap();
     (sim, session)
 }
 
@@ -541,6 +542,22 @@ fn prefab_document_saves_prefab_text() {
     assert!(text.contains("x:2.5"), "{text}");
     save_prefab_checked(PREFAB, &text, &assets()).unwrap();
     assert!(pose_at(&sim, &[0]).contains("x:2.5"));
+}
+
+#[test]
+fn placing_a_prefab_inside_itself_is_refused() {
+    let (mut sim, mut session) = prefab_session();
+    let text = session.scene().to_string();
+
+    let error = session.place_instance(&mut sim, PREFAB).unwrap_err();
+
+    assert!(
+        matches!(&error, SessionError::Scene(SceneError::PrefabCycle(chain))
+            if *chain == [PREFAB.to_string(), PREFAB.to_string()]),
+        "{error}"
+    );
+    assert_eq!(session.scene(), text);
+    assert!(!session.timeline().can_undo);
 }
 
 #[test]
@@ -760,7 +777,8 @@ fn tick_0_edit_on_a_nested_instance_entity_overrides_the_outer_instance() {
 #[test]
 fn tick_0_edit_on_an_instance_entity_in_a_prefab_document_overrides_it() {
     let mut sim = simulation();
-    let mut session = Session::start(&mut sim, outer_prefab(), assets(), Document::Prefab).unwrap();
+    let document = Document::Prefab { id: OUTER };
+    let mut session = Session::start(&mut sim, outer_prefab(), assets(), document).unwrap();
 
     let edit = insert_pose(&sim, vec![0, 0], 2.5);
     session.edit(&mut sim, edit).unwrap();
@@ -776,6 +794,35 @@ fn tick_0_edit_on_an_instance_entity_in_a_prefab_document_overrides_it() {
     assets.insert(OUTER, text.clone());
     save_prefab_checked(OUTER, &text, &assets).unwrap();
     assert!(pose_at(&sim, &[0, 0]).contains("x:2.5"));
+}
+
+#[test]
+fn a_prefab_document_reaching_itself_through_another_prefab_is_refused() {
+    // The outer prefab holds an instance of the crate prefab, opened as the document.
+    let mut assets = assets();
+    assets.insert(OUTER, outer_prefab());
+    let text = fs::read_to_string(CRATE_PREFAB).unwrap();
+    let document = Document::Prefab { id: PREFAB };
+    let mut sim = simulation();
+    let mut session = Session::start(&mut sim, text.clone(), assets.clone(), document).unwrap();
+
+    let error = session.place_instance(&mut sim, OUTER).unwrap_err();
+
+    assert!(
+        matches!(&error, SessionError::Scene(SceneError::PrefabCycle(chain))
+            if *chain == [OUTER.to_string(), PREFAB.to_string(), OUTER.to_string()]),
+        "{error}"
+    );
+    assert_eq!(session.scene(), text);
+    // A prefab file that already holds such an instance does not load as its document.
+    let (cyclic, _) = place_instance(&text, OUTER).unwrap();
+    let Err(error) = Session::start(&mut sim, cyclic, assets, document) else {
+        panic!("a prefab document holding itself loaded");
+    };
+    assert!(
+        matches!(error, SessionError::Scene(SceneError::PrefabCycle(_))),
+        "{error}"
+    );
 }
 
 /// Game code writing a rotation that is not unit length, which loading refuses, from tick 10.

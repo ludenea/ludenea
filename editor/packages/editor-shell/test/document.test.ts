@@ -38,7 +38,7 @@ describe("document store", () => {
       type: "load_scene",
       scene: project.disk["assets/ball.prefab.ron"],
       assets: project.assets(),
-      document: "Prefab",
+      document: { Prefab: { id: ids.ball } },
     });
   });
 

@@ -723,11 +723,13 @@ pub fn save_prefab_checked(
     Resolver::new(&overlay).prefab(id, &[], &mut Vec::new())
 }
 
-/// `assets` with the text of `id` replaced by `file`.
-struct Overlay<'a> {
-    id: AssetId,
-    file: &'a str,
-    assets: &'a dyn AssetSource,
+/// `assets` with the text of `id` replaced by `file`, such as a prefab being edited: its
+/// instances then resolve against `file`, so an instance of `id` in it, even a nested one,
+/// is a cycle.
+pub struct Overlay<'a> {
+    pub id: AssetId,
+    pub file: &'a str,
+    pub assets: &'a dyn AssetSource,
 }
 
 impl AssetSource for Overlay<'_> {

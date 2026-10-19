@@ -80,7 +80,11 @@ type ComponentValue = {
 /**
  * What the session edits: its scene text is a scene file or a prefab file.
  */
-type Document = "Scene" | "Prefab";
+type Document = "Scene" | {
+    "Prefab": {
+        id: AssetId;
+    };
+};
 
 /**
  * What `SetField` changes.
@@ -1004,7 +1008,7 @@ type ServerMessage = {
 /** The control protocol version this build speaks: a client and a host connect only when theirs are equal. */
 const PROTOCOL_VERSION = 4;
 /** The wire shape of `PROTOCOL_VERSION`, a hash of the protocol's types: a client and a host connect only when theirs are equal too. */
-const PROTOCOL_FINGERPRINT = "bbbbeec8251a0960";
+const PROTOCOL_FINGERPRINT = "8c1f6be87e649d47";
 /** The `type` of the reply each command type gets when it succeeds. */
 type ReplyTypes = {
     apply_override: "done";

@@ -647,7 +647,7 @@ fn export_and_load_session_round_trips_assets_branches_and_document() {
         Command::LoadScene {
             scene: fs::read_to_string(CRATE_PREFAB).unwrap(),
             assets: assets(),
-            document: Document::Prefab,
+            document: Document::Prefab { id: PREFAB },
         },
     );
     step(&mut host, 5);
@@ -692,7 +692,7 @@ fn export_and_load_session_round_trips_assets_branches_and_document() {
     else {
         panic!("export_session replies session");
     };
-    assert_eq!(document, Document::Prefab);
+    assert_eq!(document, Document::Prefab { id: PREFAB });
     assert!(!assets.is_empty() && !tree.0.is_empty());
 
     let mut loaded = Host::new(boxes::app).unwrap();
@@ -736,7 +736,7 @@ fn export_and_load_session_round_trips_assets_branches_and_document() {
     };
     assert_eq!(reloaded, hashes);
     assert_eq!(reloaded_assets, assets);
-    assert_eq!(document, Document::Prefab);
+    assert_eq!(document, Document::Prefab { id: PREFAB });
 
     // Deleting B deletes C, its descendant, too.
     assert_eq!(
@@ -1071,6 +1071,80 @@ fn place_instance_over_protocol() {
             .starts_with("entity 7/0 belongs to a prefab instance"),
         "{error:?}"
     );
+}
+
+#[test]
+fn a_prefab_document_refuses_an_instance_of_itself() {
+    let mut host = Host::new(boxes::app).unwrap();
+    let text = fs::read_to_string(CRATE_PREFAB).unwrap();
+    ok(
+        &mut host,
+        Command::LoadScene {
+            scene: text.clone(),
+            assets: assets(),
+            document: Document::Prefab { id: PREFAB },
+        },
+    );
+
+    let error = host
+        .handle(Command::PlaceInstance { prefab: PREFAB })
+        .unwrap_err();
+
+    assert_eq!(error.code, ErrorCode::InvalidScene);
+    assert!(
+        error.message.starts_with(&format!(
+            "prefab instances form a cycle: {PREFAB} -> {PREFAB}"
+        )),
+        "{error:?}"
+    );
+    assert_eq!(scene_text(&mut host), text);
+}
+
+/// A component naming another entity.
+#[derive(Component, Serialize, Deserialize)]
+struct Link {
+    to: Entity,
+}
+
+fn link_app() -> App {
+    let mut app = boxes::app();
+    app.component::<Link>();
+    app
+}
+
+#[test]
+fn save_scene_checks_a_prefab_document_before_marking_it_saved() {
+    let mut host = Host::new(link_app).unwrap();
+    // Entity 0 names local 1, which the prefab does not have: a scene load keeps such a
+    // reference, a prefab file cannot.
+    let prefab = r#"Prefab(version: 1, next_id: 2, entities: [
+        (id: 0, components: {"protocol_v3::Link": (to: (index: 1, generation: 0))}),
+    ])"#;
+    ok(
+        &mut host,
+        Command::LoadScene {
+            scene: prefab.to_string(),
+            assets: Vec::new(),
+            document: Document::Prefab { id: AssetId(0xa) },
+        },
+    );
+    ok(
+        &mut host,
+        Command::Spawn {
+            components: Default::default(),
+        },
+    );
+
+    let error = host.handle(Command::SaveScene).unwrap_err();
+
+    assert_eq!(error.code, ErrorCode::InvalidScene);
+    assert!(
+        error.message.starts_with(
+            "component `protocol_v3::Link` of entity 0 references an entity outside the prefab"
+        ),
+        "{error:?}"
+    );
+    assert!(timeline(&mut host).scene_dirty);
 }
 
 #[test]

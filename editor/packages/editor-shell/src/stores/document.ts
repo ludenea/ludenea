@@ -230,7 +230,7 @@ export function createDocumentStore(options: {
     const command: Command =
       document.kind === "replay"
         ? { type: "load_replay", replay: source.replay }
-        : { type: "load_scene", scene: text!, assets: source.texts.assets, document: document.kind === "prefab" ? "Prefab" : "Scene" };
+        : { type: "load_scene", scene: text!, assets: source.texts.assets, document: document.kind === "prefab" ? { Prefab: { id: document.id } } : "Scene" };
     return game.request(command).catch(locatedIn(source.texts.paths));
   };
   const storeIn = (document: OpenDocument, saved: SavedSession) =>

@@ -518,6 +518,10 @@ impl Host {
             }
             Command::SaveScene => {
                 let ron = self.session.scene().to_string();
+                if let Document::Prefab { id } = self.session.document() {
+                    prefab::save_prefab_checked(id, &ron, self.session.assets())
+                        .map_err(scene_error)?;
+                }
                 self.session.mark_scene_saved();
                 Ok(Reply::Scene { ron })
             }

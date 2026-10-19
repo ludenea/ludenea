@@ -779,10 +779,11 @@ fn wire_format_matches_golden_json() {
         to(&Command::LoadScene {
             scene: "s".into(),
             assets: vec![(AssetId(0xab), "a".into())],
-            document: Document::Prefab,
+            document: Document::Prefab { id: AssetId(0xab) },
         }),
         json!({"type":"load_scene","scene":"s",
-            "assets":[["000000000000000000000000000000ab","a"]],"document":"Prefab"})
+            "assets":[["000000000000000000000000000000ab","a"]],
+            "document":{"Prefab":{"id":"000000000000000000000000000000ab"}}})
     );
     let error = ProtocolError {
         code: ErrorCode::NoSuchEntity,

@@ -26,7 +26,7 @@ pub const PROTOCOL_VERSION: u32 = 4;
 /// the messages reach, without their documentation. A client and a host connect only when
 /// theirs are equal too, so builds from different revisions of one version refuse each other
 /// instead of misreading fields. `tests/typescript.rs` pins it.
-pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0xbbbb_eec8_251a_0960);
+pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0x8c1f_6be8_7e64_9d47);
 
 /// Binary data, serialized as a standard base64 string.
 #[derive(Clone, Debug, PartialEq)]
@@ -84,7 +84,8 @@ pub mod outcome {
     #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "Outcome"))]
     #[serde(rename_all = "snake_case")]
     pub enum Wire {
-        Ok(Reply),
+        /// Boxed: the largest reply is many times the size of an error.
+        Ok(Box<Reply>),
         Error(ProtocolError),
     }
 
@@ -93,7 +94,7 @@ pub mod outcome {
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
         match result {
-            Ok(reply) => Wire::Ok(reply.clone()),
+            Ok(reply) => Wire::Ok(Box::new(reply.clone())),
             Err(error) => Wire::Error(error.clone()),
         }
         .serialize(serializer)
@@ -103,7 +104,7 @@ pub mod outcome {
         deserializer: D,
     ) -> Result<Result<Reply, ProtocolError>, D::Error> {
         Ok(match Wire::deserialize(deserializer)? {
-            Wire::Ok(reply) => Ok(reply),
+            Wire::Ok(reply) => Ok(*reply),
             Wire::Error(error) => Err(error),
         })
     }
@@ -271,7 +272,9 @@ pub enum Command {
         path: Vec<PathSegment>,
         value: JsonValue,
     },
-    /// The session's scene, whatever the current tick, marked as saved.
+    /// The session's scene, whatever the current tick, marked as saved. A prefab document
+    /// is checked first, as every prefab file before it is written: an instance cycle or an
+    /// entity reference outside the prefab fails with `invalid_scene`, unmarked.
     SaveScene,
     /// Copies the current value of a component into the scene, as a tick 0 edit: the
     /// session resimulates, then returns to the current tick. The entity must exist at
