@@ -43,8 +43,10 @@ beforeAll(() => {
 async function editor(
   options: { warnings?: string[]; refuse?: (scene: string) => string | null; overrides?: Override[]; game?: (command: { type: string }) => object | undefined; project?: (request: { type: string }) => object | undefined } = {},
 ) {
-  // What the host reports of instance 5's overrides; a field edit on its entity adds one.
-  const held = { overrides: options.overrides ?? [override("position", "x")] };
+  // What the host reports of instance 5's overrides (a field edit on its entity adds one), and
+  // its text of the ball prefab ("Apply to prefab" changes it, undo takes it back).
+  const original = { overrides: options.overrides ?? [override("position", "x")], prefab: "(assets/ball.prefab.ron)" };
+  const held = { ...original };
   const instances = () => [
     { address: [4], prefab: BALL, entities: [entity(4)], overrides: [] },
     { address: [5], prefab: BALL, entities: [entity(5)], overrides: held.overrides },
@@ -79,7 +81,12 @@ async function editor(
       if (command.type === "get_entity") return { type: "entity", entity: command.entity, components: { [POSE]: { type: "json", value: { position: { x: -1.5, y: 3 }, rotation: { cos: 1, sin: 0 } } } } };
       if (command.type === "get_resources") return { type: "resources", resources: {} };
       if (command.type === "create_prefab") return { type: "text", text: "(new prefab)" };
-      if (command.type === "apply_to_prefab") return { type: "text", text: "(applied)" };
+      if (command.type === "apply_to_prefab") {
+        Object.assign(held, { overrides: [], prefab: "(applied)" });
+        return { type: "text", text: held.prefab };
+      }
+      if (command.type === "undo") Object.assign(held, original);
+      if (command.type === "save_asset") return command.id === BALL ? { type: "text", text: held.prefab } : { error: { code: "invalid_command", message: "no such asset" } };
       if (command.type === "place_instance" || command.type === "replace_with_instance") return { type: "placed", instance: 6 };
       return { type: "done" };
     },
@@ -180,7 +187,7 @@ describe("prefabs", () => {
     ]);
   });
 
-  it("apply_writes_returned_prefab_text", async () => {
+  it("apply_moves_the_override_into_the_unsaved_prefab_until_it_is_saved", async () => {
     const { host, game } = await editor();
     const section = await inspectInstanceEntity(host);
 
@@ -188,7 +195,48 @@ describe("prefabs", () => {
     await settle();
 
     expect(sent(game, "apply_to_prefab")).toEqual([{ type: "apply_to_prefab", instance: [5], entity: [0], component: POSE, path: [field("position"), field("x")] }]);
+    // The override is gone, and the prefab's new text stays in the session until saved.
+    expect(section.queryByLabelText("position.x overridden")).toBeNull();
+    expect(host.editor.document.getState().unsavedAssets).toEqual([BALL]);
+    expect(host.project.sent.filter((request) => request.type === "write_text")).toEqual([]);
+
+    renderPanel(host, "ludenea.scene-tree");
+    const group = screen.getAllByRole("group", { name: "ball.prefab.ron" })[1]!;
+    expect(within(group).getByLabelText("unsaved changes")).toBeTruthy();
+    fireEvent.click(within(group).getByRole("button", { name: "Save prefab ball.prefab.ron" }));
+    await settle();
+
+    expect(sent(game, "save_asset")).toEqual([{ type: "save_asset", id: BALL }]);
     expect(host.project.sent).toContainEqual({ type: "write_text", path: "assets/ball.prefab.ron", text: "(applied)" });
+    expect(host.editor.document.getState().unsavedAssets).toEqual([]);
+    expect(within(group).queryByLabelText("unsaved changes")).toBeNull();
+  });
+
+  it("undoing_an_apply_brings_the_override_back_and_leaves_the_prefab_saved", async () => {
+    const { host } = await editor();
+    const section = await inspectInstanceEntity(host);
+    fireEvent.click(section.getByRole("button", { name: "Apply position.x to prefab" }));
+    await settle();
+    expect(host.editor.document.getState().unsavedAssets).toEqual([BALL]);
+
+    await act(() => host.editor.commands.run("edit.undo"));
+    await settle();
+
+    expect(section.getByLabelText("position.x overridden")).toBeTruthy();
+    expect(host.editor.document.getState().unsavedAssets).toEqual([]);
+  });
+
+  it("the_open_prefab_is_never_marked_as_an_unsaved_asset", async () => {
+    const { host, held } = await editor();
+    await act(() => host.editor.document.getState().open(BALL));
+    await settle();
+    // The session edits the open prefab as its document: its asset text stays as loaded.
+    held.prefab = "(as loaded)";
+
+    await act(() => host.editor.commands.run("edit.redo"));
+    await settle();
+
+    expect(host.editor.document.getState().unsavedAssets).toEqual([]);
   });
 
   it("place_prefab_sends_place_instance", async () => {

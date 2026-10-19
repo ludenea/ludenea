@@ -243,6 +243,11 @@ session (the editor's copy of each open document's session), and the plugin API.
   plugin reloads; none of them reach only the browser's developer tools any more.
 - Removed: `logToConsole` from `@ludenea/editor-builtins` and the `log` option of
   `createEditor` with its `DocumentLog` type; use `editor.console`.
+- "Apply to prefab" (`Prefabs.apply`) no longer writes the prefab file. It marks the prefab
+  in `unsavedAssets`, the scene tree shows each group of an unsaved prefab with a "Save
+  prefab" button, and undo clears the mark. The `inspector.save-asset` command saves the
+  asset whose identifier it is given, a prefab included, and the selected data asset
+  without one.
 
 ### Formats
 

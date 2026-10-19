@@ -1,5 +1,6 @@
 import type { ControlClient, Entity, FileEntry, InstanceInfo, OverrideInfo, PathSegment } from "@ludenea/control-client";
 import { definePlugin, type Editor, type Loaded, type TimelineState } from "@ludenea/editor-shell";
+import { markUnsaved } from "../inspector";
 import { createStore, errorText, showPanel, type Store } from "../shared";
 import { entityKey } from "../shared/EntityList";
 import { assertEditable, edit, onEdited } from "../timeline/editing";
@@ -28,6 +29,7 @@ export interface Prefabs {
   state: Store<PrefabsState>;
   place(prefab: string): Promise<void>;
   revert(target: Target): Promise<void>;
+  /** Moves the override into the instance's prefab, whose new text the session holds, unsaved, until the prefab is saved. */
   apply(target: Target): Promise<void>;
 }
 
@@ -120,12 +122,9 @@ export const prefabsPlugin = definePlugin({
       async apply(target) {
         const located = targetOf(target);
         const prefab = state.get().instances.find((instance) => instance.address.join() === located.instance.join())?.prefab;
-        const { entries } = await editor.project.request({ type: "list_files" });
-        const path = entries.find((file) => file.id === prefab)?.path;
-        if (!path) throw new Error(`the prefab ${prefab ?? "of the instance"} has no file in the project`);
-        const { text } = await game().request({ type: "apply_to_prefab", ...located, component: target.component, path: target.path });
-        // The change on disk reloads the open scene with the new prefab.
-        await editor.project.request({ type: "write_text", path, text });
+        if (!prefab) throw new Error(`instance ${located.instance.join("/")} is not in the scene`);
+        await edit(editor, game(), { type: "apply_to_prefab", ...located, component: target.component, path: target.path });
+        markUnsaved(editor, prefab, true);
       },
     };
     plugins.set(editor, prefabs);

@@ -68,10 +68,11 @@ export const inspectorPlugin = definePlugin({
         await onEntity(editor, edit(editor, control, { type: "apply_to_scene", entity, component }));
       },
     });
-    const selectedAsset = () => {
+    /** The game and the asset `asked` names, else the selected data asset. */
+    const assetOf = (asked?: unknown) => {
       const control = editor.control;
       if (!control) throw new Error("no game is running");
-      const id = editor.selection.getState().asset;
+      const id = typeof asked === "string" ? asked : editor.selection.getState().asset;
       if (!id) throw new Error("select a data asset first");
       return { control, id };
     };
@@ -79,7 +80,7 @@ export const inspectorPlugin = definePlugin({
       id: "inspector.apply-to-asset",
       title: "Apply the selected data asset's current value to the asset",
       async run() {
-        const { control, id } = selectedAsset();
+        const { control, id } = assetOf();
         await edit(editor, control, { type: "apply_to_asset", id });
         markUnsaved(editor, id, true);
       },
@@ -87,8 +88,9 @@ export const inspectorPlugin = definePlugin({
     editor.commands.register({
       id: "inspector.save-asset",
       title: "Save the selected data asset",
-      async run() {
-        const { control, id } = selectedAsset();
+      // Given an asset identifier, such as a prefab "Apply to prefab" changed, it saves that asset.
+      async run(_, asked) {
+        const { control, id } = assetOf(asked);
         const open = editor.document.getState().current;
         if (open?.kind === "replay") throw new Error(`${open.path} is a replay: its data assets are its own, never written to the project's files`);
         const { text } = await control.request({ type: "save_asset", id });
@@ -106,8 +108,8 @@ export const inspectorPlugin = definePlugin({
         }
       },
     });
-    // Undo and redo may take a tick 0 asset edit back or bring it again. A check answered
-    // after a later edit is stale: that edit's own check, or its mark, decides.
+    // Undo and redo may take a tick 0 asset edit or "Apply to prefab" back, or bring it again.
+    // A check answered after a later edit is stale: that edit's own check, or its mark, decides.
     let edits = 0;
     onEdited(editor, (command) => {
       const asked = ++edits;
@@ -123,17 +125,19 @@ export const inspectorPlugin = definePlugin({
 });
 
 /**
- * Marks each data asset unsaved whose text in the session differs from its file. A replay's
- * assets are its own: they are left as they are.
+ * Marks each prefab and data asset unsaved whose text in the session differs from its file. A
+ * replay's assets are its own: they are left as they are. So is the open prefab, which the
+ * session edits as its document, not as an asset.
  */
 async function markDiffering(editor: Editor, current: () => boolean): Promise<void> {
   const control = editor.control;
-  if (!control || editor.document.getState().current?.kind === "replay") return;
+  const open = editor.document.getState().current;
+  if (!control || open?.kind === "replay") return;
   try {
     const { entries } = await editor.project.request({ type: "list_files" });
-    const data = entries.filter((file) => typeof file.kind === "object" && "Data" in file.kind);
+    const assets = entries.filter((file) => file.id !== open?.id && (file.kind === "Prefab" || (typeof file.kind === "object" && "Data" in file.kind)));
     await Promise.all(
-      data.map(async ({ id, path }) => {
+      assets.map(async ({ id, path }) => {
         // An asset the session does not hold has nothing unsaved.
         const session = await control.request({ type: "save_asset", id }).catch(() => null);
         if (!session) return;
@@ -142,11 +146,11 @@ async function markDiffering(editor: Editor, current: () => boolean): Promise<vo
       }),
     );
   } catch (error) {
-    editor.console.log("warning", `Cannot check which data assets are unsaved: ${errorText(error)}`);
+    editor.console.log("warning", `Cannot check which assets are unsaved: ${errorText(error)}`);
   }
 }
 
-/** Marks the data asset `id` as differing from its file, or not; never in a replay, whose assets are its own. */
+/** Marks the prefab or data asset `id` as differing from its file, or not; never in a replay, whose assets are its own. */
 export function markUnsaved(editor: Editor, id: AssetId, unsaved: boolean): void {
   if (unsaved && editor.document.getState().current?.kind === "replay") return;
   const { unsavedAssets } = editor.document.getState();

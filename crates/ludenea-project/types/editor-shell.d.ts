@@ -212,8 +212,9 @@ interface DocumentState {
     /** The open replay was recorded with other game types (its schema fingerprint differs); false for a scene or prefab. */
     fingerprintDiffers: boolean;
     /**
-     * The data assets whose text in the session differs from their file (a tick 0 edit, "Apply
-     * to asset"): plugins add an asset when they change it and remove it when they save it.
+     * The prefab and data assets whose text in the session differs from their file (a tick 0
+     * edit, "Apply to asset", "Apply to prefab"): plugins add an asset when they change it and
+     * remove it when they save it.
      * Reloading changed assets keeps their session text. Stored sessions carry it: a document
      * that opens, or a new game, starts from the files' texts and marks those of the session it
      * restores again.

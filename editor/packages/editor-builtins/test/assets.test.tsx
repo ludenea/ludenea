@@ -573,7 +573,7 @@ describe("data assets, replays, traces, and snapshots", () => {
     await act(() => host.editor.commands.run("edit.undo"));
     await settle();
 
-    expect(host.editor.console.list().map(({ level, text }) => [level, text])).toContainEqual(["warning", "Cannot check which data assets are unsaved: permission denied"]);
+    expect(host.editor.console.list().map(({ level, text }) => [level, text])).toContainEqual(["warning", "Cannot check which assets are unsaved: permission denied"]);
   });
 
   it("an_unsaved_check_answered_after_a_later_edit_is_dropped", async () => {

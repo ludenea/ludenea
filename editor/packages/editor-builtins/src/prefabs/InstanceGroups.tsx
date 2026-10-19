@@ -9,7 +9,10 @@ const fileName = (path: string) => path.split("/").at(-1)!;
 // Without the prefabs plugin there is nothing to show.
 const inactive = createStore({ instances: [] as InstanceInfo[], placing: false, error: null as string | null });
 
-/** The scene's prefab instances as collapsible groups named after their prefab file, and the "Place prefab" picker. */
+/**
+ * The scene's prefab instances as collapsible groups named after their prefab file, with a save
+ * button while the session holds unsaved changes of the prefab, and the "Place prefab" picker.
+ */
 export function InstanceGroups({ editor }: { editor: Editor }) {
   const prefabs = prefabsOf(editor);
   const { instances, placing, error } = useStore<{ instances: InstanceInfo[]; placing: boolean; error: string | null }>(prefabs?.state ?? inactive);
@@ -29,6 +32,7 @@ export function InstanceGroups({ editor }: { editor: Editor }) {
 function Group({ editor, prefabs, instance }: { editor: Editor; prefabs: Prefabs; instance: InstanceInfo }) {
   const { instances, prefabs: files } = useStore(prefabs.state);
   const name = fileName(files.find((file) => file.id === instance.prefab)?.path ?? instance.prefab);
+  const unsaved = editor.document((document) => document.unsavedAssets.includes(instance.prefab));
   const depth = instance.address.length;
   const inside = (other: InstanceInfo) => other.address.length > depth && other.address.slice(0, depth).join() === instance.address.join();
   const nested = instances.filter((other) => other.address.length === depth + 1 && inside(other));
@@ -39,9 +43,27 @@ function Group({ editor, prefabs, instance }: { editor: Editor; prefabs: Prefabs
     if (event.shiftKey || event.ctrlKey || event.metaKey) selection.add(entity);
     else selection.select([entity]);
   };
+  const save = (event: MouseEvent) => {
+    // Inside the summary: the click saves, it does not fold the group.
+    event.preventDefault();
+    editor.commands.run("inspector.save-asset", instance.prefab).then(
+      () => prefabs.state.set({ error: null }),
+      (failure: unknown) => prefabs.state.set({ error: errorText(failure) }),
+    );
+  };
   return (
     <details open aria-label={name}>
-      <summary title={instance.prefab}>{name}</summary>
+      <summary title={instance.prefab}>
+        {name}
+        {unsaved && (
+          <>
+            <span aria-label="unsaved changes"> ●</span>{" "}
+            <button aria-label={`Save prefab ${name}`} onClick={save}>
+              Save prefab
+            </button>
+          </>
+        )}
+      </summary>
       {own.map((entity) => (
         <button key={entityKey(entity)} className="ludenea-link ludenea-mono" onClick={(event) => choose(entity, event)}>
           {entityKey(entity)}
