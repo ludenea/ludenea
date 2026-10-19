@@ -4,21 +4,41 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
 use axum::Router;
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade, close_code};
 use axum::extract::{Path as UrlPath, Request, State};
 use axum::http::{HeaderMap, StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use ludenea_project::protocol::{ProjectEvent, ProjectRequest, ProjectServerMessage, ServiceMode};
+use ludenea_project::protocol::{
+    FailureCode, ProjectEvent, ProjectFailure, ProjectRequest, ProjectServerMessage, ServiceMode,
+};
 use ludenea_project::service::ProjectService;
 use tokio::sync::broadcast::error::RecvError;
+use tungstenite::error::CapacityError;
 
 #[cfg(feature = "embed-editor")]
 static EMBEDDED_EDITOR: include_dir::Dir<'_> =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/../../editor/apps/web/dist");
+
+/// The largest message the project connection takes. Browsers send a message as one frame or
+/// as several (Chromium splits large ones), so it bounds both. Sized for scenes of 100,000
+/// entities (about 11 MB of text): the largest message is the session the editor stores after
+/// each edit, which holds the scene, its saved text, and two scene texts per edit at tick 0 in
+/// its undo history, base64-encoded twice. That is about 68 MB after one edit at tick 0 and
+/// 39 MB more for each further one, so six fit. A larger message is refused, then the
+/// connection closes.
+const MAX_MESSAGE_SIZE: usize = 256 << 20;
+
+/// How long a connection stays open after refusing a message, before it closes. The editor is
+/// usually still sending the rest of the message: closing at once resets the connection, and
+/// Chromium can then lose the refusal and the close frame before reading them.
+// ponytail: a fixed wait, since axum's WebSocket cannot read past the refused message; reading
+// and discarding the rest until the editor closes would need the raw connection.
+const LINGER: Duration = Duration::from_secs(1);
 
 pub struct Options {
     pub project: PathBuf,
@@ -100,7 +120,10 @@ async fn project_socket(
     if !same_origin(&headers, &app.allowed_origins) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    upgrade.on_upgrade(move |socket| session(app, socket))
+    upgrade
+        .max_frame_size(MAX_MESSAGE_SIZE)
+        .max_message_size(MAX_MESSAGE_SIZE)
+        .on_upgrade(move |socket| session(app, socket))
 }
 
 /// Listening beyond this machine lets anyone on the network edit and build the project, which
@@ -188,7 +211,13 @@ async fn session(app: App, mut socket: WebSocket) {
             frame = socket.recv() => {
                 let text = match frame {
                     Some(Ok(Message::Text(text))) => text,
-                    Some(Ok(Message::Close(_)) | Err(_)) | None => return,
+                    Some(Err(error)) => {
+                        if let Some((size, limit)) = oversized(error) {
+                            refuse_oversized(&mut socket, size, limit).await;
+                        }
+                        return;
+                    }
+                    Some(Ok(Message::Close(_))) | None => return,
                     Some(Ok(_)) => continue,
                 };
                 let service = Arc::clone(&app.service);
@@ -227,11 +256,57 @@ async fn session(app: App, mut socket: WebSocket) {
                 .map(|event| ProjectServerMessage::Event { event }),
         );
         for message in messages {
-            let text = serde_json::to_string(&message).expect("protocol messages serialize");
-            if socket.send(Message::Text(text.into())).await.is_err() {
+            if send(&mut socket, &message).await.is_err() {
                 return;
             }
         }
+    }
+}
+
+async fn send(socket: &mut WebSocket, message: &ProjectServerMessage) -> Result<(), axum::Error> {
+    let text = serde_json::to_string(message).expect("protocol messages serialize");
+    socket.send(Message::Text(text.into())).await
+}
+
+/// The size and the limit of a message over [`MAX_MESSAGE_SIZE`], if `error` refuses one:
+/// the size received so far when it came in several frames.
+fn oversized(error: axum::Error) -> Option<(usize, usize)> {
+    match *error.into_inner().downcast::<tungstenite::Error>().ok()? {
+        tungstenite::Error::Capacity(CapacityError::MessageTooLong { size, max_size }) => {
+            Some((size, max_size))
+        }
+        _ => None,
+    }
+}
+
+/// Tells the editor why its message of at least `size` bytes is refused, logs it, and closes
+/// the connection, which cannot read past that message, after [`LINGER`].
+async fn refuse_oversized(socket: &mut WebSocket, size: usize, limit: usize) {
+    let mib = limit >> 20;
+    eprintln!(
+        "warning: refused a project message of at least {size} bytes, over the limit of \
+         {limit} bytes ({mib} MiB); its connection is closed"
+    );
+    let error = ProjectFailure::new(
+        FailureCode::InvalidRequest,
+        format!(
+            "the project service refused a message of at least {size} bytes: it takes up to \
+             {limit} bytes ({mib} MiB), and closes the connection; reload the editor to \
+             connect again"
+        ),
+    );
+    let reason = format!("message of at least {size} bytes, over the limit of {limit} bytes");
+    let close = CloseFrame {
+        code: close_code::SIZE,
+        reason: reason.into(),
+    };
+    // A failed send means the editor is gone already: nothing to wait for.
+    if send(socket, &ProjectServerMessage::Refused { error })
+        .await
+        .is_ok()
+        && socket.send(Message::Close(Some(close))).await.is_ok()
+    {
+        tokio::time::sleep(LINGER).await;
     }
 }
 

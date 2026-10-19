@@ -164,6 +164,12 @@ Only pages served from the address the browser used may open the project connect
 development server on another port that proxies it (Vite on `http://localhost:5173`, for
 example) needs `--allow-origin http://localhost:5173` (repeatable).
 
+The project connection takes messages up to 256 MiB, in one frame or several. The largest
+message is the session the editor stores after each edit: for a scene of 100,000 entities
+(about 11 MB of text), about 68 MB after one edit at tick 0 and 39 MB more for each further
+one. A larger message is refused with its size and the limit, which the editor shows in its
+console and the tool logs, then the connection closes; reload the editor to connect again.
+
 Built with `--features embed-editor`, the `ludenea` binary carries the editor and needs no
 `--editor-dir`. The desktop application (Tauri) runs the same editor with the game as a
 native process:

@@ -266,6 +266,10 @@ API.
 - `set_aside_stored_session { document }` moves the stored session of a document, which the
   editor could not restore, where no later `store_session` overwrites it, and answers
   `set_aside` with its new path, or a null path when none is stored.
+- `ludenea serve` takes messages up to 256 MiB, in one frame or several. It took frames up
+  to 16 MiB and messages up to 64 MiB, and closed the connection without a word on a larger
+  one. A larger message now gets `refused` (`invalid_request`) naming its size and the
+  limit, then a close with code 1009, and the tool logs it.
 
 ### Plugin API
 

@@ -5,19 +5,25 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
 use ludenea_project::protocol::{
-    PROJECT_PROTOCOL_FINGERPRINT, PROJECT_PROTOCOL_VERSION, ProjectClientMessage, ProjectEvent,
-    ProjectReply, ProjectRequest, ProjectServerMessage,
+    FailureCode, PROJECT_PROTOCOL_FINGERPRINT, PROJECT_PROTOCOL_VERSION, ProjectClientMessage,
+    ProjectEvent, ProjectFailure, ProjectReply, ProjectRequest, ProjectServerMessage,
 };
 use ludenea_project::{AssetKind, FileChange};
 use tempfile::TempDir;
 use tungstenite::client::IntoClientRequest;
+use tungstenite::protocol::frame::coding::{CloseCode, Data, OpCode};
+use tungstenite::protocol::frame::{Frame, FrameHeader};
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The largest message the project connection takes, as the README documents it.
+const MESSAGE_LIMIT: usize = 256 << 20;
 
 type Socket = WebSocket<MaybeTlsStream<TcpStream>>;
 
@@ -25,6 +31,8 @@ struct Server {
     child: Child,
     address: String,
     root: PathBuf,
+    /// The lines the server writes to its standard error.
+    log: Receiver<String>,
     _dir: TempDir,
 }
 
@@ -61,8 +69,18 @@ fn serve_with(options: &[&str]) -> Server {
         .args(["serve", root.to_str().unwrap(), "--port", "0"])
         .args(options)
         .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    let stderr = BufReader::new(child.stderr.take().unwrap());
+    let (lines, log) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in stderr.lines().map_while(Result::ok) {
+            if lines.send(line).is_err() {
+                break;
+            }
+        }
+    });
     let mut line = String::new();
     BufReader::new(child.stdout.take().unwrap())
         .read_line(&mut line)
@@ -76,7 +94,21 @@ fn serve_with(options: &[&str]) -> Server {
         child,
         address,
         root: root.canonicalize().unwrap(),
+        log,
         _dir: dir,
+    }
+}
+
+/// The next line the server logs that contains `text`.
+fn logged(server: &Server, text: &str) -> String {
+    loop {
+        let line = server
+            .log
+            .recv_timeout(TIMEOUT)
+            .expect("the server logs it in time");
+        if line.contains(text) {
+            return line;
+        }
     }
 }
 
@@ -346,4 +378,94 @@ fn an_editor_connecting_after_the_build_learns_how_it_ended() {
     let mut late = connect(&server, None).unwrap();
     handshake(&mut late);
     assert_eq!(build_finished(&mut late), ok);
+}
+
+/// The refusal the service sends before it closes the connection, skipping the events that
+/// arrive first, and the close frame that follows it.
+fn refusal_then_close(socket: &mut Socket) -> (ProjectFailure, CloseCode) {
+    let error = loop {
+        match receive(socket) {
+            ProjectServerMessage::Refused { error } => break error,
+            ProjectServerMessage::Event { .. } => {}
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    };
+    match socket.read() {
+        Ok(Message::Close(Some(frame))) => (error, frame.code),
+        other => panic!("expected a close frame after the refusal, got {other:?}"),
+    }
+}
+
+/// A browser may send a message as one frame: a 20 MiB scene write goes through, and a frame
+/// over the limit is refused, naming its size and the limit, as soon as its header arrives.
+#[test]
+fn a_large_write_is_accepted_and_an_oversized_one_is_refused_precisely() {
+    let server = serve();
+    let mut socket = connect(&server, None).unwrap();
+    handshake(&mut socket);
+    let mut text = "(entities: [])\n// ".to_string();
+    text.push_str(&"x".repeat((20 << 20) - text.len()));
+    let path = "scenes/large.scene.ron".to_string();
+    let reply = request(&mut socket, 1, ProjectRequest::WriteText { path, text });
+    assert_eq!(reply, ProjectReply::Done);
+    let written = fs::metadata(server.root.join("scenes/large.scene.ron")).unwrap();
+    assert_eq!(written.len(), 20 << 20);
+
+    // Only the header: the service refuses the frame on its announced size.
+    let oversized = MESSAGE_LIMIT + 1;
+    let header = FrameHeader {
+        is_final: true,
+        opcode: OpCode::Data(Data::Text),
+        mask: Some([0; 4]),
+        ..FrameHeader::default()
+    };
+    let mut bytes = Vec::new();
+    header.format(oversized as u64, &mut bytes).unwrap();
+    let MaybeTlsStream::Plain(stream) = socket.get_mut() else {
+        panic!("the test connects without TLS");
+    };
+    stream.write_all(&bytes).unwrap();
+
+    let (error, close) = refusal_then_close(&mut socket);
+    assert_eq!(error.code, FailureCode::InvalidRequest);
+    for text in [&error.message, &logged(&server, "refused")] {
+        assert!(
+            text.contains(&format!("{oversized} bytes"))
+                && text.contains(&format!("{MESSAGE_LIMIT} bytes")),
+            "{text}"
+        );
+    }
+    assert_eq!(close, CloseCode::Size);
+}
+
+/// Chromium sends a large message as many frames: once their total passes the limit, the
+/// message is refused with the size received so far and the limit.
+#[test]
+fn a_message_over_the_limit_in_many_frames_is_refused_precisely() {
+    let server = serve();
+    let mut socket = connect(&server, None).unwrap();
+    handshake(&mut socket);
+    let fragment = tungstenite::Bytes::from(vec![b'x'; 16 << 20]);
+    let fragments = MESSAGE_LIMIT / fragment.len() + 1;
+    for index in 0..fragments {
+        let opcode = OpCode::Data(if index == 0 {
+            Data::Text
+        } else {
+            Data::Continue
+        });
+        let frame = Frame::message(fragment.clone(), opcode, false);
+        socket.send(Message::Frame(frame)).unwrap();
+    }
+
+    let (error, close) = refusal_then_close(&mut socket);
+    assert_eq!(error.code, FailureCode::InvalidRequest);
+    let received = fragments * fragment.len();
+    for text in [&error.message, &logged(&server, "refused")] {
+        assert!(
+            text.contains(&format!("{received} bytes"))
+                && text.contains(&format!("{MESSAGE_LIMIT} bytes")),
+            "{text}"
+        );
+    }
+    assert_eq!(close, CloseCode::Size);
 }

@@ -20,10 +20,12 @@ clap.workspace = true
 include_dir = { version = "0.7.4", optional = true }
 ludenea-project.workspace = true
 serde_json.workspace = true
-tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync"] }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+# The version axum's WebSocket uses, so the error of a message over the size limit downcasts
+# to it.
+tungstenite = "0.29.0"
 
 [dev-dependencies]
 ludenea-project.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
-tungstenite = "0.30.0"
