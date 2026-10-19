@@ -378,7 +378,7 @@ describe("guardSession with documents", () => {
     expect(second.sent.filter((command) => command.type === "load_session")).toEqual([]);
     expect(second.sent.find((command) => command.type === "load_scene")).toMatchObject({ scene: "(B)" });
     const decode = (bytes: string) => JSON.parse(atob(bytes));
-    expect(stored.has(b) ? decode(stored.get(b)!).load.scene : "(B)").toBe("(B)");
+    expect(stored.has(b) ? decode(stored.get(b)!).saved.load.scene : "(B)").toBe("(B)");
     expect(requests.filter((request) => request.type === "write_text")).toEqual([]);
   });
 });

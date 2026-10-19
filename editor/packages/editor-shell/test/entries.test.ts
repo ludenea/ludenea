@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import * as plugins from "../src";
 import * as app from "../src/app";
 
-const APP_ONLY = ["CommandPalette", "PluginLoader", "Shell", "createEditor", "exportSession", "installShortcuts", "mountShell", "restoreSession"];
+const APP_ONLY = ["CommandPalette", "PluginLoader", "STORED_SESSION_VERSION", "Shell", "createEditor", "exportSession", "installShortcuts", "mountShell", "restoreSession"];
 
 describe("entry points", () => {
   it("the_plugin_entry_leaves_out_what_only_the_applications_use", () => {

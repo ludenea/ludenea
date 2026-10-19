@@ -7,4 +7,5 @@ export { PluginLoader } from "./loader";
 export { CommandPalette } from "./palette/CommandPalette";
 export { type Registry } from "./registry";
 export { exportSession, restoreSession, type DocumentSessions, type SavedSession } from "./stores/document";
+export { STORED_SESSION_VERSION } from "./stores/stored-session";
 export { installShortcuts } from "./shortcuts";

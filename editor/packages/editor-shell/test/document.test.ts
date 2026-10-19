@@ -1,7 +1,7 @@
 import { ProtocolFailure, type TypeSchema } from "@ludenea/control-client";
 import { describe, expect, it, vi } from "vitest";
 import { AssetFailure } from "../src";
-import { fakeProject, gameWithSession, ids, logged, settle, testGame, testHost, timeline, type Session } from "./support";
+import { fakeProject, gameWithSession, ids, logged, sessionFile, settle, storedBytes, testGame, testHost, timeline, type Session } from "./support";
 
 const session = (scene: string, extra: Partial<Session> = {}): Session => ({
   scene,
@@ -44,8 +44,9 @@ describe("document store", () => {
     expect(host.editor.document.getState().current).toEqual({ id: ids.main, kind: "scene", path: "scenes/main.scene.ron" });
     await host.editor.document.getState().open(ids.ball);
 
-    expect(project.stored(ids.main)?.load).toMatchObject({ type: "load_session", scene: "(main)", branches: "AQID" });
-    expect(project.stored(ids.main)?.tick).toBe(2);
+    expect(project.stored(ids.main)?.version).toBe(1);
+    expect(project.stored(ids.main)?.saved.load).toMatchObject({ type: "load_session", scene: "(main)", branches: "AQID" });
+    expect(project.stored(ids.main)?.saved.tick).toBe(2);
     expect(host.editor.document.getState().current).toEqual({ id: ids.ball, kind: "prefab", path: "assets/ball.prefab.ron" });
     expect(game.sent.filter((command) => command.type === "load_scene").at(-1)).toEqual({
       type: "load_scene",
@@ -143,7 +144,7 @@ describe("document store", () => {
     game.push({ type: "timeline_changed", timeline: timeline(2) });
     await opened;
     expect(host.editor.document.getState().current?.id).toBe(ids.ball);
-    expect(project.stored(ids.main)?.load.scene).toBe("(main)");
+    expect(project.stored(ids.main)?.saved.load.scene).toBe("(main)");
   });
 
   it("a_root_branch_that_cannot_be_named_still_opens_the_document", async () => {
@@ -163,26 +164,160 @@ describe("document store", () => {
     expect(logged(host)).toContainEqual(["warning", "Cannot name the root branch main: no such branch", undefined]);
   });
 
-  it("a_stored_session_that_fails_to_restore_leaves_the_document_open_from_its_file", async () => {
-    const project = fakeProject();
-    const host = await testHost(undefined, project.answer);
-    const loaded = { type: "loaded", warnings: ["from the file"], instances: [], load_addresses: [] };
-    const game = await testGame((command) => {
+  /** A game that refuses every stored session and exports `(edited)` once the scene loaded. */
+  const refusingGame = () =>
+    testGame((command) => {
       if (command.type === "get_timeline") return timeline(0);
-      if (command.type === "load_scene") return loaded;
+      if (command.type === "load_scene") return { type: "loaded", warnings: ["from the file"], instances: [], load_addresses: [] };
       if (command.type === "load_session") return { error: { code: "invalid_command", message: "the branch tree cannot be decoded" } };
+      if (command.type === "export_session") return { type: "session", ...session("(edited)") };
       return { type: "done" };
     });
+  // The stored session of the main scene, as the editor writes it.
+  const mainSession = { load: { ...session("(main)", unsaved), type: "load_session" as const, expected: [] }, tick: 0, document: ids.main };
+  const file = sessionFile(ids.main);
+  const kept = `.ludenea/sessions/${ids.main}.1.rejected.session`;
+  const projectRequests = (project: ReturnType<typeof fakeProject>, types: string[]) => project.sent.filter((request) => types.includes(request.type)).map((request) => request.type);
+
+  it.each([
+    ["not base64", "not base64!", `The stored session of scenes/main.scene.ron (${file}) cannot be read: it is not base64`],
+    ["not JSON", btoa("{truncated"), `The stored session of scenes/main.scene.ron (${file}) cannot be read: it is not JSON (`],
+    ["older shape", storedBytes({ tick: 3 }), `The stored session of scenes/main.scene.ron (${file}) cannot be read: it has no load;`],
+    ["newer version", storedBytes({ version: 2, saved: mainSession }), `The stored session of scenes/main.scene.ron (${file}) cannot be read: it has version 2,`],
+    ["refused by the game", storedBytes({ version: 1, saved: mainSession }), `The game refused the stored session of scenes/main.scene.ron (${file}): the branch tree cannot be decoded;`],
+  ])("a_stored_session_that_does_not_decode_opens_the_document_from_its_file_and_is_set_aside: %s", async (_, bytes, why) => {
+    const project = fakeProject();
+    const host = await testHost(undefined, project.answer);
+    const game = await refusingGame();
     host.setControl(game.control);
-    project.store(ids.main, { load: { ...session("(main)", unsaved), type: "load_session", expected: [] }, tick: 0, document: ids.main });
+    project.sessions.set(file, bytes);
 
     await host.editor.document.getState().open(ids.main);
 
     expect(host.editor.document.getState()).toMatchObject({ current: { id: ids.main }, loaded: { warnings: ["from the file"] } });
-    const refused = "The game refused the stored session of scenes/main.scene.ron; the document opened from its file: the branch tree cannot be decoded";
-    expect(logged(host)).toContainEqual(["error", refused, undefined]);
+    const warnings = logged(host).filter(([level]) => level === "warning");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]![1]).toContain(why);
+    expect(warnings[0]![1]).toContain(`; the document opened from its file, and the session is kept as ${kept}.`);
     // Shown on the scene tree as well.
-    expect(host.editor.document.getState().error).toBe(refused);
+    expect(host.editor.document.getState().error).toBe(warnings[0]![1]);
+    expect(project.sessions.get(kept)).toBe(bytes);
+
+    // The next store does not overwrite it.
+    await host.sessions.store();
+    expect(project.sessions.get(kept)).toBe(bytes);
+    expect(project.stored(ids.main)?.saved.load.scene).toBe("(edited)");
+    expect(projectRequests(project, ["set_aside_stored_session", "store_session"])).toEqual(["set_aside_stored_session", "store_session"]);
+  });
+
+  it("a_stored_session_from_before_versions_opens_with_its_unsaved_assets", async () => {
+    const project = fakeProject();
+    const host = await testHost(undefined, project.answer);
+    const game = await gameWithSession(session("(main)"));
+    host.setControl(game.control);
+    // Unversioned, and listing its unsaved assets instead of their saved text.
+    const { saved_assets: _, ...load } = mainSession.load;
+    project.sessions.set(file, storedBytes({ ...mainSession, load, unsavedAssets: [ids.settings] }));
+
+    await host.editor.document.getState().open(ids.main);
+
+    expect(game.sent.find((command) => command.type === "load_session")).toMatchObject({
+      assets: [
+        [ids.ball, "(ball)"],
+        [ids.settings, edited],
+      ],
+      saved_assets: [[ids.settings, settingsFile]],
+    });
+    expect(logged(host).filter(([level]) => level === "warning")).toEqual([]);
+    expect(projectRequests(project, ["set_aside_stored_session"])).toEqual([]);
+  });
+
+  it("a_stored_session_the_next_game_refuses_is_set_aside", async () => {
+    const project = fakeProject();
+    const host = await testHost(undefined, project.answer);
+    project.store(ids.main, mainSession);
+    const bytes = project.sessions.get(file);
+    await host.editor.document.getState().open(ids.main);
+
+    const game = await refusingGame();
+    host.setControl(game.control);
+    await vi.waitFor(() => expect(project.sessions.get(kept)).toBe(bytes));
+    await settle();
+
+    const refused = `The game refused the stored session of scenes/main.scene.ron (${file}): the branch tree cannot be decoded; the document opened from its file, and the session is kept as ${kept}.`;
+    expect(logged(host)).toContainEqual(["warning", refused, undefined]);
+    expect(host.editor.document.getState()).toMatchObject({ loaded: { warnings: ["from the file"] }, error: refused });
+    await host.sessions.store();
+    expect(project.sessions.get(kept)).toBe(bytes);
+    expect(project.stored(ids.main)?.saved.load.scene).toBe("(edited)");
+  });
+
+  it("a_stored_session_that_does_not_decode_is_set_aside_when_a_crash_restarts_the_game", async () => {
+    const project = fakeProject();
+    const host = await testHost(undefined, project.answer);
+    const game = await gameWithSession(session("(main)"));
+    host.setControl(game.control);
+    await host.editor.document.getState().open(ids.main);
+    project.sessions.set(file, "not base64!");
+    // The latest export was taken while another document was open.
+    const other = { ...(await host.sessions.export(game.control)), document: ids.ball };
+
+    expect(await host.sessions.own(other)).toBeNull();
+
+    expect(logged(host)).toContainEqual([
+      "warning",
+      `The stored session of scenes/main.scene.ron (${file}) cannot be read: it is not base64; the document opened from its file, and the session is kept as ${kept}.`,
+      undefined,
+    ]);
+    expect(project.sessions.get(kept)).toBe("not base64!");
+  });
+
+  it("a_stored_session_that_cannot_be_set_aside_is_never_overwritten", async () => {
+    const project = fakeProject();
+    const answer: typeof project.answer = (request) =>
+      request.type === "set_aside_stored_session" ? (project.sent.push(request), { error: { code: "io", message: "permission denied" } }) : project.answer(request);
+    const host = await testHost(undefined, answer);
+    const game = await refusingGame();
+    host.setControl(game.control);
+    project.sessions.set(file, "not base64!");
+
+    await host.editor.document.getState().open(ids.main);
+    await host.sessions.store();
+    await host.editor.document.getState().open(ids.ball);
+
+    expect(logged(host)).toContainEqual([
+      "warning",
+      `The stored session of scenes/main.scene.ron (${file}) cannot be read: it is not base64; the document opened from its file, but the session cannot be set aside (permission denied), so its session is not stored until ${file} is moved away and the document opened again.`,
+      undefined,
+    ]);
+    expect(project.sessions.get(file)).toBe("not base64!");
+    expect(projectRequests(project, ["store_session"])).toEqual([]);
+
+    // Moved away by hand: the document's next open stores its sessions again.
+    project.sessions.delete(file);
+    await host.editor.document.getState().open(ids.main);
+    await host.sessions.store();
+    expect(project.stored(ids.main)?.saved.load.scene).toBe("(edited)");
+  });
+
+  it("an_earlier_export_is_not_stored_while_its_document_opens", async () => {
+    const project = fakeProject();
+    const host = await testHost(undefined, project.answer);
+    // A game that never answers the stored session's load, so the open waits on it.
+    const game = await testGame((command) => {
+      if (command.type === "load_scene") return { type: "loaded", warnings: [], instances: [], load_addresses: [] };
+      return command.type === "load_session" ? undefined : { type: "done" };
+    });
+    host.setControl(game.control);
+    project.store(ids.main, mainSession);
+    const bytes = project.sessions.get(file);
+
+    void host.editor.document.getState().open(ids.main);
+    await vi.waitFor(() => expect(game.sent.some((command) => command.type === "load_session")).toBe(true));
+    await host.sessions.store({ ...mainSession, load: { ...mainSession.load, scene: "(earlier)" } });
+
+    expect(projectRequests(project, ["store_session"])).toEqual([]);
+    expect(project.sessions.get(file)).toBe(bytes);
   });
 
   it("the_session_of_the_open_document_is_refreshed_from_disk_for_a_new_game", async () => {

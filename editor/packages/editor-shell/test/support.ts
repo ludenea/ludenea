@@ -97,11 +97,14 @@ export const ids = {
   second: "00000000000000000000000000000006",
 };
 
-/** Stored sessions are the JSON of a `SavedSession`, base64-encoded. */
-const encode = (value: unknown) => btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(value))));
+/** `value` as JSON, base64-encoded: a stored session is `{ version: 1, saved }`. */
+export const storedBytes = (value: unknown) => btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(value))));
 const decode = (bytes: string) => JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(bytes), (char) => char.charCodeAt(0))));
 
-/** A project service with a scene, a prefab, a data asset, and two replays on its disk, which stores sessions. */
+/** Where the project keeps the stored session of `document`. */
+export const sessionFile = (document: string) => `.ludenea/sessions/${document}.session`;
+
+/** A project service with a scene, a prefab, a data asset, and two replays on its disk, which stores sessions and sets them aside. */
 export function fakeProject() {
   const disk: { [path: string]: string } = {
     "scenes/main.scene.ron": "(main)",
@@ -115,6 +118,7 @@ export function fakeProject() {
     { path: "replays/first.replay", id: ids.first, kind: "Replay" },
     { path: "replays/second.replay", id: ids.second, kind: "Replay" },
   ];
+  // The files of `.ludenea/sessions/`, by path.
   const sessions = new Map<string, string>();
   const sent: Message[] = [];
   const assets = () => [
@@ -133,10 +137,21 @@ export function fakeProject() {
       case "read_binary":
         return { type: "bytes", bytes: btoa(request.path as string) };
       case "store_session":
-        sessions.set(request.document as string, request.bytes as string);
+        sessions.set(sessionFile(request.document as string), request.bytes as string);
         return { type: "done" };
       case "load_stored_session":
-        return { type: "stored_session", bytes: sessions.get(request.document as string) ?? null };
+        return { type: "stored_session", bytes: sessions.get(sessionFile(request.document as string)) ?? null };
+      case "set_aside_stored_session": {
+        const file = sessionFile(request.document as string);
+        const bytes = sessions.get(file);
+        if (bytes === undefined) return { type: "set_aside", path: null };
+        let n = 1;
+        while (sessions.has(`.ludenea/sessions/${request.document}.${n}.rejected.session`)) n++;
+        const path = `.ludenea/sessions/${request.document}.${n}.rejected.session`;
+        sessions.set(path, bytes);
+        sessions.delete(file);
+        return { type: "set_aside", path };
+      }
       case "create_asset":
         return { type: "file", path: request.path, id: ids.created, kind: request.kind };
       default:
@@ -148,7 +163,10 @@ export function fakeProject() {
     sent,
     answer,
     assets,
-    stored: (id: string) => (sessions.has(id) ? decode(sessions.get(id)!) : undefined),
-    store: (id: string, saved: unknown) => sessions.set(id, encode(saved)),
+    sessions,
+    /** The stored session of `id` as the editor wrote it: `{ version, saved }`. */
+    stored: (id: string) => (sessions.has(sessionFile(id)) ? decode(sessions.get(sessionFile(id))!) : undefined),
+    /** Stores `saved` as the session of `id`, as the editor does. */
+    store: (id: string, saved: unknown) => sessions.set(sessionFile(id), storedBytes({ version: 1, saved })),
   };
 }

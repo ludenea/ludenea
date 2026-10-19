@@ -1,7 +1,8 @@
 import type { AssetId, Command, ControlClient, FileChange, ProjectClient, Reply } from "@ludenea/control-client";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import { AssetFailure, locateAssetError } from "../assets";
-import type { EditorConsole } from "../console";
+import type { ConsoleLocation, EditorConsole } from "../console";
+import { decodeStoredSession, encodeStoredSession, type StoredSession } from "./stored-session";
 
 /** What the game reports about the scene it loaded: stale override warnings, prefab instances, and load addresses. */
 export type Loaded = Extract<Reply, { type: "loaded" }>;
@@ -50,7 +51,7 @@ export interface DocumentState {
 export interface DocumentSessions {
   /** Exports the session of `control`, tagged with the document open when asked (none while one opens). */
   export(control: ControlClient): Promise<SavedSession>;
-  /** Stores `saved` (a fresh export by default) as the open document's session; one tagged with another document is not stored. */
+  /** Stores `saved` (a fresh export by default) as the open document's session; one tagged with another document is not stored, nor any while a document opens. */
   store(saved?: SavedSession): Promise<void>;
   /** `saved` when it belongs to the open document, else the open document's stored session, if any. */
   own(saved: SavedSession | null): Promise<SavedSession | null>;
@@ -144,13 +145,8 @@ async function returnTo(control: ControlClient, saved: SavedSession, tick: numbe
   return true;
 }
 
-// Stored sessions are the JSON of a `SavedSession`, as base64 bytes.
-const encode = (saved: SavedSession): string => {
-  let binary = "";
-  for (const byte of new TextEncoder().encode(JSON.stringify(saved))) binary += String.fromCharCode(byte);
-  return btoa(binary);
-};
-const decode = (bytes: string): SavedSession => JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(bytes), (char) => char.charCodeAt(0))));
+/** Where the project keeps the stored session of the document `id`, as messages name it. */
+const sessionFile = (id: AssetId) => `.ludenea/sessions/${id}.session`;
 
 const KINDS: { [kind: string]: OpenDocument["kind"] } = { Scene: "scene", Prefab: "prefab", Replay: "replay" };
 /** How the session names its root branch until the editor renames it after the document. */
@@ -169,6 +165,10 @@ const onDisk = (load: SavedSession["load"], fresh: [AssetId, string][], discard:
     saved_assets: fresh.filter(([id]) => kept.has(id)),
   };
 };
+
+const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
+/** Where the console points for `error`: the asset at fault, when known. */
+const locationOf = (error: unknown): ConsoleLocation | undefined => (error instanceof AssetFailure ? { file: error.path, line: error.line, column: error.column } : undefined);
 
 const assetKind = (change: FileChange) => Object.values(change)[0]!.kind;
 const changedPath = (change: FileChange) => Object.values(change)[0]!.path;
@@ -204,9 +204,9 @@ export function createDocumentStore(options: {
   };
   /** Logs `error` in the console, located in the asset at fault, and rethrows it. */
   const reported = (what: string) => (error: unknown) => {
-    const text = `${what}: ${error instanceof Error ? error.message : String(error)}`;
+    const text = `${what}: ${message(error)}`;
     store.setState({ error: text });
-    log("error", text, error instanceof AssetFailure ? { file: error.path, line: error.line, column: error.column } : undefined);
+    log("error", text, locationOf(error));
     throw error;
   };
 
@@ -218,11 +218,68 @@ export function createDocumentStore(options: {
         : { type: "load_scene", scene: text!, assets: source.texts.assets, document: document.kind === "prefab" ? { Prefab: { id: document.id } } : "Scene" };
     return game.request(command).catch(locatedIn(source.texts.paths));
   };
-  const storeIn = (document: OpenDocument, saved: SavedSession) =>
-    project.request({ type: "store_session", document: document.id, bytes: encode(saved) }).then(() => {});
-  const stored = async (document: OpenDocument): Promise<SavedSession | null> => {
+  // The set-aside of each stored session the editor could not restore. The stores of its
+  // document wait for it, so none overwrites that session, and make none while it cannot be
+  // set aside (false), until the document opens again.
+  const asides = new Map<AssetId, Promise<boolean>>();
+  const storeIn = async (document: OpenDocument, saved: SavedSession) => {
+    if ((await asides.get(document.id)) === false) return;
+    await project.request({ type: "store_session", document: document.id, bytes: encodeStoredSession(saved) });
+  };
+  /** The stored session of `document` as read, if any. */
+  const stored = async (document: OpenDocument): Promise<StoredSession | null> => {
     const { bytes } = await project.request({ type: "load_stored_session", document: document.id });
-    return bytes ? decode(bytes) : null;
+    const read = bytes === null ? null : decodeStoredSession(bytes);
+    // Readable, or gone: its document's stores go on.
+    if (!read || "saved" in read) asides.delete(document.id);
+    return read;
+  };
+  /**
+   * Sets the stored session of `document` aside, where no store of the document made after
+   * this call overwrites it, and logs `why` it was not restored with where it is kept;
+   * resolves to the logged warning.
+   */
+  const setAside = (document: OpenDocument, why: string, location?: ConsoleLocation): Promise<string> => {
+    const request = project.request({ type: "set_aside_stored_session", document: document.id });
+    asides.set(
+      document.id,
+      request.then(
+        () => true,
+        () => false,
+      ),
+    );
+    return request
+      .then(
+        ({ path }) => `${why}; the document opened from its file${path === null ? "" : `, and the session is kept as ${path}`}.`,
+        (error: unknown) =>
+          `${why}; the document opened from its file, but the session cannot be set aside (${message(error)}), so its session is not stored until ${sessionFile(document.id)} is moved away and the document opened again.`,
+      )
+      .then((text) => {
+        log("warning", text, location);
+        return text;
+      });
+  };
+  const unreadable = (document: OpenDocument, reason: string) =>
+    setAside(document, `The stored session of ${document.path} (${sessionFile(document.id)}) cannot be read: ${reason}`);
+  /**
+   * Restores `saved`, the stored session of `document`, into `game`: resolves to what the game
+   * reports loaded (null when the session loaded but cannot go back to its tick), or, when the
+   * game refused it, to the warning that it was set aside.
+   */
+  const restoreStored = async (game: ControlClient, document: OpenDocument, saved: SavedSession): Promise<{ loaded: Loaded | null } | { refused: string }> => {
+    let accepted = false;
+    try {
+      return {
+        loaded: await restoreSession(game, saved, saved.tick, () => {
+          accepted = true;
+        }),
+      };
+    } catch (error) {
+      const failure = locateAssetError(error, texts.paths);
+      if (!accepted) return { refused: await setAside(document, `The game refused the stored session of ${document.path} (${sessionFile(document.id)}): ${message(failure)}`, locationOf(failure)) };
+      log("warning", `The stored session of ${document.path} is loaded, but cannot go back to tick ${saved.tick}: ${message(failure)}`, locationOf(failure));
+      return { loaded: null };
+    }
   };
   // The scene and assets on disk now, so a stored session whose files changed replays against
   // them, except its unsaved scene and assets, which keep the session's text.
@@ -231,7 +288,6 @@ export function createDocumentStore(options: {
     const scene = saved.load.saved_scene === null && text !== null ? text : saved.load.scene;
     return { ...saved, load: { ...onDisk(saved.load, fresh), scene } };
   };
-  const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
   /** Names the root branch after the document; the document is open either way. */
   const nameRoot = async (game: ControlClient, document: OpenDocument) => {
     const name = document.path.split("/").at(-1)!.split(".")[0]!;
@@ -282,37 +338,26 @@ export function createDocumentStore(options: {
           let bytes = "";
           if (kind === "replay") ({ bytes } = await project.request({ type: "read_binary", path: entry.path }));
           else ({ text } = await project.request({ type: "read_text", path: entry.path }));
-          const saved = await stored(document);
-          const restoring = saved && refreshed(saved, text, fresh.assets);
+          const read = await stored(document);
+          const restoring = read && "saved" in read ? refreshed(read.saved, text, fresh.assets) : null;
           const reply = game ? await load(game, document, text, { texts: fresh, replay: bytes }) : null;
           const loaded = reply && loadedIn(reply);
           // Only what the game accepted is kept: a refused document leaves the previous one.
           texts = fresh;
           replay = bytes;
+          // A stored session that cannot be read is set aside before its document is current.
+          const aside = read && "unreadable" in read ? unreadable(document, read.unreadable) : null;
           // A stored session's load reports what stays loaded: the scene load's report is not kept.
           const restores = game !== null && restoring !== null;
           set({ current: document, text, loaded: restores ? null : loaded, fingerprintDiffers: differs(reply), error: null });
           pending = game ? null : restoring;
+          // The document is open, from its file: a stored session it cannot take back is
+          // reported, on the scene tree too when it is set aside, not a refused open.
+          if (aside) set({ error: await aside });
           if (!game) return;
           if (restoring) {
-            // The document is open, from its file: a stored session it cannot take back is
-            // reported (on the scene tree too when refused), not a refused open.
-            let accepted = false;
-            const restored = await restoreSession(game, restoring, restoring.tick, () => {
-              accepted = true;
-            }).then(
-              (reply) => reply,
-              (error: unknown) => {
-                const failure = locateAssetError(error, texts.paths);
-                const text = accepted
-                  ? `The stored session of ${entry.path} is loaded, but cannot go back to tick ${restoring.tick}: ${message(failure)}`
-                  : `The game refused the stored session of ${entry.path}; the document opened from its file: ${message(failure)}`;
-                log(accepted ? "warning" : "error", text, failure instanceof AssetFailure ? { file: failure.path, line: failure.line, column: failure.column } : undefined);
-                if (!accepted) set({ error: text });
-                return accepted ? null : loaded;
-              },
-            );
-            set({ loaded: restored });
+            const restored = await restoreStored(game, document, restoring);
+            set("refused" in restored ? { loaded, error: restored.refused } : { loaded: restored.loaded });
           }
           await nameRoot(game, document);
         } finally {
@@ -417,10 +462,12 @@ export function createDocumentStore(options: {
     // Both sent at once: a session the application restores into this game, and its first
     // export, come after them.
     const loaded = load(game, document, store.getState().text, { texts, replay });
-    const restored = saved ? restoreSession(game, saved).catch(locatedIn(texts.paths)) : null;
+    const restored = saved ? restoreStored(game, document, saved) : null;
     Promise.all([loaded, restored])
       .then(([first, second]) => {
-        store.setState({ loaded: second ?? loadedIn(first), fingerprintDiffers: differs(first), error: null });
+        const report = { loaded: loadedIn(first), fingerprintDiffers: differs(first) };
+        // A refused stored session leaves the scene load's report, and its warning on the scene tree.
+        store.setState(second && "refused" in second ? { ...report, error: second.refused } : { ...report, loaded: second?.loaded ?? report.loaded, error: null });
         return nameRoot(game, document);
       })
       .catch(reported(`Cannot load ${document.path} into the game`))
@@ -432,16 +479,23 @@ export function createDocumentStore(options: {
     async store(saved) {
       const document = store.getState().current;
       const game = control();
-      if (!document || (!saved && !game)) return;
+      // While a document opens, its stored session is being restored: an earlier export of it
+      // would overwrite that before the game accepts or refuses it.
+      if (!document || opening || (!saved && !game)) return;
       saved ??= await tagged(game!);
       if (saved.document === document.id) await storeIn(document, saved);
     },
     async own(saved) {
       const document = store.getState().current;
       if ((saved?.document ?? null) === (document?.id ?? null)) return saved;
+      if (!document) return null;
       // Like a document that opens: against the scene and assets on disk now.
-      const own = document && (await stored(document));
-      return own && refreshed(own, store.getState().text, texts.assets);
+      const read = await stored(document);
+      if (read && "unreadable" in read) {
+        store.setState({ error: await unreadable(document, read.unreadable) });
+        return null;
+      }
+      return read && refreshed(read.saved, store.getState().text, texts.assets);
     },
   };
   return { store, sessions };

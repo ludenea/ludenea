@@ -24,10 +24,14 @@ this table in the same commit.
 | Input log (`.inputs`)  | `INPUT_LOG_VERSION`        | 1       | 1                             |
 | Edit log               | `EDIT_LOG_VERSION`         | 2       | 1                             |
 | Undo history           | `UNDO_VERSION`             | 4       | the unversioned form before 2 |
+| Stored session         | `STORED_SESSION_VERSION`   | 1       | the unversioned form before 1 |
+
+The stored session is the editor's copy of each open document's session, in
+`.ludenea/sessions/`; its version is a TypeScript constant of `@ludenea/editor-shell/app`.
 
 Not versioned yet: data assets (`.ron` files holding a value of the game type their meta
-names), the project manifest `ludenea.toml`, the branch tree of a session, the stored
-session (the editor's copy of each open document's session), and the plugin API.
+names), the project manifest `ludenea.toml`, the branch tree of a session, and the plugin
+API.
 
 ## [Unreleased]
 
@@ -297,9 +301,20 @@ session (the editor's copy of each open document's session), and the plugin API.
   (`unsaved_assets`), a saved session carries them in `load.saved_assets`, and
   `restoreSession` restores one. `DocumentState.reloadAssets` takes the unsaved assets to
   discard, which take their file's text.
+- `@ludenea/editor-shell/app` exports `STORED_SESSION_VERSION`. A stored session that the
+  game refuses, and one that loads into a new game but cannot go back to its tick, are
+  reported as warnings; the latter used to fail as `Cannot load <path> into the game`.
 
 ### Formats
 
+- Stored session 1: `.ludenea/sessions/<id>.session` holds `{ version: 1, saved }`, the
+  `SavedSession` in an envelope. The unversioned form before it still reads, and the
+  assets it lists in `unsavedAssets` stay unsaved. A stored session that cannot be read
+  (not base64, not JSON, a shape the editor does not know, or another version), or that
+  the game refuses, no longer blocks opening its document and is never overwritten: the
+  document opens from its file, a warning names the session file and the reason, and the
+  session is set aside as `.ludenea/sessions/<id>.<n>.rejected.session`. Until it is, no
+  session of that document is stored.
 - Undo history 4: an "Apply to prefab" entry holds the prefab text and the scene text, each
   before and after it. Version 3 histories still read.
 - Snapshot 3: a `ludenea::Prefab` asset holds only its entities; version 2 also listed the
