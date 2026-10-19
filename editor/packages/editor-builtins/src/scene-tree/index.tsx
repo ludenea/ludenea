@@ -25,8 +25,8 @@ export const sceneTreePlugin = definePlugin({
       title: "Save scene",
       async run() {
         const open = editor.document.getState().current;
-        // The game may still hold the session of a document removed or moved since: it has no file to go to.
-        if (!open) return editor.console.log("warning", "Nothing saved: no document is open (the open one was removed or moved); open a document first.");
+        // The game may still hold the session of a closed document: opening another would replace it.
+        if (!open) return editor.console.log("warning", "Nothing saved: no scene or prefab is open, so the game's session has no file to go to.");
         if (open.kind === "replay") throw new Error(`${open.path} is a replay: its file is never overwritten`);
         const control = game();
         let ron: string;

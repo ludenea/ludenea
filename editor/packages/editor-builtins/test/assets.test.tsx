@@ -10,19 +10,25 @@ const entries = [
   { path: "assets/logo.png", id: "0000000000000000000000000000000b", kind: "Other" },
 ];
 
-/** The editor with every built-in plugin, a game, and the asset browser showing two files. */
 const SETTINGS = "0000000000000000000000000000000c";
 
-async function browser(disk: { text: string } = { text: "(on disk)" }, withGame = true) {
+/**
+ * The editor with every built-in plugin, a game, and the asset browser showing two files, or
+ * `disk.files` once set. Each file holds `disk.text`, unless `disk.texts` has its own; a write
+ * goes there.
+ */
+async function browser(disk: { text: string; files?: typeof entries; texts?: { [path: string]: string } } = { text: "(on disk)" }, withGame = true) {
   const host = await testEditor(builtinPlugins, (request) => {
-    if (request.type === "list_files") return { type: "files", entries };
-    if (request.type === "read_text") return { type: "text", text: disk.text };
+    const path = request.path as string;
+    if (request.type === "list_files") return { type: "files", entries: disk.files ?? entries };
+    if (request.type === "read_text") return { type: "text", text: disk.texts?.[path] ?? disk.text };
+    if (request.type === "write_text") disk.texts = { ...disk.texts, [path]: request.text as string };
     if (request.type === "read_asset_texts") return { type: "asset_texts", assets: [], paths: [] };
     if (request.type === "load_stored_session") return { type: "stored_session", bytes: null };
     if (request.type === "info") return undefined;
     return { type: "done" };
   });
-  const game = await testGame();
+  const game = await testGame((command) => (command.type === "save_scene" ? { type: "scene", ron: "(saved)" } : { type: "done" }));
   if (withGame) act(() => host.setControl(game.client));
   renderPanel(host, "ludenea.assets");
   await settle();
@@ -248,17 +254,100 @@ describe("assets", () => {
     expect(restarted.sent.filter((command) => command.type === "load_scene")).toEqual([{ type: "load_scene", scene: "(edited without a game)", assets: [], document: "Scene" }]);
   });
 
-  it("removing_the_open_scene_on_disk_closes_it", async () => {
-    const { host } = await browser();
-    await openScene();
-    setSceneDirty(host, true);
+  describe("the open scene moved or removed outside the editor", () => {
+    const SCENE_ID = entries[0]!.id;
+    const LEVEL = "scenes/level.scene.ron";
+    const writes = (host: { project: { sent: { type: string }[] } }) => host.project.sent.filter((request) => request.type === "write_text");
+    const stores = (host: { project: { sent: { type: string }[] } }) => host.project.sent.filter((request) => request.type === "store_session");
 
-    act(() => host.project.push({ type: "files_changed", changes: [{ Removed: { path: SCENE, kind: "Scene" } }, { Created: { path: "scenes/moved.scene.ron", kind: "Scene" } }] }));
-    await settle();
+    it("an_open_scene_renamed_outside_with_its_meta_stays_open_at_its_new_path", async () => {
+      const { host, disk } = await browser();
+      await openScene();
+      setSceneDirty(host, true);
 
-    expect(screen.queryByLabelText("unsaved changes")).toBeNull();
-    await host.editor.commands.run("scene.save");
-    expect(host.project.sent.filter((request) => request.type === "write_text")).toEqual([]);
+      // Moved with its meta: the listing has the scene's identifier at the new path.
+      disk.files = [{ ...entries[0]!, path: LEVEL }, entries[1]!];
+      act(() => host.project.push({ type: "files_changed", changes: [{ Removed: { path: SCENE, kind: "Scene" } }, { Created: { path: LEVEL, kind: "Scene" } }] }));
+      await settle();
+
+      expect(host.editor.document.getState().current).toEqual({ id: SCENE_ID, kind: "scene", path: LEVEL });
+      expect(screen.getByLabelText("unsaved changes")).toBeTruthy();
+      expect(screen.queryByRole("alert")).toBeNull();
+      await host.editor.commands.run("scene.save");
+      expect(writes(host)).toEqual([{ type: "write_text", path: LEVEL, text: "(saved)" }]);
+    });
+
+    it("an_open_scene_renamed_outside_without_its_meta_follows_the_file_holding_its_text", async () => {
+      const LEVEL_ID = "0000000000000000000000000000001a";
+      const COPY = "scenes/copy.scene.ron";
+      const { host, disk } = await browser();
+      await openScene();
+
+      // The meta stays behind, so the moved file gets an identifier of its own; another scene
+      // created at the same time holds other text.
+      disk.files = [{ path: COPY, id: "0000000000000000000000000000001b", kind: "Scene" }, { path: LEVEL, id: LEVEL_ID, kind: "Scene" }, entries[1]!];
+      disk.texts = { [COPY]: "(another scene)" };
+      act(() =>
+        host.project.push({
+          type: "files_changed",
+          changes: [{ Removed: { path: SCENE, kind: "Scene" } }, { Created: { path: COPY, kind: "Scene" } }, { Created: { path: LEVEL, kind: "Scene" } }],
+        }),
+      );
+      await settle();
+      await settle();
+
+      expect(host.editor.document.getState().current).toEqual({ id: LEVEL_ID, kind: "scene", path: LEVEL });
+      // Stored under the new identifier at once, where the next open and crash recovery look.
+      expect(stores(host)).toEqual([expect.objectContaining({ document: LEVEL_ID })]);
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("a_dirty_scene_removed_on_disk_stays_open_with_a_banner", async () => {
+      const { host, game, disk } = await browser();
+      await openScene();
+      setSceneDirty(host, true);
+
+      disk.files = [entries[1]!];
+      act(() => host.project.push({ type: "files_changed", changes: [{ Removed: { path: SCENE, kind: "Scene" } }] }));
+      await settle();
+
+      expect(stores(host)).toEqual([expect.objectContaining({ document: SCENE_ID })]);
+      expect(host.editor.document.getState().current).toEqual({ id: SCENE_ID, kind: "scene", path: SCENE });
+      const banner = screen.getByRole("alert");
+      expect(banner.textContent).toContain(`${SCENE} was deleted on disk`);
+
+      fireEvent.click(within(banner).getByRole("button", { name: "Save again" }));
+      await settle();
+      expect(writes(host)).toEqual([{ type: "write_text", path: SCENE, text: "(saved)" }]);
+      expect(game.sent).toContainEqual({ type: "mark_scene_saved", text: "(saved)" });
+
+      // The watcher reports the file back: the scene is in place again.
+      disk.files = entries;
+      act(() => host.project.push({ type: "files_changed", changes: [{ Created: { path: SCENE, kind: "Scene" } }] }));
+      await settle();
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(host.editor.document.getState().current).toEqual({ id: SCENE_ID, kind: "scene", path: SCENE });
+    });
+
+    it("closing_a_scene_removed_on_disk_stores_its_session_first", async () => {
+      const { host, disk } = await browser();
+      await openScene();
+      disk.files = [entries[1]!];
+      act(() => host.project.push({ type: "files_changed", changes: [{ Removed: { path: SCENE, kind: "Scene" } }] }));
+      await settle();
+
+      fireEvent.click(within(screen.getByRole("alert")).getByRole("button", { name: "Close" }));
+      await settle();
+
+      // Stored on removal, and again with what changed since.
+      expect(stores(host)).toHaveLength(2);
+      expect(host.editor.document.getState().current).toBeNull();
+      expect(screen.queryByRole("alert")).toBeNull();
+      // Saving now advises nothing that would drop the game's session.
+      await host.editor.commands.run("scene.save");
+      expect(writes(host)).toEqual([]);
+      expect(host.editor.console.list().at(-1)?.text).toBe("Nothing saved: no scene or prefab is open, so the game's session has no file to go to.");
+    });
   });
 
   it("delete_asks_for_confirmation_inside_the_panel", async () => {
@@ -384,7 +473,7 @@ describe("data assets, replays, traces, and snapshots", () => {
 
   async function project(options: { current?: number; answer?: (command: { type: string; [key: string]: unknown }) => object | undefined } = {}) {
     const { current = 0, answer = () => undefined } = options;
-    const onDisk = { scene: "(scene)", files: {} as { [path: string]: string }, unwritable: false };
+    const onDisk = { scene: "(scene)", files: {} as { [path: string]: string }, unwritable: false, removed: [] as string[] };
     // The assets the game holds unsaved, as the host keeps them: a tick 0 edit or "Apply to asset"
     // marks one, `MarkAssetSaved` clears it, and `LoadSession` says which stay.
     let unsaved: string[] = [];
@@ -430,7 +519,7 @@ describe("data assets, replays, traces, and snapshots", () => {
       },
     );
     const host = await testEditor(builtinPlugins, (request) => {
-      if (request.type === "list_files") return { type: "files", entries: files };
+      if (request.type === "list_files") return { type: "files", entries: files.filter((file) => !onDisk.removed.includes(file.path)) };
       if (request.type === "read_text") return { type: "text", text: onDisk.files[request.path as string] ?? onDisk.scene };
       if (request.type === "write_text" && onDisk.unwritable) return { error: { code: "io", message: "permission denied" } };
       if (request.type === "read_binary") return { type: "bytes", bytes: "cmVwbGF5" };
@@ -515,6 +604,22 @@ describe("data assets, replays, traces, and snapshots", () => {
     expect(screen.queryByLabelText("unsaved changes")).toBeNull();
     await expect(host.editor.commands.run("inspector.save-asset")).rejects.toThrow("assets/run.replay is a replay");
     expect(host.project.sent.filter((request) => request.type === "write_text")).toEqual([]);
+  });
+
+  it("a_replay_removed_on_disk_stays_open_and_offers_only_close", async () => {
+    const { host, onDisk } = await project();
+    fireEvent.doubleClick(screen.getByText("run.replay"));
+    await settle();
+
+    onDisk.removed.push("assets/run.replay");
+    act(() => host.project.push({ type: "files_changed", changes: [{ Removed: { path: "assets/run.replay", kind: "Replay" } }] }));
+    await settle();
+
+    // A replay's file is never written: there is nothing to save again.
+    const banner = screen.getByRole("alert");
+    expect(banner.textContent).toContain("assets/run.replay was deleted on disk");
+    expect(within(banner).getAllByRole("button").map((button) => button.textContent)).toEqual(["Close"]);
+    expect(host.editor.document.getState().current).toEqual({ id: RUN, kind: "replay", path: "assets/run.replay" });
   });
 
   it("opening_trace_runs_divergence_command", async () => {

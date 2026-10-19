@@ -96,7 +96,8 @@ describe("scene tree", () => {
 
     expect(game.sent.filter((command) => command.type === "save_scene")).toEqual([]);
     expect(host.project.sent.filter((request) => request.type === "write_text")).toEqual([]);
-    expect(screen.getByText(/open a document first/)).toBeTruthy();
+    // Opening a document would replace the session the game holds: the message does not advise it.
+    expect(screen.getByText("Nothing saved: no scene or prefab is open, so the game's session has no file to go to.")).toBeTruthy();
   });
 
   it("save_writes_a_prefab_document_to_its_own_file", async () => {

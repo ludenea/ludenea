@@ -1,5 +1,5 @@
 import type { FileEntry, JsonValue, PathSegment } from "@ludenea/control-client";
-import type { Editor } from "@ludenea/editor-shell";
+import { runReported, type Editor } from "@ludenea/editor-shell";
 import { useRef, type KeyboardEvent } from "react";
 import { setAt } from "../inspector/default-value";
 import { Field } from "../inspector/fields/Field";
@@ -31,6 +31,8 @@ function grouped(files: FileEntry[], filter: string, kind: KindName | null): [st
 export function AssetsPanel({ editor, assets }: { editor: Editor; assets: Assets }) {
   const { files, filter, kind, selected, action, menu, creating, banners, error, listError } = useStore(assets.state);
   const openScene = editor.document((state) => state.current?.path ?? null);
+  // A replay's file is never written: a deleted one cannot be saved again.
+  const replay = editor.document((state) => state.current?.kind === "replay");
   const unsaved = editor.timeline((state) => state.timeline?.scene_dirty ?? false);
   const dragged = useRef<string | null>(null);
   const scrolled = useKeptScroll<HTMLDivElement>(assets.scroll);
@@ -62,13 +64,21 @@ export function AssetsPanel({ editor, assets }: { editor: Editor; assets: Assets
         <button onClick={() => void editor.commands.run("assets.new-data")}>New data asset</button>
       </div>
       {creating && <NewDataForm editor={editor} creating={creating} assets={assets} attempt={attempt} />}
-      {banners.map((banner) => (
-        <div key={banner.path} role="alert" className="ludenea-banner">
-          {banner.path} changed on disk.
-          <button onClick={() => attempt(assets.reload(banner))}>Reload</button>
-          <button onClick={() => assets.keepMine(banner)}>Keep mine</button>
-        </div>
-      ))}
+      {banners.map((banner) =>
+        "removed" in banner ? (
+          <div key={banner.path} role="alert" className="ludenea-banner">
+            {banner.path} was deleted on disk.
+            {!replay && <button onClick={() => void runReported(editor, "scene.save")}>Save again</button>}
+            <button onClick={() => attempt(assets.close(banner))}>Close</button>
+          </div>
+        ) : (
+          <div key={banner.path} role="alert" className="ludenea-banner">
+            {banner.path} changed on disk.
+            <button onClick={() => attempt(assets.reload(banner))}>Reload</button>
+            <button onClick={() => assets.keepMine(banner)}>Keep mine</button>
+          </div>
+        ),
+      )}
       {error && <p className="ludenea-error">{error}</p>}
       {listError && <p className="ludenea-error">{listError}</p>}
       {action && <ActionForm action={action} assets={assets} attempt={attempt} />}

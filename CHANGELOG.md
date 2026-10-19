@@ -312,6 +312,13 @@ API.
   gives: a stored session the game refuses is set aside with that warning, before any later
   store of its document, and the restore resolves to null instead of failing. Other sessions
   restore as with `restoreSession`.
+- The asset browser keeps the open document open when its file is moved or renamed outside
+  the editor: `DocumentState.current` follows the file's identifier to its new path, or,
+  when the meta stayed behind, the file created with the document's text, under that file's
+  identifier. When the file is deleted outside the editor, the document's session is stored
+  and the document stays open, with a banner offering "Save again" (`scene.save`) and
+  "Close" (the new `Assets.close`, which stores the session again first); it used to close
+  and drop the session. "Save scene" without an open document no longer advises opening one.
 - A `refused` from the project service after the handshake (a message over its size limit)
   fails the requests `ProjectClient` is waiting on with the service's message, instead of
   `connection closed: ...` once the connection closes.

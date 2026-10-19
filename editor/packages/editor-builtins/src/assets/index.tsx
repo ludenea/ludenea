@@ -1,13 +1,17 @@
 import type { AssetId, AssetKind, FileChange, FileEntry, JsonValue, TypeSchema } from "@ludenea/control-client";
-import { definePlugin, type Editor } from "@ludenea/editor-shell";
+import { definePlugin, type Editor, type OpenDocument } from "@ludenea/editor-shell";
 import { createStore, errorText, shared, showPanel, unsavedAssets, type Scroll, type Store } from "../shared";
 import { AssetsPanel, baseName } from "./AssetsPanel";
 import { emptyValue, toRon } from "./value";
 
 export type Action = { kind: "rename" | "move" | "delete"; path: string };
 
-/** A file changed on disk while the editor held unsaved edits of it: the open document (its new text) or a data asset. */
-export type Banner = { path: string; text: string } | { path: string; asset: AssetId };
+/**
+ * A file changed on disk while the editor held unsaved edits of it: the open document (its new
+ * text) or a data asset; or the open document's file was deleted on disk (`removed`), while
+ * the document stays open with its session.
+ */
+export type Banner = { path: string; text: string } | { path: string; asset: AssetId } | { path: string; removed: true };
 
 /** A file kind without its data type: what the browser shows and filters by. */
 export type KindName = "Scene" | "Prefab" | "Data" | "Replay" | "Trace" | "Snapshot" | "Other";
@@ -53,9 +57,12 @@ export interface Assets {
   reload(banner: Banner): Promise<void>;
   /** Keeps the editor's version of the file `banner` names. */
   keepMine(banner: Banner): void;
+  /** Closes the open document whose file `banner` says was deleted on disk, once its session is stored. */
+  close(banner: Banner): Promise<void>;
 }
 
 const changedPath = (change: FileChange) => ("Changed" in change ? change.Changed.path : "Created" in change ? change.Created.path : null);
+const createdPath = (change: FileChange) => ("Created" in change ? change.Created.path : null);
 const removedPath = (change: FileChange) => ("Removed" in change ? change.Removed.path : null);
 
 export const assetsPlugin = definePlugin({
@@ -154,9 +161,20 @@ export const assetsPlugin = definePlugin({
       async reload(banner) {
         state.set({ banners: withoutBanner(banner.path) });
         if ("text" in banner) return replace(banner.text);
-        await documents.getState().reloadAssets([banner.asset]);
+        if ("asset" in banner) await documents.getState().reloadAssets([banner.asset]);
       },
       keepMine: (banner) => state.set({ banners: withoutBanner(banner.path) }),
+      async close(banner) {
+        if (documents.getState().current?.path !== banner.path) return;
+        // Stored again: the session changed since the file was deleted.
+        await documents
+          .getState()
+          .store()
+          .catch((error: unknown) => {
+            throw new Error(`${banner.path} stays open: its session cannot be stored: ${errorText(error)}`);
+          });
+        documents.setState({ current: null, text: null });
+      },
     };
 
     // A change to the open scene or prefab reloads it, unless the editor holds unsaved edits.
@@ -167,6 +185,48 @@ export const assetsPlugin = definePlugin({
       if (editor.timeline.getState().timeline?.scene_dirty) showBanner({ path, text });
       else await replace(text);
     };
+    /**
+     * Finds the file of `open` in the fresh listing, after `changes` removed its path or brought
+     * it back: the document follows its identifier, else a file `changes` created that holds its
+     * text (moved without its meta, the file has an identifier of its own, under which the
+     * session is stored at once, where the next open and crash recovery look for it). When the
+     * file is really gone, the session is stored and the document stays open as deleted on disk
+     * until it is saved again or closed.
+     */
+    const follow = async (open: OpenDocument, changes: FileChange[]) => {
+      // Another document, or this one renamed in the editor, is open now.
+      const still = () => documents.getState().current === open;
+      const sameKind = (file: FileEntry) => kindName(file.kind).toLowerCase() === open.kind;
+      const { files } = state.get();
+      let found = files.find((file) => file.id === open.id && sameKind(file));
+      // A replay has no text to recognise.
+      const text = documents.getState().text;
+      if (!found && text !== null) {
+        const created = files.filter((file) => sameKind(file) && changes.some((change) => createdPath(change) === file.path));
+        for (const file of created) {
+          // A file that cannot be read is not known to hold it.
+          const read = await editor.project.request({ type: "read_text", path: file.path }).catch(() => null);
+          if (read?.text !== text) continue;
+          found = file;
+          break;
+        }
+      }
+      if (!still()) return;
+      if (found) {
+        state.set({ banners: state.get().banners.filter((banner) => !("removed" in banner && banner.path === open.path)) });
+        if (found.id === open.id && found.path === open.path) return;
+        documents.setState({ current: { ...open, id: found.id, path: found.path } });
+        if (found.id !== open.id) await documents.getState().store();
+        return;
+      }
+      if (!changes.some((change) => removedPath(change) === open.path)) return;
+      try {
+        await documents.getState().store();
+      } catch (error) {
+        editor.console.log("warning", `Cannot store the session of ${open.path}, deleted on disk: ${errorText(error)}`);
+      }
+      if (still()) showBanner({ path: open.path, removed: true });
+    };
     let info = project.get().info;
     const stops = [
       editor.project.on("files_changed", ({ changes }) => {
@@ -176,14 +236,18 @@ export const assetsPlugin = definePlugin({
           const id = state.get().files.find((file) => file.path === changedPath(change))?.id;
           if (id && unsaved.includes(id)) showBanner({ path: changedPath(change)!, asset: id });
         }
-        void refresh();
-        const open = documents.getState().current?.path;
+        const listed = refresh();
+        const open = documents.getState().current;
         if (!open) return;
-        // Removed or renamed outside the editor: nothing on disk to save the game's document to any more.
-        if (!renaming.has(open) && changes.some((change) => removedPath(change) === open)) {
-          documents.setState({ current: null, text: null });
-          state.set({ banners: withoutBanner(open) });
-        } else if (changes.some((change) => changedPath(change) === open)) onDiskChange(open).catch(report);
+        const removedOrBack = changes.some((change) => removedPath(change) === open.path || createdPath(change) === open.path);
+        if (removedOrBack && !renaming.has(open.path)) listed.then(() => follow(open, changes)).catch(report);
+        if (changes.some((change) => changedPath(change) === open.path)) onDiskChange(open.path).catch(report);
+      }),
+      // A deleted document's banner goes once another document, or none, is open.
+      documents.subscribe(({ current }) => {
+        const { banners } = state.get();
+        const kept = banners.filter((banner) => !("removed" in banner) || banner.path === current?.path);
+        if (kept.length < banners.length) state.set({ banners: kept });
       }),
       project.subscribe(() => {
         if (project.get().info === info) return;
