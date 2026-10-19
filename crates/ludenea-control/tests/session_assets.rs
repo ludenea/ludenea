@@ -8,6 +8,7 @@ use ludenea::control::session::Document;
 use ludenea::control::{Resimulation, Session, SessionError};
 use ludenea::ecs::{Asset, AssetId, Component};
 use ludenea::prelude::*;
+use ludenea_app::path::PathSegment;
 use ludenea_app::{AssetTexts, EntityRef, SceneError, ValueKind};
 use serde_json::json;
 
@@ -293,6 +294,126 @@ fn replace_with_instance_moves_entities_into_a_prefab() {
 
     session.undo(&mut sim).unwrap();
     assert_eq!(session.scene(), original);
+}
+
+#[test]
+fn create_prefab_after_playing_keeps_the_tick_0_values() {
+    let mut sim = simulation();
+    let scene = boxes::generate_scene(10, 3);
+    let mut session = Session::start(&mut sim, scene, assets(), Document::Scene).unwrap();
+    // The first crate, which falls once played.
+    let crate_entity = sim.entity_at_address(&[4]).unwrap();
+    let at_tick_0 = create_prefab(&sim, &[crate_entity]).unwrap();
+    play(&mut session, &mut sim, 120);
+    let (hash, played) = (sim.hash(), create_prefab(&sim, &[crate_entity]).unwrap());
+    assert_ne!(played, at_tick_0);
+
+    let text = session.create_prefab(&mut sim, &[crate_entity]).unwrap();
+
+    assert_eq!(text, at_tick_0);
+    assert_eq!(session.timeline().current, 120);
+    assert_eq!(sim.hash(), hash);
+    // An entity spawned after tick 0 is not in the scene.
+    let spawned = session
+        .edit(
+            &mut sim,
+            Edit::Spawn {
+                components: Vec::new(),
+            },
+        )
+        .unwrap()
+        .unwrap();
+    let error = session.create_prefab(&mut sim, &[spawned]).unwrap_err();
+    assert!(
+        matches!(&error, SessionError::Scene(SceneError::MissingTarget(target)) if *target == format!("entity {spawned}")),
+        "{error:?}"
+    );
+    assert_eq!(session.timeline().current, 120);
+}
+
+fn field(name: &str) -> PathSegment {
+    PathSegment::Field {
+        name: name.to_string(),
+    }
+}
+
+/// The spawner scene with instance 6's override list emptied.
+fn without_instance_6_overrides(scene: &str) -> String {
+    let start = scene.find("(id: 6,").unwrap();
+    let end = start + scene[start..].find('\n').unwrap();
+    let instance_6 = format!("(id: 6, prefab: \"{PREFAB}\", overrides: []),");
+    [&scene[..start], &instance_6, &scene[end..]].concat()
+}
+
+#[test]
+fn apply_to_prefab_moves_the_override_into_the_prefab() {
+    let (mut sim, mut session) = spawner_session();
+    let (scene, prefab) = (
+        session.scene().to_string(),
+        session.assets()[&PREFAB].clone(),
+    );
+    play(&mut session, &mut sim, 120);
+    let x = [field("position"), field("x")];
+
+    // Instance 6 overrides the position's `x` with 5.0.
+    let applied = session
+        .apply_to_prefab(&mut sim, &[6], &[0], Pose::NAME, &x)
+        .unwrap();
+
+    let expected = prefab.replace("position:(x:0.0,y:26.0)", "position:(x:5.0,y:26.0)");
+    assert_eq!(applied, expected);
+    assert_eq!(session.assets()[&PREFAB], expected);
+    assert_eq!(session.scene(), without_instance_6_overrides(&scene));
+    assert_eq!(
+        session.timeline().undo_label.as_deref(),
+        Some("Undo apply to prefab")
+    );
+    resimulate_all(&mut session, &mut sim);
+    assert_eq!(session.timeline().current, 120);
+    session.seek(&mut sim, 0).unwrap();
+    // Every instance follows the prefab.
+    assert!(pose_at(&sim, &[5, 0]).contains("x:5.0"));
+    // Nothing is left to apply.
+    assert!(matches!(
+        session.apply_to_prefab(&mut sim, &[6], &[0], Pose::NAME, &x),
+        Err(SessionError::Scene(SceneError::MissingTarget(_)))
+    ));
+
+    // One undo takes both back, and the history keeps the entry across a resume.
+    let mut session =
+        Session::resume(&mut sim, session.export().unwrap(), Document::Scene).unwrap();
+    resimulate_all(&mut session, &mut sim);
+    session.undo(&mut sim).unwrap();
+    assert_eq!(session.scene(), scene);
+    assert_eq!(session.assets()[&PREFAB], prefab);
+    assert!(pose_at(&sim, &[5, 0]).contains("x:0.0"));
+    resimulate_all(&mut session, &mut sim);
+    session.redo(&mut sim).unwrap();
+    assert_eq!(session.scene(), without_instance_6_overrides(&scene));
+    assert_eq!(session.assets()[&PREFAB], expected);
+}
+
+#[test]
+fn applying_a_whole_component_moves_each_of_its_overrides() {
+    let (mut sim, mut session) = spawner_session();
+    let (scene, prefab) = (
+        session.scene().to_string(),
+        session.assets()[&PREFAB].clone(),
+    );
+    let y = [field("position"), field("y")];
+    session
+        .set_override(&mut sim, &[6], &[0], Pose::NAME, &y, "3.0")
+        .unwrap();
+
+    session
+        .apply_to_prefab(&mut sim, &[6], &[0], Pose::NAME, &[])
+        .unwrap();
+
+    assert_eq!(
+        session.assets()[&PREFAB],
+        prefab.replace("position:(x:0.0,y:26.0)", "position:(x:5.0,y:3.0)")
+    );
+    assert_eq!(session.scene(), without_instance_6_overrides(&scene));
 }
 
 fn simulation_with(scene: &str) -> Simulation {

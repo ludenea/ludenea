@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::branches::{BranchId, BranchTree, BranchesError, StoredBranch};
 
 /// The version `UndoHistory::encode` writes first. Milestone 2a wrote no version.
-pub const UNDO_VERSION: u32 = 3;
+pub const UNDO_VERSION: u32 = 4;
 
 #[derive(Debug, thiserror::Error)]
 pub enum UndoError {
@@ -54,6 +54,15 @@ pub(crate) enum UndoEntry {
         before: String,
         after: String,
     },
+    /// An override moved into its prefab at tick 0: the text of the prefab `id` and the
+    /// scene text, each before and after it. Last, so version 3 histories still decode.
+    AppliedToPrefab {
+        id: AssetId,
+        before: String,
+        after: String,
+        scene_before: String,
+        scene_after: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -82,7 +91,9 @@ impl ForkCause {
 impl UndoEntry {
     fn branch(&self) -> Option<BranchId> {
         match self {
-            UndoEntry::Scene { .. } | UndoEntry::Asset { .. } => None,
+            UndoEntry::Scene { .. }
+            | UndoEntry::Asset { .. }
+            | UndoEntry::AppliedToPrefab { .. } => None,
             UndoEntry::Run { branch, .. } | UndoEntry::Fork { branch, .. } => Some(*branch),
         }
     }
@@ -92,6 +103,7 @@ impl UndoEntry {
         match self {
             UndoEntry::Scene { .. } => "scene edit".to_string(),
             UndoEntry::Asset { .. } => "asset edit".to_string(),
+            UndoEntry::AppliedToPrefab { .. } => "apply to prefab".to_string(),
             UndoEntry::Run { edit, .. } => format!("edit at tick {}", edit.tick),
             UndoEntry::Fork { cause, .. } => cause.describe(),
         }
@@ -100,7 +112,9 @@ impl UndoEntry {
     /// Whether undoing it works on `tree`, or why not.
     fn undo_fits(&self, tree: &BranchTree) -> Result<(), String> {
         match self {
-            UndoEntry::Scene { .. } | UndoEntry::Asset { .. } => Ok(()),
+            UndoEntry::Scene { .. }
+            | UndoEntry::Asset { .. }
+            | UndoEntry::AppliedToPrefab { .. } => Ok(()),
             UndoEntry::Run { branch, .. } => known(tree, *branch),
             UndoEntry::Fork { branch, .. } => not_root(*branch).and_then(|()| known(tree, *branch)),
         }
@@ -117,7 +131,9 @@ impl UndoEntry {
     ) -> Result<(), String> {
         let unfit = |error: BranchesError| format!("restores branches that do not fit: {error}");
         match self {
-            UndoEntry::Scene { .. } | UndoEntry::Asset { .. } => Ok(()),
+            UndoEntry::Scene { .. }
+            | UndoEntry::Asset { .. }
+            | UndoEntry::AppliedToPrefab { .. } => Ok(()),
             UndoEntry::Fork {
                 branch, removed, ..
             } => {
@@ -267,7 +283,9 @@ impl UndoHistory {
     /// redo works within the root, as in 2a.
     pub fn keep_on_root(&mut self, path: &[BranchId], run: &EditLog) {
         let keep = |entry: &mut UndoEntry| match entry {
-            UndoEntry::Scene { .. } | UndoEntry::Asset { .. } => true,
+            UndoEntry::Scene { .. }
+            | UndoEntry::Asset { .. }
+            | UndoEntry::AppliedToPrefab { .. } => true,
             UndoEntry::Run {
                 branch,
                 edit,
@@ -337,13 +355,13 @@ impl UndoHistory {
         postcard::to_allocvec(&(UNDO_VERSION, self)).expect("an undo history always encodes")
     }
 
-    /// Decodes the current version, version 2, or the unversioned 2a form, the last two
-    /// with every entry on the root branch (2a edit targets as `EntityRef::Runtime`): an
-    /// entry of version 2 recorded on another branch then fails to undo as `NotOnBranch`
-    /// and is dropped. All start with a varint, so each versioned form is tried first and
-    /// must use every byte.
+    /// Decodes the current version, version 3 (the current entries but the last), version
+    /// 2, or the unversioned 2a form, the last two with every entry on the root branch (2a
+    /// edit targets as `EntityRef::Runtime`): an entry of version 2 recorded on another
+    /// branch then fails to undo as `NotOnBranch` and is dropped. All start with a varint,
+    /// so each versioned form is tried first and must use every byte.
     pub fn decode(bytes: &[u8]) -> Result<UndoHistory, UndoError> {
-        if let Ok((UNDO_VERSION, mut history)) = decode_exact::<(u32, UndoHistory)>(bytes) {
+        if let Ok((3 | UNDO_VERSION, mut history)) = decode_exact::<(u32, UndoHistory)>(bytes) {
             for entry in history.undo.iter_mut().chain(&mut history.redo) {
                 if let UndoEntry::Run {
                     removed, restores, ..

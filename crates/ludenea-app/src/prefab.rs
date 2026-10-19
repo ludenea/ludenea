@@ -626,6 +626,67 @@ pub fn apply_to_prefab(
     Ok(splice(prefab_file, target.span.clone(), value))
 }
 
+/// Moves the override of `component` at `path` on `entity` of the instance at `instance`
+/// (named as `set_override` names them) out of the scene or prefab `file` and into the
+/// prefab of the instance's entry in `file`, whose text `assets` holds: the prefab takes
+/// the override's value as `file` writes it (see `apply_to_prefab`). An empty `path` moves
+/// every override of the component, in file order. Returns the prefab, its new text, and
+/// the new `file`.
+pub fn move_overrides_to_prefab(
+    file: &str,
+    assets: &dyn AssetSource,
+    instance: &[u32],
+    entity: &[u32],
+    component: &str,
+    path: &[PathSegment],
+) -> Result<(AssetId, String, String), SceneError> {
+    let (id, target) = split_target(instance, entity)?;
+    let root = parse_file(file)?;
+    let at = ListAt {
+        instance: Some(id),
+        name: "overrides",
+    };
+    let (entry, overrides) = list(file, &root, at)?;
+    let prefab = field(file, entry, "prefab")
+        .and_then(|prefab| ron::from_str::<AssetId>(&file[prefab.span.clone()]).ok())
+        .ok_or_else(|| SceneError::Parse(format!("instance {id} names no `prefab`")))?;
+    let mut prefab_file = assets
+        .text(prefab)
+        .ok_or_else(|| SceneError::MissingAsset {
+            referenced_by: format!("instance {id}"),
+            id: prefab,
+        })?
+        .to_string();
+    let matches = targets(&target, component, (!path.is_empty()).then_some(path));
+    let parse = |error: ron::error::SpannedError| SceneError::Parse(error.to_string());
+    let mut moved = 0;
+    let entries = overrides.map_or(&[][..], items).iter();
+    for entry in entries.filter(|entry| matches(file, entry)) {
+        let Target { path, .. } = ron::from_str(&file[entry.span.clone()]).map_err(parse)?;
+        let value = field(file, entry, "value").ok_or_else(|| {
+            SceneError::Parse(format!("an override of instance {id} has no `value`"))
+        })?;
+        prefab_file = apply_to_prefab(
+            &prefab_file,
+            &target,
+            component,
+            &path,
+            &file[value.span.clone()],
+        )?;
+        moved += 1;
+    }
+    if moved == 0 {
+        let at = [&[id][..], &target].concat();
+        return Err(SceneError::MissingTarget(format!(
+            "an override of `{component}` at `{}` on entity {}",
+            Path(path),
+            address_text(&at)
+        )));
+    }
+    let file = revert_override(file, instance, entity, component, path)?;
+    Ok((prefab, prefab_file, file))
+}
+
 /// Checks the prefab `id` before `file` is written as its text: refuses an `Entity` value
 /// of its own entities naming none of them, and an instance cycle, whose chain starts at
 /// `id`. `file` replaces whatever `assets` holds for `id`; a new prefab passes the

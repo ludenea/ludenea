@@ -680,6 +680,15 @@ impl Session {
                 self.load_asset_version(sim, *id, before.clone())?;
                 Ok(None)
             }
+            UndoEntry::AppliedToPrefab {
+                id,
+                before,
+                scene_before,
+                ..
+            } => {
+                self.load_versions(sim, scene_before.clone(), *id, before.clone())?;
+                Ok(None)
+            }
             UndoEntry::Fork {
                 branch,
                 cause,
@@ -750,6 +759,15 @@ impl Session {
             }
             UndoEntry::Asset { id, after, .. } => {
                 self.load_asset_version(sim, *id, after.clone())?;
+                Ok(None)
+            }
+            UndoEntry::AppliedToPrefab {
+                id,
+                after,
+                scene_after,
+                ..
+            } => {
+                self.load_versions(sim, scene_after.clone(), *id, after.clone())?;
                 Ok(None)
             }
             UndoEntry::Fork {
@@ -946,7 +964,9 @@ impl Session {
     fn undo_label(&self) -> Option<String> {
         let entry = self.history.next_undo()?;
         let removes = match entry {
-            UndoEntry::Scene { .. } | UndoEntry::Asset { .. } => Vec::new(),
+            UndoEntry::Scene { .. }
+            | UndoEntry::Asset { .. }
+            | UndoEntry::AppliedToPrefab { .. } => Vec::new(),
             UndoEntry::Run { branch, edit, .. } => self.tree.forked_at_or_after(*branch, edit.tick),
             UndoEntry::Fork { branch, .. } => match self.tree.get(*branch) {
                 Some(_) => self.tree.subtree(*branch),
@@ -1176,6 +1196,65 @@ impl Session {
         self.ensure_resimulated()?;
         let scene = prefab::set_override(&self.scene, instance, entity, component, path, value)?;
         self.change_scene(sim, scene)
+    }
+
+    /// The prefab file of the scene entities `entities` as the scene holds them (see
+    /// `prefab::create_prefab`), whatever tick the session shows: the world goes back to
+    /// tick 0 to write it, then comes back. An entity spawned after tick 0 is dead there, so
+    /// it is refused.
+    pub fn create_prefab(
+        &mut self,
+        sim: &mut Simulation,
+        entities: &[Entity],
+    ) -> Result<String, SessionError> {
+        self.ensure_resimulated()?;
+        self.restore_checkpoint(sim, 0)?;
+        let written = prefab::create_prefab(sim, entities).map_err(SessionError::from);
+        // The writing's error is the one to report, wherever coming back ends.
+        let back = self.come_back(sim, self.current);
+        let text = written?;
+        back.map(|()| text)
+    }
+
+    /// Moves the override of `component` at `path` on `entity` of the instance at
+    /// `instance` into the instance's prefab, like a tick 0 edit: the prefab's text in the
+    /// session takes the override's value as the scene text writes it, and the override is
+    /// removed (see `prefab::move_overrides_to_prefab`); an empty `path` moves every
+    /// override of the component. One undo takes both back. Returns the new prefab text,
+    /// which only the session holds until it is saved.
+    pub fn apply_to_prefab(
+        &mut self,
+        sim: &mut Simulation,
+        instance: &[u32],
+        entity: &[u32],
+        component: &str,
+        path: &[PathSegment],
+    ) -> Result<String, SessionError> {
+        self.ensure_resimulated()?;
+        let (id, after, scene) = prefab::move_overrides_to_prefab(
+            &self.scene,
+            &self.assets,
+            instance,
+            entity,
+            component,
+            path,
+        )?;
+        prefab::save_prefab_checked(id, &after, &self.assets)?;
+        let before = self
+            .assets
+            .get(&id)
+            .ok_or(EditError::MissingAsset(id))?
+            .clone();
+        let scene_before = self.scene.clone();
+        self.load_versions(sim, scene.clone(), id, after.clone())?;
+        self.history.record(UndoEntry::AppliedToPrefab {
+            id,
+            before,
+            after: after.clone(),
+            scene_before,
+            scene_after: scene,
+        });
+        Ok(after)
     }
 
     /// Removes that override, like a tick 0 edit; an empty `path` removes every override of
@@ -2037,8 +2116,20 @@ impl Session {
         id: AssetId,
         text: String,
     ) -> Result<(), SessionError> {
+        self.load_versions(sim, self.scene.clone(), id, text)
+    }
+
+    /// Replaces the scene text with `scene` and the asset text of `id` with `text`, and
+    /// loads them, like a tick 0 edit; nothing changes when the load fails.
+    fn load_versions(
+        &mut self,
+        sim: &mut Simulation,
+        scene: String,
+        id: AssetId,
+        text: String,
+    ) -> Result<(), SessionError> {
         let previous = self.assets.insert(id, text);
-        match self.load_scene(sim, &self.scene, &self.assets) {
+        match self.load_scene(sim, &scene, &self.assets) {
             Ok(warnings) => self.warnings = warnings,
             Err(error) => {
                 match previous {
@@ -2048,6 +2139,7 @@ impl Session {
                 return Err(error);
             }
         }
+        self.set_scene(scene);
         self.start_resimulation(sim)
     }
 

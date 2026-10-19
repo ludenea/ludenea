@@ -23,7 +23,7 @@ this table in the same commit.
 | Snapshot (`.snap`)     | `SNAPSHOT_VERSION`         | 3       | 2                             |
 | Input log (`.inputs`)  | `INPUT_LOG_VERSION`        | 1       | 1                             |
 | Edit log               | `EDIT_LOG_VERSION`         | 2       | 1                             |
-| Undo history           | `UNDO_VERSION`             | 3       | the unversioned form before 2 |
+| Undo history           | `UNDO_VERSION`             | 4       | the unversioned form before 2 |
 
 Not versioned yet: data assets (`.ron` files holding a value of the game type their meta
 names), the project manifest `ludenea.toml`, the branch tree of a session, the stored
@@ -148,6 +148,12 @@ session (the editor's copy of each open document's session), and the plugin API.
   `SceneError::UnknownComponent`; it panicked.
 - `Host::new` returns the new `AppError::Scene` when the built world cannot be written as
   a scene.
+- The new `Session::create_prefab` writes the prefab file of scene entities as the scene
+  holds them, whatever tick the session shows, and refuses an entity spawned after tick 0
+  with `SceneError::MissingTarget` naming it. The new `Session::apply_to_prefab` moves an
+  override into the session's text of the instance's prefab and out of the scene, as one
+  tick 0 edit that one undo takes back; `ludenea_app::prefab::move_overrides_to_prefab` is
+  its text operation.
 
 ### Control protocol
 
@@ -195,6 +201,15 @@ session (the editor's copy of each open document's session), and the plugin API.
   than the scene's `next_id` leaves fails with `invalid_edit` and changes nothing. With
   stale references in the scene it ended the game process; otherwise it failed with
   `invalid_scene`.
+- `create_prefab` writes the entities as the scene holds them, whatever the current tick.
+  Past tick 0 it wrote their simulated values, which `replace_with_instance` then put into
+  the scene. It refuses an entity spawned after tick 0 with `invalid_scene`, naming it.
+- `apply_to_prefab` is a tick 0 edit: the instance's prefab takes the override's value as
+  the scene writes it, in the session's asset text, which `save_asset` gives to write, and
+  the override is removed; one `undo` ("Undo apply to prefab") takes both back, and an
+  instance without that override is refused with `invalid_scene`. It still replies the new
+  prefab text. It used to take the instance's value at the current tick, simulated past
+  tick 0, and to change neither the scene nor the session's prefab text.
 
 ### Project protocol
 
@@ -231,6 +246,8 @@ session (the editor's copy of each open document's session), and the plugin API.
 
 ### Formats
 
+- Undo history 4: an "Apply to prefab" entry holds the prefab text and the scene text, each
+  before and after it. Version 3 histories still read.
 - Snapshot 3: a `ludenea::Prefab` asset holds only its entities; version 2 also listed the
   component types that hold an `Entity`. Version 2 snapshots still read. The schema of
   `ludenea::Prefab` changed with it, so every game's schema fingerprint changed, and the

@@ -1172,6 +1172,29 @@ fn apply_to_prefab_returns_updated_prefab() {
     assert_ne!(prefab, original);
 }
 
+#[test]
+fn apply_to_prefab_after_playing_writes_the_override_value() {
+    let (mut host, _) = spawner_host(fs::read_to_string(SPAWNER_SCENE).unwrap());
+    step(&mut host, 120);
+    // Instance 6 overrides the position's `x` with 5.0; its crate has moved since tick 0.
+    let prefab = text(ok(
+        &mut host,
+        Command::ApplyToPrefab {
+            instance: vec![6],
+            entity: vec![0],
+            component: "ludenea::Pose".to_string(),
+            path: vec![field("position"), field("x")],
+        },
+    ));
+    assert!(prefab.contains("position:(x:5.0,y:26.0)"), "{prefab}");
+    // The session holds the new prefab text, to save, and the override is gone.
+    assert_eq!(
+        text(ok(&mut host, Command::SaveAsset { id: PREFAB })),
+        prefab
+    );
+    assert!(!scene_text(&mut host).contains("value: 5.0"));
+}
+
 fn export_replay(host: &mut Host, branch: Option<BranchId>) -> Bytes {
     match ok(host, Command::ExportReplay { branch }) {
         Reply::Replay { replay } => replay,

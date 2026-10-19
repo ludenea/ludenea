@@ -1,8 +1,8 @@
 use ludenea_app::path::PathSegment;
 use ludenea_app::prefab::{
-    add_component_override, apply_to_prefab, check_despawn, create_prefab, place_instance,
-    remove_component_override, replace_with_instance, revert_override, save_prefab_checked,
-    set_override,
+    add_component_override, apply_to_prefab, check_despawn, create_prefab,
+    move_overrides_to_prefab, place_instance, remove_component_override, replace_with_instance,
+    revert_override, save_prefab_checked, set_override,
 };
 use ludenea_app::{App, AssetTexts, NamedAssetTexts, Resolved, SceneError, Simulation, resolve};
 use ludenea_ecs::{AssetId, Component, Entity};
@@ -315,6 +315,40 @@ fn apply_to_prefab_writes_nested_override() {
     );
     assert_eq!(component(&resolved, &[0, 3, 1], "Tag").unwrap(), "(5)");
     assert!(apply_to_prefab(&outer, &[0], "prefab_editing::Tag", &[], "(1)").is_err());
+}
+
+#[test]
+fn moving_an_override_of_a_nested_instance_overrides_it_in_the_prefab() {
+    let outer = format!(
+        "Prefab(version: 1, next_id: 4, entities: [], instances: [(id: 3, prefab: \"{}\")])",
+        AssetId(A)
+    );
+    let assets = texts(&[(A, PREFAB), (B, &outer)]);
+    let scene = format!(
+        "Scene(version: 2, next_id: 1, resources: {{}}, entities: [], instances: [(id: 0, prefab: \"{}\", overrides: [\
+        (entity: [3, 1], component: \"prefab_editing::Tag\", path: [], value: (5)),\
+        ])])",
+        AssetId(B)
+    );
+    let tag = "prefab_editing::Tag";
+
+    let (prefab, outer, moved) =
+        move_overrides_to_prefab(&scene, &assets, &[0], &[3, 1], tag, &[]).unwrap();
+
+    assert_eq!(prefab, AssetId(B));
+    // The nested instance's entity named from the instance it is in moves the same way.
+    assert_eq!(
+        move_overrides_to_prefab(&scene, &assets, &[0, 3], &[1], tag, &[]).unwrap(),
+        (prefab, outer.clone(), moved.clone())
+    );
+    assert!(moved.contains("overrides: []"), "{moved}");
+    let resolved = resolve(&moved, &texts(&[(A, PREFAB), (B, &outer)])).unwrap();
+    assert!(resolved.warnings.is_empty());
+    assert_eq!(component(&resolved, &[0, 3, 1], "Tag").unwrap(), "(5)");
+    assert!(matches!(
+        move_overrides_to_prefab(&moved, &assets, &[0], &[3, 1], tag, &[]),
+        Err(SceneError::MissingTarget(_))
+    ));
 }
 
 #[test]

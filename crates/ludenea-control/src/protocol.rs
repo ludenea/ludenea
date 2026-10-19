@@ -361,7 +361,9 @@ pub enum Command {
     DeleteBranch {
         branch: BranchId,
     },
-    /// A prefab file of these entities' current components; replies `Text`.
+    /// A prefab file of these scene entities as the scene holds them, whatever the current
+    /// tick; replies `Text`. An entity spawned after tick 0 is not in the scene: it is
+    /// refused.
     CreatePrefab {
         entities: Vec<Entity>,
     },
@@ -393,8 +395,11 @@ pub enum Command {
         component: String,
         path: Vec<PathSegment>,
     },
-    /// The instance's prefab file with the current value at `path` written into it;
-    /// replies `Text`.
+    /// Moves that override into the instance's prefab, like a tick 0 edit: the session's
+    /// text of the prefab takes the override's value as the scene writes it, and the
+    /// override is removed; one undo takes both back. An empty `path` moves every override
+    /// of the component. Replies `Text`, the new prefab text, which `SaveAsset` gives to
+    /// write.
     ApplyToPrefab {
         instance: Vec<u32>,
         entity: Vec<u32>,

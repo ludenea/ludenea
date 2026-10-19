@@ -680,7 +680,10 @@ impl Host {
                 })
             }
             Command::CreatePrefab { entities } => Ok(Reply::Text {
-                text: prefab::create_prefab(sim, &entities).map_err(scene_error)?,
+                text: self
+                    .session
+                    .create_prefab(sim, &entities)
+                    .map_err(|e| self.fail(e))?,
             }),
             Command::PlaceInstance { prefab } => {
                 let instance = self
@@ -711,7 +714,7 @@ impl Host {
                     ComponentValue::Ron { text } => text,
                     ComponentValue::Json { value } => {
                         let address = [&instance[..], &entity[..]].concat();
-                        self.override_ron(&address, &component, &path, Some(value))?
+                        self.override_ron(&address, &component, &path, value)?
                     }
                 };
                 self.session
@@ -742,28 +745,12 @@ impl Host {
                 entity,
                 component,
                 path,
-            } => {
-                let address = [&instance[..], &entity[..]].concat();
-                let value = self.override_ron(&address, &component, &path, None)?;
-                let id = self
-                    .simulation
-                    .instances()
-                    .into_iter()
-                    .find(|info| info.address == instance)
-                    .map(|info| info.prefab)
-                    .ok_or_else(|| {
-                        ProtocolError::new(
-                            ErrorCode::NoSuchEntity,
-                            format!("there is no instance {instance:?}"),
-                        )
-                    })?;
-                let assets = self.session.assets();
-                let file = assets.get(&id).ok_or_else(|| missing_asset(id))?;
-                let text = prefab::apply_to_prefab(file, &entity, &component, &path, &value)
-                    .map_err(scene_error)?;
-                prefab::save_prefab_checked(id, &text, assets).map_err(scene_error)?;
-                Ok(Reply::Text { text })
-            }
+            } => Ok(Reply::Text {
+                text: self
+                    .session
+                    .apply_to_prefab(sim, &instance, &entity, &component, &path)
+                    .map_err(|e| self.fail(e))?,
+            }),
             Command::GetInstances => Ok(Reply::Instances {
                 instances: sim.instances(),
                 load_addresses: load_addresses(sim),
@@ -948,13 +935,13 @@ impl Host {
     }
 
     /// The RON at `path` of `component` on the entity at load address `address`, as an
-    /// override value of that entity: its current value, with `value` at `path` when given.
+    /// override value of that entity: its current value with `value` at `path`.
     fn override_ron(
         &self,
         address: &[u32],
         component: &str,
         path: &[PathSegment],
-        value: Option<JsonValue>,
+        value: JsonValue,
     ) -> Result<String, ProtocolError> {
         let sim = &self.simulation;
         let entity = sim
@@ -970,31 +957,23 @@ impl Host {
                 })
             }
         };
-        let bytes = match value {
-            None => sim
-                .world()
-                .component_bytes(entity, component)
-                .ok_or_else(missing)?,
-            Some(value) => {
-                let current = sim
-                    .world()
-                    .component_json(entity, component)
-                    .ok_or_else(missing)?
-                    .map_err(|reason| {
-                        ProtocolError::new(
-                            ErrorCode::InvalidEdit,
-                            format!("`{component}` is read-only in the editor: {reason}"),
-                        )
-                    })?;
-                let schema = value_schema(sim, ValueKind::Component, component)
-                    .map_err(|e| edit_error(&e))?;
-                let mut whole = to_wire(current, &schema);
-                set_at_path(&mut whole, path, value)
-                    .map_err(|reason| ProtocolError::new(ErrorCode::InvalidPath, reason))?;
-                encode_value(sim, ValueKind::Component, component, whole)
-                    .map_err(|e| edit_error(&e))?
-            }
-        };
+        let current = sim
+            .world()
+            .component_json(entity, component)
+            .ok_or_else(missing)?
+            .map_err(|reason| {
+                ProtocolError::new(
+                    ErrorCode::InvalidEdit,
+                    format!("`{component}` is read-only in the editor: {reason}"),
+                )
+            })?;
+        let schema =
+            value_schema(sim, ValueKind::Component, component).map_err(|e| edit_error(&e))?;
+        let mut whole = to_wire(current, &schema);
+        set_at_path(&mut whole, path, value)
+            .map_err(|reason| ProtocolError::new(ErrorCode::InvalidPath, reason))?;
+        let bytes = encode_value(sim, ValueKind::Component, component, whole)
+            .map_err(|e| edit_error(&e))?;
         let whole = sim
             .override_value_ron(address, component, &bytes)
             .map_err(scene_error)?;
@@ -1021,7 +1000,7 @@ impl Host {
             && address.len() > 1
         {
             let address = address.clone();
-            let ron = self.override_ron(&address, component, path, Some(value))?;
+            let ron = self.override_ron(&address, component, path, value)?;
             return self
                 .session
                 .set_override(
@@ -1315,8 +1294,6 @@ fn changes_state(command: &Command) -> bool {
             | Command::TakeSnapshot
             | Command::DiffSnapshots { .. }
             | Command::CompareTraces { .. }
-            | Command::CreatePrefab { .. }
-            | Command::ApplyToPrefab { .. }
             | Command::GetInstances
             | Command::QueryEntities { .. }
             | Command::GetEntity { .. }

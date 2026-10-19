@@ -451,7 +451,7 @@ fn session_export_from_2a_with_undo_history_resumes() {
 
 use ludenea::control::BranchId;
 use ludenea::control::branches::BranchesError;
-use ludenea::control::undo::UndoError;
+use ludenea::control::undo::{UNDO_VERSION, UndoError};
 use serde::Serialize;
 
 const ROOT: BranchId = BranchId::ROOT;
@@ -856,14 +856,15 @@ fn undo_history_version_2_decodes() {
 
     // A history of a later version is dropped by name, not misread as 2a bytes, and the
     // session resumes without it.
-    export.undo = vec![4];
+    let later = UNDO_VERSION + 1;
+    export.undo = postcard::to_allocvec(&later).unwrap();
     let mut session = resume(&mut sim, export);
     resimulate_all(&mut session, &mut sim);
     assert_eq!(
         session.warnings(),
         [format!(
             "{}; it was dropped, so undo and redo start empty",
-            UndoError::Version { version: 4 }
+            UndoError::Version { version: later }
         )]
     );
     assert!(!session.timeline().can_undo && !session.timeline().can_redo);
@@ -935,7 +936,8 @@ fn new_logs_keep_only_the_undo_entries_of_edits_on_the_current_run() {
     assert!(edits(&session).is_empty());
 }
 
-/// The undo entries of the current version, to write histories a session never records.
+/// The undo entries of version 3, which the current version extends, to write histories a
+/// session never records.
 #[derive(Serialize)]
 #[expect(
     dead_code,
