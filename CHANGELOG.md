@@ -25,8 +25,9 @@ this table in the same commit.
 | Edit log               | `EDIT_LOG_VERSION`         | 2       | 1                             |
 | Undo history           | `UNDO_VERSION`             | 3       | the unversioned form before 2 |
 
-Not versioned yet: the branch tree of a session, the stored session (the editor's copy of
-each open document's session), the project manifest `ludenea.toml`, and the plugin API.
+Not versioned yet: data assets (`.ron` files holding a value of the game type their meta
+names), the project manifest `ludenea.toml`, the branch tree of a session, the stored
+session (the editor's copy of each open document's session), and the plugin API.
 
 ## [Unreleased]
 
