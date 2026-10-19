@@ -260,6 +260,9 @@ impl ProjectService {
             ProjectRequest::LoadStoredSession { document } => Ok(ProjectReply::StoredSession {
                 bytes: self.project()?.load_stored_session(document)?.map(Bytes),
             }),
+            ProjectRequest::SetAsideStoredSession { document } => Ok(ProjectReply::SetAside {
+                path: self.project()?.set_aside_stored_session(document)?,
+            }),
             ProjectRequest::Rename { from, to } => {
                 self.project()?.rename(&from, &to)?;
                 Ok(ProjectReply::Done)

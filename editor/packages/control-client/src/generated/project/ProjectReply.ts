@@ -5,4 +5,4 @@ import type { FileEntry } from "./FileEntry";
 import type { PluginBundle } from "./PluginBundle";
 import type { ProjectInfo } from "./ProjectInfo";
 
-export type ProjectReply = { "type": "done" } | { "type": "info" } & ProjectInfo | { "type": "files", entries: Array<FileEntry>, } | { "type": "text", text: string, } | { "type": "bytes", bytes: Bytes, } | { "type": "file" } & FileEntry | { "type": "asset_texts" } & AssetTexts | { "type": "stored_session", bytes: Bytes | null, } | { "type": "plugins", plugins: Array<PluginBundle>, } | { "type": "native" } | { "type": "wasm", glue_url: string, };
+export type ProjectReply = { "type": "done" } | { "type": "info" } & ProjectInfo | { "type": "files", entries: Array<FileEntry>, } | { "type": "text", text: string, } | { "type": "bytes", bytes: Bytes, } | { "type": "file" } & FileEntry | { "type": "asset_texts" } & AssetTexts | { "type": "stored_session", bytes: Bytes | null, } | { "type": "set_aside", path: string | null, } | { "type": "plugins", plugins: Array<PluginBundle>, } | { "type": "native" } | { "type": "wasm", glue_url: string, };

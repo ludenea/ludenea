@@ -1246,6 +1246,9 @@ type ProjectRequest = {
     "type": "load_stored_session";
     document: string;
 } | {
+    "type": "set_aside_stored_session";
+    document: string;
+} | {
     "type": "rename";
     from: string;
     to: string;
@@ -1342,6 +1345,9 @@ type ProjectReply = {
     "type": "stored_session";
     bytes: Bytes | null;
 } | {
+    "type": "set_aside";
+    path: string | null;
+} | {
     "type": "plugins";
     plugins: Array<PluginBundle>;
 } | {
@@ -1376,7 +1382,7 @@ type ProjectServerMessage = {
 /** The project protocol version this build speaks: the editor and the service connect only when theirs are equal. */
 const PROJECT_PROTOCOL_VERSION = 3;
 /** The wire shape of `PROJECT_PROTOCOL_VERSION`, a hash of the protocol's types: the editor and the service connect only when theirs are equal too. */
-const PROJECT_PROTOCOL_FINGERPRINT = "f0f1300d4dc31f00";
+const PROJECT_PROTOCOL_FINGERPRINT = "70a550015903ce41";
 /** The `type` of the replies each request type may get when it succeeds. */
 type ProjectReplyTypes = {
     build: "done";
@@ -1394,6 +1400,7 @@ type ProjectReplyTypes = {
     read_text: "text";
     rename: "done";
     restart_game: "done";
+    set_aside_stored_session: "set_aside";
     store_session: "done";
     write_binary: "done";
     write_game_types: "done";

@@ -280,6 +280,50 @@ fn stored_session_round_trips() {
     assert_eq!(read, Ok(ProjectReply::Bytes { bytes }));
 }
 
+#[test]
+fn a_stored_session_set_aside_moves_to_the_first_free_rejected_file() {
+    let dir = TempDir::new().unwrap();
+    let mut service = project(&dir, &[]);
+    let document = AssetId(0x2a);
+    let set_aside = |service: &mut ProjectService| match service
+        .handle(ProjectRequest::SetAsideStoredSession { document })
+        .unwrap()
+    {
+        ProjectReply::SetAside { path } => path,
+        other => panic!("{other:?}"),
+    };
+    let store = |service: &mut ProjectService, bytes: &[u8]| {
+        service
+            .handle(ProjectRequest::StoreSession {
+                document,
+                bytes: Bytes(bytes.to_vec()),
+            })
+            .unwrap()
+    };
+    assert_eq!(set_aside(&mut service), None);
+
+    store(&mut service, b"first");
+    let first = format!(".ludenea/sessions/{document}.1.rejected.session");
+    assert_eq!(set_aside(&mut service), Some(first.clone()));
+    assert_eq!(
+        service.handle(ProjectRequest::LoadStoredSession { document }),
+        Ok(ProjectReply::StoredSession { bytes: None })
+    );
+    // A later session is stored, then set aside next to the first, which it never replaces.
+    store(&mut service, b"second");
+    let second = format!(".ludenea/sessions/{document}.2.rejected.session");
+    assert_eq!(set_aside(&mut service), Some(second.clone()));
+
+    let read = |path: &str| fs::read(dir.path().join("demo").join(path)).unwrap();
+    assert_eq!(read(&first), b"first");
+    assert_eq!(read(&second), b"second");
+    assert!(
+        !dir.path()
+            .join(format!("demo/.ludenea/sessions/{document}.session"))
+            .exists()
+    );
+}
+
 /// Review focus: a data asset broken on disk during a session is refused when the scene is
 /// reloaded with it, with the asset's path, line, and column, and the session keeps the
 /// previous value.

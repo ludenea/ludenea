@@ -17,7 +17,7 @@ pub const PROJECT_PROTOCOL_VERSION: u32 = 3;
 /// The wire shape of `PROJECT_PROTOCOL_VERSION`: a hash of the TypeScript declarations of
 /// every type the messages reach, without their documentation. The editor and the service
 /// connect only when theirs are equal too. `tests/typescript.rs` pins it.
-pub const PROJECT_PROTOCOL_FINGERPRINT: Hash64 = Hash64(0xf0f1_300d_4dc3_1f00);
+pub const PROJECT_PROTOCOL_FINGERPRINT: Hash64 = Hash64(0x70a5_5001_5903_ce41);
 
 /// What to do about a refused handshake: editor and service come from different checkouts.
 const REBUILD: &str =
@@ -149,6 +149,13 @@ pub enum ProjectRequest {
         #[cfg_attr(feature = "ts", ts(type = "string"))]
         document: AssetId,
     },
+    /// Moves the session `StoreSession` kept for `document`, which the editor could not
+    /// restore, to the first free `.ludenea/sessions/<id>.<n>.rejected.session` from 1, where
+    /// no later store overwrites it. Replies `SetAside`.
+    SetAsideStoredSession {
+        #[cfg_attr(feature = "ts", ts(type = "string"))]
+        document: AssetId,
+    },
     Rename {
         from: String,
         to: String,
@@ -184,6 +191,7 @@ impl ProjectRequest {
             ProjectRequest::CreateAsset { .. } => &["file"],
             ProjectRequest::ReadAssetTexts => &["asset_texts"],
             ProjectRequest::LoadStoredSession { .. } => &["stored_session"],
+            ProjectRequest::SetAsideStoredSession { .. } => &["set_aside"],
             ProjectRequest::ListPlugins => &["plugins"],
             ProjectRequest::GameEndpoint => &["native", "wasm"],
             ProjectRequest::WriteText { .. }
@@ -218,6 +226,11 @@ pub enum ProjectReply {
     AssetTexts(AssetTexts),
     StoredSession {
         bytes: Option<Bytes>,
+    },
+    /// Where `SetAsideStoredSession` moved the session, relative to the project root; `None`
+    /// when none was stored.
+    SetAside {
+        path: Option<String>,
     },
     Plugins {
         plugins: Vec<PluginBundle>,

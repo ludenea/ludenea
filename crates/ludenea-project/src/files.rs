@@ -266,6 +266,31 @@ impl Project {
         }
     }
 
+    /// Moves the session [`Project::store_session`] kept for `document` to the first free
+    /// `.ludenea/sessions/<id>.<n>.rejected.session` from 1, where no later store overwrites
+    /// it, and returns that path; `None` when none is kept. The copy is on disk before the
+    /// session is removed, so a crash in between leaves both, never neither.
+    pub fn set_aside_stored_session(
+        &mut self,
+        document: AssetId,
+    ) -> Result<Option<String>, ProjectError> {
+        let Some(bytes) = self.load_stored_session(document)? else {
+            return Ok(None);
+        };
+        let mut n = 1_u64;
+        let path = loop {
+            let path = format!(".ludenea/sessions/{document}.{n}.rejected.session");
+            match self.place(&self.resolve(&path)?, &bytes, false) {
+                Ok(()) => break path,
+                Err(ProjectError::AlreadyExists(_)) => n += 1,
+                Err(error) => return Err(error),
+            }
+        };
+        let session = self.resolve(&session_path(document))?;
+        fs::remove_file(&session).map_err(|error| io_error(&session, error))?;
+        Ok(Some(path))
+    }
+
     /// Writes `text` to a temporary file in `.ludenea/` (unwatched, on the same file system),
     /// synced to disk, then renames it over `path`: neither a crash mid-write nor a power loss
     /// leaves a truncated file. The file keeps its permissions; through a symbolic link inside

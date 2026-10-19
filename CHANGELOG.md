@@ -167,6 +167,9 @@ session (the editor's copy of each open document's session), and the plugin API.
   and data assets differ from their file, listed in the new `Timeline::unsaved_assets` and
   carried by the new `SessionExport::saved_assets`, and `Session::replace_scene` keeps the
   text of an unsaved asset over the new one.
+- `Project::set_aside_stored_session` moves the stored session of a document to the first
+  free `.ludenea/sessions/<id>.<n>.rejected.session`, from 1, and returns that path, or
+  `None` when none is stored.
 
 ### Control protocol
 
@@ -247,7 +250,7 @@ session (the editor's copy of each open document's session), and the plugin API.
 
 ### Project protocol
 
-- Project protocol 3, fingerprint `f0f1300d4dc31f00`.
+- Project protocol 3, fingerprint `70a550015903ce41`.
 - `hello` and `welcome` carry `protocol_fingerprint`, as in the control protocol, and the
   service refuses a client of another version or fingerprint the same way.
 - `game_output` events and the `line` events of a build carry a line that is not UTF-8
@@ -256,6 +259,9 @@ session (the editor's copy of each open document's session), and the plugin API.
 - `TypeSchema` in `GameInfo` (`write_game_types`) has the `recursive` kind of the control
   protocol; the game types declare it as the alias of the type it names, or `unknown`
   when that type is not among them.
+- `set_aside_stored_session { document }` moves the stored session of a document, which the
+  editor could not restore, where no later `store_session` overwrites it, and answers
+  `set_aside` with its new path, or a null path when none is stored.
 
 ### Plugin API
 

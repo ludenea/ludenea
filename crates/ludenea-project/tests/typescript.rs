@@ -107,6 +107,9 @@ fn every_request() -> Vec<ProjectRequest> {
         ProjectRequest::LoadStoredSession {
             document: AssetId(7),
         },
+        ProjectRequest::SetAsideStoredSession {
+            document: AssetId(7),
+        },
         ProjectRequest::Rename {
             from: path(),
             to: path(),

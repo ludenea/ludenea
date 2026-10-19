@@ -230,6 +230,9 @@ fn every_request_names_the_replies_it_gets() {
         ProjectRequest::LoadStoredSession {
             document: AssetId(7),
         },
+        ProjectRequest::SetAsideStoredSession {
+            document: AssetId(7),
+        },
         ProjectRequest::Rename {
             from: "scenes/other.scene.ron".to_string(),
             to: "scenes/renamed.scene.ron".to_string(),
