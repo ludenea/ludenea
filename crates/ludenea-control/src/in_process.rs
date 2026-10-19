@@ -73,6 +73,11 @@ pub(crate) fn handshake(host: &Host, hello: ClientMessage) -> ServerMessage {
 
 /// Answers one protocol line of a text transport: the handshake until `connected`, then
 /// requests. A line that is not a message gets a `Refused` or an error response.
+// The text transports: standard input and output natively, the Web Worker in the browser.
+#[cfg(any(
+    not(target_family = "wasm"),
+    all(target_arch = "wasm32", target_os = "unknown")
+))]
 pub(crate) fn answer(host: &mut Host, connected: &mut bool, line: &str) -> ServerMessage {
     match serde_json::from_str::<ClientMessage>(line) {
         Ok(ClientMessage::Request { id, command }) if *connected => ServerMessage::Response {
@@ -88,6 +93,10 @@ pub(crate) fn answer(host: &mut Host, connected: &mut bool, line: &str) -> Serve
     }
 }
 
+#[cfg(any(
+    not(target_family = "wasm"),
+    all(target_arch = "wasm32", target_os = "unknown")
+))]
 fn malformed(connected: bool, line: &str, error: &serde_json::Error) -> ServerMessage {
     let id = serde_json::from_str::<serde_json::Value>(line)
         .ok()

@@ -104,8 +104,14 @@ pub mod outcome {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
-// One message lives per request, briefly: boxing the command would buy nothing.
-#[expect(clippy::large_enum_variant)]
+// With 32-bit pointers, as in WebAssembly, the command is small enough for the lint.
+#[cfg_attr(
+    target_pointer_width = "64",
+    expect(
+        clippy::large_enum_variant,
+        reason = "one message lives per request, briefly: boxing the command would buy nothing"
+    )
+)]
 pub enum ClientMessage {
     Hello { protocol_version: u32 },
     Request { id: u64, command: Command },
