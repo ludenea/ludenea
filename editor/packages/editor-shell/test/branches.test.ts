@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { fakeProject, gameWithSession, ids, settle, testGame, testHost, timeline } from "./support";
 
-const session = { scene: "(main)", saved_scene: null, inputs: "AA==", edits: "", undo: "", hashes: ["0000000000000001"], assets: [], document: "Scene" as const, keeps_assets: false, current: 0 };
+const session = { scene: "(main)", saved_scene: null, inputs: "AA==", edits: "", undo: "", hashes: ["0000000000000001"], assets: [], saved_assets: [], document: "Scene" as const, keeps_assets: false, current: 0 };
 
 describe("branch store", () => {
   it("branch_store_follows_timeline_events", async () => {

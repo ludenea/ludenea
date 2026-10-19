@@ -161,10 +161,16 @@ session (the editor's copy of each open document's session), and the plugin API.
   session on such a file. It was accepted, and the saved prefab then failed to load in
   every scene using it. The serde helper `protocol::outcome::Wire::Ok` holds a
   `Box<Reply>`, since a reply carrying the document outgrew an unboxed variant.
+- `Session::mark_scene_saved` takes the text written to the scene's file and marks the scene
+  saved only while it still is that text; the new `Session::mark_asset_saved` does the same
+  for an asset. The session tracks which prefab and data assets differ from their file,
+  listed in the new `Timeline::unsaved_assets` and carried by the new
+  `SessionExport::saved_assets`, and `Session::replace_scene` keeps the text of an unsaved
+  asset over the new one.
 
 ### Control protocol
 
-- Control protocol 4, fingerprint `8c1f6be87e649d47`.
+- Control protocol 4, fingerprint `341dc87d6714af21`.
 - `hello` and `welcome` carry `protocol_fingerprint`, a hash of the TypeScript declarations
   of every type the messages reach. The host refuses a client of another version or
   fingerprint with `version_mismatch` and says to rebuild the editor
@@ -223,8 +229,20 @@ session (the editor's copy of each open document's session), and the plugin API.
   edit that puts the prefab inside itself, directly or through another prefab, fails with
   `invalid_scene` and changes nothing; it was accepted, and the saved prefab then failed
   to load in every scene using it. `save_scene` checks a prefab document as a prefab file
-  before it marks it saved: an instance cycle or an entity reference outside the prefab
+  before it gives its text: an instance cycle or an entity reference outside the prefab
   fails with `invalid_scene`.
+- Saving is two-phase. `save_scene` and `save_asset` give the text to write and leave the
+  scene or asset unsaved; the new `mark_scene_saved { text }` and
+  `mark_asset_saved { id, text }` (reply `done`) mark it saved once the client has
+  written the text, only while the session still holds that text, so an edit made during
+  the write stays unsaved. `save_scene` marked the scene saved before the editor wrote the
+  file, so a failed write lost the edits when the document opened again.
+- The host owns which prefab and data assets differ from their file: `timeline` lists them
+  in the new `unsaved_assets`, a tick 0 asset edit, "Apply to asset" and `apply_to_prefab`
+  add one, undo and redo back to the saved text remove it, and the `session` reply and
+  `load_session` carry the saved text of each in the new `saved_assets`, so they stay
+  unsaved after a resume. `replace_scene` keeps the session's text of an unsaved asset over
+  the new file text, unsaved while they differ.
 
 ### Project protocol
 
@@ -258,11 +276,19 @@ session (the editor's copy of each open document's session), and the plugin API.
   plugin reloads; none of them reach only the browser's developer tools any more.
 - Removed: `logToConsole` from `@ludenea/editor-builtins` and the `log` option of
   `createEditor` with its `DocumentLog` type; use `editor.console`.
-- "Apply to prefab" (`Prefabs.apply`) no longer writes the prefab file. It marks the prefab
-  in `unsavedAssets`, the scene tree shows each group of an unsaved prefab with a "Save
+- "Apply to prefab" (`Prefabs.apply`) no longer writes the prefab file. The game marks the
+  prefab unsaved, the scene tree shows each group of an unsaved prefab with a "Save
   prefab" button, and undo clears the mark. The `inspector.save-asset` command saves the
   asset whose identifier it is given, a prefab included, and the selected data asset
   without one.
+- "Save scene" (`scene.save`) and `inspector.save-asset` mark the scene or asset saved only
+  after the file is written. A failed scene write is reported in the editor console as
+  `Cannot save <path>: <reason>`, and the scene stays unsaved.
+- Removed: `DocumentState.unsavedAssets`, `SavedSession.unsavedAssets` and
+  `DocumentSessions.restore`. The game's timeline lists the unsaved assets
+  (`unsaved_assets`), a saved session carries them in `load.saved_assets`, and
+  `restoreSession` restores one. `DocumentState.reloadAssets` takes the unsaved assets to
+  discard, which take their file's text.
 
 ### Formats
 

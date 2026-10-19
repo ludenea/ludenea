@@ -1,6 +1,6 @@
 import type { AssetId, AssetKind, FileChange, FileEntry, JsonValue, TypeSchema } from "@ludenea/control-client";
 import { definePlugin, type Editor } from "@ludenea/editor-shell";
-import { createStore, errorText, shared, showPanel, type Scroll, type Store } from "../shared";
+import { createStore, errorText, shared, showPanel, unsavedAssets, type Scroll, type Store } from "../shared";
 import { AssetsPanel, baseName } from "./AssetsPanel";
 import { emptyValue, toRon } from "./value";
 
@@ -154,9 +154,7 @@ export const assetsPlugin = definePlugin({
       async reload(banner) {
         state.set({ banners: withoutBanner(banner.path) });
         if ("text" in banner) return replace(banner.text);
-        const { unsavedAssets } = documents.getState();
-        documents.setState({ unsavedAssets: unsavedAssets.filter((id) => id !== banner.asset) });
-        await documents.getState().reloadAssets();
+        await documents.getState().reloadAssets([banner.asset]);
       },
       keepMine: (banner) => state.set({ banners: withoutBanner(banner.path) }),
     };
@@ -173,10 +171,10 @@ export const assetsPlugin = definePlugin({
     const stops = [
       editor.project.on("files_changed", ({ changes }) => {
         // The shell's reload keeps an unsaved data asset's text: the user picks which stays.
-        const { unsavedAssets } = documents.getState();
+        const unsaved = unsavedAssets(editor);
         for (const change of changes) {
           const id = state.get().files.find((file) => file.path === changedPath(change))?.id;
-          if (id && unsavedAssets.includes(id)) showBanner({ path: changedPath(change)!, asset: id });
+          if (id && unsaved.includes(id)) showBanner({ path: changedPath(change)!, asset: id });
         }
         void refresh();
         const open = documents.getState().current?.path;

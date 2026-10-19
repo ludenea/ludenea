@@ -81,6 +81,7 @@ pub fn every_command() -> Vec<Command> {
             value: serde_json::json!("1"),
         },
         Command::SaveScene,
+        Command::MarkSceneSaved { text: "s".into() },
         Command::ApplyToScene {
             entity,
             component: "n".into(),
@@ -115,6 +116,7 @@ pub fn every_command() -> Vec<Command> {
             undo: bytes.clone(),
             expected: vec![Hash64(1)],
             assets: vec![(AssetId(7), "a".into())],
+            saved_assets: vec![(AssetId(7), "b".into())],
             branches: bytes.clone(),
             document: Document::Prefab { id: AssetId(7) },
             keeps_assets: false,
@@ -126,6 +128,10 @@ pub fn every_command() -> Vec<Command> {
             value: serde_json::json!(2),
         },
         Command::SaveAsset { id: AssetId(7) },
+        Command::MarkAssetSaved {
+            id: AssetId(7),
+            text: "t".into(),
+        },
         Command::ApplyToAsset { id: AssetId(7) },
         Command::NewAssetValue { asset: "a".into() },
         Command::SwitchBranch {

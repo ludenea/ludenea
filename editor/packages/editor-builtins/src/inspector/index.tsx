@@ -1,7 +1,7 @@
-import { ProtocolFailure, type AssetId, type JsonValue } from "@ludenea/control-client";
+import { ProtocolFailure, type JsonValue } from "@ludenea/control-client";
 import { definePlugin, type Editor } from "@ludenea/editor-shell";
-import { createStore, errorText, showPanel, type Store } from "../shared";
-import { assertEditable, edit, onEdited } from "../timeline/editing";
+import { createStore, showPanel, type Store } from "../shared";
+import { assertEditable, edit } from "../timeline/editing";
 import { InspectorPanel } from "./InspectorPanel";
 
 /**
@@ -82,7 +82,6 @@ export const inspectorPlugin = definePlugin({
       async run() {
         const { control, id } = assetOf();
         await edit(editor, control, { type: "apply_to_asset", id });
-        markUnsaved(editor, id, true);
       },
     });
     editor.commands.register({
@@ -97,23 +96,11 @@ export const inspectorPlugin = definePlugin({
         const { entries } = await editor.project.request({ type: "list_files" });
         const path = entries.find((file) => file.id === id)?.path;
         if (!path) throw new Error(`no project file has the identifier ${id}`);
-        // Saved before the write: the watcher's reload of the written file may come first.
-        markUnsaved(editor, id, false);
-        try {
-          // The shell reloads the session's assets from the written file.
-          await editor.project.request({ type: "write_text", path, text });
-        } catch (error) {
-          markUnsaved(editor, id, true);
-          throw error;
-        }
+        // The shell reloads the session's assets from the written file.
+        await editor.project.request({ type: "write_text", path, text });
+        // Saved only if the asset still holds the text written: an edit made meanwhile stays unsaved.
+        await control.request({ type: "mark_asset_saved", id, text });
       },
-    });
-    // Undo and redo may take a tick 0 asset edit or "Apply to prefab" back, or bring it again.
-    // A check answered after a later edit is stale: that edit's own check, or its mark, decides.
-    let edits = 0;
-    onEdited(editor, (command) => {
-      const asked = ++edits;
-      if (command.type === "undo" || command.type === "redo") void markDiffering(editor, () => asked === edits);
     });
     editor.panels.register({
       id: "ludenea.inspector",
@@ -123,37 +110,3 @@ export const inspectorPlugin = definePlugin({
     });
   },
 });
-
-/**
- * Marks each prefab and data asset unsaved whose text in the session differs from its file. A
- * replay's assets are its own: they are left as they are. So is the open prefab, which the
- * session edits as its document, not as an asset.
- */
-async function markDiffering(editor: Editor, current: () => boolean): Promise<void> {
-  const control = editor.control;
-  const open = editor.document.getState().current;
-  if (!control || open?.kind === "replay") return;
-  try {
-    const { entries } = await editor.project.request({ type: "list_files" });
-    const assets = entries.filter((file) => file.id !== open?.id && (file.kind === "Prefab" || (typeof file.kind === "object" && "Data" in file.kind)));
-    await Promise.all(
-      assets.map(async ({ id, path }) => {
-        // An asset the session does not hold has nothing unsaved.
-        const session = await control.request({ type: "save_asset", id }).catch(() => null);
-        if (!session) return;
-        const { text } = await editor.project.request({ type: "read_text", path });
-        if (current()) markUnsaved(editor, id, session.text.trim() !== text.trim());
-      }),
-    );
-  } catch (error) {
-    editor.console.log("warning", `Cannot check which assets are unsaved: ${errorText(error)}`);
-  }
-}
-
-/** Marks the prefab or data asset `id` as differing from its file, or not; never in a replay, whose assets are its own. */
-export function markUnsaved(editor: Editor, id: AssetId, unsaved: boolean): void {
-  if (unsaved && editor.document.getState().current?.kind === "replay") return;
-  const { unsavedAssets } = editor.document.getState();
-  const others = unsavedAssets.filter((other) => other !== id);
-  editor.document.setState({ unsavedAssets: unsaved ? [...others, id] : others });
-}

@@ -1,6 +1,5 @@
 import type { ControlClient, Entity, FileEntry, InstanceInfo, OverrideInfo, PathSegment } from "@ludenea/control-client";
 import { definePlugin, type Editor, type Loaded, type TimelineState } from "@ludenea/editor-shell";
-import { markUnsaved } from "../inspector";
 import { createStore, errorText, showPanel, type Store } from "../shared";
 import { entityKey } from "../shared/EntityList";
 import { assertEditable, edit, onEdited } from "../timeline/editing";
@@ -120,11 +119,7 @@ export const prefabsPlugin = definePlugin({
         await edit(editor, game(), { type: "revert_override", ...targetOf(target), component: target.component, path: target.path });
       },
       async apply(target) {
-        const located = targetOf(target);
-        const prefab = state.get().instances.find((instance) => instance.address.join() === located.instance.join())?.prefab;
-        if (!prefab) throw new Error(`instance ${located.instance.join("/")} is not in the scene`);
-        await edit(editor, game(), { type: "apply_to_prefab", ...located, component: target.component, path: target.path });
-        markUnsaved(editor, prefab, true);
+        await edit(editor, game(), { type: "apply_to_prefab", ...targetOf(target), component: target.component, path: target.path });
       },
     };
     plugins.set(editor, prefabs);

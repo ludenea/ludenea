@@ -19,7 +19,7 @@ const info: GameInfo = { components: [], resources: [], assets: [], events: [], 
 const timeline = { head: 5, simulated: 5, current: 3, checkpoints: [], edit_ticks: [], can_undo: false, can_redo: false, scene_dirty: false, resimulating: false };
 // Six recorded hashes: ticks 0 to 5.
 const hashes = ["1", "2", "3", "4", "5", "6"].map((digit) => digit.padStart(16, "0"));
-const session = (scene: string) => ({ type: "session", scene, saved_scene: null, inputs: "AA==", edits: "", undo: "", hashes, assets: [], branches: "", document: "Scene", keeps_assets: false });
+const session = (scene: string) => ({ type: "session", scene, saved_scene: null, inputs: "AA==", edits: "", undo: "", hashes, assets: [], saved_assets: [], branches: "", document: "Scene", keeps_assets: false });
 
 /** A game whose host answers with `answer(command)` (`null` fails), recording every command. */
 async function fakeGame(answer: (command: Command) => object | null = () => ({ type: "done" })) {
@@ -84,7 +84,7 @@ describe("guardSession", () => {
     expect(errors.mock.calls.flat().join(" ")).toContain("boom");
     // The seek waits for the resimulation to reach the crash tick.
     expect(second.sent.map((command) => command.type)).toEqual(["load_scene", "load_session", "get_timeline"]);
-    expect(second.sent[1]).toEqual({ type: "load_session", scene: "edited", saved_scene: null, inputs: "AA==", edits: "", undo: "", expected: hashes, assets: [], branches: "", document: "Scene", keeps_assets: false });
+    expect(second.sent[1]).toEqual({ type: "load_session", scene: "edited", saved_scene: null, inputs: "AA==", edits: "", undo: "", expected: hashes, assets: [], saved_assets: [], branches: "", document: "Scene", keeps_assets: false });
     second.push({ type: "resimulated", up_to: 2 });
     await settle();
     expect(second.sent.at(-1)?.type).toBe("get_timeline");
@@ -143,7 +143,7 @@ describe("guardSession", () => {
     vi.useFakeTimers();
     const game = await fakeGame((command) => (command.type === "export_session" ? session("scene") : command.type === "get_timeline" ? { type: "timeline", ...timeline } : { type: "done" }));
     const store = vi.fn(async () => {});
-    const sessions = { export: exportSession, store, own: async () => null, restore: restoreSession };
+    const sessions = { export: exportSession, store, own: async () => null };
     guardSession(game.control, fakeWorker(), async () => game.control, { sessions });
     await vi.advanceTimersByTimeAsync(0);
     expect(store).toHaveBeenCalledTimes(1);
@@ -212,7 +212,7 @@ describe("guardSession", () => {
   });
 
   it("restore_fails_when_the_game_dies_or_panics_while_resimulating", async () => {
-    const saved = { load: { type: "load_session" as const, scene: "s", saved_scene: null, inputs: "", edits: "", undo: "", expected: hashes, assets: [], branches: "", document: "Scene" as const, keeps_assets: false }, tick: 4 };
+    const saved = { load: { type: "load_session" as const, scene: "s", saved_scene: null, inputs: "", edits: "", undo: "", expected: hashes, assets: [], saved_assets: [], branches: "", document: "Scene" as const, keeps_assets: false }, tick: 4 };
     const resimulating = (command: Command) => (command.type === "get_timeline" ? { type: "timeline", ...timeline, simulated: 0, resimulating: true } : { type: "done" });
     const dying = await fakeGame(resimulating);
     const died = restoreSession(dying.control, saved);
@@ -231,7 +231,7 @@ describe("guardSession", () => {
     vi.useFakeTimers();
     const seed = {
       // Version 1, two players, one tick.
-      load: { type: "load_session" as const, scene: "edited", saved_scene: "saved", inputs: "AQIBAQc=", edits: "AQ==", undo: "Ag==", expected: hashes, assets: [], branches: "", document: "Scene" as const, keeps_assets: false },
+      load: { type: "load_session" as const, scene: "edited", saved_scene: "saved", inputs: "AQIBAQc=", edits: "AQ==", undo: "Ag==", expected: hashes, assets: [], saved_assets: [], branches: "", document: "Scene" as const, keeps_assets: false },
       tick: 4,
     };
     // Still resimulating the restored session: every export fails.
@@ -248,7 +248,7 @@ describe("guardSession", () => {
     worker.crash({ tick: 4, message: "boom" });
     await vi.advanceTimersByTimeAsync(0);
     // The input log keeps its version and two players, without ticks.
-    const sceneOnly = { type: "load_session", scene: "edited", saved_scene: "saved", inputs: "AQIA", edits: "", undo: "", expected: [], assets: [], branches: "", document: "Scene", keeps_assets: false };
+    const sceneOnly = { type: "load_session", scene: "edited", saved_scene: "saved", inputs: "AQIA", edits: "", undo: "", expected: [], assets: [], saved_assets: [], branches: "", document: "Scene", keeps_assets: false };
     expect(restart).toHaveBeenCalledWith({ load: sceneOnly, tick: 0 });
     expect(second.sent).toEqual([sceneOnly, { type: "get_timeline" }, { type: "seek", tick: 0 }]);
     expect(logged[0]).toBe("error: The game crashed at tick 4: boom");
@@ -256,7 +256,7 @@ describe("guardSession", () => {
   });
 
   it("a_seeded_guard_restores_a_newer_export_in_full", async () => {
-    const seed = { load: { type: "load_session" as const, scene: "old", saved_scene: null, inputs: "", edits: "", undo: "", expected: hashes, assets: [], branches: "", document: "Scene" as const, keeps_assets: false }, tick: 2 };
+    const seed = { load: { type: "load_session" as const, scene: "old", saved_scene: null, inputs: "", edits: "", undo: "", expected: hashes, assets: [], saved_assets: [], branches: "", document: "Scene" as const, keeps_assets: false }, tick: 2 };
     const first = await fakeGame((command) => (command.type === "export_session" ? session("newer") : command.type === "get_timeline" ? { type: "timeline", ...timeline } : { type: "done" }));
     const worker = fakeWorker();
     const second = await fakeGame((command) => (command.type === "get_timeline" ? { type: "timeline", ...timeline } : { type: "done" }));
@@ -284,7 +284,7 @@ describe("guardSession with documents", () => {
       command.type === "export_session" ? (answering ? session("paused") : null) : command.type === "get_timeline" ? { type: "timeline", ...timeline } : { type: "done" },
     );
     const store = vi.fn(async (_?: SavedSession) => {});
-    const sessions = { export: exportSession, store, own: async () => null, restore: restoreSession };
+    const sessions = { export: exportSession, store, own: async () => null };
     const guard = guardSession(game.control, fakeWorker(), async () => game.control, { sessions, log: () => {} });
     await settle();
     store.mockClear();
@@ -301,24 +301,20 @@ describe("guardSession with documents", () => {
     expect(store).not.toHaveBeenCalled();
   });
 
-  it("a_crash_restores_through_the_document_sessions", async () => {
-    const first = await fakeGame((command) => (command.type === "export_session" ? session("edited") : command.type === "get_timeline" ? { type: "timeline", ...timeline } : { type: "done" }));
+  it("a_crash_restore_keeps_the_unsaved_assets", async () => {
+    const asset = "3".padStart(32, "0");
+    const unsaved = { ...session("edited"), assets: [[asset, "(edited)"]], saved_assets: [[asset, "(on disk)"]] };
+    const first = await fakeGame((command) => (command.type === "export_session" ? unsaved : command.type === "get_timeline" ? { type: "timeline", ...timeline } : { type: "done" }));
     const worker = fakeWorker();
-    const second = await fakeGame();
-    const sessions = {
-      export: async (control: ControlClient) => ({ ...(await exportSession(control)), document: null, unsavedAssets: ["3".padStart(32, "0")] }),
-      store: async () => {},
-      own: async (saved: SavedSession | null) => saved,
-      // Marks the session's unsaved assets again.
-      restore: vi.fn(async () => null),
-    };
+    const second = await fakeGame((command) => (command.type === "get_timeline" ? { type: "timeline", ...timeline } : { type: "done" }));
+    const sessions = { export: exportSession, store: async () => {}, own: async (saved: SavedSession | null) => saved };
     guardSession(first.control, worker, async () => second.control, { sessions, log: () => {} });
     await settle();
 
     worker.crash({ tick: 4, message: "boom" });
     await settle();
 
-    expect(sessions.restore).toHaveBeenCalledWith(second.control, expect.objectContaining({ unsavedAssets: ["3".padStart(32, "0")] }), 4);
+    expect(second.sent.find((command) => command.type === "load_session")).toMatchObject({ assets: [[asset, "(edited)"]], saved_assets: [[asset, "(on disk)"]] });
   });
 
   it("a_crash_after_a_document_switch_restores_only_the_open_document", async () => {

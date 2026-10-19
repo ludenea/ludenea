@@ -279,6 +279,8 @@ fn replace_with_instance_moves_entities_into_a_prefab() {
     assert_eq!(id, 7);
     assert!(!session.scene().contains("(id: 0,"));
     assert_eq!(session.assets().get(&wall_prefab), Some(&prefab_text));
+    // The new prefab's file holds its text.
+    assert!(session.timeline().unsaved_assets.is_empty());
     let moved = sim.entity_at_address(&[7, 0]).unwrap();
     assert_eq!(
         sim.world().entity_components_ron(moved),
@@ -368,6 +370,7 @@ fn apply_to_prefab_moves_the_override_into_the_prefab() {
         session.timeline().undo_label.as_deref(),
         Some("Undo apply to prefab")
     );
+    assert_eq!(session.timeline().unsaved_assets, [PREFAB]);
     resimulate_all(&mut session, &mut sim);
     assert_eq!(session.timeline().current, 120);
     session.seek(&mut sim, 0).unwrap();
@@ -382,15 +385,18 @@ fn apply_to_prefab_moves_the_override_into_the_prefab() {
     // One undo takes both back, and the history keeps the entry across a resume.
     let mut session =
         Session::resume(&mut sim, session.export().unwrap(), Document::Scene).unwrap();
+    assert_eq!(session.timeline().unsaved_assets, [PREFAB]);
     resimulate_all(&mut session, &mut sim);
     session.undo(&mut sim).unwrap();
     assert_eq!(session.scene(), scene);
     assert_eq!(session.assets()[&PREFAB], prefab);
     assert!(pose_at(&sim, &[5, 0]).contains("x:0.0"));
+    assert!(session.timeline().unsaved_assets.is_empty());
     resimulate_all(&mut session, &mut sim);
     session.redo(&mut sim).unwrap();
     assert_eq!(session.scene(), without_instance_6_overrides(&scene));
     assert_eq!(session.assets()[&PREFAB], expected);
+    assert_eq!(session.timeline().unsaved_assets, [PREFAB]);
 }
 
 #[test]
@@ -472,6 +478,95 @@ fn asset_edit_at_tick_0_replays_session_and_undoes() {
         session.timeline().redo_label.as_deref(),
         Some("Redo asset edit")
     );
+}
+
+/// Sets the spawner stats' `every_ticks` at the current tick.
+fn edit_stats(session: &mut Session, sim: &mut Simulation, every_ticks: u32) {
+    let edit = Edit::SetAsset {
+        id: STATS,
+        value: stats_value(sim, every_ticks),
+    };
+    session.edit(sim, edit).unwrap();
+}
+
+#[test]
+fn an_asset_stays_unsaved_until_its_written_text_is_marked_saved() {
+    let (mut sim, mut session) = spawner_session();
+    edit_stats(&mut session, &mut sim, 30);
+    assert_eq!(session.timeline().unsaved_assets, [STATS]);
+    let written = session.save_asset(STATS).unwrap();
+    // The text is not on disk yet: a failed write leaves the edit unsaved.
+    assert_eq!(session.timeline().unsaved_assets, [STATS]);
+
+    // An edit made while the text is written stays unsaved.
+    resimulate_all(&mut session, &mut sim);
+    edit_stats(&mut session, &mut sim, 40);
+    session.mark_asset_saved(STATS, &written).unwrap();
+    assert_eq!(session.timeline().unsaved_assets, [STATS]);
+
+    let latest = session.save_asset(STATS).unwrap();
+    session.mark_asset_saved(STATS, &latest).unwrap();
+    assert!(session.timeline().unsaved_assets.is_empty());
+    // Undo goes back to a text the file no longer holds, redo to the one it holds.
+    resimulate_all(&mut session, &mut sim);
+    session.undo(&mut sim).unwrap();
+    assert_eq!(session.timeline().unsaved_assets, [STATS]);
+    resimulate_all(&mut session, &mut sim);
+    session.redo(&mut sim).unwrap();
+    assert!(session.timeline().unsaved_assets.is_empty());
+
+    assert_eq!(session.mark_asset_saved(AssetId(7), &latest), None);
+}
+
+#[test]
+fn unsaved_assets_stay_unsaved_after_a_resume() {
+    let (mut sim, mut session) = spawner_session();
+    let file = session.assets()[&STATS].clone();
+    edit_stats(&mut session, &mut sim, 30);
+    resimulate_all(&mut session, &mut sim);
+    let export = session.export().unwrap();
+    assert_eq!(export.saved_assets, [(STATS, file.clone())]);
+
+    let mut resumed = Session::resume(&mut sim, export.clone(), Document::Scene).unwrap();
+    assert_eq!(resumed.timeline().unsaved_assets, [STATS]);
+    resimulate_all(&mut resumed, &mut sim);
+    resumed.undo(&mut sim).unwrap();
+    assert!(
+        resumed.timeline().unsaved_assets.is_empty(),
+        "back to the saved text"
+    );
+    assert!(resumed.export().unwrap().saved_assets.is_empty());
+
+    // A saved text equal to the session's, or of an asset the session does not hold, marks
+    // nothing.
+    let mut export = export;
+    let edited = session.assets()[&STATS].clone();
+    export.saved_assets = vec![(STATS, edited), (AssetId(7), file)];
+    let resumed = Session::resume(&mut sim, export, Document::Scene).unwrap();
+    assert!(resumed.timeline().unsaved_assets.is_empty());
+}
+
+#[test]
+fn a_new_scene_version_keeps_the_text_of_an_unsaved_asset() {
+    let (mut sim, mut session) = spawner_session();
+    let scene = session.scene().to_string();
+    edit_stats(&mut session, &mut sim, 30);
+    resimulate_all(&mut session, &mut sim);
+    let edited = session.assets()[&STATS].clone();
+
+    session
+        .replace_scene(&mut sim, scene.clone(), assets())
+        .unwrap();
+    assert_eq!(session.assets()[&STATS], edited);
+    assert_eq!(session.timeline().unsaved_assets, [STATS]);
+
+    // Its file now holds the session's text.
+    let mut written = assets();
+    written.insert(STATS, edited.clone());
+    resimulate_all(&mut session, &mut sim);
+    session.replace_scene(&mut sim, scene, written).unwrap();
+    assert_eq!(session.assets()[&STATS], edited);
+    assert!(session.timeline().unsaved_assets.is_empty());
 }
 
 #[test]

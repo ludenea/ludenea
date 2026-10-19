@@ -1,12 +1,12 @@
 import { ProtocolFailure, type AssetId, type ComponentValue, type ControlClient, type Entity, type FieldTarget, type JsonValue, type PathSegment, type Timeline, type TypeSchema } from "@ludenea/control-client";
 import type { Editor } from "@ludenea/editor-shell";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { errorText, useGame, useStore } from "../shared";
+import { errorText, useGame, useStore, useUnsavedAsset } from "../shared";
 import { edit, ResimulatingNotice, useResimulating } from "../timeline/editing";
 import { defaultValue, setAt } from "./default-value";
 import { Field } from "./fields/Field";
 import type { Edit } from "./fields/inputs";
-import { markUnsaved, onEntity, type AddDraft, type InspectorState } from "./index";
+import { onEntity, type AddDraft, type InspectorState } from "./index";
 
 type Values = { [name: string]: ComponentValue };
 
@@ -94,7 +94,7 @@ function DataAsset({ editor, control, id }: { editor: Editor; control: ControlCl
   const tick = editor.timeline((timeline) => timeline.timeline?.current ?? 0);
   const changes = editor.timeline(({ timeline }) => assetChanges(timeline));
   const reloaded = editor.document((document) => document.loaded);
-  const unsaved = editor.document((document) => document.unsavedAssets.includes(id));
+  const unsaved = useUnsavedAsset(editor, id);
   const resimulating = useResimulating(editor);
   const [asset, setAsset] = useState<{ asset: string; value: ComponentValue } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -118,9 +118,7 @@ function DataAsset({ editor, control, id }: { editor: Editor; control: ControlCl
   }, [control, id, changes, reloaded, version]);
 
   const setField: Edit = async (path, value) => {
-    const atStart = (editor.timeline.getState().timeline?.current ?? 0) === 0;
     await edit(editor, control, { type: "set_asset_field", id, path, value });
-    if (atStart) markUnsaved(editor, id, true);
     setVersion((version) => version + 1);
   };
   const run = (command: string) => () =>

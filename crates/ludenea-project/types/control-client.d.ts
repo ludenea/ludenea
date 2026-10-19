@@ -232,6 +232,9 @@ type Command = {
 } | {
     "type": "save_scene";
 } | {
+    "type": "mark_scene_saved";
+    text: string;
+} | {
     "type": "apply_to_scene";
     entity: Entity;
     component: string;
@@ -273,6 +276,10 @@ type Command = {
     expected: Array<Hash64>;
     assets: Array<[AssetId, string]>;
     /**
+     * The text as last saved of each asset of `assets` that holds unsaved edits.
+     */
+    saved_assets: Array<[AssetId, string]>;
+    /**
      * The branch tree; empty for a linear session.
      */
     branches: Bytes;
@@ -292,6 +299,10 @@ type Command = {
 } | {
     "type": "save_asset";
     id: AssetId;
+} | {
+    "type": "mark_asset_saved";
+    id: AssetId;
+    text: string;
 } | {
     "type": "apply_to_asset";
     id: AssetId;
@@ -572,6 +583,10 @@ type Timeline = {
     undo_label: string | null;
     redo_label: string | null;
     scene_dirty: boolean;
+    /**
+     * The prefab and data assets whose text in the session differs from their file.
+     */
+    unsaved_assets: Array<AssetId>;
     resimulating: boolean;
     branch: BranchId;
     branches: Array<BranchInfo>;
@@ -925,6 +940,10 @@ type Reply = {
     undo: Bytes;
     hashes: Array<Hash64>;
     assets: Array<[AssetId, string]>;
+    /**
+     * The text as last saved of each asset of `assets` that holds unsaved edits.
+     */
+    saved_assets: Array<[AssetId, string]>;
     branches: Bytes;
     document: Document;
     keeps_assets: boolean;
@@ -1008,7 +1027,7 @@ type ServerMessage = {
 /** The control protocol version this build speaks: a client and a host connect only when theirs are equal. */
 const PROTOCOL_VERSION = 4;
 /** The wire shape of `PROTOCOL_VERSION`, a hash of the protocol's types: a client and a host connect only when theirs are equal too. */
-const PROTOCOL_FINGERPRINT = "8c1f6be87e649d47";
+const PROTOCOL_FINGERPRINT = "341dc87d6714af21";
 /** The `type` of the reply each command type gets when it succeeds. */
 type ReplyTypes = {
     apply_override: "done";
@@ -1041,6 +1060,8 @@ type ReplyTypes = {
     load_replay: "replay_loaded";
     load_scene: "loaded";
     load_session: "loaded";
+    mark_asset_saved: "done";
+    mark_scene_saved: "done";
     new_asset_value: "text";
     pause: "done";
     pick: "picked";

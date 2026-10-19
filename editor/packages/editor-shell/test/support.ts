@@ -70,6 +70,7 @@ export const timeline = (current = 0) => ({
   undo_label: null,
   redo_label: null,
   scene_dirty: false,
+  unsaved_assets: [],
   resimulating: false,
   branch: 0,
   branches: [{ id: 0, name: "Branch 1", parent: null, fork_tick: 0, head: 2, stale: false, edit_ticks: [] }],

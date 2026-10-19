@@ -26,6 +26,7 @@ const timeline = (patch: Partial<Timeline> = {}): Timeline => ({
   undo_label: "Undo edit at tick 320",
   redo_label: "Redo edit at tick 340",
   scene_dirty: false,
+  unsaved_assets: [],
   resimulating: false,
   branch: 1,
   branches,

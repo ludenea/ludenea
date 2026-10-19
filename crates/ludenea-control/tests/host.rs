@@ -302,6 +302,7 @@ fn every_command_and_reply_round_trips_through_json() {
         undo_label: Some("Undo edit at tick 2".to_string()),
         redo_label: None,
         scene_dirty: true,
+        unsaved_assets: vec![AssetId(7)],
         resimulating: false,
         branch: BranchId(1),
         branches: vec![BranchInfo {
@@ -433,6 +434,7 @@ fn every_command_and_reply_round_trips_through_json() {
             undo: bytes.clone(),
             hashes: vec![Hash64(3)],
             assets: vec![(AssetId(7), "a".into())],
+            saved_assets: vec![(AssetId(7), "b".into())],
             branches: bytes.clone(),
             document: Document::Scene,
             keeps_assets: true,

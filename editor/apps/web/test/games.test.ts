@@ -12,7 +12,7 @@ import {
 } from "@ludenea/control-client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { followNativeGames, followWasmGames } from "../src/games";
-import { exportSession, restoreSession, type SavedSession } from "../src/session-guard";
+import { exportSession, type SavedSession } from "../src/session-guard";
 
 type Message = { type: string; [key: string]: unknown };
 
@@ -33,7 +33,7 @@ function fakeHost(name: string, options: { resimulating?: boolean } = {}) {
     log.push(`${name}:${message.command.type}`);
     if (message.command.type === "load_session") loads.push(message.command);
     const answers: Record<string, object> = {
-      export_session: { type: "session", scene: `${name} scene`, saved_scene: "saved", inputs: "AQEA", edits: "", undo: "", hashes, assets: [], branches: "", document: "Scene", keeps_assets: false },
+      export_session: { type: "session", scene: `${name} scene`, saved_scene: "saved", inputs: "AQEA", edits: "", undo: "", hashes, assets: [], saved_assets: [], branches: "", document: "Scene", keeps_assets: false },
       get_timeline: { type: "timeline", ...timeline, resimulating: options.resimulating ?? false },
     };
     return [JSON.stringify({ type: "response", id: message.id, result: { ok: answers[message.command.type] ?? { type: "done" } } })];
@@ -57,7 +57,7 @@ async function fakeProject(answer: (request: Message) => object) {
 const app = () => ({
   connectGame: vi.fn(),
   log: vi.fn(),
-  sessions: { export: exportSession, store: vi.fn(async () => {}), own: async (saved: SavedSession | null) => saved, restore: vi.fn(restoreSession) },
+  sessions: { export: exportSession, store: vi.fn(async () => {}), own: async (saved: SavedSession | null) => saved },
 });
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
@@ -90,8 +90,6 @@ describe("followWasmGames", () => {
     await settle();
     expect(start).toHaveBeenLastCalledWith(builds[1]);
     expect(log).toContain(`${builds[1]}:load_session`);
-    // Through the document sessions, which mark the restored session's unsaved assets again.
-    expect(editor.sessions.restore).toHaveBeenCalledTimes(1);
     // The rebuilt game dies while resimulating the restored session.
     hosts.get(builds[1])!.drop("the game crashed");
     await settle();
@@ -125,7 +123,7 @@ describe("followWasmGames crashes", () => {
     crashes.at(-1)!({ tick: 3, message: "boom" });
     await settle();
     expect(start).toHaveBeenCalledTimes(3);
-    expect(loads[1]).toEqual({ type: "load_session", scene: `${builds[0]} scene`, saved_scene: "saved", inputs: "AQEA", edits: "", undo: "", expected: [], assets: [], branches: "", document: "Scene", keeps_assets: false });
+    expect(loads[1]).toEqual({ type: "load_session", scene: `${builds[0]} scene`, saved_scene: "saved", inputs: "AQEA", edits: "", undo: "", expected: [], assets: [], saved_assets: [], branches: "", document: "Scene", keeps_assets: false });
     expect(editor.log).toHaveBeenCalledWith("error", "The game crashed at tick 3: boom");
   });
 });
@@ -223,7 +221,6 @@ describe("followNativeGames", () => {
     expect(log).toContain("new:load_session");
     const loaded = log.indexOf("new:load_session");
     expect(log.slice(loaded)).toEqual(["new:load_session", "new:get_timeline", "new:seek"]);
-    expect(editor.sessions.restore).toHaveBeenCalledTimes(1);
   });
 
   it("a_second_rebuild_before_the_swap_keeps_the_first_export", async () => {

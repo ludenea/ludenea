@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, screen } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { runReported } from "@ludenea/editor-shell";
 import { builtinPlugins } from "../src";
 import { renderPanel, settle, testEditor, testGame } from "./support";
 
@@ -99,12 +100,30 @@ describe("scene tree", () => {
   });
 
   it("save_writes_a_prefab_document_to_its_own_file", async () => {
-    const { host } = await sceneTree();
+    const { host, game } = await sceneTree();
     host.editor.document.setState({ current: { id: "0000000000000000000000000000000d", kind: "prefab", path: "assets/ball.prefab.ron" } });
 
     await host.editor.commands.run("scene.save");
 
     expect(host.project.sent.filter((request) => request.type === "write_text")).toEqual([{ type: "write_text", path: "assets/ball.prefab.ron", text: "(saved)" }]);
+    // Saved once its file holds the text.
+    expect(game.sent.at(-1)).toEqual({ type: "mark_scene_saved", text: "(saved)" });
+    expect(host.editor.document.getState().text).toBe("(saved)");
+  });
+
+  it("a_failed_write_keeps_the_scene_unsaved_and_says_why", async () => {
+    const refused = { error: { code: "io", message: "permission denied" } };
+    const { host, game } = await sceneTree((request) => (request.type === "write_text" ? refused : { type: "done" }));
+    host.editor.document.setState({ current: { id: "0000000000000000000000000000000c", kind: "scene", path: "scenes/main.scene.ron" }, text: "(on disk)" });
+
+    // As the palette and Mod+S run it.
+    expect(await runReported(host.editor, "scene.save")).toBeNull();
+
+    expect(game.sent.filter((command) => command.type === "mark_scene_saved")).toEqual([]);
+    expect(host.editor.document.getState().text).toBe("(on disk)");
+    // Once: the palette and Mod+S add nothing.
+    const errors = host.editor.console.list().filter(({ level }) => level === "error");
+    expect(errors.map(({ text }) => text)).toEqual(["Cannot save scenes/main.scene.ron: permission denied"]);
   });
 
   it("space_selects_a_row", async () => {

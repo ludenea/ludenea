@@ -90,7 +90,7 @@ describe("assets", () => {
       [SETTINGS, "assets/settings.ron"],
     ];
     const files = [...entries, { path: "scenes/other.scene.ron", id: OTHER, kind: "Scene" }];
-    const timeline = (sceneDirty: boolean) => ({ head: 0, simulated: 0, current: 0, checkpoints: [], edit_ticks: [], can_undo: false, can_redo: false, undo_label: null, redo_label: null, scene_dirty: sceneDirty, resimulating: false, branch: 0, branches: [], compare: null });
+    const timeline = (sceneDirty: boolean) => ({ head: 0, simulated: 0, current: 0, checkpoints: [], edit_ticks: [], can_undo: false, can_redo: false, undo_label: null, redo_label: null, scene_dirty: sceneDirty, unsaved_assets: [], resimulating: false, branch: 0, branches: [], compare: null });
 
     /**
      * The open scene with an unsaved tick 0 edit, over a project whose asset texts `disk` holds.
@@ -114,7 +114,7 @@ describe("assets", () => {
         // The host refuses the broken data asset, naming it by identifier.
         const broken = (command.assets as string[][] | undefined)?.some(([, text]) => text!.includes("oops"));
         if (broken) return { error: { code: "invalid_scene", message: `asset ${SETTINGS} is invalid: 1:17: Expected float` } };
-        if (command.type === "export_session") return { type: "session", scene: dirty ? "(edited)" : scene, saved_scene: dirty ? scene : null, inputs: "", edits: "", undo: "", hashes: ["0000000000000001"], assets: [], branches: "", document: "Scene", keeps_assets: false };
+        if (command.type === "export_session") return { type: "session", scene: dirty ? "(edited)" : scene, saved_scene: dirty ? scene : null, inputs: "", edits: "", undo: "", hashes: ["0000000000000001"], assets: [], saved_assets: [], branches: "", document: "Scene", keeps_assets: false };
         if (command.type === "get_timeline") return { type: "timeline", ...timeline(dirty) };
         if (command.type === "load_scene") {
           scene = command.scene as string;
@@ -374,7 +374,7 @@ describe("data assets, replays, traces, and snapshots", () => {
     { path: "assets/run.trace", id: "00000000000000000000000000000022", kind: "Trace" },
     { path: "assets/tick.snap", id: "00000000000000000000000000000023", kind: "Snapshot" },
   ];
-  const timeline = (current: number) => ({ head: 100, simulated: 100, current, checkpoints: [], edit_ticks: [], can_undo: false, can_redo: false, undo_label: null, redo_label: null, scene_dirty: false, resimulating: false, branch: 0, branches: [], compare: null });
+  const timeline = (current: number, unsaved: string[] = []) => ({ head: 100, simulated: 100, current, checkpoints: [], edit_ticks: [], can_undo: false, can_redo: false, undo_label: null, redo_label: null, scene_dirty: false, unsaved_assets: unsaved, resimulating: false, branch: 0, branches: [], compare: null });
 
   /** The asset browser over `files`, with a game whose asset types are Settings (with a default) and Weapon (without). */
   const disk = [
@@ -384,12 +384,23 @@ describe("data assets, replays, traces, and snapshots", () => {
 
   async function project(options: { current?: number; answer?: (command: { type: string; [key: string]: unknown }) => object | undefined } = {}) {
     const { current = 0, answer = () => undefined } = options;
-    const onDisk = { scene: "(scene)", files: {} as { [path: string]: string }, unreadable: false };
+    const onDisk = { scene: "(scene)", files: {} as { [path: string]: string }, unwritable: false };
+    // The assets the game holds unsaved, as the host keeps them: a tick 0 edit or "Apply to asset"
+    // marks one, `MarkAssetSaved` clears it, and `LoadSession` says which stay.
+    let unsaved: string[] = [];
+    const unsavedNow = (next: string[]) => {
+      unsaved = next;
+      setTimeout(() => game.push({ type: "timeline_changed", timeline: timeline(current, unsaved) }));
+    };
     const game = await testGame(
       (command) => {
+        const id = command.id as string;
+        if ((command.type === "set_asset_field" && current === 0) || command.type === "apply_to_asset") unsavedNow([...unsaved.filter((other) => other !== id), id]);
+        if (command.type === "mark_asset_saved") unsavedNow(unsaved.filter((other) => other !== id));
+        if (command.type === "load_session") unsavedNow((command.saved_assets as [string, string][]).map(([asset]) => asset));
         const reply = answer(command);
         if (reply) return reply;
-        if (command.type === "get_timeline") return { type: "timeline", ...timeline(current) };
+        if (command.type === "get_timeline") return { type: "timeline", ...timeline(current, unsaved) };
         if (command.type === "get_hash") return { type: "hash", tick: current, hash: "00000000000000aa", pending: false };
         if (command.type === "get_resources") return { type: "resources", resources: {} };
         if (command.type === "get_asset" && command.id === SWORD) return { type: "asset", asset: "demo::Weapon", value: { type: "json", value: { damage: 1, cooldown_ticks: 2 } } };
@@ -399,7 +410,8 @@ describe("data assets, replays, traces, and snapshots", () => {
             [SETTINGS, "(session settings)"],
             [SWORD, "(session sword)"],
           ];
-          return { type: "session", scene: "(scene)", saved_scene: null, inputs: "", edits: "", undo: "", hashes: ["0000000000000001"], assets, branches: "", document: "Scene", keeps_assets: false };
+          const saved_assets = disk.filter(([asset]) => unsaved.includes(asset!));
+          return { type: "session", scene: "(scene)", saved_scene: null, inputs: "", edits: "", undo: "", hashes: ["0000000000000001"], assets, saved_assets, branches: "", document: "Scene", keeps_assets: false };
         }
         if (command.type === "save_asset") return { type: "text", text: "(gravity_scale: 2.0)" };
         if (command.type === "load_replay") return { type: "replay_loaded", fingerprint_differs: false };
@@ -419,7 +431,8 @@ describe("data assets, replays, traces, and snapshots", () => {
     );
     const host = await testEditor(builtinPlugins, (request) => {
       if (request.type === "list_files") return { type: "files", entries: files };
-      if (request.type === "read_text") return onDisk.unreadable ? { error: { code: "io", message: "permission denied" } } : { type: "text", text: onDisk.files[request.path as string] ?? onDisk.scene };
+      if (request.type === "read_text") return { type: "text", text: onDisk.files[request.path as string] ?? onDisk.scene };
+      if (request.type === "write_text" && onDisk.unwritable) return { error: { code: "io", message: "permission denied" } };
       if (request.type === "read_binary") return { type: "bytes", bytes: "cmVwbGF5" };
       if (request.type === "read_asset_texts") return { type: "asset_texts", assets: disk, paths: [] };
       if (request.type === "load_stored_session") return { type: "stored_session", bytes: null };
@@ -495,10 +508,11 @@ describe("data assets, replays, traces, and snapshots", () => {
     fireEvent.click(screen.getByText("settings.ron"));
     await settle();
 
-    // A tick 0 edit changes the replay's asset, not the project's file.
+    // A tick 0 edit changes the replay's asset, not the project's file: never shown unsaved.
     type("gravity_scale", "2");
     await settle();
-    expect(host.editor.document.getState().unsavedAssets).toEqual([]);
+    expect(host.editor.timeline.getState().timeline?.unsaved_assets).toEqual([SETTINGS]);
+    expect(screen.queryByLabelText("unsaved changes")).toBeNull();
     await expect(host.editor.commands.run("inspector.save-asset")).rejects.toThrow("assets/run.replay is a replay");
     expect(host.project.sent.filter((request) => request.type === "write_text")).toEqual([]);
   });
@@ -537,67 +551,43 @@ describe("data assets, replays, traces, and snapshots", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Save asset" }));
     await settle();
+    await settle();
     expect(game.sent).toContainEqual({ type: "save_asset", id: SETTINGS });
     expect(host.project.sent).toContainEqual({ type: "write_text", path: "assets/settings.ron", text: "(gravity_scale: 2.0)" });
+    // Saved once its file holds the text.
+    expect(game.sent.at(-1)).toEqual({ type: "mark_asset_saved", id: SETTINGS, text: "(gravity_scale: 2.0)" });
     expect(screen.queryByLabelText("unsaved changes")).toBeNull();
   });
 
-  it("undoing_a_tick_0_asset_edit_clears_its_unsaved_marker_and_redo_marks_it_again", async () => {
-    // What the session holds of each asset, as `SaveAsset` gives it.
-    const held: { [id: string]: string } = { [SETTINGS]: "(gravity_scale: 0.5)", [SWORD]: "(damage: 1)" };
-    const { host, onDisk } = await project({ answer: (command) => (command.type === "save_asset" ? { type: "text", text: held[command.id as string] } : undefined) });
-    onDisk.files = { "assets/settings.ron": "(gravity_scale: 0.5)\n", "assets/sword.ron": "(damage: 1)\n" };
+  it("a_failed_asset_write_keeps_the_asset_unsaved", async () => {
+    const { host, game, onDisk } = await project();
     renderPanel(host, "ludenea.inspector");
     fireEvent.click(screen.getByText("settings.ron"));
     await settle();
     type("gravity_scale", "2");
     await settle();
-    expect(host.editor.document.getState().unsavedAssets).toEqual([SETTINGS]);
+    onDisk.unwritable = true;
 
-    held[SETTINGS] = "(gravity_scale: 0.5)";
-    await act(() => host.editor.commands.run("edit.undo"));
+    await expect(host.editor.commands.run("inspector.save-asset")).rejects.toThrow("permission denied");
     await settle();
-    expect(host.editor.document.getState().unsavedAssets).toEqual([]);
-    expect(screen.queryByLabelText("unsaved changes")).toBeNull();
 
-    held[SETTINGS] = "(gravity_scale: 2.0)";
-    await act(() => host.editor.commands.run("edit.redo"));
-    await settle();
-    expect(host.editor.document.getState().unsavedAssets).toEqual([SETTINGS]);
+    expect(game.sent.filter((command) => command.type === "mark_asset_saved")).toEqual([]);
+    expect(screen.getByLabelText("unsaved changes")).toBeTruthy();
   });
 
-  it("an_unsaved_check_that_cannot_read_a_file_is_reported_in_the_editor_console", async () => {
-    const { host, onDisk } = await project();
-    onDisk.unreadable = true;
-
-    await act(() => host.editor.commands.run("edit.undo"));
-    await settle();
-
-    expect(host.editor.console.list().map(({ level, text }) => [level, text])).toContainEqual(["warning", "Cannot check which assets are unsaved: permission denied"]);
-  });
-
-  it("an_unsaved_check_answered_after_a_later_edit_is_dropped", async () => {
-    // The check after undo is answered late, each asset with its file's text.
-    const late: (() => void)[] = [];
-    const files: { [id: string]: string } = { [SETTINGS]: "(gravity_scale: 0.5)", [SWORD]: "(damage: 1)" };
-    const { host, onDisk } = await project({
-      answer: (command) =>
-        command.type === "save_asset" ? new Promise<object>((resolve) => late.push(() => resolve({ type: "text", text: files[command.id as string] }))) : undefined,
-    });
-    onDisk.files = { "assets/settings.ron": "(gravity_scale: 0.5)", "assets/sword.ron": "(damage: 1)" };
+  it("the_unsaved_marker_follows_the_game", async () => {
+    const { host, game } = await project();
     renderPanel(host, "ludenea.inspector");
     fireEvent.click(screen.getByText("settings.ron"));
     await settle();
 
-    await act(() => host.editor.commands.run("edit.undo"));
-    type("gravity_scale", "2");
+    // An undo, a redo, or another client: the game says which assets differ from their file.
+    act(() => game.push({ type: "timeline_changed", timeline: timeline(0, [SETTINGS]) }));
     await settle();
-    expect(host.editor.document.getState().unsavedAssets).toEqual([SETTINGS]);
-    expect(late).toHaveLength(2);
-    late.forEach((answer) => answer());
+    expect(screen.getByLabelText("unsaved changes")).toBeTruthy();
+    act(() => game.push({ type: "timeline_changed", timeline: timeline(0) }));
     await settle();
-
-    expect(host.editor.document.getState().unsavedAssets).toEqual([SETTINGS]);
+    expect(screen.queryByLabelText("unsaved changes")).toBeNull();
   });
 
   it("apply_to_asset_shown_past_tick_0", async () => {
@@ -680,7 +670,7 @@ describe("data assets, replays, traces, and snapshots", () => {
     await settle();
     type("damage", "7");
     await settle();
-    expect(context.host.editor.document.getState().unsavedAssets).toEqual([SETTINGS, SWORD]);
+    expect(context.host.editor.timeline.getState().timeline?.unsaved_assets).toEqual([SETTINGS, SWORD]);
     const changed = async (path: string, type: string) => {
       act(() => context.host.project.push({ type: "files_changed", changes: [{ Changed: { path, kind: { Data: { type } } } }] }));
       await settle();
@@ -700,8 +690,8 @@ describe("data assets, replays, traces, and snapshots", () => {
 
     // The watcher reports the written file: the session reloads it, and keeps the sword's edit.
     await changed("assets/settings.ron", "demo::Settings");
-    expect(loadSessions(game.sent).at(-1)).toMatchObject({ assets: [[SETTINGS, "(disk settings)"], [SWORD, "(session sword)"]] });
-    expect(host.editor.document.getState().unsavedAssets).toEqual([SWORD]);
+    expect(loadSessions(game.sent).at(-1)).toMatchObject({ assets: [[SETTINGS, "(disk settings)"], [SWORD, "(session sword)"]], saved_assets: [[SWORD, "(disk sword)"]] });
+    expect(host.editor.timeline.getState().timeline?.unsaved_assets).toEqual([SWORD]);
     expect(screen.queryByRole("alert")).toBeNull();
     fireEvent.click(screen.getByText("sword.ron"));
     await settle();
@@ -719,8 +709,8 @@ describe("data assets, replays, traces, and snapshots", () => {
     await settle();
     await settle();
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(loadSessions(game.sent).at(-1)).toMatchObject({ assets: [[SETTINGS, "(session settings)"], [SWORD, "(disk sword)"]] });
-    expect(host.editor.document.getState().unsavedAssets).toEqual([SETTINGS]);
+    expect(loadSessions(game.sent).at(-1)).toMatchObject({ assets: [[SETTINGS, "(session settings)"], [SWORD, "(disk sword)"]], saved_assets: [[SETTINGS, "(disk settings)"]] });
+    expect(host.editor.timeline.getState().timeline?.unsaved_assets).toEqual([SETTINGS]);
   });
 
   it("a_scene_and_an_asset_changed_together_each_show_a_banner", async () => {
@@ -754,10 +744,9 @@ describe("data assets, replays, traces, and snapshots", () => {
     await settle();
     await settle();
 
-    expect(game.sent.filter((command) => command.type === "replace_scene")).toEqual([
-      { type: "replace_scene", scene: "(scene changed)", assets: [[SETTINGS, "(session settings)"], [SWORD, "(session sword)"]] },
-    ]);
-    expect(host.editor.document.getState().unsavedAssets).toEqual([SETTINGS, SWORD]);
+    // The game keeps the session's text of each unsaved asset.
+    expect(game.sent.filter((command) => command.type === "replace_scene")).toEqual([{ type: "replace_scene", scene: "(scene changed)", assets: disk }]);
+    expect(host.editor.timeline.getState().timeline?.unsaved_assets).toEqual([SETTINGS, SWORD]);
     expect(screen.getByLabelText("unsaved changes")).toBeTruthy();
   });
 

@@ -21,6 +21,7 @@ const timeline = (patch: Partial<Timeline> = {}): Timeline => ({
   undo_label: null,
   redo_label: null,
   scene_dirty: false,
+  unsaved_assets: [],
   resimulating: false,
   branch: 1,
   branches: [

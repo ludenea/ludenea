@@ -1,4 +1,4 @@
-import type { ControlClient, ProjectInfo } from "@ludenea/control-client";
+import type { AssetId, ControlClient, ProjectInfo } from "@ludenea/control-client";
 import { runReported, type Editor } from "@ludenea/editor-shell";
 import { useLayoutEffect, useRef, useSyncExternalStore, type UIEvent } from "react";
 
@@ -100,3 +100,16 @@ export function showPanel(editor: Editor, id: string): void {
 
 /** A failure as one line for a panel to show. */
 export const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+/** The prefab and data assets whose session text differs from their file; none in a replay, whose assets are its own. */
+export function unsavedAssets(editor: Editor): AssetId[] {
+  if (editor.document.getState().current?.kind === "replay") return [];
+  return editor.timeline.getState().timeline?.unsaved_assets ?? [];
+}
+
+/** Whether the asset `id` is among `unsavedAssets`, following the game. */
+export function useUnsavedAsset(editor: Editor, id: AssetId): boolean {
+  const unsaved = editor.timeline((state) => state.timeline?.unsaved_assets.includes(id) ?? false);
+  const replay = editor.document((state) => state.current?.kind === "replay");
+  return unsaved && !replay;
+}

@@ -217,9 +217,15 @@ fn every_command_names_the_reply_it_gets() {
         path: vec![field("every_ticks")],
         value: json!(30),
     });
-    checked.run(Command::SaveAsset { id: STATS });
+    let Reply::Text { text } = checked.run(Command::SaveAsset { id: STATS }) else {
+        unreachable!("checked by run");
+    };
+    checked.run(Command::MarkAssetSaved { id: STATS, text });
     checked.run(Command::ApplyToAsset { id: STATS });
-    checked.run(Command::SaveScene);
+    let Reply::Scene { ron } = checked.run(Command::SaveScene) else {
+        unreachable!("checked by run");
+    };
+    checked.run(Command::MarkSceneSaved { text: ron });
 
     // Past tick 0: recorded edits, snapshots and traces.
     let Reply::Stepped { .. } = checked.run(Command::Step {
@@ -241,6 +247,7 @@ fn every_command_names_the_reply_it_gets() {
         undo,
         hashes,
         assets: session_assets,
+        saved_assets,
         branches,
         document,
         keeps_assets,
@@ -361,6 +368,7 @@ fn every_command_names_the_reply_it_gets() {
         undo,
         expected: hashes,
         assets: session_assets,
+        saved_assets,
         branches,
         document,
         keeps_assets,
@@ -580,6 +588,7 @@ fn session_export_from_2a_loads() {
         undo,
         hashes,
         assets,
+        saved_assets,
         branches,
         document,
         ..
@@ -600,6 +609,7 @@ fn session_export_from_2a_loads() {
             undo,
             expected: hashes,
             assets,
+            saved_assets,
             branches,
             document,
             keeps_assets: false,
@@ -685,6 +695,7 @@ fn export_and_load_session_round_trips_assets_branches_and_document() {
         undo,
         hashes,
         assets,
+        saved_assets,
         branches: tree,
         document,
         ..
@@ -706,6 +717,7 @@ fn export_and_load_session_round_trips_assets_branches_and_document() {
             undo,
             expected: hashes.clone(),
             assets: assets.clone(),
+            saved_assets,
             branches: tree,
             document,
             keeps_assets: false,
@@ -802,6 +814,7 @@ fn load_session_refuses_a_hostile_branch_tree() {
                 undo: Bytes(Vec::new()),
                 expected: Vec::new(),
                 assets: Vec::new(),
+                saved_assets: Vec::new(),
                 branches: Bytes(tree),
                 document: Document::Scene,
                 keeps_assets: false,
@@ -864,6 +877,7 @@ fn load_session_refuses_a_stored_edit_past_any_run() {
             undo: Bytes(Vec::new()),
             expected: Vec::new(),
             assets: Vec::new(),
+            saved_assets: Vec::new(),
             branches: Bytes(tree),
             document: Document::Scene,
             keeps_assets: false,
@@ -915,6 +929,7 @@ fn a_refused_load_session_keeps_the_session() {
             undo: Bytes(Vec::new()),
             expected: hashes.clone(),
             assets,
+            saved_assets: Vec::new(),
             branches: Bytes(branches),
             document: Document::Scene,
             keeps_assets: false,
@@ -950,6 +965,7 @@ fn load_session_replies_what_the_scene_load_reports() {
         undo,
         hashes,
         assets,
+        saved_assets,
         branches,
         document,
         keeps_assets,
@@ -968,6 +984,7 @@ fn load_session_replies_what_the_scene_load_reports() {
             undo,
             expected: hashes,
             assets,
+            saved_assets,
             branches,
             document,
             keeps_assets,
@@ -1562,6 +1579,7 @@ fn export_replay_contains_a_panic_and_keeps_the_session() {
         undo,
         hashes,
         assets,
+        saved_assets,
         branches,
         document,
         ..
@@ -1586,6 +1604,7 @@ fn export_replay_contains_a_panic_and_keeps_the_session() {
             undo,
             expected: hashes,
             assets,
+            saved_assets,
             branches,
             document,
             keeps_assets: false,
@@ -1712,6 +1731,7 @@ fn branch_restored_before_its_edits_still_reloads() {
         undo,
         hashes,
         assets,
+        saved_assets,
         branches: tree,
         document,
         ..
@@ -1730,6 +1750,7 @@ fn branch_restored_before_its_edits_still_reloads() {
             undo,
             expected: hashes,
             assets,
+            saved_assets,
             branches: tree,
             document,
             keeps_assets: false,

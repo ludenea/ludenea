@@ -26,7 +26,7 @@ pub const PROTOCOL_VERSION: u32 = 4;
 /// the messages reach, without their documentation. A client and a host connect only when
 /// theirs are equal too, so builds from different revisions of one version refuse each other
 /// instead of misreading fields. `tests/typescript.rs` pins it.
-pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0x8c1f_6be8_7e64_9d47);
+pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0x341d_c87d_6714_af21);
 
 /// Binary data, serialized as a standard base64 string.
 #[derive(Clone, Debug, PartialEq)]
@@ -272,10 +272,16 @@ pub enum Command {
         path: Vec<PathSegment>,
         value: JsonValue,
     },
-    /// The session's scene, whatever the current tick, marked as saved. A prefab document
-    /// is checked first, as every prefab file before it is written: an instance cycle or an
-    /// entity reference outside the prefab fails with `invalid_scene`, unmarked.
+    /// The session's scene, whatever the current tick, to write to its file. A prefab
+    /// document is checked first, as every prefab file before it is written: an instance
+    /// cycle or an entity reference outside the prefab fails with `invalid_scene`. The scene
+    /// stays unsaved until `MarkSceneSaved` says the text was written.
     SaveScene,
+    /// The text `SaveScene` gave is written to the scene's file: the scene is saved if it
+    /// still is that text, so an edit made during the write stays unsaved.
+    MarkSceneSaved {
+        text: String,
+    },
     /// Copies the current value of a component into the scene, as a tick 0 edit: the
     /// session resimulates, then returns to the current tick. The entity must exist at
     /// tick 0.
@@ -320,6 +326,9 @@ pub enum Command {
         expected: Vec<Hash64>,
         #[serde(default)]
         assets: Vec<(AssetId, String)>,
+        /// The text as last saved of each asset of `assets` that holds unsaved edits.
+        #[serde(default)]
+        saved_assets: Vec<(AssetId, String)>,
         /// The branch tree; empty for a linear session.
         #[serde(default = "Bytes::empty")]
         branches: Bytes,
@@ -340,9 +349,16 @@ pub enum Command {
         path: Vec<PathSegment>,
         value: JsonValue,
     },
-    /// The file text to save for an asset; replies `Text`.
+    /// The file text to save for an asset; replies `Text`. The asset stays unsaved until
+    /// `MarkAssetSaved` says the text was written.
     SaveAsset {
         id: AssetId,
+    },
+    /// The text `SaveAsset` gave is written to the asset's file: the asset is saved if
+    /// `SaveAsset` still gives that text, so an edit made during the write stays unsaved.
+    MarkAssetSaved {
+        id: AssetId,
+        text: String,
     },
     /// Copies the current value of a data asset into its asset text, as a tick 0 edit.
     ApplyToAsset {
@@ -509,6 +525,8 @@ impl Command {
             | Command::RemoveComponent { .. }
             | Command::SetField { .. }
             | Command::ApplyToScene { .. }
+            | Command::MarkSceneSaved { .. }
+            | Command::MarkAssetSaved { .. }
             | Command::Play
             | Command::Pause
             | Command::Seek { .. }
@@ -606,6 +624,9 @@ pub enum Reply {
         hashes: Vec<Hash64>,
         #[serde(default)]
         assets: Vec<(AssetId, String)>,
+        /// The text as last saved of each asset of `assets` that holds unsaved edits.
+        #[serde(default)]
+        saved_assets: Vec<(AssetId, String)>,
         #[serde(default = "Bytes::empty")]
         branches: Bytes,
         #[serde(default)]

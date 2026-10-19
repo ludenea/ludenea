@@ -232,7 +232,8 @@ fn scene_dirty_until_saved() {
         )
         .unwrap();
     assert!(session.timeline().scene_dirty);
-    session.mark_scene_saved();
+    let written = session.scene().to_string();
+    session.mark_scene_saved(&written);
     assert!(!session.timeline().scene_dirty);
     session.undo(&mut sim).unwrap();
     assert!(
@@ -338,7 +339,8 @@ fn unsaved_scene_edits_stay_unsaved_across_export_and_resume() {
     resumed.undo(&mut sim).unwrap();
     assert!(!resumed.timeline().scene_dirty, "back to the saved text");
 
-    resumed.mark_scene_saved();
+    let written = resumed.scene().to_string();
+    resumed.mark_scene_saved(&written);
     let export = resumed.export().unwrap();
     assert_eq!(export.saved_scene, None, "a saved scene travels once");
     assert!(!resume(&mut sim, export).timeline().scene_dirty);
@@ -425,6 +427,7 @@ fn session_export_from_2a_with_undo_history_resumes() {
         undo,
         expected: hashes,
         assets: Vec::new(),
+        saved_assets: Vec::new(),
         branches: Bytes(Vec::new()),
         document: Document::Scene,
         keeps_assets: false,

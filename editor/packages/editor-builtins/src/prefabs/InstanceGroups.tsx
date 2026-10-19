@@ -1,7 +1,7 @@
 import type { InstanceInfo } from "@ludenea/control-client";
 import type { Editor } from "@ludenea/editor-shell";
 import { useState, type MouseEvent } from "react";
-import { createStore, errorText, useStore } from "../shared";
+import { createStore, errorText, useStore, useUnsavedAsset } from "../shared";
 import { entityKey } from "../shared/EntityList";
 import { prefabsOf, type Prefabs } from "./index";
 
@@ -32,7 +32,7 @@ export function InstanceGroups({ editor }: { editor: Editor }) {
 function Group({ editor, prefabs, instance }: { editor: Editor; prefabs: Prefabs; instance: InstanceInfo }) {
   const { instances, prefabs: files } = useStore(prefabs.state);
   const name = fileName(files.find((file) => file.id === instance.prefab)?.path ?? instance.prefab);
-  const unsaved = editor.document((document) => document.unsavedAssets.includes(instance.prefab));
+  const unsaved = useUnsavedAsset(editor, instance.prefab);
   const depth = instance.address.length;
   const inside = (other: InstanceInfo) => other.address.length > depth && other.address.slice(0, depth).join() === instance.address.join();
   const nested = instances.filter((other) => other.address.length === depth + 1 && inside(other));

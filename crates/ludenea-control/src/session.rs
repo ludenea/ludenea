@@ -126,6 +126,8 @@ pub struct Timeline {
     pub undo_label: Option<String>,
     pub redo_label: Option<String>,
     pub scene_dirty: bool,
+    /// The prefab and data assets whose text in the session differs from their file.
+    pub unsaved_assets: Vec<AssetId>,
     pub resimulating: bool,
     pub branch: BranchId,
     pub branches: Vec<BranchInfo>,
@@ -174,6 +176,10 @@ pub struct SessionExport {
     /// The prefab and data asset texts the scene loads with, in file form.
     #[serde(default)]
     pub assets: Vec<(AssetId, String)>,
+    /// The text as last loaded or saved of each asset of `assets` whose text differs from
+    /// it: the unsaved assets stay unsaved after a resume.
+    #[serde(default)]
+    pub saved_assets: Vec<(AssetId, String)>,
     /// Whether every scene load keeps every asset, as a replay's session does.
     #[serde(default)]
     pub keeps_assets: bool,
@@ -208,6 +214,9 @@ pub struct Session {
     scene: String,
     document: Document,
     assets: AssetTexts,
+    /// The text as last loaded or saved of each asset whose text in `assets` differs from
+    /// it: the unsaved assets.
+    saved_assets: AssetTexts,
     inputs: InputLog,
     edits: EditLog,
     hashes: Vec<u64>,
@@ -280,6 +289,7 @@ impl Session {
             scene,
             document,
             assets,
+            saved_assets: AssetTexts::new(),
             scene_dirty: false,
             inputs: InputLog::new(players),
             edits: EditLog::new(),
@@ -343,6 +353,11 @@ impl Session {
             session.scene_dirty = saved != session.scene;
             session.saved_scene = saved;
         }
+        session.saved_assets = export
+            .saved_assets
+            .into_iter()
+            .filter(|(id, saved)| session.assets.get(id).is_some_and(|text| text != saved))
+            .collect();
         session.inputs = inputs;
         session.edits = edits;
         session.update_head();
@@ -1044,10 +1059,23 @@ impl Session {
         self.record_scene_edit(sim, &edit).map(drop)
     }
 
-    /// Marks the current scene text as saved.
-    pub fn mark_scene_saved(&mut self) {
-        self.saved_scene = self.scene.clone();
-        self.scene_dirty = false;
+    /// Marks the scene saved if it still is `text`, the text written to its file, so an
+    /// edit made during the write stays unsaved.
+    pub fn mark_scene_saved(&mut self, text: &str) {
+        if self.scene == text {
+            self.saved_scene = text.to_string();
+            self.scene_dirty = false;
+        }
+    }
+
+    /// Marks the asset `id` saved if `text`, written to its file, still is what `save_asset`
+    /// gives, so an edit made during the write stays unsaved. `None` when the session does
+    /// not hold `id`.
+    pub fn mark_asset_saved(&mut self, id: AssetId, text: &str) -> Option<()> {
+        if self.save_asset(id)? == text {
+            self.saved_assets.remove(&id);
+        }
+        Some(())
     }
 
     /// Moves to `tick`, simulating the recorded future on the way when needed.
@@ -1117,15 +1145,27 @@ impl Session {
     }
 
     /// Loads a new version of the scene at tick 0 with new asset texts, as saved, and marks
-    /// the recorded future stale. Undo brings the previous scene version back.
+    /// the recorded future stale. Undo brings the previous scene version back. An unsaved
+    /// asset keeps its text, unsaved while it differs from its new saved text; one missing
+    /// from `assets` is gone.
     pub fn replace_scene(
         &mut self,
         sim: &mut Simulation,
         scene: String,
-        assets: AssetTexts,
+        mut assets: AssetTexts,
     ) -> Result<(), SessionError> {
+        let mut saved_assets = AssetTexts::new();
+        for (&id, file) in &mut assets {
+            if let Some(text) = self.assets.get(&id)
+                && self.saved_assets.contains_key(&id)
+                && text != file
+            {
+                saved_assets.insert(id, std::mem::replace(file, text.clone()));
+            }
+        }
         self.warnings = self.load_scene(sim, &scene, &assets)?;
         self.assets = assets;
+        self.saved_assets = saved_assets;
         self.saved_scene = scene.clone();
         let before = std::mem::replace(&mut self.scene, scene.clone());
         self.scene_dirty = false;
@@ -1182,6 +1222,8 @@ impl Session {
             };
             return Err(error);
         }
+        // The new prefab's file holds its text.
+        self.saved_assets.remove(&prefab);
         Ok(id)
     }
 
@@ -1477,6 +1519,11 @@ impl Session {
                 .iter()
                 .map(|(&id, text)| (id, text.clone()))
                 .collect(),
+            saved_assets: self
+                .saved_assets
+                .iter()
+                .map(|(&id, text)| (id, text.clone()))
+                .collect(),
             keeps_assets: self.keeps_assets,
         })
     }
@@ -1517,6 +1564,7 @@ impl Session {
             undo_label: self.undo_label(),
             redo_label: self.redo_label(),
             scene_dirty: self.scene_dirty,
+            unsaved_assets: self.saved_assets.keys().copied().collect(),
             resimulating: self.resimulating.is_some(),
             branch,
             branches,
@@ -2147,6 +2195,13 @@ impl Session {
                     None => self.assets.remove(&id),
                 };
                 return Err(error);
+            }
+        }
+        // An asset the session did not hold has no file to differ from.
+        if let Some(previous) = previous {
+            let saved = self.saved_assets.remove(&id).unwrap_or(previous);
+            if self.assets.get(&id) != Some(&saved) {
+                self.saved_assets.insert(id, saved);
             }
         }
         self.set_scene(scene);

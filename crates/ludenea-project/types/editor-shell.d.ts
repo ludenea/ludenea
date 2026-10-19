@@ -211,15 +211,6 @@ interface DocumentState {
     loaded: Loaded | null;
     /** The open replay was recorded with other game types (its schema fingerprint differs); false for a scene or prefab. */
     fingerprintDiffers: boolean;
-    /**
-     * The prefab and data assets whose text in the session differs from their file (a tick 0
-     * edit, "Apply to asset", "Apply to prefab"): plugins add an asset when they change it and
-     * remove it when they save it.
-     * Reloading changed assets keeps their session text. Stored sessions carry it: a document
-     * that opens, or a new game, starts from the files' texts and marks those of the session it
-     * restores again.
-     */
-    unsavedAssets: AssetId[];
     /** Why the last open, reload, or load into a new game was refused (the previous document and session stay); null once one succeeds. */
     error: string | null;
     /**
@@ -230,8 +221,12 @@ interface DocumentState {
     open(id: AssetId): Promise<void>;
     /** Replaces the open scene or prefab with `text` (a change on disk), with the project's asset texts: the session replays. */
     replace(text: string): Promise<void>;
-    /** Reloads the project's prefab and data asset texts into the session, keeping its edits and the text of each unsaved asset. */
-    reloadAssets(): Promise<void>;
+    /**
+     * Reloads the project's prefab and data asset texts into the session, keeping its edits and
+     * the text of each unsaved asset (the game's timeline lists them), except those of `discard`,
+     * which take their file's text.
+     */
+    reloadAssets(discard?: AssetId[]): Promise<void>;
     /** Stores the game's session as the open document's, as `open` does before loading another. */
     store(): Promise<void>;
 }

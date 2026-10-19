@@ -11,12 +11,25 @@ const session = (scene: string, extra: Partial<Session> = {}): Session => ({
   undo: "",
   hashes: ["0000000000000001", "0000000000000002", "0000000000000003"],
   assets: [],
+  saved_assets: [],
   branches: "",
   document: "Scene",
   keeps_assets: false,
   current: 2,
   ...extra,
 });
+
+// The session's text of the data asset after a tick 0 edit, which "Save asset" has not written,
+// and its file's text.
+const edited = `AssetFile(type: "demo::Settings", value: (gravity_scale: 2.0))`;
+const settingsFile = `AssetFile(type: "demo::Settings", value: (gravity_scale: 0.5))`;
+const unsaved: Partial<Session> = {
+  assets: [
+    [ids.ball, "(ball)"],
+    [ids.settings, edited],
+  ],
+  saved_assets: [[ids.settings, "(as loaded)"]],
+};
 
 const loads = (sent: { type: string }[]) => sent.filter((command) => command.type === "load_scene" || command.type === "load_session");
 
@@ -161,11 +174,11 @@ describe("document store", () => {
       return { type: "done" };
     });
     host.setControl(game.control);
-    project.store(ids.main, { load: { ...session("(main)", { assets: [[ids.settings, edited]] }), type: "load_session", expected: [] }, tick: 0, document: ids.main, unsavedAssets: [ids.settings] });
+    project.store(ids.main, { load: { ...session("(main)", unsaved), type: "load_session", expected: [] }, tick: 0, document: ids.main });
 
     await host.editor.document.getState().open(ids.main);
 
-    expect(host.editor.document.getState()).toMatchObject({ current: { id: ids.main }, unsavedAssets: [], loaded: { warnings: ["from the file"] } });
+    expect(host.editor.document.getState()).toMatchObject({ current: { id: ids.main }, loaded: { warnings: ["from the file"] } });
     const refused = "The game refused the stored session of scenes/main.scene.ron; the document opened from its file: the branch tree cannot be decoded";
     expect(logged(host)).toContainEqual(["error", refused, undefined]);
     // Shown on the scene tree as well.
@@ -394,86 +407,74 @@ describe("document store", () => {
     expect((failure as Error).message).toContain(`asset ${ids.ball} (assets/ball.prefab.ron) is a`);
   });
 
-  // The session's text of the data asset after a tick 0 edit, which "Save asset" has not written.
-  const edited = `AssetFile(type: "demo::Settings", value: (gravity_scale: 2.0))`;
-
   it("an_unsaved_asset_survives_switching_documents", async () => {
     const project = fakeProject();
     const host = await testHost(undefined, project.answer);
-    const game = await gameWithSession(session("(main)", { assets: [[ids.ball, "(ball)"], [ids.settings, edited]] }));
+    const game = await gameWithSession(session("(main)", unsaved));
     host.setControl(game.control);
     const { open } = host.editor.document.getState();
     await open(ids.main);
-    host.editor.document.setState({ unsavedAssets: [ids.settings] });
-
     await open(ids.ball);
-    expect(host.editor.document.getState().unsavedAssets).toEqual([]);
     game.sent.length = 0;
     await open(ids.main);
 
-    const restored = game.sent.find((command) => command.type === "load_session")!;
-    expect(restored.assets).toEqual([
-      [ids.ball, "(ball)"],
-      [ids.settings, edited],
-    ]);
-    expect(host.editor.document.getState().unsavedAssets).toEqual([ids.settings]);
+    // The session's text, unsaved against the file's text now.
+    expect(game.sent.find((command) => command.type === "load_session")).toMatchObject({
+      assets: [
+        [ids.ball, "(ball)"],
+        [ids.settings, edited],
+      ],
+      saved_assets: [[ids.settings, settingsFile]],
+    });
   });
 
   it("an_unsaved_asset_survives_closing_and_reopening_the_editor", async () => {
     const project = fakeProject();
     const host = await testHost(undefined, project.answer);
-    const game = await gameWithSession(session("(main)", { assets: [[ids.ball, "(ball)"], [ids.settings, edited]] }));
+    const game = await gameWithSession(session("(main)", unsaved));
     host.setControl(game.control);
     await host.editor.document.getState().open(ids.main);
-    host.editor.document.setState({ unsavedAssets: [ids.settings] });
     // As closing the editor does.
     await host.sessions.store();
 
     const reopened = await testHost(undefined, project.answer);
     await reopened.editor.document.getState().open(ids.main);
-    expect(reopened.editor.document.getState().unsavedAssets).toEqual([ids.settings]);
     const next = await gameWithSession(session("(main)"));
     reopened.setControl(next.control);
     await vi.waitFor(() => expect(next.sent).toContainEqual({ type: "seek", tick: 2 }));
 
-    expect(next.sent.find((command) => command.type === "load_session")?.assets).toContainEqual([ids.settings, edited]);
-    expect(reopened.editor.document.getState().unsavedAssets).toEqual([ids.settings]);
+    const restored = next.sent.find((command) => command.type === "load_session");
+    expect(restored?.assets).toContainEqual([ids.settings, edited]);
+    expect(restored?.saved_assets).toEqual([[ids.settings, settingsFile]]);
   });
 
   it("an_unsaved_asset_the_disk_lost_is_no_longer_unsaved", async () => {
     const project = fakeProject();
     const host = await testHost(undefined, project.answer);
+    const game = await gameWithSession(session("(main)"));
+    host.setControl(game.control);
     project.store(ids.main, {
-      load: { ...session("(main)", { assets: [[ids.created, "(gone)"]] }), type: "load_session", expected: [] },
+      load: { ...session("(main)", { assets: [[ids.created, "(gone)"]], saved_assets: [[ids.created, "(was)"]] }), type: "load_session", expected: [] },
       tick: 0,
       document: ids.main,
-      unsavedAssets: [ids.created],
     });
 
     await host.editor.document.getState().open(ids.main);
 
-    expect(host.editor.document.getState().unsavedAssets).toEqual([]);
+    expect(game.sent.find((command) => command.type === "load_session")).toMatchObject({ assets: project.assets(), saved_assets: [] });
   });
 
-  it("a_restored_session_marks_its_unsaved_assets_again", async () => {
+  it("an_unsaved_asset_reloaded_from_disk_takes_its_file_text", async () => {
     const project = fakeProject();
     const host = await testHost(undefined, project.answer);
-    const game = await gameWithSession(session("(main)", { assets: [[ids.ball, "(ball)"], [ids.settings, edited]] }));
+    const game = await gameWithSession(session("(main)", unsaved));
     host.setControl(game.control);
     await host.editor.document.getState().open(ids.main);
-    host.editor.document.setState({ unsavedAssets: [ids.settings] });
+    game.sent.length = 0;
 
-    // A rebuild or a crash: the session exported from the old game goes into a new one.
-    const saved = await host.sessions.export(game.control);
-    expect(saved.unsavedAssets).toEqual([ids.settings]);
-    const next = await gameWithSession(session("(main)"));
-    host.setControl(next.control);
-    expect(host.editor.document.getState().unsavedAssets).toEqual([]);
-    await settle();
-    await host.sessions.restore(next.control, saved);
+    await host.editor.document.getState().reloadAssets([ids.settings]);
 
-    expect(next.sent.find((command) => command.type === "load_session")?.assets).toContainEqual([ids.settings, edited]);
-    expect(host.editor.document.getState().unsavedAssets).toEqual([ids.settings]);
+    expect(game.sent.find((command) => command.type === "load_session")).toMatchObject({ assets: project.assets(), saved_assets: [] });
   });
 
   it("broken_asset_error_names_path_line_and_column", async () => {

@@ -583,6 +583,7 @@ fn export_from_2a_resumes_as_root() {
         hashes: hashes.into_iter().map(|hash| hash.0).collect(),
         branches: Vec::new(),
         assets: Vec::new(),
+        saved_assets: Vec::new(),
         keeps_assets: false,
     };
     let mut session = Session::resume(&mut sim, export, Document::Scene).unwrap();

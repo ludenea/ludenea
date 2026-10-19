@@ -377,6 +377,32 @@ fn save_scene_returns_session_scene_at_any_tick() {
 }
 
 #[test]
+fn save_scene_keeps_the_scene_dirty_until_marked_saved() {
+    let mut host = loaded(0);
+    let entity = first_crate(&mut host);
+    ok(&mut host, set_pose(entity, &["position", "x"], json!(3.0)));
+    let written = save_scene(&mut host);
+    // The text is not on disk yet: a failed write leaves the edit unsaved.
+    assert!(timeline(&mut host).scene_dirty);
+
+    // An edit made while the text is written stays unsaved.
+    resimulate(&mut host);
+    ok(&mut host, set_pose(entity, &["position", "y"], json!(4.0)));
+    ok(
+        &mut host,
+        Command::MarkSceneSaved {
+            text: written.clone(),
+        },
+    );
+    assert!(timeline(&mut host).scene_dirty);
+
+    let latest = save_scene(&mut host);
+    assert_ne!(latest, written);
+    ok(&mut host, Command::MarkSceneSaved { text: latest });
+    assert!(!timeline(&mut host).scene_dirty);
+}
+
+#[test]
 fn apply_to_scene_copies_value_and_marks_dirty() {
     let mut host = loaded(30);
     step(&mut host, 20);
@@ -402,6 +428,12 @@ fn apply_to_scene_copies_value_and_marks_dirty() {
     resimulate(&mut host);
     assert_eq!(timeline(&mut host).current, 20);
     let applied = save_scene(&mut host);
+    ok(
+        &mut host,
+        Command::MarkSceneSaved {
+            text: applied.clone(),
+        },
+    );
     assert!(!timeline(&mut host).scene_dirty);
     let mut fresh = loaded(30);
     ok(

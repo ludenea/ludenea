@@ -522,8 +522,11 @@ impl Host {
                     prefab::save_prefab_checked(id, &ron, self.session.assets())
                         .map_err(scene_error)?;
                 }
-                self.session.mark_scene_saved();
                 Ok(Reply::Scene { ron })
+            }
+            Command::MarkSceneSaved { text } => {
+                self.session.mark_scene_saved(&text);
+                Ok(Reply::Done)
             }
             Command::ApplyToScene { entity, component } => {
                 let context = format!("entity {entity}, component `{component}`");
@@ -578,6 +581,7 @@ impl Host {
                     undo: Bytes(export.undo),
                     hashes: export.hashes.into_iter().map(Hash64).collect(),
                     assets: export.assets,
+                    saved_assets: export.saved_assets,
                     branches: Bytes(export.branches),
                     document: self.session.document(),
                     keeps_assets: export.keeps_assets,
@@ -597,6 +601,7 @@ impl Host {
                 undo,
                 expected,
                 assets,
+                saved_assets,
                 branches,
                 document,
                 keeps_assets,
@@ -619,6 +624,7 @@ impl Host {
                     hashes: expected.into_iter().map(|hash| hash.0).collect(),
                     branches: branches.0,
                     assets,
+                    saved_assets,
                     keeps_assets,
                 };
                 match Session::resume(sim, export, document) {
@@ -650,6 +656,12 @@ impl Host {
                     .save_asset(id)
                     .ok_or_else(|| missing_asset(id))?,
             }),
+            Command::MarkAssetSaved { id, text } => {
+                self.session
+                    .mark_asset_saved(id, &text)
+                    .ok_or_else(|| missing_asset(id))?;
+                Ok(Reply::Done)
+            }
             Command::ApplyToAsset { id } => {
                 self.session
                     .apply_to_asset(sim, id)
@@ -1303,6 +1315,7 @@ fn changes_state(command: &Command) -> bool {
             | Command::GetEntity { .. }
             | Command::GetResources
             | Command::SaveScene
+            | Command::MarkSceneSaved { .. }
             | Command::Play
             | Command::Pause
             | Command::SetSpeed { .. }
@@ -1311,6 +1324,7 @@ fn changes_state(command: &Command) -> bool {
             | Command::ExportSession
             | Command::GetAsset { .. }
             | Command::SaveAsset { .. }
+            | Command::MarkAssetSaved { .. }
             | Command::NewAssetValue { .. }
             | Command::RenameBranch { .. }
             | Command::GetSchedule
@@ -1436,7 +1450,11 @@ mod tests {
         let mut host = Host::new(boxes::app).unwrap();
         let id = AssetId(7);
         // `ApplyToPrefab` names an instance, whose prefab the session always holds.
-        for command in [Command::GetAsset { id }, Command::SaveAsset { id }] {
+        let mark = Command::MarkAssetSaved {
+            id,
+            text: String::new(),
+        };
+        for command in [Command::GetAsset { id }, Command::SaveAsset { id }, mark] {
             let error = host.handle(command).unwrap_err();
             assert_eq!(error.code, ErrorCode::InvalidCommand, "{error:?}");
         }
