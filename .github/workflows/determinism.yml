@@ -9,6 +9,18 @@ permissions:
   contents: read
 
 jobs:
+  # The checks that do not depend on the platform, run once: formatting, clippy on WebAssembly
+  # (and on the host), and the API documentation, with warnings denied. The same command runs
+  # them locally.
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo xtask check
+
   native:
     strategy:
       fail-fast: false

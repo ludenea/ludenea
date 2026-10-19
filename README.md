@@ -46,6 +46,14 @@ Run the tests:
 cargo test --locked --workspace
 ```
 
+Run the checks CI runs once for every platform: formatting (the engine and the desktop
+backend), clippy on the host and on WebAssembly, and the API documentation, with warnings
+denied:
+
+```sh
+cargo xtask check
+```
+
 Verify the golden trace natively (use `--threads 1`, `2`, or `8`):
 
 ```sh
