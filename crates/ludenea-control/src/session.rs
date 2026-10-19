@@ -636,9 +636,10 @@ impl Session {
 
     /// Applies the last undone entry again: a scene edit reloads the scene after it, a fork
     /// brings back the branches it removed with the same identifiers and names and switches
-    /// to the forked one, and a recorded edit puts its branch back as it was before the
-    /// undo, with the descendants the undo removed. Play recorded on that branch since the
-    /// undo is replaced without warning.
+    /// to the forked one, and a recorded edit puts its branch's own part of the run back as
+    /// it was before the undo, after the run it forks from as it is now, with the
+    /// descendants the undo removed. Play recorded on that branch since the undo is replaced
+    /// without warning.
     pub fn redo(&mut self, sim: &mut Simulation) -> Result<(), SessionError> {
         self.ensure_resimulated()?;
         let mut entry = self
@@ -775,21 +776,29 @@ impl Session {
                         let ids: Vec<BranchId> = descendants.iter().map(StoredBranch::id).collect();
                         let undone = self.current_segment();
                         let defaults = sim.encoded_default_inputs();
-                        self.compose(&segment, defaults.as_deref());
+                        // Nothing resimulates, so the run before the branch's fork is fresh,
+                        // where stored ancestors may hold stale hashes: only the branch's own
+                        // part comes back.
+                        self.splice(&segment, defaults.as_deref());
                         // The descendants fork on the run the redo brings back.
                         if let Err(error) = self.tree.put_back(descendants, &self.edits, self.head)
                         {
-                            self.compose(&undone, defaults.as_deref());
+                            self.splice(&undone, defaults.as_deref());
                             return Err(error.into());
                         }
-                        if stale {
-                            self.resimulate_from(sim, 0, self.current)?;
-                        } else if let Err(error) = self.restore_checkpoint(sim, tick) {
-                            // Showing `tick` would start from this checkpoint: the redo is
-                            // refused, and the branch is as the undo left it.
-                            self.compose(&undone, defaults.as_deref());
+                        // A segment stored before a rebuild resimulates from the fork tick.
+                        let fork_tick = self.tree.current_branch().fork_tick;
+                        let from = if stale { fork_tick } else { tick };
+                        if let Err(error) = self.restore_checkpoint(sim, from) {
+                            // Showing `tick`, or resimulating, would start from this
+                            // checkpoint: the redo is refused, and the branch is as the undo
+                            // left it.
+                            self.splice(&undone, defaults.as_deref());
                             self.tree.remove(&ids);
                             return Err(error);
+                        }
+                        if stale {
+                            self.resimulate_from(sim, fork_tick, tick)?;
                         }
                     }
                     // An entry of a history written before branches: as in 2a, within
@@ -1615,6 +1624,20 @@ impl Session {
     fn compose(&mut self, target: &Segment, defaults: Option<&[u8]>) {
         (self.inputs, self.edits, self.hashes, self.checkpoints) =
             self.composed(self.tree.current(), target, defaults);
+        self.update_head();
+    }
+
+    /// Replaces the current branch's part of the flattened run with `target`, keeping the
+    /// run before its fork point.
+    fn splice(&mut self, target: &Segment, defaults: Option<&[u8]>) {
+        target.append_to(
+            self.tree.current_branch().fork(),
+            &mut self.inputs,
+            &mut self.edits,
+            &mut self.hashes,
+            &mut self.checkpoints,
+            defaults,
+        );
         self.update_head();
     }
 

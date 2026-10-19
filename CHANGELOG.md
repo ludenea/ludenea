@@ -95,6 +95,10 @@ session (the editor's copy of each open document's session), and the plugin API.
   fork never takes the identifier of a branch redo put back. A redo entry of a version 2
   history redoes within its branch only where cutting the run after its tick leaves every
   child forking on it; otherwise it is dropped.
+- `Session::redo` of a recorded edit puts back only its branch's own part of the run,
+  after the run it forks from as it is now. After a tick 0 edit on a forked branch, it
+  rebuilt the ticks before the fork from the other branches' stale hashes. A branch part
+  recorded by a previous build resimulates from the branch's fork tick, not from tick 0.
 
 ### Control protocol
 
@@ -124,6 +128,9 @@ session (the editor's copy of each open document's session), and the plugin API.
   memory, and a fork after redoing one in a reloaded session could reuse a branch
   identifier, making a branch its own parent and hanging the game. A redo entry of a
   version 2 history redoes again where it cuts no branch off; it failed to decode.
+- `redo` of an edit on a branch keeps the recorded hashes of the ticks before the branch's
+  fork true. After a tick 0 edit on a forked branch they were stale, so a later
+  `load_session` on the same build reported a divergence that did not exist.
 
 ### Project protocol
 

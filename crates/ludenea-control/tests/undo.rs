@@ -739,6 +739,88 @@ fn undo_survives_export_and_resume_with_branches() {
     assert_eq!(branch_hashes(&mut session, &mut sim, BranchId(2)), nested);
 }
 
+/// Asserts that a fresh session of `session`'s scene and logs simulates every hash it
+/// recorded, and that resuming its export reports no divergence.
+fn assert_recorded_hashes_true(session: &Session) {
+    let export = session.export().unwrap();
+    let mut sim = simulation();
+    let mut fresh = Session::start(
+        &mut sim,
+        export.scene.clone(),
+        AssetTexts::new(),
+        Document::Scene,
+    )
+    .unwrap();
+    fresh
+        .load_inputs(&mut sim, InputLog::decode(&export.inputs).unwrap())
+        .unwrap();
+    fresh
+        .load_edits(&mut sim, EditLog::decode(&export.edits).unwrap())
+        .unwrap();
+    resimulate_all(&mut fresh, &mut sim);
+    fresh
+        .seek(&mut sim, export.hashes.len() as u64 - 1)
+        .unwrap();
+    assert_eq!(hashes(&fresh)[..export.hashes.len()], export.hashes);
+
+    let mut resumed = resume(&mut sim, export);
+    loop {
+        match resumed.resimulate(&mut sim, 256).unwrap() {
+            Resimulation::Done | Resimulation::Idle => break,
+            report => assert!(
+                !matches!(report, Resimulation::Diverged { .. }),
+                "{report:?}"
+            ),
+        }
+    }
+}
+
+#[test]
+fn redo_after_a_scene_edit_on_a_fork_keeps_recorded_hashes_true() {
+    let (mut sim, mut session) = started(200);
+    play(&mut session, &mut sim, 40);
+    // Branch 1 forks at tick 40 and plays on; the root keeps its future.
+    edit_at(&mut session, &mut sim, 40, 7);
+    play(&mut session, &mut sim, 20);
+    // A tick 0 edit on the branch: every stored branch, the root included, is stale.
+    edit_at(&mut session, &mut sim, 0, 99);
+    resimulate_all(&mut session, &mut sim);
+    // An edit at the branch's end extends it.
+    edit_at(&mut session, &mut sim, 60, 3);
+    session.undo(&mut sim).unwrap();
+
+    session.redo(&mut sim).unwrap();
+    resimulate_all(&mut session, &mut sim);
+
+    assert_eq!(session.current_branch(), BranchId(1));
+    assert_eq!(session.timeline().current, 60);
+    assert_recorded_hashes_true(&session);
+}
+
+#[test]
+fn a_redone_segment_of_a_previous_build_resimulates_from_its_fork() {
+    let (mut sim, mut session) = started(200);
+    play(&mut session, &mut sim, 40);
+    edit_at(&mut session, &mut sim, 40, 7);
+    play(&mut session, &mut sim, 20);
+    edit_at(&mut session, &mut sim, 60, 3);
+    session.undo(&mut sim).unwrap();
+    // A resume stands for a rebuild: the segment the undo stored holds hashes of the
+    // previous build.
+    let mut session = resume(&mut sim, session.export().unwrap());
+    resimulate_all(&mut session, &mut sim);
+
+    session.redo(&mut sim).unwrap();
+
+    // The run before the fork at tick 40 is resimulated already.
+    let timeline = session.timeline();
+    assert!(timeline.resimulating);
+    assert_eq!(timeline.current, 40);
+    resimulate_all(&mut session, &mut sim);
+    assert_eq!(session.timeline().current, 60);
+    assert_recorded_hashes_true(&session);
+}
+
 #[test]
 fn undo_history_version_2_decodes() {
     let (mut sim, mut session) = started(100);

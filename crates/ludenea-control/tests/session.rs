@@ -949,6 +949,35 @@ fn a_redo_whose_checkpoint_does_not_restore_changes_nothing() {
 }
 
 #[test]
+fn a_redo_of_a_previous_build_whose_checkpoint_does_not_restore_changes_nothing() {
+    let (mut sim, mut session) = poisoned_from_10_to_20();
+    play(&mut session, &mut sim, 30);
+    session.seek(&mut sim, 8).unwrap();
+    play(&mut session, &mut sim, 12);
+    let edit = stats_edit(&sim, 1_000);
+    session.edit(&mut sim, edit).unwrap();
+    play(&mut session, &mut sim, 20);
+    let edit = stats_edit(&sim, 2_000);
+    session.edit(&mut sim, edit).unwrap();
+    session.undo(&mut sim).unwrap();
+    // A resume stands for a rebuild: the redone run resimulates from its fork tick, 20.
+    let export = session.export().unwrap();
+    let mut session = Session::resume(&mut sim, export, Document::Scene).unwrap();
+    resimulate_all(&mut session, &mut sim);
+    let (before, at) = (session.export().unwrap(), session.timeline().current);
+
+    let error = session.redo(&mut sim).unwrap_err();
+
+    assert!(
+        matches!(error, SessionError::Checkpoint { tick: 16, .. }),
+        "{error:?}"
+    );
+    assert_eq!(session.export().unwrap(), before);
+    assert!(session.timeline().can_redo);
+    assert_at(&session, &sim, at);
+}
+
+#[test]
 fn a_panic_whose_tick_cannot_come_back_moves_to_tick_0() {
     let mut app = boxes::app();
     app.system(Sim, zero_rotation);
