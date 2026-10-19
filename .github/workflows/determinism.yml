@@ -40,6 +40,9 @@ jobs:
     env:
       # The golden tests (debug) write the snapshots around a divergence here, in a folder
       # per golden and thread count; the verify steps (release) write theirs under release/.
+      # ponytail: only the release verify records the failing run's trace, so a divergence in
+      # debug alone uploads its snapshots without one; record a trace in golden.rs's verify if
+      # debug and release ever disagree.
       LUDENEA_DUMP_DIR: ${{ github.workspace }}/dump
     steps:
       - uses: actions/checkout@v4
