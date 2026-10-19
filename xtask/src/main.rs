@@ -1,8 +1,8 @@
 //! Workspace tasks, run with `cargo xtask <task>`.
 //!
-//! `check` runs the checks CI runs on every platform alike: formatting (the engine and the
-//! desktop backend), clippy on the host and on WebAssembly, and the API documentation, with
-//! warnings denied. It stops at the first that fails.
+//! `check` runs the lint checks CI runs: formatting (the engine and the desktop backend),
+//! clippy on the host and on WebAssembly, and the API documentation, with warnings denied. It
+//! stops at the first that fails.
 //!
 //! `wasm-game <package> <out-dir>` builds a game library for the browser and writes its
 //! JavaScript glue (`game.js`) and module (`game_bg.wasm`) to `<out-dir>`.
@@ -133,6 +133,27 @@ fn target_dir() -> Result<PathBuf, Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
+    /// CI runs each check as a step of its own (the host clippy in the native jobs, the rest
+    /// once in the lint job), so a check added here must be added there too.
+    #[test]
+    fn ci_runs_every_check() {
+        let workflow = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../.github/workflows/determinism.yml"
+        ))
+        .unwrap();
+        for command in super::CHECKS {
+            let step = format!("run: cargo {command}");
+            assert!(
+                workflow
+                    .lines()
+                    .any(|line| line.trim_end().ends_with(&step)),
+                "the workflow has no `{step}` step"
+            );
+        }
+        assert!(workflow.contains("RUSTDOCFLAGS: -D warnings"));
+    }
+
     #[test]
     fn target_dir_is_where_cargo_builds() {
         let this_test = std::env::current_exe().unwrap().canonicalize().unwrap();

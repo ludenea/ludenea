@@ -46,9 +46,8 @@ Run the tests:
 cargo test --locked --workspace
 ```
 
-Run the checks CI runs once for every platform: formatting (the engine and the desktop
-backend), clippy on the host and on WebAssembly, and the API documentation, with warnings
-denied:
+Run the lint checks CI runs: formatting (the engine and the desktop backend), clippy on the
+host and on WebAssembly, and the API documentation, with warnings denied:
 
 ```sh
 cargo xtask check
