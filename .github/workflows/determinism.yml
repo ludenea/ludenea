@@ -37,30 +37,68 @@ jobs:
       matrix:
         os: [macos-14, ubuntu-24.04, windows-2025]
     runs-on: ${{ matrix.os }}
+    env:
+      # The golden tests (debug) write the snapshots around a divergence here, in a folder
+      # per golden and thread count; the verify steps (release) write theirs under release/.
+      LUDENEA_DUMP_DIR: ${{ github.workspace }}/dump
     steps:
       - uses: actions/checkout@v4
       - name: Install the pinned toolchain
         run: rustup toolchain install
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace
+      # A divergence fails the golden tests first, so the verify steps run after a failure
+      # too. Every thread count runs, even after one fails, and dumps into a folder of its own.
       - name: Verify the golden trace
+        if: success() || failure()
         shell: bash
         run: |
+          status=0
           for threads in 1 2 8; do
-            cargo run --locked --release -p boxes -- verify examples/boxes/assets/boxes.scene.ron --inputs examples/boxes/assets/boxes.inputs --golden golden/boxes.trace --threads $threads
+            dump="$LUDENEA_DUMP_DIR/release/boxes-golden-$threads-threads"
+            if ! cargo run --locked --release -p boxes -- verify examples/boxes/assets/boxes.scene.ron --inputs examples/boxes/assets/boxes.inputs --golden golden/boxes.trace --threads $threads --dump-dir "$dump"; then
+              status=1
+              # The failing run's trace over the golden's 10,000 ticks, to compare in the editor.
+              cargo run --locked --release -p boxes -- run examples/boxes/assets/boxes.scene.ron --inputs examples/boxes/assets/boxes.inputs --ticks 10000 --threads $threads --trace "$dump/boxes.trace"
+            fi
           done
+          exit $status
       - name: Verify the golden replay
+        if: success() || failure()
         shell: bash
         run: |
+          status=0
           for threads in 1 2 8; do
-            cargo run --locked --release -p boxes -- verify golden/spawner.replay --threads $threads
+            cargo run --locked --release -p boxes -- verify golden/spawner.replay --threads $threads --dump-dir "$LUDENEA_DUMP_DIR/release/boxes-spawner-$threads-threads" || status=1
           done
-      - name: Upload the divergence dump
+          exit $status
+      # One artifact per thread count, with the debug and the release dumps of that count.
+      - name: Upload the divergence dump at 1 thread
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: dump-${{ matrix.os }}
-          path: dump/
+          name: dump-${{ matrix.os }}-native-1-threads
+          path: |
+            dump/*-1-threads
+            dump/release/*-1-threads
+          if-no-files-found: ignore
+      - name: Upload the divergence dump at 2 threads
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dump-${{ matrix.os }}-native-2-threads
+          path: |
+            dump/*-2-threads
+            dump/release/*-2-threads
+          if-no-files-found: ignore
+      - name: Upload the divergence dump at 8 threads
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dump-${{ matrix.os }}-native-8-threads
+          path: |
+            dump/*-8-threads
+            dump/release/*-8-threads
           if-no-files-found: ignore
 
   wasm:
@@ -71,8 +109,26 @@ jobs:
         run: rustup toolchain install
       - uses: bytecodealliance/actions/wasmtime/setup@v1
       - run: cargo build --locked --release --target wasm32-wasip1 -p boxes --bin boxes
-      - run: wasmtime run --dir=. target/wasm32-wasip1/release/boxes.wasm verify examples/boxes/assets/boxes.scene.ron --inputs examples/boxes/assets/boxes.inputs --golden golden/boxes.trace
-      - run: wasmtime run --dir=. target/wasm32-wasip1/release/boxes.wasm verify golden/spawner.replay
+      # WebAssembly always runs on one thread. The game reaches only the working directory
+      # (--dir=.), so the dumps go to dump/ in it, a folder per golden.
+      - name: Verify the golden trace
+        run: |
+          dump=dump/boxes-golden-1-threads
+          if ! wasmtime run --dir=. target/wasm32-wasip1/release/boxes.wasm verify examples/boxes/assets/boxes.scene.ron --inputs examples/boxes/assets/boxes.inputs --golden golden/boxes.trace --dump-dir "$dump"; then
+            # The failing run's trace over the golden's 10,000 ticks, to compare in the editor.
+            wasmtime run --dir=. target/wasm32-wasip1/release/boxes.wasm run examples/boxes/assets/boxes.scene.ron --inputs examples/boxes/assets/boxes.inputs --ticks 10000 --trace "$dump/boxes.trace"
+            exit 1
+          fi
+      - name: Verify the golden replay
+        if: success() || failure()
+        run: wasmtime run --dir=. target/wasm32-wasip1/release/boxes.wasm verify golden/spawner.replay --dump-dir dump/boxes-spawner-1-threads
+      - name: Upload the divergence dump
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dump-ubuntu-24.04-wasm32-wasip1-1-threads
+          path: dump/
+          if-no-files-found: ignore
 
   editor:
     runs-on: ubuntu-24.04
