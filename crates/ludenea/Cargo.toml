@@ -16,3 +16,6 @@ serde.workspace = true
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 wasm-bindgen.workspace = true
+
+[dev-dependencies]
+ludenea-project.workspace = true

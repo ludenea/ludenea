@@ -20,7 +20,7 @@ use crate::prefab::{
     is_prefab_file, resolve,
 };
 
-const SCENE_VERSION: u32 = 2;
+pub const SCENE_VERSION: u32 = 2;
 
 /// Where an entity came from in the last loaded scene: a path of local identifiers, one
 /// element for a scene entity.

@@ -1566,6 +1566,7 @@ dependencies = [
  "ludenea-ecs",
  "ludenea-math",
  "ludenea-physics",
+ "ludenea-project",
  "ludenea-schema",
  "serde",
  "wasm-bindgen",

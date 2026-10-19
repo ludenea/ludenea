@@ -93,6 +93,25 @@ Run the benchmark:
 cargo run --locked --release -p boxes --bin bench
 ```
 
+## Versioning
+
+Every file format and protocol has a version. [`CHANGELOG.md`](CHANGELOG.md) lists each
+one's current version and the oldest version this build reads, and records every change to
+them, to the public Rust API, and to the plugin API, in the commit that makes it. The rules:
+
+- A reader reads the version before anything else, so a version it does not support is
+  refused as such, not as a malformed file.
+- Any change to an encoded type bumps its version; nothing is appended silently. Changes
+  accumulate under the next version, which is bumped once per release.
+- User files (scenes, prefabs, metas, replays, traces, snapshots, input logs, and edit
+  logs) stay readable one release back (N-1). A pure conversion from each older version to
+  the next one migrates them, like the edit log's `version_1` module.
+- Editor state (the stored session, its undo history, and its branch tree) may drop what
+  is older than N-1. A stored file the editor refuses is set aside, never overwritten.
+- The control and project protocols require the same version on both sides. Their changes
+  accumulate under the next version, which is bumped once per release; its changelog entry
+  lists the commands, messages, and fields that changed.
+
 ## Editor
 
 The editor opens a game project, runs the game, and records everything that happens
