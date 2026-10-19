@@ -1,0 +1,39 @@
+name: mutants
+
+# A state hash that misses a field hides a desync from every trace, replay and divergence
+# report, so the tests must catch every mutant of the canonical hash serializer. This runs
+# when the serializer or the tests that guard it change.
+on:
+  push:
+    branches: [main]
+    paths:
+      - crates/ludenea-ecs/src/hash.rs
+      - crates/ludenea-ecs/tests/**
+      - .github/workflows/mutants.yml
+  pull_request:
+    paths:
+      - crates/ludenea-ecs/src/hash.rs
+      - crates/ludenea-ecs/tests/**
+      - .github/workflows/mutants.yml
+
+permissions:
+  contents: read
+
+jobs:
+  hash:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install --locked cargo-mutants@27.1.0
+      # Fails on a mutant the tests miss or one that times out; a mutant that does not compile
+      # is reported as unviable and does not fail.
+      - run: cargo mutants --file crates/ludenea-ecs/src/hash.rs --cargo-arg=--locked
+      - name: Upload the mutants report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-hash
+          path: mutants.out

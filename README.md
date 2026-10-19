@@ -16,6 +16,8 @@ for any thread count. The guarantee rests on:
   WebAssembly under `wasmtime`;
 - a golden replay (`golden/spawner.replay`) of a scene with prefabs, a data
   asset, and edits to both, verified the same way;
+- a pinned hash of a value that holds every serde shape, and mutation testing
+  that proves the tests notice any field dropping out of the state hash;
 - lints that forbid platform-dependent floating point functions, wall-clock
   time, and unordered collections in simulation code;
 - a pinned toolchain and a committed `Cargo.lock`.
@@ -56,6 +58,14 @@ host and on WebAssembly, and the API documentation, with warnings denied:
 
 ```sh
 cargo xtask check
+```
+
+Check that the tests catch every mutant of the canonical state hash serializer, as the
+`mutants` workflow does when the serializer or the `ludenea-ecs` tests change (install the
+tool with `cargo install --locked cargo-mutants@27.1.0`):
+
+```sh
+cargo mutants --file crates/ludenea-ecs/src/hash.rs --cargo-arg=--locked
 ```
 
 Verify the golden trace natively (use `--threads 1`, `2`, or `8`):

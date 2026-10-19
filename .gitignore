@@ -12,3 +12,4 @@ editor/playwright-report/
 editor/packages/debug-draw-wasm/
 editor/apps/desktop/src-tauri/target/
 editor/apps/desktop/src-tauri/gen/
+/mutants.out*/
