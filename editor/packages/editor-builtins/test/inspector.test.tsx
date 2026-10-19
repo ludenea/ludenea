@@ -1,3 +1,4 @@
+import { definePlugin } from "@ludenea/editor-shell";
 import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { builtinPlugins } from "../src";
@@ -212,6 +213,45 @@ describe("inspector", () => {
 
     expect(component("ludenea::Collider").getByText("custom density 1")).toBeTruthy();
     expect(component("ludenea::Collider").queryByLabelText("density")).toBeNull();
+  });
+
+  it("a_custom_inspector_that_throws_falls_back_to_the_generic_fields", async () => {
+    let broken = true;
+    const Custom = ({ value }: { value: { density: number } }) => {
+      if (broken) throw new Error("value.shape.Box is undefined");
+      return <p>custom density {value.density}</p>;
+    };
+    // The editor build knows no component types; a project build would type this registration.
+    const plugin = definePlugin({ name: "my_game", activate: (editor) => void editor.inspectors.register("ludenea::Collider" as never, Custom as never) });
+    const host = await testEditor([...builtinPlugins, plugin]);
+    const game = await testGame(
+      (command) => {
+        if (command.type === "get_entity") return { type: "entity", entity, components: { "ludenea::Collider": json(collider) } };
+        if (command.type === "get_resources") return { type: "resources", resources: {} };
+        return { type: "done" };
+      },
+      { components: [{ name: "ludenea::Collider", schema: schemas.collider }] },
+    );
+    act(() => host.setControl(game.client));
+    act(() => host.editor.selection.getState().select([entity]));
+    renderPanel(host, "ludenea.inspector");
+    await settle();
+
+    const failure = 'The "ludenea::Collider" inspector of plugin "my_game" failed: value.shape.Box is undefined';
+    expect(component("ludenea::Collider").getByRole("alert").textContent).toContain(failure);
+    expect((component("ludenea::Collider").getByLabelText("density") as HTMLInputElement).value).toBe("1");
+    expect(host.editor.console.list().map(({ level, text }) => [level, text])).toEqual([["error", failure]]);
+
+    // Rendered again for another entity: still the fields, and no second report.
+    act(() => host.editor.selection.getState().select([{ index: 5, generation: 1 }]));
+    await settle();
+    expect(component("ludenea::Collider").getByLabelText("density")).toBeTruthy();
+    expect(host.editor.console.list()).toHaveLength(1);
+
+    broken = false;
+    act(() => component("ludenea::Collider").getByRole("button", { name: "Reload inspector" }).click());
+    expect(component("ludenea::Collider").getByText("custom density 1")).toBeTruthy();
+    expect(component("ludenea::Collider").queryByRole("alert")).toBeNull();
   });
 
   it("add_component_choice_follows_the_components_present", async () => {

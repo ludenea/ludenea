@@ -299,6 +299,12 @@ interface Editor {
     /** What the Console panel shows: plugins report their failures here, as the shell reports those of commands. */
     console: EditorConsole;
     onGameChanged(listener: (control: ControlClient | null) => void): Disposable;
+    /**
+     * The name of the plugin that registered `registration` (a panel, command, inspector,
+     * overlay, setting, decoration, or column, as given to `register`), `"editor"` for one
+     * registered outside an `activate`; undefined when it is not registered.
+     */
+    pluginOf(registration: object): string | undefined;
 }
 /** Registrations a panel lists, re-rendering when they change. */
 interface Observed<T> {
@@ -337,6 +343,28 @@ interface EditorConsole extends Observed<ConsoleEntry> {
  */
 function runReported(editor: Editor, id: string): Promise<string | null>;
 
+/** What a `PluginBoundary` caught: the line the editor console shows, and how to render the slot again. */
+interface PluginFailure {
+    text: string;
+    retry(): void;
+}
+interface PluginBoundaryProps {
+    editor: Editor;
+    /** What the slot renders, as the plugin registered it: a panel definition, an inspector, a decoration, or a column. */
+    registration: object;
+    /** The slot in a sentence, such as `The "Stats" panel`; the plugin's name follows it. */
+    name: string;
+    /** Shown instead of the slot once it threw; by default the failure and a "Reload panel" button. */
+    fallback?(failure: PluginFailure): ReactNode;
+    children?: ReactNode;
+}
+/**
+ * Renders plugin code so that what throws while rendering costs only its own slot: the slot
+ * shows `fallback` instead, and the editor console gets the failure once per registration.
+ * Another registration (the plugin reloaded) renders the slot again.
+ */
+function PluginBoundary(props: PluginBoundaryProps): ReactNode;
+
 /** `shift+ctrl+z`, `Ctrl+Shift+Z`, and `Control+Shift+z` all become `Ctrl+Shift+Z`; `Mod+S` becomes `Cmd+S` on macOS. */
 function normalizeShortcut(shortcut: string, mac?: boolean): string;
 /**
@@ -346,6 +374,6 @@ function normalizeShortcut(shortcut: string, mac?: boolean): string;
 function isEditorKey(event: KeyboardEvent): boolean;
 function isTextField(target: EventTarget | null): boolean;
 
-export { AssetFailure, DuplicateRegistration, definePlugin, isEditorKey, isTextField, normalizeShortcut, runReported };
-export type { AssetAccess, AssetTypes, BranchState, BranchStore, CommandDefinition, ComponentTypes, ConsoleEntry, ConsoleLocation, Disposable, DocumentState, DocumentStore, Editor, EditorConsole, EntityAccess, ExplorerColumn, FieldDecoration, InspectorComponent, Loaded, Observed, OpenDocument, OverlayContext, PanelDefinition, PluginDefinition, SelectionState, SelectionStore, SettingDefinition, TimelineState, TimelineStore, ViewportOverlay };
+export { AssetFailure, DuplicateRegistration, PluginBoundary, definePlugin, isEditorKey, isTextField, normalizeShortcut, runReported };
+export type { AssetAccess, AssetTypes, BranchState, BranchStore, CommandDefinition, ComponentTypes, ConsoleEntry, ConsoleLocation, Disposable, DocumentState, DocumentStore, Editor, EditorConsole, EntityAccess, ExplorerColumn, FieldDecoration, InspectorComponent, Loaded, Observed, OpenDocument, OverlayContext, PanelDefinition, PluginBoundaryProps, PluginDefinition, PluginFailure, SelectionState, SelectionStore, SettingDefinition, TimelineState, TimelineStore, ViewportOverlay };
 }

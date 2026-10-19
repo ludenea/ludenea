@@ -52,6 +52,32 @@ describe("registry", () => {
     );
   });
 
+  it("plugin_of_names_who_registered_a_value", async () => {
+    const { editor, loader } = await testHost();
+    const panel = { id: "combat.teams", title: "Teams", component: Empty };
+    const column = { id: "combat.team", title: "Team", width: 40, value: () => null };
+    loader.activate(
+      definePlugin({
+        name: "combat",
+        activate(editor) {
+          editor.panels.register(panel);
+          editor.inspectors.register("my_game::Health" as never, Empty);
+        },
+      }),
+    );
+    const later = editor.explorer.columns.register(column);
+
+    expect(editor.pluginOf(panel)).toBe("combat");
+    expect(editor.pluginOf(Empty)).toBe("combat");
+    expect(editor.pluginOf(column)).toBe("editor");
+    // An equal value is not the registered one.
+    expect(editor.pluginOf({ ...panel })).toBeUndefined();
+    later.dispose();
+    loader.deactivate("combat");
+    expect(editor.pluginOf(panel)).toBeUndefined();
+    expect(editor.pluginOf(column)).toBeUndefined();
+  });
+
   it("duplicate_command_id_names_both_plugins", async () => {
     const { editor, loader } = await testHost();
     const command = { id: "scene.save", title: "Save", run: () => {} };

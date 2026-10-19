@@ -17,6 +17,7 @@ export {
   type SettingDefinition,
   type ViewportOverlay,
 } from "./plugin";
+export { PluginBoundary, type PluginBoundaryProps, type PluginFailure } from "./layout/PluginBoundary";
 export { DuplicateRegistration } from "./registry";
 export { isEditorKey, isTextField, normalizeShortcut } from "./shortcuts";
 export type { BranchState, BranchStore } from "./stores/branches";

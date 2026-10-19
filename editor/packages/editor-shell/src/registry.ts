@@ -45,6 +45,12 @@ export class Collection<T> {
     return this.items.get(id)?.value;
   }
 
+  /** Who registered `value`; undefined when it is not registered here. */
+  ownerOf(value: unknown): string | undefined {
+    for (const item of this.items.values()) if (item.value === value) return item.owner;
+    return undefined;
+  }
+
   /** Every value in registration order; the same array until the next change. */
   values = (): T[] => this.snapshot;
 
@@ -89,6 +95,16 @@ export class Registry {
 
   owner(): string {
     return this.activation?.name ?? "editor";
+  }
+
+  /** Who registered `value`, of any kind but a shortcut; undefined when it is not registered. */
+  ownerOf(value: object): string | undefined {
+    const kinds = [this.panels, this.commands, this.inspectors, this.overlays, this.settings, this.decorations, this.columns];
+    for (const kind of kinds) {
+      const owner = kind.ownerOf(value);
+      if (owner !== undefined) return owner;
+    }
+    return undefined;
   }
 
   /** Wraps `dispose` once-only and charges it to the activating plugin. */

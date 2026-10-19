@@ -324,6 +324,15 @@ API.
 - A `refused` from the project service after the handshake (a message over its size limit)
   fails the requests `ProjectClient` is waiting on with the service's message, instead of
   `connection closed: ...` once the connection closes.
+- A plugin panel, custom inspector, field decoration, or explorer cell that throws while
+  rendering no longer unmounts the whole editor. The panel shows `The "<title>" panel of
+  plugin "<name>" failed: <message>` with a "Reload panel" button, a custom inspector falls
+  back to the generic fields, and a decoration or cell shows a mark; the editor console gets
+  the failure once per registration, and a new registration (the plugin rebuilt) renders
+  it again. The new `PluginBoundary` gives the same isolation to a plugin that renders other
+  plugins' registrations, and the new `Editor.pluginOf` names the plugin that registered a
+  value. `mountShell` reports the other render errors in the editor console, and one that
+  no boundary catches replaces the window with its message.
 
 ### Formats
 

@@ -36,6 +36,9 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** The line `report` logs: `<context> failed: <message>`. */
+export const failureText = (error: unknown, context: string) => `${context} failed: ${message(error)}`;
+
 export function createConsole(): EditorConsole {
   let entries: ConsoleEntry[] = [];
   let lastId = 0;
@@ -47,7 +50,7 @@ export function createConsole(): EditorConsole {
   return {
     log,
     report(error, context) {
-      const text = `${context} failed: ${message(error)}`;
+      const text = failureText(error, context);
       log("error", text);
       return text;
     },

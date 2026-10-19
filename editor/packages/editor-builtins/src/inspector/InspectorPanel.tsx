@@ -1,5 +1,5 @@
 import { ProtocolFailure, type AssetId, type ComponentValue, type ControlClient, type Entity, type FieldTarget, type JsonValue, type PathSegment, type Timeline, type TypeSchema } from "@ludenea/control-client";
-import type { Editor } from "@ludenea/editor-shell";
+import { PluginBoundary, type Editor, type PluginFailure } from "@ludenea/editor-shell";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { errorText, useGame, useStore, useUnsavedAsset } from "../shared";
 import { edit, ResimulatingNotice, useResimulating } from "../timeline/editing";
@@ -249,7 +249,10 @@ interface SectionProps {
   readOnly?: boolean;
 }
 
-/** One component or resource: its custom inspector, its schema-driven fields, or read-only text. */
+/**
+ * One component or resource: its custom inspector, its schema-driven fields, or read-only text.
+ * A custom inspector that throws gives way to the schema-driven fields.
+ */
 function Section({ editor, name, title, value, schema, edit, entity, state, focused = false, readOnly = false }: SectionProps) {
   const [error, setError] = useState<string | null>(null);
   const Custom = entity ? editor.inspectors.get(name) : undefined;
@@ -263,15 +266,33 @@ function Section({ editor, name, title, value, schema, edit, entity, state, focu
 
   let body;
   if (value.type === "ron") body = <RonText name={name} text={value.text} />;
-  else if (Custom && entity) {
-    const onChange = (path: PathSegment[], next: unknown) =>
-      void edit(path, next as JsonValue).then(
-        () => setError(null),
-        (failure) => setError(errorText(failure)),
+  else {
+    const generic = schema ? (
+      <Field schema={schema} value={value.value} path={[]} edit={edit} readOnly={readOnly} editor={editor} owner={entity && { entity, component: name }} />
+    ) : (
+      <pre>{JSON.stringify(value.value, null, 2)}</pre>
+    );
+    if (Custom && entity) {
+      const onChange = (path: PathSegment[], next: unknown) =>
+        void edit(path, next as JsonValue).then(
+          () => setError(null),
+          (failure) => setError(errorText(failure)),
+        );
+      const fallback = ({ text, retry }: PluginFailure) => (
+        <>
+          <p role="alert" className="ludenea-error">
+            {text} <button onClick={retry}>Reload inspector</button>
+          </p>
+          {generic}
+        </>
       );
-    body = <Custom value={value.value} entity={entity} onChange={onChange} />;
-  } else if (schema) body = <Field schema={schema} value={value.value} path={[]} edit={edit} readOnly={readOnly} editor={editor} owner={entity && { entity, component: name }} />;
-  else body = <pre>{JSON.stringify(value.value, null, 2)}</pre>;
+      body = (
+        <PluginBoundary editor={editor} registration={Custom} name={`The "${name}" inspector`} fallback={fallback}>
+          <Custom value={value.value} entity={entity} onChange={onChange} />
+        </PluginBoundary>
+      );
+    } else body = generic;
+  }
 
   return (
     <section aria-label={name} aria-current={focused || undefined} className="ludenea-component" onFocus={() => state?.set({ focused: name })}>

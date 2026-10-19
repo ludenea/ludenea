@@ -1,6 +1,7 @@
 import type { Entity, JsonValue, PathSegment, TypeSchema } from "@ludenea/control-client";
-import type { Editor, FieldDecoration } from "@ludenea/editor-shell";
+import { PluginBoundary, type Editor, type FieldDecoration } from "@ludenea/editor-shell";
 import { useSyncExternalStore, type ReactNode } from "react";
+import { failureMark } from "../../shared/FailureMark";
 import { defaultValue, variantValue } from "../default-value";
 import { AssetField, BoolField, EntityField, FieldRow, LargeIntegerField, NumberField, StringField, pathText, useCommit, type Edit } from "./inputs";
 
@@ -20,7 +21,10 @@ export interface FieldProps {
 const field = (name: string): PathSegment => ({ type: "field", name });
 const index = (index: number): PathSegment => ({ type: "index", index });
 
-/** One value rendered from its schema, with the decorations beside it; every change goes through `edit` with its path. */
+/**
+ * One value rendered from its schema, with the decorations beside it; every change goes through
+ * `edit` with its path. A decoration that throws shows a mark instead.
+ */
 export function Field(props: FieldProps) {
   const { editor, owner, path } = props;
   const { subscribe, list } = editor.inspectors.decorations;
@@ -33,7 +37,9 @@ export function Field(props: FieldProps) {
       </div>
       <span className="ludenea-decorations">
         {decorations.map((decoration) => (
-          <Decoration key={decoration.id} decoration={decoration} editor={editor} {...owner} path={path} />
+          <PluginBoundary key={decoration.id} editor={editor} registration={decoration} name={`The "${decoration.id}" decoration`} fallback={failureMark}>
+            <Decoration decoration={decoration} editor={editor} {...owner} path={path} />
+          </PluginBoundary>
         ))}
       </span>
     </div>

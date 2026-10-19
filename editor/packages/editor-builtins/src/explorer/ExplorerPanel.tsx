@@ -1,8 +1,9 @@
-import type { ControlClient } from "@ludenea/control-client";
-import type { Editor } from "@ludenea/editor-shell";
+import type { ControlClient, Entity } from "@ludenea/control-client";
+import { PluginBoundary, type Editor, type ExplorerColumn } from "@ludenea/editor-shell";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { useGame, useStore, type Store } from "../shared";
 import { EntityList, entityKey } from "../shared/EntityList";
+import { failureMark } from "../shared/FailureMark";
 import { Introspection, type IntrospectionTab } from "./Introspection";
 
 const TABS = ["Entities", "Schedule", "Events", "Commands"] as const;
@@ -37,7 +38,7 @@ function Entities({ editor, control, state }: { editor: Editor; control: Control
   const [error, setError] = useState<string | null>(null);
   const columns = useSyncExternalStore(editor.explorer.columns.subscribe, editor.explorer.columns.list);
   // A column whose values changed: the rows read them again.
-  const [, setValues] = useState(0);
+  const [values, setValues] = useState(0);
   useEffect(() => {
     const stops = columns.map((column) => column.subscribe?.(() => setValues((version) => version + 1)));
     return () => stops.forEach((stop) => stop?.());
@@ -82,7 +83,10 @@ function Entities({ editor, control, state }: { editor: Editor; control: Control
               </span>
               {columns.map((column) => (
                 <span key={column.id} className="ludenea-column" style={{ width: column.width }}>
-                  {column.value(row.entity)}
+                  {/* A cell that threw tries again for another entity in its row, or new values. */}
+                  <PluginBoundary key={`${entityKey(row.entity)} ${values}`} editor={editor} registration={column} name={`The "${column.title}" explorer column`} fallback={failureMark}>
+                    <ColumnValue column={column} entity={row.entity} />
+                  </PluginBoundary>
                 </span>
               ))}
             </>
@@ -91,4 +95,9 @@ function Entities({ editor, control, state }: { editor: Editor; control: Control
       </div>
     </div>
   );
+}
+
+/** `value` read while rendering, inside the cell's boundary. */
+function ColumnValue({ column, entity }: { column: ExplorerColumn; entity: Entity }) {
+  return column.value(entity);
 }

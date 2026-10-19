@@ -5,12 +5,14 @@ import { CommandPalette } from "../palette/CommandPalette";
 import type { Disposable, PanelDefinition } from "../plugin";
 import type { Registry } from "../registry";
 import { installShortcuts } from "../shortcuts";
+import { PluginBoundary } from "./PluginBoundary";
 
 const HostContext = createContext<EditorHost | null>(null);
 
 /**
  * Dockview keeps a hidden tab's component mounted; a plugin panel is unmounted instead, so its
- * subscriptions (and the host's recording behind them) last only while it shows.
+ * subscriptions (and the host's recording behind them) last only while it shows. One that
+ * throws while rendering shows its failure in its place.
  */
 function PluginPanel({ params, api }: IDockviewPanelProps<{ id: string }>) {
   const host = useContext(HostContext)!;
@@ -23,7 +25,12 @@ function PluginPanel({ params, api }: IDockviewPanelProps<{ id: string }>) {
     },
     () => api.isVisible,
   );
-  return panel && visible ? <panel.component editor={host.editor} /> : null;
+  if (!panel || !visible) return null;
+  return (
+    <PluginBoundary editor={host.editor} registration={panel} name={`The "${panel.title}" panel`}>
+      <panel.component editor={host.editor} />
+    </PluginBoundary>
+  );
 }
 
 const COMPONENTS = { plugin: PluginPanel };

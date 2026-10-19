@@ -251,6 +251,13 @@ export default definePlugin({
 `editor.console` writes to the Console panel: `log` shows a message, `report` a failure.
 A command that fails from the palette or a shortcut is reported there under its title.
 
+A panel, custom inspector, field decoration, or explorer column that throws while rendering
+costs only its own place: a panel shows the failure with a "Reload panel" button, a custom
+inspector gives way to the generic fields, and a decoration or cell shows a mark. The failure
+is reported in the Console once, naming the plugin (`editor.pluginOf`), and a new
+registration (the plugin rebuilt) renders it again. A plugin that renders other plugins'
+registrations wraps each in `PluginBoundary` for the same isolation.
+
 ### Development
 
 The front end lives in `editor/` (pnpm workspace; Node.js 24 and the pnpm version in

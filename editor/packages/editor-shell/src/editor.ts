@@ -62,6 +62,12 @@ export interface Editor {
   /** What the Console panel shows: plugins report their failures here, as the shell reports those of commands. */
   console: EditorConsole;
   onGameChanged(listener: (control: ControlClient | null) => void): Disposable;
+  /**
+   * The name of the plugin that registered `registration` (a panel, command, inspector,
+   * overlay, setting, decoration, or column, as given to `register`), `"editor"` for one
+   * registered outside an `activate`; undefined when it is not registered.
+   */
+  pluginOf(registration: object): string | undefined;
 }
 
 /** What the application holding the editor uses beyond the `Editor` plugins see. */
@@ -195,6 +201,7 @@ export function createEditor(options: {
       gameListeners.add(entry);
       return registry.own(() => gameListeners.delete(entry));
     },
+    pluginOf: (registration) => registry.ownerOf(registration),
   };
 
   // A divergence the game reported belongs to the document open then.
