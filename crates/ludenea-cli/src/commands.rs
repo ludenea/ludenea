@@ -1,5 +1,6 @@
 use std::fs;
 use std::io::Write;
+use std::num::{IntErrorKind, ParseIntError};
 use std::path::{Path, PathBuf};
 
 use clap::Args;
@@ -89,9 +90,27 @@ fn simulation(app: fn() -> App, threads: Option<usize>) -> Result<Simulation, St
     Ok(sim)
 }
 
+/// The help of `--threads`, from the limit the pool enforces.
+fn threads_help() -> String {
+    format!(
+        "Threads for the game, from 1 to {}; results never depend on the count",
+        Parallel::MAX_THREADS
+    )
+}
+
 /// Parses `--threads`, refusing a count no pool takes before any thread starts.
 fn thread_count(value: &str) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
-    let threads = value.parse()?;
+    let threads = value
+        .parse()
+        .map_err(|error: ParseIntError| match error.kind() {
+            // Too large for a `usize`, so `Parallel::check` cannot name it: same refusal.
+            IntErrorKind::PosOverflow => format!(
+                "cannot start {value} threads: outside the supported range; use 1 to {}",
+                Parallel::MAX_THREADS
+            )
+            .into(),
+            _ => Box::new(error) as Box<dyn std::error::Error + Send + Sync>,
+        })?;
     Parallel::check(threads)?;
     Ok(threads)
 }
@@ -211,8 +230,7 @@ pub struct RunArgs {
     inputs: Option<PathBuf>,
     #[arg(long)]
     ticks: u32,
-    /// Threads for the game, from 1 to 256; results never depend on the count.
-    #[arg(long, value_parser = thread_count)]
+    #[arg(long, value_parser = thread_count, help = threads_help())]
     threads: Option<usize>,
     /// Print the final state hash.
     #[arg(long)]
@@ -234,8 +252,7 @@ pub struct VerifyArgs {
     inputs: Option<PathBuf>,
     #[arg(long)]
     golden: Option<PathBuf>,
-    /// Threads for the game, from 1 to 256; results never depend on the count.
-    #[arg(long, value_parser = thread_count)]
+    #[arg(long, value_parser = thread_count, help = threads_help())]
     threads: Option<usize>,
     /// Where to write the snapshots around the first mismatch.
     #[arg(long, default_value = "dump")]

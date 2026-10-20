@@ -247,7 +247,8 @@ fn too_many_threads_is_refused() {
     let dir = dir("too_many_threads");
     record_replay(&dir);
     // 257 first: before thread counts were checked, 100000 tried to start every thread.
-    for threads in ["257", "100000"] {
+    // The last one does not fit in a usize.
+    for threads in ["257", "100000", "99999999999999999999"] {
         for args in [
             &["run", "{}/scene.ron", "--ticks", "1", "--threads", threads][..],
             &["verify", "{}/run.replay", "--threads", threads],
