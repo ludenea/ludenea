@@ -327,20 +327,6 @@ impl Session {
         Ok(Session::loaded(sim, scene, assets, document, warnings))
     }
 
-    /// Loads `scene`, a scene file that reaches no asset, at tick 0 with empty logs: only
-    /// its load can fail, as `start` does for such a scene.
-    pub(crate) fn start_scene(sim: &mut Simulation, scene: String) -> Result<Session, SceneError> {
-        let assets = AssetTexts::new();
-        let load = sim.load_scene_with(&scene, &assets)?;
-        Ok(Session::loaded(
-            sim,
-            scene,
-            assets,
-            Document::Scene,
-            load.warnings,
-        ))
-    }
-
     /// A session at tick 0 with empty logs on the scene `sim` just loaded.
     fn loaded(
         sim: &Simulation,

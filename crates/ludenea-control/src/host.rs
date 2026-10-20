@@ -75,7 +75,13 @@ impl Host {
     pub fn new(build: fn() -> App) -> Result<Host, AppError> {
         let mut simulation = build().build()?;
         let scene = simulation.save_scene()?;
-        let session = Session::start_scene(&mut simulation, scene)?;
+        let started = Session::start(&mut simulation, scene, Default::default(), Document::Scene);
+        let session = match started {
+            Ok(session) => session,
+            Err(SessionError::Scene(error)) => return Err(error.into()),
+            // A start fails otherwise only on the text of a prefab document.
+            Err(other) => unreachable!("a scene document fails only to load: {other}"),
+        };
         Ok(Host {
             build,
             compare: None,
