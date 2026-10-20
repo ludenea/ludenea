@@ -17,7 +17,9 @@ for any thread count. The guarantee rests on:
 - a golden replay (`golden/spawner.replay`) of a scene with prefabs, a data
   asset, and edits to both, verified the same way;
 - a pinned hash of a value that holds every serde shape, and mutation testing
-  that proves the tests notice any field dropping out of the state hash;
+  that checks the tests catch every mutant that `cargo-mutants` generates, and
+  that compiles, in the serializer the state hash is computed with
+  (`crates/ludenea-ecs/src/hash.rs`);
 - lints that forbid platform-dependent floating point functions, wall-clock
   time, and unordered collections in simulation code;
 - a pinned toolchain and a committed `Cargo.lock`.
