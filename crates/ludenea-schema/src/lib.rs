@@ -415,6 +415,30 @@ tuple!(A, B, C, D);
 ///     Branch(Vec<Self>),
 /// }
 /// ```
+///
+/// Likewise inside an array and an option.
+///
+/// ```compile_fail
+/// use ludenea_schema::Schema;
+///
+/// #[derive(Schema)]
+/// struct Grid {
+///     rows: Vec<[Option<Self>; 2]>,
+/// }
+/// ```
+///
+/// Likewise inside a tuple, as a map's value.
+///
+/// ```compile_fail
+/// use std::collections::BTreeMap;
+///
+/// use ludenea_schema::Schema;
+///
+/// #[derive(Schema)]
+/// struct Node {
+///     children: BTreeMap<String, (u8, Node)>,
+/// }
+/// ```
 #[cfg(doctest)]
 struct _CompileFail;
 
