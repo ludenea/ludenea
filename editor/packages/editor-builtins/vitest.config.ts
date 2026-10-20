@@ -14,5 +14,5 @@ export default defineConfig({
   // default. Without this a run with a cold module cache (after an install or a build) cannot
   // load it; later runs only passed because they reused the cached transform.
   server: { fs: { allow: [searchForWorkspaceRoot(process.cwd()), fileURLToPath(new URL("../../../crates", import.meta.url))] } },
-  test: { name: "editor-builtins", environment: "jsdom" },
+  test: { name: "editor-builtins", environment: "jsdom", setupFiles: ["./test/setup.ts"] },
 });
