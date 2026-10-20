@@ -2,6 +2,8 @@
 //! current value, so a version bump without its changelog entry fails.
 
 const CHANGELOG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../CHANGELOG.md");
+/// The engine's crates, whose sources declare the version constants.
+const CRATES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/..");
 /// The editor's stored session format, whose version is a TypeScript constant.
 const STORED_SESSION: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -28,6 +30,14 @@ fn every_format_version_is_in_the_changelog() {
         ("STORED_SESSION_VERSION", stored_session_version()),
     ];
     constants.sort();
+    let mut listed: Vec<&str> = constants.iter().map(|(name, _)| *name).collect();
+    listed.retain(|name| *name != "STORED_SESSION_VERSION");
+    assert_eq!(
+        listed,
+        declared_versions(),
+        "the constants listed here (left) and the `pub const *_VERSION` of the crates (right) \
+         differ: list the new constant"
+    );
     let changelog = std::fs::read_to_string(CHANGELOG)
         .unwrap_or_else(|error| panic!("{CHANGELOG} cannot be read: {error}"));
     assert_eq!(
@@ -36,6 +46,30 @@ fn every_format_version_is_in_the_changelog() {
         "the table of {CHANGELOG} (left) and the version constants (right) differ: \
          update the table and record the change under Unreleased"
     );
+}
+
+/// The names of the `pub const <NAME>_VERSION` declared in the sources of the crates, sorted.
+fn declared_versions() -> Vec<String> {
+    fn scan(directory: &std::path::Path, names: &mut Vec<String>) {
+        let entries = std::fs::read_dir(directory)
+            .unwrap_or_else(|error| panic!("{} cannot be read: {error}", directory.display()));
+        for entry in entries {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                scan(&path, names);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                let source = std::fs::read_to_string(&path).unwrap();
+                names.extend(source.lines().filter_map(|line| {
+                    let name = line.trim().strip_prefix("pub const ")?.split(':').next()?;
+                    name.ends_with("_VERSION").then(|| name.to_string())
+                }));
+            }
+        }
+    }
+    let mut names = Vec::new();
+    scan(std::path::Path::new(CRATES), &mut names);
+    names.sort();
+    names
 }
 
 /// The value of `export const STORED_SESSION_VERSION = <n>;` in the editor's source.
