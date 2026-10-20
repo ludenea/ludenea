@@ -84,6 +84,7 @@ fn tilemap_with_wrong_tile_count_is_refused_naming_the_counts() {
         &AssetTexts::new(),
     );
     assert!(error.contains("ludenea::Tilemap"), "{error}");
+    assert!(error.contains("entity 0"), "{error}");
     assert!(
         error.contains("tiles has 3 entries, but width 2 by height 2 needs 4"),
         "{error}"

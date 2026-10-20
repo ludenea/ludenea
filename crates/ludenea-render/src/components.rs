@@ -1,6 +1,7 @@
 //! The simulated render components: what an entity draws and how the camera looks at the
 //! world. They are part of the state hash, so a replay shows the same frames.
 
+use ludenea_app::Time;
 use ludenea_draw::Color;
 use ludenea_ecs::{AssetId, Component, Handle};
 use ludenea_math::Vec2;
@@ -40,6 +41,10 @@ impl Default for Sprite {
 
 /// Plays `clip` of `sheet` on the entity's `Sprite` from the tick `started`: the `animate`
 /// system writes the sprite's texture and frame every tick.
+///
+/// `started` counts in `Time.tick`, the steps completed before the current one: a system
+/// starting a clip during a step writes `Time.tick` as it is. `Teleported::tick` counts
+/// render frames instead, one ahead during a step; `Teleported::this_step` writes it.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[component(name = "ludenea::SpriteAnimation")]
 pub struct SpriteAnimation {
@@ -195,14 +200,27 @@ impl TryFrom<TilemapData> for Tilemap {
 }
 
 /// The entity moved without travelling: the render frame whose tick is `tick` is not
-/// interpolated from the one before. A system teleporting an entity writes
-/// `Time.tick + 1`: during a step, `Time.tick` counts the steps completed before it, and the
-/// frame showing that step's result has the tick after it (`Simulation::tick` once the
-/// step ends).
+/// interpolated from the one before.
+///
+/// `tick` counts render frames, not `Time.tick`: during a step, `Time.tick` counts the steps
+/// completed before it, and the frame showing that step's result has the tick after it
+/// (`Simulation::tick` once the step ends). A system teleporting an entity during a step
+/// writes `Teleported::this_step(&time)`, which holds `Time.tick + 1`, whereas
+/// `SpriteAnimation::started` takes `Time.tick` as it is.
 #[derive(Component, Serialize, Deserialize, Copy, Clone, Debug, PartialEq)]
 #[component(name = "ludenea::Teleported")]
 pub struct Teleported {
     pub tick: u64,
+}
+
+impl Teleported {
+    /// The entity teleports during the step `time` is the clock of: the frame showing the
+    /// result of that step is not interpolated.
+    pub fn this_step(time: &Time) -> Self {
+        Teleported {
+            tick: time.tick.saturating_add(1),
+        }
+    }
 }
 
 /// NaN fails the comparison.

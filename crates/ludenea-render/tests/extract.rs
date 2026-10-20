@@ -77,20 +77,26 @@ fn sprites_are_extracted_sorted_by_layer_order_and_entity() {
     assert!(frame.warnings.is_empty(), "{:?}", frame.warnings);
 }
 
-#[test]
-fn tilemaps_are_extracted_from_their_pose() {
-    let mut simulation = simulation();
-    let entity = spawn(&mut simulation, Some(Vec2::new(-4.0, -3.0)));
-    let tilemap = Tilemap {
+fn tilemap(layer: &str) -> Tilemap {
+    Tilemap {
         tileset: AssetId(9),
         cell_size: Vec2::new(1.0, 1.0),
         width: 2,
         height: 1,
         tiles: vec![Some(3), None],
-        layer: "background".into(),
+        layer: layer.into(),
         order: 2,
-    };
-    simulation.world_mut().insert(entity, tilemap).unwrap();
+    }
+}
+
+#[test]
+fn tilemaps_are_extracted_from_their_pose() {
+    let mut simulation = simulation();
+    let entity = spawn(&mut simulation, Some(Vec2::new(-4.0, -3.0)));
+    simulation
+        .world_mut()
+        .insert(entity, tilemap("background"))
+        .unwrap();
     let frame = frame(&simulation);
     let [item] = frame.tilemaps.as_slice() else {
         panic!("expected one tilemap, got {:?}", frame.tilemaps);
@@ -101,6 +107,42 @@ fn tilemaps_are_extracted_from_their_pose() {
     );
     assert_eq!(item.position, Vec2::new(-4.0, -3.0));
     assert_eq!(item.tiles, [Some(3), None]);
+}
+
+#[test]
+fn tilemap_without_pose_warns() {
+    let mut simulation = simulation();
+    let entity = spawn(&mut simulation, None);
+    simulation
+        .world_mut()
+        .insert(entity, tilemap("world"))
+        .unwrap();
+    let frame = frame(&simulation);
+    assert!(frame.tilemaps.is_empty());
+    assert_eq!(
+        frame.warnings,
+        [format!(
+            "entity {entity}: has a Tilemap but no Pose, so it is not drawn; add a Pose"
+        )]
+    );
+}
+
+#[test]
+fn tilemap_on_an_undeclared_layer_is_skipped_with_a_warning_listing_layers() {
+    let mut simulation = simulation();
+    let entity = spawn(&mut simulation, Some(Vec2::ZERO));
+    simulation
+        .world_mut()
+        .insert(entity, tilemap("foreground"))
+        .unwrap();
+    let frame = frame(&simulation);
+    assert!(frame.tilemaps.is_empty());
+    assert_eq!(
+        frame.warnings,
+        [format!(
+            "entity {entity}: tilemap layer `foreground` is not declared; declared layers: `background`, `world`"
+        )]
+    );
 }
 
 fn camera(simulation: &mut Simulation, position: Vec2, view: Vec2) -> Entity {
@@ -315,12 +357,7 @@ fn teleport_at_tick_1(
     }
     for (entity, pose) in poses.iter_mut() {
         pose.position = Vec2::new(10.0, 0.0);
-        commands.insert(
-            entity,
-            Teleported {
-                tick: time.tick + 1,
-            },
-        );
+        commands.insert(entity, Teleported::this_step(&time));
     }
 }
 

@@ -64,7 +64,9 @@ hash, those of the golden trace and replays included.
   components, all in the state hash: `Sprite` (texture, frame, layer, order, flips, tint),
   `SpriteAnimation` (a clip of a `SpriteSheet` from a tick, looping or holding its last
   frame), `Camera2d` (centred on the entity's `Pose`, `view` the minimum visible area),
-  `Tilemap` and `Teleported`, plus the `SpriteSheet` data asset of named `Clip`s. The
+  `Tilemap` and `Teleported` (its tick is the render frame's, `Time.tick + 1` during a
+  step, which `Teleported::this_step(&time)` writes, while `SpriteAnimation::started`
+  takes `Time.tick`), plus the `SpriteSheet` data asset of named `Clip`s. The
   prelude exports `Sprite`, `SpriteAnimation`, `SpriteSheet`, `Clip`, `Camera2d`,
   `Tilemap`, `Teleported` and `RenderPlugin`.
   `RenderPlugin` registers them with `Pose`, the `animate` system (set `render::Animate`,

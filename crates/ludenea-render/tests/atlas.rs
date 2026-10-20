@@ -332,7 +332,10 @@ fn textures_sharing_an_identifier_are_all_refused() {
         id: AssetId(1),
         path: Some(path.to_string()),
     };
-    assert_eq!(atlas.errors, [duplicate("art/a.png"), duplicate("art/b.png")]);
+    assert_eq!(
+        atlas.errors,
+        [duplicate("art/a.png"), duplicate("art/b.png")]
+    );
     let message = atlas.errors[0].to_string();
     for part in [&AssetId(1).to_string(), "art/a.png", "identifier"] {
         assert!(message.contains(part), "{message} names {part}");

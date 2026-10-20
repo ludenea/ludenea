@@ -9,6 +9,10 @@ use crate::components::{Camera2d, Sprite, SpriteAnimation, Teleported, Tilemap};
 use crate::sheet::{SpriteSheet, quoted};
 
 /// The extractor `RenderPlugin` registers.
+///
+/// Every `Query::new` below succeeds, so its error is not reported: `RenderPlugin`
+/// registers each component it reads, and an extractor holds the world's only borrow. A
+/// world without them, outside the plugin, has nothing of the plugin to draw.
 pub fn extract(world: &World, frame: &mut RenderFrame) {
     extract_camera(world, frame);
     extract_sprites(world, frame);
