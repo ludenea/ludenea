@@ -92,11 +92,12 @@ export function ViewportPanel({ editor, state, failedOverlays }: { editor: Edito
       inFlight = true;
       dirty = false;
       control
-        .request({ type: "get_debug_draw", layers: visibleLayers(control, state) })
+        .request({ type: "get_render_frame", debug_layers: visibleLayers(control, state) })
         .then(
-          ({ tick, frame }) => {
+          // The viewport draws the debug drawing only until it moves to the new renderer.
+          ({ frame }) => {
             fetching.worked();
-            if (!disposed && editor.control === control) state.set({ frame, tick });
+            if (!disposed && editor.control === control) state.set({ frame: frame.debug, tick: frame.tick });
           },
           // A game being replaced refuses its last request: only the current game's failures count.
           (error) => {

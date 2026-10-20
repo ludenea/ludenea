@@ -13,7 +13,7 @@ this table in the same commit.
 
 | Format                 | Constant                   | Current | Oldest readable               |
 | ---------------------- | -------------------------- | ------- | ----------------------------- |
-| Control protocol       | `PROTOCOL_VERSION`         | 4       | 4                             |
+| Control protocol       | `PROTOCOL_VERSION`         | 5       | 5                             |
 | Project protocol       | `PROJECT_PROTOCOL_VERSION` | 4       | 4                             |
 | Scene (`.scene.ron`)   | `SCENE_VERSION`            | 2       | 1                             |
 | Prefab (`.prefab.ron`) | `PREFAB_VERSION`           | 1       | 1                             |
@@ -298,7 +298,12 @@ hash, those of the golden trace and replays included.
 
 ### Control protocol
 
-- Control protocol 4, fingerprint `448e51fb92eb35de`.
+- Control protocol 5, fingerprint `962a4b252c15a970`. Breaking: `get_render_frame`
+  (`debug_layers`) replaces `get_debug_draw` (`layers`), and its reply `render_frame`
+  (`frame`) replaces `debug_draw` (`tick`, `frame`). The frame is the `RenderFrame` of the
+  current tick: its tick, camera, render layers, sprites, tilemaps, the entities teleported
+  this tick, and warnings, with the debug drawing of `debug_layers` in `frame.debug`.
+  `get_ghost_draw` is unchanged.
 - Over `host --stdio` and in a browser worker, the events a request causes come before its
   response, not after the response to a later request: a `load_session` sent right after
   `load_scene` answered could be followed by the scene's `timeline_changed` (head 0), which
@@ -417,7 +422,7 @@ hash, those of the golden trace and replays included.
 - The `system_panicked` message and the console name the system and the source location,
   ``the game panicked at tick 3 in system `game::spawn`: ... (src/lib.rs:88:14)``, and
   the `panicked` pause reason gives the message as ``... (in system `game::spawn`,
-  src/lib.rs:88:14)``. `pick` and `get_debug_draw` give that form too, instead of "the
+  src/lib.rs:88:14)``. `pick` and `get_render_frame` give that form too, instead of "the
   game panicked while picking" and "while drawing debug layers". A browser game's crash
   message gives the location as `(file:line:column)` like a native one, not
   `at file:line`.

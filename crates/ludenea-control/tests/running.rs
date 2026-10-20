@@ -918,8 +918,8 @@ fn a_panicking_picker_or_debug_drawer_fails_its_command_and_keeps_the_host() {
         })
         .unwrap_err();
     let drawn = host
-        .handle(Command::GetDebugDraw {
-            layers: vec!["broken".to_string()],
+        .handle(Command::GetRenderFrame {
+            debug_layers: vec!["broken".to_string()],
         })
         .unwrap_err();
 

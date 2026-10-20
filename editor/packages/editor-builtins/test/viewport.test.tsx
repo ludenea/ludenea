@@ -5,7 +5,7 @@ import { viewportPlugin } from "../src/viewport";
 import { shared } from "../src/shared";
 import { bounds, screenToWorld, worldToScreen, zoomAt } from "../src/viewport/camera";
 import { renderers } from "./fake-renderer";
-import { renderPanel, settle, testEditor, testGame } from "./support";
+import { renderFrame, renderPanel, settle, testEditor, testGame } from "./support";
 
 const entity = (index: number): Entity => ({ index, generation: 0 });
 const size = { width: 400, height: 300 };
@@ -32,7 +32,7 @@ beforeAll(() => {
 
 async function viewport(answer: (command: Command) => object | undefined = () => undefined, info: Partial<GameInfo> = {}) {
   const host = await testEditor([viewportPlugin]);
-  const game = await testGame((command) => answer(command) ?? (command.type === "get_debug_draw" ? { type: "debug_draw", tick: 7, frame: { layers: {} } } : { type: "done" }), {
+  const game = await testGame((command) => answer(command) ?? (command.type === "get_render_frame" ? renderFrame(7) : { type: "done" }), {
     debug_layers: ["colliders", "contacts"],
     ...info,
   });
@@ -190,7 +190,7 @@ describe("viewport", () => {
 
   it("a_drag_moves_every_selected_entity_by_the_same_offset", async () => {
     const { host, game, view } = await viewport((command) => {
-      if (command.type === "get_debug_draw") return { type: "debug_draw", tick: 7, frame: { layers: { colliders: [...circleOf(1, 1, 1).layers.colliders!, ...circleOf(2, -1, 1).layers.colliders!] } } };
+      if (command.type === "get_render_frame") return renderFrame(7, { layers: { colliders: [...circleOf(1, 1, 1).layers.colliders!, ...circleOf(2, -1, 1).layers.colliders!] } });
       if (command.type === "pick") return { type: "picked", entities: [entity(2)] };
       if (command.type === "get_entity") return { type: "entity", entity: command.entity, components: { "ludenea::Pose": pose((command.entity as Entity).index, 1) } };
       return undefined;
@@ -219,17 +219,17 @@ describe("viewport", () => {
     const { host, game } = await viewport();
     const toggles = () => host.editor.commands.list().map((command) => command.id).filter((id) => id.startsWith("viewport.toggle-layer."));
     expect(toggles()).toEqual(["viewport.toggle-layer.colliders", "viewport.toggle-layer.contacts"]);
-    await waitFor(() => expect(sentOf(game.sent, "get_debug_draw").at(-1)).toEqual({ type: "get_debug_draw", layers: ["colliders", "contacts"] }));
+    await waitFor(() => expect(sentOf(game.sent, "get_render_frame").at(-1)).toEqual({ type: "get_render_frame", debug_layers: ["colliders", "contacts"] }));
 
     await act(() => host.editor.commands.run("viewport.toggle-layer.colliders"));
-    await waitFor(() => expect(sentOf(game.sent, "get_debug_draw").at(-1)).toEqual({ type: "get_debug_draw", layers: ["contacts"] }));
+    await waitFor(() => expect(sentOf(game.sent, "get_render_frame").at(-1)).toEqual({ type: "get_render_frame", debug_layers: ["contacts"] }));
     // The layers the built-in plugins share are the viewport's: a change there is drawn.
     act(() => shared(host.editor).layers.set({ hidden: ["contacts"] }));
-    await waitFor(() => expect(sentOf(game.sent, "get_debug_draw").at(-1)).toEqual({ type: "get_debug_draw", layers: ["colliders"] }));
+    await waitFor(() => expect(sentOf(game.sent, "get_render_frame").at(-1)).toEqual({ type: "get_render_frame", debug_layers: ["colliders"] }));
     await act(() => host.editor.commands.run("viewport.toggle-layer.colliders"));
     expect(shared(host.editor).layers.get().hidden).toEqual(["contacts", "colliders"]);
 
-    const other = await testGame(() => ({ type: "debug_draw", tick: 0, frame: { layers: {} } }), { debug_layers: ["aabbs"] });
+    const other = await testGame(() => renderFrame(0), { debug_layers: ["aabbs"] });
     act(() => host.setControl(other.client));
     expect(toggles()).toEqual(["viewport.toggle-layer.aabbs"]);
   });
@@ -239,7 +239,7 @@ describe("viewport", () => {
       layers: { colliders: [{ entity: null, primitive: { type: "label", at: { x: 1, y: 1 }, text: "hello", color: 0xff0000ff } }] },
     };
     const overlay = vi.fn();
-    const { host } = await viewport((command) => (command.type === "get_debug_draw" ? { type: "debug_draw", tick: 7, frame } : undefined));
+    const { host } = await viewport((command) => (command.type === "get_render_frame" ? renderFrame(7, frame) : undefined));
     host.editor.overlays.register({ id: "test.overlay", draw: overlay });
     act(() => host.editor.selection.getState().select([entity(3)]));
 
@@ -296,7 +296,7 @@ describe("viewport", () => {
   });
 
   it("pan_zoom_and_frame_commands_move_the_camera", async () => {
-    const { host } = await viewport((command) => (command.type === "get_debug_draw" ? { type: "debug_draw", tick: 7, frame: circleOf(1, 4, -2) } : undefined));
+    const { host } = await viewport((command) => (command.type === "get_render_frame" ? renderFrame(7, circleOf(1, 4, -2)) : undefined));
     await act(() => host.editor.commands.run("viewport.pan-right"));
     await waitFor(() => expect(camera()).toEqual([64 / 50, 0, 50]));
     await act(() => host.editor.commands.run("viewport.zoom-in"));
@@ -310,7 +310,7 @@ describe("viewport", () => {
 
   it("drag_outline_is_drawn_while_dragging", async () => {
     const { host, view } = await viewport((command) => {
-      if (command.type === "get_debug_draw") return { type: "debug_draw", tick: 7, frame: circleOf(1, 1, 1) };
+      if (command.type === "get_render_frame") return renderFrame(7, circleOf(1, 1, 1));
       if (command.type === "pick") return { type: "picked", entities: [entity(1)] };
       return undefined;
     });
@@ -386,7 +386,7 @@ describe("viewport", () => {
 
   it("expected_misses_stay_out_of_the_error_log", async () => {
     let refuse = false;
-    const { host, view } = await viewport((command) => (refuse && command.type === "get_debug_draw" ? { error: { code: "internal", message: "game closed" } } : undefined));
+    const { host, view } = await viewport((command) => (refuse && command.type === "get_render_frame" ? { error: { code: "internal", message: "game closed" } } : undefined));
     // Nothing selected to frame.
     await act(() => host.editor.commands.run("viewport.frame-selection"));
     // A frame refused by the game being replaced.
@@ -430,12 +430,12 @@ describe("viewport", () => {
     ]);
   });
 
-  it("a_debug_draw_failing_every_frame_is_reported_once_until_it_works_again", async () => {
+  it("a_render_frame_failing_every_frame_is_reported_once_until_it_works_again", async () => {
     let refuse = true;
     const { host, game } = await viewport((command) =>
-      refuse && command.type === "get_debug_draw" ? { error: { code: "internal", message: "the debug draw panicked" } } : undefined,
+      refuse && command.type === "get_render_frame" ? { error: { code: "internal", message: "the debug draw panicked" } } : undefined,
     );
-    const fetched = () => sentOf(game.sent, "get_debug_draw").length;
+    const fetched = () => sentOf(game.sent, "get_render_frame").length;
     const moreFrames = async () => {
       const before = fetched();
       await waitFor(() => expect(fetched()).toBeGreaterThan(before + 2));

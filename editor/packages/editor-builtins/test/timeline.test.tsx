@@ -5,7 +5,7 @@ import { Profiler } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { builtinPlugins } from "../src";
 import { ResimulatingNotice } from "../src/timeline/editing";
-import { renderPanel, schemas, settle, testEditor, testGame } from "./support";
+import { renderFrame, renderPanel, schemas, settle, testEditor, testGame } from "./support";
 
 type Command = { type: string; [key: string]: unknown };
 
@@ -201,7 +201,7 @@ describe("timeline", () => {
     const { host } = await editorWith((command) => {
       if (command.type === "get_timeline") return { type: "timeline", ...timeline({ resimulating: true, simulated: 60 }) };
       if (command.type === "query_entities") return { type: "entities", total: 0, rows: [] };
-      if (command.type === "get_debug_draw") return { type: "debug_draw", tick: 40, frame: { layers: {} } };
+      if (command.type === "get_render_frame") return renderFrame(40);
       return undefined;
     });
     renderPanel(host, "ludenea.scene-tree");

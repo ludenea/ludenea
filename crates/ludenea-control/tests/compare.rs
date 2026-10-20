@@ -101,8 +101,13 @@ fn layers(host: &Host) -> Vec<String> {
 
 fn draw(host: &mut Host) -> DebugDrawFrame {
     let layers = layers(host);
-    match ok(host, Command::GetDebugDraw { layers }) {
-        Reply::DebugDraw { frame, .. } => frame,
+    match ok(
+        host,
+        Command::GetRenderFrame {
+            debug_layers: layers,
+        },
+    ) {
+        Reply::RenderFrame { frame } => frame.debug,
         other => panic!("{other:?}"),
     }
 }
@@ -664,8 +669,8 @@ fn a_panicking_debug_drawer_fails_the_draw_and_stops_the_ghost_only() {
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
     DRAW_ARMED.store(true, Ordering::Relaxed);
-    let drawn = host.handle(Command::GetDebugDraw {
-        layers: layers.clone(),
+    let drawn = host.handle(Command::GetRenderFrame {
+        debug_layers: layers.clone(),
     });
     let ghost_drawn = host.handle(Command::GetGhostDraw { tick: 20, layers });
     DRAW_ARMED.store(false, Ordering::Relaxed);

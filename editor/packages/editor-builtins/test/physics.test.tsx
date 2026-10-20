@@ -2,7 +2,7 @@ import type { PluginDefinition } from "@ludenea/editor-shell";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { builtinPlugins } from "../src";
-import { renderPanel, setSceneDirty, settle, testEditor, testGame } from "./support";
+import { renderFrame, renderPanel, setSceneDirty, settle, testEditor, testGame } from "./support";
 
 // The physics crate's engine plugin lives outside this package: the project service bundles it
 // at runtime. A computed specifier keeps it out of this package's type checking: the engine
@@ -40,7 +40,7 @@ describe("physics plugin", () => {
         const { index } = command.entity as { index: number };
         return { type: "entity", entity: command.entity, components: { "ludenea::Body": { type: "json", value: { kind: kinds[index] } } } };
       }
-      if (command.type === "get_debug_draw") return { type: "debug_draw", tick: 0, frame: { layers: {} } };
+      if (command.type === "get_render_frame") return renderFrame(0);
       if (command.type === "get_tick_events") return { type: "tick_events", events: [] };
       if (command.type === "load_scene") {
         loaded = true;
@@ -55,12 +55,12 @@ describe("physics plugin", () => {
     renderPanel(host, "ludenea.viewport");
     renderPanel(host, "ludenea_physics.panel");
     await waitFor(() => expect(screen.getByRole("table", { name: "Bodies" }).textContent).toContain("Dynamic0"));
-    await waitFor(() => expect(game.sent.filter((command) => command.type === "get_debug_draw").length).toBeGreaterThan(0));
-    const drawsBefore = game.sent.filter((command) => command.type === "get_debug_draw").length;
+    await waitFor(() => expect(game.sent.filter((command) => command.type === "get_render_frame").length).toBeGreaterThan(0));
+    const drawsBefore = game.sent.filter((command) => command.type === "get_render_frame").length;
 
     fireEvent.doubleClick(screen.getByText("main.scene.ron"));
     await waitFor(() => expect(screen.getByRole("table", { name: "Bodies" }).textContent).toContain("Dynamic3"));
-    await waitFor(() => expect(game.sent.filter((command) => command.type === "get_debug_draw").length).toBeGreaterThan(drawsBefore));
+    await waitFor(() => expect(game.sent.filter((command) => command.type === "get_render_frame").length).toBeGreaterThan(drawsBefore));
     const counts = screen.getByRole("table", { name: "Bodies" }).textContent;
     expect(counts).toContain("Static1");
     expect(counts).toContain("Kinematic1");

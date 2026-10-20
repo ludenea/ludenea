@@ -4,11 +4,14 @@ use ludenea_app::prefab::InstanceInfo;
 use ludenea_app::trace::TraceComparison;
 use ludenea_app::{App, InputLog, Inputs, RawInput, Rng, Sim};
 use ludenea_control::*;
+use ludenea_draw::Color;
+use ludenea_draw::frame::{CameraItem, LayerInfo, RenderFrame, SpriteItem, TilemapItem};
 use ludenea_ecs::schema::{Schema, TypeSchema};
 use ludenea_ecs::{
     Asset, AssetId, Component, Difference, Entity, EntityHash, HashTree, NamedHash, Prefab,
     PrefabEntity, Query, ResMut, Runtime,
 };
+use ludenea_math::{Rot, Vec2};
 use serde::{Deserialize, Serialize};
 
 mod support;
@@ -76,7 +79,7 @@ fn handshake_with_version_1_is_refused() {
     assert_eq!(error.code, ErrorCode::VersionMismatch);
     assert_eq!(
         error.message,
-        "client speaks protocol 1, engine speaks 4; rebuild the editor (pnpm -C editor build) \
+        "client speaks protocol 1, engine speaks 5; rebuild the editor (pnpm -C editor build) \
          and the game from the same checkout"
     );
 }
@@ -392,9 +395,45 @@ fn every_command_and_reply_round_trips_through_json() {
                 commands: vec!["spawn 1v2".into()],
             }],
         },
-        Reply::DebugDraw {
-            tick: 3,
-            frame: Default::default(),
+        Reply::RenderFrame {
+            frame: RenderFrame {
+                tick: 3,
+                camera: Some(CameraItem {
+                    entity,
+                    center: Vec2::new(1.5, -2.0),
+                    view: Vec2::new(16.0, 9.0),
+                }),
+                layers: vec![LayerInfo {
+                    name: "world".into(),
+                    parallax: 0.5,
+                }],
+                sprites: vec![SpriteItem {
+                    entity,
+                    layer: 0,
+                    order: -1,
+                    texture: AssetId(9),
+                    frame: 2,
+                    position: Vec2::new(0.25, 4.0),
+                    rotation: Rot::IDENTITY,
+                    flip_x: true,
+                    flip_y: false,
+                    tint: Color(0x80FF_00FF),
+                }],
+                tilemaps: vec![TilemapItem {
+                    entity,
+                    layer: 0,
+                    order: 0,
+                    tileset: AssetId(10),
+                    position: Vec2::new(0.0, 0.0),
+                    cell_size: Vec2::new(1.0, 1.0),
+                    width: 2,
+                    height: 1,
+                    tiles: vec![Some(3), None],
+                }],
+                teleported: vec![entity],
+                debug: Default::default(),
+                warnings: vec!["w".into()],
+            },
         },
         Reply::Picked {
             entities: vec![entity],

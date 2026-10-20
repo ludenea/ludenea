@@ -13,6 +13,7 @@ import type { Hash64 } from "./Hash64";
 import type { HashTree } from "./HashTree";
 import type { InstanceInfo } from "./InstanceInfo";
 import type { RecordedEvent } from "./RecordedEvent";
+import type { RenderFrame } from "./RenderFrame";
 import type { SyncPoint } from "./SyncPoint";
 import type { SystemRow } from "./SystemRow";
 import type { Timeline } from "./Timeline";
@@ -26,4 +27,4 @@ saved_scene: string | null, inputs: Bytes, edits: Bytes, undo: Bytes, hashes: Ar
 /**
  * The text as last saved of each asset of `assets` that holds unsaved edits.
  */
-saved_assets: Array<[AssetId, string]>, branches: Bytes, document: Document, keeps_assets: boolean, } | { "type": "loaded", warnings: Array<string>, instances: Array<InstanceInfo>, load_addresses: Array<[Entity, Array<number>]>, } | { "type": "asset", asset: string, value: ComponentValue, } | { "type": "text", text: string, } | { "type": "deleted", branches: Array<BranchId>, } | { "type": "placed", instance: number, } | { "type": "instances", instances: Array<InstanceInfo>, load_addresses: Array<[Entity, Array<number>]>, } | { "type": "replay", replay: Bytes, } | { "type": "replay_loaded", fingerprint_differs: boolean, } | { "type": "schedule", systems: Array<SystemRow>, } | { "type": "tick_events", events: Array<RecordedEvent>, } | { "type": "tick_commands", sync_points: Array<SyncPoint>, } | { "type": "debug_draw", tick: number, frame: DebugDrawFrame, } | { "type": "picked", entities: Array<Entity>, } | { "type": "ghost_draw", frame: DebugDrawFrame, tick: number, lagging: boolean, } | { "type": "divergence" } & DivergenceReport;
+saved_assets: Array<[AssetId, string]>, branches: Bytes, document: Document, keeps_assets: boolean, } | { "type": "loaded", warnings: Array<string>, instances: Array<InstanceInfo>, load_addresses: Array<[Entity, Array<number>]>, } | { "type": "asset", asset: string, value: ComponentValue, } | { "type": "text", text: string, } | { "type": "deleted", branches: Array<BranchId>, } | { "type": "placed", instance: number, } | { "type": "instances", instances: Array<InstanceInfo>, load_addresses: Array<[Entity, Array<number>]>, } | { "type": "replay", replay: Bytes, } | { "type": "replay_loaded", fingerprint_differs: boolean, } | { "type": "schedule", systems: Array<SystemRow>, } | { "type": "tick_events", events: Array<RecordedEvent>, } | { "type": "tick_commands", sync_points: Array<SyncPoint>, } | { "type": "render_frame", frame: RenderFrame, } | { "type": "picked", entities: Array<Entity>, } | { "type": "ghost_draw", frame: DebugDrawFrame, tick: number, lagging: boolean, } | { "type": "divergence" } & DivergenceReport;

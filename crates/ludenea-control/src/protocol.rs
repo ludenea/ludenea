@@ -6,6 +6,7 @@ use ludenea_app::RawInput;
 use ludenea_app::prefab::InstanceInfo;
 use ludenea_app::trace::TraceComparison;
 use ludenea_draw::DebugDrawFrame;
+use ludenea_draw::frame::RenderFrame;
 use ludenea_ecs::hash::hex_u64;
 use ludenea_ecs::schema::TypeSchema;
 use ludenea_ecs::{AssetId, Difference, Entity, HashTree};
@@ -20,7 +21,7 @@ use crate::session::{Document, Timeline};
 
 /// The control protocol version this build speaks: a client and a host connect only when
 /// theirs are equal.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// The wire shape of `PROTOCOL_VERSION`: a hash of the TypeScript declarations of every type
 /// the messages reach, without their documentation. A client and a host connect only when
@@ -28,7 +29,7 @@ pub const PROTOCOL_VERSION: u32 = 4;
 /// instead of misreading fields. A change the declarations do not show, such as a new serde
 /// default or another encoding of a type declared as a string, leaves it as it is.
 /// `tests/typescript.rs` pins it.
-pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0x448e_51fb_92eb_35de);
+pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0x962a_4b25_2c15_a970);
 
 /// Binary data, serialized as a standard base64 string.
 #[derive(Clone, Debug, PartialEq)]
@@ -483,9 +484,9 @@ pub enum Command {
     GetTickCommands {
         tick: u64,
     },
-    /// The debug drawing of the current tick, for these layers.
-    GetDebugDraw {
-        layers: Vec<String>,
+    /// What a renderer draws at the current tick, with the debug drawing of `debug_layers`.
+    GetRenderFrame {
+        debug_layers: Vec<String>,
     },
     /// The entities under a world point.
     Pick {
@@ -549,7 +550,7 @@ impl Command {
             Command::GetSchedule => "schedule",
             Command::GetTickEvents { .. } => "tick_events",
             Command::GetTickCommands { .. } => "tick_commands",
-            Command::GetDebugDraw { .. } => "debug_draw",
+            Command::GetRenderFrame { .. } => "render_frame",
             Command::Pick { .. } => "picked",
             Command::GetGhostDraw { .. } => "ghost_draw",
             Command::GetDivergence { .. } => "divergence",
@@ -717,9 +718,8 @@ pub enum Reply {
     TickCommands {
         sync_points: Vec<SyncPoint>,
     },
-    DebugDraw {
-        tick: u64,
-        frame: DebugDrawFrame,
+    RenderFrame {
+        frame: RenderFrame,
     },
     Picked {
         entities: Vec<Entity>,

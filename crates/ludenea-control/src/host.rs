@@ -889,10 +889,9 @@ impl Host {
                     .collect();
                 Ok(Reply::TickCommands { sync_points })
             }
-            Command::GetDebugDraw { layers } => Ok(Reply::DebugDraw {
-                tick: sim.tick(),
+            Command::GetRenderFrame { debug_layers } => Ok(Reply::RenderFrame {
                 frame: sim
-                    .debug_draw(&layers.into_iter().collect())
+                    .render_frame(&debug_layers.into_iter().collect())
                     .map_err(|e| sim_error(&e))?,
             }),
             Command::Pick { point } => Ok(Reply::Picked {
@@ -1512,7 +1511,7 @@ fn changes_state(command: &Command) -> bool {
             | Command::GetSchedule
             | Command::GetTickEvents { .. }
             | Command::GetTickCommands { .. }
-            | Command::GetDebugDraw { .. }
+            | Command::GetRenderFrame { .. }
             | Command::Pick { .. }
             | Command::SetCompareBranch { .. }
             | Command::GetGhostDraw { .. }

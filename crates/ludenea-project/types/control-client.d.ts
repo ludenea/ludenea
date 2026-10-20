@@ -43,6 +43,24 @@ type Entity = {
     generation: number;
 };
 
+type Vec2 = {
+    x: number;
+    y: number;
+};
+
+/**
+ * The camera of a frame: the entity it belongs to, so a renderer can tell a camera that
+ * moved from one that was switched or teleported, and where it looks.
+ */
+type CameraItem = {
+    entity: Entity;
+    center: Vec2;
+    /**
+     * The minimum visible width and height, in world units.
+     */
+    view: Vec2;
+};
+
 /**
  * A cause candidate, in either branch, at the entity's first divergent tick or the tick
  * before. Only events and commands are recorded, so interactions without either (a
@@ -155,11 +173,6 @@ type Topic = {
     "type": "ghost";
 } | {
     "type": "divergence";
-};
-
-type Vec2 = {
-    x: number;
-    y: number;
 };
 
 type Command = {
@@ -369,8 +382,8 @@ type Command = {
     "type": "get_tick_commands";
     tick: number;
 } | {
-    "type": "get_debug_draw";
-    layers: Array<string>;
+    "type": "get_render_frame";
+    debug_layers: Array<string>;
 } | {
     "type": "pick";
     point: Vec2;
@@ -828,6 +841,18 @@ type InstanceInfo = {
     overrides: Array<OverrideInfo>;
 };
 
+/**
+ * A render layer. Its draw order is its index in `RenderFrame::layers`.
+ */
+type LayerInfo = {
+    name: string;
+    /**
+     * How much the layer moves with the camera: 1.0 moves with the world, 0.0 is fixed to
+     * the screen.
+     */
+    parallax: number;
+};
+
 type ProtocolError = {
     code: ErrorCode;
     message: string;
@@ -839,6 +864,80 @@ type ProtocolError = {
 type RecordedEvent = {
     event_type: string;
     value: JsonValue;
+};
+
+/**
+ * Rotation stored as cosine and sine of the angle, unit length (`cos² + sin² = 1`).
+ * `from_angle`, `integrate`, and `normalize` give `IDENTITY` for an input they cannot turn
+ * into a unit rotation; code that writes the fields directly keeps them unit length.
+ */
+type Rot = {
+    cos: number;
+    sin: number;
+};
+
+/**
+ * One sprite to draw.
+ */
+type SpriteItem = {
+    entity: Entity;
+    layer: number;
+    /**
+     * The draw order within the layer, lowest first.
+     */
+    order: number;
+    texture: AssetId;
+    frame: number;
+    position: Vec2;
+    rotation: Rot;
+    flip_x: boolean;
+    flip_y: boolean;
+    tint: Color;
+};
+
+/**
+ * One tilemap to draw.
+ */
+type TilemapItem = {
+    entity: Entity;
+    layer: number;
+    /**
+     * The draw order within the layer, lowest first.
+     */
+    order: number;
+    tileset: AssetId;
+    /**
+     * The bottom-left corner of the bottom-left cell.
+     */
+    position: Vec2;
+    cell_size: Vec2;
+    width: number;
+    height: number;
+    /**
+     * The tileset frame of each cell, `None` for an empty cell, row-major from the
+     * bottom-left cell.
+     */
+    tiles: Array<number | null>;
+};
+
+/**
+ * What a renderer draws for one tick.
+ */
+type RenderFrame = {
+    tick: number;
+    camera: CameraItem | null;
+    /**
+     * The app's render layers, in draw order: `SpriteItem::layer` indexes this list.
+     */
+    layers: Array<LayerInfo>;
+    sprites: Array<SpriteItem>;
+    tilemaps: Array<TilemapItem>;
+    /**
+     * The entities that moved without travelling this tick, so they are not interpolated.
+     */
+    teleported: Array<Entity>;
+    debug: DebugDrawFrame;
+    warnings: Array<string>;
 };
 
 /**
@@ -988,9 +1087,8 @@ type Reply = {
     "type": "tick_commands";
     sync_points: Array<SyncPoint>;
 } | {
-    "type": "debug_draw";
-    tick: number;
-    frame: DebugDrawFrame;
+    "type": "render_frame";
+    frame: RenderFrame;
 } | {
     "type": "picked";
     entities: Array<Entity>;
@@ -1028,9 +1126,9 @@ type ServerMessage = {
 };
 
 /** The control protocol version this build speaks: a client and a host connect only when theirs are equal. */
-const PROTOCOL_VERSION = 4;
+const PROTOCOL_VERSION = 5;
 /** The wire shape of `PROTOCOL_VERSION`, a hash of the protocol's types: a client and a host connect only when theirs are equal too. */
-const PROTOCOL_FINGERPRINT = "448e51fb92eb35de";
+const PROTOCOL_FINGERPRINT = "962a4b252c15a970";
 /** The `type` of the reply each command type gets when it succeeds. */
 type ReplyTypes = {
     apply_override: "done";
@@ -1046,13 +1144,13 @@ type ReplyTypes = {
     export_replay: "replay";
     export_session: "session";
     get_asset: "asset";
-    get_debug_draw: "debug_draw";
     get_divergence: "divergence";
     get_entity: "entity";
     get_ghost_draw: "ghost_draw";
     get_hash: "hash";
     get_hash_tree: "hash_tree";
     get_instances: "instances";
+    get_render_frame: "render_frame";
     get_resources: "resources";
     get_schedule: "schedule";
     get_tick_commands: "tick_commands";
@@ -1098,12 +1196,48 @@ type ReplyTypes = {
 };
 
 /**
+ * How a texture is sampled when scaled.
+ */
+type Filter = "Nearest" | "Linear";
+
+/**
+ * A grid of equal frames, `margin` pixels in from the image edge and `spacing` pixels apart.
+ */
+type Grid = {
+    frame_width: number;
+    frame_height: number;
+    margin: number;
+    spacing: number;
+};
+
+/**
+ * How a PNG is cut into frames and drawn.
+ */
+type TextureMeta = {
+    /**
+     * How many pixels span one world unit.
+     */
+    pixels_per_unit: number;
+    /**
+     * The frame grid; `None` makes the whole image one frame.
+     */
+    grid: Grid | null;
+    /**
+     * The pivot in pixels from the frame's top-left corner; `None` is the frame's centre.
+     */
+    pivot: [number, number] | null;
+    filter: Filter;
+};
+
+/**
  * What a project file is. Only a meta makes a `.ron` file a data asset.
  */
 type AssetKind = "Scene" | "Prefab" | {
     "Data": {
         type: string;
     };
+} | {
+    "Texture": TextureMeta;
 } | "Replay" | "Trace" | "Snapshot" | "Other";
 
 /**
@@ -1384,9 +1518,9 @@ type ProjectServerMessage = {
 };
 
 /** The project protocol version this build speaks: the editor and the service connect only when theirs are equal. */
-const PROJECT_PROTOCOL_VERSION = 3;
+const PROJECT_PROTOCOL_VERSION = 4;
 /** The wire shape of `PROJECT_PROTOCOL_VERSION`, a hash of the protocol's types: the editor and the service connect only when theirs are equal too. */
-const PROJECT_PROTOCOL_FINGERPRINT = "70a550015903ce41";
+const PROJECT_PROTOCOL_FINGERPRINT = "96f47cb59cf37239";
 /** The `type` of the replies each request type may get when it succeeds. */
 type ProjectReplyTypes = {
     build: "done";
@@ -1562,5 +1696,5 @@ function startWorkerGame(options: {
 }): WorkerGame;
 
 export { ControlClient, PROJECT_PROTOCOL_FINGERPRINT, PROJECT_PROTOCOL_VERSION, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION, ProjectClient, ProtocolFailure, RequestTracker, fakeTransport, handshake, parseFrame, postMessageTransport, startWorkerGame, tauriTransport, unwrap, webSocketTransport };
-export type { AssetId, AssetKind, AssetTexts, BranchId, BranchInfo, BuildEvent, Bytes, Cause, ClientMessage, Color, Command, ComponentValue, ConsoleLevel, DebugDrawFrame, Diagnostic, Difference, DivergenceKind, DivergenceReport, Document, Entity, EntityDivergence, EntityHash, EntityRow, ErrorCode, Event, FailureCode, FieldSchema, FieldTarget, FileChange, FileEntry, GameInfo, GameOutput, Hash64, HashTree, InstanceInfo, Item, JsonValue, MessageTransport, NamedHash, NamedSchema, Outcome, OutputStream, OverrideInfo, PathSegment, PauseReason, PluginBundle, PluginSource, Primitive, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo, ProjectOutcome, ProjectReply, ProjectReplyFor, ProjectReplyTypes, ProjectRequest, ProjectServerMessage, ProtocolError, ProtocolPeer, RawGamepad, RawInput, RecordedEvent, Reply, ReplyFor, ReplyTypes, RootCause, RootCauseKind, ServerMessage, ServiceMode, SyncPoint, SystemRow, Timeline, Topic, TraceComparison, TypeSchema, VariantFields, VariantSchema, Vec2, WorkerCrash, WorkerGame };
+export type { AssetId, AssetKind, AssetTexts, BranchId, BranchInfo, BuildEvent, Bytes, CameraItem, Cause, ClientMessage, Color, Command, ComponentValue, ConsoleLevel, DebugDrawFrame, Diagnostic, Difference, DivergenceKind, DivergenceReport, Document, Entity, EntityDivergence, EntityHash, EntityRow, ErrorCode, Event, FailureCode, FieldSchema, FieldTarget, FileChange, FileEntry, Filter, GameInfo, GameOutput, Grid, Hash64, HashTree, InstanceInfo, Item, JsonValue, LayerInfo, MessageTransport, NamedHash, NamedSchema, Outcome, OutputStream, OverrideInfo, PathSegment, PauseReason, PluginBundle, PluginSource, Primitive, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo, ProjectOutcome, ProjectReply, ProjectReplyFor, ProjectReplyTypes, ProjectRequest, ProjectServerMessage, ProtocolError, ProtocolPeer, RawGamepad, RawInput, RecordedEvent, RenderFrame, Reply, ReplyFor, ReplyTypes, RootCause, RootCauseKind, Rot, ServerMessage, ServiceMode, SpriteItem, SyncPoint, SystemRow, TextureMeta, TilemapItem, Timeline, Topic, TraceComparison, TypeSchema, VariantFields, VariantSchema, Vec2, WorkerCrash, WorkerGame };
 }

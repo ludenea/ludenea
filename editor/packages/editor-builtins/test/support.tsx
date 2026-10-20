@@ -6,7 +6,9 @@ import {
   PROTOCOL_VERSION,
   ProjectClient,
   fakeTransport,
+  type DebugDrawFrame,
   type GameInfo,
+  type RenderFrame,
   type TypeSchema,
 } from "@ludenea/control-client";
 import type { PluginDefinition } from "@ludenea/editor-shell";
@@ -51,6 +53,12 @@ export const testProject = (answer: Answer = () => undefined) =>
     answer,
     ProjectClient.connect,
   );
+
+/** The `render_frame` reply at `tick` with nothing to render but the debug drawing `debug`. */
+export const renderFrame = (tick: number, debug: DebugDrawFrame = { layers: {} }) => ({
+  type: "render_frame",
+  frame: { tick, camera: null, layers: [], sprites: [], tilemaps: [], teleported: [], debug, warnings: [] } satisfies RenderFrame,
+});
 
 export const testGame = (answer: Answer = () => ({ type: "done" }), info: Partial<GameInfo> = {}) =>
   fake(

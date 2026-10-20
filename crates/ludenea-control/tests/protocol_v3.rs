@@ -84,7 +84,7 @@ fn timeline(host: &mut Host) -> Timeline {
 
 #[test]
 fn handshake_refuses_version_2() {
-    assert_eq!(PROTOCOL_VERSION, 4);
+    assert_eq!(PROTOCOL_VERSION, 5);
     let Err(error) = InProcess::connect(Host::new(boxes::app).unwrap(), 2) else {
         panic!("a version 2 client connects");
     };
@@ -92,7 +92,23 @@ fn handshake_refuses_version_2() {
         error,
         ProtocolError {
             code: ErrorCode::VersionMismatch,
-            message: "client speaks protocol 2, engine speaks 4; rebuild the editor (pnpm -C \
+            message: "client speaks protocol 2, engine speaks 5; rebuild the editor (pnpm -C \
+                      editor build) and the game from the same checkout"
+                .to_string(),
+        }
+    );
+}
+
+#[test]
+fn an_old_client_is_refused_naming_both_versions() {
+    let Err(error) = InProcess::connect(Host::new(boxes::app).unwrap(), 4) else {
+        panic!("a version 4 client connects");
+    };
+    assert_eq!(
+        error,
+        ProtocolError {
+            code: ErrorCode::VersionMismatch,
+            message: "client speaks protocol 4, engine speaks 5; rebuild the editor (pnpm -C \
                       editor build) and the game from the same checkout"
                 .to_string(),
         }
@@ -347,7 +363,9 @@ fn every_command_names_the_reply_it_gets() {
         topic: Topic::Introspection,
     });
     checked.run(Command::GetSchedule);
-    checked.run(Command::GetDebugDraw { layers: Vec::new() });
+    checked.run(Command::GetRenderFrame {
+        debug_layers: Vec::new(),
+    });
     checked.run(Command::Pick {
         point: serde_json::from_value(json!({"x": 0.0, "y": 0.0})).unwrap(),
     });

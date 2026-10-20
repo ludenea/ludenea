@@ -194,8 +194,8 @@ pub fn every_command() -> Vec<Command> {
         Command::GetSchedule,
         Command::GetTickEvents { tick: 3 },
         Command::GetTickCommands { tick: 4 },
-        Command::GetDebugDraw {
-            layers: vec!["physics.colliders".into()],
+        Command::GetRenderFrame {
+            debug_layers: vec!["physics.colliders".into()],
         },
         Command::Pick {
             point: serde_json::from_str(r#"{"x":1.5,"y":-2.0}"#).unwrap(),

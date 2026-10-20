@@ -523,15 +523,17 @@ fn seek_pushes_entity_despawned_for_entities_not_yet_spawned() {
 }
 
 #[test]
-fn debug_draw_and_pick_through_protocol() {
+fn render_frame_and_pick_through_protocol() {
     let mut host = loaded(10);
     step(&mut host, 2);
-    let layers = host.game_info().debug_layers;
-    let Reply::DebugDraw { tick, frame } = ok(&mut host, Command::GetDebugDraw { layers }) else {
+    let debug_layers = host.game_info().debug_layers;
+    let Reply::RenderFrame { frame } = ok(&mut host, Command::GetRenderFrame { debug_layers })
+    else {
         panic!()
     };
-    assert_eq!(tick, 2);
-    assert!(!frame.layers.is_empty());
+    assert_eq!(frame.tick, 2);
+    assert!(!frame.debug.layers.is_empty());
+    assert!(frame.sprites.is_empty(), "{:?}", frame.sprites);
 
     let entity = first_crate(&mut host);
     let position = &pose(&mut host, entity)["position"];
@@ -543,4 +545,66 @@ fn debug_draw_and_pick_through_protocol() {
         panic!()
     };
     assert!(entities.contains(&entity), "{entities:?}");
+}
+
+#[test]
+fn render_frame_carries_sprites_of_a_render_plugin_game() {
+    fn app() -> App {
+        let mut app = App::new();
+        app.plugin(RenderPlugin).render_layer("world", 1.0);
+        app
+    }
+    let mut host = Host::new(app).unwrap();
+    ok(
+        &mut host,
+        Command::LoadScene {
+            scene: "Scene(version: 2, next_id: 0, resources: {}, entities: [])".into(),
+            assets: Vec::new(),
+            document: Document::Scene,
+        },
+    );
+    let pose = Pose {
+        position: Vec2::new(1.0, 2.0),
+        rotation: Rot::IDENTITY,
+    };
+    let sprite = Sprite {
+        frame: 3,
+        ..Sprite::default()
+    };
+    let Reply::Spawned { entity } = ok(
+        &mut host,
+        Command::Spawn {
+            components: BTreeMap::from([
+                (
+                    "ludenea::Pose".to_string(),
+                    serde_json::to_value(pose).unwrap(),
+                ),
+                (
+                    "ludenea::Sprite".to_string(),
+                    serde_json::to_value(sprite).unwrap(),
+                ),
+            ]),
+        },
+    ) else {
+        panic!()
+    };
+
+    let Reply::RenderFrame { frame } = ok(
+        &mut host,
+        Command::GetRenderFrame {
+            debug_layers: Vec::new(),
+        },
+    ) else {
+        panic!()
+    };
+    assert_eq!(frame.layers.len(), 1);
+    assert_eq!(frame.layers[0].name, "world");
+    let [item] = frame.sprites.as_slice() else {
+        panic!("{:?}", frame.sprites)
+    };
+    assert_eq!(
+        (item.entity, item.frame, item.position),
+        (entity, 3, Vec2::new(1.0, 2.0))
+    );
+    assert!(frame.warnings.is_empty(), "{:?}", frame.warnings);
 }
