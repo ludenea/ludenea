@@ -28,10 +28,13 @@ this table in the same commit.
 
 The stored session is the editor's copy of each open document's session, in
 `.ludenea/sessions/`; its version is a TypeScript constant of `@ludenea/editor-shell/app`.
+The meta reader does not check its version yet: it reads a meta of any version whose fields
+parse.
 
 Not versioned yet: data assets (`.ron` files holding a value of the game type their meta
-names), the project manifest `ludenea.toml`, the branch tree of a session, and the plugin
-API.
+names), the project manifest `ludenea.toml`, the branch tree of a session, the plugin API,
+and the encoding the state hash is computed from: a change to it can move every recorded
+hash, those of the golden trace and replays included.
 
 ## [Unreleased]
 
