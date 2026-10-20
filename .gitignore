@@ -6,6 +6,7 @@ dump/
 .idea/
 editor/**/dist/
 editor/e2e/golden/pkg/
+editor/e2e/fixtures/renderer/pkg/
 editor/test-results/
 editor/playwright-report/
 *.tsbuildinfo

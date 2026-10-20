@@ -9,6 +9,10 @@
 //!
 //! `wasm-renderer <out-dir>` builds the viewport renderer (`ludenea-draw` with its
 //! `render` feature) and writes `debug_draw.js`, `debug_draw.d.ts`, and `debug_draw_bg.wasm`.
+//!
+//! `wasm-render <out-dir>` builds the renderer for the browser (`ludenea-render` with its
+//! `web` feature) and writes `ludenea_render.js`, `ludenea_render.d.ts`, and
+//! `ludenea_render_bg.wasm`.
 
 use std::error::Error;
 use std::path::PathBuf;
@@ -18,7 +22,7 @@ use cargo_metadata::MetadataCommand;
 use wasm_bindgen_cli_support::Bindgen;
 
 const USAGE: &str = "usage: cargo xtask check | cargo xtask wasm-game <package> <out-dir> \
-                     | cargo xtask wasm-renderer <out-dir>";
+                     | cargo xtask wasm-renderer <out-dir> | cargo xtask wasm-render <out-dir>";
 const TARGET: &str = "wasm32-unknown-unknown";
 
 /// The cargo commands of `check`, in order, run from the workspace root.
@@ -31,9 +35,11 @@ const CHECKS: &[&str] = &[
     "clippy --locked -p ludenea-render --features gpu --all-targets -- -D warnings",
     // Warnings are denied through `RUSTDOCFLAGS`, which `check` sets.
     "doc --locked --no-deps --workspace",
-    // The browser: the facade's entry, the Web Worker transport, and the viewport renderer.
+    // The browser: the facade's entry, the Web Worker transport, the viewport renderer, and
+    // the renderer on WebGPU and WebGL2.
     "clippy --locked --target wasm32-unknown-unknown -p ludenea -p ludenea-control -p boxes --lib -- -D warnings",
     "clippy --locked --target wasm32-unknown-unknown -p ludenea-draw --features render --lib -- -D warnings",
+    "clippy --locked --target wasm32-unknown-unknown -p ludenea-render --features web --lib -- -D warnings",
     // WebAssembly outside the browser: the command line tool that verifies the goldens.
     "clippy --locked --target wasm32-wasip1 -p boxes --bins -- -D warnings",
 ];
@@ -43,7 +49,12 @@ fn main() -> ExitCode {
     let result = match args.as_slice() {
         [task] if task == "check" => check(),
         [task, package, out_dir] if task == "wasm-game" => wasm_game(package, out_dir),
-        [task, out_dir] if task == "wasm-renderer" => wasm_renderer(out_dir),
+        [task, out_dir] if task == "wasm-renderer" => {
+            browser_module("ludenea-draw", "render", "debug_draw", out_dir)
+        }
+        [task, out_dir] if task == "wasm-render" => {
+            browser_module("ludenea-render", "web", "ludenea_render", out_dir)
+        }
         _ => Err(USAGE.into()),
     };
     match result {
@@ -81,13 +92,19 @@ fn wasm_game(package: &str, out_dir: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn wasm_renderer(out_dir: &str) -> Result<(), Box<dyn Error>> {
+/// Builds `package` with `feature` for the browser, sized down, and writes its JavaScript glue,
+/// its TypeScript declarations, and its module to `out_dir` as `<out_name>.*`.
+fn browser_module(
+    package: &str,
+    feature: &str,
+    out_name: &str,
+    out_dir: &str,
+) -> Result<(), Box<dyn Error>> {
     // `cargo rustc` makes the module without declaring a `cdylib` in the crate, which would
     // otherwise link a native library on every workspace build.
-    let package = "ludenea-draw";
     let module = build(
         package,
-        &["rustc", "--features", "render", "--crate-type", "cdylib"],
+        &["rustc", "--features", feature, "--crate-type", "cdylib"],
         "wasm-renderer",
     )?;
     Bindgen::new()
@@ -95,7 +112,7 @@ fn wasm_renderer(out_dir: &str) -> Result<(), Box<dyn Error>> {
         .web(true)?
         .typescript(true)
         .omit_default_module_path(false)
-        .out_name("debug_draw")
+        .out_name(out_name)
         .generate(out_dir)?;
     Ok(())
 }

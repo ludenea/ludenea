@@ -25,9 +25,11 @@ jobs:
       # The desktop backend, outside the workspace with a lockfile of its own.
       - run: cargo fmt --manifest-path editor/apps/desktop/src-tauri/Cargo.toml --all --check
       - run: cargo doc --locked --no-deps --workspace
-      # The browser: the facade's entry, the Web Worker transport, and the viewport renderer.
+      # The browser: the facade's entry, the Web Worker transport, the viewport renderer, and
+      # the renderer on WebGPU and WebGL2.
       - run: cargo clippy --locked --target wasm32-unknown-unknown -p ludenea -p ludenea-control -p boxes --lib -- -D warnings
       - run: cargo clippy --locked --target wasm32-unknown-unknown -p ludenea-draw --features render --lib -- -D warnings
+      - run: cargo clippy --locked --target wasm32-unknown-unknown -p ludenea-render --features web --lib -- -D warnings
       # WebAssembly outside the browser: the command line tool that verifies the goldens.
       - run: cargo clippy --locked --target wasm32-wasip1 -p boxes --bins -- -D warnings
 
@@ -208,6 +210,8 @@ jobs:
           test -z "$(git status --porcelain)" || { git status --porcelain; exit 1; }
       - run: cargo test --locked -p ludenea-project -- --ignored
       - run: cargo xtask wasm-game boxes editor/e2e/golden/pkg
+      # The renderer's pixel tests (renderer.spec.ts) load it, on WebGL2 and on WebGPU.
+      - run: cargo xtask wasm-render editor/e2e/fixtures/renderer/pkg
       - run: cargo run --locked -p boxes --bin editor-bench
       - run: pnpm -C editor build
       - run: cargo build --locked -p ludenea-serve --features embed-editor

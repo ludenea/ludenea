@@ -2,6 +2,8 @@ import { defineConfig, devices } from "@playwright/test";
 import { launchArgs } from "./project";
 
 const port = 4310;
+/** The renderer's pixel tests, run once per browser backend; every other spec runs once. */
+const renderer = /renderer\.spec\.ts$/;
 
 export default defineConfig({
   testDir: ".",
@@ -18,6 +20,15 @@ export default defineConfig({
     baseURL: `http://localhost:${port}`,
     launchOptions: { args: launchArgs },
   },
+  projects: [
+    { name: "chromium", testIgnore: renderer },
+    // Without `--enable-unsafe-webgpu`, headless Chromium offers no WebGPU adapter, so the
+    // renderer draws with WebGL2 (SwiftShader through ANGLE).
+    { name: "webgl2", testMatch: renderer },
+    // With it, headless Chromium offers SwiftShader's WebGPU adapter (Vulkan in software), on
+    // macOS and on Linux runners alike: no GPU needed.
+    { name: "webgpu", testMatch: renderer, use: { launchOptions: { args: [...launchArgs, "--enable-unsafe-webgpu"] } } },
+  ],
   webServer: {
     command: `vite --config e2e/vite.config.ts --port ${port} --strictPort`,
     cwd: "..",

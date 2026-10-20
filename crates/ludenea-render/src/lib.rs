@@ -2,7 +2,8 @@
 //! tilemaps), the `animate` system, the extraction of a world into a render frame, atlas
 //! packing, interpolation between two frames, and the camera's math. All of it depends on no
 //! GPU crate, so the simulation never pulls one; the wgpu renderer is `gpu`,
-//! behind the feature of the same name.
+//! behind the feature of the same name, and `web` (feature `web`, browser only) draws with it
+//! into a canvas.
 
 pub mod animate;
 pub mod atlas;
@@ -13,6 +14,8 @@ pub mod extract;
 pub mod gpu;
 pub mod interpolate;
 pub mod sheet;
+#[cfg(all(feature = "web", target_arch = "wasm32", target_os = "unknown"))]
+pub mod web;
 
 use ludenea_app::pose::Pose;
 use ludenea_app::{App, Plugin, Sim};

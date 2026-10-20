@@ -1,0 +1,147 @@
+// The browser renderer (`ludenea_render::web`, built by `cargo xtask wasm-render
+// editor/e2e/fixtures/renderer/pkg`) drawing into a 128 by 128 canvas, for renderer.spec.ts.
+// The camera shows 8 by 8 world units around (2, 0): 16 pixels per unit, world (x, y) at pixel
+// (32 + 16 x, 64 - 16 y).
+import init, { WebRenderer } from "./pkg/ludenea_render.js";
+
+const SIZE = 128;
+const SPRITES = "00000000000000000000000000000001";
+const TILES = "00000000000000000000000000000002";
+const BROKEN = "00000000000000000000000000000003";
+const grid = { frame_width: 16, frame_height: 16, margin: 0, spacing: 0 };
+const meta = (grid) => ({ pixels_per_unit: 16, grid, pivot: null, filter: "Nearest" });
+const entity = (index) => ({ index, generation: 0 });
+
+const canvas = document.getElementById("target");
+let renderer;
+
+/** Loads the module, opens the renderer on the canvas, and loads the textures. */
+async function start() {
+  await init();
+  renderer = await WebRenderer.create(canvas);
+  renderer.resize(SIZE, SIZE, 1);
+  const sources = [
+    // Frame 0: the left half one colour, the right half another; frame 1: a third colour.
+    { id: SPRITES, path: "sprites.png", meta: meta(grid) },
+    { id: TILES, path: "tiles.png", meta: meta(null) },
+    { id: BROKEN, path: "broken.png", meta: meta(null) },
+  ];
+  const pngs = await Promise.all(
+    ["sprites.png", "tiles.png"].map(async (file) => new Uint8Array(await (await fetch(file)).arrayBuffer())),
+  );
+  pngs.push(new Uint8Array([1, 2, 3]));
+  const errors = JSON.parse(renderer.set_textures(JSON.stringify(sources), pngs));
+  return { backend: renderer.backend, errors };
+}
+
+function sprite(index, position, { layer = 1, frame = 0, flip_x = false } = {}) {
+  return {
+    entity: entity(index),
+    layer,
+    order: 0,
+    texture: SPRITES,
+    frame,
+    position: { x: position[0], y: position[1] },
+    rotation: { cos: 1, sin: 0 },
+    flip_x,
+    flip_y: false,
+    tint: 0xffffffff,
+  };
+}
+
+function frame(sprites, extra = {}) {
+  return {
+    tick: 0,
+    camera: { entity: entity(1000), center: { x: 2, y: 0 }, view: { x: 8, y: 8 } },
+    layers: [
+      { name: "background", parallax: 0 },
+      { name: "world", parallax: 1 },
+    ],
+    sprites,
+    tilemaps: [],
+    teleported: [],
+    debug: { layers: {} },
+    warnings: [],
+    ...extra,
+  };
+}
+
+/** The RGBA of each `[x, y]` pixel of the canvas, read in the task that drew it. */
+function pixels(points) {
+  const copy = new OffscreenCanvas(canvas.width, canvas.height).getContext("2d", { willReadFrequently: true });
+  copy.drawImage(canvas, 0, 0);
+  return points.map(([x, y]) => Array.from(copy.getImageData(x, y, 1, 1).data));
+}
+
+function draw(current, overlay = {}) {
+  return JSON.parse(renderer.draw(undefined, JSON.stringify(current), 1, JSON.stringify(overlay)));
+}
+
+/**
+ * The reference frame: a sprite at (0, 2), the same sprite flipped at (4, 2), a tilemap of two
+ * cells (one empty) at (0, -3), a sprite at (0, -1) on a layer fixed to the screen, a square
+ * outline from (3, -3) to (5, -1), and a selected entity's filled circle at (0, 0).
+ */
+function drawReference(points) {
+  const square = [[3, -3], [5, -3], [5, -1], [3, -1]].map(([x, y]) => ({ x, y }));
+  const outline = { type: "polygon", points: square, color: 0x3060f0ff, fill: false };
+  const dot = { type: "circle", center: { x: 0, y: 0 }, radius: 0.5, color: 0x3060f0ff, fill: true };
+  const reference = frame(
+    [sprite(1, [0, 2]), sprite(2, [4, 2], { flip_x: true }), sprite(3, [0, -1], { layer: 0, frame: 1 })],
+    {
+      tilemaps: [
+        {
+          entity: entity(4),
+          layer: 1,
+          order: 0,
+          tileset: TILES,
+          position: { x: 0, y: -3 },
+          cell_size: { x: 1, y: 1 },
+          width: 2,
+          height: 1,
+          tiles: [0, null],
+        },
+      ],
+      debug: {
+        layers: {
+          physics: [
+            { entity: entity(5), primitive: outline },
+            { entity: entity(6), primitive: dot },
+          ],
+        },
+      },
+    },
+  );
+  const report = draw(reference, { debug_layers: ["physics"], selected: [entity(6)] });
+  return { report, pixels: pixels(points) };
+}
+
+/** `count` sprites, all off screen but those `placed` at a position by index. */
+function drawSprites(count, placed, points) {
+  const sprites = Array.from({ length: count }, (_, index) => sprite(index, placed[index] ?? [100, 100]));
+  return { report: draw(frame(sprites)), pixels: pixels(points) };
+}
+
+/** Draws an empty frame: the renderer's error, or null when it drew. */
+function drawError() {
+  try {
+    draw(frame([]));
+    return null;
+  } catch (error) {
+    return String(error);
+  }
+}
+
+/** The renderer's WebGPU device, which the canvas is configured with. */
+const device = () => canvas.getContext("webgpu").getConfiguration().device;
+
+/** Raises a validation error on the device outside any renderer call: a buffer both read and written by mapping. */
+function failOnTheDevice() {
+  device().createBuffer({ label: "invalid on purpose", size: 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.MAP_WRITE });
+}
+
+function loseTheDevice() {
+  device().destroy();
+}
+
+window.fixture = { start, drawReference, drawSprites, drawError, failOnTheDevice, loseTheDevice };

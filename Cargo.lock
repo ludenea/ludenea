@@ -1752,7 +1752,11 @@ dependencies = [
  "pollster",
  "ron",
  "serde",
+ "serde_json",
  "thiserror",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
  "wgpu",
 ]
 

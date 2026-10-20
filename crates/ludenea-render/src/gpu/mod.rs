@@ -8,13 +8,16 @@ mod sprites;
 mod tilemaps;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use ludenea_app::meta::Filter;
 use ludenea_draw::Color;
 use ludenea_draw::frame::{CameraView, RenderFrame, SpriteItem, TilemapItem};
 use ludenea_ecs::{AssetId, Entity};
 use ludenea_math::Vec2;
+use serde::{Deserialize, Serialize};
 use wgpu::util::DeviceExt;
 
 use crate::atlas::{Atlas, Region};
@@ -50,8 +53,10 @@ pub struct Frames<'a> {
 }
 
 /// What the viewer adds over the frame: the debug draw layers to show, the selected entities,
-/// and a camera that overrides the frame's (the editor's free camera).
-#[derive(Clone, Debug, Default, PartialEq)]
+/// and a camera that overrides the frame's (the editor's free camera). Each field may be left
+/// out of its JSON, which `web` reads.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(default)]
 pub struct Overlay {
     pub debug_layers: BTreeSet<String>,
     pub selected: BTreeSet<Entity>,
@@ -59,7 +64,7 @@ pub struct Overlay {
 }
 
 /// What a draw could not draw as asked.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct DrawReport {
     /// What was drawn as a placeholder, in draw order: each sprite's entity, texture and
     /// frame, and each tile's tilemap entity, tileset and tile index.
@@ -279,6 +284,8 @@ impl Renderer {
     /// Draws `frames` offscreen and reads it back: `size.width * 4` bytes of RGBA per row,
     /// tightly packed, top row first. A target with no pixels gives no bytes; one past
     /// `max_texture_dimension_2d`, or whose read-back is past `max_buffer_size`, is refused.
+    /// Not on WebAssembly: it waits for the GPU, which a browser's thread cannot do.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn render_rgba(
         &mut self,
         size: Size,
@@ -340,6 +347,7 @@ impl Renderer {
         Ok(())
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn read_back(
         &mut self,
         size: Size,

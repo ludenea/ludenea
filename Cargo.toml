@@ -12,8 +12,8 @@ overflow-checks = true
 [profile.dev]
 opt-level = 1
 
-# The viewport renderer, downloaded by every browser editor: built for size (`cargo xtask
-# wasm-renderer`).
+# The browser renderers, downloaded by every browser editor and game: built for size (`cargo
+# xtask wasm-renderer` and `cargo xtask wasm-render`).
 [profile.wasm-renderer]
 inherits = "release"
 opt-level = "z"

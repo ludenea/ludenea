@@ -6,6 +6,8 @@ edition.workspace = true
 [features]
 # The wgpu renderer (`gpu`). Off by default: the simulation never pulls a GPU crate.
 gpu = ["dep:wgpu"]
+# The renderer in a browser canvas (`web`), built by `cargo xtask wasm-render`.
+web = ["gpu", "dep:serde_json", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys"]
 
 [dependencies]
 ludenea-app.workspace = true
@@ -14,11 +16,18 @@ ludenea-ecs.workspace = true
 ludenea-math.workspace = true
 png.workspace = true
 serde.workspace = true
+serde_json = { workspace = true, optional = true }
 thiserror.workspace = true
 
-# Native backends on native targets; the browser backends arrive with the web wrapper.
+# Native backends on native targets, WebGPU and WebGL2 in the browser.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 wgpu = { workspace = true, optional = true, features = ["std", "wgsl", "metal", "vulkan", "dx12"] }
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+wgpu = { workspace = true, optional = true, features = ["std", "wgsl", "webgpu", "webgl"] }
+wasm-bindgen = { workspace = true, optional = true }
+wasm-bindgen-futures = { workspace = true, optional = true }
+web-sys = { workspace = true, optional = true, features = ["HtmlCanvasElement"] }
 
 [dev-dependencies]
 boxes = { path = "../../examples/boxes" }

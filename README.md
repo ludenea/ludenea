@@ -304,9 +304,21 @@ time report into assertions, on the reference machine (an Apple M-series):
 
 ```sh
 cargo xtask wasm-game boxes editor/e2e/golden/pkg
+cargo xtask wasm-render editor/e2e/fixtures/renderer/pkg
 cargo run --locked -p boxes --bin editor-bench
 cargo build --locked -p ludenea-serve
 pnpm -C editor e2e
+```
+
+The renderer's pixel tests (`editor/e2e/renderer.spec.ts`) draw a reference frame with the
+browser renderer (`ludenea-render` with its `web` feature) and run twice, once per backend,
+with no GPU: the `webgl2` project on WebGL2 (SwiftShader through ANGLE), and the `webgpu`
+project on WebGPU, where headless Chromium offers SwiftShader's adapter with
+`--enable-unsafe-webgpu`, on macOS and Linux alike. The `webgpu` project fails, never skips,
+when the browser offers no WebGPU adapter. Run them alone with:
+
+```sh
+pnpm -C editor e2e renderer.spec.ts
 ```
 
 The divergence viewer's fixtures (`editor/e2e/fixtures/divergence/`) come from the `boxes`
