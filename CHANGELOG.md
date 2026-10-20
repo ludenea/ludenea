@@ -74,9 +74,10 @@ hash, those of the golden trace and replays included.
   layer, order and entity, the entities teleported on the frame's tick (added to those
   earlier extractors listed, sorted by entity without duplicates), and a warning naming
   the entity for a second camera, a sprite, tilemap or camera without a `Pose`, an
-  animation without a `Sprite`, an undeclared layer, or a clip the sheet lacks. Loading refuses a camera view or a tilemap cell size that is not finite
-  and above 0, a tilemap whose tile count is not `width * height`, and a clip whose `count`
-  or `ticks_per_frame` is 0. The crate depends on no GPU crate.
+  animation without a `Sprite`, an undeclared layer, or a clip the sheet lacks. Loading
+  refuses a camera view or a tilemap cell size that is not finite and above 0, a tilemap
+  whose tile count is not `width * height`, and a clip whose `count` or `ticks_per_frame`
+  is 0. The crate depends on no GPU crate.
 - `ludenea-render` also draws. `atlas::pack` decodes PNG textures, cuts each into frames by
   its `TextureMeta`, and packs the frames, extruded by 1 pixel, into reproducible
   `AtlasPage`s. It always returns an `Atlas`: a texture that does not decode, fit its
@@ -89,8 +90,9 @@ hash, those of the golden trace and replays included.
   draws a frame's sprites, tilemaps, layers with parallax, camera and debug draw to a
   target (`draw`, returning a `DrawReport`) or offscreen (`render_rgba`, returning a
   `Rendered` with the RGBA pixels and the `DrawReport`), drawing a magenta placeholder for
-  a missing texture or frame, which the report names, splitting atlases and batches below the device limits, and returning the
-  device's errors and its loss as `RenderError` values; `gpu::headless` opens a device
+  a missing texture or frame, which the report names, splitting atlases and batches below
+  the device limits, and returning the device's errors and its loss as `RenderError`
+  values; `gpu::headless` opens a device
   without a window. Behind feature `web`, the same renderer draws into a browser canvas
   with WebGPU or WebGL2.
 - The command line tool's new `render` draws a tick of a scene (with its `--inputs` and
@@ -101,14 +103,14 @@ hash, those of the golden trace and replays included.
   project's textures (each `.png` whose meta makes it a texture, found by the new
   `ludenea_cli::assets::project_textures`) are packed into the atlas; a texture that does
   not pack is a warning and draws as placeholders, and each sprite or tile drawn as a
-  placeholder is a warning naming the entity, the texture and the frame.
+  placeholder is a warning naming the entity, the texture and the frame. A tick past the
+  end of a replay and an unknown debug layer are refused with exit code 2. It needs a GPU
+  adapter, hardware or software, and is not in WebAssembly builds.
 - `Meta::texture(path)` is the one rule the editor listing and the command line share for
   whether a file is a texture: a PNG (its extension in any case, see the new
   `meta::is_png`) whose meta is a texture meta, or `Other` as metas written before
   textures had settings are, which reads as the default texture meta. A texture meta on
-  any other file makes no texture. A tick past the end of a replay and an
-  unknown debug layer are refused with exit code 2. It needs a GPU adapter, hardware or
-  software, and is not in WebAssembly builds.
+  any other file makes no texture.
 - `ludenea_app::replay::play_tick` plays one tick of a replay `load_replay` loaded: its
   recorded edits, then its recorded input.
 - `IntoSystemConfig::after_if_present(label)` orders a system after a set like `after`,
