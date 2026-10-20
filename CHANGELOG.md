@@ -94,7 +94,9 @@ API.
 - `Session::resume` drops an undo history that does not decode or has a later version,
   instead of failing with `SessionError::Undo`, and the entries that name a branch the
   session does not have, name the root as the branch a fork made, or restore branches
-  that do not fit the tree, such as one forked past its parent's run. `Session::warnings`
+  that do not fit the tree, such as one forked past its parent's run, and the fork entries
+  whose tick is not their branch's fork tick, and the redo of an edit recorded before its
+  branch forks. `Session::warnings`
   names each. Redo puts branches back only where they fork on their parent's run, and a
   fork never takes the identifier of a branch redo put back. A redo entry of a version 2
   history redoes within its branch only where cutting the run after its tick leaves every
@@ -272,7 +274,10 @@ API.
   ended the game process, redoing a branch forked past its parent's run exhausted its
   memory, and a fork after redoing one in a reloaded session could reuse a branch
   identifier, making a branch its own parent and hanging the game. A redo entry of a
-  version 2 history redoes again where it cuts no branch off; it failed to decode.
+  version 2 history redoes again where it cuts no branch off; it failed to decode. A fork
+  entry whose tick is not its branch's fork tick is dropped too, since undoing or redoing
+  it would replay up to that tick however far, and so is a redo of an edit recorded before
+  its branch forks.
 - `redo` of an edit on a branch keeps the recorded hashes of the ticks before the branch's
   fork true. After a tick 0 edit on a forked branch they were stale, so a later
   `load_session` on the same build reported a divergence that did not exist.

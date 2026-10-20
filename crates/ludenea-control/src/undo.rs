@@ -116,7 +116,9 @@ impl UndoEntry {
             | UndoEntry::Asset { .. }
             | UndoEntry::AppliedToPrefab { .. } => Ok(()),
             UndoEntry::Run { branch, .. } => known(tree, *branch),
-            UndoEntry::Fork { branch, .. } => not_root(*branch).and_then(|()| known(tree, *branch)),
+            UndoEntry::Fork { branch, cause, .. } => not_root(*branch)
+                .and_then(|()| known(tree, *branch))
+                .and_then(|()| forked_at(tree, *branch, cause.tick())),
         }
     }
 
@@ -134,14 +136,19 @@ impl UndoEntry {
             | UndoEntry::Asset { .. }
             | UndoEntry::AppliedToPrefab { .. } => Ok(()),
             UndoEntry::Fork {
-                branch, removed, ..
+                branch,
+                cause,
+                removed,
+                ..
             } => {
                 not_root(*branch)?;
                 let stored = StoredBranch::decode(removed).map_err(unfit)?;
                 let ids: Vec<BranchId> = stored.iter().map(StoredBranch::id).collect();
                 tree.put_back(stored, current_edits, current_head)
                     .map_err(unfit)?;
-                known(tree, *branch).inspect_err(|_| tree.remove(&ids))
+                known(tree, *branch)
+                    .and_then(|()| forked_at(tree, *branch, cause.tick()))
+                    .inspect_err(|_| tree.remove(&ids))
             }
             UndoEntry::Run {
                 branch,
@@ -159,6 +166,7 @@ impl UndoEntry {
                         .check_redo_within(*branch, edit.tick)
                         .map_err(not_within);
                 };
+                edit_after_fork(*branch, target.fork_tick, edit.tick)?;
                 let (segment, _) = own.into_segment().map_err(unfit)?;
                 // Redo brings the branch's run back as `own` holds it, and puts back the
                 // descendants forked on that run.
@@ -189,6 +197,31 @@ fn known(tree: &BranchTree, branch: BranchId) -> Result<(), String> {
         Some(_) => Ok(()),
         None => Err(unknown(branch)),
     }
+}
+
+/// Refuses a fork entry whose tick is not the fork tick of `branch`, a branch of `tree`:
+/// undoing or redoing it would show that tick, however far.
+pub(crate) fn forked_at(tree: &BranchTree, branch: BranchId, tick: u64) -> Result<(), String> {
+    let fork_tick = tree.get(branch).map_or(tick, |branch| branch.fork_tick);
+    if tick == fork_tick {
+        return Ok(());
+    }
+    Err(format!(
+        "forked at tick {tick}, but branch {} forks at tick {fork_tick}",
+        branch.0
+    ))
+}
+
+/// Refuses an edit at `tick` on `branch`, which forks at `fork_tick`, before the fork: the
+/// branch's own part of the run starts there.
+pub(crate) fn edit_after_fork(branch: BranchId, fork_tick: u64, tick: u64) -> Result<(), String> {
+    if tick >= fork_tick {
+        return Ok(());
+    }
+    Err(format!(
+        "records its edit at tick {tick}, before branch {} forks at tick {fork_tick}",
+        branch.0
+    ))
 }
 
 fn unknown(branch: BranchId) -> String {

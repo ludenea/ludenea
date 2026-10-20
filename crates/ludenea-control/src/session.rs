@@ -33,7 +33,8 @@ use crate::branches::{BranchId, BranchInfo, BranchTree, BranchesError, Segment, 
 use crate::checkpoints::{CHECKPOINT_BUDGET, Checkpoints};
 use crate::subscriptions::Introspection;
 use crate::undo::{
-    ForkCause, ROOT_FORKED, UndoEntry, UndoHistory, not_within, removed_by_run, unfit,
+    ForkCause, ROOT_FORKED, UndoEntry, UndoHistory, edit_after_fork, forked_at, not_within,
+    removed_by_run, unfit,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -363,8 +364,9 @@ impl Session {
     /// mean empty logs, an empty history, and a linear session. The other branches are
     /// stale until switched to. The undo history is a convenience: one that does not
     /// decode, and the entries that name a branch the session does not have or the root as
-    /// the branch a fork made, or that restore branches that do not fit the tree, are
-    /// dropped with a warning in `warnings` instead of refusing the session.
+    /// the branch a fork made, a fork tick that is not their branch's, an edit before their
+    /// branch forks, or that restore branches that do not fit the tree, are dropped with a
+    /// warning in `warnings` instead of refusing the session.
     pub fn resume(
         sim: &mut Simulation,
         export: SessionExport,
@@ -739,7 +741,10 @@ impl Session {
     ) -> Result<Option<(BranchId, u64)>, SessionError> {
         let players = self.inputs.players;
         let action = format!("Undo {}", entry.describe());
-        let refused = |reason: String| SessionError::Unfit { action, reason };
+        let refused = |reason: String| SessionError::Unfit {
+            action: action.clone(),
+            reason,
+        };
         match entry {
             UndoEntry::Scene { before, .. } => {
                 self.load_scene_version(sim, before.clone())?;
@@ -768,9 +773,10 @@ impl Session {
                     .tree
                     .get(*branch)
                     .ok_or(SessionError::NoSuchBranch(*branch))?;
-                let parent = forked
-                    .parent
-                    .ok_or_else(|| refused(ROOT_FORKED.to_string()))?;
+                let Some(parent) = forked.parent else {
+                    return Err(refused(ROOT_FORKED.to_string()));
+                };
+                forked_at(&self.tree, *branch, cause.tick()).map_err(refused)?;
                 name.clone_from(&forked.name);
                 let (subtree, tick) = (self.tree.subtree(*branch), cause.tick());
                 self.switch_to(sim, parent, tick)?;
@@ -823,7 +829,10 @@ impl Session {
         entry: &mut UndoEntry,
     ) -> Result<Option<(BranchId, u64)>, SessionError> {
         let action = format!("Redo {}", entry.describe());
-        let refused = |reason: String| SessionError::Unfit { action, reason };
+        let refused = |reason: String| SessionError::Unfit {
+            action: action.clone(),
+            reason,
+        };
         match entry {
             UndoEntry::Scene { after, .. } => {
                 self.load_scene_version(sim, after.clone())?;
@@ -853,6 +862,10 @@ impl Session {
                 self.tree
                     .put_back(stored, &self.edits, self.head)
                     .map_err(|error| refused(unfit(error)))?;
+                if let Err(reason) = forked_at(&self.tree, *branch, cause.tick()) {
+                    self.tree.remove(&ids);
+                    return Err(refused(reason));
+                }
                 if let Err(error) = self.switch_to(sim, *branch, cause.tick()) {
                     // The branch cannot be shown: the redo is refused, and the branches go
                     // back to the entry.
@@ -874,6 +887,8 @@ impl Session {
                 let mut stored = removed_by_run(removed)?.into_iter();
                 match stored.next() {
                     Some(own) => {
+                        let fork_tick = self.tree.current_branch().fork_tick;
+                        edit_after_fork(*branch, fork_tick, tick).map_err(refused)?;
                         let (segment, stale) = own.into_segment()?;
                         let descendants: Vec<StoredBranch> = stored.collect();
                         let ids: Vec<BranchId> = descendants.iter().map(StoredBranch::id).collect();
@@ -890,7 +905,6 @@ impl Session {
                             return Err(refused(unfit(error)));
                         }
                         // A segment stored before a rebuild resimulates from the fork tick.
-                        let fork_tick = self.tree.current_branch().fork_tick;
                         let from = if stale { fork_tick } else { tick };
                         if let Err(error) = self.restore_checkpoint(sim, from) {
                             // Showing `tick`, or resimulating, would start from this

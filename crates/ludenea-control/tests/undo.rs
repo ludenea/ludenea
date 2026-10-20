@@ -1370,3 +1370,82 @@ fn an_edit_or_a_take_over_that_would_fork_once_identifiers_are_exhausted_changes
         assert_eq!(sim.hash(), hash);
     }
 }
+
+/// A session of 100 ticks whose Branch 2 forks from the root at tick 50, back on the root
+/// and resumed with the undo and redo stacks `undo` and `redo`.
+fn forked_at_50_resumed_with(
+    undo: Vec<UndoEntryV3>,
+    redo: Vec<UndoEntryV3>,
+) -> (Simulation, Session) {
+    let (mut sim, mut session) = started(100);
+    play(&mut session, &mut sim, 100);
+    edit_at(&mut session, &mut sim, 50, 1);
+    session.switch_branch(&mut sim, ROOT).unwrap();
+    resimulate_all(&mut session, &mut sim);
+    let export = SessionExport {
+        undo: undo_history_v3(undo, redo),
+        ..session.export().unwrap()
+    };
+    let mut session = resume(&mut sim, export);
+    resimulate_all(&mut session, &mut sim);
+    (sim, session)
+}
+
+#[test]
+fn a_fork_entry_whose_tick_is_not_its_branch_fork_tick_is_dropped() {
+    let far = 1 << 36;
+    let fork = |id, tick, removed| UndoEntryV3::Fork {
+        branch: BranchId(id),
+        cause: ForkCauseV3::TakeOver {
+            tick,
+            input: Vec::new(),
+        },
+        name: format!("Branch {}", id + 1),
+        removed,
+    };
+    // The undo names Branch 2 as the tree has it, after the entry of its fork; the redo
+    // restores Branch 3 at tick 50.
+    let undo = vec![fork(1, 50, Vec::new()), fork(1, far, Vec::new())];
+    let redo = fork(2, far, removed_branch(2, ROOT, 50));
+    let (mut sim, mut session) = forked_at_50_resumed_with(undo, vec![redo]);
+
+    assert_eq!(
+        session.warnings(),
+        [
+            format!(
+                "the undo history's `Undo take-over at tick {far}` forked at tick {far}, but branch 1 forks at tick 50; it was dropped"
+            ),
+            format!(
+                "the undo history's `Redo take-over at tick {far}` forked at tick {far}, but branch 2 forks at tick 50; it was dropped"
+            ),
+        ]
+    );
+    // The entry of Branch 2's fork stays.
+    session.undo(&mut sim).unwrap();
+    assert_eq!(branch_ids(&session), [ROOT]);
+}
+
+#[test]
+fn a_redo_of_an_edit_before_its_branch_forks_is_dropped() {
+    let (sim, _) = started(0);
+    let run = UndoEntryV3::Run {
+        branch: BranchId(1),
+        edit: TimedEdit {
+            tick: 40,
+            edit: stats_edit(&sim, 2),
+        },
+        removed: removed_branch(1, ROOT, 50),
+    };
+    let (mut sim, mut session) = forked_at_50_resumed_with(Vec::new(), vec![run]);
+
+    assert_eq!(
+        session.warnings(),
+        [
+            "the undo history's `Redo edit at tick 40` records its edit at tick 40, before branch 1 forks at tick 50; it was dropped"
+        ]
+    );
+    assert!(matches!(
+        session.redo(&mut sim),
+        Err(SessionError::NothingToRedo)
+    ));
+}
