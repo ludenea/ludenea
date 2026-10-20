@@ -12,7 +12,7 @@
 
 use std::error::Error;
 use std::path::PathBuf;
-use std::process::{Command, ExitCode};
+use std::process::{Command, ExitCode, ExitStatus};
 
 use cargo_metadata::MetadataCommand;
 use wasm_bindgen_cli_support::Bindgen;
@@ -56,11 +56,10 @@ fn main() -> ExitCode {
 fn check() -> Result<(), Box<dyn Error>> {
     for command in CHECKS {
         eprintln!("xtask: cargo {command}");
-        let status = Command::new(cargo())
+        let status = run(Command::new(cargo())
             .args(command.split_whitespace())
             .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/.."))
-            .env("RUSTDOCFLAGS", "-D warnings")
-            .status()?;
+            .env("RUSTDOCFLAGS", "-D warnings"))?;
         if !status.success() {
             return Err(format!("`cargo {command}` failed").into());
         }
@@ -102,11 +101,10 @@ fn wasm_renderer(out_dir: &str) -> Result<(), Box<dyn Error>> {
 /// Runs `cargo <command>` on `package`'s library for the browser with `profile` and returns the
 /// module path.
 fn build(package: &str, command: &[&str], profile: &str) -> Result<PathBuf, Box<dyn Error>> {
-    let status = Command::new(cargo())
+    let status = run(Command::new(cargo())
         .args(command)
         .args(["--locked", "--profile", profile, "--target", TARGET])
-        .args(["-p", package, "--lib"])
-        .status()?;
+        .args(["-p", package, "--lib"]))?;
     if !status.success() {
         return Err(format!("building {package} for {TARGET} failed").into());
     }
@@ -114,6 +112,23 @@ fn build(package: &str, command: &[&str], profile: &str) -> Result<PathBuf, Box<
         .join(TARGET)
         .join(profile)
         .join(format!("{}.wasm", package.replace('-', "_"))))
+}
+
+/// Runs `command` and waits for it, naming the program and its working directory if it
+/// cannot start.
+fn run(command: &mut Command) -> Result<ExitStatus, Box<dyn Error>> {
+    command.status().map_err(|error| {
+        let directory = match command.get_current_dir() {
+            Some(directory) => directory.to_path_buf(),
+            None => std::env::current_dir().unwrap_or_default(),
+        };
+        format!(
+            "could not run `{}` in {}: {error}",
+            command.get_program().display(),
+            directory.display()
+        )
+        .into()
+    })
 }
 
 /// The cargo that runs this task, so that every run uses the same toolchain.
@@ -152,6 +167,20 @@ mod tests {
             );
         }
         assert!(workflow.contains("RUSTDOCFLAGS: -D warnings"));
+    }
+
+    #[test]
+    fn a_command_that_cannot_start_names_the_program_and_its_directory() {
+        let directory = std::env::temp_dir();
+        let error = super::run(
+            std::process::Command::new("ludenea-no-such-program").current_dir(&directory),
+        )
+        .unwrap_err();
+        let expected = format!(
+            "could not run `ludenea-no-such-program` in {}: ",
+            directory.display()
+        );
+        assert!(error.to_string().starts_with(&expected), "{error}");
     }
 
     #[test]
