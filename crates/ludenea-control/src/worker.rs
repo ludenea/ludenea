@@ -16,7 +16,7 @@ use ludenea_app::App;
 use wasm_bindgen::prelude::*;
 
 use crate::host::Host;
-use crate::in_process::answer;
+use crate::in_process::text::answer;
 use crate::protocol::ServerMessage;
 
 /// The tick the host was at when the current call began, for the panic hook.

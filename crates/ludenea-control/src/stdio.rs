@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use ludenea_app::{App, Parallel};
 
 use crate::host::Host;
-use crate::in_process::answer;
+use crate::in_process::text::answer;
 use crate::protocol::{Command, ConsoleLevel, ErrorCode, Event, ProtocolError, ServerMessage};
 
 /// How long the loop waits for a message before it advances the host anyway.

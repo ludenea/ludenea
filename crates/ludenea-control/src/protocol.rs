@@ -110,6 +110,26 @@ pub mod outcome {
     }
 }
 
+/// Reads a hello of any shape, for a text transport that cannot read a message: `None` when
+/// `text` is no hello, otherwise the protocol version it gives, if any, so a hello from a
+/// version before `protocol_fingerprint` is refused as a version mismatch.
+pub fn unreadable_hello(text: &str) -> Option<Option<u32>> {
+    #[derive(Deserialize)]
+    #[serde(tag = "type", rename_all = "snake_case")]
+    enum AnyHello {
+        Hello {
+            #[serde(default)]
+            protocol_version: serde_json::Value,
+        },
+    }
+    let AnyHello::Hello { protocol_version } = serde_json::from_str(text).ok()?;
+    Some(
+        protocol_version
+            .as_u64()
+            .and_then(|version| u32::try_from(version).ok()),
+    )
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]

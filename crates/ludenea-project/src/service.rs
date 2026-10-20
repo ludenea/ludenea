@@ -9,12 +9,13 @@ use std::thread;
 use std::time::Duration;
 
 use ludenea_control::Bytes;
+use ludenea_control::protocol::unreadable_hello;
 use tokio::sync::broadcast;
 
 use crate::protocol::{
     AssetTexts, FailureCode, PROJECT_PROTOCOL_VERSION, ProjectClientMessage, ProjectEvent,
     ProjectFailure, ProjectInfo, ProjectReply, ProjectRequest, ProjectServerMessage, ServiceMode,
-    handshake, unreadable_hello, version_mismatch,
+    handshake, version_mismatch,
 };
 use crate::{
     BuildArtifact, BuildError, BuildEvent, BuildTarget, GameProcess, PluginEvent, Project,

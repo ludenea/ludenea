@@ -243,6 +243,9 @@ API.
   `SessionError::NoSuchBranch`, "there is no branch 0".
 - Removed: `SessionError::Undo`, which nothing returns since `Session::resume` drops an
   undo history that does not decode with a warning. `UndoError` stays, in those warnings.
+- New: `ludenea_control::protocol::unreadable_hello`, which reads the protocol version of a
+  hello of any shape, so a text transport refuses a hello from an older protocol version
+  as a version mismatch. The project service uses it instead of its own copy.
 
 ### Control protocol
 
