@@ -25,13 +25,17 @@ use crate::camera::{DEFAULT_CAMERA, fit, world_to_clip};
 use crate::interpolate::interpolate;
 use sprites::{BLANK, INSTANCE_FLOATS, Sample};
 
-pub use device::headless;
+pub use device::{headless, headless_with_limits};
 
 /// The color a target is cleared to before anything is drawn.
 pub const BACKGROUND: Color = Color(0x121214FF);
 
 /// The largest atlas page side the renderer accepts, before the device's own limit.
 const MAX_PAGE_SIDE: u32 = 4096;
+
+/// The operation of a GPU error pending before a call: raised by the host's use of the
+/// device, or after an earlier call returned.
+const EARLIER: &str = "earlier GPU work";
 
 /// The format of pages and of `render_rgba`'s target: 8-bit RGBA, stored as given.
 const RGBA: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -79,7 +83,10 @@ pub struct Rendered {
     pub report: DrawReport,
 }
 
+/// Why the renderer could not do what was asked. Non-exhaustive: later versions may add
+/// variants without a breaking change.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum RenderError {
     #[error("no GPU adapter: tried {0}")]
     NoAdapter(String),
@@ -97,14 +104,22 @@ pub enum RenderError {
     },
     #[error("the GPU device was lost: {0}")]
     DeviceLost(String),
+    /// An atlas page whose data cannot be uploaded: a side of 0, or pixels that do not match
+    /// its size. `page` is its index in `Atlas::pages`.
+    #[error("set_atlas refuses atlas page {page}: {reason}")]
+    InvalidAtlas { page: usize, reason: String },
 }
 
 /// Draws render frames with one device. Pages come from `set_atlas`; until then, and for any
 /// sprite whose region is not in the atlas, a magenta placeholder is drawn.
 ///
 /// The renderer handles its device's errors: an error the device raises outside an error
-/// scope is returned by the next `set_atlas`, `draw` or `render_rgba` (the one that caused
-/// it, when it did) as `RenderError::Gpu`. Once the device is lost, every call returns
+/// scope is returned by the next `set_atlas`, `draw` or `render_rgba` as `RenderError::Gpu`.
+/// Its operation is the call's own when the error was raised while the call ran, and
+/// `"earlier GPU work"` when it was pending before the call (raised by the host's own use of
+/// the device, or after an earlier call returned); the call then does nothing. A call that
+/// returns `Gpu` with its own operation ran: `set_atlas` has replaced the atlas, and `draw`
+/// has submitted its work. Once the device is lost, every call returns
 /// `RenderError::DeviceLost` without touching it, and the caller makes a new renderer on a
 /// new device.
 pub struct Renderer {
@@ -217,35 +232,49 @@ impl Renderer {
     }
 
     /// Uploads the atlas's pages, replacing the previous atlas. A page wider or taller than
-    /// `max_page_side` is refused, and so is a page whose pixels do not match its size; the
-    /// previous atlas then stays.
+    /// `max_page_side` is refused with `RenderError::Limit`, naming `max_page_side` when the
+    /// renderer's 4096 cap binds and `max_texture_dimension_2d` when the device's limit does,
+    /// and a page with a side of 0 or whose pixels do not match its size with
+    /// `RenderError::InvalidAtlas`; the previous atlas then stays.
     pub fn set_atlas(&mut self, atlas: &Atlas) -> Result<(), RenderError> {
         self.guarded("set_atlas", |renderer| renderer.replace_atlas(atlas))
     }
 
     fn replace_atlas(&mut self, atlas: &Atlas) -> Result<(), RenderError> {
         let allowed = self.max_page_side();
-        for page in &atlas.pages {
+        let limit = if MAX_PAGE_SIDE < self.device.limits().max_texture_dimension_2d {
+            "max_page_side"
+        } else {
+            "max_texture_dimension_2d"
+        };
+        for (index, page) in atlas.pages.iter().enumerate() {
             let side = page.width.max(page.height);
             if side > allowed {
                 return Err(RenderError::Limit {
                     operation: "set_atlas",
-                    limit: "max_texture_dimension_2d",
+                    limit,
                     requested: u64::from(side),
                     allowed: u64::from(allowed),
                 });
             }
+            let invalid = |reason: String| RenderError::InvalidAtlas {
+                page: index,
+                reason,
+            };
+            if page.width == 0 || page.height == 0 {
+                return Err(invalid(format!(
+                    "a {}x{} page has no pixels",
+                    page.width, page.height
+                )));
+            }
             let expected = u64::from(page.width) * u64::from(page.height) * 4;
-            if page.width == 0 || page.height == 0 || page.rgba.len() as u64 != expected {
-                return Err(RenderError::Gpu {
-                    operation: "set_atlas",
-                    message: format!(
-                        "a {}x{} page needs {expected} bytes of RGBA pixels, but it has {}",
-                        page.width,
-                        page.height,
-                        page.rgba.len()
-                    ),
-                });
+            if page.rgba.len() as u64 != expected {
+                return Err(invalid(format!(
+                    "a {}x{} page needs {expected} bytes of RGBA pixels, but it has {}",
+                    page.width,
+                    page.height,
+                    page.rgba.len()
+                )));
             }
         }
         self.pages = atlas
@@ -275,7 +304,8 @@ impl Renderer {
     }
 
     /// Draws `frames` into `target`, a view of `size` pixels in the renderer's format. A size
-    /// past `max_texture_dimension_2d` is refused.
+    /// past `max_texture_dimension_2d` is refused. Of tilemaps sharing an entity, which only
+    /// a malformed frame holds, the first listed is drawn and the others are skipped.
     pub fn draw(
         &mut self,
         target: &wgpu::TextureView,
@@ -306,13 +336,14 @@ impl Renderer {
     }
 
     /// Runs `run` between two checks of the device's faults, which take precedence over its
-    /// result: the loss of the device, or the errors it raised before or during `run`.
+    /// result: the loss of the device, or the errors it raised before `run`, reported as
+    /// `EARLIER` without running it, or during `run`, reported as `operation`.
     fn guarded<T>(
         &mut self,
         operation: &'static str,
         run: impl FnOnce(&mut Self) -> Result<T, RenderError>,
     ) -> Result<T, RenderError> {
-        self.faults(operation)?;
+        self.faults(EARLIER)?;
         let result = run(self);
         self.faults(operation)?;
         result
@@ -479,19 +510,21 @@ impl Renderer {
         let aspect = size.width.max(1) as f32 / size.height.max(1) as f32;
         let visible = fit(camera.view, aspect);
         let pages: Vec<(u32, u32)> = self.pages.iter().map(|page| page.size).collect();
-        self.tilemaps.update(
-            &self.device,
-            &self.queue,
-            &frame.tilemaps,
-            &self.regions,
-            &pages,
-        );
-
-        // Tilemaps before sprites, so a stable sort draws a tilemap first on a tie.
-        let mut pieces: Vec<(u16, i32, Entity, Piece<'_>)> = frame
+        // A well-formed frame has one tilemap per entity; of a malformed frame's duplicates,
+        // only the first listed is built and drawn.
+        let mut seen = BTreeSet::new();
+        let tilemaps: Vec<&TilemapItem> = frame
             .tilemaps
             .iter()
-            .map(|item| (item.layer, item.order, item.entity, Piece::Tilemap(item)))
+            .filter(|item| seen.insert(item.entity))
+            .collect();
+        self.tilemaps
+            .update(&self.device, &self.queue, &tilemaps, &self.regions, &pages);
+
+        // Tilemaps before sprites, so a stable sort draws a tilemap first on a tie.
+        let mut pieces: Vec<(u16, i32, Entity, Piece<'_>)> = tilemaps
+            .iter()
+            .map(|&item| (item.layer, item.order, item.entity, Piece::Tilemap(item)))
             .chain(
                 frame
                     .sprites

@@ -3,6 +3,7 @@
 #![cfg(feature = "gpu")]
 
 use ludenea_app::meta::{Filter, Grid, TextureMeta};
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 
 use ludenea_draw::frame::{
@@ -15,6 +16,7 @@ use ludenea_math::{Rot, Vec2};
 use ludenea_render::atlas::{Atlas, AtlasPage, TextureSource, pack};
 use ludenea_render::gpu::{
     BACKGROUND, DrawReport, Frames, Overlay, RenderError, Renderer, Size, headless,
+    headless_with_limits,
 };
 
 const SIZE: Size = Size {
@@ -69,8 +71,14 @@ fn upload(renderer: &mut Renderer, png: &[u8], meta: &TextureMeta) -> Atlas {
     atlas
 }
 
+thread_local! {
+    /// The world `entity` spawns from, so each call gives a new entity.
+    static ENTITIES: RefCell<World> = RefCell::new(World::new());
+}
+
+/// A new entity, distinct from every other one this test thread made.
 fn entity() -> Entity {
-    World::new().spawn()
+    ENTITIES.with_borrow_mut(World::spawn)
 }
 
 fn sprite(entity: Entity, position: Vec2) -> SpriteItem {
@@ -320,6 +328,35 @@ fn nearest_filter_keeps_hard_edges() {
 }
 
 #[test]
+fn linear_filter_blends_neighbouring_texels() {
+    let mut renderer = renderer();
+    // A red texel then a blue one at 1 pixel per unit: 2 world units, pixels 16..48 across.
+    // Near the texels' shared edge, the linear sampler blends them; far from it, it does not.
+    let meta = TextureMeta {
+        pixels_per_unit: 1,
+        filter: Filter::Linear,
+        ..TextureMeta::default()
+    };
+    let texture = png(2, 1, |x, _| if x == 0 { RED } else { BLUE });
+    upload(&mut renderer, &texture, &meta);
+    let pixels = render(
+        &mut renderer,
+        SIZE,
+        &frame(vec![sprite(entity(), Vec2::ZERO)]),
+    );
+    for x in [31, 32] {
+        let [red, green, blue, alpha] = pixel(&pixels, SIZE, x, 32);
+        assert!(
+            red > 64 && blue > 64 && green == 0 && alpha == 255,
+            "a blend of red and blue at ({x}, 32): {:?}",
+            [red, green, blue, alpha]
+        );
+    }
+    assert_eq!(pixel(&pixels, SIZE, 16, 32), RED);
+    assert_eq!(pixel(&pixels, SIZE, 47, 32), BLUE);
+}
+
+#[test]
 fn animation_frame_selects_its_region() {
     let mut renderer = renderer();
     let meta = TextureMeta {
@@ -417,7 +454,17 @@ fn sprites_draw_without_an_atlas_as_placeholders() {
         SIZE,
         &frame(vec![sprite(entity(), Vec2::ZERO)]),
     );
-    assert_eq!(pixel(&pixels, SIZE, 32, 32), MAGENTA);
+    // One world unit centred on the origin: pixels 24..40 both ways.
+    for (x, y) in [(24, 24), (39, 24), (24, 39), (39, 39), (32, 32)] {
+        assert_eq!(pixel(&pixels, SIZE, x, y), MAGENTA, "inside at ({x}, {y})");
+    }
+    for (x, y) in [(23, 32), (40, 32), (32, 23), (32, 40)] {
+        assert_eq!(
+            pixel(&pixels, SIZE, x, y),
+            background(),
+            "outside at ({x}, {y})"
+        );
+    }
 }
 
 #[test]
@@ -511,14 +558,22 @@ fn parallax_layers_follow_the_camera_by_their_factor() {
 
 #[test]
 fn max_page_side_is_capped_at_4096() {
-    let renderer = renderer();
-    assert!(renderer.max_page_side() <= 4096);
-    assert!(renderer.max_page_side() > 0);
+    let (device, queue) = device();
+    let expected = 4096.min(device.limits().max_texture_dimension_2d);
+    let renderer = Renderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm);
+    assert_eq!(renderer.max_page_side(), expected);
 }
 
 #[test]
 fn set_atlas_refuses_a_page_larger_than_the_device_allows() {
-    let mut renderer = renderer();
+    let (device, queue) = device();
+    // The renderer's own cap binds below a device allowing more than 4096.
+    let limit = if device.limits().max_texture_dimension_2d > 4096 {
+        "max_page_side"
+    } else {
+        "max_texture_dimension_2d"
+    };
+    let mut renderer = Renderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm);
     let side = renderer.max_page_side() + 1;
     let atlas = Atlas {
         pages: vec![AtlasPage {
@@ -533,11 +588,57 @@ fn set_atlas_refuses_a_page_larger_than_the_device_allows() {
         renderer.set_atlas(&atlas),
         Err(RenderError::Limit {
             operation: "set_atlas",
-            limit: "max_texture_dimension_2d",
+            limit,
             requested: u64::from(side),
             allowed: u64::from(side - 1),
         })
     );
+}
+
+#[test]
+fn set_atlas_refuses_a_malformed_page_as_invalid_data() {
+    let mut renderer = renderer();
+    let valid = upload(&mut renderer, &solid(RED), &TextureMeta::default());
+    let with_page = |page: AtlasPage| Atlas {
+        pages: vec![valid.pages[0].clone(), page],
+        ..valid.clone()
+    };
+    let short = with_page(AtlasPage {
+        width: 2,
+        height: 2,
+        rgba: vec![0; 15],
+    });
+    let empty = with_page(AtlasPage {
+        width: 0,
+        height: 4,
+        rgba: Vec::new(),
+    });
+    assert_eq!(
+        renderer.set_atlas(&short),
+        Err(RenderError::InvalidAtlas {
+            page: 1,
+            reason: "a 2x2 page needs 16 bytes of RGBA pixels, but it has 15".to_string(),
+        })
+    );
+    let error = renderer.set_atlas(&empty).unwrap_err();
+    assert_eq!(
+        error,
+        RenderError::InvalidAtlas {
+            page: 1,
+            reason: "a 0x4 page has no pixels".to_string(),
+        }
+    );
+    assert_eq!(
+        error.to_string(),
+        "set_atlas refuses atlas page 1: a 0x4 page has no pixels"
+    );
+    // The previous atlas stays: the sprite still draws red.
+    let pixels = render(
+        &mut renderer,
+        SIZE,
+        &frame(vec![sprite(entity(), Vec2::ZERO)]),
+    );
+    assert_eq!(pixel(&pixels, SIZE, 32, 32), RED);
 }
 
 #[test]
@@ -814,6 +915,33 @@ fn later_layers_draw_over_earlier_ones() {
 }
 
 #[test]
+fn equal_orders_draw_the_lower_entity_first() {
+    let mut renderer = renderer();
+    tileset(&mut renderer);
+    let (first, second) = (entity(), entity());
+    let (low, high) = if first < second {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    // Same layer, same order, same place: the higher entity draws last, on top, whatever
+    // the order of the frame's list.
+    for sprites in [
+        vec![
+            tile_sprite(high, Vec2::ZERO, 0),
+            tile_sprite(low, Vec2::ZERO, 1),
+        ],
+        vec![
+            tile_sprite(low, Vec2::ZERO, 1),
+            tile_sprite(high, Vec2::ZERO, 0),
+        ],
+    ] {
+        let pixels = render(&mut renderer, SIZE, &frame(sprites));
+        assert_eq!(pixel(&pixels, SIZE, 32, 32), RED);
+    }
+}
+
+#[test]
 fn order_sorts_within_a_layer() {
     let mut renderer = renderer();
     tileset(&mut renderer);
@@ -1027,6 +1155,26 @@ fn a_tilemap_larger_than_a_chunk_draws_every_cell() {
 }
 
 #[test]
+fn of_tilemaps_sharing_an_entity_only_the_first_listed_draws() {
+    let mut renderer = renderer();
+    tileset(&mut renderer);
+    // A malformed frame: two tilemaps of one entity, red at the origin, then green left of it.
+    let shared = entity();
+    let scene = with_tilemaps(
+        Vec::new(),
+        vec![
+            tilemap(shared, Vec2::ZERO, 1, 1, vec![Some(0)]),
+            tilemap(shared, Vec2::new(-1.0, 0.0), 1, 1, vec![Some(1)]),
+        ],
+    );
+    for _ in 0..2 {
+        let pixels = render(&mut renderer, SIZE, &scene);
+        assert_eq!(pixel(&pixels, SIZE, 40, 24), RED);
+        assert_eq!(pixel(&pixels, SIZE, 24, 24), background());
+    }
+}
+
+#[test]
 fn a_tilemap_whose_tiles_do_not_match_its_size_draws_nothing_at_once() {
     let mut renderer = renderer();
     tileset(&mut renderer);
@@ -1092,30 +1240,26 @@ fn previous_frame_and_alpha_draw_in_between() {
 /// A device that allows buffers of at most `max_buffer_size` bytes, so a test can reach the
 /// limit with an ordinary frame.
 fn device_with_buffer_limit(max_buffer_size: u64) -> (wgpu::Device, wgpu::Queue) {
-    pollster::block_on(async {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = match instance.request_adapter(&Default::default()).await {
-            Ok(adapter) => adapter,
-            Err(_) => instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    force_fallback_adapter: true,
-                    ..Default::default()
-                })
-                .await
-                .unwrap_or_else(|error| panic!("no GPU adapter: {error}")),
-        };
-        let required_limits = wgpu::Limits {
-            max_buffer_size,
-            ..wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits())
-        };
-        adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                required_limits,
-                ..Default::default()
-            })
-            .await
-            .unwrap()
-    })
+    pollster::block_on(headless_with_limits(|limits| wgpu::Limits {
+        max_buffer_size,
+        ..limits
+    }))
+    .unwrap_or_else(|error| panic!("{error}"))
+}
+
+#[test]
+fn a_device_that_cannot_be_opened_is_tried_on_every_adapter() {
+    // No adapter allows textures of `u32::MAX` a side, so every device request fails.
+    let error = pollster::block_on(headless_with_limits(|limits| wgpu::Limits {
+        max_texture_dimension_2d: u32::MAX,
+        ..limits
+    }))
+    .unwrap_err();
+    let RenderError::NoAdapter(tried) = &error else {
+        panic!("expected NoAdapter, got {error}");
+    };
+    assert!(tried.contains("its device could not be opened"), "{tried}");
+    assert!(tried.contains("the fallback adapter"), "{tried}");
 }
 
 #[test]
@@ -1211,7 +1355,8 @@ fn a_validation_error_is_returned_by_the_next_draw() {
     assert!(
         matches!(
             &error,
-            RenderError::Gpu { operation: "draw", message } if message.contains("too large")
+            RenderError::Gpu { operation: "earlier GPU work", message }
+                if message.contains("too large")
         ),
         "{error}"
     );
@@ -1219,6 +1364,47 @@ fn a_validation_error_is_returned_by_the_next_draw() {
     assert_eq!(
         draw(&device, &mut renderer, SIZE, &scene, rgba),
         Ok(DrawReport::default())
+    );
+}
+
+#[test]
+fn an_error_pending_before_set_atlas_is_named_earlier_work_and_keeps_the_atlas() {
+    let (device, queue) = device();
+    let mut renderer = renderer_on(&device, queue);
+    let atlas = pack(
+        &[TextureSource {
+            id: AssetId(1),
+            path: None,
+            png: &solid(RED),
+            meta: &TextureMeta::default(),
+        }],
+        renderer.max_page_side(),
+    );
+    let _buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("too large"),
+        size: device.limits().max_buffer_size + 4,
+        usage: wgpu::BufferUsages::VERTEX,
+        mapped_at_creation: false,
+    });
+    let error = renderer.set_atlas(&atlas).unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            RenderError::Gpu { operation: "earlier GPU work", message }
+                if message.contains("too large")
+        ),
+        "{error}"
+    );
+    // `set_atlas` did not run: the sprite is still a placeholder until it is called again.
+    let scene = frame(vec![sprite(entity(), Vec2::ZERO)]);
+    assert_eq!(
+        pixel(&render(&mut renderer, SIZE, &scene), SIZE, 32, 32),
+        MAGENTA
+    );
+    renderer.set_atlas(&atlas).unwrap();
+    assert_eq!(
+        pixel(&render(&mut renderer, SIZE, &scene), SIZE, 32, 32),
+        RED
     );
 }
 

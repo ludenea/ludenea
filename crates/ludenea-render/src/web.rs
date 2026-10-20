@@ -182,9 +182,11 @@ impl WebRenderer {
         serde_json::to_string(&refused).map_err(failure)
     }
 
-    /// `width` and `height` in CSS pixels; the canvas gets `pixel_ratio` times more. A side
-    /// past the device's `max_texture_dimension_2d` keeps the canvas at that limit, and every
-    /// `draw` until a resize within it returns the `max_texture_dimension_2d` limit error.
+    /// `width` and `height` in CSS pixels; the canvas gets `pixel_ratio` times more, at least
+    /// 1 pixel a side. It cannot report an error, so an oversized size surfaces on the next
+    /// `draw`: a side past the device's `max_texture_dimension_2d` keeps the canvas at that
+    /// limit, and every `draw` until a resize within it returns the `max_texture_dimension_2d`
+    /// limit error.
     pub fn resize(&mut self, width: u32, height: u32, pixel_ratio: f32) {
         self.size = Size {
             width: ((width as f32 * pixel_ratio) as u32).max(1),

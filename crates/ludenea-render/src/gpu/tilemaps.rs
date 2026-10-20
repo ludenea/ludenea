@@ -1,7 +1,8 @@
 //! Tilemaps, cut into chunks of 32 by 32 cells: each chunk is one instance buffer of the quad
-//! pipeline, kept until its tilemap's tiles change. The instances are relative to the
-//! tilemap's position, which its view adds on the GPU, so a moving (or interpolated) tilemap
-//! keeps its chunks.
+//! pipeline, kept until its tilemap's tiles change, and drawn in one draw per run of tiles
+//! sampling the same page, so a chunk spanning several atlas pages or holding placeholders
+//! is several draws. The instances are relative to the tilemap's position, which its view
+//! adds on the GPU, so a moving (or interpolated) tilemap keeps its chunks.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
@@ -40,16 +41,21 @@ impl Cache {
     }
 
     /// Builds the chunks of each item whose tiles changed, and forgets the tilemaps not in
-    /// `items`.
+    /// `items`, which hold at most one item per entity (two would rebuild each other's
+    /// chunks on every call).
     pub fn update(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        items: &[TilemapItem],
+        items: &[&TilemapItem],
         regions: &BTreeMap<(AssetId, u32), Region>,
         pages: &[(u32, u32)],
     ) {
-        let items: Vec<&TilemapItem> = items.iter().filter(|item| well_formed(item)).collect();
+        let items: Vec<&TilemapItem> = items
+            .iter()
+            .copied()
+            .filter(|item| well_formed(item))
+            .collect();
         let present: BTreeSet<Entity> = items.iter().map(|item| item.entity).collect();
         self.0.retain(|entity, _| present.contains(entity));
         for item in items {
@@ -84,9 +90,9 @@ fn same_tiles(a: &TilemapItem, b: &TilemapItem) -> bool {
         && a.tiles == b.tiles
 }
 
-/// The chunks of `item`, relative to its position, row by row of chunks from the bottom-left. A tile fills its cell; a
-/// tile whose region is missing is a magenta cell and is reported. Only the rows `tiles`
-/// reaches are walked, and a cell past its end is empty.
+/// The chunks of `item`, relative to its position, row by row of chunks from the bottom-left.
+/// A tile fills its cell; a tile whose region is missing is a magenta cell and is reported.
+/// Only the rows `tiles` reaches are walked, and a cell past its end is empty.
 fn build(
     device: &wgpu::Device,
     queue: &wgpu::Queue,

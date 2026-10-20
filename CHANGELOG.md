@@ -95,9 +95,13 @@ hash, those of the golden trace and replays included.
   `Rendered` with the RGBA pixels and the `DrawReport`), drawing a magenta placeholder for
   a missing texture or frame, which the report names, splitting atlases and batches below
   the device limits, and returning the device's errors and its loss as `RenderError`
-  values; `gpu::headless` opens a device
-  without a window. Behind feature `web`, the same renderer draws into a browser canvas
-  with WebGPU or WebGL2.
+  values (non-exhaustive, so later variants are not breaking): a GPU error pending before
+  a call is named `"earlier GPU work"` and the call does not run, and an atlas page with a
+  side of 0 or pixels that do not match its size is `RenderError::InvalidAtlas`, naming
+  the page. `gpu::headless` opens a device without a window, on the fallback adapter when
+  there is no hardware adapter or its device cannot be opened, and
+  `gpu::headless_with_limits` does the same with adjusted device limits. Behind feature
+  `web`, the same renderer draws into a browser canvas with WebGPU or WebGL2.
 - The command line tool's new `render` draws a tick of a scene (with its `--inputs` and
   `--edits`) or of a `.replay` offscreen and writes it to a PNG: `--tick`, `--out`,
   `--width` and `--height` (1280 by 720 by default), and `--debug-layer` for each debug
