@@ -13,7 +13,13 @@ pub const DEFAULT_CAMERA: CameraView = CameraView {
 /// The visible area for a target of `aspect = width / height`: `view` widened on the longer
 /// side to match `aspect`, never narrowed and never stretched, so the whole minimum view
 /// stays on screen at the same scale on both axes.
+///
+/// `aspect` must be positive and finite; for any other aspect (a target with no pixels, or a
+/// NaN), `view` is returned unchanged rather than an infinite or NaN area.
 pub fn fit(view: Vec2, aspect: f32) -> Vec2 {
+    if !(aspect.is_finite() && aspect > 0.0) {
+        return view;
+    }
     if view.x < view.y * aspect {
         Vec2::new(view.y * aspect, view.y)
     } else {
@@ -46,6 +52,14 @@ mod tests {
         assert_eq!(fit(Vec2::new(16.0, 9.0), 1.0), Vec2::new(16.0, 16.0));
         assert_eq!(fit(Vec2::new(16.0, 9.0), 16.0 / 9.0), Vec2::new(16.0, 9.0));
         assert_eq!(fit(Vec2::new(9.0, 16.0), 1.0), Vec2::new(16.0, 16.0));
+    }
+
+    #[test]
+    fn fit_keeps_the_view_for_an_aspect_that_is_not_positive_and_finite() {
+        let view = Vec2::new(16.0, 9.0);
+        for aspect in [0.0, -1.0, f32::INFINITY, f32::NEG_INFINITY, f32::NAN] {
+            assert_eq!(fit(view, aspect), view, "aspect {aspect}");
+        }
     }
 
     #[test]
