@@ -8,8 +8,9 @@ use std::io::Cursor;
 use ludenea_app::meta::{Filter, Grid, TextureMeta};
 use ludenea_ecs::AssetId;
 
-/// How many bytes decoding one PNG may allocate: room for a 4096 by 4096 RGBA image and the
-/// decoder's own buffers, while a file declaring absurd dimensions is refused, not allocated.
+/// How many bytes one decoded PNG may take, checked against its declared dimensions before
+/// the pixel buffer is allocated (the decoder's own limit only covers its internal buffers):
+/// room for a 4096 by 4096 RGBA image, while a file declaring absurd dimensions is refused.
 const DECODE_LIMIT_BYTES: usize = 256 * 1024 * 1024;
 
 /// One texture to pack: its PNG bytes and how its meta cuts them into frames.
@@ -260,12 +261,13 @@ fn prepare(source: &TextureSource<'_>, max_page: u32) -> Result<Texture, Texture
         pixels_per_unit: meta.pixels_per_unit,
         filter: meta.filter,
     };
-    // Whole frames fit in the image, so these sums stay below its side and never overflow.
+    // Each term is at most the offset of a whole frame inside the image, so no sum exceeds the
+    // image side. `frame + spacing` alone could overflow, so it is never computed.
     let corners = (0..rows)
         .flat_map(|row| (0..columns).map(move |column| (column, row)))
         .map(|(column, row)| {
-            let left = grid.margin + column * (grid.frame_width + grid.spacing);
-            let top = grid.margin + row * (grid.frame_height + grid.spacing);
+            let left = grid.margin + column * grid.frame_width + column * grid.spacing;
+            let top = grid.margin + row * grid.frame_height + row * grid.spacing;
             (left, top)
         })
         .collect();
@@ -297,9 +299,15 @@ fn decode(bytes: &[u8]) -> Result<Image, String> {
     let mut decoder = png::Decoder::new_with_limits(Cursor::new(bytes), limits);
     decoder.set_transformations(png::Transformations::normalize_to_color8());
     let mut reader = decoder.read_info().map_err(|error| error.to_string())?;
+    let (width, height) = reader.info().size();
     let size = reader
         .output_buffer_size()
-        .ok_or("the image is too large to decode")?;
+        .filter(|&size| size <= DECODE_LIMIT_BYTES)
+        .ok_or_else(|| {
+            format!(
+                "the declared {width}x{height} image needs more than the {DECODE_LIMIT_BYTES} bytes a texture may take"
+            )
+        })?;
     let mut buffer = vec![0; size];
     let info = reader
         .next_frame(&mut buffer)
@@ -354,12 +362,12 @@ impl Shelves {
         if self.extents.is_empty() {
             self.extents.push((0, 0));
             shelf_height = height;
-        } else if column + width > self.max {
+        } else if exceeds(column, width, self.max) {
             top += shelf_height;
             shelf_height = height;
             column = 0;
         }
-        if top + height > self.max {
+        if exceeds(top, height, self.max) {
             self.extents.push((0, 0));
             top = 0;
             shelf_height = height;
@@ -373,6 +381,12 @@ impl Shelves {
         // A page index never exceeds the number of frames, which a Vec bounds well below u32.
         (page as u32, column, top)
     }
+}
+
+/// Whether `start + length` passes `max`, computed so that a page side near `u32::MAX` cannot
+/// overflow; once it does not pass, `start + length` fits a u32.
+fn exceeds(start: u32, length: u32, max: u32) -> bool {
+    u64::from(start) + u64::from(length) > u64::from(max)
 }
 
 /// Copies the frame into its region and repeats its edge pixels into the 1-pixel border, so

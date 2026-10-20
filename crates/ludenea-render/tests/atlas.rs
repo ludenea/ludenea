@@ -357,3 +357,61 @@ fn grayscale_and_palette_pngs_decode_to_rgba() {
     assert_eq!(colors(1), [[10, 10, 10, 255], [200, 200, 200, 255]]);
     assert_eq!(colors(2), [[4, 5, 6, 255], [1, 2, 3, 255]]);
 }
+
+#[test]
+fn huge_spacing_and_margin_with_one_frame_do_not_panic() {
+    let image = png(4, 4, 6);
+    let spacing = grid(4, 4, 0, u32::MAX);
+    let atlas = pack(&[source(1, &image, &spacing)], PAGE).unwrap();
+    assert_frame(&atlas, region(&atlas, 1, 0), 0, 0, 6);
+
+    let margin = grid(4, 4, u32::MAX, 0);
+    let error = pack(&[source(1, &image, &margin)], PAGE).unwrap_err();
+    assert!(
+        matches!(error[..], [TextureError::Grid { .. }]),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn png_declaring_huge_dimensions_is_refused_without_allocating() {
+    // A valid signature and IHDR declaring 60000x60000 RGBA, then an empty IDAT and IEND.
+    fn chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        let mut crc = crc32(kind);
+        crc = data.iter().fold(crc, |crc, &byte| update(crc, byte));
+        let mut bytes = (data.len() as u32).to_be_bytes().to_vec();
+        bytes.extend_from_slice(kind);
+        bytes.extend_from_slice(data);
+        bytes.extend_from_slice(&(!crc).to_be_bytes());
+        bytes
+    }
+    fn update(crc: u32, byte: u8) -> u32 {
+        (0..8).fold(crc ^ u32::from(byte), |crc, _| {
+            if crc & 1 == 1 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            }
+        })
+    }
+    fn crc32(bytes: &[u8]) -> u32 {
+        bytes.iter().fold(u32::MAX, |crc, &byte| update(crc, byte))
+    }
+    let mut header = 60_000u32.to_be_bytes().to_vec();
+    header.extend_from_slice(&60_000u32.to_be_bytes());
+    header.extend_from_slice(&[8, 6, 0, 0, 0]);
+    let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+    bytes.extend(chunk(b"IHDR", &header));
+    bytes.extend(chunk(b"IDAT", &[]));
+    bytes.extend(chunk(b"IEND", &[]));
+
+    let meta = TextureMeta::default();
+    let error = pack(&[source(1, &bytes, &meta)], PAGE).unwrap_err();
+    match &error[..] {
+        [TextureError::Decode { id, reason, .. }] => {
+            assert_eq!(*id, AssetId(1));
+            assert!(reason.contains("60000x60000"), "{reason}");
+        }
+        other => panic!("expected a decode error, got {other:?}"),
+    }
+}
