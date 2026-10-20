@@ -120,12 +120,16 @@ the plugin API, in the commit that makes it. The rules:
 - User files (scenes, prefabs, metas, data assets, the project manifest `ludenea.toml`,
   replays, traces, snapshots, input logs, and edit logs) stay readable one release back
   (N-1). A pure conversion from each older version to the next one migrates them, like the
-  edit log's `version_1` module.
+  edit log's `version_1` module. Data assets and `ludenea.toml` have no version yet, so
+  this holds for them only once they have one.
 - Editor state (the stored session, its undo history, and its branch tree) may drop what
   is older than N-1. A stored file the editor refuses is set aside, never overwritten.
 - The control and project protocols require the same version on both sides, and the same
   fingerprint: a hash of the TypeScript declarations of every type their messages reach,
-  so builds from different revisions of one version refuse each other. Their changes
+  so builds from different revisions of one version whose declarations differ refuse each
+  other. A change the declarations do not show, such as a new serde default on a field or
+  another encoding of a type declared as a string (`Hash64`, `Bytes`, `AssetId`), leaves
+  the fingerprint as it is, so builds that differ only by it still connect. Their changes
   accumulate under the next version, which is bumped once per release; its changelog entry
   names its fingerprint and lists the commands, messages, and fields that changed.
 

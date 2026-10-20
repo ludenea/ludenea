@@ -24,8 +24,10 @@ pub const PROTOCOL_VERSION: u32 = 4;
 
 /// The wire shape of `PROTOCOL_VERSION`: a hash of the TypeScript declarations of every type
 /// the messages reach, without their documentation. A client and a host connect only when
-/// theirs are equal too, so builds from different revisions of one version refuse each other
-/// instead of misreading fields. `tests/typescript.rs` pins it.
+/// theirs are equal too, so builds of one version whose declarations differ refuse each other
+/// instead of misreading fields. A change the declarations do not show, such as a new serde
+/// default or another encoding of a type declared as a string, leaves it as it is.
+/// `tests/typescript.rs` pins it.
 pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0x448e_51fb_92eb_35de);
 
 /// Binary data, serialized as a standard base64 string.
