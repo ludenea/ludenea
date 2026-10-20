@@ -902,7 +902,8 @@ pub enum ErrorCode {
     InvalidSnapshot,
     InvalidReplay,
     NoSuchEntity,
-    /// An edit the target type rejects, or one on a read-only value.
+    /// An edit the target type rejects, one on a read-only value, or one that needs more
+    /// local identifiers than the scene's `next_id` leaves.
     InvalidEdit,
     UnknownComponent,
     UnknownResource,
