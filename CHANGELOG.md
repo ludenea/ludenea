@@ -22,7 +22,7 @@ this table in the same commit.
 | Trace (`.trace`)       | `TRACE_VERSION`            | 1       | 1                             |
 | Snapshot (`.snap`)     | `SNAPSHOT_VERSION`         | 3       | 2                             |
 | Input log (`.inputs`)  | `INPUT_LOG_VERSION`        | 1       | 1                             |
-| Edit log               | `EDIT_LOG_VERSION`         | 2       | 1                             |
+| Edit log               | `EDIT_LOG_VERSION`         | 3       | 1                             |
 | Undo history           | `UNDO_VERSION`             | 4       | the unversioned form before 2 |
 | Stored session         | `STORED_SESSION_VERSION`   | 1       | the unversioned form before 1 |
 
@@ -174,10 +174,21 @@ API.
 - `Project::set_aside_stored_session` moves the stored session of a document to the first
   free `.ludenea/sessions/<id>.<n>.rejected.session`, from 1, and returns that path, or
   `None` when none is stored.
+- `Edit::Group`, the last variant, holds several entity and resource edits made as one.
+  `Simulation::apply_edit` checks each against the world as the ones before it leave it,
+  then applies them all, so a failing one changes nothing; a group holding an asset edit or
+  another group is refused with the new `EditError::NotGroupable`, which the new
+  `Edit::check_groupable` gives for one edit. `Simulation::assets_introduced_by` and the
+  checks of a replay cover the edits of a group.
+- The new `Session::edit_scene` applies `SceneChange`s (an edit, or the override of a field
+  of a prefab instance's entity) to the scene in turn as one tick 0 edit: the recorded
+  future resimulates once, one undo takes them all back, and when one fails nothing
+  changes. `Session::edit` of an `Edit::Group` at tick 0 is such a scene edit of its edits;
+  past tick 0 it records the group as one edit.
 
 ### Control protocol
 
-- Control protocol 4, fingerprint `341dc87d6714af21`.
+- Control protocol 4, fingerprint `448e51fb92eb35de`.
 - `hello` and `welcome` carry `protocol_fingerprint`, a hash of the TypeScript declarations
   of every type the messages reach. The host refuses a client of another version or
   fingerprint with `version_mismatch` and says to rebuild the editor
@@ -251,6 +262,15 @@ API.
   `load_session` carry the saved text of each in the new `saved_assets`, so they stay
   unsaved after a resume. `replace_scene` keeps the session's text of an unsaved asset over
   the new file text, unsaved while they differ.
+- The new `batch { commands }` (reply `done`) applies edit commands (`spawn`, `despawn`,
+  `insert_component`, `remove_component`, and `set_field`) as one edit, all or none, each
+  read against the state before the batch. At tick 0 it is one scene edit: one undo step,
+  and the recorded future resimulates once. Later it records one edit at the current tick,
+  a group of their edits, which one undo takes back; a batch of one command records that
+  command's edit. Any other command, a nested batch, or a component or resource changed
+  twice is refused with `invalid_command`, and nothing applies. Sent one by one after
+  playing, such edits at tick 0 applied the first only, the next ones refused with
+  `resimulating`, and each was an undo step of its own.
 
 ### Project protocol
 
@@ -339,6 +359,9 @@ API.
 
 ### Formats
 
+- Edit log 3: an edit can be a group (`Edit::Group`), last, so versions 2 and 1 still read.
+  The undo history (version 4) and replays embed edits, so they may hold groups too; a
+  replay keeps its version, and its edit log names its own.
 - Stored session 1: `.ludenea/sessions/<id>.session` holds `{ version: 1, saved }`, the
   `SavedSession` in an envelope. The unversioned form before it still reads, and the
   assets it lists in `unsavedAssets` stay unsaved. A stored session that cannot be read

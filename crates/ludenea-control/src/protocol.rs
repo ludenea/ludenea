@@ -26,7 +26,7 @@ pub const PROTOCOL_VERSION: u32 = 4;
 /// the messages reach, without their documentation. A client and a host connect only when
 /// theirs are equal too, so builds from different revisions of one version refuse each other
 /// instead of misreading fields. `tests/typescript.rs` pins it.
-pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0x341d_c87d_6714_af21);
+pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0x448e_51fb_92eb_35de);
 
 /// Binary data, serialized as a standard base64 string.
 #[derive(Clone, Debug, PartialEq)]
@@ -271,6 +271,16 @@ pub enum Command {
         target: FieldTarget,
         path: Vec<PathSegment>,
         value: JsonValue,
+    },
+    /// Applies edit commands (`spawn`, `despawn`, `insert_component`, `remove_component`, and
+    /// `set_field`) as one edit, all or none. Each is read against the state before the batch,
+    /// so a batch changes each component and resource once. At tick 0 they change the scene
+    /// in turn as one scene edit: one undo step, and the recorded future resimulates once.
+    /// Later they are recorded as one edit, an `Edit::Group`, unless the batch holds one
+    /// command, which records its own edit. Any other command, a batch included, and a value
+    /// changed twice are an `InvalidCommand`, and nothing applies.
+    Batch {
+        commands: Vec<Command>,
     },
     /// The session's scene, whatever the current tick, to write to its file. A prefab
     /// document is checked first, as every prefab file before it is written: an instance
@@ -526,6 +536,7 @@ impl Command {
             | Command::InsertComponent { .. }
             | Command::RemoveComponent { .. }
             | Command::SetField { .. }
+            | Command::Batch { .. }
             | Command::ApplyToScene { .. }
             | Command::MarkSceneSaved { .. }
             | Command::MarkAssetSaved { .. }

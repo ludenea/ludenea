@@ -288,6 +288,11 @@ fn every_command_names_the_reply_it_gets() {
         component: "ludenea::Pose".to_string(),
     });
     checked.run(Command::Despawn { entity });
+    checked.run(Command::Batch {
+        commands: vec![Command::Spawn {
+            components: [("boxes::Crate".to_string(), json!(null))].into(),
+        }],
+    });
     checked.run(Command::Undo);
     checked.run(Command::Redo);
     checked.run(Command::ApplyToScene {
@@ -1240,6 +1245,65 @@ fn set_field_on_instance_entity_at_tick_0_overrides_that_field() {
     assert!(!scene.contains("path: []"), "{scene}");
     // A scene edit, not a recorded one.
     assert!(timeline(&mut host).edit_ticks.is_empty());
+}
+
+#[test]
+fn a_tick_0_batch_overrides_instance_fields_and_edits_the_scene_in_one_step() {
+    let original = fs::read_to_string(SPAWNER_SCENE).unwrap();
+    let (mut host, _) = spawner_host(original.clone());
+    let y = vec![field("position"), field("y")];
+    let set_y = |entity, value| Command::SetField {
+        target: FieldTarget::Component {
+            entity,
+            component: "ludenea::Pose".to_string(),
+        },
+        path: y.clone(),
+        value: json!(value),
+    };
+    let wall = match ok(&mut host, Command::GetInstances) {
+        Reply::Instances { load_addresses, .. } => {
+            load_addresses
+                .into_iter()
+                .find(|(_, address)| address == &[2])
+                .unwrap()
+                .0
+        }
+        other => panic!("{other:?}"),
+    };
+    let commands = vec![
+        set_y(instance_entity(&mut host, 5), 3.0),
+        set_y(instance_entity(&mut host, 6), 4.0),
+        set_y(wall, 16.0),
+    ];
+    ok(&mut host, Command::Batch { commands });
+
+    let scene = scene_text(&mut host);
+    let y_override = |value| {
+        format!(
+            r#"(entity: [0], component: "ludenea::Pose", path: [(type:"field",name:"position"),(type:"field",name:"y")], value: {value})"#
+        )
+    };
+    for value in ["3.0", "4.0"] {
+        assert!(scene.contains(&y_override(value)), "{scene}");
+    }
+    assert!(
+        !scene.contains("path: []"),
+        "the fields alone are overridden: {scene}"
+    );
+    assert!(scene.contains("(x:-20.0,y:16.0)"), "{scene}");
+    let edited = timeline(&mut host);
+    assert!(
+        edited.edit_ticks.is_empty(),
+        "a scene edit, not a recorded one"
+    );
+    assert_eq!(edited.undo_label.as_deref(), Some("Undo scene edit"));
+
+    ok(&mut host, Command::Undo);
+    assert!(
+        !timeline(&mut host).can_undo,
+        "one undo takes the batch back"
+    );
+    assert_eq!(scene_text(&mut host), original);
 }
 
 #[test]

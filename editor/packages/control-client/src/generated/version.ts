@@ -4,7 +4,7 @@
 export const PROTOCOL_VERSION = 4;
 
 /** The wire shape of `PROTOCOL_VERSION`, a hash of the protocol's types: a client and a host connect only when theirs are equal too. */
-export const PROTOCOL_FINGERPRINT = "341dc87d6714af21";
+export const PROTOCOL_FINGERPRINT = "448e51fb92eb35de";
 
 /** The `type` of the reply each command type gets when it succeeds. */
 export type ReplyTypes = {
@@ -12,6 +12,7 @@ export type ReplyTypes = {
   apply_to_asset: "done";
   apply_to_prefab: "text";
   apply_to_scene: "done";
+  batch: "done";
   compare_traces: "trace_comparison";
   create_prefab: "text";
   delete_branch: "deleted";

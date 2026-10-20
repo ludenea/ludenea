@@ -110,6 +110,23 @@ pub enum Document {
     Prefab { id: AssetId },
 }
 
+/// One change of a scene edit (`Session::edit_scene`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum SceneChange {
+    /// An edit applied to the scene: on an entity of a prefab instance, an override of the
+    /// instance.
+    Edit(Edit),
+    /// The override of the value at `path` of `component` on `entity` of the instance at
+    /// `instance` (both paths of local identifiers), to the RON `value`.
+    Override {
+        instance: Vec<u32>,
+        entity: Vec<u32>,
+        component: String,
+        path: Vec<PathSegment>,
+        value: String,
+    },
+}
+
 /// What the timeline shows.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -614,10 +631,11 @@ impl Session {
 
     /// Applies `edit` at the current tick. At tick 0 it changes the scene (an asset edit
     /// changes the asset text, an edit on an entity of a prefab instance becomes an
-    /// override of the instance) and marks the recorded future stale; past tick 0 it
-    /// records the edit, forking a branch when the current one has recorded ticks after
-    /// it, after a `LoadAsset` edit for each asset its values reach that is not loaded.
-    /// Returns the entity a `Spawn` created.
+    /// override of the instance, a group is one scene edit of its edits in turn, see
+    /// `edit_scene`) and marks the recorded future stale; past tick 0 it records the edit,
+    /// forking a branch when the current one has recorded ticks after it, after a
+    /// `LoadAsset` edit for each asset its values reach that is not loaded. Returns the
+    /// entity a `Spawn` created.
     pub fn edit(
         &mut self,
         sim: &mut Simulation,
@@ -625,10 +643,18 @@ impl Session {
     ) -> Result<Option<Entity>, SessionError> {
         self.ensure_resimulated()?;
         if self.current == 0 {
-            if let Edit::SetAsset { id, value } = &edit {
-                return self.edit_asset(sim, *id, value).map(|()| None);
-            }
-            return self.record_scene_edit(sim, &edit);
+            return match edit {
+                Edit::SetAsset { id, value } => self.edit_asset(sim, id, &value).map(|()| None),
+                Edit::Group(edits) => {
+                    for member in &edits {
+                        member.check_groupable()?;
+                    }
+                    let changes: Vec<SceneChange> =
+                        edits.into_iter().map(SceneChange::Edit).collect();
+                    self.edit_scene(sim, &changes)
+                }
+                edit => self.edit_scene(sim, &[SceneChange::Edit(edit)]),
+            };
         }
         let loads = self.with_sources(|sources| sim.assets_introduced_by(&edit, sources))?;
         let edit = TimedEdit {
@@ -1056,7 +1082,7 @@ impl Session {
             component: component.to_string(),
             value,
         };
-        self.record_scene_edit(sim, &edit).map(drop)
+        self.edit_scene(sim, &[SceneChange::Edit(edit)]).map(drop)
     }
 
     /// Records `text`, the text written to the scene file, as saved: the scene is saved if it
@@ -2234,51 +2260,56 @@ impl Session {
         self.scene = scene;
     }
 
-    /// Applies `edit` to the scene and records it in the undo history when it changed it.
-    fn record_scene_edit(
+    /// Applies `changes` to the scene in turn, as one tick 0 edit whatever the current tick:
+    /// an edit on an entity of a prefab instance becomes an override of the instance,
+    /// otherwise the scene is saved, keeping its local identifiers, and reloaded so entity
+    /// indices and generations match any later load of it. The scene loads after each
+    /// change, for the next one to find its entities by load address; then the recorded
+    /// future is marked stale once, and one undo entry takes every change back. When one
+    /// fails, nothing changes. Returns the entity the changes spawned, the first one in
+    /// entity order when they spawn several.
+    pub fn edit_scene(
         &mut self,
         sim: &mut Simulation,
-        edit: &Edit,
+        changes: &[SceneChange],
     ) -> Result<Option<Entity>, SessionError> {
-        let before = self.scene.clone();
-        let spawned = self.edit_scene(sim, edit)?;
-        if self.scene != before {
-            let after = self.scene.clone();
-            self.history.record(UndoEntry::Scene { before, after });
-        }
-        Ok(spawned)
-    }
-
-    /// Applies `edit` to the scene: on an entity of a prefab instance it becomes an override
-    /// of the instance, otherwise the scene is saved, keeping its local identifiers, and
-    /// reloaded so entity indices and generations match any later load of it.
-    fn edit_scene(
-        &mut self,
-        sim: &mut Simulation,
-        edit: &Edit,
-    ) -> Result<Option<Entity>, SessionError> {
-        if matches!(self.document, Document::Prefab { .. })
-            && matches!(edit, Edit::SetResource { .. })
-        {
+        self.ensure_resimulated()?;
+        let resource =
+            |change: &SceneChange| matches!(change, SceneChange::Edit(Edit::SetResource { .. }));
+        if matches!(self.document, Document::Prefab { .. }) && changes.iter().any(resource) {
             return Err(SessionError::PrefabHasNoResources);
         }
         self.restore_checkpoint(sim, 0)?;
         let loaded: BTreeSet<LoadAddress> = sim.load_addresses().values().cloned().collect();
-        // The edit's error is the one to report, wherever coming back ends.
-        let scene = match self.scene_after(sim, edit) {
-            Ok(scene) if scene != self.scene => scene,
-            result => {
-                let back = self.come_back(sim, self.current);
-                return result.and(back).map(|()| None);
-            }
-        };
-        match self.load_scene(sim, &scene, &self.assets) {
-            Ok(warnings) => self.warnings = warnings,
-            Err(error) => {
-                let _ = self.come_back(sim, self.current);
-                return Err(error);
+        let mut scene = self.scene.clone();
+        let mut warnings = None;
+        for change in changes {
+            let next = self.scene_after(sim, &scene, change).and_then(|next| {
+                let warnings = self.load_scene(sim, &next, &self.assets)?;
+                Ok((next, warnings))
+            });
+            match next {
+                Ok((next, next_warnings)) => {
+                    scene = next;
+                    warnings = Some(next_warnings);
+                }
+                Err(error) => {
+                    // The change's error is the one to report, wherever coming back ends. A
+                    // scene loaded on the way gives the session's scene back first.
+                    if warnings.is_some() {
+                        let _ = self.load_scene(sim, &self.scene, &self.assets);
+                    }
+                    let _ = self.come_back(sim, self.current);
+                    return Err(error);
+                }
             }
         }
+        let Some(warnings) = warnings.filter(|_| scene != self.scene) else {
+            // The world may hold the scene loaded again, without the edits of tick 0.
+            return self.come_back(sim, self.current).map(|()| None);
+        };
+        self.warnings = warnings;
+        let before = std::mem::take(&mut self.scene);
         self.set_scene(scene);
         // The scene keeps every other entity's address: a spawned one has a new address.
         let spawned = sim
@@ -2287,26 +2318,52 @@ impl Session {
             .find(|(_, address)| !loaded.contains(*address))
             .map(|(&entity, _)| entity);
         self.start_resimulation(sim)?;
+        let after = self.scene.clone();
+        self.history.record(UndoEntry::Scene { before, after });
         Ok(spawned)
     }
 
-    /// The scene text after `edit`, which the world, at tick 0, may hold applied.
-    fn scene_after(&self, sim: &mut Simulation, edit: &Edit) -> Result<String, SessionError> {
-        if let Some(scene) = self.instance_edit(sim, edit)? {
-            return Ok(scene);
+    /// The scene text after `change` to `scene`, which the world holds as loaded at tick 0.
+    fn scene_after(
+        &self,
+        sim: &mut Simulation,
+        scene: &str,
+        change: &SceneChange,
+    ) -> Result<String, SessionError> {
+        let edit = match change {
+            SceneChange::Edit(edit) => edit,
+            SceneChange::Override {
+                instance,
+                entity,
+                component,
+                path,
+                value,
+            } => {
+                return Ok(prefab::set_override(
+                    scene, instance, entity, component, path, value,
+                )?);
+            }
+        };
+        if let Some(after) = self.instance_edit(sim, scene, edit)? {
+            return Ok(after);
         }
         sim.apply_edit(edit)?;
-        let scene = sim.save_scene_keeping(&scene_form(self.document, &self.scene)?)?;
+        let saved = sim.save_scene_keeping(&scene_form(self.document, scene)?)?;
         Ok(match self.document {
-            Document::Scene => scene,
-            Document::Prefab { .. } => prefab::scene_as_prefab(&scene)?,
+            Document::Scene => saved,
+            Document::Prefab { .. } => prefab::scene_as_prefab(&saved)?,
         })
     }
 
-    /// The scene text after `edit` when it targets an entity of a prefab instance: an
+    /// The text of `scene` after `edit` when it targets an entity of a prefab instance: an
     /// override, an added or a removed component of the instance. Despawning such an
     /// entity is refused.
-    fn instance_edit(&self, sim: &Simulation, edit: &Edit) -> Result<Option<String>, SessionError> {
+    fn instance_edit(
+        &self,
+        sim: &Simulation,
+        scene: &str,
+        edit: &Edit,
+    ) -> Result<Option<String>, SessionError> {
         let (target, component) = match edit {
             Edit::Insert {
                 entity, component, ..
@@ -2339,31 +2396,24 @@ impl Session {
         let scene = match edit {
             Edit::Insert { value, .. } => {
                 let value = override_value(sim, &address, component, value)?;
-                if has && self.prefab_has(sim, &address, component)? {
-                    prefab::set_override(&self.scene, &[*instance], inner, component, &[], &value)?
+                if has && self.prefab_has(sim, scene, &address, component)? {
+                    prefab::set_override(scene, &[*instance], inner, component, &[], &value)?
                 } else {
-                    prefab::add_component_override(
-                        &self.scene,
-                        &[*instance],
-                        inner,
-                        component,
-                        &value,
-                    )?
+                    prefab::add_component_override(scene, &[*instance], inner, component, &value)?
                 }
             }
-            _ if has => {
-                prefab::remove_component_override(&self.scene, &[*instance], inner, component)?
-            }
-            _ => self.scene.clone(),
+            _ if has => prefab::remove_component_override(scene, &[*instance], inner, component)?,
+            _ => scene.to_string(),
         };
         Ok(Some(scene))
     }
 
     /// Whether the prefab of the instance holding the entity at `address` gives it
-    /// `component`, before the instance's own changes.
+    /// `component`, before the instance's own changes, with `scene` as the session's text.
     fn prefab_has(
         &self,
         sim: &Simulation,
+        scene: &str,
         address: &[u32],
         component: &str,
     ) -> Result<bool, SessionError> {
@@ -2376,8 +2426,10 @@ impl Session {
             .assets
             .get(&instance.prefab)
             .ok_or(EditError::MissingAsset(instance.prefab))?;
-        let scene = prefab::prefab_as_scene(text)?;
-        let resolved = self.with_sources(|sources| ludenea_app::resolve(&scene, sources))?;
+        let prefab_scene = prefab::prefab_as_scene(text)?;
+        let resolved = with_sources(self.document, scene, &self.assets, |sources| {
+            ludenea_app::resolve(&prefab_scene, sources)
+        })?;
         Ok(resolved
             .entities
             .iter()

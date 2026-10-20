@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use ludenea_app::prefab;
@@ -22,7 +23,8 @@ use crate::protocol::{
     GameInfo, Hash64, NamedSchema, PauseReason, ProtocolError, Reply, SyncPoint, SystemRow, Topic,
 };
 use crate::session::{
-    Document, Resimulation, Session, SessionError, SessionExport, Timeline, panic_message,
+    Document, Resimulation, SceneChange, Session, SessionError, SessionExport, Timeline,
+    panic_message,
 };
 use crate::subscriptions::{INTROSPECTION_TICKS, Subscriptions, TickRecord};
 use crate::values::{asset_json, asset_value, entity_values, resource_values, value_schema};
@@ -445,77 +447,12 @@ impl Host {
             }
             Command::GetEntity { entity } => self.get_entity(entity),
             Command::GetResources => Ok(self.get_resources()),
-            Command::Spawn { components } => {
-                let components = components
-                    .into_iter()
-                    .map(|(name, value)| {
-                        encode_value(sim, ValueKind::Component, &name, value)
-                            .map(|bytes| (name.clone(), bytes))
-                            .map_err(|e| in_context(edit_error(&e), &format!("component `{name}`")))
-                    })
-                    .collect::<Result<_, _>>()?;
-                let spawned = self.edit(Edit::Spawn { components }, "spawn")?;
-                Ok(Reply::Spawned {
-                    entity: spawned.expect("a spawn returns its entity"),
-                })
-            }
-            Command::Despawn { entity } => {
-                let target = sim.entity_ref(entity);
-                self.edit(
-                    Edit::Despawn { entity: target },
-                    &format!("entity {entity}"),
-                )?;
-                Ok(Reply::Done)
-            }
-            Command::InsertComponent {
-                entity,
-                component,
-                value,
-            } => {
-                let context = format!("entity {entity}, component `{component}`");
-                if sim.world().has_component_named(entity, &component) {
-                    let error = ProtocolError::new(
-                        ErrorCode::InvalidEdit,
-                        "the entity already has this component; use SetField to change it",
-                    );
-                    return Err(in_context(error, &context));
-                }
-                let value = encode_value(sim, ValueKind::Component, &component, value)
-                    .map_err(|e| in_context(edit_error(&e), &context))?;
-                let edit = Edit::Insert {
-                    entity: sim.entity_ref(entity),
-                    component,
-                    value,
-                };
-                self.edit(edit, &context)?;
-                Ok(Reply::Done)
-            }
-            Command::RemoveComponent { entity, component } => {
-                let context = format!("entity {entity}, component `{component}`");
-                let target = sim.entity_ref(entity);
-                let edit = Edit::Remove {
-                    entity: target,
-                    component,
-                };
-                self.edit(edit, &context)?;
-                Ok(Reply::Done)
-            }
-            Command::SetField {
-                target,
-                path,
-                value,
-            } => {
-                let context = match &target {
-                    FieldTarget::Component { entity, component } => {
-                        format!("entity {entity}, component `{component}`")
-                    }
-                    FieldTarget::Resource { resource } => format!("resource `{resource}`"),
-                };
-                let context = format!("{context}, path `{}`", Path(&path));
-                self.set_field(target, &path, value)
-                    .map_err(|error| in_context(error, &context))?;
-                Ok(Reply::Done)
-            }
+            command @ (Command::Spawn { .. }
+            | Command::Despawn { .. }
+            | Command::InsertComponent { .. }
+            | Command::RemoveComponent { .. }
+            | Command::SetField { .. }) => self.edit_command(command),
+            Command::Batch { commands } => self.batch(commands),
             Command::SaveScene => {
                 let ron = self.session.scene().to_string();
                 if let Document::Prefab { id } = self.session.document() {
@@ -1001,34 +938,169 @@ impl Host {
         })
     }
 
-    /// Reads the exact current value of `target`, replaces the value at `path`, and records
-    /// the whole new value as an edit.
-    fn set_field(
-        &mut self,
-        target: FieldTarget,
-        path: &[PathSegment],
-        value: JsonValue,
-    ) -> Result<(), ProtocolError> {
-        // At tick 0 a field of a prefab instance's entity is an override of that one field.
-        if let FieldTarget::Component { entity, component } = &target
-            && self.session.timeline().current == 0
+    /// Applies one edit command: at tick 0 to the scene, later as a recorded edit.
+    fn edit_command(&mut self, command: Command) -> Result<Reply, ProtocolError> {
+        let spawn = matches!(command, Command::Spawn { .. });
+        let spawned = if self.session.timeline().current == 0 {
+            let (change, context) = self.scene_change_of(command)?;
+            self.session
+                .edit_scene(&mut self.simulation, &[change])
+                .map_err(|e| in_context(self.fail(e), &context))?
+        } else {
+            let (edit, context) = self.edit_of(command)?;
+            self.edit(edit, &context)?
+        };
+        Ok(if spawn {
+            Reply::Spawned {
+                entity: spawned.expect("a spawn returns its entity"),
+            }
+        } else {
+            Reply::Done
+        })
+    }
+
+    /// Applies `commands`, edit commands each read against the state before the batch, as
+    /// one edit: at tick 0 one scene edit, later one recorded edit.
+    fn batch(&mut self, commands: Vec<Command>) -> Result<Reply, ProtocolError> {
+        if commands.is_empty() {
+            return Ok(Reply::Done);
+        }
+        let at_scene = self.session.timeline().current == 0;
+        let mut changed = BTreeSet::new();
+        let (mut changes, mut edits) = (Vec::new(), Vec::new());
+        for (index, command) in commands.into_iter().enumerate() {
+            if let Some(value) = changed_value(&command)
+                && !changed.insert(value.clone())
+            {
+                return Err(ProtocolError::new(
+                    ErrorCode::InvalidCommand,
+                    format!(
+                        "command {index} of the batch changes {value} again; a batch changes                          each component and resource once, so send the whole change in one                          command"
+                    ),
+                ));
+            }
+            let in_batch = |error| in_context(error, &format!("command {index} of the batch"));
+            if at_scene {
+                changes.push(self.scene_change_of(command).map_err(in_batch)?.0);
+            } else {
+                edits.push(self.edit_of(command).map_err(in_batch)?.0);
+            }
+        }
+        let sim = &mut self.simulation;
+        let applied = if at_scene {
+            self.session.edit_scene(sim, &changes)
+        } else {
+            // One command records its own edit, as when sent alone.
+            let edit = if edits.len() == 1 {
+                edits.remove(0)
+            } else {
+                Edit::Group(edits)
+            };
+            self.session.edit(sim, edit)
+        };
+        applied.map_err(|e| self.fail(e))?;
+        Ok(Reply::Done)
+    }
+
+    /// The change `command`, an edit command, makes to the scene at tick 0, and the context
+    /// its errors name: a field of a prefab instance's entity is an override of that field;
+    /// any other change is its edit.
+    fn scene_change_of(&self, command: Command) -> Result<(SceneChange, String), ProtocolError> {
+        if let Command::SetField {
+            target: FieldTarget::Component { entity, component },
+            path,
+            value,
+        } = &command
             && let Some(address) = self.simulation.load_addresses().get(entity)
             && address.len() > 1
         {
-            let address = address.clone();
-            let ron = self.override_ron(&address, component, path, value)?;
-            return self
-                .session
-                .set_override(
-                    &mut self.simulation,
-                    &address[..1],
-                    &address[1..],
-                    component,
-                    path,
-                    &ron,
-                )
-                .map_err(|e| self.fail(e));
+            let context = edit_context(&command);
+            let ron = self
+                .override_ron(address, component, path, value.clone())
+                .map_err(|error| in_context(error, &context))?;
+            let change = SceneChange::Override {
+                instance: address[..1].to_vec(),
+                entity: address[1..].to_vec(),
+                component: component.clone(),
+                path: path.clone(),
+                value: ron,
+            };
+            return Ok((change, context));
         }
+        let (edit, context) = self.edit_of(command)?;
+        Ok((SceneChange::Edit(edit), context))
+    }
+
+    /// The edit `command`, an edit command, makes now, and the context its errors name: what
+    /// it changes. Any other command is an `InvalidCommand`.
+    fn edit_of(&self, command: Command) -> Result<(Edit, String), ProtocolError> {
+        let sim = &self.simulation;
+        let context = edit_context(&command);
+        let edit = match command {
+            Command::Spawn { components } => {
+                let components = components
+                    .into_iter()
+                    .map(|(name, value)| {
+                        encode_value(sim, ValueKind::Component, &name, value)
+                            .map(|bytes| (name.clone(), bytes))
+                            .map_err(|e| in_context(edit_error(&e), &format!("component `{name}`")))
+                    })
+                    .collect::<Result<_, _>>()?;
+                Edit::Spawn { components }
+            }
+            Command::Despawn { entity } => Edit::Despawn {
+                entity: sim.entity_ref(entity),
+            },
+            Command::InsertComponent {
+                entity,
+                component,
+                value,
+            } => {
+                if sim.world().has_component_named(entity, &component) {
+                    let error = ProtocolError::new(
+                        ErrorCode::InvalidEdit,
+                        "the entity already has this component; use SetField to change it",
+                    );
+                    return Err(in_context(error, &context));
+                }
+                let value = encode_value(sim, ValueKind::Component, &component, value)
+                    .map_err(|e| in_context(edit_error(&e), &context))?;
+                Edit::Insert {
+                    entity: sim.entity_ref(entity),
+                    component,
+                    value,
+                }
+            }
+            Command::RemoveComponent { entity, component } => Edit::Remove {
+                entity: sim.entity_ref(entity),
+                component,
+            },
+            Command::SetField {
+                target,
+                path,
+                value,
+            } => self
+                .field_edit(target, &path, value)
+                .map_err(|error| in_context(error, &context))?,
+            _ => {
+                return Err(ProtocolError::new(
+                    ErrorCode::InvalidCommand,
+                    "not an edit command; a batch holds spawn, despawn, insert_component, \
+                     remove_component, and set_field commands only",
+                ));
+            }
+        };
+        Ok((edit, context))
+    }
+
+    /// The edit that sets the value at `path` of `target` to `value`: the exact current
+    /// value of `target` with `value` at `path`, recorded whole.
+    fn field_edit(
+        &self,
+        target: FieldTarget,
+        path: &[PathSegment],
+        value: JsonValue,
+    ) -> Result<Edit, ProtocolError> {
         let world = self.simulation.world();
         let (kind, name, current) = match &target {
             FieldTarget::Component { entity, component } => {
@@ -1066,18 +1138,14 @@ impl Host {
             .map_err(|reason| ProtocolError::new(ErrorCode::InvalidPath, reason))?;
         let value =
             encode_value(&self.simulation, kind, name, whole).map_err(|e| edit_error(&e))?;
-        let edit = match target {
+        Ok(match target {
             FieldTarget::Component { entity, component } => Edit::Insert {
                 entity: self.simulation.entity_ref(entity),
                 component,
                 value,
             },
             FieldTarget::Resource { resource } => Edit::SetResource { resource, value },
-        };
-        self.session
-            .edit(&mut self.simulation, edit)
-            .map_err(|e| self.fail(e))?;
-        Ok(())
+        })
     }
 
     /// Reads the value of the data asset `id`, replaces the value at `path`, and records the
@@ -1340,6 +1408,49 @@ fn changes_state(command: &Command) -> bool {
     )
 }
 
+/// What an edit command changes, which its errors name; empty for any other command.
+fn edit_context(command: &Command) -> String {
+    match command {
+        Command::Spawn { .. } => "spawn".to_string(),
+        Command::Despawn { entity } => format!("entity {entity}"),
+        Command::InsertComponent {
+            entity, component, ..
+        }
+        | Command::RemoveComponent { entity, component } => {
+            format!("entity {entity}, component `{component}`")
+        }
+        Command::SetField { target, path, .. } => {
+            let target = match target {
+                FieldTarget::Component { entity, component } => {
+                    format!("entity {entity}, component `{component}`")
+                }
+                FieldTarget::Resource { resource } => format!("resource `{resource}`"),
+            };
+            format!("{target}, path `{}`", Path(path))
+        }
+        _ => String::new(),
+    }
+}
+
+/// The component or resource an edit command changes, which a batch changes once.
+fn changed_value(command: &Command) -> Option<String> {
+    match command {
+        Command::InsertComponent {
+            entity, component, ..
+        }
+        | Command::RemoveComponent { entity, component }
+        | Command::SetField {
+            target: FieldTarget::Component { entity, component },
+            ..
+        } => Some(format!("`{component}` of entity {entity}")),
+        Command::SetField {
+            target: FieldTarget::Resource { resource },
+            ..
+        } => Some(format!("resource `{resource}`")),
+        _ => None,
+    }
+}
+
 fn filter_error(error: &FilterError) -> ProtocolError {
     ProtocolError::new(ErrorCode::InvalidFilter, error)
 }
@@ -1376,9 +1487,10 @@ fn edit_error(error: &EditError) -> ProtocolError {
         EditError::NoSuchEntity(_) | EditError::NoSuchAddress(_) => ErrorCode::NoSuchEntity,
         EditError::UnknownComponent(_) => ErrorCode::UnknownComponent,
         EditError::UnknownResource(_) => ErrorCode::UnknownResource,
-        EditError::ReadOnly(_) | EditError::InvalidValue { .. } | EditError::MissingAsset(_) => {
-            ErrorCode::InvalidEdit
-        }
+        EditError::ReadOnly(_)
+        | EditError::InvalidValue { .. }
+        | EditError::MissingAsset(_)
+        | EditError::NotGroupable => ErrorCode::InvalidEdit,
     };
     ProtocolError::new(code, error)
 }

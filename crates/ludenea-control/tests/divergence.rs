@@ -421,6 +421,52 @@ fn resource_edit_roots_the_earliest_divergent_entities() {
 }
 
 #[test]
+fn a_batch_is_one_root_cause_naming_each_edit() {
+    let mut host = small_host();
+    seek(&mut host, FORK);
+    let crates: Vec<Entity> = match ok(
+        &mut host,
+        Command::QueryEntities {
+            filter: "With<boxes::Crate>".to_string(),
+            offset: 0,
+            limit: 2,
+        },
+    ) {
+        Reply::Entities { rows, .. } => rows.into_iter().map(|row| row.entity).collect(),
+        other => panic!("{other:?}"),
+    };
+    let push = |entity| Command::SetField {
+        target: FieldTarget::Component {
+            entity,
+            component: "ludenea::Body".to_string(),
+        },
+        path: vec![PathSegment::Field {
+            name: "angular_velocity".to_string(),
+        }],
+        value: json!(3.0),
+    };
+    let commands = crates.iter().map(|&entity| push(entity)).collect();
+    ok(&mut host, Command::Batch { commands });
+    step(&mut host, 60);
+
+    let report = complete(&mut host, Some(FORK + 10));
+    let root = report.root_cause.expect("a root cause");
+    assert_eq!(root.tick, FORK);
+    let RootCauseKind::Edit { description } = &root.kind else {
+        panic!("{root:?}");
+    };
+    assert!(
+        description.starts_with("2 edits: insert ludenea::Body on "),
+        "{description}"
+    );
+    assert_eq!(
+        description.matches("insert ludenea::Body").count(),
+        2,
+        "{description}"
+    );
+}
+
+#[test]
 fn no_work_without_request() {
     // Without a fork there is nothing to compare, subscribed or not.
     let mut host = small_host();

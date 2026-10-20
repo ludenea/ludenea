@@ -80,6 +80,15 @@ pub fn every_command() -> Vec<Command> {
             path: vec![],
             value: serde_json::json!("1"),
         },
+        Command::Batch {
+            commands: vec![
+                Command::Despawn { entity },
+                Command::RemoveComponent {
+                    entity,
+                    component: "n".into(),
+                },
+            ],
+        },
         Command::SaveScene,
         Command::MarkSceneSaved { text: "s".into() },
         Command::ApplyToScene {

@@ -56,6 +56,35 @@ pub enum Edit {
         asset: String,
         value: Vec<u8>,
     },
+    /// Several edits made as one: applied in order, all or none. Each is checked against the
+    /// world before any applies, so none can target an entity another one spawns. A group
+    /// holds spawn, despawn, insert, remove, and set-resource edits only. Last, so edit logs
+    /// of version 2 decode unchanged.
+    Group(Vec<Edit>),
+}
+
+impl Edit {
+    /// Refuses an edit that a group cannot hold: an asset edit, or another group.
+    pub fn check_groupable(&self) -> Result<(), EditError> {
+        match self {
+            Edit::SetAsset { .. } | Edit::LoadAsset { .. } | Edit::Group(_) => {
+                Err(EditError::NotGroupable)
+            }
+            Edit::Spawn { .. }
+            | Edit::Despawn { .. }
+            | Edit::Insert { .. }
+            | Edit::Remove { .. }
+            | Edit::SetResource { .. } => Ok(()),
+        }
+    }
+
+    /// The edits `self` applies: the members of a group, or itself.
+    fn members(&self) -> &[Edit] {
+        match self {
+            Edit::Group(edits) => edits,
+            other => std::slice::from_ref(other),
+        }
+    }
 }
 
 /// An edit made while the simulation was at `tick`: part of the state at `tick` from then
@@ -66,7 +95,7 @@ pub struct TimedEdit {
     pub edit: Edit,
 }
 
-pub const EDIT_LOG_VERSION: u32 = 2;
+pub const EDIT_LOG_VERSION: u32 = 3;
 
 /// The edits of a session, ordered by tick, then record order.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -93,12 +122,18 @@ impl EditLog {
         postcard::to_allocvec(self).expect("an edit log always encodes")
     }
 
-    /// Decodes the current version, or version 1 with every target as `EntityRef::Runtime`.
+    /// Decodes the current version, version 2 (without `Edit::Group`), or version 1 with
+    /// every target as `EntityRef::Runtime`.
     pub fn decode(bytes: &[u8]) -> Result<EditLog, SimError> {
         let (version, _): (u32, _) = postcard::take_from_bytes(bytes)
             .map_err(|error| SimError::EditLogDecode(error.to_string()))?;
         let log = match version {
             EDIT_LOG_VERSION => decode_exact::<EditLog>(bytes)?,
+            // `Edit::Group` is the last variant: version 2 edits decode unchanged.
+            2 => EditLog {
+                version: EDIT_LOG_VERSION,
+                ..decode_exact::<EditLog>(bytes)?
+            },
             1 => decode_exact::<version_1::EditLog>(bytes)?.into(),
             found => {
                 return Err(SimError::EditLogVersion {
@@ -238,6 +273,10 @@ pub enum EditError {
     ReadOnly(String),
     #[error("`{name}` rejects this value: {reason}; fix the value and try again")]
     InvalidValue { name: String, reason: String },
+    #[error(
+        "a group of edits holds spawn, despawn, insert, remove, and set-resource edits only; record an asset edit or a group on its own"
+    )]
+    NotGroupable,
 }
 
 /// Whether a name refers to a component or to a resource.
@@ -249,75 +288,147 @@ pub enum ValueKind {
 
 type Decoded = Box<dyn Any + Send>;
 
+/// An entity or resource edit checked against the world: applying it cannot fail.
+enum Checked {
+    Spawn(Vec<(String, Decoded)>),
+    Despawn(Entity),
+    Insert {
+        entity: Entity,
+        component: String,
+        value: Decoded,
+    },
+    Remove {
+        entity: Entity,
+        component: String,
+    },
+    SetResource {
+        resource: String,
+        value: Decoded,
+    },
+}
+
 impl Simulation {
     /// Applies `edit`. Everything is validated before anything changes, so on error the
-    /// world is untouched. Returns the entity a `Spawn` created.
+    /// world is untouched. Returns the entity a `Spawn` created; a group returns none.
     pub fn apply_edit(&mut self, edit: &Edit) -> Result<Option<Entity>, EditError> {
         match edit {
+            Edit::SetAsset { id, value } => {
+                let asset = self.asset_type_of(*id)?;
+                self.load_asset(*id, &asset, value)
+            }
+            Edit::LoadAsset { id, asset, value } => self.load_asset(*id, asset, value),
+            Edit::Group(edits) => {
+                let mut despawned = BTreeSet::new();
+                let checked = edits
+                    .iter()
+                    .map(|edit| self.check(edit, &mut despawned))
+                    .collect::<Result<Vec<_>, EditError>>()?;
+                for checked in checked {
+                    self.commit(checked);
+                }
+                Ok(None)
+            }
+            edit => {
+                let checked = self.check(edit, &mut BTreeSet::new())?;
+                Ok(self.commit(checked))
+            }
+        }
+    }
+
+    /// Checks an entity or resource edit against the world without changing it, as if the
+    /// entities of `despawned` were dead already; a despawn adds its entity. Refuses the edits
+    /// a group cannot hold.
+    fn check(&self, edit: &Edit, despawned: &mut BTreeSet<Entity>) -> Result<Checked, EditError> {
+        let alive = |target: &EntityRef| {
+            let entity = self.resolve_ref(target)?;
+            if despawned.contains(&entity) {
+                return Err(EditError::NoSuchEntity(entity));
+            }
+            self.ensure_alive(entity).map(|()| entity)
+        };
+        Ok(match edit {
             Edit::Spawn { components } => {
                 for (index, (name, _)) in components.iter().enumerate() {
                     if components[..index].iter().any(|(other, _)| other == name) {
                         return Err(invalid(name, "the component appears twice".to_string()));
                     }
                 }
-                let decoded = components
-                    .iter()
-                    .map(|(name, bytes)| Ok((name, self.decode_component(name, bytes)?)))
-                    .collect::<Result<Vec<_>, EditError>>()?;
-                let entity = self.world.spawn();
-                for (name, value) in decoded {
-                    self.world
-                        .insert_boxed(entity, name, value)
-                        .expect("validated against the registry");
-                }
-                Ok(Some(entity))
+                Checked::Spawn(
+                    components
+                        .iter()
+                        .map(|(name, bytes)| {
+                            Ok((name.clone(), self.decode_component(name, bytes)?))
+                        })
+                        .collect::<Result<_, EditError>>()?,
+                )
             }
             Edit::Despawn { entity } => {
-                let entity = self.resolve_ref(entity)?;
-                self.world
-                    .despawn(entity)
-                    .map_err(|_| EditError::NoSuchEntity(entity))?;
-                Ok(None)
+                let entity = alive(entity)?;
+                despawned.insert(entity);
+                Checked::Despawn(entity)
             }
             Edit::Insert {
                 entity,
                 component,
                 value,
-            } => {
-                let entity = self.resolve_ref(entity)?;
-                self.ensure_alive(entity)?;
-                let value = self.decode_component(component, value)?;
-                self.world
-                    .insert_boxed(entity, component, value)
-                    .expect("validated against the registry");
-                Ok(None)
-            }
+            } => Checked::Insert {
+                entity: alive(entity)?,
+                component: component.clone(),
+                value: self.decode_component(component, value)?,
+            },
             Edit::Remove { entity, component } => {
-                let entity = self.resolve_ref(entity)?;
-                self.ensure_alive(entity)?;
+                let entity = alive(entity)?;
                 self.component_codec(component)?;
-                self.world
-                    .remove_by_name(entity, component)
-                    .expect("validated against the registry");
-                Ok(None)
+                Checked::Remove {
+                    entity,
+                    component: component.clone(),
+                }
             }
             Edit::SetResource { resource, value } => {
                 if resource == TIME {
                     return Err(EditError::ReadOnly(resource.clone()));
                 }
                 let codec = self.resource_codec(resource)?;
-                let value = decode(&codec, resource, value)?;
-                self.world
-                    .insert_resource_boxed(resource, value)
-                    .expect("validated against the registry");
-                Ok(None)
+                Checked::SetResource {
+                    resource: resource.clone(),
+                    value: decode(&codec, resource, value)?,
+                }
             }
-            Edit::SetAsset { id, value } => {
-                let asset = self.asset_type_of(*id)?;
-                self.load_asset(*id, &asset, value)
+            Edit::SetAsset { .. } | Edit::LoadAsset { .. } | Edit::Group(_) => {
+                return Err(EditError::NotGroupable);
             }
-            Edit::LoadAsset { id, asset, value } => self.load_asset(*id, asset, value),
+        })
+    }
+
+    /// Applies a checked edit; returns the entity a spawn created.
+    fn commit(&mut self, checked: Checked) -> Option<Entity> {
+        let world = &mut self.world;
+        match checked {
+            Checked::Spawn(values) => {
+                let entity = world.spawn();
+                for (name, value) in values {
+                    world
+                        .insert_boxed(entity, &name, value)
+                        .expect("checked against the registry");
+                }
+                return Some(entity);
+            }
+            Checked::Despawn(entity) => world.despawn(entity).expect("checked alive"),
+            Checked::Insert {
+                entity,
+                component,
+                value,
+            } => world
+                .insert_boxed(entity, &component, value)
+                .expect("checked alive and registered"),
+            Checked::Remove { entity, component } => world
+                .remove_by_name(entity, &component)
+                .expect("checked alive and registered"),
+            Checked::SetResource { resource, value } => world
+                .insert_resource_boxed(&resource, value)
+                .expect("checked against the registry"),
         }
+        None
     }
 
     /// How an edit made now names `entity`: by load address when the last scene load
@@ -340,36 +451,39 @@ impl Simulation {
     }
 
     /// The `LoadAsset` edits `edit` needs first: one per asset that a handle in its values
-    /// reaches (recursively) and that is not loaded, read from `sources`. In value order,
-    /// then identifier order.
+    /// (a group's, in member order) reaches, recursively, and that is not loaded, read from
+    /// `sources`. In value order, then identifier order.
     pub fn assets_introduced_by(
         &self,
         edit: &Edit,
         sources: &dyn AssetSource,
     ) -> Result<Vec<Edit>, EditError> {
-        let values: Vec<(String, Codec, &[u8])> = match edit {
-            Edit::Spawn { components } => components
-                .iter()
-                .map(|(name, bytes)| Ok((name.clone(), self.component_codec(name)?, &bytes[..])))
-                .collect::<Result<_, EditError>>()?,
-            Edit::Insert {
-                component, value, ..
-            } => vec![(component.clone(), self.component_codec(component)?, value)],
-            Edit::SetResource { resource, value } => {
-                vec![(resource.clone(), self.resource_codec(resource)?, value)]
-            }
-            Edit::SetAsset { id, value } => {
-                let asset = self.asset_type_of(*id)?;
-                vec![(asset.clone(), self.asset_codec(&asset)?, value)]
-            }
-            Edit::LoadAsset { asset, value, .. } => {
-                vec![(asset.clone(), self.asset_codec(asset)?, value)]
-            }
-            Edit::Despawn { .. } | Edit::Remove { .. } => Vec::new(),
-        };
+        let mut values: Vec<(String, Codec, &[u8])> = Vec::new();
         let mut known: BTreeSet<AssetId> = self.world.asset_ids().into_iter().collect();
-        if let Edit::LoadAsset { id, .. } = edit {
-            known.insert(*id);
+        for member in edit.members() {
+            match member {
+                Edit::Spawn { components } => {
+                    for (name, bytes) in components {
+                        values.push((name.clone(), self.component_codec(name)?, bytes));
+                    }
+                }
+                Edit::Insert {
+                    component, value, ..
+                } => values.push((component.clone(), self.component_codec(component)?, value)),
+                Edit::SetResource { resource, value } => {
+                    values.push((resource.clone(), self.resource_codec(resource)?, value));
+                }
+                Edit::SetAsset { id, value } => {
+                    let asset = self.asset_type_of(*id)?;
+                    values.push((asset.clone(), self.asset_codec(&asset)?, value));
+                }
+                Edit::LoadAsset { id, asset, value } => {
+                    values.push((asset.clone(), self.asset_codec(asset)?, value));
+                    known.insert(*id);
+                }
+                Edit::Despawn { .. } | Edit::Remove { .. } => {}
+                Edit::Group(_) => return Err(EditError::NotGroupable),
+            }
         }
         let mut loads = Vec::new();
         for (name, codec, bytes) in values {
@@ -459,6 +573,12 @@ impl Simulation {
             Edit::LoadAsset { id, asset, value } => {
                 decode(&self.asset_codec(asset)?, asset, value)?;
                 asset_types.insert(*id, asset.clone());
+            }
+            Edit::Group(edits) => {
+                for member in edits {
+                    member.check_groupable()?;
+                    self.check_edit_values(member, asset_types)?;
+                }
             }
         }
         Ok(())

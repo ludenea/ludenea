@@ -4,7 +4,7 @@ use boxes::{BoxesInput, Crate};
 use ludenea::cli::Trace;
 use ludenea::control::{BranchId, Document, Resimulation, Session, SessionError, SessionExport};
 use ludenea::prelude::*;
-use ludenea_app::{AssetTexts, EntityRef, ValueKind};
+use ludenea_app::{AssetTexts, EditError, EntityRef, ValueKind};
 use serde_json::json;
 
 const SCENE: &str = concat!(
@@ -317,6 +317,50 @@ fn tick_zero_despawn_reloads_scene_with_matching_indices() {
     );
     fresh.load_scene(session.scene()).unwrap();
     assert_eq!(sim.hash(), fresh.hash());
+}
+
+#[test]
+fn a_tick_zero_group_is_one_scene_edit_of_its_edits_in_turn() {
+    let (mut sim, mut session) = started(recorded(100, None));
+    play(&mut session, &mut sim, 100);
+    session.seek(&mut sim, 0).unwrap();
+    let before = session.scene().to_string();
+    let crates = crate_count(&sim);
+    // The scene loads after each despawn: the second finds its entity by load address.
+    let despawn = |id| Edit::Despawn {
+        entity: EntityRef::Loaded(vec![id]),
+    };
+    let group = Edit::Group(vec![despawn(5), despawn(6), stats_edit(&sim, 9)]);
+    assert_eq!(session.edit(&mut sim, group).unwrap(), None);
+    assert_eq!(crate_count(&sim), crates - 2);
+    let mut fresh = simulation();
+    fresh.load_scene(session.scene()).unwrap();
+    assert_eq!(sim.hash(), fresh.hash());
+    resimulate_all(&mut session, &mut sim);
+
+    session.undo(&mut sim).unwrap();
+    assert_eq!(session.scene(), before);
+    assert!(
+        !session.timeline().can_undo,
+        "one undo takes the group back"
+    );
+
+    let asset = Edit::SetAsset {
+        id: ludenea::ecs::AssetId(7),
+        value: Vec::new(),
+    };
+    resimulate_all(&mut session, &mut sim);
+    let error = session
+        .edit(&mut sim, Edit::Group(vec![despawn(5), asset]))
+        .unwrap_err();
+    assert!(
+        matches!(error, SessionError::Edit(EditError::NotGroupable)),
+        "{error}"
+    );
+    assert_eq!(
+        (session.scene(), crate_count(&sim)),
+        (before.as_str(), crates)
+    );
 }
 
 #[test]

@@ -230,6 +230,9 @@ type Command = {
     path: Array<PathSegment>;
     value: JsonValue;
 } | {
+    "type": "batch";
+    commands: Array<Command>;
+} | {
     "type": "save_scene";
 } | {
     "type": "mark_scene_saved";
@@ -1027,13 +1030,14 @@ type ServerMessage = {
 /** The control protocol version this build speaks: a client and a host connect only when theirs are equal. */
 const PROTOCOL_VERSION = 4;
 /** The wire shape of `PROTOCOL_VERSION`, a hash of the protocol's types: a client and a host connect only when theirs are equal too. */
-const PROTOCOL_FINGERPRINT = "341dc87d6714af21";
+const PROTOCOL_FINGERPRINT = "448e51fb92eb35de";
 /** The `type` of the reply each command type gets when it succeeds. */
 type ReplyTypes = {
     apply_override: "done";
     apply_to_asset: "done";
     apply_to_prefab: "text";
     apply_to_scene: "done";
+    batch: "done";
     compare_traces: "trace_comparison";
     create_prefab: "text";
     delete_branch: "deleted";

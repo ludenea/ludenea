@@ -337,9 +337,8 @@ fn step(
         sim.apply_edit(&timed.edit).map_err(|error| match error {
             EditError::UnknownComponent(_)
             | EditError::UnknownResource(_)
-            | EditError::InvalidValue { .. } => {
-                decode(&format!("edit of tick {tick}"), error.to_string())
-            }
+            | EditError::InvalidValue { .. }
+            | EditError::NotGroupable => decode(&format!("edit of tick {tick}"), error.to_string()),
             EditError::NoSuchEntity(_)
             | EditError::NoSuchAddress(_)
             | EditError::MissingAsset(_)
@@ -412,6 +411,12 @@ fn with_runtime_target(sim: &Simulation, edit: &Edit) -> Result<Edit, EditError>
             entity: runtime(entity)?,
             component: component.clone(),
         },
+        Edit::Group(edits) => Edit::Group(
+            edits
+                .iter()
+                .map(|edit| with_runtime_target(sim, edit))
+                .collect::<Result<_, _>>()?,
+        ),
         Edit::Spawn { .. }
         | Edit::SetResource { .. }
         | Edit::SetAsset { .. }

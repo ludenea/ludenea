@@ -283,6 +283,42 @@ fn replay_with_instance_edit_plays_back() {
 }
 
 #[test]
+fn replay_with_a_group_plays_back() {
+    let set = |address: Vec<u32>, value| Edit::Insert {
+        entity: EntityRef::Loaded(address),
+        component: "replay::Counter".to_string(),
+        value: counter_bytes(value),
+    };
+    let edits = EditLog {
+        edits: vec![TimedEdit {
+            tick: 50,
+            edit: Edit::Group(vec![set(vec![3], 500), set(vec![5, 1], 1000)]),
+        }],
+        ..EditLog::new()
+    };
+    let replay = recorded(80, &edits);
+    let without_edit = recorded(80, &EditLog::new());
+    assert_eq!(replay.hashes[50], without_edit.hashes[50]);
+    assert_ne!(replay.hashes[51], without_edit.hashes[51]);
+
+    let recorded_edits = EditLog::decode(&replay.edits).unwrap();
+    let Edit::Group(members) = &recorded_edits.edits[0].edit else {
+        panic!("{recorded_edits:?}");
+    };
+    assert!(
+        members.iter().all(|member| matches!(
+            member,
+            Edit::Insert {
+                entity: EntityRef::Runtime(_),
+                ..
+            }
+        )),
+        "{members:?}"
+    );
+    assert_eq!(play(&replay).outcome, ReplayOutcome::Matched);
+}
+
+#[test]
 fn replay_tick_0_assets_include_instance_prefabs() {
     let assets = texts(&[
         (A, prefab(&counter(1, 10))),

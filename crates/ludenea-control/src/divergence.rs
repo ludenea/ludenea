@@ -637,6 +637,10 @@ fn describe(edit: &Edit) -> String {
         Edit::SetResource { resource, .. } => format!("set {resource}"),
         Edit::SetAsset { id, .. } => format!("set asset {id}"),
         Edit::LoadAsset { id, .. } => format!("load asset {id}"),
+        Edit::Group(edits) => {
+            let members: Vec<String> = edits.iter().map(describe).collect();
+            format!("{} edits: {}", edits.len(), members.join("; "))
+        }
     }
 }
 

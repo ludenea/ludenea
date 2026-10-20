@@ -679,3 +679,233 @@ fn a_spawn_that_needs_more_local_identifiers_than_remain_is_an_invalid_edit() {
         }
     }
 }
+
+/// The load address of each entity the last scene load spawned, sorted.
+fn load_addresses(host: &mut Host) -> Vec<(Entity, Vec<u32>)> {
+    match ok(host, Command::GetInstances) {
+        Reply::Instances {
+            mut load_addresses, ..
+        } => {
+            load_addresses.sort_by(|a, b| a.1.cmp(&b.1));
+            load_addresses
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+fn addresses(host: &mut Host) -> Vec<Vec<u32>> {
+    load_addresses(host)
+        .into_iter()
+        .map(|(_, address)| address)
+        .collect()
+}
+
+fn despawns(entities: &[Entity]) -> Command {
+    Command::Batch {
+        commands: entities
+            .iter()
+            .map(|&entity| Command::Despawn { entity })
+            .collect(),
+    }
+}
+
+#[test]
+fn a_batch_of_tick_zero_despawns_after_play_is_one_undo_step() {
+    let mut host = loaded(100);
+    step(&mut host, 100);
+    ok(&mut host, Command::Seek { tick: 0 });
+    let before = load_addresses(&mut host);
+    let crates = &before[4..7];
+    let entities: Vec<Entity> = crates.iter().map(|(entity, _)| *entity).collect();
+
+    assert_eq!(ok(&mut host, despawns(&entities)), Reply::Done);
+
+    let after = addresses(&mut host);
+    assert_eq!(after.len(), before.len() - 3);
+    for (_, address) in crates {
+        assert!(
+            !after.contains(address),
+            "{address:?} is still in the scene"
+        );
+    }
+    let edited = timeline(&mut host);
+    assert!(edited.scene_dirty && edited.resimulating);
+    assert_eq!(edited.undo_label.as_deref(), Some("Undo scene edit"));
+    resimulate(&mut host);
+
+    ok(&mut host, Command::Undo);
+    let undone = timeline(&mut host);
+    assert!(!undone.can_undo, "one undo takes the batch back");
+    assert!(!undone.scene_dirty);
+    resimulate(&mut host);
+    let restored: Vec<(Entity, Vec<u32>)> = load_addresses(&mut host);
+    assert_eq!(restored, before);
+}
+
+#[test]
+fn a_batch_past_tick_zero_is_one_timed_edit_and_one_undo_step() {
+    let mut host = loaded(100);
+    step(&mut host, 50);
+    let crates = &entities(&mut host)[4..7];
+    let moved = |host: &mut Host| -> Vec<Value> {
+        crates
+            .iter()
+            .map(|&entity| json_of(host, entity, "ludenea::Pose")["position"]["y"].clone())
+            .collect()
+    };
+    let before = moved(&mut host);
+    let commands = crates
+        .iter()
+        .map(|&entity| set_pose(entity, &["position", "y"], json!(40.0)))
+        .collect();
+
+    let command = through_json_text(Command::Batch { commands });
+    assert_eq!(ok(&mut host, command), Reply::Done);
+
+    assert_eq!(moved(&mut host), vec![json!(40.0); 3]);
+    let log = recorded_edits(&mut host);
+    assert_eq!(log.edits.len(), 1, "{log:?}");
+    assert_eq!(log.edits[0].tick, 50);
+    let Edit::Group(edits) = &log.edits[0].edit else {
+        panic!("{log:?}");
+    };
+    assert_eq!(edits.len(), 3);
+    assert!(edits.iter().all(|edit| matches!(edit, Edit::Insert { .. })));
+    assert_eq!(
+        timeline(&mut host).undo_label.as_deref(),
+        Some("Undo edit at tick 50 (removes Branch 2)")
+    );
+
+    ok(&mut host, Command::Undo);
+    assert!(
+        !timeline(&mut host).can_undo,
+        "one undo takes the batch back"
+    );
+    assert_eq!(moved(&mut host), before);
+}
+
+#[test]
+fn a_batch_of_one_command_records_that_command() {
+    let mut host = loaded(20);
+    step(&mut host, 10);
+    let entity = first_crate(&mut host);
+    let commands = vec![set_pose(entity, &["position", "y"], json!(12.0))];
+    ok(&mut host, Command::Batch { commands });
+    let log = recorded_edits(&mut host);
+    assert!(
+        matches!(
+            &log.edits[..],
+            [TimedEdit {
+                edit: Edit::Insert { .. },
+                ..
+            }]
+        ),
+        "{log:?}"
+    );
+}
+
+#[test]
+fn a_batch_holds_edit_commands_only() {
+    for tick in [0, 10] {
+        let mut host = loaded(20);
+        step(&mut host, 10);
+        ok(&mut host, Command::Seek { tick });
+        let entity = first_crate(&mut host);
+        let before = (hash(&mut host), save_scene(&mut host));
+        for other in [
+            Command::Play,
+            Command::Batch {
+                commands: Vec::new(),
+            },
+        ] {
+            let commands = vec![set_pose(entity, &["position", "y"], json!(12.0)), other];
+            let error = host.handle(Command::Batch { commands }).unwrap_err();
+            assert_eq!(error.code, ErrorCode::InvalidCommand, "{}", error.message);
+            assert!(
+                error.message.contains("command 1 of the batch"),
+                "{}",
+                error.message
+            );
+            assert_eq!((hash(&mut host), save_scene(&mut host)), before);
+            let timeline = timeline(&mut host);
+            assert!(!timeline.can_undo && timeline.edit_ticks.is_empty());
+        }
+    }
+}
+
+#[test]
+fn a_batch_whose_edit_fails_changes_nothing() {
+    for tick in [0, 10] {
+        let mut host = loaded(20);
+        step(&mut host, 10);
+        ok(&mut host, Command::Seek { tick });
+        let entity = first_crate(&mut host);
+        let before = (hash(&mut host), save_scene(&mut host), addresses(&mut host));
+        // The second despawn finds the entity gone: at tick 0 after the scene loaded once.
+        let error = host.handle(despawns(&[entity, entity])).unwrap_err();
+        assert_eq!(error.code, ErrorCode::NoSuchEntity, "{}", error.message);
+        assert_eq!(
+            (hash(&mut host), save_scene(&mut host), addresses(&mut host)),
+            before,
+            "at tick {tick}"
+        );
+        let timeline = timeline(&mut host);
+        assert!(!timeline.can_undo && !timeline.scene_dirty && timeline.edit_ticks.is_empty());
+        assert!(!timeline.resimulating);
+    }
+}
+
+#[test]
+fn a_batch_refuses_a_value_changed_twice() {
+    let mut host = loaded(20);
+    step(&mut host, 10);
+    let entity = first_crate(&mut host);
+    let commands = vec![
+        set_pose(entity, &["position", "x"], json!(1.0)),
+        set_pose(entity, &["position", "y"], json!(2.0)),
+    ];
+    let error = host.handle(Command::Batch { commands }).unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidCommand);
+    assert!(
+        error.message.contains(&format!(
+            "command 1 of the batch changes `ludenea::Pose` of entity {entity} again"
+        )),
+        "{}",
+        error.message
+    );
+    assert!(timeline(&mut host).edit_ticks.is_empty());
+}
+
+#[test]
+fn a_tick_zero_batch_needing_more_local_identifiers_than_remain_changes_nothing() {
+    // The first spawn takes the identifier before the last; the second has none left.
+    let scene = "Scene(version: 2, next_id: 4294967293, resources: {}, entities: [])".to_string();
+    let mut host = Host::new(boxes::app).unwrap();
+    ok(
+        &mut host,
+        Command::LoadScene {
+            scene: scene.clone(),
+            assets: Vec::new(),
+            document: Document::Scene,
+        },
+    );
+    let spawn = || Command::Spawn {
+        components: BTreeMap::new(),
+    };
+    let before = hash(&mut host);
+    let error = host
+        .handle(Command::Batch {
+            commands: vec![spawn(), spawn()],
+        })
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidEdit);
+    assert!(
+        error.message.contains("renumber the scene"),
+        "{}",
+        error.message
+    );
+    assert_eq!((hash(&mut host), save_scene(&mut host)), (before, scene));
+    assert!(!timeline(&mut host).can_undo);
+    // One spawn alone fits.
+    ok(&mut host, spawn());
+}

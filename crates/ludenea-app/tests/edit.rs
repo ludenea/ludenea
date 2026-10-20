@@ -240,7 +240,7 @@ fn edit_log_round_trips_and_rejects_other_versions() {
         error,
         SimError::EditLogVersion {
             found: 9,
-            expected: 2
+            expected: EDIT_LOG_VERSION
         }
     ));
 
@@ -741,5 +741,162 @@ fn version_1_edit_log_decodes() {
             ),
             at(4, Edit::Despawn { entity: target }),
         ]
+    );
+}
+
+#[test]
+fn version_2_edit_log_decodes_as_the_current_version() {
+    let mut log = EditLog::new();
+    log.version = 2;
+    log.edits.push(TimedEdit {
+        tick: 3,
+        edit: Edit::Spawn {
+            components: vec![("edit::Tag".to_string(), tag(1))],
+        },
+    });
+    let decoded = EditLog::decode(&log.encode()).unwrap();
+    assert_eq!(decoded.version, EDIT_LOG_VERSION);
+    assert_eq!(decoded.edits, log.edits);
+}
+
+#[test]
+fn a_group_round_trips_in_the_edit_log() {
+    let mut log = EditLog::new();
+    log.edits.push(TimedEdit {
+        tick: 3,
+        edit: Edit::Group(vec![
+            Edit::Spawn {
+                components: vec![("edit::Tag".to_string(), tag(1))],
+            },
+            Edit::Remove {
+                entity: EntityRef::Loaded(vec![4]),
+                component: "edit::Tag".to_string(),
+            },
+        ]),
+    });
+    assert_eq!(EditLog::decode(&log.encode()).unwrap(), log);
+}
+
+#[test]
+fn a_group_applies_every_edit_in_order() {
+    let mut simulation = simulation();
+    let (a, b) = (
+        spawn_tagged(&mut simulation, 1),
+        spawn_tagged(&mut simulation, 2),
+    );
+    let group = Edit::Group(vec![
+        Edit::Insert {
+            entity: EntityRef::Runtime(a),
+            component: "edit::Tag".to_string(),
+            value: tag(5),
+        },
+        Edit::Despawn {
+            entity: EntityRef::Runtime(b),
+        },
+        Edit::Spawn {
+            components: vec![("edit::Tag".to_string(), tag(7))],
+        },
+    ]);
+    assert_eq!(simulation.apply_edit(&group).unwrap(), None);
+    assert_eq!(tag_of(&simulation, a), Some(5));
+    assert!(!simulation.world().is_alive(b));
+    // The spawned entity holds its tag.
+    tagged(&simulation, 7);
+}
+
+#[test]
+fn a_group_with_a_failing_edit_changes_nothing() {
+    let mut simulation = simulation();
+    let (a, b) = (
+        spawn_tagged(&mut simulation, 1),
+        spawn_tagged(&mut simulation, 2),
+    );
+    let hash = simulation.hash();
+    let insert = |entity, value| Edit::Insert {
+        entity: EntityRef::Runtime(entity),
+        component: "edit::Tag".to_string(),
+        value: tag(value),
+    };
+    let despawn = |entity| Edit::Despawn {
+        entity: EntityRef::Runtime(entity),
+    };
+    // Each edit is checked as the ones before it leave the world: `a` is gone for the third.
+    let after_despawn = Edit::Group(vec![insert(b, 5), despawn(a), insert(a, 6)]);
+    let error = simulation.apply_edit(&after_despawn).unwrap_err();
+    assert!(
+        matches!(error, EditError::NoSuchEntity(entity) if entity == a),
+        "{error}"
+    );
+    let invalid_last = Edit::Group(vec![
+        despawn(b),
+        Edit::Insert {
+            entity: EntityRef::Runtime(a),
+            component: "edit::Tag".to_string(),
+            value: vec![0xff; 9],
+        },
+    ]);
+    let error = simulation.apply_edit(&invalid_last).unwrap_err();
+    assert!(matches!(error, EditError::InvalidValue { .. }), "{error}");
+    assert_eq!(simulation.hash(), hash);
+    assert_eq!(
+        (tag_of(&simulation, a), tag_of(&simulation, b)),
+        (Some(1), Some(2))
+    );
+}
+
+#[test]
+fn a_group_holds_entity_and_resource_edits_only() {
+    let mut simulation = armed();
+    let hash = simulation.hash();
+    let tag_3 = Edit::Remove {
+        entity: EntityRef::Loaded(vec![3]),
+        component: "edit::Tag".to_string(),
+    };
+    let set_asset = Edit::SetAsset {
+        id: AssetId(A),
+        value: stats(2, None),
+    };
+    for member in [set_asset, Edit::Group(Vec::new())] {
+        let group = Edit::Group(vec![tag_3.clone(), member]);
+        let error = simulation.apply_edit(&group).unwrap_err();
+        assert!(matches!(error, EditError::NotGroupable), "{error}");
+        assert!(
+            error
+                .to_string()
+                .contains("record an asset edit or a group on its own")
+        );
+        assert_eq!(simulation.hash(), hash);
+    }
+    let nested = Edit::Group(vec![Edit::Group(Vec::new())]);
+    let error = simulation
+        .assets_introduced_by(&nested, &texts(&[]))
+        .unwrap_err();
+    assert!(matches!(error, EditError::NotGroupable), "{error}");
+}
+
+#[test]
+fn a_group_introduces_the_assets_of_every_edit() {
+    let simulation = armed();
+    let sources = texts(&[(B, stats_file(2, None)), (C, stats_file(3, None))]);
+    let armed_with = |id: u128| Edit::Spawn {
+        components: vec![(
+            "edit::Armed".to_string(),
+            postcard::to_allocvec(&Armed(Handle::new(AssetId(id)))).unwrap(),
+        )],
+    };
+    let group = Edit::Group(vec![
+        armed_with(B),
+        armed_with(A),
+        armed_with(C),
+        armed_with(B),
+    ]);
+    let load = |id: u128, value| Edit::LoadAsset {
+        id: AssetId(id),
+        asset: "edit::Stats".to_string(),
+        value,
+    };
+    assert_eq!(
+        simulation.assets_introduced_by(&group, &sources).unwrap(),
+        vec![load(B, stats(2, None)), load(C, stats(3, None))]
     );
 }
