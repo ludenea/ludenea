@@ -1175,6 +1175,25 @@ fn of_tilemaps_sharing_an_entity_only_the_first_listed_draws() {
 }
 
 #[test]
+fn a_malformed_tilemap_does_not_hide_a_well_formed_one_of_its_entity() {
+    let mut renderer = renderer();
+    tileset(&mut renderer);
+    // Two tilemaps of one entity: the first has too many tiles, so the first well-formed one
+    // listed, green left of the origin, is the one drawn.
+    let shared = entity();
+    let scene = with_tilemaps(
+        Vec::new(),
+        vec![
+            tilemap(shared, Vec2::ZERO, 1, 1, vec![Some(0), Some(0)]),
+            tilemap(shared, Vec2::new(-1.0, 0.0), 1, 1, vec![Some(1)]),
+        ],
+    );
+    let pixels = render(&mut renderer, SIZE, &scene);
+    assert_eq!(pixel(&pixels, SIZE, 24, 24), GREEN);
+    assert_eq!(pixel(&pixels, SIZE, 40, 24), background());
+}
+
+#[test]
 fn a_tilemap_whose_tiles_do_not_match_its_size_draws_nothing_at_once() {
     let mut renderer = renderer();
     tileset(&mut renderer);

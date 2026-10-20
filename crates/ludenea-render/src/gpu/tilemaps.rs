@@ -41,8 +41,8 @@ impl Cache {
     }
 
     /// Builds the chunks of each item whose tiles changed, and forgets the tilemaps not in
-    /// `items`, which hold at most one item per entity (two would rebuild each other's
-    /// chunks on every call).
+    /// `items`, which are `well_formed` and hold at most one item per entity (two would
+    /// rebuild each other's chunks on every call).
     pub fn update(
         &mut self,
         device: &wgpu::Device,
@@ -51,11 +51,6 @@ impl Cache {
         regions: &BTreeMap<(AssetId, u32), Region>,
         pages: &[(u32, u32)],
     ) {
-        let items: Vec<&TilemapItem> = items
-            .iter()
-            .copied()
-            .filter(|item| well_formed(item))
-            .collect();
         let present: BTreeSet<Entity> = items.iter().map(|item| item.entity).collect();
         self.0.retain(|entity, _| present.contains(entity));
         for item in items {
@@ -77,7 +72,7 @@ impl Cache {
 
 /// Whether `item` has one tile per cell. Extraction refuses other tilemaps, but a frame from
 /// the control protocol may hold one: it is not drawn, and its cells are never walked.
-fn well_formed(item: &TilemapItem) -> bool {
+pub(super) fn well_formed(item: &TilemapItem) -> bool {
     item.tiles.len() as u64 == u64::from(item.width) * u64::from(item.height)
 }
 

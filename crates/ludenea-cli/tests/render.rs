@@ -319,7 +319,14 @@ fn corrupt_replay_is_refused_with_its_decode_error() {
     fs::write(dir.join("bad.replay"), b"not a replay").unwrap();
     let (code, output) = cli(
         dir,
-        &["render", "{}/bad.replay", "--tick", "0", "--out", "{}/frame.png"],
+        &[
+            "render",
+            "{}/bad.replay",
+            "--tick",
+            "0",
+            "--out",
+            "{}/frame.png",
+        ],
     );
     assert_eq!(code, 2, "{output}");
     assert!(!output.contains("hash"), "{output}");

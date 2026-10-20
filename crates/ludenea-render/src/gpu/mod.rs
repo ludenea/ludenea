@@ -305,7 +305,8 @@ impl Renderer {
 
     /// Draws `frames` into `target`, a view of `size` pixels in the renderer's format. A size
     /// past `max_texture_dimension_2d` is refused. Of tilemaps sharing an entity, which only
-    /// a malformed frame holds, the first listed is drawn and the others are skipped.
+    /// a malformed frame holds, the first well-formed one listed is drawn and the others are
+    /// skipped.
     pub fn draw(
         &mut self,
         target: &wgpu::TextureView,
@@ -517,12 +518,12 @@ impl Renderer {
         let visible = fit(camera.view, aspect);
         let pages: Vec<(u32, u32)> = self.pages.iter().map(|page| page.size).collect();
         // A well-formed frame has one tilemap per entity; of a malformed frame's duplicates,
-        // only the first listed is built and drawn.
+        // only the first well-formed one listed is built and drawn.
         let mut seen = BTreeSet::new();
         let tilemaps: Vec<&TilemapItem> = frame
             .tilemaps
             .iter()
-            .filter(|item| seen.insert(item.entity))
+            .filter(|item| tilemaps::well_formed(item) && seen.insert(item.entity))
             .collect();
         self.tilemaps
             .update(&self.device, &self.queue, &tilemaps, &self.regions, &pages);
