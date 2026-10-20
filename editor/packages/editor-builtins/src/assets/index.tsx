@@ -17,9 +17,9 @@ export type ChangedBanner = { path: string; text: string } | { path: string; ass
 /** The open document's file was deleted on disk: save it again or close it. */
 export type RemovedBanner = { path: string; removed: true };
 
-/** A file kind without its data type: what the browser shows and filters by. */
-export type KindName = "Scene" | "Prefab" | "Data" | "Replay" | "Trace" | "Snapshot" | "Other";
-export const kindName = (kind: AssetKind): KindName => (typeof kind === "string" ? kind : "Data");
+/** A file kind without its data type or texture meta: what the browser shows and filters by. */
+export type KindName = "Scene" | "Prefab" | "Data" | "Texture" | "Replay" | "Trace" | "Snapshot" | "Other";
+export const kindName = (kind: AssetKind): KindName => (typeof kind === "string" ? kind : "Data" in kind ? "Data" : "Texture");
 
 /**
  * The data asset being created: its type and path, then, for a type without a default value,
@@ -48,7 +48,7 @@ export interface Assets {
   state: Store<AssetsState>;
   /** Kept here, not in the panel: the shell unmounts a panel while its tab is hidden. */
   scroll: Scroll;
-  /** Opens a scene, prefab, or replay as the document, a trace or snapshot in the divergence viewer, and a data asset in the inspector. */
+  /** Opens a scene, prefab, or replay as the document, a trace or snapshot in the divergence viewer, and a data asset in the inspector; a texture, which has no preview yet, is only selected. */
   open(path: string): Promise<void>;
   /** Starts the "New data asset" form, for the game's asset types. */
   newDataAsset(): void;
@@ -115,6 +115,7 @@ export const assetsPlugin = definePlugin({
           editor.selection.getState().selectAsset(entry.id);
           return showPanel(editor, "ludenea.inspector");
         }
+        if (kind === "Texture") return;
         if (kind !== "Scene" && kind !== "Prefab" && kind !== "Replay") throw new Error(`${path} is not a scene, a prefab, a replay, a trace, a snapshot, or a data asset`);
         // Documents are usable before the build: the document is remembered and loaded into each game.
         await documents.getState().open(entry.id);

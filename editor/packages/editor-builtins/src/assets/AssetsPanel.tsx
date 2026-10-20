@@ -7,14 +7,13 @@ import { ASSET_FOLDERS, errorText, useGame, useKeptScroll, useStore } from "../s
 import { kindName, type Action, type Assets, type KindName, type NewData } from "./index";
 import { emptyValue, isComplete } from "./value";
 
-const ICONS: { [kind in KindName]: string } = { Scene: "▣", Prefab: "◇", Data: "≡", Replay: "▶", Trace: "∿", Snapshot: "◉", Other: "·" };
+const ICONS: { [kind in KindName]: string } = { Scene: "▣", Prefab: "◇", Data: "≡", Texture: "▦", Replay: "▶", Trace: "∿", Snapshot: "◉", Other: "·" };
 const KINDS = Object.keys(ICONS) as KindName[];
 const OPENABLE = new Set<KindName>(["Scene", "Prefab", "Data", "Replay", "Trace", "Snapshot"]);
 
 /** What a file is, as its tooltip says: the type of a data asset, else the kind's name. */
 function kindLabel(kind: AssetKind): string {
-  if (typeof kind === "string") return kind;
-  return "Data" in kind ? kind.Data.type : "Texture";
+  return typeof kind === "object" && "Data" in kind ? kind.Data.type : kindName(kind);
 }
 
 export const baseName = (path: string) => path.slice(path.lastIndexOf("/") + 1);

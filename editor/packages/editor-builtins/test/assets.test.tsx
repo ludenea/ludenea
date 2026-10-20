@@ -57,6 +57,25 @@ describe("assets", () => {
     expect([title("main.scene.ron"), title("logo.png"), title("settings.ron"), title("hero.png")]).toEqual(["Scene", "Other", "demo::Settings", "Texture"]);
   });
 
+  it("a_texture_is_its_own_kind_and_opening_it_only_selects_it", async () => {
+    const HERO = "0000000000000000000000000000000d";
+    const files: FileEntry[] = [...entries, { path: "assets/hero.png", id: HERO, kind: { Texture: { pixels_per_unit: 16, grid: null, pivot: null, filter: "Nearest" } } }];
+    const { host } = await browser({ text: "", files });
+
+    const hero = screen.getByText("hero.png").closest("li")!;
+    expect(hero.querySelector(".ludenea-asset-icon")!.textContent).toBe("▦");
+    fireEvent.change(screen.getByRole("combobox", { name: "Kind" }), { target: { value: "Texture" } });
+    expect(screen.getAllByRole("treeitem").map((item) => item.textContent)).toEqual([expect.stringContaining("hero.png")]);
+
+    fireEvent.doubleClick(screen.getByText("hero.png"));
+    await settle();
+    // Not a data asset: the inspector does not take it, no document opens, and nothing fails.
+    expect(host.editor.selection.getState().asset).not.toBe(HERO);
+    expect(host.editor.document.getState().current).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByText("hero.png").closest("li")!.getAttribute("aria-selected")).toBe("true");
+  });
+
   it("opening_scene_loads_it_into_the_game", async () => {
     const { host, game } = await browser({ text: "(scene)" });
 

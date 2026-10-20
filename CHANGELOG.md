@@ -549,6 +549,9 @@ hash, those of the golden trace and replays included.
   gives: a stored session the game refuses is set aside with that warning, before any later
   store of its document, and the restore resolves to null instead of failing. Other sessions
   restore as with `restoreSession`.
+- The asset browser shows a texture as its own kind, `Texture`, with its own icon and
+  entry in the kind filter, instead of as a data asset the inspector would take; opening
+  one only selects it, as textures have no preview yet.
 - The asset browser keeps the open document open when its file is moved or renamed outside
   the editor: `DocumentState.current` follows the file's identifier to its new path, or,
   when the meta stayed behind, the file created with the document's text, under that file's
