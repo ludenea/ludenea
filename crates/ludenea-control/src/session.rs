@@ -56,8 +56,9 @@ pub enum SessionError {
     /// The message leaves the entity out: callers name it in their context.
     #[error("the entity has no `{component}`; insert the component first")]
     MissingComponent { entity: Entity, component: String },
+    /// The message leaves the entity out: callers name it in their context.
     #[error(
-        "the entity was spawned after tick 0, so the scene does not have it; only entities of the scene can be applied to it"
+        "the entity was spawned after tick 0, so it is not in the scene; pick an entity of the scene"
     )]
     NotInScene(Entity),
     #[error(transparent)]
@@ -1077,13 +1078,10 @@ impl Session {
                 component: component.to_string(),
             }
         })?;
-        let (_, scene_state) = self.checkpoints.nearest_at_or_before(0);
-        let index = entity.index() as usize;
-        let in_scene = scene_state.entities.alive.get(index) == Some(&true)
-            && scene_state.entities.generations[index] == entity.generation();
-        if !in_scene {
+        if !self.in_scene(entity) {
             return Err(SessionError::NotInScene(entity));
         }
+        let (_, scene_state) = self.checkpoints.nearest_at_or_before(0);
         let in_scene_value = scene_state
             .components
             .iter()
@@ -1295,20 +1293,35 @@ impl Session {
 
     /// The prefab file of the scene entities `entities` as the scene holds them (see
     /// `prefab::create_prefab`), whatever tick the session shows: the world goes back to
-    /// tick 0 to write it, then comes back. An entity spawned after tick 0 is dead there, so
-    /// it is refused.
+    /// tick 0 to write it, then comes back. An entity spawned after tick 0 is not in the
+    /// scene, so it is refused.
     pub fn create_prefab(
         &mut self,
         sim: &mut Simulation,
         entities: &[Entity],
     ) -> Result<String, SessionError> {
         self.ensure_resimulated()?;
+        if let Some(&entity) = entities.iter().find(|&&entity| !self.in_scene(entity)) {
+            return Err(if sim.world().is_alive(entity) {
+                SessionError::NotInScene(entity)
+            } else {
+                EditError::NoSuchEntity(entity).into()
+            });
+        }
         self.restore_checkpoint(sim, 0)?;
         let written = prefab::create_prefab(sim, entities).map_err(SessionError::from);
         // The writing's error is the one to report, wherever coming back ends.
         let back = self.come_back(sim, self.current);
         let text = written?;
         back.map(|()| text)
+    }
+
+    /// Whether `entity` is one of the scene's: alive at tick 0.
+    fn in_scene(&self, entity: Entity) -> bool {
+        let (_, scene_state) = self.checkpoints.nearest_at_or_before(0);
+        let index = entity.index() as usize;
+        scene_state.entities.alive.get(index) == Some(&true)
+            && scene_state.entities.generations[index] == entity.generation()
     }
 
     /// Moves the override of `component` at `path` on `entity` of the instance at

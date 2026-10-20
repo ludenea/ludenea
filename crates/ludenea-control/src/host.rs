@@ -719,7 +719,7 @@ impl Host {
                 text: self
                     .session
                     .create_prefab(sim, &entities)
-                    .map_err(|e| self.fail(e))?,
+                    .map_err(|e| self.fail_naming_entity(e))?,
             }),
             Command::PlaceInstance { prefab } => {
                 let instance = self
@@ -736,7 +736,7 @@ impl Host {
                 let instance = self
                     .session
                     .replace_with_instance(sim, &entities, prefab, prefab_text)
-                    .map_err(|e| self.fail(e))?;
+                    .map_err(|e| self.fail_naming_entity(e))?;
                 Ok(Reply::Placed { instance })
             }
             Command::ApplyOverride {
@@ -1376,6 +1376,17 @@ impl Host {
             });
         }
         protocol
+    }
+
+    /// `fail`, naming the entity a `NotInScene` refusal leaves out, for a command that names
+    /// several entities.
+    fn fail_naming_entity(&mut self, error: SessionError) -> ProtocolError {
+        match error {
+            SessionError::NotInScene(entity) => {
+                in_context(self.fail(error), &format!("entity {entity}"))
+            }
+            error => self.fail(error),
+        }
     }
 
     /// A failure with no command to reply to: every kind is written to the console.

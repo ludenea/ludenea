@@ -9,7 +9,7 @@ use ludenea::control::{Resimulation, Session, SessionError};
 use ludenea::ecs::{Asset, AssetId, Component};
 use ludenea::prelude::*;
 use ludenea_app::path::PathSegment;
-use ludenea_app::{AssetTexts, EntityRef, SceneError, ValueKind};
+use ludenea_app::{AssetTexts, EditError, EntityRef, SceneError, ValueKind};
 use serde_json::json;
 
 const SPAWNER_SCENE: &str = concat!(
@@ -327,10 +327,18 @@ fn create_prefab_after_playing_keeps_the_tick_0_values() {
         .unwrap();
     let error = session.create_prefab(&mut sim, &[spawned]).unwrap_err();
     assert!(
-        matches!(&error, SessionError::Scene(SceneError::MissingTarget(target)) if *target == format!("entity {spawned}")),
+        matches!(&error, SessionError::NotInScene(entity) if *entity == spawned),
         "{error:?}"
     );
     assert_eq!(session.timeline().current, 120);
+    // An entity that never was is no such entity.
+    let unknown: Entity =
+        serde_json::from_value(json!({ "index": 4000, "generation": 0 })).unwrap();
+    let error = session.create_prefab(&mut sim, &[unknown]).unwrap_err();
+    assert!(
+        matches!(&error, SessionError::Edit(EditError::NoSuchEntity(entity)) if *entity == unknown),
+        "{error:?}"
+    );
 }
 
 fn field(name: &str) -> PathSegment {

@@ -1058,6 +1058,48 @@ fn create_prefab_returns_prefab_text() {
 }
 
 #[test]
+fn prefab_commands_name_an_entity_spawned_after_tick_0() {
+    let (mut host, reply) = spawner_host(fs::read_to_string(SPAWNER_SCENE).unwrap());
+    let Reply::Loaded { load_addresses, .. } = reply else {
+        panic!("{reply:?}");
+    };
+    let (ground, _) = load_addresses
+        .into_iter()
+        .find(|(_, address)| address == &[0])
+        .unwrap();
+    step(&mut host, 3);
+    let Reply::Spawned { entity: spawned } = ok(
+        &mut host,
+        Command::Spawn {
+            components: [("boxes::Crate".to_string(), json!(null))].into(),
+        },
+    ) else {
+        panic!("spawn replies spawned");
+    };
+    let refused = [
+        Command::CreatePrefab {
+            entities: vec![ground, spawned],
+        },
+        Command::ReplaceWithInstance {
+            entities: vec![ground, spawned],
+            prefab: AssetId(7),
+            prefab_text: fs::read_to_string(CRATE_PREFAB).unwrap(),
+        },
+    ];
+    for command in refused {
+        let error = host.handle(command).unwrap_err();
+        assert_eq!(error.code, ErrorCode::NoSuchEntity);
+        assert_eq!(
+            error.message,
+            format!(
+                "entity {spawned}: the entity was spawned after tick 0, so it is not in the \
+                 scene; pick an entity of the scene"
+            )
+        );
+    }
+}
+
+#[test]
 fn place_instance_over_protocol() {
     let (mut host, _) = spawner_host(fs::read_to_string(SPAWNER_SCENE).unwrap());
     assert_eq!(

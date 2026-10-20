@@ -155,11 +155,13 @@ API.
 - `Host::new` returns the new `AppError::Scene` when the built world cannot be written as
   a scene.
 - The new `Session::create_prefab` writes the prefab file of scene entities as the scene
-  holds them, whatever tick the session shows, and refuses an entity spawned after tick 0
-  with `SceneError::MissingTarget` naming it. The new `Session::apply_to_prefab` moves an
-  override into the session's text of the instance's prefab and out of the scene, as one
-  tick 0 edit that one undo takes back; `ludenea_app::prefab::move_overrides_to_prefab` is
-  its text operation.
+  holds them, whatever tick the session shows. It refuses an entity spawned after tick 0
+  with `SessionError::NotInScene`, whose message now fits every command that refuses such
+  an entity, one that does not exist with `EditError::NoSuchEntity`, and any while the
+  session resimulates with `SessionError::Resimulating`. The new `Session::apply_to_prefab`
+  moves an override into the session's text of the instance's prefab and out of the scene,
+  as one tick 0 edit that one undo takes back;
+  `ludenea_app::prefab::move_overrides_to_prefab` is its text operation.
 - `Document::Prefab { id }` names the prefab's asset. Every load of a prefab session reads
   the document's text for `id`, through the now public `ludenea_app::prefab::Overlay`, so
   an edit that puts the prefab inside itself, directly or through another prefab, fails
@@ -276,7 +278,9 @@ API.
   `invalid_scene`.
 - `create_prefab` writes the entities as the scene holds them, whatever the current tick.
   Past tick 0 it wrote their simulated values, which `replace_with_instance` then put into
-  the scene. It refuses an entity spawned after tick 0 with `invalid_scene`, naming it.
+  the scene. It refuses an entity spawned after tick 0 with `no_such_entity`, naming it and
+  saying it is not in the scene, as `replace_with_instance` now does too (it did not name
+  the entity), and refuses while the session resimulates with `resimulating`.
 - `apply_to_prefab` is a tick 0 edit: the instance's prefab takes the override's value as
   the scene writes it, in the session's asset text, which `save_asset` gives to write, and
   the override is removed; one `undo` ("Undo apply to prefab") takes both back, and an
