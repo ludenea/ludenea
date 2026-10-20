@@ -1,6 +1,9 @@
 //! The canonical hash covers every serde shape: the hash of a value that holds one of each
 //! is pinned, so the format cannot change unnoticed on any target, and changing any single
-//! field changes it, so no shape can silently drop out of the state hash.
+//! field, a variant's index under the same payload, or where content ends between length
+//! prefixes changes it, so no shape can silently drop out of the state hash. A sequence of
+//! unknown length is refused with the reason, and hashes travel as sixteen hexadecimal
+//! digits.
 
 use std::collections::BTreeMap;
 
@@ -12,26 +15,29 @@ use serde::{Serialize, Serializer};
 /// state hash, golden trace and replay, so it is a change of the hash format.
 const SHAPES_HASH: u64 = 14_838_969_156_561_360_344;
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize)]
 struct Marker;
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize)]
 struct Meters(i32);
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize)]
 struct Pair(u8, i16);
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize)]
 enum Shape {
     Empty,
     Full,
     Newtype(u32),
     Tuple(i8, u16),
-    Struct { inner: i32 },
+    Struct {
+        inner: i32,
+    },
+    /// After the others, so their indices, and the pinned hash, stay as they were.
+    Other(u32),
 }
 
 /// A byte string: serde has no type of its own for one (a `Vec<u8>` is a sequence).
-#[derive(Clone)]
 struct Bytes(Vec<u8>);
 
 impl Serialize for Bytes {
@@ -41,7 +47,7 @@ impl Serialize for Bytes {
 }
 
 /// One field of every serde shape.
-#[derive(Serialize, Clone)]
+#[derive(Serialize)]
 struct Shapes {
     u8: u8,
     u16: u16,
@@ -149,6 +155,9 @@ fn every_field_of_every_shape_changes_the_hash() {
         ("newtype_variant", |shapes| {
             shapes.newtype_variant = Shape::Newtype(6);
         }),
+        ("newtype_variant index", |shapes| {
+            shapes.newtype_variant = Shape::Other(5);
+        }),
         ("tuple_variant.0", |shapes| {
             shapes.tuple_variant = Shape::Tuple(-5, 7);
         }),
@@ -172,6 +181,12 @@ fn every_field_of_every_shape_changes_the_hash() {
         }),
         ("integer_keys value", |shapes| {
             shapes.integer_keys.get_mut(&1).unwrap().push('!');
+        }),
+        // The same bytes in the same order, the string's last one moved to the front of the
+        // byte string that follows it: only the length prefixes tell them apart.
+        ("string end moved into bytes", |shapes| {
+            let moved = shapes.string.pop().unwrap();
+            shapes.bytes.0.insert(0, moved as u8);
         }),
     ];
     let original = hash_value(&shapes());
