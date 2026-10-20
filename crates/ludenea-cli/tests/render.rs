@@ -48,19 +48,19 @@ fn fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/render")
 }
 
-/// A fresh directory for outputs, holding `inputs.bin`: 16 at tick 0, which moves the walker
-/// one unit right, and 0 for the next 9 ticks.
-fn dir(test: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("ludenea-render-{test}-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
+/// A fresh directory for outputs, removed when the returned guard drops, holding
+/// `inputs.bin`: 16 at tick 0, which moves the walker one unit right, and 0 for the next 9
+/// ticks.
+fn dir() -> tempfile::TempDir {
+    let guard = tempfile::tempdir().unwrap();
+    let dir = guard.path();
     let mut log = InputLog::new(1);
     log.record(&[16u8]);
     for _ in 1..10 {
         log.record(&[0u8]);
     }
     fs::write(dir.join("inputs.bin"), log.encode()).unwrap();
-    dir
+    guard
 }
 
 /// Runs the command line with `args`, `{}` standing for `dir` and `{fixture}` for the
@@ -136,8 +136,9 @@ fn record_replay(dir: &Path) {
 
 #[test]
 fn renders_a_tick_to_a_png() {
-    let dir = dir("renders_a_tick_to_a_png");
-    let output = render(&dir, "{fixture}/scenes/main.scene.ron", "3", "frame", &[]);
+    let guard = dir();
+    let dir = guard.path();
+    let output = render(dir, "{fixture}/scenes/main.scene.ron", "3", "frame", &[]);
     assert!(output.contains("frame.png"), "{output}");
     let image = decode(&dir.join("frame.png"));
     // Without inputs the walker stays on (0, 1): pixels 24..40 across and 8..24 down. The
@@ -154,25 +155,27 @@ fn renders_a_tick_to_a_png() {
 
 #[test]
 fn tick_0_renders_the_scene_as_loaded() {
-    let dir = dir("tick_0_renders_the_scene_as_loaded");
-    render(&dir, "{fixture}/scenes/main.scene.ron", "0", "frame", &[]);
+    let guard = dir();
+    let dir = guard.path();
+    render(dir, "{fixture}/scenes/main.scene.ron", "0", "frame", &[]);
     // The scene's frame 1: no step has animated the sprite yet.
     assert_eq!(decode(&dir.join("frame.png")).pixel(32, 16), YELLOW);
 }
 
 #[test]
 fn render_of_a_replay_matches_render_of_its_scene_and_inputs() {
-    let dir = dir("render_of_a_replay_matches_render_of_its_scene_and_inputs");
-    record_replay(&dir);
+    let guard = dir();
+    let dir = guard.path();
+    record_replay(dir);
     render(
-        &dir,
+        dir,
         "{}/run.replay",
         "4",
         "replay",
         &["--project", "{fixture}"],
     );
     render(
-        &dir,
+        dir,
         "{fixture}/scenes/main.scene.ron",
         "4",
         "scene",
@@ -188,8 +191,9 @@ fn render_of_a_replay_matches_render_of_its_scene_and_inputs() {
 
 #[test]
 fn replay_whose_recorded_hash_differs_warns_and_still_renders() {
-    let dir = dir("replay_whose_recorded_hash_differs_warns_and_still_renders");
-    record_replay(&dir);
+    let guard = dir();
+    let dir = guard.path();
+    record_replay(dir);
     let path = dir.join("run.replay");
     let mut replay = ludenea_app::replay::Replay::decode(&fs::read(&path).unwrap()).unwrap();
     let played = replay.hashes[4];
@@ -197,7 +201,7 @@ fn replay_whose_recorded_hash_differs_warns_and_still_renders() {
     let recorded = replay.hashes[4];
     fs::write(&path, replay.encode()).unwrap();
     let output = render(
-        &dir,
+        dir,
         "{}/run.replay",
         "4",
         "frame",
@@ -212,11 +216,12 @@ fn replay_whose_recorded_hash_differs_warns_and_still_renders() {
 
 #[test]
 fn broken_texture_warns_and_still_renders() {
-    let dir = dir("broken_texture_warns_and_still_renders");
+    let guard = dir();
+    let dir = guard.path();
     let project = dir.join("project");
     copy(&fixture(), &project);
     fs::write(project.join("assets/tiles.png"), b"not a png").unwrap();
-    let output = render(&dir, "{}/project/scenes/main.scene.ron", "3", "frame", &[]);
+    let output = render(dir, "{}/project/scenes/main.scene.ron", "3", "frame", &[]);
     let warning = output
         .lines()
         .find(|line| line.starts_with("warning: "))
@@ -232,7 +237,8 @@ fn broken_texture_warns_and_still_renders() {
 
 #[test]
 fn sprite_with_an_unknown_texture_warns_naming_it() {
-    let dir = dir("sprite_with_an_unknown_texture_warns_naming_it");
+    let guard = dir();
+    let dir = guard.path();
     let project = dir.join("project");
     copy(&fixture(), &project);
     let scene = project.join("scenes/main.scene.ron");
@@ -241,7 +247,7 @@ fn sprite_with_an_unknown_texture_warns_naming_it() {
         "\"ludenea::Sprite\": (texture: \"000000000000000000000000000000ff\"",
     );
     fs::write(&scene, text).unwrap();
-    let output = render(&dir, "{}/project/scenes/main.scene.ron", "0", "frame", &[]);
+    let output = render(dir, "{}/project/scenes/main.scene.ron", "0", "frame", &[]);
     assert!(
         output.lines().any(|line| line
             == "warning: entity 1v0: frame 1 of texture 000000000000000000000000000000ff is not loaded, so a placeholder is drawn"),
@@ -252,10 +258,11 @@ fn sprite_with_an_unknown_texture_warns_naming_it() {
 
 #[test]
 fn tick_past_a_replay_end_is_refused() {
-    let dir = dir("tick_past_a_replay_end_is_refused");
-    record_replay(&dir);
+    let guard = dir();
+    let dir = guard.path();
+    record_replay(dir);
     let (code, output) = cli(
-        &dir,
+        dir,
         &[
             "render",
             "{}/run.replay",
@@ -275,9 +282,10 @@ fn tick_past_a_replay_end_is_refused() {
 
 #[test]
 fn unknown_debug_layer_is_refused_naming_the_known_ones() {
-    let dir = dir("unknown_debug_layer_is_refused_naming_the_known_ones");
+    let guard = dir();
+    let dir = guard.path();
     let (code, output) = cli(
-        &dir,
+        dir,
         &[
             "render",
             "{fixture}/scenes/main.scene.ron",
@@ -298,9 +306,10 @@ fn unknown_debug_layer_is_refused_naming_the_known_ones() {
 
 #[test]
 fn render_does_not_change_the_run_hashes() {
-    let dir = dir("render_does_not_change_the_run_hashes");
+    let guard = dir();
+    let dir = guard.path();
     let (code, run) = cli(
-        &dir,
+        dir,
         &[
             "run",
             "{fixture}/scenes/main.scene.ron",
@@ -313,7 +322,7 @@ fn render_does_not_change_the_run_hashes() {
     );
     assert_eq!(code, 0, "{run}");
     let rendered = render(
-        &dir,
+        dir,
         "{fixture}/scenes/main.scene.ron",
         "5",
         "frame",
@@ -340,11 +349,12 @@ fn copy(from: &Path, to: &Path) {
 
 #[test]
 fn rendering_a_replay_refuses_inputs_and_edits() {
-    let dir = dir("rendering_a_replay_refuses_inputs_and_edits");
-    record_replay(&dir);
+    let guard = dir();
+    let dir = guard.path();
+    record_replay(dir);
     for option in ["--inputs", "--edits"] {
         let (code, output) = cli(
-            &dir,
+            dir,
             &[
                 "render",
                 "{}/run.replay",
