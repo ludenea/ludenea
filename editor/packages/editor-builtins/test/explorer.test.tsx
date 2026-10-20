@@ -92,6 +92,7 @@ describe("explorer", () => {
 
   it("a_list_taller_than_the_window_requests_only_the_pages_the_window_shows", async () => {
     // A layout that lets the list grow to its 2,000 rows puts every row in range.
+    const height = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight")!;
     Object.defineProperty(HTMLElement.prototype, "offsetHeight", { configurable: true, get: () => 2000 * 22 });
     try {
       const { game } = await explorer(2000);
@@ -99,7 +100,7 @@ describe("explorer", () => {
       // jsdom's 768 pixel window shows 35 rows, 55 with the overscan: the first two pages.
       expect(Math.max(...offsets)).toBe(200);
     } finally {
-      Object.defineProperty(HTMLElement.prototype, "offsetHeight", { configurable: true, get: () => 400 });
+      Object.defineProperty(HTMLElement.prototype, "offsetHeight", height);
     }
   });
 
