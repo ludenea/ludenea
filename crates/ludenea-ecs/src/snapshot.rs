@@ -9,7 +9,7 @@ use crate::assets::DecodedAsset;
 use crate::commands::CommandQueue;
 use crate::component::decode_exact;
 use crate::hash::ENTITIES_LEAF;
-use crate::{Asset, AssetId, EntitiesState, Entity, Prefab, PrefabEntity, World};
+use crate::{Asset, AssetId, EntitiesState, Entity, Prefab, World};
 
 pub const SNAPSHOT_VERSION: u32 = 3;
 
@@ -86,15 +86,12 @@ impl Snapshot {
         Ok(snapshot)
     }
 
-    /// Version 2 wrote each prefab followed by the names of its component types that hold
-    /// an `Entity`, which registration now computes.
+    /// Version 2 wrote each prefab in the layout `Prefab::upgrade_version_2` reads.
     fn upgrade_version_2(&mut self) -> Result<(), SnapshotError> {
         for (id, type_name, bytes) in &mut self.assets {
             if type_name == Prefab::NAME {
-                let (entities, _): (Vec<PrefabEntity>, BTreeSet<String>) =
-                    decode_exact(bytes).map_err(decode_error(&format!("asset {id}")))?;
-                *bytes =
-                    postcard::to_allocvec(&Prefab { entities }).expect("a prefab always encodes");
+                *bytes = Prefab::upgrade_version_2(bytes)
+                    .map_err(decode_error(&format!("asset {id}")))?;
             }
         }
         self.version = SNAPSHOT_VERSION;

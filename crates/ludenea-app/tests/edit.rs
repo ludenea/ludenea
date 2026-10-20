@@ -1,8 +1,10 @@
+use std::collections::BTreeSet;
+
 use ludenea_app::edit::{
     EDIT_LOG_VERSION, Edit, EditError, EditLog, EntityRef, TimedEdit, ValueKind,
 };
 use ludenea_app::{App, AssetTexts, SimError, Simulation};
-use ludenea_ecs::{Asset, AssetId, Component, Entity, Handle};
+use ludenea_ecs::{Asset, AssetId, Component, Entity, Handle, Prefab, PrefabEntity};
 use ludenea_math::{Rot, Vec2};
 use ludenea_physics::{Body, Collider, ContactCache, PhysicsPlugin, Polygon, Pose, Shape};
 use serde::{Deserialize, Serialize};
@@ -757,6 +759,48 @@ fn version_2_edit_log_decodes_as_the_current_version() {
     let decoded = EditLog::decode(&log.encode()).unwrap();
     assert_eq!(decoded.version, EDIT_LOG_VERSION);
     assert_eq!(decoded.edits, log.edits);
+}
+
+#[test]
+fn a_version_2_edit_log_reads_its_prefab_loads() {
+    const PREFAB: AssetId = AssetId(0x50);
+    let flat = Prefab {
+        entities: vec![PrefabEntity {
+            address: vec![0],
+            components: vec![("edit::Tag".to_string(), tag(1))],
+        }],
+    };
+    let load = |value: Vec<u8>| TimedEdit {
+        tick: 3,
+        edit: Edit::LoadAsset {
+            id: PREFAB,
+            asset: Prefab::NAME.to_string(),
+            value,
+        },
+    };
+    // Version 2 wrote each prefab followed by the names of its component types that hold an
+    // `Entity`, as an edit after tick 0 loaded the prefab it introduced.
+    let mut old = EditLog::new();
+    old.version = 2;
+    old.edits.push(load(
+        postcard::to_allocvec(&(&flat.entities, BTreeSet::from(["edit::Armed"]))).unwrap(),
+    ));
+
+    let decoded = EditLog::decode(&old.encode()).unwrap();
+
+    assert_eq!(decoded.version, EDIT_LOG_VERSION);
+    assert_eq!(decoded.edits, [load(postcard::to_allocvec(&flat).unwrap())]);
+    let mut simulation = simulation();
+    simulation.apply_edit(&decoded.edits[0].edit).unwrap();
+    assert!(simulation.world().asset_ids().contains(&PREFAB));
+
+    // A version 2 prefab without that list does not decode.
+    old.edits = vec![load(postcard::to_allocvec(&flat).unwrap())];
+    let error = EditLog::decode(&old.encode()).unwrap_err();
+    assert!(
+        matches!(&error, SimError::EditLogDecode(reason) if reason.starts_with(&format!("the prefab asset {PREFAB} loaded at tick 3: "))),
+        "{error}"
+    );
 }
 
 #[test]

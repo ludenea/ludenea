@@ -134,6 +134,8 @@ API.
 - Removed: the field `Prefab::entity_components`. Each component type records whether its
   schema holds an `Entity` when it is registered, and `spawn_prefab` remaps the values of
   those types, so a prefab can no longer leave a reference unmapped by omitting its type.
+  The new `Prefab::upgrade_version_2` turns the bytes of a prefab in the earlier layout
+  into the current one.
 - `TypeSchema::mentions` tells whether a schema or any type inside it satisfies a
   predicate, such as holding an `Entity`.
 - `Codec::remap_entities` returns `Result`: bytes that do not decode, or a type that
@@ -438,10 +440,12 @@ API.
 - Undo history 4: an "Apply to prefab" entry holds the prefab text and the scene text, each
   before and after it. Version 3 histories still read.
 - Snapshot 3: a `ludenea::Prefab` asset holds only its entities; version 2 also listed the
-  component types that hold an `Entity`. Version 2 snapshots still read. The schema of
+  component types that hold an `Entity`. Version 2 snapshots still read, and so do the
+  prefab loads of version 2 edit logs, which an edit past tick 0 records for a prefab it
+  introduces, in replays, stored sessions, branches and undo histories. The schema of
   `ludenea::Prefab` changed with it, so every game's schema fingerprint changed, and the
   tick hashes of a replay holding a prefab, recorded before, no longer match from tick
-  0: record such replays again. Replays and their version are otherwise unchanged.
+  0: record such replays again. Replays keep their version.
 - Scene 2: loading refuses an entity or instance identifier, or the first identifier of an
   entity's address, that is not below the scene's `next_id`, naming both. Such a scene
   loaded, and the next tick 0 edit could end the game process or be refused; raise

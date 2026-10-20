@@ -5,7 +5,7 @@ use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
 
 use ludenea_ecs::assets::DecodedAsset;
-use ludenea_ecs::{AssetId, Codec, Entity};
+use ludenea_ecs::{Asset, AssetId, Codec, Entity, Prefab};
 use serde::{Deserialize, Serialize};
 
 use crate::assets::AssetSource;
@@ -123,18 +123,16 @@ impl EditLog {
         postcard::to_allocvec(self).expect("an edit log always encodes")
     }
 
-    /// Decodes the current version, version 2 (without `Edit::Group`), or version 1 with
-    /// every target as `EntityRef::Runtime`.
+    /// Decodes the current version, version 2 (without `Edit::Group`, its prefab loads in
+    /// their earlier layout), or version 1 with every target as `EntityRef::Runtime` (it had
+    /// no asset edits).
     pub fn decode(bytes: &[u8]) -> Result<EditLog, SimError> {
         let (version, _): (u32, _) = postcard::take_from_bytes(bytes)
             .map_err(|error| SimError::EditLogDecode(error.to_string()))?;
         let log = match version {
             EDIT_LOG_VERSION => decode_exact::<EditLog>(bytes)?,
             // `Edit::Group` is the last variant: version 2 edits decode unchanged.
-            2 => EditLog {
-                version: EDIT_LOG_VERSION,
-                ..decode_exact::<EditLog>(bytes)?
-            },
+            2 => upgrade_version_2(decode_exact::<EditLog>(bytes)?)?,
             1 => decode_exact::<version_1::EditLog>(bytes)?.into(),
             found => {
                 return Err(SimError::EditLogVersion {
@@ -165,6 +163,23 @@ impl EditLog {
 
 fn decode_exact<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T, SimError> {
     ludenea_ecs::decode_exact(bytes).map_err(SimError::EditLogDecode)
+}
+
+/// Version 2 loaded each prefab in the layout `Prefab::upgrade_version_2` reads.
+fn upgrade_version_2(mut log: EditLog) -> Result<EditLog, SimError> {
+    for TimedEdit { tick, edit } in &mut log.edits {
+        if let Edit::LoadAsset { id, asset, value } = edit
+            && asset == Prefab::NAME
+        {
+            *value = Prefab::upgrade_version_2(value).map_err(|reason| {
+                SimError::EditLogDecode(format!(
+                    "the prefab asset {id} loaded at tick {tick}: {reason}"
+                ))
+            })?;
+        }
+    }
+    log.version = EDIT_LOG_VERSION;
+    Ok(log)
 }
 
 /// Edit log version 1, which named every target by entity identifier; also read inside

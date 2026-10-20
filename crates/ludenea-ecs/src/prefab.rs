@@ -7,7 +7,7 @@ use ludenea_macros::Schema;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::ignore_dead;
-use crate::{Asset, CommandKind, CommandRecord, Component, Entity, Handle, World};
+use crate::{Asset, CommandKind, CommandRecord, Component, Entity, Handle, World, decode_exact};
 
 /// A prefab with its nested instances expanded and their overrides applied, in prefab
 /// order. Every `Entity` value inside a component names the position of its target in
@@ -16,6 +16,16 @@ use crate::{Asset, CommandKind, CommandRecord, Component, Entity, Handle, World}
 #[derive(Schema, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Prefab {
     pub entities: Vec<PrefabEntity>,
+}
+
+impl Prefab {
+    /// The bytes of a prefab as snapshots and edit logs of version 2 hold it, its entities
+    /// followed by the names of their component types that hold an `Entity` (which
+    /// registration now computes), in the current layout.
+    pub fn upgrade_version_2(bytes: &[u8]) -> Result<Vec<u8>, String> {
+        let (entities, _): (Vec<PrefabEntity>, BTreeSet<String>) = decode_exact(bytes)?;
+        Ok(postcard::to_allocvec(&Prefab { entities }).expect("a prefab always encodes"))
+    }
 }
 
 impl Asset for Prefab {
