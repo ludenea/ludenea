@@ -1000,3 +1000,42 @@ fn an_edit_whose_loads_are_taken_back_where_the_state_does_not_restore_replays_t
     assert_eq!(sim.tick(), 12);
     assert_eq!(sim.hash(), before);
 }
+
+#[test]
+fn a_redo_after_new_asset_texts_resimulates_the_run_it_brings_back() {
+    let (mut sim, mut session) = spawner_session();
+    let scene = session.scene().to_string();
+    play(&mut session, &mut sim, 100);
+    let value = sim
+        .encode_json_value(
+            ValueKind::Resource,
+            "boxes::ContactStats",
+            json!({ "begins": 1, "ends": 0 }),
+        )
+        .unwrap();
+    let resource = "boxes::ContactStats".to_string();
+    session
+        .edit(&mut sim, Edit::SetResource { resource, value })
+        .unwrap();
+    session.undo(&mut sim).unwrap();
+    // The same scene with a new text of the spawner's asset: no undo entry, so the redo
+    // stays, and the run it brings back was recorded with the previous text.
+    let mut changed = assets();
+    let text = changed[&STATS].replace("every_ticks: 60", "every_ticks: 20");
+    assert_ne!(text, changed[&STATS]);
+    changed.insert(STATS, text);
+    session.replace_scene(&mut sim, scene, changed).unwrap();
+    resimulate_all(&mut session, &mut sim);
+
+    session.redo(&mut sim).unwrap();
+    resimulate_all(&mut session, &mut sim);
+
+    let resumed = Session::resume(&mut sim, session.export().unwrap(), Document::Scene);
+    let reports = resimulate_all(&mut resumed.unwrap(), &mut sim);
+    assert!(
+        !reports
+            .iter()
+            .any(|report| matches!(report, Resimulation::Diverged { .. })),
+        "{reports:?}"
+    );
+}

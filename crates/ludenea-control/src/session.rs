@@ -1228,15 +1228,21 @@ impl Session {
     }
 
     /// Loads a new version of the scene at tick 0 with new asset texts, as saved, and marks
-    /// the recorded future stale. Undo brings the previous scene version back. An unsaved
-    /// asset keeps its text, unsaved while it differs from its new saved text; one missing
-    /// from `assets` is gone.
+    /// the recorded future stale. Undo brings the previous scene version back; with the
+    /// same scene text, nothing is recorded, and what redo brings back resimulates. An
+    /// unsaved asset keeps its text, unsaved while it differs from its new saved text; one
+    /// missing from `assets` is gone.
     pub fn replace_scene(
         &mut self,
         sim: &mut Simulation,
         scene: String,
         mut assets: AssetTexts,
     ) -> Result<(), SessionError> {
+        if scene == self.scene {
+            // No undo entry clears the redo stack: the branches it brings back hold hashes
+            // of the previous asset texts, so they resimulate.
+            self.history.mark_removed_stale()?;
+        }
         let mut saved_assets = AssetTexts::new();
         for (&id, file) in &mut assets {
             if let Some(text) = self.assets.get(&id)
