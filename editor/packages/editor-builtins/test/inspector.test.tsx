@@ -322,6 +322,24 @@ describe("inspector", () => {
     });
   });
 
+  it("a_component_shown_whole_says_when_the_selected_values_differ", async () => {
+    const banner = "The selected entities have different values; the first one's is shown.";
+    const ron = (text: string) => ({ type: "ron", text });
+    // Without a JSON form, and without a schema: each shows as a whole.
+    const held = {
+      4: { "ludenea::Collider": ron("(density: 1.0)"), "my_game::Unknown": json({ a: 1 }) },
+      5: { "ludenea::Collider": ron("(density: 2.0)"), "my_game::Unknown": json({ a: 2 }) },
+    };
+    await selected([entity, second], held);
+    expect(component("ludenea::Collider").getByText(banner)).toBeTruthy();
+    expect(component("my_game::Unknown").getByText(banner)).toBeTruthy();
+    cleanup();
+
+    await selected([entity, second], { 4: held[4], 5: held[4] });
+    expect(component("ludenea::Collider").queryByText(banner)).toBeNull();
+    expect(component("my_game::Unknown").queryByText(banner)).toBeNull();
+  });
+
   it("a_change_to_one_selected_entity_reloads_that_entity_only", async () => {
     const held = {
       4: { "ludenea::Collider": json(collider) },
