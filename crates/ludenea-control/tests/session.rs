@@ -1232,6 +1232,36 @@ fn a_redone_fork_whose_replay_panics_once_stays_on_the_redone_branch() {
     assert_eq!(sim.tick(), 40);
 }
 
+static REPLAY_TRAP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Panics at every tick from 45 on while armed.
+fn replay_trap(time: Res<Time>) {
+    if time.tick >= 45 && REPLAY_TRAP.load(std::sync::atomic::Ordering::Relaxed) {
+        panic!("replay trap");
+    }
+}
+
+#[test]
+fn a_panic_that_repeats_while_coming_back_moves_to_tick_0() {
+    let mut app = boxes::app();
+    app.system(Sim, replay_trap);
+    let (mut sim, mut session) = marked(app);
+    play(&mut session, &mut sim, 50);
+
+    // Coming back to tick 50 replays from the checkpoint of tick 48, which panics too.
+    REPLAY_TRAP.store(true, std::sync::atomic::Ordering::Relaxed);
+    let result = quietly(|| session.step(&mut sim, None));
+    REPLAY_TRAP.store(false, std::sync::atomic::Ordering::Relaxed);
+
+    let Err(SessionError::Panicked(panic)) = result else {
+        panic!("unexpected result {result:?}");
+    };
+    assert_eq!(panic.tick, 50);
+    assert_at(&session, &sim, 0);
+    play(&mut session, &mut sim, 50);
+    assert_at(&session, &sim, 50);
+}
+
 #[test]
 fn a_panic_whose_tick_cannot_come_back_moves_to_tick_0() {
     let mut app = boxes::app();

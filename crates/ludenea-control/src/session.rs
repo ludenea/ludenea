@@ -299,6 +299,9 @@ pub struct Session {
     keeps_assets: bool,
     /// What the ghost shows.
     compare: CompareChoice,
+    /// Whether the world is coming back to a tick (see `come_back`): a tick that panics on
+    /// the way leaves coming back to it.
+    coming_back: bool,
 }
 
 /// What the ghost shows: the parent of the current branch unless a branch is chosen.
@@ -356,6 +359,7 @@ impl Session {
             warnings,
             keeps_assets: false,
             compare: CompareChoice::Parent,
+            coming_back: false,
         }
     }
 
@@ -1529,6 +1533,8 @@ impl Session {
     /// bookkeeping left halfway: ends a resimulation as a failing tick ends it, then loads the
     /// scene again and comes back to the current tick (see `reload`).
     pub fn recover(&mut self, sim: &mut Simulation) -> Result<(), SessionError> {
+        // A panic that unwound through `come_back` left it set.
+        self.coming_back = false;
         if let Some(tick) = self.end_resimulation() {
             self.current = tick;
         }
@@ -2009,8 +2015,8 @@ impl Session {
     }
 
     /// Steps once, recorded while introspection is on, before the session touches its logs:
-    /// when the game panics, the session comes back to the current tick (see `come_back`)
-    /// and `Panicked` names the tick that failed.
+    /// when the game panics, the session comes back to the current tick (see `come_back`),
+    /// unless it is coming back already, and `Panicked` names the tick that failed.
     fn run_tick(&mut self, sim: &mut Simulation, input: Option<&[u8]>) -> Result<(), SessionError> {
         let stepped = match &mut self.introspection {
             Some(introspection) => introspection.step(sim, input),
@@ -2019,7 +2025,9 @@ impl Session {
         match stepped.map_err(SessionError::from) {
             Err(SessionError::Panicked(panic)) => {
                 // The panic is the error to report, wherever coming back ends.
-                let _ = self.come_back(sim, self.current);
+                if !self.coming_back {
+                    let _ = self.come_back(sim, self.current);
+                }
                 Err(SessionError::Panicked(panic))
             }
             stepped => stepped,
@@ -2028,18 +2036,24 @@ impl Session {
 
     /// Brings the world back to `tick` after it left the run (a panic tore it, or another
     /// state was loaded), and makes `tick` current. When a tick panics on the way, the
-    /// session stays at the current tick, where `run_tick` came back to. When the replay
-    /// fails otherwise, the session goes to tick 0, whose checkpoint is the state the scene
+    /// session stays at the current tick if replaying there works (only a game that does
+    /// not repeat itself panics on a tick that ran before). When that or the replay fails
+    /// otherwise, the session goes to tick 0, whose checkpoint is the state the scene
     /// loaded, so the world and `current` agree again; the error says why.
     // ponytail: tick 0 rather than the latest checkpoint that restores; search back through
     // the checkpoints if landing far behind the failing one matters.
     fn come_back(&mut self, sim: &mut Simulation, tick: u64) -> Result<(), SessionError> {
-        let error = match self.replay_to(sim, tick) {
+        self.coming_back = true;
+        let replayed = self.replay_to(sim, tick);
+        let at_current = matches!(replayed, Err(SessionError::Panicked(_)))
+            && self.replay_to(sim, self.current).is_ok();
+        self.coming_back = false;
+        let error = match replayed {
             Ok(()) => {
                 self.current = tick;
                 return Ok(());
             }
-            Err(error @ SessionError::Panicked(_)) => return Err(error),
+            Err(error) if at_current => return Err(error),
             Err(error) => error,
         };
         self.replay_to(sim, 0)?;
