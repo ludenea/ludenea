@@ -188,8 +188,11 @@ export const assetsPlugin = definePlugin({
     /**
      * Finds the file of `open` in the fresh listing, after any batch of `changes`: a move can
      * arrive in several batches (a checkout removes every file before it writes them back).
-     * The document follows its identifier, then takes the moved file's text as any change on
-     * disk; else it follows a file `changes` created that holds its text (moved without its
+     * The document stays with its file while that file keeps its identifier. Otherwise it
+     * follows the one file with its identifier, then takes the moved file's text as any change
+     * on disk; several files with it (copied with their metas, which the project service warns
+     * about) are none it can tell is its own, so it follows none. With no file of its
+     * identifier, it follows a file `changes` created that holds its text (moved without its
      * meta, the file has an identifier of its own, under which the session is stored at once,
      * where the next open and crash recovery look for it). When `changes` removed the file and
      * it is really gone, the session is stored and the document stays open as deleted on disk
@@ -200,10 +203,11 @@ export const assetsPlugin = definePlugin({
       const still = () => documents.getState().current === open;
       const sameKind = (file: FileEntry) => kindName(file.kind).toLowerCase() === open.kind;
       const { files } = state.get();
-      let found = files.find((file) => file.id === open.id && sameKind(file));
+      const withId = files.filter((file) => file.id === open.id && sameKind(file));
+      let found = withId.find((file) => file.path === open.path) ?? (withId.length === 1 ? withId[0] : undefined);
       // A replay has no text to recognise.
       const text = documents.getState().text;
-      if (!found && text !== null) {
+      if (withId.length === 0 && text !== null) {
         const created = files.filter((file) => sameKind(file) && changes.some((change) => createdPath(change) === file.path));
         for (const file of created) {
           // A file that cannot be read is not known to hold it.

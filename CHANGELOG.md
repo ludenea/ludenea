@@ -409,8 +409,10 @@ API.
 - The asset browser keeps the open document open when its file is moved or renamed outside
   the editor: `DocumentState.current` follows the file's identifier to its new path, or,
   when the meta stayed behind, the file created with the document's text, under that file's
-  identifier. A move the watcher reports in several batches, as a branch checkout does, is
-  followed too, and a moved file whose text changed on the way shows as changed on disk.
+  identifier. It stays with its own file while that file keeps the identifier, and follows
+  none of several files that have it, as copies made with their metas do, so a save never
+  goes to a copy. A move the watcher reports in several batches, as a branch checkout does,
+  is followed too, and a moved file whose text changed on the way shows as changed on disk.
   When the file is deleted outside the editor, the document's session is stored and the
   document stays open, with a banner offering "Save again" (`scene.save`) and "Close" (the
   new `Assets.close`, which stores the session again first); it used to close and drop the

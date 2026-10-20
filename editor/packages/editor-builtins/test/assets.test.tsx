@@ -381,6 +381,49 @@ describe("assets", () => {
       expect(game.sent.filter((command) => command.type === "replace_scene")).toEqual([]);
     });
 
+    // A file manager copies a file with its meta as "main copy.scene.ron", listed before the
+    // original: both have the scene's identifier.
+    const COPY = "scenes/main copy.scene.ron";
+
+    it("a_copy_sharing_the_open_scenes_identifier_leaves_it_at_its_own_file", async () => {
+      const { host, disk } = await browser();
+      await openScene();
+      setSceneDirty(host, true);
+
+      disk.files = [{ ...entries[0]!, path: COPY }, ...entries];
+      act(() => host.project.push({ type: "files_changed", changes: [{ Created: { path: COPY, kind: "Scene" } }] }));
+      await settle();
+      // A later batch, about any file, does not move it either.
+      act(() => host.project.push({ type: "files_changed", changes: [{ Changed: { path: "assets/logo.png", kind: "Other" } }] }));
+      await settle();
+
+      expect(host.editor.document.getState().current).toEqual({ id: SCENE_ID, kind: "scene", path: SCENE });
+      expect(screen.queryByRole("alert")).toBeNull();
+      await host.editor.commands.run("scene.save");
+      expect(writes(host)).toEqual([{ type: "write_text", path: SCENE, text: "(saved)" }]);
+    });
+
+    it("a_removed_scene_follows_none_of_several_files_sharing_its_identifier", async () => {
+      const { host, disk } = await browser();
+      await openScene();
+      setSceneDirty(host, true);
+
+      // Moved, then copied with its meta: two files have its identifier, and its text.
+      disk.files = [{ ...entries[0]!, path: COPY }, { ...entries[0]!, path: LEVEL }, entries[1]!];
+      act(() =>
+        host.project.push({
+          type: "files_changed",
+          changes: [{ Removed: { path: SCENE, kind: "Scene" } }, { Created: { path: COPY, kind: "Scene" } }, { Created: { path: LEVEL, kind: "Scene" } }],
+        }),
+      );
+      await settle();
+      await settle();
+
+      expect(host.editor.document.getState().current).toEqual({ id: SCENE_ID, kind: "scene", path: SCENE });
+      expect(stores(host)).toEqual([expect.objectContaining({ document: SCENE_ID })]);
+      expect(screen.getByRole("alert").textContent).toContain(`${SCENE} was deleted on disk`);
+    });
+
     it("closing_a_scene_removed_on_disk_stores_its_session_first", async () => {
       const { host, disk } = await browser();
       await openScene();
