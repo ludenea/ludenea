@@ -1716,7 +1716,7 @@ impl Session {
         if id == self.current_branch() {
             return Ok(());
         }
-        self.drop_reports();
+        let before = (self.tree.current(), self.resimulating);
         self.switching = Some((id, tick));
         let result = self
             .switch_step(sim)
@@ -1724,6 +1724,10 @@ impl Session {
         if result.is_err() {
             // The session stays on the branch that failed.
             self.switching = None;
+        }
+        // A switch refused before it left the current branch keeps its resimulation.
+        if result.is_ok() || (self.tree.current(), self.resimulating) != before {
+            self.drop_reports();
         }
         result
     }

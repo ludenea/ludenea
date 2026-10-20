@@ -1048,6 +1048,52 @@ fn an_undo_whose_checkpoint_does_not_restore_changes_nothing() {
 }
 
 #[test]
+fn a_refused_switch_keeps_the_reports_of_the_running_resimulation() {
+    let (mut sim, mut session) = poisoned_from_10_to_20();
+    play(&mut session, &mut sim, 60);
+    session.seek(&mut sim, 8).unwrap();
+    play(&mut session, &mut sim, 12);
+    let edit = stats_edit(&sim, 1_000);
+    session.edit(&mut sim, edit).unwrap();
+    let forked = session.timeline().branch;
+    play(&mut session, &mut sim, 20);
+    session.switch_branch(&mut sim, BranchId::ROOT).unwrap();
+    // Resumed with an edit that fails at tick 5 and a recorded hash of tick 7 that is
+    // false: resimulation reports the dropped edit, then the divergence.
+    let entity = sim.world().entities().next().unwrap();
+    let mut edits = EditLog::new();
+    edits.edits.push(TimedEdit {
+        tick: 5,
+        edit: Edit::Remove {
+            entity: EntityRef::Runtime(entity),
+            component: "boxes::Gone".to_string(),
+        },
+    });
+    let mut export = session.export().unwrap();
+    export.edits = edits.encode();
+    export.hashes[7] ^= 1;
+    let mut session = Session::resume(&mut sim, export, Document::Scene).unwrap();
+    let report = session.resimulate(&mut sim, 1_000).unwrap();
+    assert!(
+        matches!(report, Resimulation::EditDropped { tick: 5, .. }),
+        "{report:?}"
+    );
+
+    // The forked branch is stale from its fork tick, 20, whose way starts at tick 16.
+    let error = session.switch_branch(&mut sim, forked).unwrap_err();
+
+    assert!(
+        matches!(error, SessionError::Checkpoint { tick: 16, .. }),
+        "{error:?}"
+    );
+    let report = session.resimulate(&mut sim, 1_000).unwrap();
+    assert!(
+        matches!(report, Resimulation::Diverged { tick: 7, .. }),
+        "{report:?}"
+    );
+}
+
+#[test]
 fn a_redo_whose_checkpoint_does_not_restore_changes_nothing() {
     let (mut sim, mut session) = poisoned_from_10_to_20();
     play(&mut session, &mut sim, 30);
