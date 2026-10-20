@@ -72,7 +72,8 @@ hash, those of the golden trace and replays included.
   velocity, or restitution threshold that is not finite or below zero. NaN gravity or a
   huge damping ratio ended the game process at the next step, and 400,000,000 substeps
   hung it. The step brings substeps and a damping ratio that game code writes back within
-  these limits.
+  these limits, but the resource keeps the written value, so a snapshot of the world taken
+  meanwhile, such as a session checkpoint, fails to restore.
 - `Body` refuses a `gravity_scale` whose magnitude is above the new `MAX_GRAVITY_SCALE`
   (1000). `Collider` refuses a density above the new `MAX_DENSITY` (1e6), a friction or
   restitution above the new `MAX_FRICTION` and `MAX_RESTITUTION` (1000), and, unless its
@@ -513,12 +514,14 @@ hash, those of the golden trace and replays included.
   tick hashes of a replay holding a prefab, recorded before, no longer match from tick
   0: record such replays again. Replays keep their version.
 - Scenes, prefabs, snapshots, replays and stored sessions of every version that hold a
-  value the game cannot run now fail to load, naming the value, where they loaded and then
-  ended or hung the game process at the next step or spawn: physics values beyond the new
+  value beyond the new limits now fail to load, naming the value: physics values beyond the
   limits of `PhysicsSettings`, `Body` and `Collider`, a `Time` whose `dt` is not finite or
-  outside 2^-32 to 1 second (see Rust API), and a prefab the game cannot spawn. Their
-  encoding is unchanged, so their versions are too; correct the value in the file, or
-  record the replay again.
+  outside 2^-32 to 1 second (see Rust API), and a prefab the game cannot spawn. Some of
+  them loaded and then ended or hung the game process at the next step or spawn, such as
+  NaN gravity, 400,000,000 substeps, a NaN `dt`, or a prefab whose component is not
+  registered; others ran, such as 65 substeps or a `dt` of 2 seconds. Their encoding is
+  unchanged, so their versions are too; correct the value in the file, or record the
+  replay again.
 - Scene 2: loading refuses an entity or instance identifier, or the first identifier of an
   entity's address, that is not below the scene's `next_id`, naming both. Such a scene
   loaded, and the next tick 0 edit could end the game process or be refused; raise

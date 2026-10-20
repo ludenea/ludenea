@@ -303,11 +303,13 @@ impl TryFrom<ColliderData> for Collider {
 pub struct PhysicsSettings {
     pub gravity: Vec2,
     /// Solver substeps per tick; the step brings a value that game code writes outside 1 to
-    /// `MAX_SUBSTEPS` back within it.
+    /// `MAX_SUBSTEPS` back within it. The resource keeps the written value, so a snapshot
+    /// of the world then fails to restore until the value is back within the limits.
     pub substeps: u32,
     pub contact_hertz: f32,
     /// The step brings a value that game code writes above `MAX_CONTACT_DAMPING_RATIO` down
-    /// to it.
+    /// to it. The resource keeps the written value, so a snapshot of the world then fails to
+    /// restore until the value is back within the limit.
     pub contact_damping_ratio: f32,
     pub contact_push_max_velocity: f32,
     pub restitution_threshold: f32,
