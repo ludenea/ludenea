@@ -78,6 +78,8 @@ jobs:
           done
           exit $status
       # One artifact per thread count, with the debug and the release dumps of that count.
+      # Steps cannot loop: a thread count added to the verify loops above or to the golden
+      # tests (examples/boxes/tests/golden.rs) needs an upload step of its own here.
       - name: Upload the divergence dump at 1 thread
         if: failure()
         uses: actions/upload-artifact@v4
