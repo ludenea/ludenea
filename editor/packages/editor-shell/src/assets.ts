@@ -52,8 +52,10 @@ export function locateAssetError(error: unknown, paths: [AssetId, string][]): un
 
 /** `text` with each asset identifier of `paths` it names followed by the asset's file, once. */
 export function nameAssets(text: string, paths: [AssetId, string][]): string {
-  const files = new Map(paths);
+  // Built at the first identifier: most text names none (every line of a build's output).
+  let files: Map<AssetId, string> | undefined;
   return text.replace(ASSET_ID, (id: string, offset: number) => {
+    files ??= new Map(paths);
     const file = files.get(id);
     return file === undefined || text.startsWith(` (${file})`, offset + id.length) ? id : `${id} (${file})`;
   });
