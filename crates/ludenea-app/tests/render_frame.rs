@@ -85,6 +85,36 @@ fn non_finite_parallax_is_refused_at_build() {
 }
 
 #[test]
+fn more_layers_than_a_layer_index_holds_are_refused_at_build() {
+    let limit = usize::from(u16::MAX) + 1;
+    let mut app = App::new();
+    for index in 0..=limit {
+        app.render_layer(Box::leak(format!("layer {index}").into_boxed_str()), 1.0);
+    }
+    let Err(error) = app.build() else {
+        panic!("an app declaring {} layers built", limit + 1);
+    };
+    assert!(
+        matches!(error, AppError::TooManyLayers { count, limit: max } if count == limit + 1 && max == limit),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "the app declares 65537 render layers, past the limit of 65536; merge some of them"
+    );
+}
+
+#[test]
+fn as_many_layers_as_a_layer_index_holds_build() {
+    let mut app = App::new();
+    for index in 0..=u16::MAX {
+        app.render_layer(Box::leak(format!("layer {index}").into_boxed_str()), 1.0);
+    }
+    let frame = app.build().unwrap().render_frame(&layers(&[])).unwrap();
+    assert_eq!(frame.layer_index("layer 65535"), Some(u16::MAX));
+}
+
+#[test]
 fn extractors_run_in_registration_order() {
     let mut app = App::new();
     app.extractor(second).extractor(first).extractor(second);

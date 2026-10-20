@@ -24,7 +24,7 @@ pub type ExtractFn = fn(&World, &mut RenderFrame);
 /// The editor and render hooks an app registered, handed to its `Simulation`.
 #[derive(Default)]
 pub(crate) struct EditorHooks {
-    pub(crate) layers: BTreeSet<&'static str>,
+    pub(crate) debug_layers: BTreeSet<&'static str>,
     /// Render layers and their parallax, in draw order.
     pub(crate) render_layers: Vec<(&'static str, f32)>,
     pub(crate) extractors: Vec<ExtractFn>,
@@ -51,6 +51,9 @@ pub trait Plugin {
 /// The fixed-tick simulation schedule, the only schedule in this milestone.
 pub struct Sim;
 
+/// The most render layers an app declares: `SpriteItem::layer` is a `u16` index.
+const MAX_LAYERS: usize = u16::MAX as usize + 1;
+
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
     #[error("app registration failed: {0}")]
@@ -59,6 +62,11 @@ pub enum AppError {
     Build(#[from] BuildError),
     #[error("the render layer `{0}` is declared twice; give each layer its own name")]
     DuplicateLayer(String),
+    /// A render frame indexes its layers with a `u16`, so it holds `limit` layers at most.
+    #[error(
+        "the app declares {count} render layers, past the limit of {limit}; merge some of them"
+    )]
+    TooManyLayers { count: usize, limit: usize },
     /// A parallax that is NaN or infinite has no position to draw at, and no number to
     /// travel as in a render frame.
     #[error("the render layer `{layer}` has the parallax {parallax}; give it a finite number")]
@@ -196,13 +204,14 @@ impl App {
 
     /// Registers a debug drawer for `layers`, shown by the editor viewport.
     pub fn debug_draw(&mut self, layers: &[&'static str], draw: DebugDrawFn) -> &mut Self {
-        self.hooks.layers.extend(layers);
+        self.hooks.debug_layers.extend(layers);
         self.hooks.drawers.push(draw);
         self
     }
 
     /// Declares a render layer; layers draw in declaration order. `parallax` 1.0 moves with
-    /// the world, 0.0 is fixed to the screen. `build` refuses a name declared twice.
+    /// the world, 0.0 is fixed to the screen. `build` refuses a name declared twice, and more
+    /// than 65,536 layers.
     pub fn render_layer(&mut self, name: &'static str, parallax: f32) -> &mut Self {
         self.hooks.render_layers.push((name, parallax));
         self
@@ -234,6 +243,10 @@ impl App {
     pub fn build(mut self) -> Result<Simulation, AppError> {
         if let Some(error) = self.errors.into_iter().next() {
             return Err(error.into());
+        }
+        let (count, limit) = (self.hooks.render_layers.len(), MAX_LAYERS);
+        if count > limit {
+            return Err(AppError::TooManyLayers { count, limit });
         }
         let mut declared = BTreeSet::new();
         if let Some((name, _)) = self

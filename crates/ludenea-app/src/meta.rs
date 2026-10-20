@@ -376,15 +376,30 @@ mod tests {
     }
 
     #[test]
-    fn texture_meta_with_zero_frame_width_is_refused_naming_the_field() {
-        let mut meta = sheet_meta();
-        let AssetKind::Texture(texture) = &mut meta.kind else {
-            unreachable!()
-        };
-        texture.grid.as_mut().unwrap().frame_width = 0;
-        let text = ron::to_string(&meta).unwrap();
-        let error = Meta::parse(Path::new("hero.png.meta"), text).unwrap_err();
-        assert!(error.contains("grid.frame_width"), "{error}");
+    fn texture_meta_with_a_zero_size_is_refused_naming_the_field() {
+        type Zero = fn(&mut TextureMeta);
+        let zeroes: [(&str, Zero); 3] = [
+            ("pixels_per_unit", |texture| texture.pixels_per_unit = 0),
+            ("grid.frame_width", |texture| {
+                texture.grid.as_mut().unwrap().frame_width = 0;
+            }),
+            ("grid.frame_height", |texture| {
+                texture.grid.as_mut().unwrap().frame_height = 0;
+            }),
+        ];
+        for (field, zero) in zeroes {
+            let mut meta = sheet_meta();
+            let AssetKind::Texture(texture) = &mut meta.kind else {
+                unreachable!()
+            };
+            zero(texture);
+            let text = ron::to_string(&meta).unwrap();
+            let error = Meta::parse(Path::new("hero.png.meta"), text).unwrap_err();
+            assert!(
+                error.contains(&format!("{field} must be at least 1")),
+                "{error}"
+            );
+        }
     }
 
     #[test]

@@ -49,7 +49,8 @@ hash, those of the golden trace and replays included.
 - `App::render_layer(name, parallax)` declares a render layer, drawn in declaration order;
   `build` refuses a name declared twice with the new `AppError::DuplicateLayer`, and a
   parallax that is NaN or infinite with the new `AppError::NonFiniteParallax`, naming the
-  layer and the value.
+  layer and the value, and more than 65,536 layers, past what a `u16` layer index holds,
+  with the new `AppError::TooManyLayers`, naming the count and the limit.
   `App::extractor` registers an `ExtractFn` that adds a world's content to the frame.
 - `Simulation::render_frame(debug_layers)` builds the frame of the current tick: its tick
   and layers, then every extractor in registration order, then the debug draw of

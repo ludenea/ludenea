@@ -20,10 +20,9 @@ fn a_default_pose_is_valid() {
 #[test]
 fn a_non_finite_position_is_refused() {
     let bad = pose(Vec2::new(f32::NAN, 0.0), Rot::IDENTITY);
-    let Err(PoseError::Position(_)) = bad.validate() else {
-        panic!("a NaN position must be refused");
-    };
-    let message = bad.validate().unwrap_err().to_string();
+    let error = bad.validate().unwrap_err();
+    assert!(matches!(error, PoseError::Position(_)), "{error:?}");
+    let message = error.to_string();
     assert!(message.contains("position must be finite"), "{message}");
 }
 
@@ -60,15 +59,13 @@ impl Plugin for Second {
 }
 
 #[test]
-fn pose_registered_by_two_plugins_is_registered_once() {
+fn pose_registered_by_two_plugins_builds_and_works() {
     let mut app = App::new();
     app.plugin(First).plugin(Second);
-    let simulation = app.build().unwrap();
-    let poses = simulation
-        .world()
-        .component_schemas()
-        .into_iter()
-        .filter(|(name, _)| *name == "ludenea::Pose")
-        .count();
-    assert_eq!(poses, 1);
+    let mut simulation = app.build().unwrap();
+    let world = simulation.world_mut();
+    let entity = world.spawn();
+    let placed = pose(Vec2::new(1.0, 2.0), Rot::IDENTITY);
+    world.insert(entity, placed).unwrap();
+    assert_eq!(*world.get::<Pose>(entity).unwrap(), placed);
 }

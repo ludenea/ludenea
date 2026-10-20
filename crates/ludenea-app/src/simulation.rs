@@ -192,7 +192,7 @@ impl Simulation {
 
     /// The debug draw layers the app registered, sorted.
     pub fn debug_layers(&self) -> Vec<&'static str> {
-        self.hooks.layers.iter().copied().collect()
+        self.hooks.debug_layers.iter().copied().collect()
     }
 
     /// What every registered drawer draws for the requested layers.
