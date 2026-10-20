@@ -483,7 +483,8 @@ API.
 
 ### Formats
 
-- Edit log 3: an edit can be a group (`Edit::Group`), last, so versions 2 and 1 still read.
+- Edit log 3: an edit can be a group (`Edit::Group`), last, so versions 2 and 1 still read;
+  a version 2 log that holds a group is refused with `SimError::EditLogDecode`.
   The undo history (version 4) and replays embed edits, so they may hold groups too; a
   replay keeps its version, and its edit log names its own.
 - Stored session 1: `.ludenea/sessions/<id>.session` holds `{ version: 1, saved }`, the

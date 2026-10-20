@@ -131,7 +131,8 @@ impl EditLog {
             .map_err(|error| SimError::EditLogDecode(error.to_string()))?;
         let log = match version {
             EDIT_LOG_VERSION => decode_exact::<EditLog>(bytes)?,
-            // `Edit::Group` is the last variant: version 2 edits decode unchanged.
+            // `Edit::Group` is the last variant: version 2 edits decode unchanged, and the
+            // upgrade refuses a group.
             2 => upgrade_version_2(decode_exact::<EditLog>(bytes)?)?,
             1 => decode_exact::<version_1::EditLog>(bytes)?.into(),
             found => {
@@ -165,17 +166,24 @@ fn decode_exact<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T, SimErro
     ludenea_ecs::decode_exact(bytes).map_err(SimError::EditLogDecode)
 }
 
-/// Version 2 loaded each prefab in the layout `Prefab::upgrade_version_2` reads.
+/// Version 2 loaded each prefab in the layout `Prefab::upgrade_version_2` reads, and had no
+/// groups.
 fn upgrade_version_2(mut log: EditLog) -> Result<EditLog, SimError> {
     for TimedEdit { tick, edit } in &mut log.edits {
-        if let Edit::LoadAsset { id, asset, value } = edit
-            && asset == Prefab::NAME
-        {
-            *value = Prefab::upgrade_version_2(value).map_err(|reason| {
-                SimError::EditLogDecode(format!(
-                    "the prefab asset {id} loaded at tick {tick}: {reason}"
-                ))
-            })?;
+        match edit {
+            Edit::LoadAsset { id, asset, value } if asset == Prefab::NAME => {
+                *value = Prefab::upgrade_version_2(value).map_err(|reason| {
+                    SimError::EditLogDecode(format!(
+                        "the prefab asset {id} loaded at tick {tick}: {reason}"
+                    ))
+                })?;
+            }
+            Edit::Group(_) => {
+                return Err(SimError::EditLogDecode(format!(
+                    "the edit at tick {tick} is a group, which version 2 edit logs do not hold"
+                )));
+            }
+            _ => {}
         }
     }
     log.version = EDIT_LOG_VERSION;

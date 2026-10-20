@@ -762,6 +762,24 @@ fn version_2_edit_log_decodes_as_the_current_version() {
 }
 
 #[test]
+fn a_version_2_edit_log_holding_a_group_is_refused() {
+    let mut log = EditLog::new();
+    log.version = 2;
+    log.edits.push(TimedEdit {
+        tick: 3,
+        edit: Edit::Group(vec![Edit::Spawn {
+            components: vec![("edit::Tag".to_string(), tag(1))],
+        }]),
+    });
+    let error = EditLog::decode(&log.encode()).unwrap_err();
+    assert!(
+        matches!(&error, SimError::EditLogDecode(reason)
+            if reason == "the edit at tick 3 is a group, which version 2 edit logs do not hold"),
+        "{error}"
+    );
+}
+
+#[test]
 fn a_version_2_edit_log_reads_its_prefab_loads() {
     const PREFAB: AssetId = AssetId(0x50);
     let flat = Prefab {
