@@ -356,7 +356,9 @@ API.
   reloads the session to its current tick; a resimulation it interrupted ends there, as
   when a tick panics, instead of panicking again on every advance. A panic in the compare
   or divergence simulation, as while it restores a checkpoint, stops only the ghost or
-  the report, as a panic in one of their ticks does. When the session cannot come back,
+  the report, as a panic in one of their ticks does. A report that failed tries again
+  only once the state changes, or on `get_divergence` or a new subscription, instead of
+  rebuilding its simulations and logging the failure on every advance. When the session cannot come back,
   commands that change the state and `play` are refused with that error, and time stops,
   until `load_scene`, `load_session` or `load_replay` starts a new session, or a later
   panic brings it back. A session that comes back to tick 0 instead of its tick is consistent

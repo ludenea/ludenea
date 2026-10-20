@@ -833,3 +833,31 @@ fn a_panic_restoring_the_divergence_simulations_stops_the_report_only() {
     assert_eq!((timeline(&mut host).current, hash(&mut host)), before);
     step(&mut host, 5);
 }
+
+#[test]
+fn a_divergence_report_that_keeps_failing_stops_until_the_runs_change() {
+    let mut host = brittle_host();
+    ok(
+        &mut host,
+        Command::Subscribe {
+            topic: Topic::Divergence,
+        },
+    );
+    BRITTLE_ARMED.set(true);
+    let first = host.advance(0.0);
+    let second = host.advance(0.0);
+    BRITTLE_ARMED.set(false);
+
+    assert_eq!(errors(&first).len(), 1, "{first:?}");
+    assert!(errors(&second).is_empty(), "{second:?}");
+    // A change to the runs tries again.
+    spawn_crate(&mut host);
+    host.drain_events();
+    BRITTLE_ARMED.set(true);
+    let events = host.advance(0.0);
+    BRITTLE_ARMED.set(false);
+    assert!(
+        matches!(&errors(&events)[..], [text] if text.starts_with("the divergence report stopped: ")),
+        "{events:?}"
+    );
+}

@@ -58,6 +58,9 @@ pub struct Host {
     divergence_subscribed: bool,
     /// Whether a requested report is not complete yet: it runs until it is.
     divergence_asked: bool,
+    /// Whether the report failed and the runs it compares have not changed since: it would
+    /// fail again, so it waits for them to change or for a client to ask again.
+    divergence_failed: bool,
     /// Why the session could not come back to a consistent tick after the game panicked:
     /// until a new session loads or a later recover succeeds, commands that change the
     /// state are refused with it and time does not pass.
@@ -80,6 +83,7 @@ impl Host {
             divergence: None,
             divergence_subscribed: false,
             divergence_asked: false,
+            divergence_failed: false,
             pacer: Pacer::new(simulation.tick_rate()),
             timeline: session.timeline(),
             simulation,
@@ -155,6 +159,7 @@ impl Host {
             if let Some(divergence) = &mut self.divergence {
                 divergence.invalidate();
             }
+            self.divergence_failed = false;
             self.report_state(before);
             self.report_changes();
         }
@@ -221,8 +226,11 @@ impl Host {
         if resimulating && let Some(compare) = &mut self.compare {
             compare.invalidate();
         }
-        if resimulating && let Some(divergence) = &mut self.divergence {
-            divergence.invalidate();
+        if resimulating {
+            if let Some(divergence) = &mut self.divergence {
+                divergence.invalidate();
+            }
+            self.divergence_failed = false;
         }
         self.follow_compare();
         self.follow_divergence();
@@ -243,6 +251,7 @@ impl Host {
         self.compare = None;
         self.ghost_reported = None;
         self.divergence = None;
+        self.divergence_failed = false;
         let message = match catch_panic(panic.tick, || self.session.recover(&mut self.simulation)) {
             Ok(Ok(why)) => {
                 self.inconsistent = None;
@@ -311,9 +320,10 @@ impl Host {
 
     /// Computes the divergence report a budget further while it is asked for or subscribed;
     /// a failure stops it, the main session untouched, also when the game panics outside a
-    /// tick, as while restoring a checkpoint.
+    /// tick, as while restoring a checkpoint, until the runs change or a client asks again.
     fn follow_divergence(&mut self) {
         if !(self.divergence_subscribed || self.divergence_asked)
+            || self.divergence_failed
             || self.session.compare_branch().is_none()
         {
             return;
@@ -353,6 +363,7 @@ impl Host {
             Err(message) => {
                 self.divergence = None;
                 self.divergence_asked = false;
+                self.divergence_failed = true;
                 let text = format!("the divergence report stopped: {message}");
                 self.console(ConsoleLevel::Error, text);
             }
@@ -368,6 +379,7 @@ impl Host {
                 "there is no compare branch to compare the current branch with".to_string(),
             ));
         }
+        self.divergence_failed = false;
         self.build_divergence().map_err(invalid)?;
         let divergence = self.divergence.as_mut().expect("built");
         divergence.request(up_to);
@@ -903,6 +915,7 @@ impl Host {
                 }
                 if topic == Topic::Divergence {
                     self.divergence_subscribed = true;
+                    self.divergence_failed = false;
                 }
                 if topic == Topic::Introspection {
                     self.session
@@ -923,6 +936,7 @@ impl Host {
                     // nothing follows it any more.
                     self.divergence_subscribed = false;
                     self.divergence_asked = false;
+                    self.divergence_failed = false;
                     self.divergence = None;
                 }
                 if topic == Topic::Introspection {
