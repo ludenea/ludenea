@@ -69,8 +69,9 @@ cargo xtask check
 
 Run the renderer's GPU tests, which draw offscreen and compare the pixels read back. They need
 a GPU adapter, hardware or software: without one they fail naming what was tried, they never
-skip. CI runs them on a software adapter: lavapipe on Linux (the `mesa-vulkan-drivers`
-package), WARP on Windows (built in), and Metal on macOS.
+skip. The command line tool's `render` tests (`crates/ludenea-cli/tests/render.rs`), part of
+the workspace tests above, need one too. CI provides lavapipe on Linux (the
+`mesa-vulkan-drivers` package), WARP on Windows (built in), and Metal on macOS.
 
 ```sh
 cargo test --locked -p ludenea-render --features gpu
