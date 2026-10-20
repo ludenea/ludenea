@@ -661,10 +661,8 @@ impl Simulation {
     /// entity at load address `address`: its `Entity` values name local identifiers of the
     /// file that entity comes from, and one naming an entity outside that file is refused.
     /// A `component` the app does not register is refused with
-    /// `SceneError::UnknownComponent`.
-    ///
-    /// # Panics
-    /// If `bytes` do not decode.
+    /// `SceneError::UnknownComponent`, and `bytes` that do not decode with
+    /// `SceneError::InvalidValue`.
     pub fn override_value_ron(
         &self,
         address: &[u32],
@@ -689,10 +687,14 @@ impl Simulation {
                 _ => None,
             }
         })
-        .map_err(|(_, path)| SceneError::ForeignReference {
-            entity: address.last().copied().unwrap_or_default(),
-            component: component.to_string(),
-            path: Path(&path).to_string(),
+        .map_err(|error| {
+            error.into_scene_error(Some(address), component, |(_, path)| {
+                SceneError::ForeignReference {
+                    entity: address.last().copied().unwrap_or_default(),
+                    component: component.to_string(),
+                    path: Path(&path).to_string(),
+                }
+            })
         })
     }
 
@@ -757,7 +759,7 @@ impl Simulation {
             .collect();
         let stale: RefCell<BTreeMap<(u32, u32), u32>> = RefCell::default();
         // Only `fresh` refuses an entity, once the identifiers run out.
-        let ron = |codec: Codec, bytes: &[u8]| {
+        let ron = |entity: Option<&[u32]>, name: &str, codec: Codec, bytes: &[u8]| {
             value_ron(codec, bytes, &mut |index, generation| {
                 let key = (index, generation);
                 let mut stale = stale.borrow_mut();
@@ -771,7 +773,7 @@ impl Simulation {
                 };
                 Some((local, 0))
             })
-            .map_err(|_| exhausted())
+            .map_err(|error| error.into_scene_error(entity, name, |_| exhausted()))
         };
 
         let snapshot = self.world.snapshot();
@@ -780,15 +782,16 @@ impl Simulation {
             .iter()
             .map(|(name, bytes)| {
                 let codec = self.world.resource_codec(name).expect("snapshotted name");
-                Ok(format!("{name:?}: {}", ron(codec, bytes)?))
+                Ok(format!("{name:?}: {}", ron(None, name, codec, bytes)?))
             })
             .collect::<Result<Vec<_>, SceneError>>()?
             .join(", ");
         let entities = locals
             .iter()
             .map(|&(entity, local)| {
-                let components =
-                    self.components_ron(&snapshot, entity, |_, codec, bytes| ron(codec, bytes))?;
+                let components = self.components_ron(&snapshot, entity, |name, codec, bytes| {
+                    ron(Some(&[local]), name, codec, bytes)
+                })?;
                 Ok(format!(
                     "    (id: {local}, components: {{{components}}}),\n"
                 ))
@@ -839,10 +842,14 @@ impl Simulation {
                     let local = locals.get(&(index, generation))?;
                     Some((*local, 0))
                 })
-                .map_err(|(_, path)| SceneError::ForeignReference {
-                    entity: entity.index(),
-                    component: name.to_string(),
-                    path: Path(&path).to_string(),
+                .map_err(|error| {
+                    error.into_scene_error(Some(&[local]), name, |(_, path)| {
+                        SceneError::ForeignReference {
+                            entity: entity.index(),
+                            component: name.to_string(),
+                            path: Path(&path).to_string(),
+                        }
+                    })
                 })
             })?;
             written.push_str(&format!(
@@ -1204,20 +1211,45 @@ fn invalid(entity: Option<&[u32]>, name: &str, reason: String) -> SceneError {
     }
 }
 
+/// Why `value_ron` cannot write a value.
+enum Unwritten {
+    /// `map` refused an entity: its index and the path to it.
+    Refused(Refused),
+    /// The value does not decode, as when the game's own conversion refuses a value its
+    /// systems or its build wrote.
+    Undecodable(String),
+}
+
+impl Unwritten {
+    /// The error of a value of `name` at `entity` (none for a resource), with `refused`
+    /// for an entity `map` refused.
+    fn into_scene_error(
+        self,
+        entity: Option<&[u32]>,
+        name: &str,
+        refused: impl FnOnce(Refused) -> SceneError,
+    ) -> SceneError {
+        match self {
+            Unwritten::Refused(at) => refused(at),
+            Unwritten::Undecodable(reason) => invalid(entity, name, reason),
+        }
+    }
+}
+
 /// The RON of a value's postcard `bytes`, its `Entity` values mapped by `map` (see
 /// `rewrite_entities`).
 fn value_ron(
     codec: Codec,
     bytes: &[u8],
     map: &mut dyn FnMut(u32, u32) -> Option<(u32, u32)>,
-) -> Result<String, Refused> {
+) -> Result<String, Unwritten> {
     let schema = (codec.schema)();
     let bytes = if schema.mentions(&|schema| matches!(schema, TypeSchema::Entity)) {
-        rewrite_entities(&schema, bytes, map)?
+        rewrite_entities(&schema, bytes, map).map_err(Unwritten::Refused)?
     } else {
         bytes.to_vec()
     };
-    let value = (codec.decode)(&bytes).expect("snapshot bytes decode");
+    let value = (codec.decode)(&bytes).map_err(Unwritten::Undecodable)?;
     Ok((codec.encode_ron)(&*value))
 }
 

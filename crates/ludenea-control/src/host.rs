@@ -4,8 +4,8 @@ use ludenea_app::prefab;
 use ludenea_app::replay::Replay;
 use ludenea_app::trace::{Trace, compare_traces};
 use ludenea_app::{
-    App, AppError, AssetTexts, Edit, EditError, EditLog, GamePanic, InputLog, RawInput, SceneError,
-    SimError, Simulation, ValueKind, catch_panic,
+    App, AppError, Edit, EditError, EditLog, GamePanic, InputLog, RawInput, SceneError, SimError,
+    Simulation, ValueKind, catch_panic,
 };
 
 use ludenea_debug_draw::DebugDrawFrame;
@@ -66,12 +66,12 @@ pub struct Host {
 
 impl Host {
     /// Starts a session on an empty scene: the built world, without entities. `build` makes
-    /// the game again for the compare simulation.
+    /// the game again for the compare simulation. A built world that cannot be written as a
+    /// scene that loads back is refused with `AppError::Scene`.
     pub fn new(build: fn() -> App) -> Result<Host, AppError> {
         let mut simulation = build().build()?;
         let scene = simulation.save_scene()?;
-        let session = Session::start(&mut simulation, scene, AssetTexts::new(), Document::Scene)
-            .expect("the built world's scene loads");
+        let session = Session::start_scene(&mut simulation, scene)?;
         Ok(Host {
             build,
             compare: None,

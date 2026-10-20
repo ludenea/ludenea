@@ -58,8 +58,9 @@ pub enum AppError {
         mapping: &'static str,
         input: String,
     },
-    /// The built world cannot be written as the scene a session starts from.
-    #[error("the built world cannot be written as a scene: {0}")]
+    /// The built world cannot be written as the scene a session starts from, or that scene
+    /// does not load back.
+    #[error("the built world cannot be written as a scene that loads back: {0}")]
     Scene(#[from] SceneError),
 }
 

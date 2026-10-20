@@ -155,7 +155,11 @@ API.
 - `Simulation::override_value_ron` refuses a component the app does not register with
   `SceneError::UnknownComponent`; it panicked.
 - `Host::new` returns the new `AppError::Scene` when the built world cannot be written as
-  a scene.
+  a scene, or when that scene does not load back; it panicked on the latter.
+- `Simulation::save_scene`, `Simulation::save_scene_keeping`, `prefab::create_prefab`,
+  and `Simulation::override_value_ron` refuse a value that does not decode, as when the
+  game's own `try_from` refuses a value its systems or its build wrote, with
+  `SceneError::InvalidValue` naming it; they panicked.
 - The new `Session::create_prefab` writes the prefab file of scene entities as the scene
   holds them, whatever tick the session shows. It refuses an entity spawned after tick 0
   with `SessionError::NotInScene`, whose message now fits every command that refuses such

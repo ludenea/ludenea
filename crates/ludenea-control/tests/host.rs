@@ -1399,3 +1399,75 @@ fn a_panic_while_hashing_a_resimulated_tick_keeps_no_stale_hash_for_it() {
     assert!(!timeline.resimulating);
     assert_eq!((timeline.current, timeline.simulated), (5, 5));
 }
+
+/// Refuses on load the default value the game itself holds.
+#[derive(ludenea_ecs::Resource, Serialize, Deserialize)]
+#[serde(try_from = "i32")]
+struct Fuel(i32);
+
+impl TryFrom<i32> for Fuel {
+    type Error = String;
+
+    fn try_from(fuel: i32) -> Result<Self, String> {
+        if fuel < 0 {
+            return Err(format!("fuel must be zero or more, got {fuel}"));
+        }
+        Ok(Fuel(fuel))
+    }
+}
+
+#[test]
+fn a_game_whose_built_world_does_not_load_back_is_refused() {
+    let app = || {
+        let mut app = App::new();
+        app.resource(Fuel(-1));
+        app
+    };
+
+    let Err(error) = Host::new(app) else {
+        panic!("the host started on a world that does not load back")
+    };
+
+    let message = error.to_string();
+    assert!(
+        message.contains("fuel must be zero or more, got -1"),
+        "{message}"
+    );
+}
+
+/// Written by its build and kept in snapshots, but refused by the scene loader: a game
+/// whose text form does not read back what it writes.
+#[derive(ludenea_ecs::Resource, Serialize)]
+struct Gauge(i32);
+
+impl<'de> Deserialize<'de> for Gauge {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Raw(i32);
+        let human_readable = deserializer.is_human_readable();
+        let Raw(value) = Raw::deserialize(deserializer)?;
+        if human_readable {
+            return Err(serde::de::Error::custom("a gauge never reads from text"));
+        }
+        Ok(Gauge(value))
+    }
+}
+
+#[test]
+fn a_game_whose_built_world_saves_but_does_not_load_is_refused() {
+    let app = || {
+        let mut app = App::new();
+        app.resource(Gauge(3));
+        app
+    };
+
+    let Err(error) = Host::new(app) else {
+        panic!("the host started on a world that does not load back")
+    };
+
+    let message = error.to_string();
+    assert!(
+        message.contains("a gauge never reads from text"),
+        "{message}"
+    );
+}
