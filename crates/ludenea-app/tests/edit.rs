@@ -919,6 +919,21 @@ fn a_group_holds_entity_and_resource_edits_only() {
 }
 
 #[test]
+fn an_empty_group_is_refused() {
+    let mut simulation = armed();
+    let hash = simulation.hash();
+
+    let error = simulation.apply_edit(&Edit::Group(Vec::new())).unwrap_err();
+
+    assert!(matches!(error, EditError::EmptyGroup), "{error}");
+    assert_eq!(
+        error.to_string(),
+        "a group holds no edit; record at least one edit in it"
+    );
+    assert_eq!(simulation.hash(), hash);
+}
+
+#[test]
 fn a_group_introduces_the_assets_of_every_edit() {
     let simulation = armed();
     let sources = texts(&[(B, stats_file(2, None)), (C, stats_file(3, None))]);

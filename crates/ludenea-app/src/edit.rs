@@ -59,8 +59,8 @@ pub enum Edit {
     },
     /// Several edits made as one: applied in order, all or none. Each is checked against the
     /// world before any applies, so none can target an entity another one spawns. A group
-    /// holds spawn, despawn, insert, remove, and set-resource edits only. Last, so edit logs
-    /// of version 2 decode unchanged.
+    /// holds at least one edit, and spawn, despawn, insert, remove, and set-resource edits
+    /// only. Last, so edit logs of version 2 decode unchanged.
     Group(Vec<Edit>),
 }
 
@@ -293,6 +293,8 @@ pub enum EditError {
         "a group of edits holds spawn, despawn, insert, remove, and set-resource edits only; record an asset edit or a group on its own"
     )]
     NotGroupable,
+    #[error("a group holds no edit; record at least one edit in it")]
+    EmptyGroup,
     /// The type's own code panicked on the value, such as a `try_from` that asserts.
     #[error("{0}")]
     Panicked(Box<GamePanic>),
@@ -351,6 +353,7 @@ impl Simulation {
                 vec![self.check_asset(*id, &self.asset_type_of(*id)?, value)?]
             }
             Edit::LoadAsset { id, asset, value } => vec![self.check_asset(*id, asset, value)?],
+            Edit::Group(edits) if edits.is_empty() => return Err(EditError::EmptyGroup),
             Edit::Group(edits) => {
                 let mut despawned = BTreeSet::new();
                 edits
@@ -624,6 +627,7 @@ impl Simulation {
                 decode(&self.asset_codec(asset)?, asset, value)?;
                 asset_types.insert(*id, asset.clone());
             }
+            Edit::Group(edits) if edits.is_empty() => return Err(EditError::EmptyGroup),
             Edit::Group(edits) => {
                 for member in edits {
                     member.check_groupable()?;

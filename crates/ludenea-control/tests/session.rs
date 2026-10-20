@@ -2,7 +2,9 @@ use std::fs;
 
 use boxes::{BoxesInput, Crate};
 use ludenea::cli::Trace;
-use ludenea::control::{BranchId, Document, Resimulation, Session, SessionError, SessionExport};
+use ludenea::control::{
+    BranchId, Document, Resimulation, SceneChange, Session, SessionError, SessionExport,
+};
 use ludenea::prelude::*;
 use ludenea_app::{AssetTexts, EditError, EntityRef, ValueKind};
 use serde_json::json;
@@ -361,6 +363,85 @@ fn a_tick_zero_group_is_one_scene_edit_of_its_edits_in_turn() {
         (session.scene(), crate_count(&sim)),
         (before.as_str(), crates)
     );
+}
+
+#[test]
+fn a_scene_edit_refuses_asset_edits_and_groups() {
+    let (mut sim, mut session) = started(recorded(10, None));
+    let before = session.scene().to_string();
+    let despawn = Edit::Despawn {
+        entity: EntityRef::Loaded(vec![5]),
+    };
+    let asset = ludenea::ecs::AssetId(7);
+    let refused = [
+        Edit::SetAsset {
+            id: asset,
+            value: Vec::new(),
+        },
+        Edit::LoadAsset {
+            id: asset,
+            asset: "boxes::SpawnerStats".to_string(),
+            value: Vec::new(),
+        },
+        Edit::Group(vec![despawn.clone()]),
+    ];
+    for edit in refused {
+        let changes = [
+            SceneChange::Edit(despawn.clone()),
+            SceneChange::Edit(edit.clone()),
+        ];
+        let error = session.edit_scene(&mut sim, &changes).unwrap_err();
+        assert!(
+            matches!(error, SessionError::Edit(EditError::NotGroupable)),
+            "{edit:?}: {error}"
+        );
+        assert_eq!(session.scene(), before);
+        assert!(!session.timeline().can_undo);
+    }
+}
+
+#[test]
+fn an_empty_group_or_a_load_at_tick_0_is_refused() {
+    let (mut sim, mut session) = started(recorded(20, None));
+    let empty = || Edit::Group(Vec::new());
+    let error = session.edit(&mut sim, empty()).unwrap_err();
+    assert!(
+        matches!(error, SessionError::Edit(EditError::EmptyGroup)),
+        "{error}"
+    );
+    let asset = ludenea::ecs::AssetId(7);
+    let load = Edit::LoadAsset {
+        id: asset,
+        asset: "boxes::SpawnerStats".to_string(),
+        value: Vec::new(),
+    };
+    let error = session.edit(&mut sim, load).unwrap_err();
+    assert!(
+        matches!(error, SessionError::LoadAtTickZero(id) if id == asset),
+        "{error}"
+    );
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "asset {asset} cannot be loaded at tick 0, where the assets come with the scene; \
+             give its text with the scene's assets, or load it past tick 0"
+        )
+    );
+    assert!(!session.timeline().can_undo);
+
+    // Past tick 0, before recorded ticks: an empty group would fork a branch for nothing.
+    play(&mut session, &mut sim, 20);
+    session.seek(&mut sim, 10).unwrap();
+    let error = session.edit(&mut sim, empty()).unwrap_err();
+    assert!(
+        matches!(error, SessionError::Edit(EditError::EmptyGroup)),
+        "{error}"
+    );
+    let timeline = session.timeline();
+    assert!(!timeline.can_undo, "{timeline:?}");
+    assert_eq!(timeline.branches.len(), 1);
+    let edits = EditLog::decode(&session.export().unwrap().edits).unwrap();
+    assert!(edits.edits.is_empty(), "{edits:?}");
 }
 
 #[test]

@@ -1548,6 +1548,7 @@ fn session_error(error: &SessionError) -> ProtocolError {
         SessionError::MissingComponent { .. }
         | SessionError::PrefabHasNoResources
         | SessionError::NotDataAsset(_)
+        | SessionError::LoadAtTickZero(_)
         | SessionError::Scene(SceneError::IdentifiersExhausted { .. }) => ErrorCode::InvalidEdit,
         SessionError::NotInScene(_) => ErrorCode::NoSuchEntity,
         SessionError::Sim(error) => return sim_error(error),
@@ -1566,7 +1567,8 @@ fn edit_error(error: &EditError) -> ProtocolError {
         EditError::ReadOnly(_)
         | EditError::InvalidValue { .. }
         | EditError::MissingAsset(_)
-        | EditError::NotGroupable => ErrorCode::InvalidEdit,
+        | EditError::NotGroupable
+        | EditError::EmptyGroup => ErrorCode::InvalidEdit,
         EditError::Panicked(_) => ErrorCode::SystemPanicked,
     };
     ProtocolError::new(code, error)

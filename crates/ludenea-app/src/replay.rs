@@ -393,7 +393,8 @@ fn step(
             EditError::UnknownComponent(_)
             | EditError::UnknownResource(_)
             | EditError::InvalidValue { .. }
-            | EditError::NotGroupable => decode(&format!("edit of tick {tick}"), error.to_string()),
+            | EditError::NotGroupable
+            | EditError::EmptyGroup => decode(&format!("edit of tick {tick}"), error.to_string()),
             EditError::NoSuchEntity(_)
             | EditError::NoSuchAddress(_)
             | EditError::MissingAsset(_)

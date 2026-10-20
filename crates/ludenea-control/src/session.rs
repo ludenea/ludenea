@@ -96,6 +96,10 @@ pub enum SessionError {
     PrefabHasNoResources,
     #[error("asset {0} is not a data asset; open a prefab as a document to edit it")]
     NotDataAsset(AssetId),
+    #[error(
+        "asset {0} cannot be loaded at tick 0, where the assets come with the scene; give its text with the scene's assets, or load it past tick 0"
+    )]
+    LoadAtTickZero(AssetId),
     #[error(transparent)]
     Replay(ReplayError),
 }
@@ -642,13 +646,14 @@ impl Session {
         Ok(self.current)
     }
 
-    /// Applies `edit` at the current tick. At tick 0 it changes the scene (an asset edit
+    /// Applies `edit` at the current tick. At tick 0 it changes the scene (a `SetAsset` edit
     /// changes the asset text, an edit on an entity of a prefab instance becomes an
     /// override of the instance, a group is one scene edit of its edits in turn, see
-    /// `edit_scene`) and marks the recorded future stale; past tick 0 it records the edit,
-    /// forking a branch when the current one has recorded ticks after it, after a
-    /// `LoadAsset` edit for each asset its values reach that is not loaded. Returns the
-    /// entity a `Spawn` created.
+    /// `edit_scene`) and marks the recorded future stale; a `LoadAsset` edit is refused
+    /// there, since the assets of tick 0 come with the scene. Past tick 0 it records the
+    /// edit, forking a branch when the current one has recorded ticks after it, after a
+    /// `LoadAsset` edit for each asset its values reach that is not loaded. A group without
+    /// edits is refused at any tick. Returns the entity a `Spawn` created.
     pub fn edit(
         &mut self,
         sim: &mut Simulation,
@@ -658,10 +663,9 @@ impl Session {
         if self.current == 0 {
             return match edit {
                 Edit::SetAsset { id, value } => self.edit_asset(sim, id, &value).map(|()| None),
+                Edit::LoadAsset { id, .. } => Err(SessionError::LoadAtTickZero(id)),
+                Edit::Group(edits) if edits.is_empty() => Err(EditError::EmptyGroup.into()),
                 Edit::Group(edits) => {
-                    for member in &edits {
-                        member.check_groupable()?;
-                    }
                     let changes: Vec<SceneChange> =
                         edits.into_iter().map(SceneChange::Edit).collect();
                     self.edit_scene(sim, &changes)
@@ -2293,14 +2297,20 @@ impl Session {
     /// indices and generations match any later load of it. The scene loads after each
     /// change, for the next one to find its entities by load address; then the recorded
     /// future is marked stale once, and one undo entry takes every change back. When one
-    /// fails, nothing changes. Returns the entity the changes spawned, the first one in
-    /// entity order when they spawn several.
+    /// fails, nothing changes. Like a group, the changes hold no asset edit and no group.
+    /// Returns the entity the changes spawned, the first one in entity order when they spawn
+    /// several.
     pub fn edit_scene(
         &mut self,
         sim: &mut Simulation,
         changes: &[SceneChange],
     ) -> Result<Option<Entity>, SessionError> {
         self.ensure_resimulated()?;
+        for change in changes {
+            if let SceneChange::Edit(edit) = change {
+                edit.check_groupable()?;
+            }
+        }
         let resource =
             |change: &SceneChange| matches!(change, SceneChange::Edit(Edit::SetResource { .. }));
         if matches!(self.document, Document::Prefab { .. }) && changes.iter().any(resource) {

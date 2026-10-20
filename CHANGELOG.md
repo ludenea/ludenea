@@ -177,16 +177,21 @@ API.
   free `.ludenea/sessions/<id>.<n>.rejected.session`, from 1, and returns that path, or
   `None` when none is stored.
 - `Edit::Group`, the last variant, holds several entity and resource edits made as one.
-  `Simulation::apply_edit` checks each against the world as the ones before it leave it,
-  then applies them all, so a failing one changes nothing; a group holding an asset edit or
-  another group is refused with the new `EditError::NotGroupable`, which the new
+  `Simulation::apply_edit` checks each against the world before the group, as if the
+  entities that earlier members despawn were dead already, then applies them all, so a
+  failing one changes nothing and none can target an entity another one spawns. A group
+  without edits is refused with the new `EditError::EmptyGroup`, and one holding an asset
+  edit or another group with the new `EditError::NotGroupable`, which the new
   `Edit::check_groupable` gives for one edit. `Simulation::assets_introduced_by` and the
   checks of a replay cover the edits of a group.
 - The new `Session::edit_scene` applies `SceneChange`s (an edit, or the override of a field
   of a prefab instance's entity) to the scene in turn as one tick 0 edit: the recorded
   future resimulates once, one undo takes them all back, and when one fails nothing
-  changes. `Session::edit` of an `Edit::Group` at tick 0 is such a scene edit of its edits;
-  past tick 0 it records the group as one edit.
+  changes. Like a group, it refuses an asset edit or a group among them with
+  `EditError::NotGroupable`. `Session::edit` of an `Edit::Group` at tick 0 is such a scene
+  edit of its edits; past tick 0 it records the group as one edit. `Session::edit` refuses
+  a `LoadAsset` edit at tick 0, where the assets come with the scene, with the new
+  `SessionError::LoadAtTickZero`; it changed nothing and returned no error.
 - The `Simulation` methods that run game code catch its panics in native builds and return
   them as the new `SimError::Panicked` or `EditError::Panicked`: `step`, which now returns
   `Result<(), SimError>`, `step_with`, `step_encoded`, `step_observed`, `map_raw_input`,
