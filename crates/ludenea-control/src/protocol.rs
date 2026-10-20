@@ -113,7 +113,9 @@ pub mod outcome {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
-// With 32-bit pointers, as in WebAssembly, the command is small enough for the lint.
+// With 32-bit pointers, as in WebAssembly, the size difference between the variants stays
+// below clippy's `large_enum_variant` threshold, so an unconditional expectation would go
+// unfulfilled there.
 #[cfg_attr(
     target_pointer_width = "64",
     expect(
@@ -201,7 +203,8 @@ pub enum Command {
     LoadEdits {
         log: Bytes,
     },
-    /// Runs the game on `threads` threads, from 1 to 256; results never depend on the count.
+    /// Runs the game on `threads` threads, from 1 to [`ludenea_app::Parallel::MAX_THREADS`];
+    /// results never depend on the count.
     /// A count outside that range, or one the system cannot start, is an `InvalidCommand`
     /// and the previous count stays.
     SetThreads {
