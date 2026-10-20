@@ -1425,3 +1425,70 @@ fn resimulating_while_the_current_state_does_not_restore_replays_it() {
     assert_eq!(sim.tick(), 15);
     assert_eq!(sim.hash(), before);
 }
+
+#[test]
+fn a_scene_edit_that_changes_nothing_where_the_tick_cannot_come_back_goes_to_tick_0() {
+    let (mut sim, mut session) = poisoned_from_10_to_20();
+    play(&mut session, &mut sim, 17);
+    let scene = session.scene().to_string();
+    // A body's collider never changes: inserting its value leaves the scene as it is.
+    let (body, _) = Query::<(Entity, &Collider)>::new(sim.world())
+        .unwrap()
+        .iter()
+        .next()
+        .unwrap();
+    let same = Edit::Insert {
+        entity: sim.entity_ref(body),
+        component: "ludenea::Collider".to_string(),
+        value: sim
+            .world()
+            .component_bytes(body, "ludenea::Collider")
+            .unwrap(),
+    };
+
+    let error = session
+        .edit_scene(&mut sim, &[SceneChange::Edit(same)])
+        .unwrap_err();
+
+    // The scene is as it was; the way back to tick 17 starts from the checkpoint of tick 16.
+    assert!(
+        matches!(error, SessionError::Checkpoint { tick: 16, .. }),
+        "{error:?}"
+    );
+    assert_eq!(session.scene(), scene);
+    assert!(!session.timeline().can_undo);
+    assert_at(&session, &sim, 0);
+}
+
+#[test]
+fn a_scene_change_that_does_not_load_changes_nothing() {
+    let (mut sim, mut session) = started(recorded(30, None));
+    play(&mut session, &mut sim, 5);
+    let before = (session.scene().to_string(), sim.hash());
+    // A spawner whose prefab and stats the session has no text for.
+    let spawner = sim
+        .encode_json_value(
+            ValueKind::Component,
+            "boxes::Spawner",
+            json!({ "prefab": "0000000000000000000000000000000e", "stats": "0000000000000000000000000000000f" }),
+        )
+        .unwrap();
+    let spawn = Edit::Spawn {
+        components: vec![("boxes::Spawner".to_string(), spawner)],
+    };
+
+    let error = session
+        .edit_scene(&mut sim, &[SceneChange::Edit(spawn)])
+        .unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            SessionError::Scene(ludenea_app::SceneError::MissingAsset { .. })
+        ),
+        "{error:?}"
+    );
+    assert_eq!((session.scene().to_string(), sim.hash()), before);
+    assert!(!session.timeline().can_undo);
+    assert_at(&session, &sim, 5);
+}
