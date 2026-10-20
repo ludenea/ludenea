@@ -148,25 +148,75 @@ fn target_dir() -> Result<PathBuf, Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
+    const WORKFLOW: &str = include_str!("../../.github/workflows/determinism.yml");
+
     /// CI runs each check as a step of its own (the host clippy in the native jobs, the rest
     /// once in the lint job), so a check added here must be added there too.
     #[test]
     fn ci_runs_every_check() {
-        let workflow = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../.github/workflows/determinism.yml"
-        ))
-        .unwrap();
-        for command in super::CHECKS {
-            let step = format!("run: cargo {command}");
-            assert!(
-                workflow
-                    .lines()
-                    .any(|line| line.trim_end().ends_with(&step)),
-                "the workflow has no `{step}` step"
+        assert_eq!(missing_checks(WORKFLOW), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_check_commented_out_or_in_another_job_is_missing() {
+        // A Windows checkout may end lines with CRLF.
+        let workflow = WORKFLOW.replace("\r\n", "\n");
+        let doc = "      - run: cargo doc --locked --no-deps --workspace\n";
+        let commented_out = workflow.replace(
+            doc,
+            "      # - run: cargo doc --locked --no-deps --workspace\n",
+        );
+        let test = "      - run: cargo test --locked --workspace\n";
+        let elsewhere = workflow
+            .replace(doc, "")
+            .replace(test, &format!("{doc}{test}"));
+        let flags_in_a_comment = workflow.replace(
+            "      RUSTDOCFLAGS: -D warnings\n",
+            "      # RUSTDOCFLAGS: -D warnings\n",
+        );
+        for workflow in [commented_out, elsewhere] {
+            assert_eq!(
+                missing_checks(&workflow),
+                ["the lint job has no `run: cargo doc --locked --no-deps --workspace` step"]
             );
         }
-        assert!(workflow.contains("RUSTDOCFLAGS: -D warnings"));
+        assert_eq!(
+            missing_checks(&flags_in_a_comment),
+            ["the lint job does not set `RUSTDOCFLAGS: -D warnings`"]
+        );
+    }
+
+    /// What `workflow` misses of `super::CHECKS`: a step of each, uncommented, in the job
+    /// that runs it, and the lint job's `RUSTDOCFLAGS`.
+    fn missing_checks(workflow: &str) -> Vec<String> {
+        let mut missing = Vec::new();
+        for command in super::CHECKS {
+            let job = if *command == "clippy --locked --workspace --all-targets -- -D warnings" {
+                "native"
+            } else {
+                "lint"
+            };
+            let step = format!("run: cargo {command}");
+            if !job_lines(workflow, job).any(|line| line == format!("- {step}")) {
+                missing.push(format!("the {job} job has no `{step}` step"));
+            }
+        }
+        if !job_lines(workflow, "lint").any(|line| line == "RUSTDOCFLAGS: -D warnings") {
+            missing.push("the lint job does not set `RUSTDOCFLAGS: -D warnings`".to_string());
+        }
+        missing
+    }
+
+    /// The trimmed lines of the job `name`, from its key to the next line indented as a job
+    /// key.
+    fn job_lines<'a>(workflow: &'a str, name: &str) -> impl Iterator<Item = &'a str> {
+        let key = format!("  {name}:");
+        workflow
+            .lines()
+            .skip_while(move |line| line.trim_end() != key)
+            .skip(1)
+            .take_while(|line| line.is_empty() || line.starts_with("   "))
+            .map(str::trim)
     }
 
     #[test]
