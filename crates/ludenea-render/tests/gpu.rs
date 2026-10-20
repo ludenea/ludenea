@@ -2,9 +2,10 @@
 //! adapter (hardware or software); without one they fail naming what was tried.
 #![cfg(feature = "gpu")]
 
-use ludenea_app::meta::{Filter, Grid, TextureMeta};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
+
+use ludenea_app::meta::{Filter, Grid, TextureMeta};
 
 use ludenea_draw::frame::{
     CameraItem, CameraView, LayerInfo, RenderFrame, SpriteItem, TilemapItem,
