@@ -1206,7 +1206,8 @@ fn a_session_that_cannot_come_back_refuses_changes_until_a_new_one_loads() {
     };
     assert_eq!(host.handle(step.clone()).unwrap_err(), error);
     host.handle(Command::GetTimeline).unwrap();
-    host.handle(Command::Play).unwrap();
+    // Play would show a frozen world as playing.
+    assert_eq!(host.handle(Command::Play).unwrap_err(), error);
     host.drain_events();
     assert!(
         !host

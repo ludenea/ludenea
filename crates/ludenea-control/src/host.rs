@@ -128,8 +128,9 @@ impl Host {
     /// Executes `command`. When game code panics where nothing reports it more precisely,
     /// the reply is `SystemPanicked` and the session comes back (see `recover`).
     pub fn handle(&mut self, command: Command) -> Result<Reply, ProtocolError> {
+        // Play is refused too: time does not pass, so it would show a frozen world playing.
         if let Some(reason) = &self.inconsistent
-            && changes_state(&command)
+            && (changes_state(&command) || matches!(command, Command::Play))
             && !matches!(
                 command,
                 Command::LoadScene { .. }
