@@ -209,6 +209,10 @@ describe("prefabs", () => {
     renderPanel(host, "ludenea.scene-tree");
     const group = screen.getAllByRole("group", { name: "ball.prefab.ron" })[1]!;
     expect(within(group).getByLabelText("unsaved changes")).toBeTruthy();
+    // The summary toggles the group: it holds no other control.
+    const summary = group.querySelector<HTMLElement>(":scope > summary")!;
+    expect(within(summary).queryByRole("button")).toBeNull();
+    expect(summary.textContent).toBe("ball.prefab.ron");
     fireEvent.click(within(group).getByRole("button", { name: "Save prefab ball.prefab.ron" }));
     await settle();
     await settle();

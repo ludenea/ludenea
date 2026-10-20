@@ -43,27 +43,23 @@ function Group({ editor, prefabs, instance }: { editor: Editor; prefabs: Prefabs
     if (event.shiftKey || event.ctrlKey || event.metaKey) selection.add(entity);
     else selection.select([entity]);
   };
-  const save = (event: MouseEvent) => {
-    // Inside the summary: the click saves, it does not fold the group.
-    event.preventDefault();
+  const save = () =>
     editor.commands.run("inspector.save-asset", instance.prefab).then(
       () => prefabs.state.set({ error: null }),
       (failure: unknown) => prefabs.state.set({ error: errorText(failure) }),
     );
-  };
+  // The summary toggles the group, so the save button is in the group, not inside it.
   return (
     <details open aria-label={name}>
-      <summary title={instance.prefab}>
-        {name}
-        {unsaved && (
-          <>
-            <span aria-label="unsaved changes"> ●</span>{" "}
-            <button aria-label={`Save prefab ${name}`} onClick={save}>
-              Save prefab
-            </button>
-          </>
-        )}
-      </summary>
+      <summary title={instance.prefab}>{name}</summary>
+      {unsaved && (
+        <div>
+          <span aria-label="unsaved changes">●</span>{" "}
+          <button aria-label={`Save prefab ${name}`} onClick={save}>
+            Save prefab
+          </button>
+        </div>
+      )}
       {own.map((entity) => (
         <button key={entityKey(entity)} className="ludenea-link ludenea-mono" onClick={(event) => choose(entity, event)}>
           {entityKey(entity)}
