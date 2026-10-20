@@ -244,7 +244,7 @@ describe("document store", () => {
     await vi.waitFor(() => expect(project.sessions.get(kept)).toBe(bytes));
     await settle();
 
-    const refused = `The game refused the stored session of scenes/main.scene.ron (${file}): the branch tree cannot be decoded; the document opened from its file, and the session is kept as ${kept}.`;
+    const refused = `The game refused the stored session of scenes/main.scene.ron (${file}): the branch tree cannot be decoded; the new game loaded the document from its file, and the session is kept as ${kept}.`;
     expect(logged(host)).toContainEqual(["warning", refused, undefined]);
     expect(host.editor.document.getState()).toMatchObject({ loaded: { warnings: ["from the file"] }, error: refused });
     await host.sessions.store();
@@ -286,7 +286,7 @@ describe("document store", () => {
 
     expect(logged(host)).toContainEqual([
       "warning",
-      `The stored session of scenes/main.scene.ron (${file}) cannot be read: it is not base64; the document opened from its file, and the session is kept as ${kept}.`,
+      `The stored session of scenes/main.scene.ron (${file}) cannot be read: it is not base64; the new game loaded the document from its file, and the session is kept as ${kept}.`,
       undefined,
     ]);
     expect(project.sessions.get(kept)).toBe("not base64!");
@@ -311,7 +311,7 @@ describe("document store", () => {
     await host.sessions.store();
     expect(await restoring).toBeNull();
 
-    const refused = `The game refused the stored session of scenes/main.scene.ron (${file}): the branch tree cannot be decoded; the document opened from its file, and the session is kept as ${kept}.`;
+    const refused = `The game refused the stored session of scenes/main.scene.ron (${file}): the branch tree cannot be decoded; the new game loaded the document from its file, and the session is kept as ${kept}.`;
     expect(logged(host)).toContainEqual(["warning", refused, undefined]);
     expect(host.editor.document.getState().error).toBe(refused);
     expect(project.sessions.get(kept)).toBe(bytes);
