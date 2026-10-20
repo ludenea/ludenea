@@ -324,6 +324,49 @@ fn a_stored_session_set_aside_moves_to_the_first_free_rejected_file() {
     );
 }
 
+/// A set-aside copy that cannot be written, here into a sessions folder that refuses new
+/// files, is an error that names it, and the stored session stays where it was.
+#[cfg(unix)]
+#[test]
+fn a_set_aside_that_cannot_write_its_copy_keeps_the_stored_session() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().unwrap();
+    let mut service = project(&dir, &[]);
+    let document = AssetId(0x2a);
+    service
+        .handle(ProjectRequest::StoreSession {
+            document,
+            bytes: Bytes(b"kept".to_vec()),
+        })
+        .unwrap();
+    let sessions = dir.path().join("demo/.ludenea/sessions");
+    fs::set_permissions(&sessions, fs::Permissions::from_mode(0o555)).unwrap();
+
+    let result = service.handle(ProjectRequest::SetAsideStoredSession { document });
+    fs::set_permissions(&sessions, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let failure = result.unwrap_err();
+    assert_eq!(failure.code, FailureCode::Io, "{failure:?}");
+    assert!(
+        failure
+            .message
+            .contains(&format!("{document}.1.rejected.session")),
+        "{failure:?}"
+    );
+    assert_eq!(
+        service.handle(ProjectRequest::LoadStoredSession { document }),
+        Ok(ProjectReply::StoredSession {
+            bytes: Some(Bytes(b"kept".to_vec()))
+        })
+    );
+    let names: Vec<_> = fs::read_dir(&sessions)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, [format!("{document}.session")]);
+}
+
 /// Review focus: a data asset broken on disk during a session is refused when the scene is
 /// reloaded with it, with the asset's path, line, and column, and the session keeps the
 /// previous value.
