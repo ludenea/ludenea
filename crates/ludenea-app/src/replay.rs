@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::assets::{AssetSource, AssetTexts, parse_asset_file};
 use crate::edit::{Edit, EditError, EditLog, EntityRef, TimedEdit};
-use crate::{InputLog, Simulation};
+use crate::panic::catch_panic;
+use crate::{GamePanic, InputLog, SimError, Simulation};
 
 pub const REPLAY_VERSION: u32 = 1;
 
@@ -52,6 +53,14 @@ pub enum ReplayError {
     Edit { tick: u64, reason: String },
     #[error("cannot record the replay: the {what} fails: {reason}; fix it and record again")]
     Record { what: String, reason: String },
+    /// The game panicked. For a panic while a tick ran, `snapshot` is the encoded state the
+    /// tick ran from, simulated again; none when the game panicked outside a tick or that
+    /// state cannot be simulated again.
+    #[error("{panic}")]
+    Panicked {
+        panic: Box<GamePanic>,
+        snapshot: Option<Vec<u8>>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -105,7 +114,8 @@ impl Replay {
 }
 
 /// Loads `scene` with `assets`, then runs `ticks` ticks of `inputs` and `edits`, recording
-/// the replay of that run. Inputs and edits of tick `ticks` and later are left out.
+/// the replay of that run. Inputs and edits of tick `ticks` and later are left out. A panic
+/// of the game is `ReplayError::Panicked`.
 pub fn record_replay(
     sim: &mut Simulation,
     scene: &str,
@@ -114,15 +124,26 @@ pub fn record_replay(
     edits: &EditLog,
     ticks: u64,
 ) -> Result<Replay, ReplayError> {
-    sim.load_scene_with(scene, assets)
-        .map_err(record_error("scene"))?;
-    sim.set_players(usize::from(inputs.players));
-    record_loaded_replay(sim, inputs, edits, ticks)
+    guarded(sim, |sim| {
+        sim.load_scene_with(scene, assets)
+            .map_err(record_error("scene"))?;
+        sim.set_players(usize::from(inputs.players));
+        record_loaded(sim, inputs, edits, ticks)
+    })
 }
 
 /// `record_replay` on the scene and assets `sim` just loaded, with its players set: the
 /// replay holds every loaded asset, reached by the scene or not.
 pub fn record_loaded_replay(
+    sim: &mut Simulation,
+    inputs: &InputLog,
+    edits: &EditLog,
+    ticks: u64,
+) -> Result<Replay, ReplayError> {
+    guarded(sim, |sim| record_loaded(sim, inputs, edits, ticks))
+}
+
+fn record_loaded(
     sim: &mut Simulation,
     inputs: &InputLog,
     edits: &EditLog,
@@ -149,28 +170,59 @@ pub fn record_loaded_replay(
         checkpoints: Vec::new(),
     };
     let mut recorded = EditLog::new();
+    // The latest snapshot of this run, to simulate the state a panicking tick ran from again.
+    let mut held = (0, sim.snapshot());
     for tick in 0..ticks {
-        let what = format!("edit of tick {tick}");
-        for timed in edits.at(tick) {
-            let edit = with_runtime_target(sim, &timed.edit).map_err(record_error(&what))?;
-            sim.apply_edit(&edit).map_err(record_error(&what))?;
-            recorded.edits.push(TimedEdit { tick, edit });
+        let ran = record_tick(sim, &inputs, edits, &mut recorded, tick);
+        if let Err(error) = ran {
+            return Err(with_snapshot(error, sim, &held, &inputs, &recorded));
         }
-        sim.step_encoded(inputs.tick(tick))
-            .map_err(record_error(&format!("input of tick {tick}")))?;
         replay.hashes.push(sim.hash());
         if (tick + 1) % REPLAY_CHECKPOINT_INTERVAL == 0 {
-            replay.checkpoints.push((tick + 1, sim.snapshot().encode()));
+            let snapshot = sim.snapshot();
+            replay.checkpoints.push((tick + 1, snapshot.encode()));
+            held = (tick + 1, snapshot);
         }
     }
     replay.edits = recorded.encode();
     Ok(replay)
 }
 
+/// Applies the edits of `tick`, recording them with runtime targets into `recorded`, then
+/// steps with its inputs.
+fn record_tick(
+    sim: &mut Simulation,
+    inputs: &InputLog,
+    edits: &EditLog,
+    recorded: &mut EditLog,
+    tick: u64,
+) -> Result<(), ReplayError> {
+    let what = format!("edit of tick {tick}");
+    for timed in edits.at(tick) {
+        let edit = with_runtime_target(sim, &timed.edit).map_err(record_error(&what))?;
+        sim.apply_edit(&edit).map_err(|error| match error {
+            EditError::Panicked(panic) => panicked(panic),
+            error => record_error(&what)(error),
+        })?;
+        recorded.edits.push(TimedEdit { tick, edit });
+    }
+    sim.step_encoded(inputs.tick(tick))
+        .map_err(sim_error(record_error(&format!("input of tick {tick}"))))
+}
+
 /// Loads the replay's scene and assets into `sim` and checks that every recorded value
 /// decodes, then plays it against its hashes, calling `on_tick(tick, total)` after each
-/// tick. Stops at the first divergent tick, leaving `sim` there.
+/// tick. Stops at the first divergent tick, leaving `sim` there. A panic of the game is
+/// `ReplayError::Panicked`.
 pub fn play_replay(
+    sim: &mut Simulation,
+    replay: &Replay,
+    on_tick: impl FnMut(u64, u64),
+) -> Result<ReplayReport, ReplayError> {
+    guarded(sim, |sim| play(sim, replay, on_tick))
+}
+
+fn play(
     sim: &mut Simulation,
     replay: &Replay,
     mut on_tick: impl FnMut(u64, u64),
@@ -216,7 +268,9 @@ pub fn play_replay(
         if tick == total {
             break;
         }
-        step(sim, &inputs, &edits, tick)?;
+        if let Err(error) = step(sim, &inputs, &edits, tick) {
+            return Err(with_snapshot(error, sim, &held, &inputs, &edits));
+        }
         tick += 1;
         on_tick(tick, total);
     }
@@ -224,12 +278,13 @@ pub fn play_replay(
 }
 
 /// Loads the replay's scene and assets into `sim` and checks that every recorded value
-/// decodes, without playing it; returns its input and edit logs.
+/// decodes, without playing it; returns its input and edit logs. A panic of the game is
+/// `ReplayError::Panicked`.
 pub fn load_replay(
     sim: &mut Simulation,
     replay: &Replay,
 ) -> Result<(InputLog, EditLog), ReplayError> {
-    load(sim, replay, ticks(replay)?)
+    guarded(sim, |sim| load(sim, replay, ticks(replay)?))
 }
 
 /// The number of ticks the replay records.
@@ -346,10 +401,11 @@ fn step(
                 tick,
                 reason: error.to_string(),
             },
+            EditError::Panicked(panic) => panicked(panic),
         })?;
     }
     sim.step_encoded(inputs.tick(tick))
-        .map_err(decode_error(&format!("input of tick {tick}")))
+        .map_err(sim_error(decode_error(&format!("input of tick {tick}"))))
 }
 
 /// The encoded snapshot of the tick before the current one, re-simulated from `held`;
@@ -364,13 +420,78 @@ fn snapshot_before(
     let before = sim.tick() - 1;
     sim.restore(&held.1)
         .expect("a snapshot restores into its own world");
-    for tick in held.0..before {
-        step(sim, inputs, edits, tick)?;
-    }
+    simulate_to(sim, held.0, inputs, edits, before)?;
     let snapshot = sim.snapshot().encode();
     sim.restore(&current)
         .expect("a snapshot restores into its own world");
     Ok(snapshot)
+}
+
+/// Steps from tick `from` up to `to`, the edits of `to` not applied.
+fn simulate_to(
+    sim: &mut Simulation,
+    from: u64,
+    inputs: &InputLog,
+    edits: &EditLog,
+    to: u64,
+) -> Result<(), ReplayError> {
+    for tick in from..to {
+        step(sim, inputs, edits, tick)?;
+    }
+    Ok(())
+}
+
+/// `error`, with the state the panicking tick ran from when it is a panic while a tick ran:
+/// simulated again from `held`, where it leaves `sim`. Without that state when `held` does
+/// not restore or a tick fails again.
+fn with_snapshot(
+    error: ReplayError,
+    sim: &mut Simulation,
+    held: &(u64, Snapshot),
+    inputs: &InputLog,
+    edits: &EditLog,
+) -> ReplayError {
+    match error {
+        ReplayError::Panicked {
+            panic,
+            snapshot: None,
+        } => {
+            let simulated = sim.restore(&held.1).is_ok()
+                && simulate_to(sim, held.0, inputs, edits, panic.tick).is_ok();
+            ReplayError::Panicked {
+                snapshot: simulated.then(|| sim.snapshot().encode()),
+                panic,
+            }
+        }
+        error => error,
+    }
+}
+
+/// Runs `f` on `sim`, with a panic of the game that `f` does not report itself as
+/// `ReplayError::Panicked` at the tick `sim` was left at.
+fn guarded<T>(
+    sim: &mut Simulation,
+    f: impl FnOnce(&mut Simulation) -> Result<T, ReplayError>,
+) -> Result<T, ReplayError> {
+    catch_panic(sim.tick(), || f(sim)).unwrap_or_else(|mut panic| {
+        panic.tick = sim.tick();
+        Err(panicked(sim.named(panic)))
+    })
+}
+
+fn panicked(panic: Box<GamePanic>) -> ReplayError {
+    ReplayError::Panicked {
+        panic,
+        snapshot: None,
+    }
+}
+
+/// A panic as `ReplayError::Panicked`, any other error as `other` makes it.
+fn sim_error(other: impl FnOnce(SimError) -> ReplayError) -> impl FnOnce(SimError) -> ReplayError {
+    move |error| match error {
+        SimError::Panicked(panic) => panicked(panic),
+        error => other(error),
+    }
 }
 
 /// The recorded checkpoint of the current tick when it restores to `expected`, leaving the

@@ -159,6 +159,7 @@ impl ScheduleBuilder {
                 .into_iter()
                 .map(|index| systems[index].take().expect("each index is ordered once"))
                 .collect(),
+            running: None,
         })
     }
 }
@@ -211,15 +212,19 @@ pub struct SystemInfo {
 /// Systems in run order.
 pub struct Schedule {
     systems: Vec<Box<dyn System>>,
+    /// The system running, or whose commands apply; see [`Schedule::running`].
+    running: Option<&'static str>,
 }
 
 impl Schedule {
     /// Runs every system in order, applying its commands right after it returns.
     pub fn run(&mut self, world: &mut World) {
         for system in &mut self.systems {
+            self.running = Some(system.name());
             system.run(world);
             commands::apply(world, None);
         }
+        self.running = None;
     }
 
     /// Like `run`, reporting each system and its commands to `observer`, then the end of the
@@ -228,12 +233,22 @@ impl Schedule {
         let mut records = Vec::new();
         for (index, system) in self.systems.iter_mut().enumerate() {
             observer.before_system(index);
+            self.running = Some(system.name());
             system.run(world);
             records.clear();
             commands::apply(world, Some(&mut records));
+            self.running = None;
             observer.after_system(index, &records);
         }
         observer.tick_end(world);
+    }
+
+    /// The system that was running, or whose commands were applying, when a run stopped
+    /// before its end: after a panic unwound out of [`Schedule::run`] or
+    /// [`Schedule::run_observed`], it names the system that panicked. `None` once a run
+    /// ends, and outside the systems.
+    pub fn running(&self) -> Option<&'static str> {
+        self.running
     }
 
     /// What each system reads and writes, in run order.

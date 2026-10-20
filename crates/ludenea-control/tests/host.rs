@@ -969,3 +969,253 @@ fn drain_events_returns_what_commands_queued() {
     assert!(!client.drain_events().is_empty());
     assert!(client.drain_events().is_empty());
 }
+
+/// Asserts that health is never negative, as a game in development may, instead of
+/// refusing the value.
+#[derive(Component, Serialize, Deserialize)]
+#[serde(try_from = "i32")]
+struct Health(i32);
+
+impl TryFrom<i32> for Health {
+    type Error = String;
+
+    fn try_from(health: i32) -> Result<Self, String> {
+        assert!(health >= 0, "health must not be negative, got {health}");
+        Ok(Health(health))
+    }
+}
+
+fn hash(client: &mut InProcess) -> Hash64 {
+    match client.request(Command::GetHash) {
+        Ok(Reply::Hash { hash, .. }) => hash,
+        other => panic!("{other:?}"),
+    }
+}
+
+fn health_scene(health: i32) -> Command {
+    Command::LoadScene {
+        scene: format!(
+            r#"Scene(version: 1, resources: {{}}, entities: [{{ "host::Health": {health} }}])"#
+        ),
+        assets: Vec::new(),
+        document: Document::Scene,
+    }
+}
+
+/// A client of a game with `Health`, whose scene has one entity at 10 health.
+fn health_client() -> InProcess {
+    let app = || {
+        let mut app = App::new();
+        app.component::<Health>();
+        app
+    };
+    let mut client = InProcess::connect(Host::new(app).unwrap(), PROTOCOL_VERSION).unwrap();
+    client.request(health_scene(10)).unwrap();
+    client
+}
+
+#[test]
+fn a_panicking_try_from_in_set_field_is_reported_and_the_hash_is_unchanged() {
+    let mut client = health_client();
+    let Ok(Reply::Entities { rows, .. }) = client.request(Command::QueryEntities {
+        filter: String::new(),
+        offset: 0,
+        limit: 1,
+    }) else {
+        panic!()
+    };
+    let before = hash(&mut client);
+
+    let error = client
+        .request(Command::SetField {
+            target: FieldTarget::Component {
+                entity: rows[0].entity,
+                component: "host::Health".to_string(),
+            },
+            path: Vec::new(),
+            value: serde_json::json!(-5),
+        })
+        .unwrap_err();
+
+    assert_eq!(error.code, ErrorCode::SystemPanicked);
+    assert!(
+        error
+            .message
+            .contains("health must not be negative, got -5"),
+        "{}",
+        error.message
+    );
+    assert_eq!(hash(&mut client), before);
+}
+
+#[test]
+fn a_panic_while_loading_a_scene_brings_the_session_back() {
+    let mut client = health_client();
+    client.drain_events();
+    let before = hash(&mut client);
+
+    let error = client.request(health_scene(-5)).unwrap_err();
+
+    assert_eq!(error.code, ErrorCode::SystemPanicked);
+    assert!(
+        error
+            .message
+            .starts_with("the game panicked at tick 0: health must not be negative, got -5 (")
+            && error.message.ends_with("; the session is back at tick 0"),
+        "{}",
+        error.message
+    );
+    let events = client.drain_events();
+    assert!(
+        events.contains(&Event::Console {
+            level: ConsoleLevel::Error,
+            text: error.message.clone(),
+        }),
+        "{events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            Event::Paused { reason: PauseReason::Panicked { tick: 0, message } }
+                if message.starts_with("health must not be negative, got -5 (")
+        )),
+        "{events:?}"
+    );
+    assert_eq!(hash(&mut client), before);
+}
+
+/// Serializes as its count, except at 7, where a hand-written serializer may panic.
+#[derive(Component, Deserialize)]
+struct Fuse(u32);
+
+impl Serialize for Fuse {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        assert!(self.0 != 7, "the fuse blew");
+        serializer.serialize_newtype_struct("Fuse", &self.0)
+    }
+}
+
+fn burn(mut fuses: Query<&mut Fuse>) {
+    for fuse in fuses.iter_mut() {
+        fuse.0 += 1;
+    }
+}
+
+#[test]
+fn a_panic_outside_a_system_while_playing_pauses_and_brings_the_session_back() {
+    let app = || {
+        let mut app = App::new();
+        app.component::<Fuse>().system(Sim, burn);
+        app
+    };
+    let mut host = Host::new(app).unwrap();
+    host.handle(Command::LoadScene {
+        scene: r#"Scene(version: 1, resources: {}, entities: [{ "host::Fuse": (0) }])"#.into(),
+        assets: Vec::new(),
+        document: Document::Scene,
+    })
+    .unwrap();
+    host.handle(Command::Play).unwrap();
+
+    let mut events = Vec::new();
+    for _ in 0..10 {
+        events.extend(host.advance(1.0 / 60.0));
+    }
+
+    let paused: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Paused { reason } => Some(reason),
+            _ => None,
+        })
+        .collect();
+    let [PauseReason::Panicked { tick: 7, message }] = paused.as_slice() else {
+        panic!("unexpected events {events:?}");
+    };
+    assert!(message.starts_with("the fuse blew ("), "{message}");
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            Event::Console { level: ConsoleLevel::Error, text }
+                if text.starts_with("the game panicked at tick 7: the fuse blew (")
+                    && text.ends_with("; the session is back at tick 6")
+        )),
+        "{events:?}"
+    );
+    assert_eq!(host.tick(), 6);
+    let Ok(Reply::Timeline(timeline)) = host.handle(Command::GetTimeline) else {
+        panic!()
+    };
+    assert_eq!((timeline.current, timeline.simulated), (6, 6));
+}
+
+static FRAGILE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Loads while `FRAGILE` is off and panics while it is on: game code that loads a value
+/// once, then not again.
+#[derive(Component, Serialize, Deserialize)]
+#[serde(try_from = "u32")]
+struct Fragile(u32);
+
+impl TryFrom<u32> for Fragile {
+    type Error = String;
+
+    fn try_from(value: u32) -> Result<Self, String> {
+        let broken = FRAGILE.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(!broken, "the fragile value broke");
+        Ok(Fragile(value))
+    }
+}
+
+#[test]
+fn a_session_that_cannot_come_back_refuses_changes_until_a_new_one_loads() {
+    let app = || {
+        let mut app = App::new();
+        app.component::<Fragile>();
+        app
+    };
+    let mut host = Host::new(app).unwrap();
+    let load = Command::LoadScene {
+        scene: r#"Scene(version: 1, resources: {}, entities: [{ "host::Fragile": 1 }])"#.into(),
+        assets: Vec::new(),
+        document: Document::Scene,
+    };
+    host.handle(load.clone()).unwrap();
+
+    FRAGILE.store(true, std::sync::atomic::Ordering::SeqCst);
+    let error = host.handle(load.clone()).unwrap_err();
+    FRAGILE.store(false, std::sync::atomic::Ordering::SeqCst);
+
+    assert_eq!(error.code, ErrorCode::SystemPanicked);
+    assert!(
+        error
+            .message
+            .starts_with("the game panicked at tick 0: the fragile value broke (")
+            && error
+                .message
+                .contains("; the session cannot come back to a consistent tick: ")
+            && error
+                .message
+                .ends_with("; load the scene or the session again"),
+        "{}",
+        error.message
+    );
+    let step = Command::Step {
+        ticks: 1,
+        record_hashes: false,
+    };
+    assert_eq!(host.handle(step.clone()).unwrap_err(), error);
+    host.handle(Command::GetTimeline).unwrap();
+    host.handle(Command::Play).unwrap();
+    host.drain_events();
+    assert!(
+        !host
+            .advance(1.0)
+            .iter()
+            .any(|event| matches!(event, Event::Ticked { .. })),
+        "time passed on an inconsistent session"
+    );
+    host.handle(load).unwrap();
+    host.handle(step).unwrap();
+    assert_eq!(host.tick(), 1);
+}

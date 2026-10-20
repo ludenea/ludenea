@@ -5,7 +5,6 @@
 //! may have caused it.
 
 use std::collections::BTreeMap;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use ludenea_app::{Edit, EntityRef, Simulation};
 use ludenea_ecs::diff::entity_subject;
@@ -20,7 +19,7 @@ use serde_json::Value;
 
 use crate::branches::BranchId;
 use crate::compare::{apply_edits, restore, same_past};
-use crate::session::{BranchRun, Session, SessionError, panic_message};
+use crate::session::{BranchRun, Session};
 
 /// How many ticks after the fork a report covers unless asked for another range.
 pub const DIVERGENCE_TICKS: u64 = 600;
@@ -241,24 +240,9 @@ impl DivergenceRun {
 
     /// Compares at most `budget` more ticks. Returns the last tick compared when it moved,
     /// and whether the report is complete or there is nothing to compare. Fails on a panic
-    /// of the game or a tick that cannot run; the run is then unusable.
+    /// of the game in a tick or an edit, or a tick that cannot run; the run is then
+    /// unusable. Any other panic unwinds to the host's boundary, which builds it again.
     pub fn advance(
-        &mut self,
-        session: &Session,
-        budget: u32,
-    ) -> Result<(Option<u64>, bool), String> {
-        let advanced = catch_unwind(AssertUnwindSafe(|| self.advance_within(session, budget)));
-        advanced.unwrap_or_else(|payload| {
-            let tick = self.sims[CURRENT].tick().max(self.sims[COMPARE].tick());
-            Err(SessionError::Panicked {
-                tick,
-                message: panic_message(&*payload),
-            }
-            .to_string())
-        })
-    }
-
-    fn advance_within(
         &mut self,
         session: &Session,
         budget: u32,

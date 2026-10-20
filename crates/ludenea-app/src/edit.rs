@@ -8,8 +8,9 @@ use ludenea_ecs::{AssetId, Codec, Entity};
 use serde::{Deserialize, Serialize};
 
 use crate::assets::AssetSource;
+use crate::panic::catch_panic;
 use crate::scene::{LoadAddress, LoadedValue, Reference, visit_handles};
-use crate::{SceneError, SimError, Simulation};
+use crate::{GamePanic, SceneError, SimError, Simulation};
 
 const TIME: &str = "ludenea::Time";
 
@@ -277,6 +278,9 @@ pub enum EditError {
         "a group of edits holds spawn, despawn, insert, remove, and set-resource edits only; record an asset edit or a group on its own"
     )]
     NotGroupable,
+    /// The type's own code panicked on the value, such as a `try_from` that asserts.
+    #[error("{0}")]
+    Panicked(Box<GamePanic>),
 }
 
 /// Whether a name refers to a component or to a resource.
@@ -309,8 +313,14 @@ enum Checked {
 
 impl Simulation {
     /// Applies `edit`. Everything is validated before anything changes, so on error the
-    /// world is untouched. Returns the entity a `Spawn` created; a group returns none.
+    /// world is untouched, also when the type's own code panics on a value. Returns the
+    /// entity a `Spawn` created; a group returns none.
     pub fn apply_edit(&mut self, edit: &Edit) -> Result<Option<Entity>, EditError> {
+        catch_panic(self.tick(), || self.apply_checked(edit))
+            .map_err(|panic| EditError::Panicked(self.named(panic)))?
+    }
+
+    fn apply_checked(&mut self, edit: &Edit) -> Result<Option<Entity>, EditError> {
         match edit {
             Edit::SetAsset { id, value } => {
                 let asset = self.asset_type_of(*id)?;
@@ -536,8 +546,30 @@ impl Simulation {
             ValueKind::Component => self.component_codec(name)?,
             ValueKind::Resource => self.resource_codec(name)?,
         };
-        let value = (codec.from_json)(value).map_err(|reason| invalid(name, reason))?;
-        Ok((codec.encode)(&*value))
+        self.encode_json(&codec, name, value)
+    }
+
+    /// Converts a JSON value of the asset type `asset` into the canonical bytes
+    /// `Edit::SetAsset` carries, running the type's own validation.
+    pub fn encode_asset_json(
+        &self,
+        asset: &str,
+        value: serde_json::Value,
+    ) -> Result<Vec<u8>, EditError> {
+        self.encode_json(&self.asset_codec(asset)?, asset, value)
+    }
+
+    fn encode_json(
+        &self,
+        codec: &Codec,
+        name: &str,
+        value: serde_json::Value,
+    ) -> Result<Vec<u8>, EditError> {
+        self.caught(|| {
+            let value = (codec.from_json)(value).map_err(|reason| invalid(name, reason))?;
+            Ok((codec.encode)(&*value))
+        })
+        .map_err(EditError::Panicked)?
     }
 
     /// Checks that every value `edit` carries decodes with this app's types, without

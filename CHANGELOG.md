@@ -185,6 +185,30 @@ API.
   future resimulates once, one undo takes them all back, and when one fails nothing
   changes. `Session::edit` of an `Edit::Group` at tick 0 is such a scene edit of its edits;
   past tick 0 it records the group as one edit.
+- The `Simulation` methods that run game code catch its panics in native builds and return
+  them as the new `SimError::Panicked` or `EditError::Panicked`: `step`, which now returns
+  `Result<(), SimError>`, `step_with`, `step_encoded`, `step_observed`, `map_raw_input`,
+  `debug_draw` and `pick`, which now return `Result`, `apply_edit`, `encode_json_value`,
+  and the new `encode_asset_json` and `default_asset_ron` (whose refusals are the new
+  `SimError::AssetDefault`). A panic is the new `GamePanic`: the tick, the system that was
+  running or whose commands were applying (the new `Schedule::running`), the message, and
+  the source location as `file:line:column`, displayed as
+  ``the game panicked at tick 3 in system `game::spawn`: ... (src/lib.rs:88:14)``. The
+  message names an asset by the file the scene load's `AssetSource` gave for it, so a
+  prefab spawn that fails names `assets/ball.prefab.ron`, not its identifier. The new
+  `ludenea_app::catch_panic` is the one way game code is caught; its first call installs
+  a panic hook that records the location, then runs the hook that was there before.
+  WebAssembly builds still abort on a panic.
+- `record_replay`, `record_loaded_replay`, `play_replay` and `load_replay` return the new
+  `ReplayError::Panicked { panic, snapshot }` when the game panics, with the snapshot of
+  the state a panicking tick ran from; the panic unwound through them.
+  `SessionError::Panicked` holds a `GamePanic`, and converting a `SimError` or
+  `ReplayError` panic gives it; an `EditError::Panicked` stays an edit failure.
+- The command line tool's `run` and `verify` report a game panic as
+  ``error: the game panicked at tick 3 in system `game::boom`: ... (src/lib.rs:6:22)``
+  and exit with code 2, where Rust's panic text and code 101 named neither the tick nor
+  the system; `verify` also writes the state the panicking tick ran from to
+  `tick-3.snap` in `--dump-dir`.
 
 ### Control protocol
 
@@ -271,6 +295,24 @@ API.
   twice is refused with `invalid_command`, and nothing applies. Sent one by one after
   playing, such edits at tick 0 applied the first only, the next ones refused with
   `resimulating`, and each was an undo step of its own.
+- A game panic no longer ends the game process. An input mapping that panics fails
+  `set_live_input`, and a type whose own code panics on a value fails `spawn`,
+  `insert_component`, `set_field`, `set_asset_field` or `new_asset_value`, with
+  `system_panicked`, changing nothing. Any other panic while the host handles a command
+  or advances, such as a type that panics while a scene loads or while it is serialized,
+  replies `system_panicked`, is written to the console, pauses with `panicked`, and
+  reloads the session to its current tick. When the session cannot come back, commands
+  that change the state are refused with that error, and time stops, until
+  `load_scene`, `load_session` or `load_replay` starts a new session. A recorded edit whose
+  type now panics on its value is dropped while resimulating and reported with
+  `edit_dropped`, as an edit that no longer applies is.
+- The `system_panicked` message and the console name the system and the source location,
+  ``the game panicked at tick 3 in system `game::spawn`: ... (src/lib.rs:88:14)``, and
+  the `panicked` pause reason gives the message as ``... (in system `game::spawn`,
+  src/lib.rs:88:14)``. `pick` and `get_debug_draw` give that form too, instead of "the
+  game panicked while picking" and "while drawing debug layers". A browser game's crash
+  message gives the location as `(file:line:column)` like a native one, not
+  `at file:line`.
 
 ### Project protocol
 

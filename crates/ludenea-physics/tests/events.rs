@@ -70,7 +70,7 @@ fn landing_box_emits_one_begin() {
     let ground = spawn(&mut simulation, 0.0, Body::fixed());
     let falling = spawn(&mut simulation, 3.0, Body::dynamic());
     for _ in 0..200 {
-        simulation.step();
+        simulation.step().unwrap();
     }
     assert_eq!(seen(&simulation), [(true, ground, falling)]);
 }
@@ -85,7 +85,7 @@ fn separating_emits_end() {
     };
     let launched = spawn(&mut simulation, 0.9, body);
     for _ in 0..30 {
-        simulation.step();
+        simulation.step().unwrap();
     }
     assert_eq!(
         seen(&simulation),
@@ -104,7 +104,7 @@ fn despawn_while_touching_emits_end_and_does_not_panic() {
         log.despawn_at = 20;
     }
     for _ in 0..40 {
-        simulation.step();
+        simulation.step().unwrap();
     }
     assert_eq!(
         seen(&simulation),
@@ -122,7 +122,7 @@ fn events_are_sorted_by_pair() {
     let upper = spawn(&mut simulation, 0.9, Body::dynamic());
     let far = spawn(&mut simulation, 50.0, Body::fixed());
     let other = spawn(&mut simulation, 50.9, Body::dynamic());
-    simulation.step();
+    simulation.step().unwrap();
     assert_eq!(
         seen(&simulation),
         [(true, ground, upper), (true, far, other)]

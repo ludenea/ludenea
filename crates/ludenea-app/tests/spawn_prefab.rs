@@ -1,5 +1,7 @@
 use ludenea_app::replay::{ReplayOutcome, play_replay, record_replay};
-use ludenea_app::{App, AssetTexts, EditLog, InputLog, Rng, Sim, Simulation, Time};
+use ludenea_app::{
+    App, AssetTexts, EditLog, InputLog, NamedAssetTexts, Rng, Sim, SimError, Simulation, Time,
+};
 use ludenea_ecs::{
     AssetId, CommandKind, CommandRecord, Commands, Component, Entity, Handle, IntoSystemConfig,
     Prefab, Query, Res, ResMut, ScheduleObserver, World,
@@ -132,7 +134,7 @@ fn tagged(world: &World, value: u32) -> Vec<Entity> {
 #[test]
 fn spawn_prefab_spawns_entities_in_prefab_order() {
     let mut simulation = simulation(1000);
-    simulation.step();
+    simulation.step().unwrap();
     let world = simulation.world();
     let (first, second) = (tagged(world, 1), tagged(world, 2));
     assert_eq!((first.len(), second.len()), (1, 1));
@@ -142,7 +144,7 @@ fn spawn_prefab_spawns_entities_in_prefab_order() {
 #[test]
 fn spawned_entity_fields_point_to_new_entities() {
     let mut simulation = simulation(1000);
-    simulation.step();
+    simulation.step().unwrap();
     let world = simulation.world();
     let (first, second) = (tagged(world, 1)[0], tagged(world, 2)[0]);
     assert_eq!(world.get::<Target>(first).unwrap().0, second);
@@ -162,7 +164,7 @@ fn overrides_apply_after_spawn() {
         }
     }
     let mut simulation = simulation_with(1000, spawn);
-    simulation.step();
+    simulation.step().unwrap();
     let world = simulation.world();
     let first = tagged(world, 11);
     assert_eq!(first.len(), 1);
@@ -179,7 +181,7 @@ fn spawn_prefab_is_deterministic_across_thread_counts() {
         simulation.set_threads(threads).unwrap();
         (0..200)
             .map(|_| {
-                simulation.step();
+                simulation.step().unwrap();
                 simulation.hash()
             })
             .collect::<Vec<_>>()
@@ -188,7 +190,7 @@ fn spawn_prefab_is_deterministic_across_thread_counts() {
     assert_eq!(single, hashes(8));
     let mut simulation = simulation(7);
     for _ in 0..200 {
-        simulation.step();
+        simulation.step().unwrap();
     }
     assert_eq!(tagged(simulation.world(), 1).len(), 29);
 }
@@ -197,13 +199,13 @@ fn spawn_prefab_is_deterministic_across_thread_counts() {
 fn spawn_prefab_survives_snapshot_and_restore() {
     let mut simulation = simulation(5);
     for _ in 0..50 {
-        simulation.step();
+        simulation.step().unwrap();
     }
     let snapshot = simulation.snapshot();
     let run = |simulation: &mut Simulation| {
         (0..50)
             .map(|_| {
-                simulation.step();
+                simulation.step().unwrap();
                 simulation.hash()
             })
             .collect::<Vec<_>>()
@@ -261,8 +263,7 @@ fn spawn_records_commands() {
 }
 
 #[test]
-#[should_panic(expected = "has no entity with local identifier 9")]
-fn unknown_local_identifier_panics() {
+fn an_unknown_local_identifier_names_the_system_and_the_prefab_file() {
     fn spawn(spawners: Query<&Spawner>, mut commands: Commands) {
         for spawner in spawners.iter() {
             commands.spawn_prefab(spawner.bullet, |overrides| {
@@ -270,15 +271,26 @@ fn unknown_local_identifier_panics() {
             });
         }
     }
-    simulation_with(1000, spawn).step();
+    let mut simulation = unloaded(spawn);
+    let (scene, texts) = bullet_scene(1000);
+    let paths = [(AssetId(BULLET), "assets/bullet.prefab.ron".to_string())].into();
+    simulation
+        .load_scene_with(&scene, &NamedAssetTexts { texts, paths })
+        .unwrap();
+
+    let Err(SimError::Panicked(panic)) = simulation.step() else {
+        panic!("the spawn must fail");
+    };
+
+    assert_eq!(panic.tick, 0);
+    assert!(panic.system.unwrap().ends_with("::spawn"), "{panic}");
+    assert_eq!(
+        panic.message,
+        "prefab assets/bullet.prefab.ron has no entity with local identifier 9"
+    );
 }
 
 #[test]
-#[should_panic(
-    expected = "prefab 0000000000000000000000000000000c: `spawn_prefab::FirstSlot` refuses \
-                the entities spawned for it: 1v0 is not in the first slot; its type must \
-                accept every entity"
-)]
 fn a_component_refusing_its_spawned_entities_names_the_prefab_and_the_component() {
     fn spawn(spawners: Query<&Spawner>, mut commands: Commands) {
         for spawner in spawners.iter() {
@@ -296,13 +308,21 @@ fn a_component_refusing_its_spawned_entities_names_the_prefab_and_the_component(
     );
     let mut simulation = unloaded(spawn);
     simulation.load_scene_with(&scene, &assets).unwrap();
-    simulation.step();
+    let Err(SimError::Panicked(panic)) = simulation.step() else {
+        panic!("the spawn must fail");
+    };
+    assert_eq!(
+        panic.message,
+        "prefab 0000000000000000000000000000000c: `spawn_prefab::FirstSlot` refuses the \
+         entities spawned for it: 1v0 is not in the first slot; its type must accept every \
+         entity"
+    );
 }
 
 #[test]
 fn remap_keeps_non_finite_floats() {
     let mut simulation = simulation(1000);
-    simulation.step();
+    simulation.step().unwrap();
     let world = simulation.world();
     let (entity, other) = (tagged(world, 1)[0], tagged(world, 2)[0]);
     let aim = Aim {
@@ -347,7 +367,7 @@ fn spawn_records_each_inserted_component() {
 #[test]
 fn remap_maps_each_entity_on_its_own_and_survives_a_failure() {
     let mut simulation = simulation(1000);
-    simulation.step();
+    simulation.step().unwrap();
     let world = simulation.world();
     let (first, second) = (tagged(world, 1)[0], tagged(world, 2)[0]);
     let codec = world.component_codec("spawn_prefab::Pair").unwrap();

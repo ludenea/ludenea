@@ -48,7 +48,7 @@ fn step_advances_tick_and_runs_systems_in_order() {
         1.0 / 60.0
     );
 
-    simulation.step();
+    simulation.step().unwrap();
     simulation
         .step_with(&[Pad {
             jump: true,
@@ -148,8 +148,42 @@ fn a_refused_thread_count_keeps_the_previous_pool() {
         );
         assert_eq!(simulation.threads(), 4);
     }
-    simulation.step();
+    simulation.step().unwrap();
     assert_eq!(simulation.tick(), 1);
+}
+
+fn boom(time: Res<Time>) {
+    if time.tick == 2 {
+        panic!("boom at two");
+    }
+}
+
+#[test]
+fn a_panicking_system_names_the_tick_the_system_and_where() {
+    let mut app = App::new();
+    app.system(Sim, first)
+        .resource(Log::default())
+        .system(Sim, boom);
+    let mut simulation = app.build().unwrap();
+    simulation.step().unwrap();
+    simulation.step().unwrap();
+
+    let Err(SimError::Panicked(panic)) = simulation.step() else {
+        panic!("the step must fail");
+    };
+
+    assert_eq!(
+        (panic.tick, panic.system, panic.message.as_str()),
+        (2, Some("simulation::boom"), "boom at two")
+    );
+    let location = panic.location.as_deref().unwrap();
+    assert!(location.contains("tests/simulation.rs:"), "{location}");
+    assert_eq!(
+        panic.to_string(),
+        format!(
+            "the game panicked at tick 2 in system `simulation::boom`: boom at two ({location})"
+        )
+    );
 }
 
 #[test]

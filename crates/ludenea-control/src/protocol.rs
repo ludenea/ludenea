@@ -835,7 +835,9 @@ pub enum Event {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PauseReason {
     User,
-    /// A system panicked while running `tick`; the session stays at `tick`.
+    /// Game code panicked at `tick`, such as a system running it; the session stays at
+    /// `tick`, or the tick it came back to. `message` is the panic's, with the system and
+    /// the source location when known.
     Panicked {
         tick: u64,
         message: String,
@@ -888,6 +890,8 @@ pub enum ErrorCode {
     NothingToUndo,
     NothingToRedo,
     NoInputMapping,
+    /// Game code panicked: a system, the input mapping, a drawer, a picker, or a type's own
+    /// code. The message names the tick, the system, and the source location when known.
     SystemPanicked,
     InvalidFilter,
 }

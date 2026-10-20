@@ -294,8 +294,6 @@ fn panicking_system_pauses_with_panicked_and_keeps_session() {
     let mut host = loaded_with(panicking_app, scene_a(), inputs.clone());
     ok(&mut host, Command::Play);
 
-    let hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
     let mut events = Vec::new();
     for _ in 0..100 {
         events.extend(host.advance(1.0 / 60.0));
@@ -307,7 +305,6 @@ fn panicking_system_pauses_with_panicked_and_keeps_session() {
             record_hashes: false,
         },
     );
-    std::panic::set_hook(hook);
 
     let paused: Vec<_> = events
         .iter()
@@ -319,13 +316,19 @@ fn panicking_system_pauses_with_panicked_and_keeps_session() {
     let [PauseReason::Panicked { tick: 50, message }] = paused.as_slice() else {
         panic!("unexpected events {events:?}");
     };
-    assert!(message.contains("boom at fifty"), "{message}");
+    assert!(
+        message.starts_with("boom at fifty (in system `running::panic_at_50`, "),
+        "{message}"
+    );
+    assert!(message.contains("tests/running.rs:"), "{message}");
     assert!(events.iter().any(|event| matches!(
         event,
         Event::Console {
             level: ConsoleLevel::Error,
             text
-        } if text.contains("boom at fifty")
+        } if text.starts_with(
+            "the game panicked at tick 50 in system `running::panic_at_50`: boom at fifty ("
+        )
     )));
     assert_eq!(step_error, ErrorCode::SystemPanicked);
     assert_eq!(timeline(&mut host).current, 50);
@@ -512,10 +515,7 @@ fn panic_during_resimulation_ends_it_and_keeps_undo_and_export() {
         },
     );
 
-    let hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
     let events = host.advance(0.0);
-    std::panic::set_hook(hook);
 
     assert!(
         events.iter().any(|event| matches!(
@@ -653,15 +653,12 @@ fn a_command_that_changes_the_state_announces_it_once() {
 fn a_panicking_step_names_its_tick_once() {
     let mut host = loaded_with(panicking_app, scene_a(), recorded(100));
     step(&mut host, 50);
-    let hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
     let error = host
         .handle(Command::Step {
             ticks: 1,
             record_hashes: false,
         })
         .unwrap_err();
-    std::panic::set_hook(hook);
     assert_eq!(
         error.message.matches("tick 50").count(),
         1,
@@ -704,4 +701,116 @@ fn load_session_with_empty_logs_loads_only_its_scene() {
     );
     assert!(timeline.scene_dirty && !timeline.resimulating);
     assert_eq!(export(&mut host).scene, scene_a());
+}
+
+/// Boxes whose input mapping reads the first gamepad, which a keyboard player lacks.
+fn gamepad_app() -> App {
+    let mut app = boxes::app();
+    app.input_mapping(|raw: &RawInput, _| BoxesInput {
+        spawn: Some(raw.gamepads[0].axes[0]),
+        ..BoxesInput::default()
+    });
+    app
+}
+
+#[test]
+fn a_panicking_input_mapping_fails_set_live_input_and_keeps_the_host() {
+    let mut host = loaded_with(gamepad_app, scene_a(), recorded(100));
+    let keyboard = RawInput {
+        keys: ["KeyS".to_string()].into(),
+        ..RawInput::default()
+    };
+
+    let error = host
+        .handle(Command::SetLiveInput {
+            players: vec![keyboard],
+        })
+        .unwrap_err();
+
+    assert_eq!(error.code, ErrorCode::SystemPanicked);
+    assert!(
+        error.message.contains("index out of bounds"),
+        "{}",
+        error.message
+    );
+    ok(&mut host, Command::GetHash);
+    assert_eq!(step(&mut host, 1).len(), 1);
+}
+
+static SUPERSTITIOUS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Asserts that a luck is never 13 once `SUPERSTITIOUS` is on: a later build of the game
+/// whose type panics on a value an earlier build recorded.
+#[derive(Component, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "u32")]
+struct Luck(u32);
+
+impl TryFrom<u32> for Luck {
+    type Error = String;
+
+    fn try_from(luck: u32) -> Result<Self, String> {
+        let superstitious = SUPERSTITIOUS.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(!(superstitious && luck == 13), "13 is unlucky");
+        Ok(Luck(luck))
+    }
+}
+
+fn luck_app() -> App {
+    let mut app = App::new();
+    app.component::<Luck>();
+    app
+}
+
+#[test]
+fn a_recorded_edit_whose_value_now_panics_is_dropped_while_resimulating() {
+    let mut host = Host::new(luck_app).unwrap();
+    ok(
+        &mut host,
+        Command::LoadScene {
+            scene: r#"Scene(version: 1, resources: {}, entities: [{ "running::Luck": 0 }])"#.into(),
+            assets: Vec::new(),
+            document: Document::Scene,
+        },
+    );
+    step(&mut host, 3);
+    let Reply::Entities { rows, .. } = ok(
+        &mut host,
+        Command::QueryEntities {
+            filter: String::new(),
+            offset: 0,
+            limit: 1,
+        },
+    ) else {
+        panic!()
+    };
+    ok(
+        &mut host,
+        Command::SetField {
+            target: FieldTarget::Component {
+                entity: rows[0].entity,
+                component: "running::Luck".to_string(),
+            },
+            path: Vec::new(),
+            value: serde_json::json!(13),
+        },
+    );
+    step(&mut host, 2);
+    let exported = export(&mut host);
+    let hashes = exported.hashes.clone();
+
+    SUPERSTITIOUS.store(true, std::sync::atomic::Ordering::SeqCst);
+    let mut fresh = Host::new(luck_app).unwrap();
+    ok(&mut fresh, load_session(exported, hashes));
+    let events = resimulate(&mut fresh);
+    SUPERSTITIOUS.store(false, std::sync::atomic::Ordering::SeqCst);
+
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            Event::EditDropped { tick: 3, reason }
+                if reason.starts_with("the game panicked at tick 3: 13 is unlucky (")
+        )),
+        "{events:?}"
+    );
+    assert_eq!(timeline(&mut fresh).simulated, 5);
 }

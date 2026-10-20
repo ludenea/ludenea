@@ -2,12 +2,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ludenea_app::replay::Replay;
-use ludenea_app::{App, InputLog, Rng, Sim};
+use ludenea_app::{App, InputLog, Rng, Sim, Time};
 use ludenea_cli::{Trace, run};
 use ludenea_control::{
     Bytes, Command, Document, Host, InProcess, PROTOCOL_VERSION, Reply, Transport,
 };
-use ludenea_ecs::{Asset, Component, Handle, Query, ResMut};
+use ludenea_ecs::{Asset, Component, Handle, Query, Res, ResMut};
 use serde::{Deserialize, Serialize};
 
 #[derive(Component, Serialize, Deserialize)]
@@ -60,6 +60,11 @@ fn dir(test: &str) -> PathBuf {
 }
 
 fn cli(dir: &Path, args: &[&str]) -> (i32, String) {
+    cli_with(app, dir, args)
+}
+
+/// Runs the command line of `app` with `args`, `{}` standing for `dir`.
+fn cli_with(app: fn() -> App, dir: &Path, args: &[&str]) -> (i32, String) {
     let mut full = vec!["test".to_string()];
     full.extend(
         args.iter()
@@ -692,4 +697,80 @@ fn scene_with_a_prefab_instance_runs_and_its_replay_verifies() {
         verify_replay(&dir, "1"),
         (0, "ok: 11 hashes match\n".to_string())
     );
+}
+
+/// Indexes past the end of an empty list at tick 3, as a game system with a bug may.
+fn boom(time: Res<Time>) {
+    let empty: Vec<u64> = Vec::new();
+    if time.tick == 3 {
+        let _ = empty[0];
+    }
+}
+
+/// `app` with a system that panics at tick 3.
+fn booming_app() -> App {
+    let mut app = app();
+    app.system(Sim, boom);
+    app
+}
+
+#[test]
+fn game_panic_names_the_tick_and_system() {
+    let dir = dir("game_panic");
+    let (code, out) = cli_with(booming_app, &dir, &["run", "{}/scene.ron", "--ticks", "5"]);
+    assert_eq!(code, 2, "{out}");
+    assert!(
+        out.starts_with(
+            "error: the game panicked at tick 3 in system `cli::boom`: index out of bounds"
+        ),
+        "{out}"
+    );
+    assert!(out.contains("tests/cli.rs:"), "{out}");
+}
+
+#[test]
+fn verifying_a_game_that_panics_dumps_the_state_the_tick_ran_from() {
+    let dir = dir("verify_panic");
+    record(&dir);
+    let expected = golden_hashes(&dir);
+    let (code, out) = cli_with(
+        booming_app,
+        &dir,
+        &[
+            "verify",
+            "{}/scene.ron",
+            "--inputs",
+            "{}/inputs.bin",
+            "--golden",
+            "{}/golden.bin",
+            "--dump-dir",
+            "{}/dump",
+        ],
+    );
+    assert_eq!(code, 2, "{out}");
+    assert!(
+        out.starts_with("error: the game panicked at tick 3 in system `cli::boom`: "),
+        "{out}"
+    );
+    assert!(out.trim_end().ends_with("tick-3.snap"), "{out}");
+    assert_eq!(snapshot_hash(&dir.join("dump/tick-3.snap")), expected[3]);
+}
+
+#[test]
+fn verifying_a_replay_of_a_game_that_panics_dumps_the_state_the_tick_ran_from() {
+    let dir = dir("verify_replay_panic");
+    record_replay(&dir);
+    let expected = golden_hashes(&dir);
+    let (code, out) = cli_with(
+        booming_app,
+        &dir,
+        &["verify", "{}/run.replay", "--dump-dir", "{}/dump"],
+    );
+    assert_eq!(code, 2, "{out}");
+    assert!(
+        out.starts_with("error: the game panicked at tick 3 in system `cli::boom`: "),
+        "{out}"
+    );
+    assert!(out.trim_end().ends_with("tick-3.snap"), "{out}");
+    assert_eq!(snapshot_hash(&dir.join("dump/tick-3.snap")), expected[3]);
 }

@@ -327,7 +327,7 @@ fn contact_cache_has_no_json_form_but_ron_works() {
             )
             .unwrap();
     }
-    simulation.step();
+    simulation.step().unwrap();
     let cache = simulation
         .world()
         .resource::<ContactCache>()
@@ -899,4 +899,49 @@ fn a_group_introduces_the_assets_of_every_edit() {
         simulation.assets_introduced_by(&group, &sources).unwrap(),
         vec![load(B, stats(2, None)), load(C, stats(3, None))]
     );
+}
+
+/// Asserts that a count is never 13, as a game in development may, instead of refusing it.
+#[derive(Component, Serialize, Deserialize)]
+#[serde(try_from = "u32")]
+struct Unlucky(u32);
+
+impl TryFrom<u32> for Unlucky {
+    type Error = String;
+
+    fn try_from(count: u32) -> Result<Self, String> {
+        assert!(count != 13, "13 is unlucky");
+        Ok(Unlucky(count))
+    }
+}
+
+#[test]
+fn a_value_its_type_panics_on_is_refused_and_the_world_is_unchanged() {
+    let mut app = App::new();
+    app.component::<Unlucky>();
+    let mut simulation = app.build().unwrap();
+    let before = simulation.hash();
+    let spawn = Edit::Spawn {
+        components: vec![(
+            "edit::Unlucky".to_string(),
+            postcard::to_allocvec(&13u32).unwrap(),
+        )],
+    };
+
+    let Err(EditError::Panicked(applied)) = simulation.apply_edit(&spawn) else {
+        panic!("the edit must fail");
+    };
+    let Err(EditError::Panicked(encoded)) =
+        simulation.encode_json_value(ValueKind::Component, "edit::Unlucky", json!(13))
+    else {
+        panic!("the value must fail");
+    };
+
+    assert_eq!(
+        (applied.tick, applied.message.as_str()),
+        (0, "13 is unlucky")
+    );
+    assert_eq!(encoded.message, "13 is unlucky");
+    assert_eq!(simulation.hash(), before);
+    assert_eq!(simulation.world().entities().count(), 0);
 }

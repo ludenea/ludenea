@@ -43,7 +43,9 @@ fn colliders_layer_draws_one_item_per_collider_with_entity() {
     let mut simulation = simulation();
     let a = spawn_box(&mut simulation, 0.0, 0.0);
     let b = spawn_box(&mut simulation, 5.0, 0.0);
-    let frame = simulation.debug_draw(&layers(&["physics.colliders"]));
+    let frame = simulation
+        .debug_draw(&layers(&["physics.colliders"]))
+        .unwrap();
     let items = &frame.layers["physics.colliders"];
     assert_eq!(items.len(), 2);
     assert_eq!(items[0].entity, Some(a));
@@ -63,10 +65,16 @@ fn colliders_layer_draws_one_item_per_collider_with_entity() {
 fn unrequested_layers_are_empty() {
     let mut simulation = simulation();
     spawn_box(&mut simulation, 0.0, 0.0);
-    let frame = simulation.debug_draw(&layers(&["physics.aabbs"]));
+    let frame = simulation.debug_draw(&layers(&["physics.aabbs"])).unwrap();
     assert!(!frame.layers.contains_key("physics.colliders"));
     assert_eq!(frame.layers["physics.aabbs"].len(), 1);
-    assert!(simulation.debug_draw(&layers(&[])).layers.is_empty());
+    assert!(
+        simulation
+            .debug_draw(&layers(&[]))
+            .unwrap()
+            .layers
+            .is_empty()
+    );
 }
 
 #[test]
@@ -74,7 +82,7 @@ fn pick_inside_box_returns_it() {
     let mut simulation = simulation();
     let target = spawn_box(&mut simulation, 0.0, 0.0);
     spawn_box(&mut simulation, 10.0, 0.0);
-    assert_eq!(simulation.pick(Vec2::new(0.5, -0.5)), vec![target]);
+    assert_eq!(simulation.pick(Vec2::new(0.5, -0.5)).unwrap(), vec![target]);
 }
 
 #[test]
@@ -94,8 +102,8 @@ fn pick_outside_everything_returns_empty() {
             })),
         )
         .unwrap();
-    assert!(simulation.pick(Vec2::new(3.0, 3.0)).is_empty());
-    assert!(simulation.pick(Vec2::new(20.9, 0.9)).is_empty());
+    assert!(simulation.pick(Vec2::new(3.0, 3.0)).unwrap().is_empty());
+    assert!(simulation.pick(Vec2::new(20.9, 0.9)).unwrap().is_empty());
 }
 
 #[test]
@@ -112,8 +120,8 @@ fn pick_collider_less_pose_within_radius() {
             },
         )
         .unwrap();
-    assert_eq!(simulation.pick(Vec2::new(4.2, 4.0)), vec![marker]);
-    assert!(simulation.pick(Vec2::new(4.3, 4.0)).is_empty());
+    assert_eq!(simulation.pick(Vec2::new(4.2, 4.0)).unwrap(), vec![marker]);
+    assert!(simulation.pick(Vec2::new(4.3, 4.0)).unwrap().is_empty());
 }
 
 #[test]
@@ -125,12 +133,12 @@ fn debug_draw_and_pick_do_not_change_world_hash() {
         .world_mut()
         .insert(moving, Body::dynamic())
         .unwrap();
-    simulation.step();
+    simulation.step().unwrap();
     let before = simulation.hash();
     let all = layers(&["physics.colliders", "physics.contacts", "physics.aabbs"]);
-    let frame = simulation.debug_draw(&all);
+    let frame = simulation.debug_draw(&all).unwrap();
     assert!(!frame.layers["physics.contacts"].is_empty());
-    simulation.pick(Vec2::new(0.0, 0.0));
+    simulation.pick(Vec2::new(0.0, 0.0)).unwrap();
     assert_eq!(simulation.hash(), before);
 }
 
@@ -142,7 +150,9 @@ fn colliders_are_colored_by_body_kind() {
         let entity = spawn_box(&mut simulation, 5.0 * i as f32, 0.0);
         simulation.world_mut().insert(entity, body).unwrap();
     }
-    let frame = simulation.debug_draw(&layers(&["physics.colliders"]));
+    let frame = simulation
+        .debug_draw(&layers(&["physics.colliders"]))
+        .unwrap();
     let colors: Vec<u32> = frame.layers["physics.colliders"]
         .iter()
         .map(|item| match &item.primitive {
@@ -162,8 +172,10 @@ fn contacts_layer_draws_a_point_and_a_normal_per_manifold_point() {
         .world_mut()
         .insert(resting, Body::dynamic())
         .unwrap();
-    simulation.step();
-    let frame = simulation.debug_draw(&layers(&["physics.contacts"]));
+    simulation.step().unwrap();
+    let frame = simulation
+        .debug_draw(&layers(&["physics.contacts"]))
+        .unwrap();
     let items = &frame.layers["physics.contacts"];
     // Two face-to-face boxes touch at two points, each drawn as a dot then a normal.
     assert_eq!(items.len(), 4);

@@ -526,10 +526,11 @@ fn panic_restores_state_and_keeps_logs() {
     let result = session.step(&mut sim, None);
     std::panic::set_hook(hook);
 
-    let Err(SessionError::Panicked { tick: 50, message }) = result else {
+    let Err(SessionError::Panicked(panic)) = result else {
         panic!("unexpected result {result:?}");
     };
-    assert!(message.contains("boom at fifty"), "{message}");
+    assert_eq!(panic.tick, 50);
+    assert!(panic.message.contains("boom at fifty"), "{panic}");
     assert_eq!(session.timeline().current, 50);
     assert_eq!(sim.hash(), before.hashes[50]);
     assert_eq!(session.export().unwrap(), before);
@@ -667,7 +668,7 @@ fn panic_during_seek_keeps_the_current_tick() {
 
     assert!(matches!(
         result,
-        Err(SessionError::Panicked { tick: 50, .. })
+        Err(SessionError::Panicked(panic)) if panic.tick == 50
     ));
     assert_eq!(session.timeline().current, 10);
     assert_eq!(sim.hash(), before.hashes[10]);
@@ -704,7 +705,7 @@ fn panic_during_resimulation_ends_it_at_the_failing_tick() {
 
     assert!(matches!(
         result,
-        Err(SessionError::Panicked { tick: 50, .. })
+        Err(SessionError::Panicked(panic)) if panic.tick == 50
     ));
     let timeline = session.timeline();
     assert!(!timeline.resimulating, "{timeline:?}");
@@ -742,7 +743,7 @@ fn panic_while_restoring_past_the_simulated_ticks_moves_to_the_failing_tick() {
 
     assert!(matches!(
         result,
-        Err(SessionError::Panicked { tick: 50, .. })
+        Err(SessionError::Panicked(panic)) if panic.tick == 50
     ));
     assert_eq!(session.timeline().current, 50);
     assert_eq!(sim.tick(), 50);
@@ -1056,7 +1057,7 @@ fn a_redo_of_a_previous_build_whose_replay_to_the_fork_panics_changes_nothing() 
     FORK_REPLAY_TRAP.store(false, std::sync::atomic::Ordering::Relaxed);
 
     assert!(
-        matches!(result, Err(SessionError::Panicked { tick: 18, .. })),
+        matches!(&result, Err(SessionError::Panicked(panic)) if panic.tick == 18),
         "{result:?}"
     );
     assert_eq!(session.export().unwrap(), before);
@@ -1078,10 +1079,11 @@ fn a_panic_whose_tick_cannot_come_back_moves_to_tick_0() {
 
     let result = quietly(|| session.step(&mut sim, None));
 
-    let Err(SessionError::Panicked { tick: 50, message }) = result else {
+    let Err(SessionError::Panicked(panic)) = result else {
         panic!("unexpected result {result:?}");
     };
-    assert!(message.contains("boom at fifty"), "{message}");
+    assert_eq!(panic.tick, 50);
+    assert!(panic.message.contains("boom at fifty"), "{panic}");
     assert_at(&session, &sim, 0);
 }
 

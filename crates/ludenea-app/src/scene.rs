@@ -463,6 +463,12 @@ impl Simulation {
         let text = resolved.to_scene_text();
         let load = self.load_resolved(resolved, assets)?;
         self.resolved_scene = Some(text);
+        self.asset_paths = self
+            .world
+            .asset_ids()
+            .into_iter()
+            .filter_map(|id| Some((id, assets.path(id)?.to_string())))
+            .collect();
         Ok(load)
     }
 

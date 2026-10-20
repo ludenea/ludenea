@@ -1,4 +1,4 @@
-use ludenea_app::{App, SceneError, Simulation, Time};
+use ludenea_app::{App, SceneError, SimError, Simulation, Time};
 use ludenea_ecs::Entity;
 use ludenea_math::{Aabb, Rot, Vec2};
 use ludenea_physics::{
@@ -63,7 +63,7 @@ fn body(simulation: &Simulation, entity: Entity) -> Body {
 
 fn step(simulation: &mut Simulation, ticks: usize) {
     for _ in 0..ticks {
-        simulation.step();
+        simulation.step().unwrap();
     }
 }
 
@@ -161,7 +161,7 @@ fn bouncing_ball_with_restitution_rebounds() {
     let mut reversed = false;
     let mut apex = f32::NEG_INFINITY;
     for _ in 0..240 {
-        simulation.step();
+        simulation.step().unwrap();
         let velocity = body(&simulation, ball).linear_velocity.y;
         if velocity > 0.0 {
             reversed = true;
@@ -270,7 +270,7 @@ fn offset_center_of_mass_rotates_about_its_center() {
         }))),
     );
     for _ in 0..120 {
-        simulation.step();
+        simulation.step().unwrap();
         let pose = pose(&simulation, spinner);
         let center = pose.position + pose.rotation.rotate(Vec2::new(1.0, 0.0));
         assert!(
@@ -307,7 +307,7 @@ fn two_runs_give_identical_hash_sequences() {
         }
         (0..180)
             .map(|_| {
-                simulation.step();
+                simulation.step().unwrap();
                 simulation.hash()
             })
             .collect::<Vec<u64>>()
@@ -375,7 +375,7 @@ fn kinematic_spin_keeps_a_unit_rotation_and_restores() {
     let mut spinning = Body::kinematic();
     spinning.angular_velocity = 1e30;
     let spinner = spawn(&mut simulation, Vec2::ZERO, spinning, Some(boxed(0.5, 0.5)));
-    simulation.step();
+    simulation.step().unwrap();
     let Rot { cos, sin } = pose(&simulation, spinner).rotation;
     assert!(
         (cos * cos + sin * sin - 1.0).abs() < 1e-4,
@@ -400,7 +400,7 @@ fn kinematic_spin_is_clamped_like_a_dynamic_one() {
     let dynamic = spawn(&mut simulation, Vec2::ZERO, spinning, ball());
     spinning.kind = BodyKind::Kinematic;
     let kinematic = spawn(&mut simulation, Vec2::new(5.0, 0.0), spinning, ball());
-    simulation.step();
+    simulation.step().unwrap();
     let clamped = body(&simulation, dynamic).angular_velocity;
     assert!(clamped < 1e3, "dynamic angular velocity {clamped}");
     assert_eq!(body(&simulation, kinematic).angular_velocity, clamped);
@@ -418,9 +418,10 @@ fn an_invalid_pose_after_the_step_names_the_entity_and_the_field() {
         Body::dynamic(),
         None,
     );
-    let panic =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| simulation.step())).unwrap_err();
-    let message = panic.downcast_ref::<String>().unwrap();
+    let Err(SimError::Panicked(panic)) = simulation.step() else {
+        panic!("the step must fail");
+    };
+    let message = panic.message;
     assert!(
         message.contains(&format!("entity {lost}")) && message.contains("position must be finite"),
         "{message}"
@@ -813,11 +814,8 @@ fn scene_at_the_load_limits(picker: &mut Picker) -> Simulation {
 fn random_scenes_at_the_load_limits_stay_finite() {
     for seed in 0..2000 {
         let mut simulation = scene_at_the_load_limits(&mut Picker(seed));
-        let stepped =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| step(&mut simulation, 30)));
-        if let Err(panic) = stepped {
-            let message = panic.downcast_ref::<String>().cloned().unwrap_or_default();
-            panic!("seed {seed}: {message}");
+        if let Err(error) = (0..30).try_for_each(|_| simulation.step()) {
+            panic!("seed {seed}: {error}");
         }
     }
 }
@@ -833,9 +831,10 @@ fn an_invalid_state_after_the_step_names_the_step_inputs() {
         .resource_mut::<PhysicsSettings>()
         .unwrap()
         .gravity = Vec2::new(f32::NAN, -10.0);
-    let panic =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| simulation.step())).unwrap_err();
-    let message = panic.downcast_ref::<String>().unwrap();
+    let Err(SimError::Panicked(panic)) = simulation.step() else {
+        panic!("the step must fail");
+    };
+    let message = panic.message;
     for expected in [
         format!("entity {lost}"),
         "position must be finite".to_string(),

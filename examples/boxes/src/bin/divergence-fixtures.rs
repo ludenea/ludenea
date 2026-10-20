@@ -52,7 +52,7 @@ fn run(scene: &str, moved: bool) -> (Trace, Vec<u8>) {
     };
     let mut snapshot = None;
     for tick in 1..=TICKS {
-        sim.step();
+        sim.step().expect("the boxes game steps");
         if tick == MOVED_AT {
             if moved {
                 let world = sim.world_mut();

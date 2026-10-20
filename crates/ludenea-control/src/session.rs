@@ -17,14 +17,13 @@
 //! branch tree.
 
 use std::collections::{BTreeSet, VecDeque};
-use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use ludenea_app::assets::{asset_file, parse_asset_file};
 use ludenea_app::path::PathSegment;
 use ludenea_app::prefab;
 use ludenea_app::replay::{Replay, ReplayError, keep_assets, load_replay, record_loaded_replay};
 use ludenea_app::{
-    AssetSource, AssetTexts, Edit, EditError, EditLog, EntityRef, InputLog, LoadAddress,
+    AssetSource, AssetTexts, Edit, EditError, EditLog, EntityRef, GamePanic, InputLog, LoadAddress,
     SceneError, SimError, Simulation, TimedEdit,
 };
 use ludenea_ecs::{AssetId, Entity, Snapshot, SnapshotError};
@@ -41,8 +40,11 @@ pub enum SessionError {
     InvalidTick { tick: u64, head: u64 },
     #[error("the session is resimulated up to tick {up_to} only; wait for resimulation to finish")]
     Resimulating { up_to: u64 },
-    #[error("the game panicked while running tick {tick}: {message}")]
-    Panicked { tick: u64, message: String },
+    /// Game code panicked while a tick ran or a replay was recorded or loaded: `From` turns
+    /// those panics of the simulation and its replays into this one. A type that panics on
+    /// an edit's value is an `Edit` failure, handled as any edit that does not apply.
+    #[error("{0}")]
+    Panicked(Box<GamePanic>),
     #[error("there is nothing to undo")]
     NothingToUndo,
     #[error("there is nothing to redo")]
@@ -59,7 +61,7 @@ pub enum SessionError {
     )]
     NotInScene(Entity),
     #[error(transparent)]
-    Sim(#[from] SimError),
+    Sim(SimError),
     #[error(transparent)]
     Scene(#[from] SceneError),
     #[error(transparent)]
@@ -95,7 +97,25 @@ pub enum SessionError {
     #[error("asset {0} is not a data asset; open a prefab as a document to edit it")]
     NotDataAsset(AssetId),
     #[error(transparent)]
-    Replay(#[from] ReplayError),
+    Replay(ReplayError),
+}
+
+impl From<SimError> for SessionError {
+    fn from(error: SimError) -> Self {
+        match error {
+            SimError::Panicked(panic) => SessionError::Panicked(panic),
+            error => SessionError::Sim(error),
+        }
+    }
+}
+
+impl From<ReplayError> for SessionError {
+    fn from(error: ReplayError) -> Self {
+        match error {
+            ReplayError::Panicked { panic, .. } => SessionError::Panicked(panic),
+            error => SessionError::Replay(error),
+        }
+    }
 }
 
 /// What the session edits: its scene text is a scene file or a prefab file.
@@ -438,8 +458,8 @@ impl Session {
 
     /// Records the replay of `branch`, the current one when `None`, over its recorded
     /// ticks. Recording runs on `sim`, which then comes back to the current tick, also when
-    /// the game panics (a stored branch may run ticks this build never ran). Returns the
-    /// recording, and the error of coming back when that failed after it ran.
+    /// the game panics in a tick (a stored branch may run ticks this build never ran).
+    /// Returns the recording, and the error of coming back when that failed after it ran.
     pub fn export_replay(
         &mut self,
         sim: &mut Simulation,
@@ -458,20 +478,13 @@ impl Session {
         let inputs_end = inputs.ticks.len() as u64;
         let edits_end = edits.last_tick().map_or(0, |tick| tick.saturating_add(1));
         let ticks = simulated.max(inputs_end).max(edits_end);
-        let record = || -> Result<Replay, SessionError> {
-            self.load_scene(sim, &self.scene, &self.assets)?;
-            sim.set_players(usize::from(inputs.players));
-            Ok(record_loaded_replay(sim, &inputs, &edits, ticks)?)
-        };
-        let recorded = catch_unwind(AssertUnwindSafe(record));
-        let tick = sim.tick();
+        let recorded = self
+            .load_scene(sim, &self.scene, &self.assets)
+            .and_then(|_| {
+                sim.set_players(usize::from(inputs.players));
+                Ok(record_loaded_replay(sim, &inputs, &edits, ticks)?)
+            });
         let reloaded = self.reload(sim).err();
-        let recorded = recorded.unwrap_or_else(|payload| {
-            Err(SessionError::Panicked {
-                tick,
-                message: panic_message(&*payload),
-            })
-        });
         (recorded, reloaded)
     }
 
@@ -1394,7 +1407,7 @@ impl Session {
             // The ticks up to a failing one were recorded on the way: the session goes
             // there. Otherwise it leaves the restored state for the current tick.
             let back = match &error {
-                SessionError::Panicked { tick: failed, .. } => *failed,
+                SessionError::Panicked(panic) => panic.tick,
                 _ => self.current,
             };
             // The error to report is the one that stopped the restore.
@@ -1926,24 +1939,21 @@ impl Session {
         self.head = inputs.max(self.edits.last_tick().unwrap_or(0));
     }
 
-    /// Steps once, recorded while introspection is on, catching a panic before the session
-    /// touches its logs: on a panic the session comes back to the current tick (see
-    /// `come_back`) and `Panicked` names the tick that failed.
+    /// Steps once, recorded while introspection is on, before the session touches its logs:
+    /// when the game panics, the session comes back to the current tick (see `come_back`)
+    /// and `Panicked` names the tick that failed.
     fn run_tick(&mut self, sim: &mut Simulation, input: Option<&[u8]>) -> Result<(), SessionError> {
-        let tick = sim.tick();
-        let introspection = &mut self.introspection;
-        let step = || match introspection {
+        let stepped = match &mut self.introspection {
             Some(introspection) => introspection.step(sim, input),
             None => sim.step_encoded(input),
         };
-        match catch_unwind(AssertUnwindSafe(step)) {
-            Ok(result) => Ok(result?),
-            Err(payload) => {
-                let message = panic_message(&*payload);
+        match stepped.map_err(SessionError::from) {
+            Err(SessionError::Panicked(panic)) => {
                 // The panic is the error to report, wherever coming back ends.
                 let _ = self.come_back(sim, self.current);
-                Err(SessionError::Panicked { tick, message })
+                Err(SessionError::Panicked(panic))
             }
+            stepped => stepped,
         }
     }
 
@@ -1960,7 +1970,7 @@ impl Session {
                 self.current = tick;
                 return Ok(());
             }
-            Err(error @ SessionError::Panicked { .. }) => return Err(error),
+            Err(error @ SessionError::Panicked(_)) => return Err(error),
             Err(error) => error,
         };
         self.replay_to(sim, 0)?;
@@ -2568,15 +2578,6 @@ fn override_value(
     let ron = sim.override_value_ron(address, component, value)?;
     (codec.decode_ron)(&ron).map_err(invalid)?;
     Ok(ron)
-}
-
-/// The message of a panic's payload.
-pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
-    payload
-        .downcast_ref::<&str>()
-        .map(|message| message.to_string())
-        .or_else(|| payload.downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "a panic without a message".to_string())
 }
 
 /// Whether an undo or redo failed for good: its entry is dropped. That includes removed

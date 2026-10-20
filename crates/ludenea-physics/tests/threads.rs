@@ -85,7 +85,7 @@ fn hashes(threads: usize) -> Vec<u64> {
     let mut simulation = scene(threads);
     (0..600)
         .map(|_| {
-            simulation.step();
+            simulation.step().unwrap();
             simulation.hash()
         })
         .collect()
@@ -129,7 +129,7 @@ fn row_hashes(threads: usize) -> (Vec<u64>, Simulation, Vec<Entity>) {
     let (mut simulation, entities) = row(threads);
     let hashes = (0..60)
         .map(|_| {
-            simulation.step();
+            simulation.step().unwrap();
             simulation.hash()
         })
         .collect();

@@ -4,14 +4,13 @@
 //! checkpoints.
 
 use std::collections::BTreeSet;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use ludenea_app::Simulation;
 use ludenea_debug_draw::DebugDrawFrame;
 use ludenea_ecs::Snapshot;
 
 use crate::branches::BranchId;
-use crate::session::{BranchRun, Session, SessionError, panic_message};
+use crate::session::{BranchRun, Session};
 
 /// Most ticks the compare simulation runs per `advance` while playing.
 pub const COMPARE_BUDGET_PLAYING: u32 = 4;
@@ -63,33 +62,14 @@ impl CompareRun {
     }
 
     /// Runs at most `budget` ticks of the session's compare branch toward `tick`. Fails on
-    /// a panic of the game, a tick that cannot run, or a fresh tick whose hash differs from
-    /// the recorded one; the compare simulation is then unusable.
+    /// a panic of the game in a tick or an edit, a tick that cannot run, or a fresh tick
+    /// whose hash differs from the recorded one; the compare simulation is then unusable.
+    /// Any other panic unwinds to the host's boundary, which builds it again.
     pub fn follow(
         &mut self,
         session: &Session,
         tick: u64,
         budget: u32,
-    ) -> Result<CompareState, String> {
-        let mut running = self.sim.tick();
-        let followed = catch_unwind(AssertUnwindSafe(|| {
-            self.follow_within(session, tick, budget, &mut running)
-        }));
-        followed.unwrap_or_else(|payload| {
-            Err(SessionError::Panicked {
-                tick: running,
-                message: panic_message(&*payload),
-            }
-            .to_string())
-        })
-    }
-
-    fn follow_within(
-        &mut self,
-        session: &Session,
-        tick: u64,
-        budget: u32,
-        running: &mut u64,
     ) -> Result<CompareState, String> {
         self.refresh(session);
         let Self {
@@ -129,7 +109,6 @@ impl CompareRun {
             if now >= tick {
                 break;
             }
-            *running = now;
             sim.step_encoded(run.inputs.tick(now))
                 .map_err(|error| error.to_string())?;
             now += 1;
@@ -163,7 +142,13 @@ impl CompareRun {
         let run = self.run.as_ref().expect("refreshed");
         Ok(match self.at {
             _ if tick > run.end() => (DebugDrawFrame::default(), tick, false),
-            Some(at) => (caught_draw(&self.sim, layers)?, at, at != tick),
+            Some(at) => (
+                self.sim
+                    .debug_draw(layers)
+                    .map_err(|error| error.to_string())?,
+                at,
+                at != tick,
+            ),
             None => (DebugDrawFrame::default(), tick, true),
         })
     }
@@ -191,19 +176,6 @@ impl CompareRun {
         }
         self.run = Some(run);
     }
-}
-
-/// What the game's drawers draw for `layers`, a panic of theirs as its message.
-pub(crate) fn caught_draw(
-    sim: &Simulation,
-    layers: &BTreeSet<String>,
-) -> Result<DebugDrawFrame, String> {
-    catch_unwind(AssertUnwindSafe(|| sim.debug_draw(layers))).map_err(|payload| {
-        format!(
-            "the game panicked while drawing debug layers: {}",
-            panic_message(&*payload)
-        )
-    })
 }
 
 /// Loads the session's scene into `sim` and restores `run`'s checkpoint `snapshot` at

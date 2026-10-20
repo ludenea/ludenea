@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use ludenea_app::replay::{Replay, ReplayOutcome, play_replay, record_replay};
+use ludenea_app::replay::{Replay, ReplayError, ReplayOutcome, play_replay, record_replay};
 use ludenea_app::trace::{TRACE_VERSION, Trace, compare_traces, inputs_hash, scene_hash};
 use ludenea_app::{App, EditLog, InputLog, NamedAssetTexts, Parallel, SimError, Simulation};
 use ludenea_control::{Bytes, Command, Host, InProcess, PROTOCOL_VERSION, Reply, Transport};
@@ -68,7 +68,7 @@ impl Run {
     }
 
     /// Runs `ticks` ticks from the scene load, recording them as a replay.
-    fn record(&mut self, ticks: u64) -> Result<Replay, String> {
+    fn record(&mut self, ticks: u64) -> Result<Replay, ReplayError> {
         record_replay(
             &mut self.sim,
             &self.scene,
@@ -77,7 +77,6 @@ impl Run {
             &self.edits,
             ticks,
         )
-        .map_err(|error| error.to_string())
     }
 }
 
@@ -99,7 +98,7 @@ fn thread_count(value: &str) -> Result<usize, Box<dyn std::error::Error + Send +
 
 /// Plays `replay` against its hashes and tells whether they all match; on the first
 /// mismatch reports it and writes the snapshots of that tick and the one before into
-/// `dump_dir`.
+/// `dump_dir`, as for a panic of the game (see `failure`).
 fn play(
     app: fn() -> App,
     replay: &Replay,
@@ -108,7 +107,8 @@ fn play(
     out: &mut dyn Write,
 ) -> Result<bool, String> {
     let mut sim = simulation(app, threads)?;
-    let report = play_replay(&mut sim, replay, |_, _| {}).map_err(|error| error.to_string())?;
+    let report =
+        play_replay(&mut sim, replay, |_, _| {}).map_err(|error| failure(error, dump_dir))?;
     if report.fingerprint_differs {
         say(out, "note: recorded by a build with other game types")?;
     }
@@ -136,6 +136,23 @@ fn play(
     }
     say(out, format_args!("wrote {}", paths.join(" and ")))?;
     Ok(false)
+}
+
+/// The message of a failed recording or replay. For a panic of the game while a tick ran,
+/// also writes the snapshot of the state that tick ran from into `dump_dir`.
+fn failure(error: ReplayError, dump_dir: &Path) -> String {
+    let ReplayError::Panicked {
+        panic,
+        snapshot: Some(bytes),
+    } = error
+    else {
+        return error.to_string();
+    };
+    let path = dump_dir.join(format!("tick-{}.snap", panic.tick));
+    match write(&path, &bytes) {
+        Ok(()) => format!("{panic}; wrote {}", path.display()),
+        Err(error) => format!("{panic}; {error}"),
+    }
 }
 
 fn mismatch(out: &mut dyn Write, tick: u64, expected: u64, got: u64) -> Result<(), String> {
@@ -233,7 +250,9 @@ pub struct DiffArgs {
 
 pub fn run(app: fn() -> App, args: &RunArgs, out: &mut dyn Write) -> Outcome {
     let mut run = Run::read(app, &args.files, args.inputs.as_deref(), args.threads)?;
-    let replay = run.record(u64::from(args.ticks))?;
+    let replay = run
+        .record(u64::from(args.ticks))
+        .map_err(|error| error.to_string())?;
     if let Some(path) = &args.trace {
         let trace = Trace {
             version: TRACE_VERSION,
@@ -295,7 +314,9 @@ pub fn verify(app: fn() -> App, args: &VerifyArgs, out: &mut dyn Write) -> Outco
         return Ok(2);
     }
     let ticks = golden.hashes.len().saturating_sub(1) as u64;
-    let mut replay = run.record(ticks)?;
+    let mut replay = run
+        .record(ticks)
+        .map_err(|error| failure(error, dump_dir))?;
     let Some(tick) = compare_traces(&golden.hashes, &replay.hashes).first_divergent else {
         return matched(out, golden.hashes.len());
     };

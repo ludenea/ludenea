@@ -1,19 +1,18 @@
 use std::collections::BTreeSet;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use ludenea_app::prefab;
 use ludenea_app::replay::Replay;
 use ludenea_app::trace::{Trace, compare_traces};
 use ludenea_app::{
-    App, AppError, AssetTexts, Edit, EditError, EditLog, InputLog, RawInput, SceneError, SimError,
-    Simulation, ValueKind,
+    App, AppError, AssetTexts, Edit, EditError, EditLog, GamePanic, InputLog, RawInput, SceneError,
+    SimError, Simulation, ValueKind, catch_panic,
 };
 
 use ludenea_debug_draw::DebugDrawFrame;
 use ludenea_ecs::{AssetId, Entity, EntityFilter, FilterError, Snapshot};
 use serde_json::Value as JsonValue;
 
-use crate::compare::{COMPARE_BUDGET_PAUSED, COMPARE_BUDGET_PLAYING, CompareRun, caught_draw};
+use crate::compare::{COMPARE_BUDGET_PAUSED, COMPARE_BUDGET_PLAYING, CompareRun};
 use crate::divergence::DivergenceRun;
 use crate::json::{from_wire, to_wire};
 use crate::pacer::Pacer;
@@ -24,7 +23,6 @@ use crate::protocol::{
 };
 use crate::session::{
     Document, Resimulation, SceneChange, Session, SessionError, SessionExport, Timeline,
-    panic_message,
 };
 use crate::subscriptions::{INTROSPECTION_TICKS, Subscriptions, TickRecord};
 use crate::values::{asset_json, asset_value, entity_values, resource_values, value_schema};
@@ -60,6 +58,10 @@ pub struct Host {
     divergence_subscribed: bool,
     /// Whether a requested report is not complete yet: it runs until it is.
     divergence_asked: bool,
+    /// Why the session could not come back to a consistent tick after the game panicked:
+    /// until a new session loads, commands that change the state are refused with it and
+    /// time does not pass.
+    inconsistent: Option<String>,
 }
 
 impl Host {
@@ -86,6 +88,7 @@ impl Host {
             live: None,
             subscriptions: Subscriptions::default(),
             events: Vec::new(),
+            inconsistent: None,
         })
     }
 
@@ -122,7 +125,26 @@ impl Host {
         self.simulation.tick()
     }
 
+    /// Executes `command`. When game code panics where nothing reports it more precisely,
+    /// the reply is `SystemPanicked` and the session comes back (see `recover`).
     pub fn handle(&mut self, command: Command) -> Result<Reply, ProtocolError> {
+        if let Some(reason) = &self.inconsistent
+            && changes_state(&command)
+            && !matches!(
+                command,
+                Command::LoadScene { .. }
+                    | Command::LoadSession { .. }
+                    | Command::LoadReplay { .. }
+            )
+        {
+            return Err(ProtocolError::new(ErrorCode::SystemPanicked, reason));
+        }
+        let tick = self.simulation.tick();
+        catch_panic(tick, || self.handle_unguarded(command))
+            .unwrap_or_else(|panic| Err(self.recover(panic)))
+    }
+
+    fn handle_unguarded(&mut self, command: Command) -> Result<Reply, ProtocolError> {
         let before = changes_state(&command).then(|| self.state());
         let result = self.execute(command);
         if let Some(before) = before {
@@ -140,8 +162,20 @@ impl Host {
     }
 
     /// Runs the ticks due after `elapsed_seconds` while playing, and a resimulation budget
-    /// while the recorded future is stale. Returns the events since the last call.
+    /// while the recorded future is stale. Returns the events since the last call. When game
+    /// code panics where nothing reports it more precisely, play pauses and the session
+    /// comes back (see `recover`).
     pub fn advance(&mut self, elapsed_seconds: f64) -> Vec<Event> {
+        if self.inconsistent.is_none() {
+            let tick = self.simulation.tick();
+            if let Err(panic) = catch_panic(tick, || self.advance_unguarded(elapsed_seconds)) {
+                self.recover(panic);
+            }
+        }
+        std::mem::take(&mut self.events)
+    }
+
+    fn advance_unguarded(&mut self, elapsed_seconds: f64) {
         let resimulating = self.session.timeline().resimulating;
         if resimulating {
             // Resimulation changes the state shown only by moving to another tick (back
@@ -193,7 +227,44 @@ impl Host {
         self.follow_divergence();
         self.report_changes();
         self.report_timeline();
-        std::mem::take(&mut self.events)
+    }
+
+    /// Brings the session back after game code panicked outside the places that report a
+    /// panic themselves (a scene load, a type's serialization), naming the tick the panic
+    /// left the simulation at: the world may be torn, so the session reloads to its current
+    /// tick, and the compare and divergence simulations, which may be what panicked, are
+    /// built again on next use. Writes the error to the console, pauses with `Panicked`, and
+    /// returns it. When the session cannot come back, the host refuses to go on until a new
+    /// session loads.
+    fn recover(&mut self, mut panic: Box<GamePanic>) -> ProtocolError {
+        panic.tick = self.simulation.tick();
+        self.compare = None;
+        self.ghost_reported = None;
+        self.divergence = None;
+        let current = self.session.timeline().current;
+        let message = match catch_panic(panic.tick, || self.session.reload(&mut self.simulation)) {
+            Ok(Ok(())) => format!("{panic}; the session is back at tick {current}"),
+            Ok(Err(error)) => self.inconsistent_after(&panic, &error),
+            Err(again) => self.inconsistent_after(&panic, &again),
+        };
+        self.console(ConsoleLevel::Error, message.clone());
+        self.pause(PauseReason::Panicked {
+            tick: panic.tick,
+            message: panic.detail(),
+        });
+        self.report_timeline();
+        ProtocolError::new(ErrorCode::SystemPanicked, message)
+    }
+
+    /// Marks the session as inconsistent after `panic`, as `reason` stopped it from coming
+    /// back, and returns why.
+    fn inconsistent_after(&mut self, panic: &GamePanic, reason: &dyn std::fmt::Display) -> String {
+        let message = format!(
+            "{panic}; the session cannot come back to a consistent tick: {reason}; load the \
+             scene or the session again"
+        );
+        self.inconsistent = Some(message.clone());
+        message
     }
 
     /// Runs the compare simulation toward the current tick while the ghost is subscribed;
@@ -606,10 +677,7 @@ impl Host {
                 Ok(Reply::Done)
             }
             Command::NewAssetValue { asset } => Ok(Reply::Text {
-                text: sim
-                    .world()
-                    .default_asset_ron(&asset)
-                    .map_err(|e| ProtocolError::new(ErrorCode::InvalidCommand, e))?,
+                text: sim.default_asset_ron(&asset).map_err(|e| sim_error(&e))?,
             }),
             Command::SwitchBranch { branch } => {
                 self.session
@@ -783,21 +851,12 @@ impl Host {
             }
             Command::GetDebugDraw { layers } => Ok(Reply::DebugDraw {
                 tick: sim.tick(),
-                frame: caught_draw(sim, &layers.into_iter().collect())
-                    .map_err(|message| ProtocolError::new(ErrorCode::SystemPanicked, message))?,
+                frame: sim
+                    .debug_draw(&layers.into_iter().collect())
+                    .map_err(|e| sim_error(&e))?,
             }),
             Command::Pick { point } => Ok(Reply::Picked {
-                entities: catch_unwind(AssertUnwindSafe(|| sim.pick(point))).map_err(
-                    |payload| {
-                        ProtocolError::new(
-                            ErrorCode::SystemPanicked,
-                            format!(
-                                "the game panicked while picking: {}",
-                                panic_message(&*payload)
-                            ),
-                        )
-                    },
-                )?,
+                entities: sim.pick(point).map_err(|e| sim_error(&e))?,
             }),
             Command::SetCompareBranch { branch } => {
                 self.session
@@ -1169,22 +1228,18 @@ impl Host {
         let mut whole = to_wire(current, &schema);
         set_at_path(&mut whole, path, value)
             .map_err(|reason| ProtocolError::new(ErrorCode::InvalidPath, reason))?;
-        let invalid = |reason| {
+        let value = from_wire(whole, &schema).map_err(|reason| {
             edit_error(&EditError::InvalidValue {
                 name: asset.clone(),
                 reason,
             })
-        };
-        let codec = self
-            .simulation
-            .world()
-            .asset_codec(&asset)
-            .expect("a loaded asset's type");
-        let decoded =
-            (codec.from_json)(from_wire(whole, &schema).map_err(invalid)?).map_err(invalid)?;
+        })?;
         let edit = Edit::SetAsset {
             id,
-            value: (codec.encode)(&*decoded),
+            value: self
+                .simulation
+                .encode_asset_json(&asset, value)
+                .map_err(|e| edit_error(&e))?,
         };
         self.session
             .edit(&mut self.simulation, edit)
@@ -1204,6 +1259,7 @@ impl Host {
         // Records of the old session never match the new one's hashes, unless it is the same.
         session.introspection = self.session.introspection.take();
         self.session = session;
+        self.inconsistent = None;
         if self.playing {
             self.pause(PauseReason::User);
         }
@@ -1225,7 +1281,7 @@ impl Host {
             let tick = self.simulation.tick();
             self.session.step(&mut self.simulation, None).map_err(|e| {
                 // A panic message names its tick already.
-                let panicked = matches!(e, SessionError::Panicked { .. });
+                let panicked = matches!(e, SessionError::Panicked(_));
                 let mut error = self.fail(e);
                 error.message = if panicked {
                     format!("{}; earlier ticks stay applied", error.message)
@@ -1297,9 +1353,12 @@ impl Host {
     /// pauses with `Panicked`.
     fn fail(&mut self, error: SessionError) -> ProtocolError {
         let protocol = session_error(&error);
-        if let SessionError::Panicked { tick, message } = error {
+        if let SessionError::Panicked(panic) = error {
             self.console(ConsoleLevel::Error, protocol.message.clone());
-            self.pause(PauseReason::Panicked { tick, message });
+            self.pause(PauseReason::Panicked {
+                tick: panic.tick,
+                message: panic.detail(),
+            });
         }
         protocol
     }
@@ -1307,7 +1366,7 @@ impl Host {
     /// A failure with no command to reply to: every kind is written to the console.
     /// Returns its message.
     fn fail_unattended(&mut self, error: SessionError) -> String {
-        let panicked = matches!(error, SessionError::Panicked { .. });
+        let panicked = matches!(error, SessionError::Panicked(_));
         let protocol = self.fail(error);
         if !panicked {
             self.console(ConsoleLevel::Error, protocol.message.clone());
@@ -1461,7 +1520,7 @@ fn session_error(error: &SessionError) -> ProtocolError {
     let code = match error {
         SessionError::InvalidTick { .. } => ErrorCode::InvalidTick,
         SessionError::Resimulating { .. } => ErrorCode::Resimulating,
-        SessionError::Panicked { .. } => ErrorCode::SystemPanicked,
+        SessionError::Panicked(_) => ErrorCode::SystemPanicked,
         SessionError::NothingToUndo => ErrorCode::NothingToUndo,
         SessionError::NothingToRedo => ErrorCode::NothingToRedo,
         SessionError::Undo(_)
@@ -1493,6 +1552,7 @@ fn edit_error(error: &EditError) -> ProtocolError {
         | EditError::InvalidValue { .. }
         | EditError::MissingAsset(_)
         | EditError::NotGroupable => ErrorCode::InvalidEdit,
+        EditError::Panicked(_) => ErrorCode::SystemPanicked,
     };
     ProtocolError::new(code, error)
 }
@@ -1538,7 +1598,15 @@ fn encode_value(
 fn sim_error(error: &SimError) -> ProtocolError {
     let code = match error {
         SimError::NoInputMapping => ErrorCode::NoInputMapping,
-        _ => ErrorCode::InvalidInputs,
+        SimError::Panicked(_) => ErrorCode::SystemPanicked,
+        SimError::AssetDefault(_) => ErrorCode::InvalidCommand,
+        SimError::NoInputType
+        | SimError::InputTypeMismatch { .. }
+        | SimError::InputDecode(_)
+        | SimError::InputLogVersion { .. }
+        | SimError::EditLogVersion { .. }
+        | SimError::EditLogDecode(_)
+        | SimError::NoPlayers => ErrorCode::InvalidInputs,
     };
     ProtocolError::new(code, error)
 }
