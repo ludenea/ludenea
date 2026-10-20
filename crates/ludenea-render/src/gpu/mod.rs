@@ -8,7 +8,7 @@ mod sprites;
 mod tilemaps;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
 
 use ludenea_app::meta::Filter;
 use ludenea_draw::Color;
@@ -19,7 +19,8 @@ use wgpu::util::DeviceExt;
 
 use crate::atlas::{Atlas, Region};
 use crate::camera::{DEFAULT_CAMERA, fit, world_to_clip};
-use sprites::{BLANK, Sample};
+use crate::interpolate::interpolate;
+use sprites::{BLANK, INSTANCE_FLOATS, Sample};
 
 pub use device::headless;
 
@@ -40,6 +41,7 @@ pub struct Size {
 }
 
 /// The frames to draw: `current`, and the one before it with how far between them to draw.
+/// With `previous`, what is drawn is `interpolate(previous, current, alpha)`.
 #[derive(Clone, Copy, Debug)]
 pub struct Frames<'a> {
     pub previous: Option<&'a RenderFrame>,
@@ -86,8 +88,15 @@ pub enum RenderError {
 
 /// Draws render frames with one device. Pages come from `set_atlas`; until then, and for any
 /// sprite whose region is not in the atlas, a magenta placeholder is drawn.
+///
+/// The renderer handles its device's errors: an error the device raises outside an error
+/// scope is returned by the next `set_atlas`, `draw` or `render_rgba` (the one that caused
+/// it, when it did) as `RenderError::Gpu`. Once the device is lost, every call returns
+/// `RenderError::DeviceLost` without touching it, and the caller makes a new renderer on a
+/// new device.
 pub struct Renderer {
     device: wgpu::Device,
+    faults: Arc<Mutex<Faults>>,
     queue: wgpu::Queue,
     format: wgpu::TextureFormat,
     layout: wgpu::BindGroupLayout,
@@ -105,6 +114,18 @@ pub struct Renderer {
     tilemaps: tilemaps::Cache,
 }
 
+/// What the device reported through its callbacks, waiting for the next call to return it.
+#[derive(Default)]
+struct Faults {
+    errors: Vec<String>,
+    lost: Option<String>,
+}
+
+/// The faults, even if a callback panicked while holding them.
+fn lock(faults: &Mutex<Faults>) -> MutexGuard<'_, Faults> {
+    faults.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 #[derive(Clone)]
 struct Pipelines {
     quads: wgpu::RenderPipeline,
@@ -118,7 +139,21 @@ struct Page {
 
 impl Renderer {
     /// A renderer drawing into targets of `format`.
+    /// It replaces the device's uncaptured error handler and its device lost callback.
     pub fn new(device: wgpu::Device, queue: wgpu::Queue, format: wgpu::TextureFormat) -> Self {
+        let faults = Arc::new(Mutex::new(Faults::default()));
+        let sink = Arc::clone(&faults);
+        device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
+            lock(&sink).errors.push(error.to_string());
+        }));
+        let sink = Arc::clone(&faults);
+        device.set_device_lost_callback(move |reason, message| {
+            lock(&sink).lost = Some(if message.is_empty() {
+                format!("{reason:?}")
+            } else {
+                message
+            });
+        });
         let layout = sprites::page_layout(&device);
         let view_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("view"),
@@ -149,6 +184,7 @@ impl Renderer {
         let blank = bind_group(&device, &layout, &white, &samplers[0]);
         Renderer {
             device,
+            faults,
             queue,
             format,
             layout,
@@ -171,6 +207,10 @@ impl Renderer {
     /// `max_page_side` is refused, and so is a page whose pixels do not match its size; the
     /// previous atlas then stays.
     pub fn set_atlas(&mut self, atlas: &Atlas) -> Result<(), RenderError> {
+        self.guarded("set_atlas", |renderer| renderer.replace_atlas(atlas))
+    }
+
+    fn replace_atlas(&mut self, atlas: &Atlas) -> Result<(), RenderError> {
         let allowed = self.max_page_side();
         for page in &atlas.pages {
             let side = page.width.max(page.height);
@@ -221,7 +261,8 @@ impl Renderer {
         Ok(())
     }
 
-    /// Draws `frames.current` into `target`, a view of `size` pixels in the renderer's format.
+    /// Draws `frames` into `target`, a view of `size` pixels in the renderer's format. A size
+    /// past `max_texture_dimension_2d` is refused.
     pub fn draw(
         &mut self,
         target: &wgpu::TextureView,
@@ -229,12 +270,73 @@ impl Renderer {
         frames: Frames<'_>,
         overlay: &Overlay,
     ) -> Result<DrawReport, RenderError> {
-        self.encode(target, self.format, size, frames, overlay)
+        self.guarded("draw", |renderer| {
+            renderer.fits("draw", size)?;
+            renderer.encode(target, renderer.format, size, frames, overlay)
+        })
     }
 
-    /// Draws `frames.current` offscreen and reads it back: `size.width * 4` bytes of RGBA per
-    /// row, tightly packed, top row first. A target with no pixels gives no bytes.
+    /// Draws `frames` offscreen and reads it back: `size.width * 4` bytes of RGBA per row,
+    /// tightly packed, top row first. A target with no pixels gives no bytes; one past
+    /// `max_texture_dimension_2d`, or whose read-back is past `max_buffer_size`, is refused.
     pub fn render_rgba(
+        &mut self,
+        size: Size,
+        frames: Frames<'_>,
+        overlay: &Overlay,
+    ) -> Result<Vec<u8>, RenderError> {
+        self.guarded("render_rgba", |renderer| {
+            renderer.read_back(size, frames, overlay)
+        })
+    }
+
+    /// Runs `run` between two checks of the device's faults, which take precedence over its
+    /// result: the loss of the device, or the errors it raised before or during `run`.
+    fn guarded<T>(
+        &mut self,
+        operation: &'static str,
+        run: impl FnOnce(&mut Self) -> Result<T, RenderError>,
+    ) -> Result<T, RenderError> {
+        self.faults(operation)?;
+        let result = run(self);
+        self.faults(operation)?;
+        result
+    }
+
+    /// The device's loss, or the errors it raised since the last call, taken.
+    fn faults(&self, operation: &'static str) -> Result<(), RenderError> {
+        // A non-blocking poll runs the callbacks the device has pending, its loss among them.
+        // Without a wait or a submission index, it has no error of its own to return.
+        let _ = self.device.poll(wgpu::PollType::Poll);
+        let mut faults = lock(&self.faults);
+        if let Some(message) = &faults.lost {
+            return Err(RenderError::DeviceLost(message.clone()));
+        }
+        if faults.errors.is_empty() {
+            return Ok(());
+        }
+        Err(RenderError::Gpu {
+            operation,
+            message: std::mem::take(&mut faults.errors).join("; "),
+        })
+    }
+
+    /// Refuses a target wider or taller than `max_texture_dimension_2d`.
+    fn fits(&self, operation: &'static str, size: Size) -> Result<(), RenderError> {
+        let allowed = self.device.limits().max_texture_dimension_2d;
+        let side = size.width.max(size.height);
+        if side > allowed {
+            return Err(RenderError::Limit {
+                operation,
+                limit: "max_texture_dimension_2d",
+                requested: u64::from(side),
+                allowed: u64::from(allowed),
+            });
+        }
+        Ok(())
+    }
+
+    fn read_back(
         &mut self,
         size: Size,
         frames: Frames<'_>,
@@ -243,16 +345,7 @@ impl Renderer {
         if size.width == 0 || size.height == 0 {
             return Ok(Vec::new());
         }
-        let allowed = self.device.limits().max_texture_dimension_2d;
-        let side = size.width.max(size.height);
-        if side > allowed {
-            return Err(RenderError::Limit {
-                operation: "render_rgba",
-                limit: "max_texture_dimension_2d",
-                requested: u64::from(side),
-                allowed: u64::from(allowed),
-            });
-        }
+        self.fits("render_rgba", size)?;
         // Rows are copied out padded to the copy alignment, then packed. The side fits the
         // texture limit, so a padded row fits a u32.
         let row = size.width * 4;
@@ -349,7 +442,14 @@ impl Renderer {
         frames: Frames<'_>,
         overlay: &Overlay,
     ) -> Result<DrawReport, RenderError> {
-        let frame = frames.current;
+        let interpolated;
+        let frame = match frames.previous {
+            Some(previous) => {
+                interpolated = interpolate(previous, frames.current, frames.alpha);
+                &interpolated
+            }
+            None => frames.current,
+        };
         let camera = overlay
             .camera
             .as_ref()
@@ -358,8 +458,13 @@ impl Renderer {
         let aspect = size.width.max(1) as f32 / size.height.max(1) as f32;
         let visible = fit(camera.view, aspect);
         let pages: Vec<(u32, u32)> = self.pages.iter().map(|page| page.size).collect();
-        self.tilemaps
-            .update(&self.device, &frame.tilemaps, &self.regions, &pages);
+        self.tilemaps.update(
+            &self.device,
+            &self.queue,
+            &frame.tilemaps,
+            &self.regions,
+            &pages,
+        );
 
         // Tilemaps before sprites, so a stable sort draws a tilemap first on a tie.
         let mut pieces: Vec<(u16, i32, Entity, Piece<'_>)> = frame
@@ -375,40 +480,49 @@ impl Renderer {
             .collect();
         pieces.sort_by_key(|(layer, order, entity, _)| (*layer, *order, *entity));
 
-        // One view per layer drawn, then the debug draw's (parallax 1).
+        // One view per layer of sprites drawn and one per tilemap (its layer's, moved to the
+        // tilemap's position, so its chunks do not depend on it), then the debug draw's.
         let mut views: Vec<[f32; 4]> = Vec::new();
         let mut slots: BTreeMap<u16, u32> = BTreeMap::new();
         let mut draws: Vec<Draw> = Vec::new();
         let mut instances: Vec<sprites::Instance> = Vec::new();
+        // Sprite instances go in buffers of at most `per_buffer`, below `max_buffer_size`.
+        let per_buffer = self.per_buffer(INSTANCE_BYTES)?;
         let mut missing = Vec::new();
+        let layer_view = |layer: u16| {
+            let parallax = frame
+                .layers
+                .get(usize::from(layer))
+                .map_or(1.0, |info| info.parallax);
+            view(camera, visible, parallax)
+        };
         for (layer, _, _, piece) in pieces {
-            let slot = *slots.entry(layer).or_insert_with(|| {
-                let parallax = frame
-                    .layers
-                    .get(usize::from(layer))
-                    .map_or(1.0, |info| info.parallax);
-                views.push(view(camera, visible, parallax));
-                views.len() as u32 - 1
-            });
             match piece {
                 Piece::Sprite(item) => {
+                    let slot = *slots.entry(layer).or_insert_with(|| {
+                        views.push(layer_view(layer));
+                        views.len() as u32 - 1
+                    });
                     let (sample, instance) = sprites::instance(item, &self.regions, &pages);
                     let sample = sample.unwrap_or_else(|| {
                         missing.push((item.entity, item.texture, item.frame));
                         BLANK
                     });
-                    let index = instances.len() as u32;
+                    let part = instances.len() / per_buffer;
+                    let index = (instances.len() % per_buffer) as u32;
                     instances.push(instance);
                     match draws.last_mut() {
                         Some(Draw {
                             slot: last_slot,
-                            source: Source::Sprites,
+                            source: Source::Sprites(last_part),
                             sample: last,
                             instances: run,
-                        }) if *last_slot == slot && *last == sample => run.end = index + 1,
+                        }) if *last_slot == slot && *last_part == part && *last == sample => {
+                            run.end = index + 1
+                        }
                         _ => draws.push(Draw {
                             slot,
-                            source: Source::Sprites,
+                            source: Source::Sprites(part),
                             sample,
                             instances: index..index + 1,
                         }),
@@ -418,6 +532,8 @@ impl Renderer {
                     let Some(built) = self.tilemaps.get(item.entity) else {
                         continue;
                     };
+                    views.push(moved(layer_view(layer), item.position));
+                    let slot = views.len() as u32 - 1;
                     missing.extend_from_slice(&built.missing);
                     for (chunk_index, chunk) in built.chunks.iter().enumerate() {
                         for (sample, run) in &chunk.batches {
@@ -435,25 +551,40 @@ impl Renderer {
         views.push(view(camera, visible, 1.0));
         let debug_slot = views.len() as u32 - 1;
 
-        let instance_bytes: Vec<u8> = instances
-            .iter()
-            .flatten()
-            .flat_map(|value| value.to_le_bytes())
-            .collect();
-        let instances = (!instance_bytes.is_empty())
-            .then(|| {
-                self.buffer(
+        let instances: Vec<wgpu::Buffer> = instances
+            .chunks(per_buffer)
+            .map(|part| {
+                let bytes: Vec<u8> = part
+                    .iter()
+                    .flatten()
+                    .flat_map(|value| value.to_le_bytes())
+                    .collect();
+                fill(
+                    &self.device,
+                    &self.queue,
                     "sprite instances",
-                    &instance_bytes,
+                    &bytes,
                     wgpu::BufferUsages::VERTEX,
                 )
             })
-            .transpose()?;
+            .collect();
         let line_width = debug::LINE_PIXELS * visible.x / size.width.max(1) as f32;
         let debug_bytes = debug::vertices(&frame.debug, overlay, line_width);
-        let debug_vertices = (!debug_bytes.is_empty())
-            .then(|| self.buffer("debug draw", &debug_bytes, wgpu::BufferUsages::VERTEX))
-            .transpose()?;
+        // Whole triangles per buffer, below `max_buffer_size`.
+        let triangle = 3 * debug::VERTEX_BYTES;
+        let debug_vertices: Vec<(wgpu::Buffer, u32)> = debug_bytes
+            .chunks(self.per_buffer(triangle)?.saturating_mul(triangle))
+            .map(|part| {
+                let buffer = fill(
+                    &self.device,
+                    &self.queue,
+                    "debug draw",
+                    part,
+                    wgpu::BufferUsages::VERTEX,
+                );
+                (buffer, debug::count(part))
+            })
+            .collect();
 
         // Each view on its own aligned slot, picked by a dynamic offset.
         let stride = self
@@ -504,7 +635,7 @@ impl Renderer {
             }
             for draw in &draws {
                 let buffer = match draw.source {
-                    Source::Sprites => instances.as_ref(),
+                    Source::Sprites(part) => instances.get(part),
                     Source::Chunk(entity, chunk) => self
                         .tilemaps
                         .get(entity)
@@ -529,11 +660,13 @@ impl Renderer {
                 pass.set_bind_group(1, &view_group, &[draw.slot * stride]);
                 pass.draw(0..4, draw.instances.clone());
             }
-            if let Some(vertices) = &debug_vertices {
+            if !debug_vertices.is_empty() {
                 pass.set_pipeline(&pipelines.debug);
-                pass.set_vertex_buffer(0, vertices.slice(..));
                 pass.set_bind_group(0, &view_group, &[debug_slot * stride]);
-                pass.draw(0..debug::count(&debug_bytes), 0..1);
+            }
+            for (vertices, count) in &debug_vertices {
+                pass.set_vertex_buffer(0, vertices.slice(..));
+                pass.draw(0..*count, 0..1);
             }
         }
         self.queue.submit([encoder.finish()]);
@@ -556,13 +689,21 @@ impl Renderer {
                 allowed,
             });
         }
-        Ok(self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(label),
-                contents: bytes,
-                usage,
-            }))
+        Ok(fill(&self.device, &self.queue, label, bytes, usage))
+    }
+
+    /// How many items of `unit` bytes fit in one buffer; refused if not even one does.
+    fn per_buffer(&self, unit: usize) -> Result<usize, RenderError> {
+        let allowed = self.device.limits().max_buffer_size;
+        match usize::try_from(allowed / unit as u64).unwrap_or(usize::MAX) {
+            0 => Err(RenderError::Limit {
+                operation: "draw",
+                limit: "max_buffer_size",
+                requested: unit as u64,
+                allowed,
+            }),
+            count => Ok(count),
+        }
     }
 
     fn pipelines(&mut self, format: wgpu::TextureFormat) -> &Pipelines {
@@ -584,10 +725,24 @@ impl Renderer {
 /// The bytes of one view: world to clip scale, then translation, as `f32`.
 const VIEW_BYTES: u64 = 16;
 
+/// The bytes of one sprite or tile instance.
+const INSTANCE_BYTES: usize = INSTANCE_FLOATS * 4;
+
 /// The view of a layer of `parallax`: `world * scale + translate` is `world_to_clip`.
 fn view(camera: &CameraView, visible: Vec2, parallax: f32) -> [f32; 4] {
     let translate = world_to_clip(Vec2::ZERO, camera.clone(), visible, parallax);
     [2.0 / visible.x, 2.0 / visible.y, translate[0], translate[1]]
+}
+
+/// `view` for geometry placed relative to `origin`: `(local + origin) * scale + translate`.
+fn moved(view: [f32; 4], origin: Vec2) -> [f32; 4] {
+    let [scale_x, scale_y, x, y] = view;
+    [
+        scale_x,
+        scale_y,
+        x + origin.x * scale_x,
+        y + origin.y * scale_y,
+    ]
 }
 
 /// A tilemap or a sprite, in draw order.
@@ -606,8 +761,28 @@ struct Draw {
 }
 
 enum Source {
-    Sprites,
+    /// One of the frame's sprite instance buffers.
+    Sprites(usize),
     Chunk(Entity, usize),
+}
+
+/// A new buffer holding `bytes`, a multiple of 4 bytes long. It is written through the queue,
+/// so a buffer the device refuses raises an error instead of panicking.
+fn fill(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &'static str,
+    bytes: &[u8],
+    usage: wgpu::BufferUsages,
+) -> wgpu::Buffer {
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: bytes.len() as u64,
+        usage: usage | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(&buffer, 0, bytes);
+    buffer
 }
 
 /// A texture of `width` by `height` RGBA pixels, row by row from the top-left.

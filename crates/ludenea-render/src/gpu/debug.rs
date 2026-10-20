@@ -12,6 +12,9 @@ pub(super) const LINE_PIXELS: f32 = 1.5;
 /// World position then RGBA color, all `f32`.
 const VERTEX_FLOATS: usize = 6;
 
+/// The bytes of one vertex.
+pub(super) const VERTEX_BYTES: usize = VERTEX_FLOATS * 4;
+
 const SHADER: &str = include_str!("shaders/debug.wgsl");
 
 /// The vertex bytes of the overlay's debug layers, outlines `line_width` world units wide.
@@ -32,7 +35,7 @@ pub(super) fn vertices(frame: &DebugDrawFrame, overlay: &Overlay, line_width: f3
 
 /// How many vertices `bytes` holds.
 pub(super) fn count(bytes: &[u8]) -> u32 {
-    (bytes.len() / (VERTEX_FLOATS * 4)) as u32
+    (bytes.len() / VERTEX_BYTES) as u32
 }
 
 /// The debug draw pipeline for one target format, alpha blended as the editor's: the view
@@ -60,7 +63,7 @@ pub(super) fn pipeline(
             entry_point: Some("vs"),
             compilation_options: Default::default(),
             buffers: &[Some(wgpu::VertexBufferLayout {
-                array_stride: (VERTEX_FLOATS * 4) as wgpu::BufferAddress,
+                array_stride: VERTEX_BYTES as wgpu::BufferAddress,
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &attributes,
             })],

@@ -1,13 +1,15 @@
 //! Tilemaps, cut into chunks of 32 by 32 cells: each chunk is one instance buffer of the quad
-//! pipeline, kept until its tilemap item changes.
+//! pipeline, kept until its tilemap's tiles change. The instances are relative to the
+//! tilemap's position, which its view adds on the GPU, so a moving (or interpolated) tilemap
+//! keeps its chunks.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
 use ludenea_draw::frame::TilemapItem;
 use ludenea_ecs::{AssetId, Entity};
-use wgpu::util::DeviceExt;
 
+use super::fill;
 use super::sprites::{self, BLANK, Instance, Sample};
 use crate::atlas::Region;
 
@@ -27,7 +29,7 @@ pub(super) struct Built {
     pub missing: Vec<(Entity, AssetId, u32)>,
 }
 
-/// The chunks of each tilemap entity, rebuilt only when its item or the atlas changes.
+/// The chunks of each tilemap entity, rebuilt only when its tiles or the atlas change.
 #[derive(Default)]
 pub(super) struct Cache(BTreeMap<Entity, Built>);
 
@@ -37,10 +39,12 @@ impl Cache {
         self.0.clear();
     }
 
-    /// Builds the chunks of each item that changed, and forgets the tilemaps not in `items`.
+    /// Builds the chunks of each item whose tiles changed, and forgets the tilemaps not in
+    /// `items`.
     pub fn update(
         &mut self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         items: &[TilemapItem],
         regions: &BTreeMap<(AssetId, u32), Region>,
         pages: &[(u32, u32)],
@@ -52,10 +56,10 @@ impl Cache {
             if self
                 .0
                 .get(&item.entity)
-                .is_none_or(|built| built.item != *item)
+                .is_none_or(|built| !same_tiles(&built.item, item))
             {
                 self.0
-                    .insert(item.entity, build(device, item, regions, pages));
+                    .insert(item.entity, build(device, queue, item, regions, pages));
             }
         }
     }
@@ -71,11 +75,21 @@ fn well_formed(item: &TilemapItem) -> bool {
     item.tiles.len() as u64 == u64::from(item.width) * u64::from(item.height)
 }
 
-/// The chunks of `item`, row by row of chunks from the bottom-left. A tile fills its cell; a
+/// Whether `a` and `b` have the same chunks: everything but where they are and draw.
+fn same_tiles(a: &TilemapItem, b: &TilemapItem) -> bool {
+    a.tileset == b.tileset
+        && a.cell_size == b.cell_size
+        && a.width == b.width
+        && a.height == b.height
+        && a.tiles == b.tiles
+}
+
+/// The chunks of `item`, relative to its position, row by row of chunks from the bottom-left. A tile fills its cell; a
 /// tile whose region is missing is a magenta cell and is reported. Only the rows `tiles`
 /// reaches are walked, and a cell past its end is empty.
 fn build(
     device: &wgpu::Device,
+    queue: &wgpu::Queue,
     item: &TilemapItem,
     regions: &BTreeMap<(AssetId, u32), Region>,
     pages: &[(u32, u32)],
@@ -98,8 +112,8 @@ fn build(
         for first_column in (0..item.width).step_by(CHUNK as usize) {
             // The chunk's corner is the instances' centre, so their offsets stay small.
             let corner = [
-                item.position.x + first_column as f32 * cell_width,
-                item.position.y + first_row as f32 * cell_height,
+                first_column as f32 * cell_width,
+                first_row as f32 * cell_height,
             ];
             let mut instances: Vec<Instance> = Vec::new();
             let mut batches: Vec<(Sample, Range<u32>)> = Vec::new();
@@ -145,11 +159,13 @@ fn build(
                 .flat_map(|value| value.to_le_bytes())
                 .collect();
             // At most 32 * 32 instances of 72 bytes: far below any buffer limit.
-            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("tilemap chunk"),
-                contents: &bytes,
-                usage: wgpu::BufferUsages::VERTEX,
-            });
+            let buffer = fill(
+                device,
+                queue,
+                "tilemap chunk",
+                &bytes,
+                wgpu::BufferUsages::VERTEX,
+            );
             built.chunks.push(Chunk { buffer, batches });
         }
     }

@@ -672,6 +672,24 @@ fn render_with(renderer: &mut Renderer, frame: &RenderFrame, overlay: &Overlay) 
 }
 
 fn report(device: &wgpu::Device, renderer: &mut Renderer, frame: &RenderFrame) -> DrawReport {
+    draw(
+        device,
+        renderer,
+        SIZE,
+        frame,
+        wgpu::TextureFormat::Rgba8Unorm,
+    )
+    .unwrap()
+}
+
+/// Draws `frame` with `renderer` into a new `SIZE` target of `format`, told it is `size`.
+fn draw(
+    device: &wgpu::Device,
+    renderer: &mut Renderer,
+    size: Size,
+    frame: &RenderFrame,
+    format: wgpu::TextureFormat,
+) -> Result<DrawReport, RenderError> {
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("target"),
         size: wgpu::Extent3d {
@@ -682,7 +700,7 @@ fn report(device: &wgpu::Device, renderer: &mut Renderer, frame: &RenderFrame) -
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
+        format,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     });
@@ -691,14 +709,12 @@ fn report(device: &wgpu::Device, renderer: &mut Renderer, frame: &RenderFrame) -
         current: frame,
         alpha: 1.0,
     };
-    renderer
-        .draw(
-            &target.create_view(&Default::default()),
-            SIZE,
-            frames,
-            &Overlay::default(),
-        )
-        .unwrap()
+    renderer.draw(
+        &target.create_view(&Default::default()),
+        size,
+        frames,
+        &Overlay::default(),
+    )
 }
 
 #[test]
@@ -1014,4 +1030,229 @@ fn a_tilemap_whose_tiles_do_not_match_its_size_draws_nothing_at_once() {
         pixels.chunks_exact(4).all(|texel| texel == background()),
         "something was drawn"
     );
+}
+
+#[test]
+fn previous_frame_and_alpha_draw_in_between() {
+    let mut renderer = renderer();
+    tileset(&mut renderer);
+    let mut world = World::new();
+    let (moving, map) = (world.spawn(), world.spawn());
+    let previous = with_tilemaps(
+        vec![sprite(moving, Vec2::new(-1.0, 1.0))],
+        vec![tilemap(map, Vec2::new(-2.0, -2.0), 1, 1, vec![Some(1)])],
+    );
+    let current = with_tilemaps(
+        vec![sprite(moving, Vec2::new(1.0, 1.0))],
+        vec![tilemap(map, Vec2::new(0.0, -2.0), 1, 1, vec![Some(1)])],
+    );
+    let between = |renderer: &mut Renderer, alpha: f32| {
+        let frames = Frames {
+            previous: Some(&previous),
+            current: &current,
+            alpha,
+        };
+        renderer
+            .render_rgba(SIZE, frames, &Overlay::default())
+            .unwrap()
+    };
+    // Halfway: the sprite centred on (0, 1), pixels 24..40 across and 8..24 down; the cell at
+    // world [-1, 0] by [-2, -1], pixels 16..32 across and 48..64 down.
+    let pixels = between(&mut renderer, 0.5);
+    assert_eq!(pixel(&pixels, SIZE, 32, 16), RED);
+    assert_eq!(pixel(&pixels, SIZE, 20, 16), background());
+    assert_eq!(pixel(&pixels, SIZE, 44, 16), background());
+    assert_eq!(pixel(&pixels, SIZE, 24, 56), GREEN);
+    assert_eq!(pixel(&pixels, SIZE, 40, 56), background());
+    // At alpha 1 both are where `current` puts them.
+    let pixels = between(&mut renderer, 1.0);
+    assert_eq!(pixel(&pixels, SIZE, 48, 16), RED);
+    assert_eq!(pixel(&pixels, SIZE, 32, 16), background());
+    assert_eq!(pixel(&pixels, SIZE, 40, 56), GREEN);
+    assert_eq!(pixel(&pixels, SIZE, 24, 56), background());
+}
+
+/// A device that allows buffers of at most `max_buffer_size` bytes, so a test can reach the
+/// limit with an ordinary frame.
+fn device_with_buffer_limit(max_buffer_size: u64) -> (wgpu::Device, wgpu::Queue) {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = match instance.request_adapter(&Default::default()).await {
+            Ok(adapter) => adapter,
+            Err(_) => instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    force_fallback_adapter: true,
+                    ..Default::default()
+                })
+                .await
+                .unwrap_or_else(|error| panic!("no GPU adapter: {error}")),
+        };
+        let required_limits = wgpu::Limits {
+            max_buffer_size,
+            ..wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits())
+        };
+        adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                required_limits,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+    })
+}
+
+#[test]
+fn sixty_thousand_sprites_then_one_both_draw() {
+    // 60,000 instances of 72 bytes are 4.32 MB: past a 1 MiB buffer limit.
+    let (device, queue) = device_with_buffer_limit(1 << 20);
+    let mut renderer = Renderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm);
+    upload(&mut renderer, &solid(RED), &TextureMeta::default());
+    let mut world = World::new();
+    let mut sprites: Vec<SpriteItem> = (0..60_000)
+        .map(|_| sprite(world.spawn(), Vec2::new(100.0, 100.0)))
+        .collect();
+    sprites[0].position = Vec2::new(-1.0, 1.0);
+    sprites[30_000].position = Vec2::new(1.0, 1.0);
+    sprites[59_999].position = Vec2::new(1.0, -1.0);
+    let pixels = render(&mut renderer, SIZE, &frame(sprites));
+    assert_eq!(pixel(&pixels, SIZE, 16, 16), RED, "the first sprite");
+    assert_eq!(pixel(&pixels, SIZE, 48, 16), RED, "the middle sprite");
+    assert_eq!(pixel(&pixels, SIZE, 48, 48), RED, "the last sprite");
+    assert_eq!(pixel(&pixels, SIZE, 16, 48), background());
+
+    let pixels = render(
+        &mut renderer,
+        SIZE,
+        &frame(vec![sprite(world.spawn(), Vec2::new(-1.0, -1.0))]),
+    );
+    assert_eq!(pixel(&pixels, SIZE, 16, 48), RED);
+    assert_eq!(pixel(&pixels, SIZE, 16, 16), background());
+}
+
+#[test]
+fn a_debug_draw_past_the_buffer_limit_draws_in_parts() {
+    // A filled circle is 96 vertices of 24 bytes: 1,000 of them are 2.3 MB.
+    let (device, queue) = device_with_buffer_limit(1 << 20);
+    let mut renderer = Renderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm);
+    let mut scene = frame(Vec::new());
+    let blue = Color(0x0000FFFF);
+    dot(&mut scene, "test", None, Vec2::new(-1.0, 1.0), blue);
+    for _ in 0..1_000 {
+        dot(&mut scene, "test", None, Vec2::new(100.0, 100.0), blue);
+    }
+    dot(&mut scene, "test", None, Vec2::new(1.0, -1.0), blue);
+    let overlay = Overlay {
+        debug_layers: BTreeSet::from(["test".to_string()]),
+        ..Overlay::default()
+    };
+    let pixels = render_with(&mut renderer, &scene, &overlay);
+    assert_eq!(pixel(&pixels, SIZE, 16, 16), BLUE, "the first circle");
+    assert_eq!(pixel(&pixels, SIZE, 48, 48), BLUE, "the last circle");
+    assert_eq!(pixel(&pixels, SIZE, 48, 16), background());
+}
+
+#[test]
+fn oversized_target_is_refused_naming_the_limit() {
+    let (device, queue) = device();
+    let allowed = device.limits().max_texture_dimension_2d;
+    let mut renderer = Renderer::new(device.clone(), queue, wgpu::TextureFormat::Rgba8Unorm);
+    let huge = Size {
+        width: 1,
+        height: allowed + 1,
+    };
+    assert_eq!(
+        draw(
+            &device,
+            &mut renderer,
+            huge,
+            &frame(Vec::new()),
+            wgpu::TextureFormat::Rgba8Unorm
+        ),
+        Err(RenderError::Limit {
+            operation: "draw",
+            limit: "max_texture_dimension_2d",
+            requested: u64::from(allowed + 1),
+            allowed: u64::from(allowed),
+        })
+    );
+}
+
+#[test]
+fn a_validation_error_is_returned_by_the_next_draw() {
+    let (device, queue) = device();
+    let mut renderer = Renderer::new(device.clone(), queue, wgpu::TextureFormat::Rgba8Unorm);
+    // A buffer past the device's limit: a validation error on the renderer's device.
+    let _buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("too large"),
+        size: device.limits().max_buffer_size + 4,
+        usage: wgpu::BufferUsages::VERTEX,
+        mapped_at_creation: false,
+    });
+    let scene = frame(Vec::new());
+    let rgba = wgpu::TextureFormat::Rgba8Unorm;
+    let error = draw(&device, &mut renderer, SIZE, &scene, rgba).unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            RenderError::Gpu { operation: "draw", message } if message.contains("too large")
+        ),
+        "{error}"
+    );
+    // Reported once: the next draw succeeds.
+    assert_eq!(
+        draw(&device, &mut renderer, SIZE, &scene, rgba),
+        Ok(DrawReport::default())
+    );
+}
+
+#[test]
+fn a_draw_the_gpu_refuses_returns_its_error() {
+    let (device, queue) = device();
+    let mut renderer = renderer_on(&device, queue);
+    upload(&mut renderer, &solid(RED), &TextureMeta::default());
+    // The renderer draws Rgba8Unorm; a Bgra8Unorm target does not match its pipeline.
+    let scene = frame(vec![sprite(entity(), Vec2::ZERO)]);
+    let error = draw(
+        &device,
+        &mut renderer,
+        SIZE,
+        &scene,
+        wgpu::TextureFormat::Bgra8Unorm,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            RenderError::Gpu {
+                operation: "draw",
+                ..
+            }
+        ),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_lost_device_is_reported_as_device_lost() {
+    let (device, queue) = device();
+    let mut renderer = renderer_on(&device, queue);
+    device.destroy();
+    let scene = frame(Vec::new());
+    let rgba = wgpu::TextureFormat::Rgba8Unorm;
+    let error = draw(&device, &mut renderer, SIZE, &scene, rgba).unwrap_err();
+    assert!(matches!(error, RenderError::DeviceLost(_)), "{error}");
+    // Every later call says the same, without touching the lost device.
+    let empty = Atlas {
+        pages: Vec::new(),
+        regions: Default::default(),
+        errors: Vec::new(),
+    };
+    assert!(matches!(
+        renderer.set_atlas(&empty),
+        Err(RenderError::DeviceLost(_))
+    ));
+}
+
+fn renderer_on(device: &wgpu::Device, queue: wgpu::Queue) -> Renderer {
+    Renderer::new(device.clone(), queue, wgpu::TextureFormat::Rgba8Unorm)
 }
