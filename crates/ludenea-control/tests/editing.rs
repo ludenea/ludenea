@@ -866,12 +866,12 @@ fn a_batch_refuses_a_value_changed_twice() {
     ];
     let error = host.handle(Command::Batch { commands }).unwrap_err();
     assert_eq!(error.code, ErrorCode::InvalidCommand);
-    assert!(
-        error.message.contains(&format!(
-            "command 1 of the batch changes `ludenea::Pose` of entity {entity} again"
-        )),
-        "{}",
-        error.message
+    assert_eq!(
+        error.message,
+        format!(
+            "command 1 of the batch changes `ludenea::Pose` of entity {entity} again; a batch \
+             changes each component and resource once, so send the whole change in one command"
+        )
     );
     assert!(timeline(&mut host).edit_ticks.is_empty());
 }

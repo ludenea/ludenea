@@ -975,7 +975,9 @@ impl Host {
                 return Err(ProtocolError::new(
                     ErrorCode::InvalidCommand,
                     format!(
-                        "command {index} of the batch changes {value} again; a batch changes                          each component and resource once, so send the whole change in one                          command"
+                        "command {index} of the batch changes {value} again; a batch changes \
+                         each component and resource once, so send the whole change in one \
+                         command"
                     ),
                 ));
             }
