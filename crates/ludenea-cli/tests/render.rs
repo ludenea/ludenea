@@ -236,6 +236,81 @@ fn broken_texture_warns_and_still_renders() {
 }
 
 #[test]
+fn invalid_texture_meta_warns_and_still_renders() {
+    for meta in [
+        "Meta(".to_string(),
+        fs::read_to_string(fixture().join("assets/tiles.png.meta"))
+            .unwrap()
+            .replace("pixels_per_unit: 16", "pixels_per_unit: 0"),
+    ] {
+        let guard = dir();
+        let dir = guard.path();
+        let project = dir.join("project");
+        copy(&fixture(), &project);
+        fs::write(project.join("assets/tiles.png.meta"), meta).unwrap();
+        let output = render(dir, "{}/project/scenes/main.scene.ron", "3", "frame", &[]);
+        let warning = output
+            .lines()
+            .find(|line| line.starts_with("warning: "))
+            .unwrap_or_else(|| panic!("no warning in {output}"));
+        assert!(warning.contains("tiles.png.meta"), "{warning}");
+        assert!(warning.contains("the texture is left out"), "{warning}");
+        let image = decode(&dir.join("frame.png"));
+        // The tiles are drawn as placeholders, the walker as before.
+        assert_eq!(image.pixel(8, 56), MAGENTA);
+        assert_eq!(image.pixel(32, 16), RED);
+    }
+}
+
+#[test]
+fn textures_sharing_an_identifier_are_refused_before_the_run() {
+    let guard = dir();
+    let dir = guard.path();
+    let project = dir.join("project");
+    copy(&fixture(), &project);
+    let hero = fs::read_to_string(project.join("assets/hero.png.meta")).unwrap();
+    fs::write(project.join("assets/tiles.png.meta"), hero).unwrap();
+    let (code, output) = cli(
+        dir,
+        &[
+            "render",
+            "{}/project/scenes/main.scene.ron",
+            "--tick",
+            "3",
+            "--out",
+            "{}/frame.png",
+        ],
+    );
+    assert_eq!(code, 2, "{output}");
+    assert!(output.contains("have the same identifier"), "{output}");
+    // Refused before the scene runs: no tick is played, so no hash is printed.
+    assert!(!output.contains("hash"), "{output}");
+    assert!(!dir.join("frame.png").exists());
+}
+
+#[test]
+fn width_past_the_device_limit_is_refused_naming_it() {
+    let guard = dir();
+    let dir = guard.path();
+    let (code, output) = cli(
+        dir,
+        &[
+            "render",
+            "{fixture}/scenes/main.scene.ron",
+            "--tick",
+            "0",
+            "--out",
+            "{}/frame.png",
+            "--width",
+            "4000000000",
+        ],
+    );
+    assert_eq!(code, 2, "{output}");
+    assert!(output.contains("max_texture_dimension_2d"), "{output}");
+    assert!(!dir.join("frame.png").exists());
+}
+
+#[test]
 fn sprite_with_an_unknown_texture_warns_naming_it() {
     let guard = dir();
     let dir = guard.path();

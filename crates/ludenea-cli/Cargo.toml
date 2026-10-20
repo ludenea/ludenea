@@ -17,8 +17,6 @@ pollster.workspace = true
 wgpu.workspace = true
 
 [dev-dependencies]
-ludenea-render.workspace = true
-png.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true

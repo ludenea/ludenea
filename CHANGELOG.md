@@ -104,11 +104,15 @@ hash, those of the golden trace and replays included.
   draw layer to show. It prints the tick's state hash, which rendering never changes, and
   for a replay a warning when that hash differs from the one the replay recorded. The
   project's textures (each `.png` whose meta makes it a texture, found by the new
-  `ludenea_cli::assets::project_textures`) are packed into the atlas; a texture that does
-  not pack is a warning and draws as placeholders, and each sprite or tile drawn as a
-  placeholder is a warning naming the entity, the texture and the frame. A tick past the
-  end of a replay and an unknown debug layer are refused with exit code 2. It needs a GPU
-  adapter, hardware or software, and is not in WebAssembly builds.
+  `ludenea_cli::assets::project_textures`, which returns them with a warning for each
+  texture whose meta cannot be read or is invalid) are packed into the atlas; a texture
+  whose meta cannot be read or is invalid, or that does not pack, is a warning, is left out
+  and draws as placeholders, and each sprite or tile drawn as a placeholder is a warning
+  naming the entity, the texture and the frame. Two textures sharing an identifier, a tick
+  past the end of a replay, an unknown debug layer, and a `--width` or `--height` past the
+  device's `max_texture_dimension_2d` are refused with exit code 2; the textures and the
+  GPU adapter are checked before the run. It needs a GPU adapter, hardware or software,
+  and is not in WebAssembly builds.
 - `Meta::texture(path)` is the one rule the editor listing and the command line share for
   whether a file is a texture: a PNG (its extension in any case, see the new
   `meta::is_png`) whose meta is a texture meta, or `Other` as metas written before

@@ -418,7 +418,9 @@ pub struct RenderArgs {
 
 /// Runs to `--tick`, draws the frames of that tick and the one before it at the later one
 /// (`alpha` 1, as a game shows a tick it just ran) offscreen, and writes the pixels as a
-/// PNG. Texture errors are warnings: what they leave out is drawn as placeholders.
+/// PNG. Texture errors are warnings: what they leave out is drawn as placeholders. The
+/// textures are read and the device opened before the run, so a project or an adapter the
+/// render cannot use fails without waiting for it.
 #[cfg(not(target_family = "wasm"))]
 pub fn render(app: fn() -> App, args: &RenderArgs, out: &mut dyn Write) -> Outcome {
     use ludenea_app::replay::{load_replay, play_tick};
@@ -435,12 +437,16 @@ pub fn render(app: fn() -> App, args: &RenderArgs, out: &mut dyn Write) -> Outco
     } = args;
     let mut sim = simulation(app, None)?;
     let debug_layers = known_debug_layers(&sim, debug_layers)?;
-    let replay = if is_replay(&files.scene) {
-        if inputs.is_some() || files.edits.is_some() {
-            return Err(
-                "a replay holds its own inputs and edits; drop --inputs and --edits".into(),
-            );
-        }
+    let is_replay = is_replay(&files.scene);
+    if is_replay && (inputs.is_some() || files.edits.is_some()) {
+        return Err("a replay holds its own inputs and edits; drop --inputs and --edits".into());
+    }
+    let textures = crate::assets::project_textures(&files.scene, files.project.as_deref())?;
+    for warning in &textures.warnings {
+        say(out, format_args!("warning: {warning}"))?;
+    }
+    let mut renderer = renderer(&textures.textures, out)?;
+    let replay = if is_replay {
         Replay::decode(&read(&files.scene)?).map_err(|error| error.to_string())?
     } else {
         // ponytail: a scene runs twice, recorded then played as a replay, so both kinds of
@@ -487,7 +493,6 @@ pub fn render(app: fn() -> App, args: &RenderArgs, out: &mut dyn Write) -> Outco
     for warning in &current.warnings {
         say(out, format_args!("warning: {warning}"))?;
     }
-    let textures = crate::assets::project_textures(&files.scene, files.project.as_deref())?;
     let size = Size {
         width: *width,
         height: *height,
@@ -501,7 +506,7 @@ pub fn render(app: fn() -> App, args: &RenderArgs, out: &mut dyn Write) -> Outco
         debug_layers,
         ..Overlay::default()
     };
-    let pixels = draw(&textures, size, frames, &overlay, out)?;
+    let pixels = draw(&mut renderer, size, frames, &overlay, out)?;
     write(path, &encode_png(size, &pixels)?)?;
     say(out, format_args!("wrote {}", path.display()))?;
     Ok(0)
@@ -524,21 +529,13 @@ fn known_debug_layers(
     Ok(names.iter().cloned().collect())
 }
 
-/// Draws `frames` on a headless device with `textures` packed into its atlas, warning about
-/// each texture left out and each frame drawn as a placeholder, and reads the pixels back.
+/// A renderer on a headless device with `textures` packed into its atlas, warning about
+/// each texture left out.
 #[cfg(not(target_family = "wasm"))]
-fn draw(
-    textures: &[(
-        ludenea_ecs::AssetId,
-        String,
-        Vec<u8>,
-        ludenea_app::meta::TextureMeta,
-    )],
-    size: ludenea_render::gpu::Size,
-    frames: ludenea_render::gpu::Frames<'_>,
-    overlay: &ludenea_render::gpu::Overlay,
+fn renderer(
+    textures: &[crate::assets::ProjectTexture],
     out: &mut dyn Write,
-) -> Result<Vec<u8>, String> {
+) -> Result<ludenea_render::gpu::Renderer, String> {
     use ludenea_render::atlas::{TextureSource, pack};
     use ludenea_render::gpu::{Renderer, headless};
 
@@ -561,6 +558,19 @@ fn draw(
     renderer
         .set_atlas(&atlas)
         .map_err(|error| error.to_string())?;
+    Ok(renderer)
+}
+
+/// Draws `frames` offscreen, warning about each frame drawn as a placeholder, and reads the
+/// pixels back.
+#[cfg(not(target_family = "wasm"))]
+fn draw(
+    renderer: &mut ludenea_render::gpu::Renderer,
+    size: ludenea_render::gpu::Size,
+    frames: ludenea_render::gpu::Frames<'_>,
+    overlay: &ludenea_render::gpu::Overlay,
+    out: &mut dyn Write,
+) -> Result<Vec<u8>, String> {
     let rendered = renderer
         .render_rgba(size, frames, overlay)
         .map_err(|error| error.to_string())?;

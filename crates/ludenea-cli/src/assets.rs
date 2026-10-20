@@ -37,23 +37,37 @@ pub fn project_assets(scene: &Path, project: Option<&Path>) -> Result<NamedAsset
 /// A texture of a project: its identifier, path, PNG bytes, and meta.
 pub type ProjectTexture = (AssetId, String, Vec<u8>, TextureMeta);
 
+/// The textures of a project, and a warning for each texture left out.
+#[derive(Debug, Default, PartialEq)]
+pub struct ProjectTextures {
+    pub textures: Vec<ProjectTexture>,
+    pub warnings: Vec<String>,
+}
+
 /// Every texture of the project holding `scene` (found as [`project_assets`] finds assets):
-/// each `.png` whose meta makes it a texture ([`Meta::texture`]), with its identifier, path, bytes, and meta,
-/// sorted by identifier. A `.png` without a meta is skipped; a meta that cannot be read, or
-/// two textures with the same identifier, are refused naming the files.
-pub fn project_textures(
-    scene: &Path,
-    project: Option<&Path>,
-) -> Result<Vec<ProjectTexture>, String> {
+/// each `.png` whose meta makes it a texture ([`Meta::texture`]), with its identifier, path,
+/// bytes, and meta, sorted by identifier. A `.png` without a meta is skipped; one whose meta
+/// cannot be read or is invalid is left out with a warning naming the meta, as a texture
+/// that does not pack is. Two textures with the same identifier are refused naming the
+/// files.
+pub fn project_textures(scene: &Path, project: Option<&Path>) -> Result<ProjectTextures, String> {
     let mut textures: BTreeMap<AssetId, (String, Vec<u8>, TextureMeta)> = BTreeMap::new();
+    let mut warnings = Vec::new();
     for file in project_files(scene, project)? {
         let name = file.to_string_lossy().into_owned();
         let meta_file = PathBuf::from(format!("{name}.meta"));
         if !is_png(&name) || !meta_file.is_file() {
             continue;
         }
-        let meta = Meta::read(&meta_file)
-            .map_err(|reason| format!("cannot read {name}.meta: {reason}"))?;
+        let meta = match Meta::read(&meta_file) {
+            Ok(meta) => meta,
+            Err(reason) => {
+                warnings.push(format!(
+                    "cannot read {name}.meta: {reason}; the texture is left out"
+                ));
+                continue;
+            }
+        };
         let Some(texture) = meta.texture(&name) else {
             continue;
         };
@@ -66,10 +80,13 @@ pub fn project_textures(
         let bytes = fs::read(&file).map_err(|error| format!("cannot read {name}: {error}"))?;
         textures.insert(meta.id, (name, bytes, texture));
     }
-    Ok(textures
-        .into_iter()
-        .map(|(id, (name, bytes, texture))| (id, name, bytes, texture))
-        .collect())
+    Ok(ProjectTextures {
+        textures: textures
+            .into_iter()
+            .map(|(id, (name, bytes, texture))| (id, name, bytes, texture))
+            .collect(),
+        warnings,
+    })
 }
 
 /// Every file of the project holding `scene`: under `project`, else under the nearest folder
@@ -249,7 +266,7 @@ mod tests {
         let prefab = folder.join("prefab.png");
         put(&prefab, "d");
         meta(&prefab, 3, "Prefab");
-        let textures = project_textures(&scene, None).unwrap();
+        let textures = project_textures(&scene, None).unwrap().textures;
         let meta = TextureMeta {
             pixels_per_unit: 8,
             filter: ludenea_app::meta::Filter::Linear,
@@ -281,7 +298,7 @@ mod tests {
         put(&misplaced, "()");
         texture_meta(&misplaced, 5);
         assert_eq!(
-            project_textures(&scene, None).unwrap(),
+            project_textures(&scene, None).unwrap().textures,
             [(
                 AssetId(4),
                 old.display().to_string(),
@@ -289,6 +306,29 @@ mod tests {
                 TextureMeta::default()
             )]
         );
+    }
+
+    #[test]
+    fn a_texture_whose_meta_cannot_be_read_is_left_out_with_a_warning() {
+        let (_guard, folder) = dir();
+        let scene = folder.join("main.scene.ron");
+        put(&scene, "");
+        let (broken, good) = (folder.join("broken.png"), folder.join("good.png"));
+        put(&broken, "a");
+        put(&folder.join("broken.png.meta"), "Meta(");
+        put(&good, "b");
+        texture_meta(&good, 1);
+        let ProjectTextures { textures, warnings } = project_textures(&scene, None).unwrap();
+        let ids: Vec<AssetId> = textures.iter().map(|(id, ..)| *id).collect();
+        assert_eq!(ids, [AssetId(1)]);
+        let [warning] = warnings.as_slice() else {
+            panic!("{warnings:?}")
+        };
+        assert!(
+            warning.starts_with(&format!("cannot read {}.meta: ", broken.display())),
+            "{warning}"
+        );
+        assert!(warning.ends_with("; the texture is left out"), "{warning}");
     }
 
     #[test]
