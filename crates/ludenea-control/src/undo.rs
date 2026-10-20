@@ -49,8 +49,8 @@ pub(crate) enum UndoEntry {
         name: String,
         removed: Vec<u8>,
     },
-    /// A tick 0 asset edit: the asset text before and after it. Last, so histories
-    /// written before it still decode.
+    /// A tick 0 asset edit: the asset text before and after it. After the variants of
+    /// earlier versions, so histories written before it still decode.
     Asset {
         id: AssetId,
         before: String,
@@ -162,7 +162,8 @@ impl UndoEntry {
                 let Some(target) = tree.get_mut(*branch) else {
                     return Err(unknown(*branch));
                 };
-                // An entry of a history written before branches redoes within its branch.
+                // An entry of a history written before branches, or one `keep_on_root`
+                // moved to the root, redoes within its branch.
                 let Some(own) = stored.next() else {
                     return tree
                         .check_redo_within(*branch, edit.tick)
@@ -186,7 +187,8 @@ impl UndoEntry {
 }
 
 /// The branches the undo of a `Run` entry removed, its branch's own first. An entry of a
-/// history written before branches holds none, and redoes within its branch.
+/// history written before branches holds none, and so does one `UndoHistory::keep_on_root`
+/// moved to the root; both redo within their branch.
 pub(crate) fn removed_by_run(removed: &[u8]) -> Result<Vec<StoredBranch>, BranchesError> {
     if removed.is_empty() {
         return Ok(Vec::new());

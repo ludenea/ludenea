@@ -105,8 +105,8 @@ hash, those of the golden trace and replays included.
   branch forks. `Session::warnings`
   names each. Redo puts branches back only where they fork on their parent's run, and a
   fork never takes the identifier of a branch redo put back. A redo entry of a version 2
-  history redoes within its branch only where cutting the run after its tick leaves every
-  child forking on it; otherwise it is dropped.
+  history redoes within its branch only where its tick is not before the branch's fork and
+  cutting the run after it leaves every child forking on it; otherwise it is dropped.
 - `Session::redo` of a recorded edit puts back only its branch's own part of the run,
   after the run it forks from as it is now. After a tick 0 edit on a forked branch, it
   rebuilt the ticks before the fork from the other branches' stale hashes. A branch part
@@ -116,7 +116,9 @@ hash, those of the golden trace and replays included.
   `SessionError::BranchesDecode` and the new `BranchesError::Exhausted`; it panicked. Once
   a session has handed out its last branch identifier, an edit or take-over that would
   fork is refused with the new `SessionError::CannotFork` and changes nothing; it
-  panicked, or, built without overflow checks, reused an identifier.
+  panicked, or, built without overflow checks, reused an identifier. `BranchTree::fork`
+  returns `Result<(), BranchesError>`, `BranchesError::Exhausted` once the identifiers run
+  out.
 - A type that contains itself, such as a tree node holding a `Vec` of nodes, has no schema
   yet. `#[derive(Schema)]`, and so the `Component`, `Resource`, `Asset` and `Event`
   derives, refuses a field that names the type itself or `Self` inside `Option`, `Vec`,

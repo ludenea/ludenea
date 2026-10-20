@@ -929,9 +929,10 @@ impl Session {
                         let ids: Vec<BranchId> = descendants.iter().map(StoredBranch::id).collect();
                         let undone = self.current_segment();
                         let defaults = sim.encoded_default_inputs();
-                        // Nothing resimulates, so the run before the branch's fork is fresh,
-                        // where stored ancestors may hold stale hashes: only the branch's own
-                        // part comes back.
+                        // No resimulation is pending (`ensure_resimulated` passed), so the
+                        // current run before the branch's fork is fresh, where stored
+                        // ancestors may hold stale hashes: only the branch's own part comes
+                        // back.
                         self.splice(&segment, defaults.as_deref());
                         // The descendants fork on the run the redo brings back.
                         if let Err(error) = self.tree.put_back(descendants, &self.edits, self.head)
@@ -960,7 +961,8 @@ impl Session {
                             return Err(error);
                         }
                     }
-                    // An entry of a history written before branches: as in 2a, within
+                    // An entry of a history written before branches, or one
+                    // `UndoHistory::keep_on_root` moved to the root: as in 2a, within
                     // the branch, whose run is cut after `tick`.
                     None => {
                         self.seek(sim, tick)?;
@@ -2111,8 +2113,8 @@ impl Session {
     }
 
     /// Puts the world back to `state`, a snapshot of the current tick taken before the world
-    /// left it. When a system left a value in it that its type refuses to load, comes back
-    /// by replaying instead (see `come_back`).
+    /// left it. When a system left a value in it that its type refuses to load, the session
+    /// comes back to the current tick by replaying instead (see `come_back`).
     fn restore_current(
         &mut self,
         sim: &mut Simulation,
