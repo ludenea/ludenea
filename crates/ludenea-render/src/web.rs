@@ -11,7 +11,7 @@ use web_sys::HtmlCanvasElement;
 use web_sys::js_sys::Uint8Array;
 
 use crate::atlas::{self, Atlas, TextureError, TextureSource};
-use crate::gpu::{Frames, Overlay, Renderer, Size};
+use crate::gpu::{Frames, Overlay, RenderError, Renderer, Size};
 
 /// One texture of `set_textures`, whose PNG comes in a separate array.
 #[derive(Deserialize)]
@@ -52,6 +52,8 @@ pub struct WebRenderer {
     canvas: HtmlCanvasElement,
     renderer: Renderer,
     backend: &'static str,
+    /// The size asked by the last `resize`, which the surface may be clamped below.
+    size: Size,
 }
 
 fn failure(error: impl std::fmt::Display) -> JsValue {
@@ -60,7 +62,8 @@ fn failure(error: impl std::fmt::Display) -> JsValue {
 
 #[wasm_bindgen]
 impl WebRenderer {
-    /// A renderer drawing into `canvas`, at the canvas's current size.
+    /// A renderer drawing into `canvas`, at the canvas's current size. A canvas wider or taller
+    /// than the device's `max_texture_dimension_2d` is refused.
     pub async fn create(canvas: HtmlCanvasElement) -> Result<WebRenderer, JsValue> {
         let (width, height) = (canvas.width().max(1), canvas.height().max(1));
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
@@ -119,8 +122,18 @@ impl WebRenderer {
             view_formats: vec![],
             color_space: Default::default(),
         };
-        surface.configure(&device, &config);
+        // The renderer first: it takes the device's errors, which would otherwise panic.
         let renderer = Renderer::new(device.clone(), queue.clone(), format);
+        let allowed = device.limits().max_texture_dimension_2d;
+        if width.max(height) > allowed {
+            return Err(failure(RenderError::Limit {
+                operation: "create",
+                limit: "max_texture_dimension_2d",
+                requested: u64::from(width.max(height)),
+                allowed: u64::from(allowed),
+            }));
+        }
+        surface.configure(&device, &config);
         Ok(WebRenderer {
             surface,
             device,
@@ -129,6 +142,7 @@ impl WebRenderer {
             canvas,
             renderer,
             backend,
+            size: Size { width, height },
         })
     }
 
@@ -178,10 +192,17 @@ impl WebRenderer {
         serde_json::to_string(&refused).map_err(failure)
     }
 
-    /// `width` and `height` in CSS pixels; the canvas gets `pixel_ratio` times more.
+    /// `width` and `height` in CSS pixels; the canvas gets `pixel_ratio` times more. A side
+    /// past the device's `max_texture_dimension_2d` keeps the canvas at that limit, and every
+    /// `draw` until a resize within it returns the `max_texture_dimension_2d` limit error.
     pub fn resize(&mut self, width: u32, height: u32, pixel_ratio: f32) {
-        self.config.width = ((width as f32 * pixel_ratio) as u32).max(1);
-        self.config.height = ((height as f32 * pixel_ratio) as u32).max(1);
+        self.size = Size {
+            width: ((width as f32 * pixel_ratio) as u32).max(1),
+            height: ((height as f32 * pixel_ratio) as u32).max(1),
+        };
+        let allowed = self.device.limits().max_texture_dimension_2d;
+        self.config.width = self.size.width.min(allowed);
+        self.config.height = self.size.height.min(allowed);
         self.canvas.set_width(self.config.width);
         self.canvas.set_height(self.config.height);
         self.surface.configure(&self.device, &self.config);
@@ -211,13 +232,10 @@ impl WebRenderer {
             current: &current,
             alpha,
         };
-        let size = Size {
-            width: self.config.width,
-            height: self.config.height,
-        };
+        // The size asked, so the renderer refuses one past the limit.
         let report = self
             .renderer
-            .draw(&view, size, frames, &overlay)
+            .draw(&view, self.size, frames, &overlay)
             .map_err(failure)?;
         self.queue.present(texture);
         serde_json::to_string(&report).map_err(failure)

@@ -1,31 +1,7 @@
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
+import { type Point, type Rgba, start } from "./renderer";
 
-// The browser renderer, which the fixture page loads from its `pkg/`. Each test runs in the
-// `webgl2` and the `webgpu` projects (playwright.config.ts).
-const RENDERER = join(import.meta.dirname, "fixtures/renderer/pkg/ludenea_render.js");
-
-type Rgba = [number, number, number, number];
-type Point = [number, number];
-interface Drawn {
-  report: { missing: unknown[] };
-  pixels: Rgba[];
-}
-
-declare global {
-  interface Window {
-    /** Set by `fixtures/renderer/main.js`. */
-    fixture: {
-      start(): Promise<{ backend: string; errors: { id: string; path: string | null; message: string }[] }>;
-      drawReference(points: Point[]): Drawn;
-      drawSprites(count: number, placed: Record<number, Point>, points: Point[]): Drawn;
-      drawError(): string | null;
-      failOnTheDevice(): void;
-      loseTheDevice(): void;
-    };
-  }
-}
+// Each test runs in the `webgl2` and the `webgpu` projects (playwright.config.ts).
 
 const BACKGROUND: Rgba = [0x12, 0x12, 0x14, 255];
 // The texels of fixtures/renderer/sprites.png and tiles.png. None is 0 or 255 on every channel,
@@ -37,26 +13,10 @@ const TILE: Rgba = [0x40, 0xa0, 0x60, 255];
 const OUTLINE: Rgba = [0x30, 0x60, 0xf0, 255];
 const HIGHLIGHT: Rgba = [0xff, 0xd4, 0x00, 255];
 
-/** Opens the fixture page and its renderer, failing on any page error. */
-async function start(page: Page): Promise<{ backend: string; errors: { id: string; path: string | null; message: string }[] }> {
-  expect(existsSync(RENDERER), `${RENDERER} is missing: run cargo xtask wasm-render editor/e2e/fixtures/renderer/pkg`).toBe(true);
-  const errors: string[] = [];
-  page.on("pageerror", (error) => errors.push(error.message));
-  page.on("console", (message) => {
-    if (message.type() === "error") errors.push(message.text());
-    console.log(`[page] ${message.text()}`);
-  });
-  await page.goto("/renderer/index.html");
-  await page.waitForFunction(() => window.fixture !== undefined);
-  const started = await page.evaluate(() => window.fixture.start());
-  expect(errors).toEqual([]);
-  return started;
-}
-
 test("draws_the_reference_frame", async ({ page }) => {
-  const { errors } = await start(page);
+  const { refused } = await start(page);
   // The broken texture is refused, naming it; the others load.
-  expect(errors).toEqual([
+  expect(refused).toEqual([
     {
       id: "00000000000000000000000000000003",
       path: "broken.png",
@@ -76,6 +36,13 @@ test("draws_the_reference_frame", async ({ page }) => {
     ["debug outline", [96, 80], OUTLINE],
     ["inside the outline", [96, 96], BACKGROUND],
     ["selected entity", [32, 64], HIGHLIGHT],
+    // The world layer draws over the layer before it, whatever their orders.
+    ["layer over the layer before it", [108, 56], LEFT],
+    // Halfway from (0, 3.5) to (1, 3.5): pixels 32 to 48 across, and neither end.
+    ["halfway sprite, left texel", [35, 8], LEFT],
+    ["halfway sprite, right texel", [44, 8], RIGHT],
+    ["where the sprite was", [26, 8], BACKGROUND],
+    ["where the sprite is", [54, 8], BACKGROUND],
   ];
   const { report, pixels } = await page.evaluate((points) => window.fixture.drawReference(points), samples.map(([, point]) => point));
   expect(report).toEqual({ missing: [] });
@@ -112,17 +79,18 @@ test("webgpu_project_has_a_webgpu_adapter", async ({ page }, testInfo) => {
   }
 });
 
-// The browser reports WebGPU's errors and the device's loss after the call that caused them.
-test("a_gpu_error_raised_between_draws_is_returned_by_the_next_draw", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "webgpu", "WebGL2 raises its errors in the call that causes them, as native backends do (tests/gpu.rs)");
-  await start(page);
+test("a_canvas_past_the_texture_limit_is_refused_and_a_resize_past_it_fails_the_draw", async ({ page }) => {
+  const { pageErrors } = await start(page);
+  // Past any device's `max_texture_dimension_2d`.
+  const wide = 40_000;
+  const refused = await page.evaluate((width) => window.fixture.createOn(width, 1), wide);
+  expect(refused).toMatch(new RegExp(`^create needs ${wide} for \`max_texture_dimension_2d\`, but at most \\d+ is allowed$`));
+  await page.evaluate((width) => window.fixture.resize(width, 1), wide);
+  expect(await page.evaluate(() => window.fixture.drawError())).toMatch(
+    new RegExp(`^draw needs ${wide} for \`max_texture_dimension_2d\`, but at most \\d+ is allowed$`),
+  );
+  // Back within the limit, it draws again.
+  await page.evaluate(() => window.fixture.resize(128, 128));
   expect(await page.evaluate(() => window.fixture.drawError())).toBeNull();
-  await page.evaluate(() => window.fixture.failOnTheDevice());
-  await expect.poll(() => page.evaluate(() => window.fixture.drawError())).toMatch(/^draw failed on the GPU: .*invalid on purpose/s);
-  // Reported once.
-  expect(await page.evaluate(() => window.fixture.drawError())).toBeNull();
-  await page.evaluate(() => window.fixture.loseTheDevice());
-  await expect.poll(() => page.evaluate(() => window.fixture.drawError())).toMatch(/^the GPU device was lost: /);
-  // Every draw after the loss.
-  expect(await page.evaluate(() => window.fixture.drawError())).toMatch(/^the GPU device was lost: /);
+  expect(pageErrors).toEqual([]);
 });

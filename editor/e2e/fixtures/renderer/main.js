@@ -34,11 +34,11 @@ async function start() {
   return { backend: renderer.backend, errors };
 }
 
-function sprite(index, position, { layer = 1, frame = 0, flip_x = false } = {}) {
+function sprite(index, position, { layer = 1, order = 0, frame = 0, flip_x = false } = {}) {
   return {
     entity: entity(index),
     layer,
-    order: 0,
+    order,
     texture: SPRITES,
     frame,
     position: { x: position[0], y: position[1] },
@@ -73,21 +73,32 @@ function pixels(points) {
   return points.map(([x, y]) => Array.from(copy.getImageData(x, y, 1, 1).data));
 }
 
-function draw(current, overlay = {}) {
-  return JSON.parse(renderer.draw(undefined, JSON.stringify(current), 1, JSON.stringify(overlay)));
+/** Draws `current`, or `alpha` of the way from `previous` to it when `previous` is given. */
+function draw(current, overlay = {}, previous = undefined, alpha = 1) {
+  const before = previous === undefined ? undefined : JSON.stringify(previous);
+  return JSON.parse(renderer.draw(before, JSON.stringify(current), alpha, JSON.stringify(overlay)));
 }
 
 /**
  * The reference frame: a sprite at (0, 2), the same sprite flipped at (4, 2), a tilemap of two
  * cells (one empty) at (0, -3), a sprite at (0, -1) on a layer fixed to the screen, a square
- * outline from (3, -3) to (5, -1), and a selected entity's filled circle at (0, 0).
+ * outline from (3, -3) to (5, -1), a selected entity's filled circle at (0, 0), a sprite on
+ * the world layer over one at the same pixels on the layer fixed to the screen (listed after it,
+ * with a higher order), and a sprite moved from (0, 3.5) to (1, 3.5), drawn halfway.
  */
 function drawReference(points) {
   const square = [[3, -3], [5, -3], [5, -1], [3, -1]].map(([x, y]) => ({ x, y }));
   const outline = { type: "polygon", points: square, color: 0x3060f0ff, fill: false };
   const dot = { type: "circle", center: { x: 0, y: 0 }, radius: 0.5, color: 0x3060f0ff, fill: true };
   const reference = frame(
-    [sprite(1, [0, 2]), sprite(2, [4, 2], { flip_x: true }), sprite(3, [0, -1], { layer: 0, frame: 1 })],
+    [
+      sprite(1, [0, 2]),
+      sprite(2, [4, 2], { flip_x: true }),
+      sprite(3, [0, -1], { layer: 0, frame: 1 }),
+      sprite(7, [5, 0.5]),
+      sprite(8, [3, 0.5], { layer: 0, order: 10, frame: 1 }),
+      sprite(9, [1, 3.5]),
+    ],
     {
       tilemaps: [
         {
@@ -112,7 +123,9 @@ function drawReference(points) {
       },
     },
   );
-  const report = draw(reference, { debug_layers: ["physics"], selected: [entity(6)] });
+  const previous = structuredClone(reference);
+  previous.sprites[5].position = { x: 0, y: 3.5 };
+  const report = draw(reference, { debug_layers: ["physics"], selected: [entity(6)] }, previous, 0.5);
   return { report, pixels: pixels(points) };
 }
 
@@ -144,4 +157,21 @@ function loseTheDevice() {
   device().destroy();
 }
 
-window.fixture = { start, drawReference, drawSprites, drawError, failOnTheDevice, loseTheDevice };
+/** Opens a renderer on a new canvas of `width` by `height` pixels: null, or its error. */
+async function createOn(width, height) {
+  const other = document.createElement("canvas");
+  other.width = width;
+  other.height = height;
+  try {
+    (await WebRenderer.create(other)).free();
+    return null;
+  } catch (error) {
+    return String(error);
+  }
+}
+
+function resize(width, height) {
+  renderer.resize(width, height, 1);
+}
+
+window.fixture = { start, drawReference, drawSprites, drawError, failOnTheDevice, loseTheDevice, createOn, resize };
