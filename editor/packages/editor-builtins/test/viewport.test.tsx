@@ -453,6 +453,17 @@ describe("viewport", () => {
     expect(host.editor.console.list().map(({ text }) => text)).toEqual([reported, reported]);
   });
 
+  it("a_failing_draw_is_reported_in_the_editor_console", async () => {
+    const { host } = await viewport();
+    vi.spyOn(renderers.at(-1)!, "draw").mockImplementation(() => {
+      throw new Error("the surface is lost");
+    });
+    act(() => host.editor.selection.getState().select([entity(1)]));
+    await waitFor(() => expect(host.editor.console.list()).toHaveLength(1));
+
+    expect(host.editor.console.list().map(({ level, text }) => [level, text])).toEqual([["error", "Drawing the viewport failed: the surface is lost"]]);
+  });
+
   it("a_refused_pick_is_reported_in_the_editor_console", async () => {
     const { host, view } = await viewport((command) => (command.type === "pick" ? { error: { code: "system_panicked", message: "the game panicked while picking" } } : undefined));
     const reported = ["error", "Picking an entity in the viewport failed: the game panicked while picking"];

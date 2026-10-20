@@ -357,6 +357,22 @@ describe("divergence", () => {
     expect(sentOf(game.sent, "unsubscribe")).toContainEqual({ type: "unsubscribe", topic: { type: "ghost" } });
   });
 
+  it("a_refused_subscription_to_the_compare_branch_is_reported_in_the_editor_console", async () => {
+    const { host } = await divergence({
+      game: (command) => {
+        if (command.type === "subscribe") return { error: { code: "invalid_command", message: "no compare branch" } };
+        return command.type === "get_divergence" ? { type: "divergence", ...report } : undefined;
+      },
+    });
+    renderPanel(host, "ludenea.divergence-report");
+    await settle();
+
+    expect(host.editor.console.list().map(({ level, text }) => [level, text])).toEqual([
+      ["error", "Following the ghost of the compare branch failed: no compare branch"],
+      ["error", "Following the divergence of the compare branch failed: no compare branch"],
+    ]);
+  });
+
   it("lagging_badge_shows_when_ghost_lags", async () => {
     const { host, game } = await divergence({
       game: (command) => (command.type === "get_ghost_draw" ? { type: "ghost_draw", frame: circle, tick: 340, lagging: true } : undefined),

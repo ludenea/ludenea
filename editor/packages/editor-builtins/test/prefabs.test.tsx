@@ -238,6 +238,21 @@ describe("prefabs", () => {
     expect(host.editor.timeline.getState().timeline?.unsaved_assets).toEqual([]);
   });
 
+  it("a_panel_that_cannot_be_shown_is_reported_in_the_editor_console", async () => {
+    const { host } = await editor();
+    host.editor.commands.register({
+      id: "panels.open.ludenea.scene-tree",
+      title: "Show Scene panel",
+      run() {
+        throw new Error("the layout is locked");
+      },
+    });
+    await act(() => host.editor.commands.run("prefabs.place"));
+    await settle();
+
+    expect(host.editor.console.list().map(({ level, text }) => [level, text])).toEqual([["error", "Show Scene panel failed: the layout is locked"]]);
+  });
+
   it("place_prefab_sends_place_instance", async () => {
     const { host, game } = await editor();
     renderPanel(host, "ludenea.scene-tree");

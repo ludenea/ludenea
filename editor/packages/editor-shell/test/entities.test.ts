@@ -99,6 +99,17 @@ describe("entities", () => {
     expect(logged(host)).toEqual([["error", "Watching entity 4v2 failed: no such entity", undefined]]);
   });
 
+  it("an_unwatch_the_game_refuses_is_reported_in_the_editor_console", async () => {
+    const host = await testHost();
+    const game = await testGame((command) => (command.type === "unsubscribe" ? { error: { code: "invalid_command", message: "not subscribed" } } : { type: "done" }));
+    host.setControl(game.control);
+
+    host.editor.entities.watch(entity, () => {}).dispose();
+    await settle();
+
+    expect(logged(host)).toEqual([["error", "Unwatching entity 4v2 failed: not subscribed", undefined]]);
+  });
+
   it("entities_need_a_game", async () => {
     const { editor } = await testHost();
     await expect(editor.entities.get(entity, "ludenea::Pose")).rejects.toThrow("no game");
