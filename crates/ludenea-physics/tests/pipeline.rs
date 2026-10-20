@@ -481,22 +481,32 @@ fn scene_with_huge_substeps_is_rejected() {
 
 #[test]
 fn scene_with_physics_settings_out_of_range_is_rejected() {
-    for (field, value) in [
-        ("gravity", "(x: 0.0, y: -1000001.0)"),
-        ("gravity", "(x: inf, y: 0.0)"),
-        ("substeps", "0"),
-        ("substeps", "65"),
-        ("contact_hertz", "-1.0"),
-        ("contact_damping_ratio", "NaN"),
-        ("contact_damping_ratio", "1001.0"),
-        ("contact_push_max_velocity", "inf"),
-        ("restitution_threshold", "-0.5"),
+    // Each reason names the field and the refused value.
+    for (field, value, reason) in [
+        (
+            "gravity",
+            "(x: 0.0, y: -1000001.0)",
+            "got (0.0, -1000001.0)",
+        ),
+        ("gravity", "(x: inf, y: 0.0)", "got (inf, 0.0)"),
+        ("substeps", "0", "got 0"),
+        ("substeps", "65", "got 65"),
+        ("contact_hertz", "-1.0", "got -1.0"),
+        ("contact_damping_ratio", "NaN", "got NaN"),
+        ("contact_damping_ratio", "1001.0", "got 1001.0"),
+        ("contact_push_max_velocity", "inf", "got inf"),
+        ("restitution_threshold", "-0.5", "got -0.5"),
     ] {
-        assert_resource_rejected(
-            &scene_with_resources(&settings(field, value)),
-            "ludenea::PhysicsSettings",
-            field,
+        let scene = scene_with_resources(&settings(field, value));
+        let error = simulation().load_scene(&scene).unwrap_err();
+        let SceneError::InvalidValue { reason: why, .. } = &error else {
+            panic!("{error:?}");
+        };
+        assert!(
+            why.contains(&format!("{field} must")) && why.ends_with(reason),
+            "{why}"
         );
+        assert_resource_rejected(&scene, "ludenea::PhysicsSettings", field);
     }
 }
 
