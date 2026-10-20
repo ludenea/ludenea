@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { launchArgs } from "./project";
 
 const port = 4310;
 
@@ -15,7 +16,7 @@ export default defineConfig({
     actionTimeout: 30_000,
     ...devices["Desktop Chrome"],
     baseURL: `http://localhost:${port}`,
-    launchOptions: { args: ["--use-angle=swiftshader"] },
+    launchOptions: { args: launchArgs },
   },
   webServer: {
     command: `vite --config e2e/vite.config.ts --port ${port} --strictPort`,

@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
-import { button, collectErrors, expectNoErrors, expectTick, openScene, repository, runCommand, seek, serveProject, timeline, waitForGame, type ServedProject } from "./project";
+import { button, collectErrors, expectNoErrors, expectTick, launchArgs, openScene, repository, runCommand, seek, serveProject, timeline, waitForGame, type ServedProject } from "./project";
 
 declare global {
   interface Window {
@@ -23,7 +23,7 @@ const strict = process.env.PERF_STRICT === "1";
 
 // The configuration's launch arguments, with scrollbars shown as users see them (headless
 // Chromium hides them), so a test can give the page scrollbars that take room.
-test.use({ launchOptions: { args: ["--use-angle=swiftshader"], ignoreDefaultArgs: ["--hide-scrollbars"] } });
+test.use({ launchOptions: { args: launchArgs, ignoreDefaultArgs: ["--hide-scrollbars"] } });
 
 let served: ServedProject;
 
