@@ -20,7 +20,9 @@ impl Default for Rot {
 impl Rot {
     pub const IDENTITY: Rot = Rot { cos: 1.0, sin: 0.0 };
 
-    /// `IDENTITY` when the angle is not finite or too large to reduce, as `sin_cos`.
+    /// As `sin_cos`: `IDENTITY` when the angle is not finite or so large that the
+    /// approximation overflows, and a unit rotation that does not follow the angle when it is
+    /// too large to reduce precisely.
     pub fn from_angle(angle: f32) -> Rot {
         let (sin, cos) = sin_cos(angle);
         Rot { cos, sin }
@@ -128,8 +130,24 @@ mod tests {
     }
 
     #[test]
-    fn from_angle_gives_identity_for_an_angle_it_cannot_reduce() {
-        for angle in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1e30] {
+    fn from_angle_gives_identity_for_an_angle_that_is_not_finite() {
+        for angle in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(Rot::from_angle(angle), Rot::IDENTITY, "{angle}");
+        }
+    }
+
+    #[test]
+    fn from_angle_of_a_finite_angle_too_large_to_reduce_is_a_unit_rotation() {
+        // Reduced to -65536, outside [-PI, PI]: unit length, yet not the identity.
+        assert_eq!(
+            Rot::from_angle(1e12),
+            Rot {
+                cos: 0.70710677,
+                sin: 0.70710677
+            }
+        );
+        // The approximation overflows, which gives the identity.
+        for angle in [1e30, f32::MAX, f32::MIN] {
             assert_eq!(Rot::from_angle(angle), Rot::IDENTITY, "{angle}");
         }
     }

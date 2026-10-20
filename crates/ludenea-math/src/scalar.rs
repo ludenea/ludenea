@@ -48,8 +48,11 @@ pub fn unwind_angle(angle: f32) -> f32 {
 }
 
 /// Returns `(sin, cos)` using the Box2D v3 rational approximation, normalized. Gives
-/// `(0, 1)`, the identity rotation, when the angle is not finite or so large that reducing
-/// it to `[-PI, PI]` overflows.
+/// `(0, 1)`, the identity rotation, when the angle is not finite or so large that the
+/// approximation overflows (1e30, for example). The reduction to `[-PI, PI]` loses precision
+/// as the angle grows: from 2^26 (about 6.7e7) on, where consecutive `f32` values are more
+/// than a turn apart, the result is a unit rotation that does not follow the angle, such as
+/// `(0.7071, 0.7071)` for 1e12.
 pub fn sin_cos(angle: f32) -> (f32, f32) {
     let x = unwind_angle(angle);
     let pi2 = PI * PI;

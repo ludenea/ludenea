@@ -55,9 +55,11 @@ hash, those of the golden trace and replays included.
   pool on error. The command line tool's `--threads` takes 1 to 256, and its refusals
   exit with code 2 instead of a panic.
 - `Rot::normalize` returns `Rot::IDENTITY` when the magnitude is zero or not finite, and
-  `sin_cos` returns `(0, 1)` for an angle that is not finite or too large to reduce, so
-  `Rot::from_angle` and `Rot::integrate` give the identity there too. All of them returned
-  `(0, 0)`, a rotation that loading a `Pose` refuses.
+  `sin_cos` returns `(0, 1)` for an angle that is not finite or so large that its
+  approximation overflows (1e30, for example), so `Rot::from_angle` and `Rot::integrate`
+  give the identity there too. All of them returned `(0, 0)`, a rotation that loading a
+  `Pose` refuses. A finite angle too large to reduce precisely, such as 1e12, still gives
+  a unit rotation that does not follow the angle.
 - The physics step clamps the angular velocity of a kinematic body as it does a dynamic
   one's, to an eighth of a turn per substep, and writes the clamped value back to `Body`.
 - `Pose::validate` checks a pose as loading does and returns the new `PoseError`, which
