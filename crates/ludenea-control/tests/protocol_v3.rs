@@ -83,36 +83,22 @@ fn timeline(host: &mut Host) -> Timeline {
 }
 
 #[test]
-fn handshake_refuses_version_2() {
-    assert_eq!(PROTOCOL_VERSION, 5);
-    let Err(error) = InProcess::connect(Host::new(boxes::app).unwrap(), 2) else {
-        panic!("a version 2 client connects");
-    };
-    assert_eq!(
-        error,
-        ProtocolError {
-            code: ErrorCode::VersionMismatch,
-            message: "client speaks protocol 2, engine speaks 5; rebuild the editor (pnpm -C \
-                      editor build) and the game from the same checkout"
-                .to_string(),
-        }
-    );
-}
-
-#[test]
 fn an_old_client_is_refused_naming_both_versions() {
-    let Err(error) = InProcess::connect(Host::new(boxes::app).unwrap(), 4) else {
-        panic!("a version 4 client connects");
-    };
-    assert_eq!(
-        error,
-        ProtocolError {
-            code: ErrorCode::VersionMismatch,
-            message: "client speaks protocol 4, engine speaks 5; rebuild the editor (pnpm -C \
-                      editor build) and the game from the same checkout"
-                .to_string(),
-        }
-    );
+    for old in 1..PROTOCOL_VERSION {
+        let Err(error) = InProcess::connect(Host::new(boxes::app).unwrap(), old) else {
+            panic!("a version {old} client connects");
+        };
+        assert_eq!(
+            error,
+            ProtocolError {
+                code: ErrorCode::VersionMismatch,
+                message: format!(
+                    "client speaks protocol {old}, engine speaks {PROTOCOL_VERSION}; rebuild the \
+                     editor (pnpm -C editor build) and the game from the same checkout"
+                ),
+            }
+        );
+    }
 }
 
 /// The `type` a command or a reply travels with.

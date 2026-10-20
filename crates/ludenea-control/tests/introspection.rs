@@ -4,6 +4,7 @@ use boxes::BoxesInput;
 use ludenea::control::Event;
 use ludenea::control::*;
 use ludenea::prelude::*;
+use ludenea_ecs::AssetId;
 use serde_json::{Value, json};
 
 fn ok(host: &mut Host, command: Command) -> Reply {
@@ -551,7 +552,9 @@ fn render_frame_and_pick_through_protocol() {
 fn render_frame_carries_sprites_of_a_render_plugin_game() {
     fn app() -> App {
         let mut app = App::new();
-        app.plugin(RenderPlugin).render_layer("world", 1.0);
+        app.plugin(RenderPlugin)
+            .render_layer("background", 0.5)
+            .render_layer("world", 1.0);
         app
     }
     let mut host = Host::new(app).unwrap();
@@ -568,7 +571,9 @@ fn render_frame_carries_sprites_of_a_render_plugin_game() {
         rotation: Rot::IDENTITY,
     };
     let sprite = Sprite {
+        texture: AssetId(7),
         frame: 3,
+        layer: "world".into(),
         ..Sprite::default()
     };
     let Reply::Spawned { entity } = ok(
@@ -597,14 +602,24 @@ fn render_frame_carries_sprites_of_a_render_plugin_game() {
     ) else {
         panic!()
     };
-    assert_eq!(frame.layers.len(), 1);
-    assert_eq!(frame.layers[0].name, "world");
+    let names: Vec<&str> = frame
+        .layers
+        .iter()
+        .map(|layer| layer.name.as_str())
+        .collect();
+    assert_eq!(names, ["background", "world"]);
     let [item] = frame.sprites.as_slice() else {
         panic!("{:?}", frame.sprites)
     };
     assert_eq!(
-        (item.entity, item.frame, item.position),
-        (entity, 3, Vec2::new(1.0, 2.0))
+        (
+            item.entity,
+            item.layer,
+            item.texture,
+            item.frame,
+            item.position
+        ),
+        (entity, 1, AssetId(7), 3, Vec2::new(1.0, 2.0))
     );
     assert!(frame.warnings.is_empty(), "{:?}", frame.warnings);
 }
