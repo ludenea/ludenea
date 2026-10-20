@@ -207,6 +207,11 @@ pub(crate) mod tests {
             assert_eq!(printed, expected, "{stream:?}");
             assert_eq!(game.wait(), None, "the game still runs");
             assert_eq!(
+                output.try_recv(),
+                Err(mpsc::TryRecvError::Empty),
+                "{stream:?}: more output arrived"
+            );
+            assert_eq!(
                 messages.try_recv(),
                 Err(mpsc::TryRecvError::Empty),
                 "{stream:?}: messages still arrive"
