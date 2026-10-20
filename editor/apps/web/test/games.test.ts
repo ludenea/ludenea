@@ -204,6 +204,53 @@ describe("followWasmGames giving up", () => {
   });
 });
 
+describe("followWasmGames stored sessions", () => {
+  it("a_stored_session_the_rebuilt_game_refuses_is_set_aside_before_the_next_store", async () => {
+    const builds = ["/game/a/game.js", "/game/b/game.js"] as const;
+    let build = 0;
+    const { project, ids, requests, sessions, push } = await documentProject((request) => (request.type === "game_endpoint" ? { type: "wasm", glue_url: builds[build] } : { type: "done" }));
+    const [a] = ids;
+    const bytes = storedBytes({
+      load: { type: "load_session", scene: "(A edited)", saved_scene: "(A)", inputs: "AQEA", edits: "", undo: "", expected: hashes, assets: [], saved_assets: [], branches: "", document: "Scene", keeps_assets: false },
+      tick: 2,
+      document: a,
+    });
+    sessions.set(sessionFile(a), bytes);
+    const host = createEditor({ project });
+    const editor = { connectGame: host.setControl, log: host.editor.console.log, sessions: host.sessions };
+    const timelines = (command: Message) => (command.type === "get_timeline" ? { type: "timeline", ...timeline, branch: 0, branches: [], compare: null } : undefined);
+    const games = [
+      // The old game exports nothing, so A's stored session carries over.
+      fakeHost("old", { answer: (command) => (command.type === "export_session" ? { error: { code: "io", message: "the game exited" } } : timelines(command)) }),
+      // The rebuilt game no longer has a component the stored session holds.
+      fakeHost("new", {
+        answer: (command) => (command.type === "load_session" ? { error: { code: "invalid_command", message: "the component demo::Gone is not registered" } } : timelines(command)),
+      }),
+    ];
+    followWasmGames(project, editor, (glueUrl) => {
+      const game = games[builds.indexOf(glueUrl as (typeof builds)[number])]!;
+      return { transport: game, onCrashed: () => () => {}, terminate: () => game.close() };
+    });
+    await settle();
+    await host.editor.document.getState().open(a);
+
+    build = 1;
+    push({ type: "game_ready" });
+    await vi.waitFor(() => expect(requests.some((request) => request.type === "set_aside_stored_session")).toBe(true));
+    // The rebuilt game pauses: its guard stores its session.
+    games[1]!.push(JSON.stringify({ type: "event", event: { type: "paused", reason: { type: "user" } } }));
+    await vi.waitFor(() => expect(requests.some((request) => request.type === "store_session")).toBe(true));
+
+    expect(loads.at(-1)).toMatchObject({ scene: "(A edited)" });
+    const kept = `.ludenea/sessions/${a}.1.rejected.session`;
+    expect(sessions.get(kept)).toBe(bytes);
+    expect(requests.map((request) => request.type).filter((type) => type === "set_aside_stored_session" || type === "store_session")).toEqual(["set_aside_stored_session", "store_session"]);
+    const messages = host.editor.console.list().map(({ level, text }) => `${level}: ${text}`);
+    expect(messages).toContainEqual(expect.stringMatching(`^warning: The game refused the stored session of scenes/a.scene.ron .*kept as ${kept}`));
+    expect(messages.filter((message) => message.startsWith("error:"))).toEqual([]);
+  });
+});
+
 describe("followNativeGames", () => {
   it("desktop_rebuild_exports_before_restart_game", async () => {
     const games = [fakeHost("old"), fakeHost("new")];
