@@ -53,7 +53,11 @@ export interface DocumentState {
 export interface DocumentSessions {
   /** Exports the session of `control`, tagged with the document open when asked (none while one opens). */
   export(control: ControlClient): Promise<SavedSession>;
-  /** Stores `saved` (a fresh export by default) as the open document's session; one tagged with another document is not stored, nor any while a document opens. */
+  /**
+   * Stores `saved` (a fresh export by default) as the open document's session; one tagged with
+   * another document is not stored, nor any while a document opens, nor a stored session the
+   * game refused through `restore`.
+   */
   store(saved?: SavedSession): Promise<void>;
   /** `saved` when it belongs to the open document, else the open document's stored session, if any: restore it with `restore`. */
   own(saved: SavedSession | null): Promise<SavedSession | null>;
@@ -234,8 +238,11 @@ export function createDocumentStore(options: {
   // cannot be (false). The stores of its document wait for it, so none overwrites that session,
   // and make none while it cannot be set aside, until a game takes it or it is gone.
   const asides = new Map<AssetId, Promise<boolean>>();
+  // The stored sessions a game refused: one still held elsewhere (the seed of a session guard)
+  // is never stored back over the export that replaced it.
+  const refused = new WeakSet<SavedSession>();
   const storeIn = async (document: OpenDocument, saved: SavedSession) => {
-    if ((await asides.get(document.id)) === false) return;
+    if (refused.has(saved) || (await asides.get(document.id)) === false) return;
     await project.request({ type: "store_session", document: document.id, bytes: encodeStoredSession(saved) });
   };
   /** The stored session of `document` as read, if any. */
@@ -294,6 +301,7 @@ export function createDocumentStore(options: {
     } catch (error) {
       const failure = locateAssetError(error, texts.paths);
       if (!accepted) {
+        refused.add(saved);
         const { kept, warning } = setAside(document, `The game refused the stored session of ${document.path} (${sessionFile(document.id)}): ${message(failure)}`, outcome, locationOf(failure));
         decide(kept);
         return { refused: await warning };

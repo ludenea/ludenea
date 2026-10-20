@@ -493,6 +493,10 @@ hash, those of the golden trace and replays included.
   names that protocol and peer, as the game and the service do: `ControlClient.connect`
   says "the game speaks protocol ..." and `ProjectClient.connect` "the service speaks
   project protocol ...", where both said "the engine speaks protocol ...".
+- `DocumentSessions.store` no longer stores a stored session the game refused through
+  `restore`. Closing the page stored the seed of a session guard whose game refused it back
+  over the document's session, and the next open set it aside again as another
+  `.rejected.session`.
 
 ### Formats
 

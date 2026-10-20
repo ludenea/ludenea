@@ -370,6 +370,38 @@ describe("guardSession with documents", () => {
     expect(requests.filter((request) => request.type === "write_text")).toEqual([]);
   });
 
+  it("closing_the_page_does_not_store_back_a_seed_the_game_refused", async () => {
+    const page = new EventTarget();
+    vi.stubGlobal("addEventListener", page.addEventListener.bind(page));
+    vi.stubGlobal("removeEventListener", page.removeEventListener.bind(page));
+    const { project, ids, requests, sessions } = await documentProject();
+    const [a] = ids;
+    sessions.set(
+      sessionFile(a),
+      storedBytes({
+        load: { type: "load_session", scene: "(A edited)", saved_scene: "(A)", inputs: "AA==", edits: "", undo: "", expected: hashes, assets: [], saved_assets: [], branches: "", document: "Scene", keeps_assets: false },
+        tick: 2,
+        document: a,
+      }),
+    );
+    const host = createEditor({ project });
+    await host.editor.document.getState().open(a);
+    // A rebuilt game, seeded with the open document's stored session, refuses it.
+    const seed = (await host.sessions.own(null))!;
+    const game = await documentGame({ refuses: true });
+    host.setControl(game.control);
+    guardSession(game.control, fakeWorker(), async () => game.control, { seed, sessions: host.sessions, log: () => {} });
+    expect(await host.sessions.restore(game.control, seed)).toBeNull();
+
+    page.dispatchEvent(new Event("pagehide"));
+    await vi.waitFor(() => expect(requests.some((request) => request.type === "store_session")).toBe(true));
+    await settle();
+
+    const stored = requests.filter((request) => request.type === "store_session").map((request) => JSON.parse(atob(request.bytes as string)).saved.load.scene);
+    // The next game's export, not the refused seed, which a next open would refuse again.
+    expect(stored).toEqual(["(A)"]);
+  });
+
   it("a_stored_session_the_restarted_game_refuses_is_set_aside_before_the_next_store", async () => {
     const { project, ids, requests, sessions } = await documentProject();
     const [a] = ids;
