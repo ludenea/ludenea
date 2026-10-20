@@ -485,8 +485,9 @@ export function createDocumentStore(options: {
     Promise.all([loaded, restored])
       .then(([first, second]) => {
         const report = { loaded: loadedIn(first), fingerprintDiffers: differs(first) };
-        // A refused stored session leaves the scene load's report, and its warning on the scene tree.
-        store.setState(second && "refused" in second ? { ...report, error: second.refused } : { ...report, loaded: second?.loaded ?? report.loaded, error: null });
+        // A refused stored session leaves the scene load's report, and its warning on the scene
+        // tree. A restored one's load reports what stays loaded, as when the document opens.
+        store.setState(second && "refused" in second ? { ...report, error: second.refused } : { ...report, loaded: second ? second.loaded : report.loaded, error: null });
         return nameRoot(game, document);
       })
       .catch(reported(`Cannot load ${document.path} into the game`))

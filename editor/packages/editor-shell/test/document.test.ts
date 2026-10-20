@@ -252,6 +252,26 @@ describe("document store", () => {
     expect(project.stored(ids.main)?.saved.load.scene).toBe("(edited)");
   });
 
+  it("a_stored_session_the_next_game_loads_but_cannot_go_back_in_leaves_no_load_report", async () => {
+    const project = fakeProject();
+    const host = await testHost(undefined, project.answer);
+    project.store(ids.main, mainSession);
+    await host.editor.document.getState().open(ids.main);
+
+    const game = await testGame((command) => {
+      if (command.type === "get_timeline") return timeline(0);
+      if (command.type === "load_scene" || command.type === "load_session") return { type: "loaded", warnings: [`from ${command.type}`], instances: [], load_addresses: [] };
+      if (command.type === "seek") return { error: { code: "invalid_command", message: "no such tick" } };
+      return { type: "done" };
+    });
+    host.setControl(game.control);
+    await vi.waitFor(() => expect(logged(host)).toContainEqual(["warning", "The stored session of scenes/main.scene.ron is loaded, but cannot go back to tick 0: no such tick", undefined]));
+    await settle();
+
+    // As when the document opens: the scene load's report is not kept.
+    expect(host.editor.document.getState()).toMatchObject({ loaded: null, error: null });
+  });
+
   it("a_stored_session_that_does_not_decode_is_set_aside_when_a_crash_restarts_the_game", async () => {
     const project = fakeProject();
     const host = await testHost(undefined, project.answer);
