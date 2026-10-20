@@ -223,6 +223,21 @@ impl Renderer {
                 allowed: u64::from(allowed),
             });
         }
+        // Rows are copied out padded to the copy alignment, then packed. The side fits the
+        // texture limit, so a padded row fits a u32.
+        let row = size.width * 4;
+        let padded =
+            row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let read_back = u64::from(padded) * u64::from(size.height);
+        let allowed = self.device.limits().max_buffer_size;
+        if read_back > allowed {
+            return Err(RenderError::Limit {
+                operation: "render_rgba",
+                limit: "max_buffer_size",
+                requested: read_back,
+                allowed,
+            });
+        }
         let extent = wgpu::Extent3d {
             width: size.width,
             height: size.height,
@@ -246,13 +261,9 @@ impl Renderer {
             overlay,
         )?;
 
-        // Rows are copied out padded to the copy alignment, then packed.
-        let row = size.width * 4;
-        let padded =
-            row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("offscreen read-back"),
-            size: u64::from(padded) * u64::from(size.height),
+            size: read_back,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });

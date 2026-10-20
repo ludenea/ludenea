@@ -562,3 +562,41 @@ fn render_rgba_refuses_a_target_larger_than_the_device_allows() {
         "{error}"
     );
 }
+
+#[test]
+fn render_rgba_refuses_a_target_whose_read_back_exceeds_the_buffer_limit() {
+    let (device, queue) = device();
+    let limits = device.limits();
+    // The largest square target the texture limit allows; its read-back must still pass the
+    // buffer limit for this test to mean anything.
+    let side = limits.max_texture_dimension_2d;
+    let padded = u64::from((side * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT))
+        * u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+    let requested = padded * u64::from(side);
+    assert!(
+        requested > limits.max_buffer_size,
+        "a {side}x{side} read-back ({requested} bytes) fits the {} byte buffer limit: this \
+         device cannot exercise the check",
+        limits.max_buffer_size
+    );
+    let mut renderer = Renderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm);
+    let scene = frame(Vec::new());
+    let frames = Frames {
+        previous: None,
+        current: &scene,
+        alpha: 1.0,
+    };
+    let size = Size {
+        width: side,
+        height: side,
+    };
+    assert_eq!(
+        renderer.render_rgba(size, frames, &Overlay::default()),
+        Err(RenderError::Limit {
+            operation: "render_rgba",
+            limit: "max_buffer_size",
+            requested,
+            allowed: limits.max_buffer_size,
+        })
+    );
+}
