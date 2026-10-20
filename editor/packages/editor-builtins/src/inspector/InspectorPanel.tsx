@@ -208,7 +208,7 @@ function useEntities(editor: Editor, control: ControlClient, entities: Entity[])
     const replies: (Loaded | undefined)[] = entities.map(() => undefined);
     const load = (entity: Entity, at: number) =>
       void onEntity(editor, control.request({ type: "get_entity", entity })).then(
-        ({ entity, components }) => {
+        ({ components }) => {
           replies[at] = { entity, components };
           const all = replies.filter((reply) => reply !== undefined);
           if (current && all.length === entities.length) setLoaded(all);
