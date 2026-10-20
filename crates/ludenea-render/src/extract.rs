@@ -15,20 +15,35 @@ pub fn extract(world: &World, frame: &mut RenderFrame) {
     extract_tilemaps(world, frame);
     check_animations(world, frame);
     if let Ok(teleported) = Query::<(Entity, &Teleported)>::new(world) {
-        frame.teleported = teleported
-            .iter()
-            .filter(|(_, teleported)| teleported.tick == frame.tick)
-            .map(|(entity, _)| entity)
-            .collect();
+        let tick = frame.tick;
+        frame.teleported.extend(
+            teleported
+                .iter()
+                .filter(|(_, teleported)| teleported.tick == tick)
+                .map(|(entity, _)| entity),
+        );
+        frame.teleported.sort();
+        frame.teleported.dedup();
     }
 }
 
-/// The camera of the lowest entity with a `Camera2d` and a `Pose`.
+/// The camera of the lowest entity with a `Camera2d` and a `Pose`, with a warning for each
+/// camera without a `Pose`.
 fn extract_camera(world: &World, frame: &mut RenderFrame) {
-    let Ok(cameras) = Query::<(Entity, &Camera2d, &Pose)>::new(world) else {
+    let Ok(cameras) = Query::<(Entity, &Camera2d, Option<&Pose>)>::new(world) else {
         return;
     };
-    let mut cameras: Vec<_> = cameras.iter().collect();
+    let mut cameras: Vec<_> = cameras
+        .iter()
+        .filter_map(|(entity, camera, pose)| {
+            if pose.is_none() {
+                frame.warnings.push(format!(
+                    "entity {entity}: has a Camera2d but no Pose, so it is not used; add a Pose"
+                ));
+            }
+            Some((entity, camera, pose?))
+        })
+        .collect();
     cameras.sort_by_key(|(entity, _, _)| *entity);
     let Some(&(first, camera, pose)) = cameras.first() else {
         return;
@@ -118,13 +133,20 @@ fn extract_tilemaps(world: &World, frame: &mut RenderFrame) {
         .sort_by_key(|item| (item.layer, item.order, item.entity));
 }
 
-/// Warns about each animation `animate` cannot play, whose sprite keeps its last frame.
+/// Warns about each animation `animate` cannot play, whose sprite keeps its last frame, and
+/// each animation without a sprite to play on.
 fn check_animations(world: &World, frame: &mut RenderFrame) {
-    let Ok(animations) = Query::<(Entity, &SpriteAnimation)>::new(world) else {
+    let Ok(animations) = Query::<(Entity, &SpriteAnimation, Option<&Sprite>)>::new(world) else {
         return;
     };
     let sheets = <Assets<SpriteSheet> as SystemParam>::fetch(world);
-    for (entity, animation) in animations.iter() {
+    for (entity, animation, sprite) in animations.iter() {
+        if sprite.is_none() {
+            frame.warnings.push(format!(
+                "entity {entity}: has a SpriteAnimation but no Sprite, so it animates nothing; add a Sprite"
+            ));
+            continue;
+        }
         let id = animation.sheet.id;
         match sheets.try_get(animation.sheet) {
             None => frame.warnings.push(format!(

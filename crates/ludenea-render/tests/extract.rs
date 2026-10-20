@@ -158,6 +158,61 @@ fn two_cameras_warn_and_keep_the_lowest_entity() {
 }
 
 #[test]
+fn camera_without_pose_warns() {
+    let mut simulation = simulation();
+    let entity = spawn(&mut simulation, None);
+    simulation
+        .world_mut()
+        .insert(
+            entity,
+            Camera2d {
+                view: Vec2::new(1.0, 1.0),
+            },
+        )
+        .unwrap();
+    let frame = frame(&simulation);
+    assert_eq!(frame.camera, None);
+    assert_eq!(
+        frame.warnings,
+        [format!(
+            "entity {entity}: has a Camera2d but no Pose, so it is not used; add a Pose"
+        )]
+    );
+}
+
+#[test]
+fn animation_without_sprite_warns() {
+    let mut simulation = simulation();
+    let entity = spawn(&mut simulation, Some(Vec2::ZERO));
+    let world = simulation.world_mut();
+    world
+        .insert_asset_ron(
+            SHEET,
+            "ludenea::SpriteSheet",
+            "(texture: \"00000000000000000000000000000007\", clips: {\"idle\": (first: 0, count: 1, ticks_per_frame: 1)})",
+        )
+        .unwrap();
+    world
+        .insert(
+            entity,
+            SpriteAnimation {
+                sheet: Handle::new(SHEET),
+                clip: "idle".into(),
+                started: 0,
+                looping: true,
+            },
+        )
+        .unwrap();
+    let frame = frame(&simulation);
+    assert_eq!(
+        frame.warnings,
+        [format!(
+            "entity {entity}: has a SpriteAnimation but no Sprite, so it animates nothing; add a Sprite"
+        )]
+    );
+}
+
+#[test]
 fn undeclared_layer_is_skipped_with_a_warning_listing_layers() {
     let mut simulation = simulation();
     let entity = spawn(&mut simulation, Some(Vec2::ZERO));
@@ -288,6 +343,30 @@ fn teleported_is_listed_only_on_its_tick() {
         listed,
         [(1, vec![]), (2, vec![entity]), (3, vec![]), (4, vec![])]
     );
+}
+
+/// A game extractor listing every posed entity as teleported, last entity first.
+fn teleport_everything(world: &ludenea_ecs::World, frame: &mut RenderFrame) {
+    let poses = Query::<(Entity, &Pose)>::new(world).unwrap();
+    let mut entities: Vec<Entity> = poses.iter().map(|(entity, _)| entity).collect();
+    entities.reverse();
+    frame.teleported.extend(entities);
+}
+
+#[test]
+fn teleported_keeps_what_an_earlier_extractor_added() {
+    let mut app = App::new();
+    app.extractor(teleport_everything)
+        .plugin(RenderPlugin)
+        .render_layer("world", 1.0);
+    let mut simulation = app.build().unwrap();
+    let first = spawn(&mut simulation, Some(Vec2::ZERO));
+    let second = spawn(&mut simulation, Some(Vec2::ZERO));
+    simulation
+        .world_mut()
+        .insert(second, Teleported { tick: 0 })
+        .unwrap();
+    assert_eq!(frame(&simulation).teleported, [first, second]);
 }
 
 const SCENE: &str = concat!(
