@@ -221,7 +221,7 @@ API.
   reloads to the current tick.
 - `record_replay`, `record_loaded_replay`, `play_replay` and `load_replay` return the new
   `ReplayError::Panicked { panic, snapshot }` when the game panics, with the snapshot of
-  the state a panicking tick ran from; the panic unwound through them.
+  the state a panicking tick ran from, where the panic used to unwind through them.
   `SessionError::Panicked` holds a `GamePanic`, and converting a `SimError` or
   `ReplayError` panic gives it; an `EditError::Panicked` stays an edit failure.
 - The command line tool's `run` and `verify` report a game panic as
@@ -473,6 +473,13 @@ API.
   `ludenea::Prefab` changed with it, so every game's schema fingerprint changed, and the
   tick hashes of a replay holding a prefab, recorded before, no longer match from tick
   0: record such replays again. Replays keep their version.
+- Scenes, prefabs, snapshots, replays and stored sessions of every version that hold a
+  value the game cannot run now fail to load, naming the value, where they loaded and then
+  ended or hung the game process at the next step or spawn: physics values beyond the new
+  limits of `PhysicsSettings`, `Body` and `Collider`, a `Time` whose `dt` is not finite or
+  outside 2^-32 to 1 second (see Rust API), and a prefab the game cannot spawn. Their
+  encoding is unchanged, so their versions are too; correct the value in the file, or
+  record the replay again.
 - Scene 2: loading refuses an entity or instance identifier, or the first identifier of an
   entity's address, that is not below the scene's `next_id`, naming both. Such a scene
   loaded, and the next tick 0 edit could end the game process or be refused; raise
