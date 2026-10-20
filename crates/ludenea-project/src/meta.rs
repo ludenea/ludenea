@@ -1,1 +1,1 @@
-pub use ludenea_app::meta::{AssetKind, FoundAsset, Meta, read_assets};
+pub use ludenea_app::meta::{AssetKind, FoundAsset, Meta, is_png, read_assets};

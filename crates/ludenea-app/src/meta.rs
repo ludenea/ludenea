@@ -38,13 +38,21 @@ impl AssetKind {
             (".replay", Self::Replay),
             (".trace", Self::Trace),
             (".snap", Self::Snapshot),
-            (".png", Self::Texture(TextureMeta::default())),
         ];
+        if is_png(path) {
+            return Self::Texture(TextureMeta::default());
+        }
         kinds
             .into_iter()
             .find(|(extension, _)| path.ends_with(extension))
             .map_or(Self::Other, |(_, kind)| kind)
     }
+}
+
+/// Whether `path` names a PNG, whatever the case of its extension.
+pub fn is_png(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 4 && bytes[bytes.len() - 4..].eq_ignore_ascii_case(b".png")
 }
 
 /// How a PNG is cut into frames and drawn.
@@ -141,6 +149,19 @@ impl Meta {
             version: META_VERSION,
             id: AssetId(uuid::Uuid::new_v4().as_u128()),
             kind,
+        }
+    }
+
+    /// The texture meta of the file `path` this meta belongs to, if that file is a texture:
+    /// a PNG whose meta is a texture meta, or `Other` (as a meta written before textures had
+    /// settings is), which reads as the default texture meta. A texture meta on any other
+    /// file makes no texture. The editor listing and the command line share this rule.
+    pub fn texture(&self, path: &str) -> Option<TextureMeta> {
+        match &self.kind {
+            _ if !is_png(path) => None,
+            AssetKind::Texture(texture) => Some(texture.clone()),
+            AssetKind::Other => Some(TextureMeta::default()),
+            _ => None,
         }
     }
 
@@ -292,6 +313,41 @@ mod tests {
                 pivot: None,
                 filter: Filter::Nearest,
             })
+        );
+    }
+
+    fn meta_of(kind: AssetKind) -> Meta {
+        Meta {
+            version: 1,
+            id: AssetId(42),
+            kind,
+        }
+    }
+
+    #[test]
+    fn an_other_meta_on_a_png_is_a_default_texture() {
+        let meta = meta_of(AssetKind::Other);
+        assert_eq!(meta.texture("hero.png"), Some(TextureMeta::default()));
+        assert_eq!(meta.texture("HERO.PNG"), Some(TextureMeta::default()));
+        assert_eq!(meta.texture("hero.ron"), None);
+    }
+
+    #[test]
+    fn a_texture_meta_counts_only_on_a_png() {
+        let meta = sheet_meta();
+        let AssetKind::Texture(texture) = &meta.kind else {
+            unreachable!()
+        };
+        assert_eq!(meta.texture("hero.Png"), Some(texture.clone()));
+        assert_eq!(meta.texture("hero.ron"), None);
+        assert_eq!(meta_of(AssetKind::Prefab).texture("hero.png"), None);
+    }
+
+    #[test]
+    fn png_extension_is_matched_in_any_case() {
+        assert_eq!(
+            AssetKind::of("assets/HERO.PNG"),
+            AssetKind::Texture(TextureMeta::default())
         );
     }
 

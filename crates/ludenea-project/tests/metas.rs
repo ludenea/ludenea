@@ -208,3 +208,42 @@ fn a_meta_broken_again_after_its_repair_is_reported_again() {
         [ProjectWarning::InvalidMeta { path, .. }] if path == "scenes/main.scene.ron.meta"
     ));
 }
+
+#[test]
+fn a_listed_png_gets_a_texture_meta() {
+    let dir = TempDir::new().unwrap();
+    let project = new_project(&dir);
+    let root = dir.path().join("demo");
+    fs::create_dir_all(root.join("assets")).unwrap();
+    fs::write(root.join("assets/new.png"), "").unwrap();
+    fs::write(root.join("assets/old.png"), "").unwrap();
+    // Written before textures had metas of their own.
+    fs::write(
+        root.join("assets/old.png.meta"),
+        "Meta(version: 1, id: \"0000000000000000000000000000002a\", kind: Other)\n",
+    )
+    .unwrap();
+    fs::write(root.join("assets/misplaced.ron"), "()").unwrap();
+    fs::write(
+        root.join("assets/misplaced.ron.meta"),
+        "Meta(version: 2, id: \"0000000000000000000000000000002b\", kind: Texture((pixels_per_unit: 8, grid: None, pivot: None, filter: Linear)))\n",
+    )
+    .unwrap();
+    let texture = AssetKind::Texture(ludenea_app::meta::TextureMeta::default());
+    let kinds: Vec<_> = project
+        .files()
+        .into_iter()
+        .map(|entry| (entry.path, entry.kind))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("assets/misplaced.ron".to_string(), AssetKind::Other),
+            ("assets/new.png".to_string(), texture.clone()),
+            ("assets/old.png".to_string(), texture),
+            ("scenes/main.scene.ron".to_string(), AssetKind::Scene),
+        ]
+    );
+    let created = fs::read_to_string(root.join("assets/new.png.meta")).unwrap();
+    assert!(created.contains("Texture("), "{created}");
+}

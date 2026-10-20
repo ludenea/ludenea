@@ -51,11 +51,19 @@ fn meta_path(file: &Path) -> PathBuf {
 }
 
 /// The kind of the file `path`: its extension decides, except that only a meta makes a file
-/// a data asset.
+/// a data asset, and a meta decides whether and how a PNG is a texture ([`Meta::texture`]).
 fn kind_of(path: &str, meta: Option<&Meta>) -> AssetKind {
-    match meta.map(|meta| &meta.kind) {
-        Some(declared @ (AssetKind::Data { .. } | AssetKind::Texture(_))) => declared.clone(),
-        _ => AssetKind::of(path),
+    let Some(meta) = meta else {
+        return AssetKind::of(path);
+    };
+    if let Some(texture) = meta.texture(path) {
+        return AssetKind::Texture(texture);
+    }
+    match (&meta.kind, AssetKind::of(path)) {
+        (declared @ AssetKind::Data { .. }, _) => declared.clone(),
+        // A PNG whose meta declares another kind is not a texture.
+        (_, AssetKind::Texture(_)) => AssetKind::Other,
+        (_, kind) => kind,
     }
 }
 
@@ -217,7 +225,7 @@ impl Project {
             AssetKind::Data { .. } => {
                 path.ends_with(".ron") && AssetKind::of(path) == AssetKind::Other
             }
-            AssetKind::Texture(_) => path.ends_with(".png"),
+            AssetKind::Texture(_) => crate::meta::is_png(path),
             other => AssetKind::of(path) == *other,
         };
         if !fits {

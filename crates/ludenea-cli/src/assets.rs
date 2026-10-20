@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use ludenea_app::meta::{AssetKind, Meta, TextureMeta, read_assets};
+use ludenea_app::meta::{Meta, TextureMeta, is_png, read_assets};
 use ludenea_app::{AssetTexts, NamedAssetTexts};
 use ludenea_ecs::AssetId;
 
@@ -38,7 +38,7 @@ pub fn project_assets(scene: &Path, project: Option<&Path>) -> Result<NamedAsset
 pub type ProjectTexture = (AssetId, String, Vec<u8>, TextureMeta);
 
 /// Every texture of the project holding `scene` (found as [`project_assets`] finds assets):
-/// each `.png` whose meta is a texture meta, with its identifier, path, bytes, and meta,
+/// each `.png` whose meta makes it a texture ([`Meta::texture`]), with its identifier, path, bytes, and meta,
 /// sorted by identifier. A `.png` without a meta is skipped; a meta that cannot be read, or
 /// two textures with the same identifier, are refused naming the files.
 pub fn project_textures(
@@ -49,12 +49,12 @@ pub fn project_textures(
     for file in project_files(scene, project)? {
         let name = file.to_string_lossy().into_owned();
         let meta_file = PathBuf::from(format!("{name}.meta"));
-        if !name.ends_with(".png") || !meta_file.is_file() {
+        if !is_png(&name) || !meta_file.is_file() {
             continue;
         }
         let meta = Meta::read(&meta_file)
             .map_err(|reason| format!("cannot read {name}.meta: {reason}"))?;
-        let AssetKind::Texture(texture) = meta.kind else {
+        let Some(texture) = meta.texture(&name) else {
             continue;
         };
         if let Some((other, ..)) = textures.get(&meta.id) {
@@ -246,9 +246,9 @@ mod tests {
         put(&b, "b");
         texture_meta(&b, 1);
         put(&folder.join("no-meta.png"), "c");
-        let other = folder.join("other.png");
-        put(&other, "d");
-        meta(&other, 3, "Other");
+        let prefab = folder.join("prefab.png");
+        put(&prefab, "d");
+        meta(&prefab, 3, "Prefab");
         let textures = project_textures(&scene, None).unwrap();
         let meta = TextureMeta {
             pixels_per_unit: 8,
@@ -266,6 +266,28 @@ mod tests {
                 ),
                 (AssetId(2), a.display().to_string(), b"a".to_vec(), meta),
             ]
+        );
+    }
+
+    #[test]
+    fn a_png_with_a_version_1_other_meta_is_a_default_texture() {
+        let (_guard, folder) = dir();
+        let scene = folder.join("main.scene.ron");
+        put(&scene, "");
+        let old = folder.join("old.png");
+        put(&old, "a");
+        meta(&old, 4, "Other");
+        let misplaced = folder.join("misplaced.ron");
+        put(&misplaced, "()");
+        texture_meta(&misplaced, 5);
+        assert_eq!(
+            project_textures(&scene, None).unwrap(),
+            [(
+                AssetId(4),
+                old.display().to_string(),
+                b"a".to_vec(),
+                TextureMeta::default()
+            )]
         );
     }
 
