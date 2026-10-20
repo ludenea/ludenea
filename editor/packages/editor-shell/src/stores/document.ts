@@ -1,6 +1,6 @@
 import type { AssetId, Command, ControlClient, FileChange, ProjectClient, Reply } from "@ludenea/control-client";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
-import { AssetFailure, locateAssetError } from "../assets";
+import { AssetFailure, locateAssetError, nameAssets } from "../assets";
 import type { ConsoleLocation, EditorConsole } from "../console";
 import { decodeStoredSession, encodeStoredSession, type StoredSession } from "./stored-session";
 
@@ -45,6 +45,8 @@ export interface DocumentState {
   reloadAssets(discard?: AssetId[]): Promise<void>;
   /** Stores the game's session as the open document's, as `open` does before loading another. */
   store(): Promise<void>;
+  /** `text` with each project asset the game names by identifier followed by the asset's file. */
+  nameAssets(text: string): string;
 }
 
 /** The sessions of documents, as the application's crash recovery and close keep them. */
@@ -395,6 +397,7 @@ export function createDocumentStore(options: {
       }).catch(reported("Cannot reload the scene")),
     reloadAssets: (discard) => reloadAssets(discard),
     store: () => sessions.store(),
+    nameAssets: (text) => nameAssets(text, texts.paths),
   }));
 
   // A prefab or data asset changed on disk: the open scene or prefab reloads with it. The

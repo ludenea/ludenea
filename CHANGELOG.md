@@ -188,17 +188,25 @@ API.
 - The `Simulation` methods that run game code catch its panics in native builds and return
   them as the new `SimError::Panicked` or `EditError::Panicked`: `step`, which now returns
   `Result<(), SimError>`, `step_with`, `step_encoded`, `step_observed`, `map_raw_input`,
-  `debug_draw` and `pick`, which now return `Result`, `apply_edit`, `encode_json_value`,
-  and the new `encode_asset_json` and `default_asset_ron` (whose refusals are the new
-  `SimError::AssetDefault`). A panic is the new `GamePanic`: the tick, the system that was
-  running or whose commands were applying (the new `Schedule::running`), the message, and
-  the source location as `file:line:column`, displayed as
+  `debug_draw` and `pick`, which now return `Result`, `apply_edit` while it decodes the
+  values (the world is then untouched; a value's `Drop` that panics while the edit
+  changes the world unwinds to the caller), `encode_json_value`, and the new
+  `encode_asset_json` and `default_asset_ron` (whose refusals are the new
+  `SimError::AssetDefault`). A panic is the new `GamePanic`: the tick, the system that
+  was running or whose commands were applying (the new `Schedule::running`), the message,
+  and the source location as `file:line:column`, displayed as
   ``the game panicked at tick 3 in system `game::spawn`: ... (src/lib.rs:88:14)``. The
   message names an asset by the file the scene load's `AssetSource` gave for it, so a
   prefab spawn that fails names `assets/ball.prefab.ron`, not its identifier. The new
   `ludenea_app::catch_panic` is the one way game code is caught; its first call installs
   a panic hook that records the location, then runs the hook that was there before.
   WebAssembly builds still abort on a panic.
+- The new `World::decode_asset` decodes and validates an asset without storing it, and
+  `World::insert_decoded_asset` stores it: the type's own code runs before the world
+  changes. `World::insert_asset` does both.
+- The new `Session::recover` brings a session back after game code panicked anywhere in
+  it: it ends a resimulation the panic interrupted, as a tick that fails ends it, then
+  reloads to the current tick.
 - `record_replay`, `record_loaded_replay`, `play_replay` and `load_replay` return the new
   `ReplayError::Panicked { panic, snapshot }` when the game panics, with the snapshot of
   the state a panicking tick ran from; the panic unwound through them.
@@ -301,8 +309,11 @@ API.
   `system_panicked`, changing nothing. Any other panic while the host handles a command
   or advances, such as a type that panics while a scene loads or while it is serialized,
   replies `system_panicked`, is written to the console, pauses with `panicked`, and
-  reloads the session to its current tick. When the session cannot come back, commands
-  that change the state are refused with that error, and time stops, until
+  reloads the session to its current tick; a resimulation it interrupted ends there, as
+  when a tick panics, instead of panicking again on every advance. A panic in the compare
+  or divergence simulation, as while it restores a checkpoint, stops only the ghost or
+  the report, as a panic in one of their ticks does. When the session cannot come back,
+  commands that change the state are refused with that error, and time stops, until
   `load_scene`, `load_session` or `load_replay` starts a new session. A recorded edit whose
   type now panics on its value is dropped while resimulating and reported with
   `edit_dropped`, as an edit that no longer applies is.
@@ -398,6 +409,9 @@ API.
   changes), and the new `Editor.pluginOf` names the plugin that registered a value.
   `mountShell` reports the other render errors in the editor console, and one that no
   boundary catches replaces the window with its message.
+- `DocumentState.nameAssets(text)` follows each project asset that `text` names by
+  identifier, as the game does, with the asset's file. The Console panel shows every entry
+  that way, so a game panic on a prefab names `assets/ball.prefab.ron` too.
 - Despawning the selection (`scene.despawn-selection`), nudging it, dragging it in the
   viewport, and editing it in the inspector change every selected entity in one `batch`:
   one undo step, all of them or none. A viewport drag moves every selected entity by the

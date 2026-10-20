@@ -229,6 +229,8 @@ interface DocumentState {
     reloadAssets(discard?: AssetId[]): Promise<void>;
     /** Stores the game's session as the open document's, as `open` does before loading another. */
     store(): Promise<void>;
+    /** `text` with each project asset the game names by identifier followed by the asset's file. */
+    nameAssets(text: string): string;
 }
 /** A Zustand store: one document at a time, as the game keeps one session. */
 type DocumentStore = UseBoundStore<StoreApi<DocumentState>>;

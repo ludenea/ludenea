@@ -173,6 +173,11 @@ impl DivergenceRun {
         self.outdated = true;
     }
 
+    /// The tick of the simulation furthest ahead.
+    pub fn tick(&self) -> u64 {
+        self.sims[CURRENT].tick().max(self.sims[COMPARE].tick())
+    }
+
     /// Like `invalidate` after play ran ticks: play only records the current branch's
     /// future, which matters only while the range is capped at the current branch's end. A
     /// take-over that forks changes the current branch, which every use checks.
@@ -241,7 +246,7 @@ impl DivergenceRun {
     /// Compares at most `budget` more ticks. Returns the last tick compared when it moved,
     /// and whether the report is complete or there is nothing to compare. Fails on a panic
     /// of the game in a tick or an edit, or a tick that cannot run; the run is then
-    /// unusable. Any other panic unwinds to the host's boundary, which builds it again.
+    /// unusable. Any other panic unwinds to the caller, which stops the report.
     pub fn advance(
         &mut self,
         session: &Session,

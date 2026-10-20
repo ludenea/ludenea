@@ -1219,3 +1219,183 @@ fn a_session_that_cannot_come_back_refuses_changes_until_a_new_one_loads() {
     host.handle(step).unwrap();
     assert_eq!(host.tick(), 1);
 }
+
+#[test]
+fn a_panic_outside_a_tick_while_resimulating_ends_the_resimulation_once() {
+    let app = || {
+        let mut app = App::new();
+        app.component::<Fuse>().system(Sim, burn);
+        app
+    };
+    let mut host = Host::new(app).unwrap();
+    host.handle(Command::LoadScene {
+        scene: r#"Scene(version: 1, resources: {}, entities: [{ "host::Fuse": (0) }])"#.into(),
+        assets: Vec::new(),
+        document: Document::Scene,
+    })
+    .unwrap();
+    // An edit at tick 10 makes the session resimulate up to it, through the tick whose hash
+    // panics.
+    let mut edits = ludenea_app::EditLog::new();
+    edits.edits = vec![ludenea_app::TimedEdit {
+        tick: 10,
+        edit: ludenea_app::Edit::Spawn {
+            components: Vec::new(),
+        },
+    }];
+    host.handle(Command::LoadEdits {
+        log: Bytes(edits.encode()),
+    })
+    .unwrap();
+    host.drain_events();
+
+    let mut events = Vec::new();
+    for _ in 0..3 {
+        events.extend(host.advance(1.0 / 60.0));
+    }
+
+    let errors: Vec<_> = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::Console {
+                    level: ConsoleLevel::Error,
+                    ..
+                }
+            )
+        })
+        .collect();
+    let [Event::Console { text, .. }] = errors.as_slice() else {
+        panic!("unexpected events {events:?}");
+    };
+    assert!(
+        text.starts_with("the game panicked at tick 7: the fuse blew (")
+            && text.ends_with("; the session is back at tick 0"),
+        "{text}"
+    );
+    let paused = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::Paused {
+                    reason: PauseReason::Panicked { tick: 7, .. }
+                }
+            )
+        })
+        .count();
+    assert_eq!(paused, 1, "{events:?}");
+    let Ok(Reply::Timeline(timeline)) = host.handle(Command::GetTimeline) else {
+        panic!()
+    };
+    assert!(!timeline.resimulating);
+    assert_eq!((timeline.current, timeline.simulated), (0, 6));
+    host.handle(Command::Step {
+        ticks: 1,
+        record_hashes: false,
+    })
+    .unwrap();
+}
+
+static BOMB_ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Panics once when dropped while `BOMB_ARMED` is on.
+#[derive(Component, Serialize, Deserialize)]
+struct Bomb(u32);
+
+impl Drop for Bomb {
+    fn drop(&mut self) {
+        if BOMB_ARMED.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            panic!("the bomb went off");
+        }
+    }
+}
+
+#[test]
+fn a_panic_while_an_edit_changes_the_world_brings_the_session_back() {
+    let app = || {
+        let mut app = App::new();
+        app.component::<Bomb>().component::<Score>();
+        app
+    };
+    let mut client = InProcess::connect(Host::new(app).unwrap(), PROTOCOL_VERSION).unwrap();
+    client
+        .request(Command::LoadScene {
+            scene: r#"Scene(version: 1, resources: {}, entities: [{ "host::Bomb": (1), "host::Score": (2) }])"#
+                .into(),
+            assets: Vec::new(),
+            document: Document::Scene,
+        })
+        .unwrap();
+    step(&mut client, 1);
+    let Ok(Reply::Entities { rows, .. }) = client.request(Command::QueryEntities {
+        filter: String::new(),
+        offset: 0,
+        limit: 1,
+    }) else {
+        panic!()
+    };
+    let before = hash(&mut client);
+
+    BOMB_ARMED.store(true, std::sync::atomic::Ordering::SeqCst);
+    let error = client
+        .request(Command::Despawn {
+            entity: rows[0].entity,
+        })
+        .unwrap_err();
+    BOMB_ARMED.store(false, std::sync::atomic::Ordering::SeqCst);
+
+    assert_eq!(error.code, ErrorCode::SystemPanicked);
+    assert!(
+        error
+            .message
+            .starts_with("the game panicked at tick 1: the bomb went off (")
+            && error.message.ends_with("; the session is back at tick 1"),
+        "{}",
+        error.message
+    );
+    assert_eq!(hash(&mut client), before);
+    let Ok(Reply::Timeline(timeline)) = client.request(Command::GetTimeline) else {
+        panic!()
+    };
+    assert!(timeline.edit_ticks.is_empty(), "{timeline:?}");
+}
+
+#[test]
+fn a_panic_while_hashing_a_resimulated_tick_keeps_no_stale_hash_for_it() {
+    let app = || {
+        let mut app = App::new();
+        app.component::<Fuse>().system(Sim, burn);
+        app
+    };
+    let fuse = |count: u32| {
+        format!(r#"Scene(version: 1, resources: {{}}, entities: [{{ "host::Fuse": ({count}) }}])"#)
+    };
+    let mut host = Host::new(app).unwrap();
+    host.handle(Command::LoadScene {
+        scene: fuse(8),
+        assets: Vec::new(),
+        document: Document::Scene,
+    })
+    .unwrap();
+    host.handle(Command::Step {
+        ticks: 10,
+        record_hashes: false,
+    })
+    .unwrap();
+    // From 1, the fuse blows while hashing tick 6, whose recorded hash is the old run's.
+    host.handle(Command::ReplaceScene {
+        scene: fuse(1),
+        assets: Vec::new(),
+    })
+    .unwrap();
+
+    host.advance(0.0);
+
+    let Ok(Reply::Timeline(timeline)) = host.handle(Command::GetTimeline) else {
+        panic!()
+    };
+    assert!(!timeline.resimulating);
+    assert_eq!((timeline.current, timeline.simulated), (5, 5));
+}

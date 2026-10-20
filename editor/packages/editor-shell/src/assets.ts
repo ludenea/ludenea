@@ -43,11 +43,20 @@ const ASSET_ID = /\b[0-9a-f]{32}\b/g;
 export function locateAssetError(error: unknown, paths: [AssetId, string][]): unknown {
   if (!(error instanceof ProtocolFailure)) return error;
   const files = new Map(paths);
-  const message = error.message.replace(ASSET_ID, (id) => (files.has(id) ? `${id} (${files.get(id)})` : id));
+  const message = nameAssets(error.message, paths);
   const match = INVALID_ASSET.exec(error.message);
   const path = match && files.get(match[1]!);
   if (match && path) return new AssetFailure(error.code, message, path, Number(match[2]), Number(match[3]));
   return message === error.message ? error : new ProtocolFailure(error.code, message);
+}
+
+/** `text` with each asset identifier of `paths` it names followed by the asset's file, once. */
+export function nameAssets(text: string, paths: [AssetId, string][]): string {
+  const files = new Map(paths);
+  return text.replace(ASSET_ID, (id: string, offset: number) => {
+    const file = files.get(id);
+    return file === undefined || text.startsWith(` (${file})`, offset + id.length) ? id : `${id} (${file})`;
+  });
 }
 
 export function createAssetAccess(control: () => ControlClient | null, project: ProjectClient): AssetAccess {

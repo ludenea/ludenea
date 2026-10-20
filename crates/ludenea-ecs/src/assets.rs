@@ -39,6 +39,13 @@ pub(crate) struct LoadedAsset {
     pub(crate) bytes: Vec<u8>,
 }
 
+/// An asset its type decoded and validated, not stored yet: `World::decode_asset` runs the
+/// type's own code before `World::insert_decoded_asset` changes the world.
+pub struct DecodedAsset {
+    pub(crate) id: AssetId,
+    pub(crate) asset: LoadedAsset,
+}
+
 impl World {
     /// Registers the asset type `T`; registering the same type again is a no-op. Fails with
     /// `EcsError::RecursiveType` when `T` holds a type that contains itself.
@@ -111,8 +118,28 @@ impl World {
         type_name: &str,
         bytes: &[u8],
     ) -> Result<(), EcsError> {
+        let asset = self.decode_asset(id, type_name, bytes)?;
+        self.insert_decoded_asset(asset);
+        Ok(())
+    }
+
+    /// Decodes and validates `bytes` of `type_name` as the asset `id`, without storing it.
+    /// Refuses them as `insert_asset` does.
+    pub fn decode_asset(
+        &self,
+        id: AssetId,
+        type_name: &str,
+        bytes: &[u8],
+    ) -> Result<DecodedAsset, EcsError> {
         let decode = self.asset_type(type_name)?.decode;
-        self.store_asset(id, type_name, decode(bytes))
+        let (id, asset) = self.loaded(id, type_name, decode(bytes))?;
+        Ok(DecodedAsset { id, asset })
+    }
+
+    /// Stores `asset`, replacing the asset with its identifier. Dropping the value replaced
+    /// runs the type's own code.
+    pub fn insert_decoded_asset(&mut self, asset: DecodedAsset) {
+        self.assets.insert(asset.id, asset.asset);
     }
 
     /// Inserts or replaces the asset `id` from a RON text of the type `type_name`, refused
@@ -162,20 +189,12 @@ impl World {
         hasher.digest()
     }
 
-    /// Decodes and validates `bytes` of `type_name` into a loaded asset, without storing it.
-    pub(crate) fn decode_asset(
-        &self,
-        id: AssetId,
-        type_name: &str,
-        bytes: &[u8],
-    ) -> Result<(AssetId, LoadedAsset), EcsError> {
-        let decode = self.asset_type(type_name)?.decode;
-        self.loaded(id, type_name, decode(bytes))
-    }
-
     /// Replaces every loaded asset.
-    pub(crate) fn replace_assets(&mut self, assets: Vec<(AssetId, LoadedAsset)>) {
-        self.assets = assets.into_iter().collect();
+    pub(crate) fn replace_assets(&mut self, assets: Vec<DecodedAsset>) {
+        self.assets = assets
+            .into_iter()
+            .map(|decoded| (decoded.id, decoded.asset))
+            .collect();
     }
 
     fn store_asset(

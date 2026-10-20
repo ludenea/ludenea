@@ -1451,24 +1451,40 @@ impl Session {
         budget: u32,
     ) -> Result<Resimulation, SessionError> {
         let result = self.resimulate_within(sim, budget);
-        if result.is_err() {
-            // The switch stops on the branch that failed.
-            self.switching = None;
-        }
         if result.is_err()
-            && let Some(failed) = self.resimulating.take()
+            && let Some(tick) = self.end_resimulation()
         {
-            let kept = usize::try_from(failed + 1).expect("tick fits in memory");
-            self.hashes.truncate(kept);
-            self.checkpoints.truncate_after(failed);
-            let tick = self
-                .return_to
-                .take()
-                .map_or(self.current, |tick| tick.min(failed));
             // The error to report is the one that ended resimulation.
             let _ = self.come_back(sim, tick);
         }
         result
+    }
+
+    /// Ends a resimulation that failed where it got: the switch stops on the branch that
+    /// failed, the stale hashes and checkpoints after the last tick resimulated are dropped,
+    /// and the recorded inputs and edits stay as the future. Returns the tick to come back
+    /// to, when it was resimulating.
+    fn end_resimulation(&mut self) -> Option<u64> {
+        self.switching = None;
+        let failed = self.resimulating.take()?;
+        let kept = usize::try_from(failed + 1).expect("tick fits in memory");
+        self.hashes.truncate(kept);
+        self.checkpoints.truncate_after(failed);
+        Some(
+            self.return_to
+                .take()
+                .map_or(self.current, |tick| tick.min(failed)),
+        )
+    }
+
+    /// Brings the session back after game code panicked anywhere in it, with its own
+    /// bookkeeping left halfway: ends a resimulation as a failing tick ends it, then loads the
+    /// scene again and comes back to the current tick (see `reload`).
+    pub fn recover(&mut self, sim: &mut Simulation) -> Result<(), SessionError> {
+        if let Some(tick) = self.end_resimulation() {
+            self.current = tick;
+        }
+        self.reload(sim)
     }
 
     fn resimulate_within(
@@ -1492,7 +1508,6 @@ impl Session {
             }
             self.run_tick(sim, self.inputs.tick(up_to).map(<[u8]>::to_vec).as_deref())?;
             up_to += 1;
-            self.resimulating = Some(up_to);
             let got = sim.hash();
             if let Some(introspection) = &mut self.introspection {
                 introspection.hashed(up_to, got);
@@ -1511,6 +1526,8 @@ impl Session {
                 }
                 None => self.hashes.push(got),
             }
+            // Resimulated once its hash is recorded: a panic while hashing leaves it stale.
+            self.resimulating = Some(up_to);
             if self.checkpoints.wants(up_to) {
                 self.checkpoints.insert(up_to, sim.snapshot());
                 self.enforce_checkpoint_budget();

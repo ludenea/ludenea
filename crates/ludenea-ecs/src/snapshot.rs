@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
+use crate::assets::DecodedAsset;
 use crate::commands::CommandQueue;
 use crate::component::decode_exact;
 use crate::hash::ENTITIES_LEAF;
@@ -177,7 +178,10 @@ impl World {
         }
         let mut assets = Vec::with_capacity(snapshot.assets.len());
         for (id, type_name, bytes) in &snapshot.assets {
-            if assets.last().is_some_and(|(last, _)| last >= id) {
+            if assets
+                .last()
+                .is_some_and(|last: &DecodedAsset| last.id >= *id)
+            {
                 return Err(decode_error(&format!("asset {id}"))(
                     "asset identifiers are not in strictly ascending order".to_string(),
                 ));

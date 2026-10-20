@@ -719,3 +719,117 @@ fn a_panicking_picker_fails_the_pick_and_keeps_the_session() {
     step(&mut host, 5);
     draw(&mut host);
 }
+
+thread_local! {
+    /// Whether `Brittle` panics as it loads on this thread: each test arms its own.
+    static BRITTLE_ARMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Loads while `BRITTLE_ARMED` is off and panics while it is on, as a `try_from` that asserts.
+#[derive(ludenea_ecs::Component, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "BrittleValue")]
+struct Brittle(u32);
+
+/// What `Brittle` loads from, of the same shape.
+#[derive(serde::Deserialize)]
+struct BrittleValue(u32);
+
+impl TryFrom<BrittleValue> for Brittle {
+    type Error = String;
+
+    fn try_from(value: BrittleValue) -> Result<Self, String> {
+        assert!(!BRITTLE_ARMED.get(), "the brittle value broke");
+        Ok(Brittle(value.0))
+    }
+}
+
+/// A host whose compare branch holds a `Brittle` value in its checkpoint at tick 16, at
+/// tick 20 on a branch forked there.
+fn brittle_host() -> Host {
+    let app = || {
+        let mut app = boxes::app();
+        app.component::<Brittle>();
+        app
+    };
+    let mut host = Host::new(app).unwrap();
+    ok(
+        &mut host,
+        Command::LoadScene {
+            scene: boxes::generate_scene(10, 3),
+            assets: Vec::new(),
+            document: Document::Scene,
+        },
+    );
+    ok(
+        &mut host,
+        Command::Spawn {
+            components: [("compare::Brittle".to_string(), json!(1))].into(),
+        },
+    );
+    step(&mut host, 40);
+    seek(&mut host, 20);
+    spawn_crate(&mut host);
+    host.drain_events();
+    host
+}
+
+#[test]
+fn a_panic_restoring_the_compare_simulation_stops_the_ghost_only() {
+    let mut host = brittle_host();
+    let before = (timeline(&mut host).current, hash(&mut host));
+    ok(
+        &mut host,
+        Command::Subscribe {
+            topic: Topic::Ghost,
+        },
+    );
+    // Paused, only the compare simulation restores a checkpoint.
+    BRITTLE_ARMED.set(true);
+    let events = host.advance(0.0);
+    BRITTLE_ARMED.set(false);
+
+    assert!(
+        matches!(&errors(&events)[..], [text] if text.starts_with("the ghost stopped: the game panicked at tick ")
+            && text.contains("the brittle value broke")),
+        "{events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::Paused { .. })),
+        "{events:?}"
+    );
+    assert_eq!(timeline(&mut host).compare, None);
+    assert_eq!((timeline(&mut host).current, hash(&mut host)), before);
+    assert!(errors(&host.advance(0.0)).is_empty());
+    step(&mut host, 5);
+}
+
+#[test]
+fn a_panic_restoring_the_divergence_simulations_stops_the_report_only() {
+    let mut host = brittle_host();
+    let before = (timeline(&mut host).current, hash(&mut host));
+    ok(
+        &mut host,
+        Command::Subscribe {
+            topic: Topic::Divergence,
+        },
+    );
+    BRITTLE_ARMED.set(true);
+    let events = host.advance(0.0);
+    BRITTLE_ARMED.set(false);
+
+    assert!(
+        matches!(&errors(&events)[..], [text] if text.starts_with("the divergence report stopped: the game panicked at tick ")
+            && text.contains("the brittle value broke")),
+        "{events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::Paused { .. })),
+        "{events:?}"
+    );
+    assert_eq!((timeline(&mut host).current, hash(&mut host)), before);
+    step(&mut host, 5);
+}

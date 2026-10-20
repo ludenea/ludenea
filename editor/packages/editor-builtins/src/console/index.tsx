@@ -45,8 +45,10 @@ export const consolePlugin = definePlugin({
     const next = () => ++lastId;
     const state = createStore({ entries: [] as Entry[], levels: { error: true, warning: true, info: true } as Levels, notice: null as string | null });
     const update = (change: (entries: Entry[]) => Entry[]) => state.set({ entries: change(state.get().entries).slice(-LIMIT) });
+    // The game names assets by identifier: the console names their files too.
+    const named = (text: string) => editor.document.getState().nameAssets(text);
     const add = (level: ConsoleLevel, text: string, source: Entry["source"] = "editor", location?: Location) =>
-      update((entries) => [...entries, { id: next(), level, source, text, location }]);
+      update((entries) => [...entries, { id: next(), level, source, text: named(text), location }]);
 
     // What the editor console holds, from its first entry: those logged before this plugin
     // activated waited there.
@@ -55,7 +57,7 @@ export const consolePlugin = definePlugin({
       const fresh = editor.console.list().filter((entry) => entry.id > seen);
       if (fresh.length === 0) return;
       seen = fresh.at(-1)!.id;
-      update((entries) => [...entries, ...fresh.map(({ level, text, location }) => ({ id: next(), level, source: "editor" as const, text, location }))]);
+      update((entries) => [...entries, ...fresh.map(({ level, text, location }) => ({ id: next(), level, source: "editor" as const, text: named(text), location }))]);
     };
     take();
     const stopEditor = editor.console.subscribe(take);

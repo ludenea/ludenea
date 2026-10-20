@@ -81,6 +81,33 @@ describe("console", () => {
     expect(screen.getByText("hello from the game")).toBeTruthy();
   });
 
+  it("a_message_naming_a_project_asset_by_identifier_names_its_file_too", async () => {
+    const SCENE = "0000000000000000000000000000000a";
+    const BALL = "6c90cde358504084bfb84f6d1d83c6d9";
+    const host = await testEditor(builtinPlugins, (request) => {
+      if (request.type === "list_files") return { type: "files", entries: [{ path: "scenes/main.scene.ron", id: SCENE, kind: "Scene" }] };
+      if (request.type === "read_text") return { type: "text", text: "(scene)" };
+      if (request.type === "read_asset_texts") return { type: "asset_texts", assets: [[BALL, "(ball)"]], paths: [[BALL, "assets/ball.prefab.ron"]] };
+      if (request.type === "load_stored_session") return { type: "stored_session", bytes: null };
+      return undefined;
+    });
+    const game = await testGame();
+    act(() => host.setControl(game.client));
+    renderPanel(host, "ludenea.console");
+    await act(() => host.editor.document.getState().open(SCENE));
+
+    // A panic while playing, and a request that failed on one.
+    act(() => game.push({ type: "console", level: "error", text: `the game panicked at tick 3 in system \`game::spawn\`: prefab ${BALL} has no entity with local identifier 5` }));
+    act(() => host.editor.console.log("error", `Step failed: prefab ${BALL} has no entity with local identifier 5`));
+    // One the document store located already.
+    act(() => host.editor.console.log("error", `Cannot reload: asset ${BALL} (assets/ball.prefab.ron) is invalid`));
+
+    const lines = screen.getByRole("list", { name: "Console" }).textContent;
+    expect(lines).toContain(`system \`game::spawn\`: prefab ${BALL} (assets/ball.prefab.ron) has no entity`);
+    expect(lines).toContain(`Step failed: prefab ${BALL} (assets/ball.prefab.ron) has no entity`);
+    expect(lines).toContain(`Cannot reload: asset ${BALL} (assets/ball.prefab.ron) is invalid`);
+  });
+
   it("console_shows_what_the_application_reports", async () => {
     const host = await testEditor(builtinPlugins);
     renderPanel(host, "ludenea.console");

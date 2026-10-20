@@ -230,20 +230,22 @@ impl Host {
     }
 
     /// Brings the session back after game code panicked outside the places that report a
-    /// panic themselves (a scene load, a type's serialization), naming the tick the panic
-    /// left the simulation at: the world may be torn, so the session reloads to its current
-    /// tick, and the compare and divergence simulations, which may be what panicked, are
-    /// built again on next use. Writes the error to the console, pauses with `Panicked`, and
-    /// returns it. When the session cannot come back, the host refuses to go on until a new
-    /// session loads.
+    /// panic themselves (a scene load, a type's serialization, a value dropped by an edit),
+    /// naming the tick the panic left the simulation at: the world may be torn, so the
+    /// session ends a resimulation the panic interrupted and reloads to its current tick (see
+    /// `Session::recover`). The compare and divergence simulations are built again on next
+    /// use. Writes the error to the console, pauses with `Panicked`, and returns it. When the
+    /// session cannot come back, the host refuses to go on until a new session loads.
     fn recover(&mut self, mut panic: Box<GamePanic>) -> ProtocolError {
         panic.tick = self.simulation.tick();
         self.compare = None;
         self.ghost_reported = None;
         self.divergence = None;
-        let current = self.session.timeline().current;
-        let message = match catch_panic(panic.tick, || self.session.reload(&mut self.simulation)) {
-            Ok(Ok(())) => format!("{panic}; the session is back at tick {current}"),
+        let message = match catch_panic(panic.tick, || self.session.recover(&mut self.simulation)) {
+            Ok(Ok(())) => format!(
+                "{panic}; the session is back at tick {}",
+                self.session.timeline().current
+            ),
             Ok(Err(error)) => self.inconsistent_after(&panic, &error),
             Err(again) => self.inconsistent_after(&panic, &again),
         };
@@ -268,7 +270,8 @@ impl Host {
     }
 
     /// Runs the compare simulation toward the current tick while the ghost is subscribed;
-    /// a failure stops the ghost, the main session untouched.
+    /// a failure stops the ghost, the main session untouched, also when the game panics
+    /// outside a tick, as while restoring a checkpoint.
     fn follow_compare(&mut self) {
         if !self.ghost || self.session.compare_branch().is_none() {
             return;
@@ -281,7 +284,12 @@ impl Host {
         let tick = self.simulation.tick();
         let followed = self.build_compare().and_then(|()| {
             let compare = self.compare.as_mut().expect("built");
-            compare.follow(&self.session, tick, budget)
+            catch_panic(tick, || compare.follow(&self.session, tick, budget)).unwrap_or_else(
+                |mut panic| {
+                    panic.tick = compare.tick();
+                    Err(panic.to_string())
+                },
+            )
         });
         match followed {
             Ok(state) => {
@@ -296,7 +304,8 @@ impl Host {
     }
 
     /// Computes the divergence report a budget further while it is asked for or subscribed;
-    /// a failure stops it, the main session untouched.
+    /// a failure stops it, the main session untouched, also when the game panics outside a
+    /// tick, as while restoring a checkpoint.
     fn follow_divergence(&mut self) {
         if !(self.divergence_subscribed || self.divergence_asked)
             || self.session.compare_branch().is_none()
@@ -310,7 +319,13 @@ impl Host {
         };
         let advanced = self.build_divergence().and_then(|()| {
             let divergence = self.divergence.as_mut().expect("built");
-            divergence.advance(&self.session, budget)
+            catch_panic(divergence.tick(), || {
+                divergence.advance(&self.session, budget)
+            })
+            .unwrap_or_else(|mut panic| {
+                panic.tick = divergence.tick();
+                Err(panic.to_string())
+            })
         });
         if let Some(divergence) = &mut self.divergence {
             for warning in divergence.take_warnings() {

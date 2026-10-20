@@ -4,11 +4,11 @@
 use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
 
+use ludenea_ecs::assets::DecodedAsset;
 use ludenea_ecs::{AssetId, Codec, Entity};
 use serde::{Deserialize, Serialize};
 
 use crate::assets::AssetSource;
-use crate::panic::catch_panic;
 use crate::scene::{LoadAddress, LoadedValue, Reference, visit_handles};
 use crate::{GamePanic, SceneError, SimError, Simulation};
 
@@ -292,8 +292,9 @@ pub enum ValueKind {
 
 type Decoded = Box<dyn Any + Send>;
 
-/// An entity or resource edit checked against the world: applying it cannot fail.
+/// An edit checked against the world, its values decoded: applying it cannot fail.
 enum Checked {
+    Asset(DecodedAsset),
     Spawn(Vec<(String, Decoded)>),
     Despawn(Entity),
     Insert {
@@ -313,36 +314,37 @@ enum Checked {
 
 impl Simulation {
     /// Applies `edit`. Everything is validated before anything changes, so on error the
-    /// world is untouched, also when the type's own code panics on a value. Returns the
-    /// entity a `Spawn` created; a group returns none.
+    /// world is untouched, also when the type's own code panics while decoding a value.
+    /// Dropping the values the edit replaces or removes runs the type's code too, once the
+    /// world has started to change: a panic there unwinds, and the caller brings the world
+    /// back. Returns the entity a `Spawn` created; a group returns none.
     pub fn apply_edit(&mut self, edit: &Edit) -> Result<Option<Entity>, EditError> {
-        catch_panic(self.tick(), || self.apply_checked(edit))
-            .map_err(|panic| EditError::Panicked(self.named(panic)))?
+        let checked = self
+            .caught(|| self.check_edit(edit))
+            .map_err(EditError::Panicked)??;
+        let mut created = None;
+        for checked in checked {
+            created = self.commit(checked);
+        }
+        Ok(created.filter(|_| !matches!(edit, Edit::Group(_))))
     }
 
-    fn apply_checked(&mut self, edit: &Edit) -> Result<Option<Entity>, EditError> {
-        match edit {
+    /// Checks `edit`, a group's members in order, against the world without changing it.
+    fn check_edit(&self, edit: &Edit) -> Result<Vec<Checked>, EditError> {
+        Ok(match edit {
             Edit::SetAsset { id, value } => {
-                let asset = self.asset_type_of(*id)?;
-                self.load_asset(*id, &asset, value)
+                vec![self.check_asset(*id, &self.asset_type_of(*id)?, value)?]
             }
-            Edit::LoadAsset { id, asset, value } => self.load_asset(*id, asset, value),
+            Edit::LoadAsset { id, asset, value } => vec![self.check_asset(*id, asset, value)?],
             Edit::Group(edits) => {
                 let mut despawned = BTreeSet::new();
-                let checked = edits
+                edits
                     .iter()
                     .map(|edit| self.check(edit, &mut despawned))
-                    .collect::<Result<Vec<_>, EditError>>()?;
-                for checked in checked {
-                    self.commit(checked);
-                }
-                Ok(None)
+                    .collect::<Result<_, _>>()?
             }
-            edit => {
-                let checked = self.check(edit, &mut BTreeSet::new())?;
-                Ok(self.commit(checked))
-            }
-        }
+            edit => vec![self.check(edit, &mut BTreeSet::new())?],
+        })
     }
 
     /// Checks an entity or resource edit against the world without changing it, as if the
@@ -414,6 +416,7 @@ impl Simulation {
     fn commit(&mut self, checked: Checked) -> Option<Entity> {
         let world = &mut self.world;
         match checked {
+            Checked::Asset(asset) => world.insert_decoded_asset(asset),
             Checked::Spawn(values) => {
                 let entity = world.spawn();
                 for (name, value) in values {
@@ -616,19 +619,14 @@ impl Simulation {
         Ok(())
     }
 
-    fn load_asset(
-        &mut self,
-        id: AssetId,
-        asset: &str,
-        value: &[u8],
-    ) -> Result<Option<Entity>, EditError> {
+    fn check_asset(&self, id: AssetId, asset: &str, value: &[u8]) -> Result<Checked, EditError> {
         self.world
-            .insert_asset(id, asset, value)
+            .decode_asset(id, asset, value)
+            .map(Checked::Asset)
             .map_err(|error| match error {
                 ludenea_ecs::EcsError::InvalidAsset { reason, .. } => invalid(asset, reason),
                 other => invalid(asset, other.to_string()),
-            })?;
-        Ok(None)
+            })
     }
 
     fn asset_type_of(&self, id: AssetId) -> Result<String, EditError> {

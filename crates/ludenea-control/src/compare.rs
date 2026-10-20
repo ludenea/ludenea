@@ -61,10 +61,15 @@ impl CompareRun {
         self.outdated = true;
     }
 
+    /// The tick of the compare simulation's state.
+    pub fn tick(&self) -> u64 {
+        self.sim.tick()
+    }
+
     /// Runs at most `budget` ticks of the session's compare branch toward `tick`. Fails on
     /// a panic of the game in a tick or an edit, a tick that cannot run, or a fresh tick
     /// whose hash differs from the recorded one; the compare simulation is then unusable.
-    /// Any other panic unwinds to the host's boundary, which builds it again.
+    /// Any other panic unwinds to the caller, which stops the ghost.
     pub fn follow(
         &mut self,
         session: &Session,
