@@ -65,6 +65,26 @@ fn duplicate_layer_is_refused_at_build() {
 }
 
 #[test]
+fn non_finite_parallax_is_refused_at_build() {
+    for parallax in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let mut app = App::new();
+        app.render_layer("world", 1.0).render_layer("bg", parallax);
+        let Err(error) = app.build() else {
+            panic!("an app declaring a parallax of {parallax} built");
+        };
+        assert!(
+            matches!(&error, AppError::NonFiniteParallax { layer, parallax: value }
+                if *layer == "bg" && value.to_bits() == parallax.to_bits()),
+            "{error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            format!("the render layer `bg` has the parallax {parallax}; give it a finite number")
+        );
+    }
+}
+
+#[test]
 fn extractors_run_in_registration_order() {
     let mut app = App::new();
     app.extractor(second).extractor(first).extractor(second);

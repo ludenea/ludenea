@@ -59,6 +59,10 @@ pub enum AppError {
     Build(#[from] BuildError),
     #[error("the render layer `{0}` is declared twice; give each layer its own name")]
     DuplicateLayer(String),
+    /// A parallax that is NaN or infinite has no position to draw at, and no number to
+    /// travel as in a render frame.
+    #[error("the render layer `{layer}` has the parallax {parallax}; give it a finite number")]
+    NonFiniteParallax { layer: &'static str, parallax: f32 },
     #[error(
         "the input mapping builds `{mapping}` but the app's input type is {input}; map the type given to `App::input`"
     )]
@@ -239,6 +243,14 @@ impl App {
             .find(|(name, _)| !declared.insert(*name))
         {
             return Err(AppError::DuplicateLayer(name.to_string()));
+        }
+        if let Some(&(layer, parallax)) = self
+            .hooks
+            .render_layers
+            .iter()
+            .find(|(_, parallax)| !parallax.is_finite())
+        {
+            return Err(AppError::NonFiniteParallax { layer, parallax });
         }
         if let Some(mapping) = &self.hooks.mapping
             && self.input.as_ref().map(|input| input.id) != Some(mapping.id)
