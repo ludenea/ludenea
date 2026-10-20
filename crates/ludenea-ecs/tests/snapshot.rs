@@ -776,6 +776,44 @@ fn inserting_a_prefab_asset_this_world_cannot_spawn_is_refused() {
 }
 
 #[test]
+fn a_refused_prefab_asset_keeps_the_one_it_would_replace() {
+    let mut world = prefab_world();
+    let held = Prefab {
+        entities: vec![entity(
+            &[0],
+            &[(
+                Health::NAME,
+                postcard::to_allocvec(&Health { hp: 1 }).unwrap(),
+            )],
+        )],
+    };
+    world
+        .insert_asset(PREFAB, Prefab::NAME, &postcard::to_allocvec(&held).unwrap())
+        .unwrap();
+    let before = world
+        .asset_bytes(PREFAB)
+        .map(|(name, bytes)| (name.to_string(), bytes));
+    let gone = Prefab {
+        entities: vec![entity(&[0], &[("other_game::Gone", vec![1])])],
+    };
+
+    world
+        .insert_asset(PREFAB, Prefab::NAME, &postcard::to_allocvec(&gone).unwrap())
+        .unwrap_err();
+    world
+        .insert_asset_ron(PREFAB, Prefab::NAME, &ron::to_string(&gone).unwrap())
+        .unwrap_err();
+
+    assert_eq!(world.asset_ids(), [PREFAB]);
+    assert_eq!(
+        world
+            .asset_bytes(PREFAB)
+            .map(|(name, bytes)| (name.to_string(), bytes)),
+        before
+    );
+}
+
+#[test]
 fn a_version_2_snapshot_reads_its_prefab_assets() {
     let mut world = prefab_world();
     let health = postcard::to_allocvec(&Health { hp: 4 }).unwrap();

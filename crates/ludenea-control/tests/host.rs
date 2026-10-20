@@ -6,7 +6,8 @@ use ludenea_app::{App, InputLog, Inputs, RawInput, Rng, Sim};
 use ludenea_control::*;
 use ludenea_ecs::schema::{Schema, TypeSchema};
 use ludenea_ecs::{
-    AssetId, Component, Difference, Entity, EntityHash, HashTree, NamedHash, Query, ResMut, Runtime,
+    Asset, AssetId, Component, Difference, Entity, EntityHash, HashTree, NamedHash, Prefab,
+    PrefabEntity, Query, ResMut, Runtime,
 };
 use serde::{Deserialize, Serialize};
 
@@ -701,6 +702,40 @@ fn seek_to_a_checkpoint_the_game_cannot_load_is_refused_and_the_session_goes_on(
     assert!(
         error.message.contains("checkpoint of tick 16")
             && error.message.contains("level must be zero or more, got -6"),
+        "{}",
+        error.message
+    );
+    assert_eq!(step(&mut client, 1).len(), 1);
+}
+
+#[test]
+fn restoring_a_prefab_asset_this_game_cannot_spawn_is_an_invalid_snapshot() {
+    let mut client = client();
+    step(&mut client, 3);
+    let mut taken = ludenea_ecs::Snapshot::decode(&snapshot(&mut client).0).unwrap();
+    let gone = Prefab {
+        entities: vec![PrefabEntity {
+            address: vec![0],
+            components: vec![("other_game::Gone".to_string(), vec![1])],
+        }],
+    };
+    taken.assets.push((
+        AssetId(1),
+        Prefab::NAME.to_string(),
+        postcard::to_allocvec(&gone).unwrap(),
+    ));
+
+    let error = client
+        .request(Command::Restore {
+            snapshot: Bytes(taken.encode()),
+        })
+        .unwrap_err();
+
+    assert_eq!(error.code, ErrorCode::InvalidSnapshot);
+    assert!(
+        error
+            .message
+            .contains("entity [0]: component `other_game::Gone` is not registered"),
         "{}",
         error.message
     );
