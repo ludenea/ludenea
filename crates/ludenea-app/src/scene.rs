@@ -316,9 +316,14 @@ fn parse_resolved(file: ResolvedV2) -> Result<ParsedScene, SceneError> {
 }
 
 fn not_below_next_id(local: u32, next_id: u32) -> SceneError {
-    SceneError::Parse(format!(
+    SceneError::Parse(not_below_next_id_reason(local, next_id))
+}
+
+/// Why a scene or prefab file that gives `local` with this `next_id` is refused.
+pub(crate) fn not_below_next_id_reason(local: u32, next_id: u32) -> String {
+    format!(
         "local identifier {local} is not below `next_id` {next_id}; give `next_id` a value above every entity and instance identifier"
-    ))
+    )
 }
 
 /// The `next_id` of a scene file: the entity count for version 1, 0 when it does not parse.

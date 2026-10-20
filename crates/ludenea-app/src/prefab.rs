@@ -14,7 +14,9 @@ use serde::{Deserialize, Serialize};
 use crate::Simulation;
 use crate::assets::{AssetSource, parse_asset_file};
 use crate::path::{Path, PathSegment};
-use crate::scene::{LoadAddress, NamedValues, SceneEntity, SceneError, after, parse_scene};
+use crate::scene::{
+    LoadAddress, NamedValues, SceneEntity, SceneError, after, not_below_next_id_reason, parse_scene,
+};
 
 pub const PREFAB_VERSION: u32 = 1;
 
@@ -119,8 +121,7 @@ struct PrefabHeader {
 #[derive(Deserialize)]
 #[serde(rename = "Prefab")]
 struct PrefabFile {
-    #[serde(rename = "next_id")]
-    _next_id: u32,
+    next_id: u32,
     entities: Vec<SceneEntity>,
     #[serde(default)]
     instances: Vec<Instance>,
@@ -395,6 +396,9 @@ impl<'a> Resolver<'a> {
                 return Err(invalid(format!(
                     "local identifier {local} is given twice; give each entity and instance its own"
                 )));
+            }
+            if local >= file.next_id {
+                return Err(invalid(not_below_next_id_reason(local, file.next_id)));
             }
         }
 

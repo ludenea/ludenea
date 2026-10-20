@@ -417,6 +417,28 @@ fn missing_prefab_is_refused_naming_the_instance() {
 }
 
 #[test]
+fn prefab_identifier_not_below_its_next_id_is_refused() {
+    for (own, instances) in [
+        (
+            vec![(0, tag(1).as_str()), (2, tag(2).as_str())],
+            String::new(),
+        ),
+        (vec![(0, tag(1).as_str())], instance(2, B, "", "", "")),
+    ] {
+        let mut simulation = simulation();
+        let assets = texts(&[(A, prefab(2, &own, &instances)), (B, prefab(0, &[], ""))]);
+        let error = simulation
+            .load_scene_with(&scene(1, &[], &instance(0, A, "", "", "")), &assets)
+            .unwrap_err();
+        assert!(
+            matches!(&error, SceneError::InvalidAsset { id: AssetId(A), reason, .. }
+                if reason.contains("local identifier 2 is not below `next_id` 2")),
+            "{error:?}"
+        );
+    }
+}
+
+#[test]
 fn prefab_cycle_is_refused_with_paths() {
     let mut simulation = simulation();
     let cyclic = texts(&[

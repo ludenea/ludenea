@@ -516,3 +516,7 @@ API.
   loaded, and the next tick 0 edit could end the game process or be refused; raise
   `next_id` above every identifier. A scene whose entities have addresses now reports its
   own fault (an empty or repeated address, instances) instead of a missing `id`.
+- Prefab 1: loading refuses an entity or instance identifier of a prefab file, nested ones
+  included, that is not below the prefab's `next_id`, naming both, as scenes do. Such a
+  prefab loaded, and an instance placed in it could reuse an identifier; raise `next_id`
+  above every identifier.
