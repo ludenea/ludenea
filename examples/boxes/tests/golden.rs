@@ -46,14 +46,21 @@ fn dump_dir_follows_ludenea_dump_dir() {
 }
 
 #[test]
-fn ci_sets_the_dump_dir_variable() {
+fn ci_sets_the_dump_dir_variable_for_the_native_golden_tests() {
     let workflow = include_str!("../../../.github/workflows/determinism.yml");
     let key = format!("{DUMP_DIR_VARIABLE}: ");
+    // The `env` of the native job, which runs these tests, not of another job or a step.
+    let mut native_env = workflow
+        .lines()
+        .skip_while(|line| line.trim_end() != "  native:")
+        .skip(1)
+        .take_while(|line| line.is_empty() || line.starts_with("   "))
+        .skip_while(|line| line.trim_end() != "    env:")
+        .skip(1)
+        .take_while(|line| line.starts_with("      "));
     assert!(
-        workflow
-            .lines()
-            .any(|line| line.trim_start().starts_with(&key)),
-        "the workflow does not set {DUMP_DIR_VARIABLE}"
+        native_env.any(|line| line.trim_start().starts_with(&key)),
+        "the native job's env does not set {DUMP_DIR_VARIABLE}"
     );
 }
 
