@@ -997,10 +997,20 @@ fn a_prefab_document_reaching_itself_through_another_prefab_is_refused() {
         "{error}"
     );
     assert_eq!(session.scene(), text);
-    // A prefab file that already holds such an instance does not load as its document.
+    // A prefab file that already holds such an instance does not load as its document, nor
+    // resume as its session.
     let (cyclic, _) = place_instance(&text, OUTER).unwrap();
+    let mut export = session.export().unwrap();
+    export.scene = cyclic.clone();
     let Err(error) = Session::start(&mut sim, cyclic, assets, document) else {
         panic!("a prefab document holding itself loaded");
+    };
+    assert!(
+        matches!(error, SessionError::Scene(SceneError::PrefabCycle(_))),
+        "{error}"
+    );
+    let Err(error) = Session::resume(&mut sim, export, document) else {
+        panic!("a prefab document holding itself resumed");
     };
     assert!(
         matches!(error, SessionError::Scene(SceneError::PrefabCycle(_))),
