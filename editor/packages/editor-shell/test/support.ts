@@ -50,7 +50,7 @@ export async function testGame(answer: Answer = () => undefined, info: Partial<G
     return respond(message.id, answer(message.command));
   });
   const control = await ControlClient.connect(transport);
-  return { control, sent, push: (event: object) => transport.push(JSON.stringify({ type: "event", event })) };
+  return { control, sent, push: (event: object) => transport.push(JSON.stringify({ type: "event", event })), drop: (reason: string) => transport.drop(reason) };
 }
 
 export const settle = () => new Promise((resolve) => setTimeout(resolve, 0));

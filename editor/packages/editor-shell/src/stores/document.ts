@@ -1,4 +1,4 @@
-import type { AssetId, Command, ControlClient, FileChange, ProjectClient, Reply } from "@ludenea/control-client";
+import { ProtocolFailure, type AssetId, type Command, type ControlClient, type FileChange, type ProjectClient, type Reply } from "@ludenea/control-client";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import { AssetFailure, locateAssetError, nameAssets } from "../assets";
 import type { ConsoleLocation, EditorConsole } from "../console";
@@ -286,8 +286,9 @@ export function createDocumentStore(options: {
    * Restores `saved`, the stored session of `document` or one the previous game `exported` of
    * it, into `game` at `tick`: resolves to what the game reports loaded (null when the session
    * loaded but cannot go back to its tick), or, when the game refused it, to the warning that the
-   * stored session was set aside, which gives the `outcome` for the document. The document's
-   * stores wait until the game takes it or the stored session is set aside.
+   * stored session was set aside, which gives the `outcome` for the document. An export the
+   * game never answers (its connection closed) is not refused: the call rejects and nothing is
+   * set aside. The document's stores wait until the game takes it or the stored session is set aside.
    */
   const restoreStored = async (
     game: ControlClient,
@@ -308,6 +309,11 @@ export function createDocumentStore(options: {
         }),
       };
     } catch (error) {
+      // The export stays the latest session of its document, to store over the stored one.
+      if (exported && !accepted && !(error instanceof ProtocolFailure)) {
+        decide(true);
+        throw error;
+      }
       const failure = locateAssetError(error, texts.paths);
       if (!accepted) {
         refused.add(saved);

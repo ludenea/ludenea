@@ -346,6 +346,33 @@ describe("document store", () => {
     expect(projectRequests(project, ["set_aside_stored_session", "store_session"])).toEqual(["set_aside_stored_session", "store_session"]);
   });
 
+  it("an_export_of_the_open_document_whose_restore_is_interrupted_is_not_set_aside", async () => {
+    const project = fakeProject();
+    const host = await testHost(undefined, project.answer);
+    const game = await gameWithSession(session("(main)"));
+    host.setControl(game.control);
+    await host.editor.document.getState().open(ids.main);
+    project.store(ids.main, mainSession);
+    const bytes = project.sessions.get(file);
+    const exported = await host.sessions.export(game.control);
+    const own = await host.sessions.own(exported);
+    // A game whose connection closes before it answers the export's load.
+    const next = await testGame((command) => (command.type === "load_session" ? undefined : { type: "done" }));
+    host.setControl(next.control);
+
+    const restoring = host.sessions.restore(next.control, own!);
+    await vi.waitFor(() => expect(next.sent.some((command) => command.type === "load_session")).toBe(true));
+    next.drop("the game exited");
+
+    await expect(restoring).rejects.toThrow("connection closed: the game exited");
+    expect(projectRequests(project, ["set_aside_stored_session"])).toEqual([]);
+    expect(project.sessions.get(file)).toBe(bytes);
+    expect(host.editor.document.getState().error).toBeNull();
+    // Not refused: the export is still stored, as on page hide.
+    await host.sessions.store(own!);
+    expect(project.stored(ids.main)?.saved.load.scene).toBe("(main)");
+  });
+
   it("a_stored_session_own_gives_is_not_stored_over_until_the_game_answers_its_restore", async () => {
     const project = fakeProject();
     const host = await testHost(undefined, project.answer);
