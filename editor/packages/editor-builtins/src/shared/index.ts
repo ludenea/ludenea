@@ -73,6 +73,8 @@ export interface Shared {
   overlays: Store<{ version: number }>;
   /** The debug layers the viewport hides, by name. */
   layers: Store<{ hidden: string[] }>;
+  /** The text the editor last wrote to each project file, by path: the watcher reports it as a change. */
+  written: Map<string, string>;
 }
 
 const sharedState = new WeakMap<Editor, Shared>();
@@ -85,6 +87,7 @@ export function shared(editor: Editor): Shared {
       reveal: createStore({ path: null as string | null }),
       overlays: createStore({ version: 0 }),
       layers: createStore({ hidden: [] as string[] }),
+      written: new Map(),
     };
     sharedState.set(editor, state);
   }

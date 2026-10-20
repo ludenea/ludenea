@@ -393,7 +393,9 @@ API.
 - "Save scene" (`scene.save`) and `inspector.save-asset` mark the scene or asset saved only
   after the file is written. A failed scene write fails the command with
   `Cannot save <path>: <reason>`, which the palette and Mod+S show in the editor console,
-  and the scene stays unsaved.
+  and the scene stays unsaved. The asset browser knows the text the editor wrote, so the
+  watcher reporting a saved asset before the game says it is saved shows no "changed on
+  disk" banner.
 - Removed: `DocumentState.unsavedAssets` and `SavedSession.unsavedAssets`. The game's
   timeline lists the unsaved assets (`unsaved_assets`), and a saved session carries them in
   `load.saved_assets`, so `DocumentSessions.restore` no longer marks them unsaved.

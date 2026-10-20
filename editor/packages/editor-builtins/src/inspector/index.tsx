@@ -1,6 +1,6 @@
 import { ProtocolFailure, type Command, type JsonValue } from "@ludenea/control-client";
 import { definePlugin, type Editor } from "@ludenea/editor-shell";
-import { createStore, showPanel, type Store } from "../shared";
+import { createStore, shared, showPanel, type Store } from "../shared";
 import { assertEditable, batched, edit } from "../timeline/editing";
 import { InspectorPanel } from "./InspectorPanel";
 
@@ -99,7 +99,9 @@ export const inspectorPlugin = definePlugin({
         const { entries } = await editor.project.request({ type: "list_files" });
         const path = entries.find((file) => file.id === id)?.path;
         if (!path) throw new Error(`no project file has the identifier ${id}`);
-        // The shell reloads the session's assets from the written file.
+        // The shell reloads the session's assets from the written file, and the asset browser
+        // knows its text for the editor's own when the watcher reports it.
+        shared(editor).written.set(path, text);
         await editor.project.request({ type: "write_text", path, text });
         // Saved only if the asset still holds the text written: an edit made meanwhile stays unsaved.
         await control.request({ type: "mark_asset_saved", id, text });

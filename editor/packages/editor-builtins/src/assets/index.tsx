@@ -68,7 +68,7 @@ const removedPath = (change: FileChange) => ("Removed" in change ? change.Remove
 export const assetsPlugin = definePlugin({
   name: "ludenea.assets",
   activate(editor) {
-    const { reveal, project } = shared(editor);
+    const { reveal, project, written } = shared(editor);
     const documents = editor.document;
     const state = createStore<AssetsState>({
       files: [],
@@ -242,8 +242,21 @@ export const assetsPlugin = definePlugin({
         // The shell's reload keeps an unsaved data asset's text: the user picks which stays.
         const unsaved = unsavedAssets(editor);
         for (const change of changes) {
-          const id = state.get().files.find((file) => file.path === changedPath(change))?.id;
-          if (id && unsaved.includes(id)) showBanner({ path: changedPath(change)!, asset: id });
+          const path = changedPath(change);
+          const id = state.get().files.find((file) => file.path === path)?.id;
+          if (!path || !id || !unsaved.includes(id)) continue;
+          const mine = written.get(path);
+          if (mine === undefined) {
+            showBanner({ path, asset: id });
+            continue;
+          }
+          // The editor's own save, reported before the game says the asset is saved, is no change.
+          editor.project
+            .request({ type: "read_text", path })
+            .then(({ text }) => {
+              if (text !== mine && unsavedAssets(editor).includes(id)) showBanner({ path, asset: id });
+            })
+            .catch(report);
         }
         const listed = refresh();
         const open = documents.getState().current;

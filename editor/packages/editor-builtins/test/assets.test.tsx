@@ -570,11 +570,22 @@ describe("data assets, replays, traces, and snapshots", () => {
     const { current = 0, answer = () => undefined } = options;
     const onDisk = { scene: "(scene)", files: {} as { [path: string]: string }, unwritable: false, removed: [] as string[] };
     // The assets the game holds unsaved, as the host keeps them: a tick 0 edit or "Apply to asset"
-    // marks one, `MarkAssetSaved` clears it, and `LoadSession` says which stay.
+    // marks one, `MarkAssetSaved` clears it, and `LoadSession` says which stay. While `late` is
+    // set, the game reports its timeline only once released, as a game busy elsewhere does.
     let unsaved: string[] = [];
+    const reports: (() => void)[] = [];
+    const late = {
+      on: false,
+      release() {
+        late.on = false;
+        for (const report of reports.splice(0)) report();
+      },
+    };
     const unsavedNow = (next: string[]) => {
       unsaved = next;
-      setTimeout(() => game.push({ type: "timeline_changed", timeline: timeline(current, unsaved) }));
+      const report = () => game.push({ type: "timeline_changed", timeline: timeline(current, unsaved) });
+      if (late.on) reports.push(report);
+      else setTimeout(report);
     };
     const game = await testGame(
       (command) => {
@@ -617,6 +628,7 @@ describe("data assets, replays, traces, and snapshots", () => {
       if (request.type === "list_files") return { type: "files", entries: files.filter((file) => !onDisk.removed.includes(file.path)) };
       if (request.type === "read_text") return { type: "text", text: onDisk.files[request.path as string] ?? onDisk.scene };
       if (request.type === "write_text" && onDisk.unwritable) return { error: { code: "io", message: "permission denied" } };
+      if (request.type === "write_text") onDisk.files[request.path as string] = request.text as string;
       if (request.type === "read_binary") return { type: "bytes", bytes: "cmVwbGF5" };
       if (request.type === "read_asset_texts") return { type: "asset_texts", assets: disk, paths: [] };
       if (request.type === "load_stored_session") return { type: "stored_session", bytes: null };
@@ -627,7 +639,7 @@ describe("data assets, replays, traces, and snapshots", () => {
     act(() => host.setControl(game.client));
     renderPanel(host, "ludenea.assets");
     await settle();
-    return { host, game, onDisk };
+    return { host, game, onDisk, late };
   }
 
   const newDataAsset = async (type: string, path: string) => {
@@ -896,6 +908,32 @@ describe("data assets, replays, traces, and snapshots", () => {
     fireEvent.click(screen.getByText("sword.ron"));
     await settle();
     expect(screen.getByLabelText("unsaved changes")).toBeTruthy();
+  });
+
+  it("an_asset_save_reported_on_disk_before_the_game_confirms_it_shows_no_banner", async () => {
+    const { host, game, onDisk, late, changed } = await unsavedEdits();
+    fireEvent.click(screen.getByText("settings.ron"));
+    await settle();
+    late.on = true;
+    fireEvent.click(screen.getByRole("button", { name: "Save asset" }));
+    await settle();
+    expect(game.sent).toContainEqual({ type: "mark_asset_saved", id: SETTINGS, text: "(gravity_scale: 2.0)" });
+
+    // The watcher reports the written file while the editor still shows the asset unsaved.
+    expect(host.editor.timeline.getState().timeline?.unsaved_assets).toEqual([SETTINGS, SWORD]);
+    await changed("assets/settings.ron", "demo::Settings");
+    expect(screen.queryByRole("alert")).toBeNull();
+    late.release();
+    await settle();
+    expect(host.editor.timeline.getState().timeline?.unsaved_assets).toEqual([SWORD]);
+
+    // Unsaved again, the file changed by another program shows the banner.
+    type("gravity_scale", "3");
+    await settle();
+    expect(host.editor.timeline.getState().timeline?.unsaved_assets).toEqual([SWORD, SETTINGS]);
+    onDisk.files["assets/settings.ron"] = "(gravity_scale: 4.0)";
+    await changed("assets/settings.ron", "demo::Settings");
+    expect(screen.getByRole("alert").textContent).toContain("assets/settings.ron changed on disk");
   });
 
   it("a_disk_change_to_an_unsaved_asset_shows_the_banner", async () => {
