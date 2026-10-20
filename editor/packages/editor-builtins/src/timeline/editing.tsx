@@ -16,6 +16,15 @@ export function onEdited(editor: Editor, listener: (command: Command) => void): 
   return () => listeners.delete(listener);
 }
 
+/**
+ * One editing command for `commands`: the command itself when there is one, otherwise a batch,
+ * which the game applies as one edit (one undo step) or, when one of them fails, not at all.
+ */
+export function batched(commands: Command[]): Command {
+  const [only] = commands;
+  return commands.length === 1 && only ? only : { type: "batch", commands };
+}
+
 /** Sends an editing command (refused while resimulating), then refreshes the timeline and hash it changed. */
 export async function edit<C extends Command>(editor: Editor, control: ControlClient, command: C): Promise<ReplyFor<C>> {
   assertEditable(editor);

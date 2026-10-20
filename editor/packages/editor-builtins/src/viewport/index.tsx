@@ -46,7 +46,7 @@ export const viewportPlugin = definePlugin({
           // While playing, the arrows are the game's input: the same rule from the palette.
           if (editor.timeline.getState().playing) throw new Error("pause the game to nudge the selection");
           const offset = { x: x * NUDGE_METERS, y: y * NUDGE_METERS };
-          await Promise.all(editor.selection.getState().entities.map((entity) => moveBy(editor, control, entity, offset, state)));
+          await moveBy(editor, control, editor.selection.getState().entities, offset, state);
         },
       });
     }

@@ -276,6 +276,68 @@ describe("inspector", () => {
     expect(game.sent.filter((command) => command.type === "insert_component").map((command) => command.component)).toEqual(["ludenea::Collider"]);
   });
 
+  /** Selects `entities`, each holding the components `held` gives for its index. */
+  async function selected(entities: { index: number; generation: number }[], held: Record<number, Record<string, unknown>>) {
+    const found = await inspector((command) => {
+      if (command.type !== "get_entity") return undefined;
+      const { index } = command.entity as { index: number };
+      return { type: "entity", entity: command.entity, components: held[index] };
+    });
+    act(() => found.host.editor.selection.getState().select(entities));
+    await settle();
+    return found;
+  }
+
+  const second = { index: 5, generation: 1 };
+  const third = { index: 6, generation: 1 };
+
+  it("a_multi_selection_shows_the_shared_components_and_edits_them_all_in_one_batch", async () => {
+    const { game } = await selected([entity, second, third], {
+      4: { "ludenea::Collider": json(collider), "my_game::Score": json({ points: "1" }) },
+      5: { "ludenea::Collider": json({ ...collider, density: 2 }), "my_game::Score": json({ points: "1" }) },
+      6: { "ludenea::Collider": json(collider) },
+    });
+
+    expect(screen.getByRole("heading", { name: /^3 entities selected/ })).toBeTruthy();
+    // Entity 6 has no Score: only the Collider is shared.
+    expect(screen.queryByRole("region", { name: "my_game::Score" })).toBeNull();
+    const row = (label: string) => component("ludenea::Collider").getByLabelText(label).closest(".ludenea-field")!;
+    expect(row("density").textContent).toContain("mixed");
+    expect(row("shape.Circle.radius").textContent).not.toContain("mixed");
+    // Applying to the scene is a command of one entity.
+    expect(component("ludenea::Collider").queryByRole("button", { name: "Apply to scene" })).toBeNull();
+
+    edit("density", "3");
+    await settle();
+    const target = (entity: object) => ({ type: "component", entity, component: "ludenea::Collider" });
+    expect(game.sent.filter((command) => command.type === "batch" || command.type === "set_field")).toEqual([
+      { type: "batch", commands: [entity, second, third].map((each) => ({ type: "set_field", target: target(each), path: [field("density")], value: 3 })) },
+    ]);
+
+    fireEvent.click(component("ludenea::Collider").getByRole("button", { name: "Remove" }));
+    await settle();
+    expect(game.sent.filter((command) => command.type === "batch").at(-1)).toEqual({
+      type: "batch",
+      commands: [entity, second, third].map((each) => ({ type: "remove_component", entity: each, component: "ludenea::Collider" })),
+    });
+  });
+
+  it("adding_a_component_to_a_multi_selection_inserts_it_where_it_lacks_in_one_batch", async () => {
+    const { game } = await selected([entity, second, third], {
+      4: { "my_game::Score": json({ points: "1" }) },
+      5: {},
+      6: {},
+    });
+    await act(() => screen.getByRole("button", { name: "Add component" }).click());
+    fireEvent.change(screen.getByRole("combobox", { name: "Component" }), { target: { value: "my_game::Score" } });
+    fireEvent.click(screen.getByRole("button", { name: "Insert" }));
+    await settle();
+
+    expect(game.sent.filter((command) => command.type === "batch" || command.type === "insert_component")).toEqual([
+      { type: "batch", commands: [second, third].map((each) => ({ type: "insert_component", entity: each, component: "my_game::Score", value: { points: 0 } })) },
+    ]);
+  });
+
   it("add_component_draft_survives_hiding_the_panel", async () => {
     const { host } = await inspector((command) => {
       if (command.type === "get_entity") return { type: "entity", entity, components: {} };

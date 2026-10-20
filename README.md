@@ -131,10 +131,13 @@ the plugin API, in the commit that makes it. The rules:
 
 The editor opens a game project, runs the game, and records everything that happens
 while it plays: scrub the timeline back to any tick, change a component in the inspector
-at that tick, play again from there, and undo or redo the change. The session (scene,
-input log, and edit log) replays in the command line tool to the same hashes, tick for
-tick. The game always runs apart from the interface (a Web Worker in the browser, a
-separate process on the desktop), so the interface stays responsive while it simulates.
+at that tick, play again from there, and undo or redo the change. With several entities
+selected, Delete, the arrow keys, a drag in the viewport, and the inspector change them all
+as one edit, which one undo takes back; the inspector shows the components they share and
+marks the fields whose values differ. The session (scene, input log, and edit log) replays
+in the command line tool to the same hashes, tick for tick. The game always runs apart from
+the interface (a Web Worker in the browser, a separate process on the desktop), so the
+interface stays responsive while it simulates.
 Panels: scene tree, inspector, viewport with physics debug drawing, timeline, asset
 browser, entity explorer, physics, and console, all reachable from the command palette.
 A project opens with the document last open in it, or else with the `default_scene` of its

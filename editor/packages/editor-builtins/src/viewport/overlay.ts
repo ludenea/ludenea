@@ -13,8 +13,8 @@ export type OverlayScene = {
   tick: number;
   selection: readonly Entity[];
   overlays: readonly ViewportOverlay[];
-  /** An entity being dragged: its outline is drawn moved by `offset` meters. */
-  drag: { entity: Entity; offset: Vec2 } | null;
+  /** The entities being dragged: their outlines are drawn moved by `offset` meters. */
+  drag: { entities: readonly Entity[]; offset: Vec2 } | null;
 };
 
 export const css = (color: Color) => `rgba(${color >>> 24}, ${(color >>> 16) & 255}, ${(color >>> 8) & 255}, ${(color & 255) / 255})`;
@@ -42,7 +42,7 @@ export function drawOverlay(context: CanvasRenderingContext2D, scene: OverlaySce
     context.lineWidth = 1.5;
     context.setLineDash([4, 3]);
     for (const { entity, primitive } of items) {
-      if (!same(entity, drag.entity)) continue;
+      if (!drag.entities.some((dragged) => same(entity, dragged))) continue;
       context.beginPath();
       outline(context, primitive, moved, camera.pixelsPerMeter);
       context.stroke();

@@ -1,7 +1,7 @@
-import { ProtocolFailure, type JsonValue } from "@ludenea/control-client";
+import { ProtocolFailure, type Command, type JsonValue } from "@ludenea/control-client";
 import { definePlugin, type Editor } from "@ludenea/editor-shell";
 import { createStore, showPanel, type Store } from "../shared";
-import { assertEditable, edit } from "../timeline/editing";
+import { assertEditable, batched, edit } from "../timeline/editing";
 import { InspectorPanel } from "./InspectorPanel";
 
 /**
@@ -31,19 +31,19 @@ export const inspectorPlugin = definePlugin({
     const target = () => {
       const control = editor.control;
       if (!control) throw new Error("no game is running");
-      const entity = editor.selection.getState().entities[0];
-      if (!entity) throw new Error("select an entity first");
-      return { control, entity };
+      const { entities } = editor.selection.getState();
+      if (entities.length === 0) throw new Error("select an entity first");
+      return { control, entities };
     };
     const focused = () => {
-      const { control, entity } = target();
+      const { control, entities } = target();
       const component = state.get().focused;
       if (!component) throw new Error("focus a component in the inspector first");
-      return { control, entity, component };
+      return { control, entities, component };
     };
     editor.commands.register({
       id: "inspector.add-component",
-      title: "Add component to the selected entity",
+      title: "Add component to the selected entities",
       run() {
         target();
         assertEditable(editor);
@@ -53,10 +53,11 @@ export const inspectorPlugin = definePlugin({
     });
     editor.commands.register({
       id: "inspector.remove-component",
-      title: "Remove the focused component",
+      title: "Remove the focused component from the selected entities",
       async run() {
-        const { control, entity, component } = focused();
-        await onEntity(editor, edit(editor, control, { type: "remove_component", entity, component }));
+        const { control, entities, component } = focused();
+        const removals = entities.map((entity): Command => ({ type: "remove_component", entity, component }));
+        await onEntity(editor, edit(editor, control, batched(removals)));
         state.set({ focused: null });
       },
     });
@@ -64,7 +65,9 @@ export const inspectorPlugin = definePlugin({
       id: "inspector.apply-to-scene",
       title: "Apply the focused component to the scene",
       async run() {
-        const { control, entity, component } = focused();
+        const { control, entities, component } = focused();
+        const [entity] = entities;
+        if (!entity || entities.length > 1) throw new Error("select one entity to apply its component to the scene");
         await onEntity(editor, edit(editor, control, { type: "apply_to_scene", entity, component }));
       },
     });

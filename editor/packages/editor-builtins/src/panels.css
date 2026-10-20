@@ -155,6 +155,10 @@
   color: var(--color-warning);
 }
 
+.ludenea-dock .dv-content-container .ludenea-mixed {
+  color: var(--color-warning);
+}
+
 .ludenea-dock .dv-content-container .ludenea-link {
   padding: 0;
   border: 0;

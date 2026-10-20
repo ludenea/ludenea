@@ -31,7 +31,7 @@ type Press = {
   moved: boolean;
   shift: boolean;
   picked?: Promise<Entity[]>;
-  /** The selected entity under the press, once the pick answers: what a drag moves. */
+  /** The selected entity under the press, once the pick answers: a drag moves the selection holding it. */
   target?: Entity | null;
 };
 
@@ -141,7 +141,7 @@ export function ViewportPanel({ editor, state, failedOverlays }: { editor: Edito
       const canvas = context.canvas;
       if (canvas.width !== Math.round(size.width * ratio)) canvas.width = Math.round(size.width * ratio);
       if (canvas.height !== Math.round(size.height * ratio)) canvas.height = Math.round(size.height * ratio);
-      const drag = press?.mode === "select" && press.moved && press.target ? { entity: press.target, offset: dragOffset(press) } : null;
+      const drag = press?.mode === "select" && press.moved && press.target ? { entities: dragged(press.target), offset: dragOffset(press) } : null;
       const overlays = editor.overlays.list();
       // One unregistered then registered again is a new registration: its failure is news.
       for (const overlay of failedOverlays) if (!overlays.includes(overlay)) failedOverlays.delete(overlay);
@@ -186,6 +186,11 @@ export function ViewportPanel({ editor, state, failedOverlays }: { editor: Edito
     const dragOffset = ({ start, last }: Press): Vec2 => {
       const [from, to] = [world(start), world(last)];
       return { x: to.x - from.x, y: to.y - from.y };
+    };
+    // What a drag starting on `target` moves: the selection holding it, or it alone.
+    const dragged = (target: Entity): readonly Entity[] => {
+      const { entities } = editor.selection.getState();
+      return entities.some((entity) => same(entity, target)) ? entities : [target];
     };
 
     const onPointerDown = (event: PointerEvent) => {
@@ -239,13 +244,13 @@ export function ViewportPanel({ editor, state, failedOverlays }: { editor: Edito
         }, report("Picking an entity in the viewport"));
         return;
       }
-      // A drag moves the selected entity it started on, as one edit on release.
+      // A drag moves the selection it started on by the same offset, as one edit on release.
       const offset = dragOffset(released);
       released.picked
         .then(() => {
-          if (released.target && control) return moveBy(editor, control, released.target, offset, state);
+          if (released.target && control) return moveBy(editor, control, dragged(released.target), offset, state);
         })
-        .catch(report("Moving the entity dragged in the viewport"));
+        .catch(report("Moving the dragged entities in the viewport"));
     };
 
     // The browser took the pointer (a gesture, a lost touch): drop the press, move nothing.

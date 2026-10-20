@@ -164,6 +164,57 @@ describe("viewport", () => {
     expect(sentOf(game.sent, "set_field")).toHaveLength(2);
   });
 
+  it("nudging_a_multi_selection_sends_one_batch", async () => {
+    const { host, game, view } = await viewport((command) => {
+      if (command.type !== "get_entity") return undefined;
+      const { index } = command.entity as Entity;
+      return { type: "entity", entity: command.entity, components: { "ludenea::Pose": pose(index, 2) } };
+    });
+    act(() => host.editor.selection.getState().select([entity(1), entity(3)]));
+    fireEvent.keyDown(view, { key: "ArrowUp" });
+    await settle();
+
+    expect(sentOf(game.sent, "set_field")).toEqual([]);
+    expect(sentOf(game.sent, "batch")).toEqual([
+      {
+        type: "batch",
+        commands: [1, 3].map((index) => ({
+          type: "set_field",
+          target: { type: "component", entity: entity(index), component: "ludenea::Pose" },
+          path: [{ type: "field", name: "position" }],
+          value: { x: index, y: 2.1 },
+        })),
+      },
+    ]);
+  });
+
+  it("a_drag_moves_every_selected_entity_by_the_same_offset", async () => {
+    const { host, game, view } = await viewport((command) => {
+      if (command.type === "get_debug_draw") return { type: "debug_draw", tick: 7, frame: { layers: { colliders: [...circleOf(1, 1, 1).layers.colliders!, ...circleOf(2, -1, 1).layers.colliders!] } } };
+      if (command.type === "pick") return { type: "picked", entities: [entity(2)] };
+      if (command.type === "get_entity") return { type: "entity", entity: command.entity, components: { "ludenea::Pose": pose((command.entity as Entity).index, 1) } };
+      return undefined;
+    });
+    act(() => host.editor.selection.getState().select([entity(1), entity(2)]));
+    fireEvent.pointerDown(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    await settle();
+    fireEvent.pointerMove(view, { buttons: 1, clientX: 300, clientY: 150, pointerId: 1 });
+    // Both outlines move one meter right and one down.
+    await waitFor(() => expect(drawn.calls).toContainEqual({ method: "arc", args: [300, 150, 25, 0, 2 * Math.PI] }));
+    expect(drawn.calls).toContainEqual({ method: "arc", args: [200, 150, 25, 0, 2 * Math.PI] });
+    fireEvent.pointerUp(view, { button: 0, clientX: 300, clientY: 150, pointerId: 1 });
+    await settle();
+
+    expect(sentOf(game.sent, "set_field")).toEqual([]);
+    expect(sentOf(game.sent, "batch").map((command) => (command.commands as Command[]).map(({ value }) => value))).toEqual([
+      [
+        { x: 2, y: 0 },
+        { x: 3, y: 0 },
+      ],
+    ]);
+    expect(host.editor.selection.getState().entities).toEqual([entity(1), entity(2)]);
+  });
+
   it("layer_toggle_commands_follow_game_info", async () => {
     const { host, game } = await viewport();
     const toggles = () => host.editor.commands.list().map((command) => command.id).filter((id) => id.startsWith("viewport.toggle-layer."));
@@ -374,7 +425,7 @@ describe("viewport", () => {
     await settle();
 
     expect(host.editor.console.list().map(({ level, text }) => [level, text])).toEqual([
-      ["error", "Moving the entity dragged in the viewport failed: the entity is locked"],
+      ["error", "Moving the dragged entities in the viewport failed: the entity is locked"],
       ["error", "Despawn selected entities failed: select the entities to despawn first"],
     ]);
   });

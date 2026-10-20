@@ -356,6 +356,15 @@ API.
   changes), and the new `Editor.pluginOf` names the plugin that registered a value.
   `mountShell` reports the other render errors in the editor console, and one that no
   boundary catches replaces the window with its message.
+- Despawning the selection (`scene.despawn-selection`), nudging it, dragging it in the
+  viewport, and editing it in the inspector change every selected entity in one `batch`:
+  one undo step, all of them or none. A viewport drag moves every selected entity by the
+  same offset and outlines each one; it moved the entity under the pointer only. With
+  several entities selected, the inspector shows "N entities selected" and the components
+  they all have, marks "mixed" the fields whose values differ (it shows the first entity's),
+  and sets a field, adds a component to the entities lacking it, or removes one from all of
+  them. Custom inspectors, field decorations, and "Apply to scene" stay with one entity
+  selected: `inspector.apply-to-scene` refuses several.
 
 ### Formats
 

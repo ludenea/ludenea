@@ -86,6 +86,25 @@ describe("scene tree", () => {
     expect(host.editor.selection.getState().entities).toEqual([]);
   });
 
+  it("despawning_three_selected_entities_sends_one_batch", async () => {
+    const host = await testEditor(builtinPlugins);
+    // At tick 0 with a recorded future, the game refuses a second edit while the first resimulates.
+    let edits = 0;
+    const game = await testGame((command) => {
+      if (command.type !== "despawn" && command.type !== "batch") return { type: "done" };
+      edits += 1;
+      return edits === 1 ? { type: "done" } : { error: { code: "resimulating", message: "the session is resimulated up to tick 0 only; wait for resimulation to finish" } };
+    });
+    act(() => host.setControl(game.client));
+    host.editor.selection.getState().select([entity(1), entity(2), entity(3)]);
+
+    await host.editor.commands.run("scene.despawn-selection");
+
+    const despawns = [1, 2, 3].map((index) => ({ type: "despawn", entity: entity(index) }));
+    expect(game.sent.filter((command) => command.type === "despawn" || command.type === "batch")).toEqual([{ type: "batch", commands: despawns }]);
+    expect(host.editor.selection.getState().entities).toEqual([]);
+  });
+
   it("save_without_an_open_document_writes_nothing", async () => {
     const info = { type: "info", name: "demo", root: "/demo", default_scene: "scenes/main.scene.ron", mode: "browser" };
     const { host, game } = await sceneTree((request) => (request.type === "info" ? info : { type: "done" }));

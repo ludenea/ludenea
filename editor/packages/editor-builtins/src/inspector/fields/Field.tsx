@@ -3,7 +3,7 @@ import { PluginBoundary, type Editor, type FieldDecoration } from "@ludenea/edit
 import { useSyncExternalStore, type ReactNode } from "react";
 import { failureMark } from "../../shared/FailureMark";
 import { defaultValue, variantValue } from "../default-value";
-import { AssetField, BoolField, EntityField, FieldRow, LargeIntegerField, NumberField, StringField, pathText, useCommit, type Edit } from "./inputs";
+import { AssetField, BoolField, EntityField, FieldRow, LargeIntegerField, MixedMark, NumberField, StringField, pathText, useCommit, type Edit } from "./inputs";
 
 export interface FieldProps {
   schema: TypeSchema;
@@ -116,7 +116,10 @@ function Group({ path, children }: { path: PathSegment[]; children: ReactNode })
   if (path.length === 0) return <>{children}</>;
   return (
     <fieldset className="ludenea-group">
-      <legend>{pathText(path.slice(-1))}</legend>
+      <legend>
+        {pathText(path.slice(-1))}
+        <MixedMark path={path} />
+      </legend>
       {children}
     </fieldset>
   );

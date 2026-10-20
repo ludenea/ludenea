@@ -1,6 +1,6 @@
 import type { AssetKind, Entity, FileEntry, JsonValue, PathSegment } from "@ludenea/control-client";
 import type { Editor } from "@ludenea/editor-shell";
-import { useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { errorText } from "../../shared";
 
 /** Sends one field's new value; rejects with the host's error. */
@@ -31,6 +31,20 @@ export function useCommit(edit: Edit, path: PathSegment[]) {
   return { error, setError, commit };
 }
 
+/** The paths, as `pathText` writes them, where the values of the selected entities differ (see `mixedPaths`). */
+export const MixedPaths = createContext<ReadonlySet<string>>(new Set());
+
+/** Marks a row or group whose value differs between the selected entities; it shows the first one's. */
+export function MixedMark({ path }: { path: PathSegment[] }) {
+  if (!useContext(MixedPaths).has(pathText(path))) return null;
+  return (
+    <span className="ludenea-mixed" title="The selected entities have different values here; the first one's is shown">
+      {" "}
+      mixed
+    </span>
+  );
+}
+
 /** A labelled field with its error underneath. */
 export function FieldRow({ path, error, children }: { path: PathSegment[]; error?: string | null; children: ReactNode }) {
   return (
@@ -38,6 +52,7 @@ export function FieldRow({ path, error, children }: { path: PathSegment[]; error
       <label>
         <span>{lastName(path)}</span> {children}
       </label>
+      <MixedMark path={path} />
       {error && <p className="ludenea-error">{error}</p>}
     </div>
   );
