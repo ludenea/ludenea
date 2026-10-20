@@ -175,6 +175,9 @@ API.
   and data assets differ from their file, listed in the new `Timeline::unsaved_assets` and
   carried by the new `SessionExport::saved_assets`, and `Session::replace_scene` keeps the
   text of an unsaved asset over the new one.
+- `Project::files` reports files whose metas give them one identifier, as a folder copied
+  with its metas has, with the new `ProjectWarning::DuplicateId`: once, then again when
+  the files that share it change.
 - `Project::set_aside_stored_session` moves the stored session of a document to the first
   free `.ludenea/sessions/<id>.<n>.rejected.session`, from 1, and returns that path, or
   `None` when none is stored.
@@ -355,6 +358,8 @@ API.
 - `set_aside_stored_session { document }` moves the stored session of a document, which the
   editor could not restore, where no later `store_session` overwrites it, and answers
   `set_aside` with its new path, or a null path when none is stored.
+- A `warning` event names the files that share an identifier, usually a file or folder
+  copied with its metas, and says to delete the `.meta` of each copy.
 - `ludenea serve` takes messages up to 256 MiB, in one frame or several. It took frames up
   to 16 MiB and messages up to 64 MiB, and closed the connection without a word on a larger
   one. A larger message now gets `refused` (`invalid_request`) naming its size and the

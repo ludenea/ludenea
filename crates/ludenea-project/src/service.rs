@@ -621,6 +621,16 @@ fn warning_message(warning: &ProjectWarning) -> String {
         ProjectWarning::InvalidMeta { path, reason } => {
             format!("cannot use {path}: {reason}; its file has no identifier until it is repaired")
         }
+        ProjectWarning::DuplicateId { id, paths } => {
+            let files = match paths.split_last() {
+                Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+                _ => paths.join(", "),
+            };
+            format!(
+                "{files} have the same identifier {id}, as files copied with their metas do; \
+                 delete the .meta of each copy to give it an identifier of its own"
+            )
+        }
     }
 }
 

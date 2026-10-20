@@ -175,6 +175,44 @@ fn hello_of_an_earlier_version_is_refused_as_such() {
 }
 
 #[test]
+fn files_that_share_an_identifier_are_named_in_a_warning() {
+    let dir = TempDir::new().unwrap();
+    let root = minimal_project(&dir);
+    let mut service = ProjectService::new(ServiceMode::Browser, None);
+    open(&mut service, &root);
+    service.handle(ProjectRequest::ListFiles).unwrap();
+    for file in ["main.scene.ron", "main.scene.ron.meta"] {
+        let copy = file.replace("main", "main copy");
+        fs::copy(
+            root.join("scenes").join(file),
+            root.join("scenes").join(copy),
+        )
+        .unwrap();
+    }
+    let mut events = service.subscribe();
+
+    let ProjectReply::Files { entries } = service.handle(ProjectRequest::ListFiles).unwrap() else {
+        panic!("ListFiles answers Files");
+    };
+
+    let id = entries[0].id;
+    let warnings: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            ProjectEvent::Warning { message } => Some(message),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        warnings,
+        [format!(
+            "scenes/main copy.scene.ron and scenes/main.scene.ron have the same identifier {id}, \
+             as files copied with their metas do; delete the .meta of each copy to give it an \
+             identifier of its own"
+        )]
+    );
+}
+
+#[test]
 fn a_hello_that_does_not_decode_says_what_it_needs() {
     let unreadable = [
         format!(r#"{{"type":"hello","protocol_version":{PROJECT_PROTOCOL_VERSION}}}"#),

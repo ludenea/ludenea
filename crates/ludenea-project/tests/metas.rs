@@ -93,6 +93,59 @@ fn file_moved_outside_editor_gets_new_id_and_orphan_warning_once() {
 }
 
 #[test]
+fn files_that_share_an_identifier_are_reported_once_until_it_changes() {
+    let dir = TempDir::new().unwrap();
+    let mut project = new_project(&dir);
+    project
+        .rename("scenes/main.scene.ron", "scenes/levels/one.scene.ron")
+        .unwrap();
+    let id = project.files()[0].id;
+    let root = dir.path().join("demo/scenes");
+    // A folder copied with its metas, as a file manager does: the copy is listed first.
+    fs::create_dir_all(root.join("levels copy")).unwrap();
+    let copy_meta = || {
+        fs::copy(
+            root.join("levels/one.scene.ron.meta"),
+            root.join("levels copy/one.scene.ron.meta"),
+        )
+        .unwrap();
+    };
+    fs::copy(
+        root.join("levels/one.scene.ron"),
+        root.join("levels copy/one.scene.ron"),
+    )
+    .unwrap();
+    copy_meta();
+    let paths = vec![
+        "scenes/levels copy/one.scene.ron".to_string(),
+        "scenes/levels/one.scene.ron".to_string(),
+    ];
+    let shared = ProjectWarning::DuplicateId {
+        id,
+        paths: paths.clone(),
+    };
+
+    let listed: Vec<_> = project
+        .files()
+        .into_iter()
+        .map(|entry| (entry.path, entry.id))
+        .collect();
+
+    assert_eq!(listed, [(paths[0].clone(), id), (paths[1].clone(), id)]);
+    assert_eq!(project.take_warnings(), std::slice::from_ref(&shared));
+    project.files();
+    assert!(project.take_warnings().is_empty(), "reported once");
+
+    // Without its meta the copy gets an identifier of its own; copied again, it is news.
+    fs::remove_file(root.join("levels copy/one.scene.ron.meta")).unwrap();
+    assert_ne!(project.files()[0].id, id);
+    assert!(project.take_warnings().is_empty());
+    copy_meta();
+    project.files();
+    assert_eq!(project.take_warnings(), [shared]);
+}
+
+#[test]
 fn rename_refuses_to_overwrite_an_existing_file() {
     let dir = TempDir::new().unwrap();
     let mut project = new_project(&dir);

@@ -13,7 +13,7 @@ pub mod service;
 mod template;
 mod types;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read};
 use std::ops::Deref;
@@ -67,12 +67,17 @@ pub enum ProjectWarning {
     /// A `.meta` that cannot be read, parsed, or created. It is left untouched and its file is
     /// listed with the identifier `AssetId(0)` until the meta is repaired.
     InvalidMeta { path: String, reason: String },
+    /// Files whose metas give them one identifier, usually because a file was copied with
+    /// its meta: the identifier names none of them for sure. In path order.
+    DuplicateId { id: AssetId, paths: Vec<String> },
 }
 
 #[derive(Default, Debug)]
 struct Warnings {
     reported: BTreeSet<AssetId>,
     invalid_reported: BTreeSet<String>,
+    /// The files of each identifier shared when last listed.
+    duplicates: BTreeMap<AssetId, Vec<String>>,
     pending: Vec<ProjectWarning>,
 }
 

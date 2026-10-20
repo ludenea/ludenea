@@ -68,7 +68,8 @@ fn kind_on_disk(root: &Path, relative: &str) -> AssetKind {
 
 impl Project {
     /// The files under `scenes/` and `assets/`, sorted by path. Files without a meta get one.
-    /// Metas without a file are queued as warnings (see [`Project::take_warnings`]).
+    /// Metas without a file, metas that cannot be used, and files that share an identifier
+    /// are queued as warnings (see [`Project::take_warnings`]).
     pub fn files(&self) -> Vec<FileEntry> {
         let mut all = Vec::new();
         for directory in ASSET_DIRECTORIES {
@@ -110,6 +111,24 @@ impl Project {
                     .push(ProjectWarning::InvalidMeta { path, reason });
             }
         }
+        let mut duplicates: BTreeMap<AssetId, Vec<String>> = BTreeMap::new();
+        for entry in entries.iter().filter(|entry| entry.id != AssetId(0)) {
+            duplicates
+                .entry(entry.id)
+                .or_default()
+                .push(entry.path.clone());
+        }
+        duplicates.retain(|_, paths| paths.len() > 1);
+        // Shared again after it was resolved, or by other files, it is news again.
+        for (id, paths) in &duplicates {
+            if warnings.duplicates.get(id) != Some(paths) {
+                warnings.pending.push(ProjectWarning::DuplicateId {
+                    id: *id,
+                    paths: paths.clone(),
+                });
+            }
+        }
+        warnings.duplicates = duplicates;
         for meta in all.iter().filter_map(|path| path.strip_suffix(".meta")) {
             if present.contains(meta) {
                 continue;
