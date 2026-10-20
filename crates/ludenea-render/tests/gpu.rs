@@ -5,7 +5,9 @@
 use ludenea_app::meta::{Filter, Grid, TextureMeta};
 use std::collections::BTreeSet;
 
-use ludenea_draw::frame::{CameraView, LayerInfo, RenderFrame, SpriteItem, TilemapItem};
+use ludenea_draw::frame::{
+    CameraItem, CameraView, LayerInfo, RenderFrame, SpriteItem, TilemapItem,
+};
 use ludenea_draw::mesh::HIGHLIGHT;
 use ludenea_draw::{Color, Primitive};
 use ludenea_ecs::{AssetId, Entity, World};
@@ -91,7 +93,8 @@ fn sprite(entity: Entity, position: Vec2) -> SpriteItem {
 fn frame(sprites: Vec<SpriteItem>) -> RenderFrame {
     RenderFrame {
         tick: 0,
-        camera: Some(CameraView {
+        camera: Some(CameraItem {
+            entity: entity(),
             center: Vec2::ZERO,
             view: Vec2::new(4.0, 4.0),
         }),
@@ -484,7 +487,8 @@ fn parallax_layers_follow_the_camera_by_their_factor() {
     let mut renderer = renderer();
     upload(&mut renderer, &solid(RED), &TextureMeta::default());
     let mut scene = frame(vec![sprite(entity(), Vec2::ZERO)]);
-    scene.camera = Some(CameraView {
+    scene.camera = Some(CameraItem {
+        entity: entity(),
         center: Vec2::new(1.0, 0.0),
         view: Vec2::new(4.0, 4.0),
     });
@@ -827,7 +831,8 @@ fn background_layer_scrolls_slower() {
     marker.layer = 1;
     let mut scene = with_tilemaps(vec![marker], vec![cell]);
     scene.layers = vec![layer("background", 0.5), layer("world", 1.0)];
-    scene.camera = Some(CameraView {
+    scene.camera = Some(CameraItem {
+        entity: entity(),
         center: Vec2::new(1.0, 0.0),
         view: Vec2::new(4.0, 4.0),
     });
@@ -839,7 +844,8 @@ fn background_layer_scrolls_slower() {
     assert_eq!(pixel(&pixels, SIZE, 32, 8), GREEN);
 
     // The camera at x = 2, the tilemap unchanged: the cell moves by 1, to pixels 8..24.
-    scene.camera = Some(CameraView {
+    scene.camera = Some(CameraItem {
+        entity: entity(),
         center: Vec2::new(2.0, 0.0),
         view: Vec2::new(4.0, 4.0),
     });

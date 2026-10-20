@@ -43,8 +43,9 @@ hash, those of the golden trace and replays included.
 - Breaking: the `ludenea-debug-draw` crate is renamed `ludenea-draw`, and the facade's
   `ludenea::debug_draw` is now `ludenea::draw`, with no alias. Its types keep their names.
 - `ludenea_draw::frame::RenderFrame` is what a renderer draws for one tick: the camera
-  view, the render layers in draw order, sprites, tilemaps, the entities teleported this
-  tick, the debug draw, and warnings. `Color` derives `Schema`, so components can hold it.
+  (its entity, centre and view), the render layers in draw order, sprites, tilemaps, the
+  entities teleported this tick, the debug draw, and warnings. `Color` derives `Schema`, so
+  components can hold it.
 - `App::render_layer(name, parallax)` declares a render layer, drawn in declaration order;
   `build` refuses a name declared twice with the new `AppError::DuplicateLayer`.
   `App::extractor` registers an `ExtractFn` that adds a world's content to the frame.

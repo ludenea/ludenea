@@ -4,7 +4,7 @@ use ludenea_app::input_log::InputLog;
 use ludenea_app::pose::Pose;
 use ludenea_app::trace::Trace;
 use ludenea_app::{App, Sim, Simulation, Time};
-use ludenea_draw::frame::{CameraView, RenderFrame};
+use ludenea_draw::frame::{CameraItem, RenderFrame};
 use ludenea_ecs::{AssetId, Commands, Entity, Handle, Query, Res};
 use ludenea_math::{Rot, Vec2};
 use ludenea_render::{
@@ -116,11 +116,12 @@ fn camera(simulation: &mut Simulation, position: Vec2, view: Vec2) -> Entity {
 fn camera_comes_from_pose_and_view() {
     let mut simulation = simulation();
     assert_eq!(frame(&simulation).camera, None);
-    camera(&mut simulation, Vec2::new(3.0, -1.0), Vec2::new(16.0, 9.0));
+    let entity = camera(&mut simulation, Vec2::new(3.0, -1.0), Vec2::new(16.0, 9.0));
     let frame = frame(&simulation);
     assert_eq!(
         frame.camera,
-        Some(CameraView {
+        Some(CameraItem {
+            entity,
             center: Vec2::new(3.0, -1.0),
             view: Vec2::new(16.0, 9.0),
         })
@@ -144,7 +145,8 @@ fn two_cameras_warn_and_keep_the_lowest_entity() {
     let first = camera(&mut simulation, Vec2::new(1.0, 0.0), Vec2::new(8.0, 8.0));
     let second = camera(&mut simulation, Vec2::new(2.0, 0.0), Vec2::new(4.0, 4.0));
     let frame = frame(&simulation);
-    assert_eq!(frame.camera.unwrap().center, Vec2::new(1.0, 0.0));
+    let used = frame.camera.unwrap();
+    assert_eq!((used.entity, used.center), (first, Vec2::new(1.0, 0.0)));
     assert!(
         frame.warnings.iter().any(|warning| warning
             == &format!(

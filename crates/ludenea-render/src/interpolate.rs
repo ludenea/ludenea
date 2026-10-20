@@ -3,14 +3,15 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ludenea_draw::frame::{CameraView, RenderFrame};
+use ludenea_draw::frame::RenderFrame;
 use ludenea_ecs::Entity;
 use ludenea_math::{Rot, Vec2, clamp};
 
 /// `current`, with sprite and tilemap positions, sprite rotations and the camera blended from
 /// `previous` by `alpha`: 0 is `previous`, 1 (or NaN) is `current`, and anything outside is
 /// clamped. An entity missing from `previous`, or listed in `current.teleported`, is drawn
-/// where `current` has it; so is a camera that only one of the frames has.
+/// where `current` has it; so is a camera that only one of the frames has, or whose entity
+/// differs between them (a switched camera).
 pub fn interpolate(previous: &RenderFrame, current: &RenderFrame, alpha: f32) -> RenderFrame {
     let alpha = if alpha.is_nan() {
         1.0
@@ -47,11 +48,12 @@ pub fn interpolate(previous: &RenderFrame, current: &RenderFrame, alpha: f32) ->
         }
     }
 
-    if let (Some(before), Some(camera)) = (&previous.camera, &mut frame.camera) {
-        *camera = CameraView {
-            center: Vec2::lerp(before.center, camera.center, alpha),
-            view: Vec2::lerp(before.view, camera.view, alpha),
-        };
+    if let (Some(before), Some(camera)) = (&previous.camera, &mut frame.camera)
+        && before.entity == camera.entity
+        && !teleported.contains(&camera.entity)
+    {
+        camera.center = Vec2::lerp(before.center, camera.center, alpha);
+        camera.view = Vec2::lerp(before.view, camera.view, alpha);
     }
     frame
 }
@@ -65,7 +67,7 @@ fn slerp(from: Rot, to: Rot, alpha: f32) -> Rot {
 #[cfg(test)]
 mod tests {
     use ludenea_draw::Color;
-    use ludenea_draw::frame::{CameraView, RenderFrame, SpriteItem, TilemapItem};
+    use ludenea_draw::frame::{CameraItem, RenderFrame, SpriteItem, TilemapItem};
     use ludenea_ecs::{AssetId, Entity, World};
     use ludenea_math::{PI, Rot, Vec2};
 
@@ -226,28 +228,50 @@ mod tests {
         assert_eq!(blended.tilemaps, current.tilemaps);
     }
 
+    fn camera(entity: Entity, center: Vec2, view: Vec2) -> Option<CameraItem> {
+        Some(CameraItem {
+            entity,
+            center,
+            view,
+        })
+    }
+
     #[test]
     fn camera_is_blended() {
+        let entity = World::new().spawn();
         let mut previous = frame(1, Vec::new(), Vec::new());
-        previous.camera = Some(CameraView {
-            center: Vec2::new(0.0, 0.0),
-            view: Vec2::new(10.0, 10.0),
-        });
+        previous.camera = camera(entity, Vec2::new(0.0, 0.0), Vec2::new(10.0, 10.0));
         let mut current = frame(2, Vec::new(), Vec::new());
-        current.camera = Some(CameraView {
-            center: Vec2::new(4.0, -2.0),
-            view: Vec2::new(20.0, 30.0),
-        });
+        current.camera = camera(entity, Vec2::new(4.0, -2.0), Vec2::new(20.0, 30.0));
         assert_eq!(
             interpolate(&previous, &current, 0.25).camera,
-            Some(CameraView {
-                center: Vec2::new(1.0, -0.5),
-                view: Vec2::new(12.5, 15.0),
-            })
+            camera(entity, Vec2::new(1.0, -0.5), Vec2::new(12.5, 15.0))
         );
         // A camera that appears or disappears is not blended.
         let without = frame(1, Vec::new(), Vec::new());
         assert_eq!(interpolate(&without, &current, 0.25).camera, current.camera);
         assert_eq!(interpolate(&previous, &without, 0.25).camera, None);
+    }
+
+    #[test]
+    fn teleported_camera_is_not_blended() {
+        let entity = World::new().spawn();
+        let mut previous = frame(1, Vec::new(), Vec::new());
+        previous.camera = camera(entity, Vec2::new(0.0, 0.0), Vec2::new(10.0, 10.0));
+        let mut current = frame(2, Vec::new(), Vec::new());
+        current.camera = camera(entity, Vec2::new(40.0, 0.0), Vec2::new(20.0, 20.0));
+        current.teleported = vec![entity];
+        assert_eq!(interpolate(&previous, &current, 0.5).camera, current.camera);
+    }
+
+    #[test]
+    fn switched_camera_is_not_blended() {
+        let mut world = World::new();
+        let (old, new) = (world.spawn(), world.spawn());
+        let mut previous = frame(1, Vec::new(), Vec::new());
+        previous.camera = camera(old, Vec2::new(0.0, 0.0), Vec2::new(10.0, 10.0));
+        let mut current = frame(2, Vec::new(), Vec::new());
+        current.camera = camera(new, Vec2::new(40.0, 0.0), Vec2::new(20.0, 20.0));
+        assert_eq!(interpolate(&previous, &current, 0.5).camera, current.camera);
     }
 }

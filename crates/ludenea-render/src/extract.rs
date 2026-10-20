@@ -2,7 +2,7 @@
 //! frame, with a warning naming the entity for everything that cannot be drawn.
 
 use ludenea_app::pose::Pose;
-use ludenea_draw::frame::{CameraView, RenderFrame, SpriteItem, TilemapItem};
+use ludenea_draw::frame::{CameraItem, RenderFrame, SpriteItem, TilemapItem};
 use ludenea_ecs::{Assets, Entity, Query, SystemParam, World};
 
 use crate::components::{Camera2d, Sprite, SpriteAnimation, Teleported, Tilemap};
@@ -44,7 +44,8 @@ fn extract_camera(world: &World, frame: &mut RenderFrame) {
             entities.join(", ")
         ));
     }
-    frame.camera = Some(CameraView {
+    frame.camera = Some(CameraItem {
+        entity: first,
         center: pose.position,
         view: camera.view,
     });

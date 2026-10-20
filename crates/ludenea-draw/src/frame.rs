@@ -12,7 +12,7 @@ use crate::{Color, DebugDrawFrame};
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RenderFrame {
     pub tick: u64,
-    pub camera: Option<CameraView>,
+    pub camera: Option<CameraItem>,
     /// The app's render layers, in draw order: `SpriteItem::layer` indexes this list.
     pub layers: Vec<LayerInfo>,
     pub sprites: Vec<SpriteItem>,
@@ -23,13 +23,33 @@ pub struct RenderFrame {
     pub warnings: Vec<String>,
 }
 
-/// Where the camera looks.
+/// The camera of a frame: the entity it belongs to, so a renderer can tell a camera that
+/// moved from one that was switched or teleported, and where it looks.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct CameraItem {
+    pub entity: Entity,
+    pub center: Vec2,
+    /// The minimum visible width and height, in world units.
+    pub view: Vec2,
+}
+
+/// Where a camera looks.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct CameraView {
     pub center: Vec2,
     /// The minimum visible width and height, in world units.
     pub view: Vec2,
+}
+
+impl From<&CameraItem> for CameraView {
+    fn from(camera: &CameraItem) -> Self {
+        CameraView {
+            center: camera.center,
+            view: camera.view,
+        }
+    }
 }
 
 /// A render layer. Its draw order is its index in `RenderFrame::layers`.
@@ -112,7 +132,8 @@ mod tests {
         );
         RenderFrame {
             tick: 42,
-            camera: Some(CameraView {
+            camera: Some(CameraItem {
+                entity: entity(5, 0),
                 center: Vec2::new(1.5, -2.0),
                 view: Vec2::new(16.0, 9.0),
             }),

@@ -305,6 +305,10 @@ impl Renderer {
 
     /// The device's loss, or the errors it raised since the last call, taken.
     fn faults(&self, operation: &'static str) -> Result<(), RenderError> {
+        // A lost device is never touched again, not even polled.
+        if let Some(message) = &lock(&self.faults).lost {
+            return Err(RenderError::DeviceLost(message.clone()));
+        }
         // A non-blocking poll runs the callbacks the device has pending, its loss among them.
         // Without a wait or a submission index, it has no error of its own to return.
         let _ = self.device.poll(wgpu::PollType::Poll);
@@ -452,9 +456,10 @@ impl Renderer {
         };
         let camera = overlay
             .camera
-            .as_ref()
-            .or(frame.camera.as_ref())
-            .unwrap_or(&DEFAULT_CAMERA);
+            .clone()
+            .or_else(|| frame.camera.as_ref().map(CameraView::from))
+            .unwrap_or(DEFAULT_CAMERA);
+        let camera = &camera;
         let aspect = size.width.max(1) as f32 / size.height.max(1) as f32;
         let visible = fit(camera.view, aspect);
         let pages: Vec<(u32, u32)> = self.pages.iter().map(|page| page.size).collect();
