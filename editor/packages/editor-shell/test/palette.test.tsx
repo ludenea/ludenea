@@ -1,6 +1,6 @@
 import { ProtocolFailure } from "@ludenea/control-client";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { normalizeShortcut } from "../src";
 import { CommandPalette, installShortcuts } from "../src/app";
 import { logged, settle, testHost } from "./support";
@@ -56,7 +56,7 @@ describe("command palette and shortcuts", () => {
     editor.commands.register({ id: "edit.undo", title: "Undo", run: () => Promise.reject(new ProtocolFailure("nothing_to_undo", "there is nothing to undo")) });
     editor.shortcuts.register({ key: "Ctrl+Z", command: "edit.undo" });
     editor.shortcuts.register({ key: "Ctrl+Y", command: "edit.unknown" });
-    const uninstall = installShortcuts(editor, registry, window);
+    onTestFinished(installShortcuts(editor, registry, window));
 
     fireEvent.keyDown(document.body, { key: "z", ctrlKey: true });
     await settle();
@@ -69,7 +69,6 @@ describe("command palette and shortcuts", () => {
       ["error", 'edit.unknown failed: no command "edit.unknown" is registered', undefined],
     ]);
     expect(devtools).not.toHaveBeenCalled();
-    uninstall();
   });
 
   it("palette_lists_and_runs_registered_commands", async () => {
@@ -180,16 +179,15 @@ describe("command palette and shortcuts", () => {
     const save = vi.fn();
     editor.commands.register({ id: "scene.save", title: "Save scene", run: save });
     editor.shortcuts.register({ key: "Ctrl+S", command: "scene.save" });
-    const uninstall = installShortcuts(editor, registry, window);
+    onTestFinished(installShortcuts(editor, registry, window));
     const input = document.body.appendChild(document.createElement("input"));
+    onTestFinished(() => input.remove());
 
     fireEvent.keyDown(input, { key: "s", ctrlKey: true });
     expect(save).not.toHaveBeenCalled();
     fireEvent.keyDown(document.body, { key: "s", ctrlKey: true });
     expect(save).toHaveBeenCalledOnce();
 
-    uninstall();
-    input.remove();
   });
 
   it("named_keys_match_keyboard_event_values", async () => {
@@ -203,10 +201,9 @@ describe("command palette and shortcuts", () => {
     const up = vi.fn();
     editor.commands.register({ id: "viewport.pan-up", title: "Pan up", run: up });
     editor.shortcuts.register({ key: "shift+arrowup", command: "viewport.pan-up" });
-    const uninstall = installShortcuts(editor, registry, window);
+    onTestFinished(installShortcuts(editor, registry, window));
     fireEvent.keyDown(document.body, { key: "ArrowUp", shiftKey: true });
     expect(up).toHaveBeenCalledOnce();
-    uninstall();
   });
 
   it("mod_is_cmd_on_macos_and_ctrl_elsewhere", () => {
@@ -221,7 +218,7 @@ describe("command palette and shortcuts", () => {
       editor.commands.register({ id: id!, title: id!, run: () => void ran.push(id!) });
       editor.shortcuts.register({ key: key!, command: id! });
     }
-    const uninstall = installShortcuts(editor, registry, window);
+    onTestFinished(installShortcuts(editor, registry, window));
     const mod = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? { metaKey: true } : { ctrlKey: true };
     const press = () => {
       fireEvent.keyDown(document.body, { key: "F5" });
@@ -249,6 +246,5 @@ describe("command palette and shortcuts", () => {
     ran.length = 0;
     press();
     expect(ran).toEqual(["play", "undo", "frame", "step", "pan"]);
-    uninstall();
   });
 });
