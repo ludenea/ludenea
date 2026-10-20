@@ -1,16 +1,12 @@
-//! The sprite pipeline and the instances it draws: one quad per sprite, batched by
-//! `(layer, page, filter)` in item order.
+//! The quad pipeline that sprites and tilemap tiles share, and the instances of sprites.
 
 use std::collections::BTreeMap;
-use std::ops::Range;
 
 use ludenea_app::meta::Filter;
-use ludenea_draw::frame::{CameraView, RenderFrame, SpriteItem};
-use ludenea_ecs::{AssetId, Entity};
-use ludenea_math::Vec2;
+use ludenea_draw::frame::SpriteItem;
+use ludenea_ecs::AssetId;
 
 use crate::atlas::Region;
-use crate::camera::world_to_clip;
 
 /// The floats of one instance, in the shader's `Instance` order: center, axis_x, axis_y,
 /// offset, size, uv_min, uv_size (two each), tint (four).
@@ -19,82 +15,64 @@ pub(super) type Instance = [f32; INSTANCE_FLOATS];
 
 const SHADER: &str = include_str!("shaders/sprite.wgsl");
 const PLACEHOLDER: [f32; 4] = [1.0, 0.0, 1.0, 1.0];
+const WHITE: [f32; 4] = [1.0; 4];
 
 /// What a run of consecutive instances samples: a page (`None` for the blank texture the
 /// placeholders use) through a filter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct BatchKey {
-    pub layer: u16,
+pub(super) struct Sample {
     pub page: Option<u32>,
     pub filter: Filter,
 }
 
-pub(super) struct Batch {
-    pub key: BatchKey,
-    pub instances: Range<u32>,
+/// The placeholders' sample: the blank texture.
+pub(super) const BLANK: Sample = Sample {
+    page: None,
+    filter: Filter::Nearest,
+};
+
+/// The region of `(texture, frame)` and its page's size, if both are uploaded. `pages`
+/// holds each uploaded page's width and height.
+pub(super) fn find<'a>(
+    regions: &'a BTreeMap<(AssetId, u32), Region>,
+    pages: &[(u32, u32)],
+    texture: AssetId,
+    frame: u32,
+) -> Option<(&'a Region, (u32, u32))> {
+    let region = regions.get(&(texture, frame))?;
+    Some((region, *pages.get(region.page as usize)?))
 }
 
-/// The instances of a frame's sprites, their batches, and the sprites whose region is missing.
-pub(super) struct Sprites {
-    pub instances: Vec<Instance>,
-    pub batches: Vec<Batch>,
-    pub missing: Vec<(Entity, AssetId, u32)>,
+/// A region's sample and its uv rectangle in its page (min then size, normalized).
+pub(super) fn uv(region: &Region, page: (u32, u32)) -> (Sample, [f32; 4]) {
+    let (page_width, page_height) = (page.0 as f32, page.1 as f32);
+    let sample = Sample {
+        page: Some(region.page),
+        filter: region.filter,
+    };
+    let uv = [
+        region.x as f32 / page_width,
+        region.y as f32 / page_height,
+        region.width as f32 / page_width,
+        region.height as f32 / page_height,
+    ];
+    (sample, uv)
 }
 
-/// Builds the instances of `frame`'s sprites, in item order, seen by `camera` over `visible`.
-/// `pages` holds each uploaded page's width and height; a region on a page that is not
-/// uploaded counts as missing.
-pub(super) fn build(
-    frame: &RenderFrame,
-    camera: &CameraView,
-    visible: Vec2,
+/// The sprite's instance in world space and what it samples, or `None` for the sample when
+/// its region is missing and it is drawn as a placeholder.
+pub(super) fn instance(
+    item: &SpriteItem,
     regions: &BTreeMap<(AssetId, u32), Region>,
     pages: &[(u32, u32)],
-) -> Sprites {
-    let mut sprites = Sprites {
-        instances: Vec::with_capacity(frame.sprites.len()),
-        batches: Vec::new(),
-        missing: Vec::new(),
-    };
-    for item in &frame.sprites {
-        let parallax = frame
-            .layers
-            .get(usize::from(item.layer))
-            .map_or(1.0, |layer| layer.parallax);
-        let found = regions
-            .get(&(item.texture, item.frame))
-            .and_then(|region| Some((region, *pages.get(region.page as usize)?)));
-        let (page, filter, quad) = match found {
-            Some((region, page)) => (
-                Some(region.page),
-                region.filter,
-                textured(item, region, page),
-            ),
-            None => {
-                sprites
-                    .missing
-                    .push((item.entity, item.texture, item.frame));
-                (None, Filter::Nearest, placeholder())
-            }
-        };
-        let key = BatchKey {
-            layer: item.layer,
-            page,
-            filter,
-        };
-        let index = sprites.instances.len() as u32;
-        sprites
-            .instances
-            .push(place(item, camera, visible, parallax, quad));
-        match sprites.batches.last_mut() {
-            Some(batch) if batch.key == key => batch.instances.end = index + 1,
-            _ => sprites.batches.push(Batch {
-                key,
-                instances: index..index + 1,
-            }),
+) -> (Option<Sample>, Instance) {
+    match find(regions, pages, item.texture, item.frame) {
+        Some((region, page)) => {
+            let (sample, uv) = uv(region, page);
+            (Some(sample), place(item, textured(item, region, uv)))
         }
+        None => (None, place(item, placeholder())),
     }
-    sprites
 }
 
 /// A quad before it is placed: its bottom-left corner and size in world units from the
@@ -107,21 +85,15 @@ struct Quad {
 }
 
 /// The region's quad: `region size / pixels_per_unit` world units, its pivot on the position.
-fn textured(item: &SpriteItem, region: &Region, page: (u32, u32)) -> Quad {
+fn textured(item: &SpriteItem, region: &Region, uv: [f32; 4]) -> Quad {
     let unit = region.pixels_per_unit as f32;
     let (width, height) = (region.width as f32, region.height as f32);
     let (pivot_x, pivot_y) = (region.pivot.0 as f32, region.pivot.1 as f32);
-    let (page_width, page_height) = (page.0 as f32, page.1 as f32);
     Quad {
         // The pivot counts from the top-left, the quad's local +y is up.
         offset: [-pivot_x / unit, -(height - pivot_y) / unit],
         size: [width / unit, height / unit],
-        uv: [
-            region.x as f32 / page_width,
-            region.y as f32 / page_height,
-            width / page_width,
-            height / page_height,
-        ],
+        uv,
         tint: tint(item),
     }
 }
@@ -136,15 +108,9 @@ fn placeholder() -> Quad {
     }
 }
 
-/// Places a quad on the sprite's pose: flips mirror it around the pivot, the camera and the
-/// layer's parallax put the pivot in clip space, and the rotation turns it.
-fn place(
-    item: &SpriteItem,
-    camera: &CameraView,
-    visible: Vec2,
-    parallax: f32,
-    mut quad: Quad,
-) -> Instance {
+/// Places a quad on the sprite's pose in world space: flips mirror it around the pivot, and
+/// the rotation turns it. The layer's view puts it in clip space on the GPU.
+fn place(item: &SpriteItem, mut quad: Quad) -> Instance {
     if item.flip_x {
         quad.offset[0] = -quad.offset[0];
         quad.size[0] = -quad.size[0];
@@ -153,34 +119,41 @@ fn place(
         quad.offset[1] = -quad.offset[1];
         quad.size[1] = -quad.size[1];
     }
-    let center = world_to_clip(item.position, camera.clone(), visible, parallax);
-    let (scale_x, scale_y) = (2.0 / visible.x, 2.0 / visible.y);
     let (cos, sin) = (item.rotation.cos, item.rotation.sin);
-    let Quad {
-        offset,
-        size,
-        uv,
-        tint,
-    } = quad;
+    let position = [item.position.x, item.position.y];
+    instance_of(
+        position,
+        [cos, sin, -sin, cos],
+        quad.offset,
+        quad.size,
+        quad.uv,
+        quad.tint,
+    )
+}
+
+/// An unrotated quad at `center`, in world space: a tile of a tilemap chunk.
+pub(super) fn tile(
+    center: [f32; 2],
+    offset: [f32; 2],
+    size: [f32; 2],
+    uv: [f32; 4],
+    placeholder: bool,
+) -> Instance {
+    let tint = if placeholder { PLACEHOLDER } else { WHITE };
+    instance_of(center, [1.0, 0.0, 0.0, 1.0], offset, size, uv, tint)
+}
+
+fn instance_of(
+    center: [f32; 2],
+    axes: [f32; 4],
+    offset: [f32; 2],
+    size: [f32; 2],
+    uv: [f32; 4],
+    tint: [f32; 4],
+) -> Instance {
     [
-        center[0],
-        center[1],
-        scale_x * cos,
-        scale_y * sin,
-        -scale_x * sin,
-        scale_y * cos,
-        offset[0],
-        offset[1],
-        size[0],
-        size[1],
-        uv[0],
-        uv[1],
-        uv[2],
-        uv[3],
-        tint[0],
-        tint[1],
-        tint[2],
-        tint[3],
+        center[0], center[1], axes[0], axes[1], axes[2], axes[3], offset[0], offset[1], size[0],
+        size[1], uv[0], uv[1], uv[2], uv[3], tint[0], tint[1], tint[2], tint[3],
     ]
 }
 
@@ -217,10 +190,12 @@ pub(super) fn page_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     })
 }
 
-/// The sprite pipeline for one target format, with premultiplied alpha blending.
+/// The quad pipeline for one target format, with premultiplied alpha blending: a page at
+/// group 0, the layer's view at group 1.
 pub(super) fn pipeline(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
+    view_layout: &wgpu::BindGroupLayout,
     format: wgpu::TextureFormat,
 ) -> wgpu::RenderPipeline {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -229,7 +204,7 @@ pub(super) fn pipeline(
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("sprite"),
-        bind_group_layouts: &[Some(layout)],
+        bind_group_layouts: &[Some(layout), Some(view_layout)],
         immediate_size: 0,
     });
     let attributes = wgpu::vertex_attr_array![

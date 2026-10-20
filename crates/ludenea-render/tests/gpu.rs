@@ -3,8 +3,11 @@
 #![cfg(feature = "gpu")]
 
 use ludenea_app::meta::{Filter, Grid, TextureMeta};
-use ludenea_draw::Color;
-use ludenea_draw::frame::{CameraView, LayerInfo, RenderFrame, SpriteItem};
+use std::collections::BTreeSet;
+
+use ludenea_draw::frame::{CameraView, LayerInfo, RenderFrame, SpriteItem, TilemapItem};
+use ludenea_draw::mesh::HIGHLIGHT;
+use ludenea_draw::{Color, Primitive};
 use ludenea_ecs::{AssetId, Entity, World};
 use ludenea_math::{Rot, Vec2};
 use ludenea_render::atlas::{Atlas, AtlasPage, TextureSource, pack};
@@ -599,4 +602,394 @@ fn render_rgba_refuses_a_target_whose_read_back_exceeds_the_buffer_limit() {
             allowed: limits.max_buffer_size,
         })
     );
+}
+
+/// Packs a tileset as `AssetId(1)`: three 16 by 16 frames, red, green, then blue.
+fn tileset(renderer: &mut Renderer) {
+    let meta = TextureMeta {
+        grid: Some(Grid {
+            frame_width: 16,
+            frame_height: 16,
+            margin: 0,
+            spacing: 0,
+        }),
+        ..TextureMeta::default()
+    };
+    let texture = png(48, 16, |x, _| [RED, GREEN, BLUE][(x / 16) as usize]);
+    upload(renderer, &texture, &meta);
+}
+
+/// A tilemap of one-unit cells on layer 0 with order 0, its bottom-left corner at `position`.
+fn tilemap(
+    entity: Entity,
+    position: Vec2,
+    width: u32,
+    height: u32,
+    tiles: Vec<Option<u32>>,
+) -> TilemapItem {
+    TilemapItem {
+        entity,
+        layer: 0,
+        order: 0,
+        tileset: AssetId(1),
+        position,
+        cell_size: Vec2::new(1.0, 1.0),
+        width,
+        height,
+        tiles,
+    }
+}
+
+fn with_tilemaps(sprites: Vec<SpriteItem>, tilemaps: Vec<TilemapItem>) -> RenderFrame {
+    RenderFrame {
+        tilemaps,
+        ..frame(sprites)
+    }
+}
+
+/// A sprite of the tileset's frame `frame`: one unit centred on `position`.
+fn tile_sprite(entity: Entity, position: Vec2, frame: u32) -> SpriteItem {
+    SpriteItem {
+        frame,
+        ..sprite(entity, position)
+    }
+}
+
+fn layer(name: &str, parallax: f32) -> LayerInfo {
+    LayerInfo {
+        name: name.into(),
+        parallax,
+    }
+}
+
+fn render_with(renderer: &mut Renderer, frame: &RenderFrame, overlay: &Overlay) -> Vec<u8> {
+    let frames = Frames {
+        previous: None,
+        current: frame,
+        alpha: 1.0,
+    };
+    renderer.render_rgba(SIZE, frames, overlay).unwrap()
+}
+
+fn report(device: &wgpu::Device, renderer: &mut Renderer, frame: &RenderFrame) -> DrawReport {
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("target"),
+        size: wgpu::Extent3d {
+            width: SIZE.width,
+            height: SIZE.height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let frames = Frames {
+        previous: None,
+        current: frame,
+        alpha: 1.0,
+    };
+    renderer
+        .draw(
+            &target.create_view(&Default::default()),
+            SIZE,
+            frames,
+            &Overlay::default(),
+        )
+        .unwrap()
+}
+
+#[test]
+fn tilemap_draws_tiles_at_their_cells() {
+    let mut renderer = renderer();
+    tileset(&mut renderer);
+    // Cells of world [0, 1] and [1, 2] by [0, 1]: pixels 32..48 and 48..64 across, 16..32 down.
+    let scene = with_tilemaps(
+        Vec::new(),
+        vec![tilemap(entity(), Vec2::ZERO, 2, 1, vec![Some(0), Some(1)])],
+    );
+    let pixels = render(&mut renderer, SIZE, &scene);
+    for (x, y) in [(32, 16), (47, 31), (40, 24)] {
+        assert_eq!(pixel(&pixels, SIZE, x, y), RED, "first cell at ({x}, {y})");
+    }
+    for (x, y) in [(48, 16), (63, 31), (56, 24)] {
+        assert_eq!(
+            pixel(&pixels, SIZE, x, y),
+            GREEN,
+            "second cell at ({x}, {y})"
+        );
+    }
+    for (x, y) in [(31, 24), (40, 15), (40, 32), (56, 32)] {
+        assert_eq!(
+            pixel(&pixels, SIZE, x, y),
+            background(),
+            "outside at ({x}, {y})"
+        );
+    }
+}
+
+#[test]
+fn empty_cells_stay_transparent() {
+    let mut renderer = renderer();
+    tileset(&mut renderer);
+    // A blue sprite under the second cell, which is empty: it shows through.
+    let scene = with_tilemaps(
+        vec![tile_sprite(entity(), Vec2::new(1.5, 0.5), 2)],
+        vec![tilemap(entity(), Vec2::ZERO, 2, 1, vec![Some(0), None])],
+    );
+    let pixels = render(&mut renderer, SIZE, &scene);
+    assert_eq!(pixel(&pixels, SIZE, 40, 24), RED);
+    assert_eq!(pixel(&pixels, SIZE, 56, 24), BLUE);
+}
+
+#[test]
+fn tilemap_row_zero_is_at_the_bottom() {
+    let mut renderer = renderer();
+    tileset(&mut renderer);
+    // Row 0 covers world y [0, 1] (pixels 16..32 down), row 1 covers [1, 2] (pixels 0..16).
+    let scene = with_tilemaps(
+        Vec::new(),
+        vec![tilemap(entity(), Vec2::ZERO, 1, 2, vec![Some(0), Some(1)])],
+    );
+    let pixels = render(&mut renderer, SIZE, &scene);
+    assert_eq!(pixel(&pixels, SIZE, 40, 24), RED);
+    assert_eq!(pixel(&pixels, SIZE, 40, 8), GREEN);
+}
+
+#[test]
+fn later_layers_draw_over_earlier_ones() {
+    let mut renderer = renderer();
+    tileset(&mut renderer);
+    let mut scene = with_tilemaps(Vec::new(), Vec::new());
+    scene.layers = vec![layer("back", 1.0), layer("front", 1.0)];
+    // A tilemap on the front layer with the lowest order covers a sprite on the back layer
+    // with the highest order, whatever their order in the frame's lists.
+    let mut front = tilemap(entity(), Vec2::ZERO, 1, 1, vec![Some(0)]);
+    front.layer = 1;
+    front.order = i32::MIN;
+    let mut back = tile_sprite(entity(), Vec2::new(0.5, 0.5), 1);
+    back.order = i32::MAX;
+    // Two sprites, the front one listed first: the front one still covers the back one.
+    let mut front_sprite = tile_sprite(entity(), Vec2::new(-0.5, -0.5), 2);
+    front_sprite.layer = 1;
+    let mut back_sprite = tile_sprite(entity(), Vec2::new(-0.5, -0.5), 1);
+    back_sprite.order = 1;
+    scene.sprites = vec![front_sprite, back, back_sprite];
+    scene.tilemaps = vec![front];
+    let pixels = render(&mut renderer, SIZE, &scene);
+    assert_eq!(pixel(&pixels, SIZE, 40, 24), RED);
+    assert_eq!(pixel(&pixels, SIZE, 24, 40), BLUE);
+}
+
+#[test]
+fn order_sorts_within_a_layer() {
+    let mut renderer = renderer();
+    tileset(&mut renderer);
+    // On one layer: a green sprite (order 0) under a red tilemap (order 1) under a blue
+    // sprite (order 2) that covers only the cell's left half. The blue sprite is listed first.
+    let mut cells = tilemap(entity(), Vec2::ZERO, 1, 1, vec![Some(0)]);
+    cells.order = 1;
+    let under = tile_sprite(entity(), Vec2::new(0.5, 0.5), 1);
+    let mut over = tile_sprite(entity(), Vec2::new(0.0, 0.5), 2);
+    over.order = 2;
+    let scene = with_tilemaps(vec![over, under], vec![cells]);
+    let pixels = render(&mut renderer, SIZE, &scene);
+    assert_eq!(pixel(&pixels, SIZE, 44, 24), RED);
+    assert_eq!(pixel(&pixels, SIZE, 36, 24), BLUE);
+}
+
+#[test]
+fn background_layer_scrolls_slower() {
+    let mut renderer = renderer();
+    tileset(&mut renderer);
+    // The camera at x = 1: the background (parallax 0.5) sees it at 0.5, the world at 1.
+    let mut cell = tilemap(entity(), Vec2::new(-0.5, -0.5), 1, 1, vec![Some(0)]);
+    cell.layer = 0;
+    let mut marker = tile_sprite(entity(), Vec2::new(1.0, 1.5), 1);
+    marker.layer = 1;
+    let mut scene = with_tilemaps(vec![marker], vec![cell]);
+    scene.layers = vec![layer("background", 0.5), layer("world", 1.0)];
+    scene.camera = Some(CameraView {
+        center: Vec2::new(1.0, 0.0),
+        view: Vec2::new(4.0, 4.0),
+    });
+    // The cell, world x [-0.5, 0.5], moves by 0.5 to pixels 16..32; the sprite by 1, its
+    // centre to pixel 32.
+    let pixels = render(&mut renderer, SIZE, &scene);
+    assert_eq!(pixel(&pixels, SIZE, 20, 32), RED);
+    assert_eq!(pixel(&pixels, SIZE, 36, 32), background());
+    assert_eq!(pixel(&pixels, SIZE, 32, 8), GREEN);
+
+    // The camera at x = 2, the tilemap unchanged: the cell moves by 1, to pixels 8..24.
+    scene.camera = Some(CameraView {
+        center: Vec2::new(2.0, 0.0),
+        view: Vec2::new(4.0, 4.0),
+    });
+    let pixels = render(&mut renderer, SIZE, &scene);
+    assert_eq!(pixel(&pixels, SIZE, 12, 32), RED);
+    assert_eq!(pixel(&pixels, SIZE, 28, 32), background());
+}
+
+/// A filled circle of radius 0.5 on debug layer `layer`.
+fn dot(frame: &mut RenderFrame, layer: &str, entity: Option<Entity>, center: Vec2, color: Color) {
+    frame.debug.push(
+        layer,
+        entity,
+        Primitive::Circle {
+            center,
+            radius: 0.5,
+            color,
+            fill: true,
+        },
+    );
+}
+
+#[test]
+fn debug_draw_is_on_top() {
+    let mut renderer = renderer();
+    tileset(&mut renderer);
+    let (plain, picked) = {
+        let mut world = World::new();
+        (world.spawn(), world.spawn())
+    };
+    // Over a sprite and a tilemap on a front layer with the highest order, even with the
+    // sprite's layer fixed to the screen: the debug draw moves with the world.
+    let mut red = tile_sprite(plain, Vec2::ZERO, 0);
+    red.order = i32::MAX;
+    let mut cells = tilemap(picked, Vec2::new(0.5, 0.5), 1, 1, vec![Some(0)]);
+    cells.order = i32::MAX;
+    let mut scene = with_tilemaps(vec![red], vec![cells]);
+    scene.layers = vec![layer("hud", 0.0)];
+    dot(
+        &mut scene,
+        "physics",
+        Some(plain),
+        Vec2::ZERO,
+        Color(0x0000FFFF),
+    );
+    dot(
+        &mut scene,
+        "physics",
+        Some(picked),
+        Vec2::new(1.0, 1.0),
+        Color(0x0000FFFF),
+    );
+    let overlay = Overlay {
+        debug_layers: BTreeSet::from(["physics".to_string()]),
+        selected: BTreeSet::from([picked]),
+        ..Overlay::default()
+    };
+    let pixels = render_with(&mut renderer, &scene, &overlay);
+    assert_eq!(pixel(&pixels, SIZE, 32, 32), BLUE);
+    assert_eq!(pixel(&pixels, SIZE, 48, 16), HIGHLIGHT.0.to_be_bytes());
+    // Outside the circle, the sprite shows.
+    assert_eq!(pixel(&pixels, SIZE, 25, 25), RED);
+}
+
+#[test]
+fn debug_layers_not_requested_are_hidden() {
+    let mut renderer = renderer();
+    let mut scene = frame(Vec::new());
+    dot(
+        &mut scene,
+        "physics",
+        None,
+        Vec2::new(-1.0, 0.0),
+        Color(0x0000FFFF),
+    );
+    dot(
+        &mut scene,
+        "navigation",
+        None,
+        Vec2::new(1.0, 0.0),
+        Color(0x00FF00FF),
+    );
+    let overlay = Overlay {
+        debug_layers: BTreeSet::from(["physics".to_string()]),
+        ..Overlay::default()
+    };
+    let pixels = render_with(&mut renderer, &scene, &overlay);
+    assert_eq!(pixel(&pixels, SIZE, 16, 32), BLUE);
+    assert_eq!(pixel(&pixels, SIZE, 48, 32), background());
+    // Without layers, nothing of the debug draw shows.
+    let pixels = render(&mut renderer, SIZE, &scene);
+    assert_eq!(pixel(&pixels, SIZE, 16, 32), background());
+}
+
+#[test]
+fn missing_tile_draws_a_placeholder_and_reports_it() {
+    let (device, queue) = device();
+    let mut renderer = Renderer::new(device.clone(), queue, wgpu::TextureFormat::Rgba8Unorm);
+    tileset(&mut renderer);
+    let map = entity();
+    // Frame 7 is not in the tileset: its cell is magenta, the others draw.
+    let scene = with_tilemaps(
+        Vec::new(),
+        vec![tilemap(map, Vec2::ZERO, 2, 1, vec![Some(7), Some(1)])],
+    );
+    let pixels = render(&mut renderer, SIZE, &scene);
+    assert_eq!(pixel(&pixels, SIZE, 40, 24), MAGENTA);
+    assert_eq!(pixel(&pixels, SIZE, 56, 24), GREEN);
+    assert_eq!(
+        report(&device, &mut renderer, &scene),
+        DrawReport {
+            missing: vec![(map, AssetId(1), 7)],
+        }
+    );
+}
+
+#[test]
+fn a_changed_tilemap_or_atlas_redraws_its_tiles() {
+    let mut renderer = renderer();
+    let mut scene = with_tilemaps(
+        Vec::new(),
+        vec![tilemap(entity(), Vec2::ZERO, 1, 1, vec![Some(0)])],
+    );
+    // Without an atlas the cell is a placeholder; with one, the tile.
+    assert_eq!(
+        pixel(&render(&mut renderer, SIZE, &scene), SIZE, 40, 24),
+        MAGENTA
+    );
+    tileset(&mut renderer);
+    assert_eq!(
+        pixel(&render(&mut renderer, SIZE, &scene), SIZE, 40, 24),
+        RED
+    );
+    scene.tilemaps[0].tiles = vec![Some(1)];
+    assert_eq!(
+        pixel(&render(&mut renderer, SIZE, &scene), SIZE, 40, 24),
+        GREEN
+    );
+    scene.tilemaps.clear();
+    assert_eq!(
+        pixel(&render(&mut renderer, SIZE, &scene), SIZE, 40, 24),
+        background()
+    );
+}
+
+#[test]
+fn a_tilemap_larger_than_a_chunk_draws_every_cell() {
+    let mut renderer = renderer();
+    tileset(&mut renderer);
+    // 70 by 70 cells of a quarter unit: three chunks across and up, all inside the view.
+    let (width, height) = (70, 70);
+    let mut map = tilemap(
+        entity(),
+        Vec2::new(-2.0, -2.0),
+        width,
+        height,
+        (0..width * height)
+            .map(|cell| Some(cell % width / 32))
+            .collect(),
+    );
+    map.cell_size = Vec2::new(4.0 / 70.0, 4.0 / 70.0);
+    let pixels = render(&mut renderer, SIZE, &with_tilemaps(Vec::new(), vec![map]));
+    // Columns 0..32 red, 32..64 green, 64..70 blue; every row drawn, the top one included.
+    for y in [0, 32, 63] {
+        assert_eq!(pixel(&pixels, SIZE, 2, y), RED, "at (2, {y})");
+        assert_eq!(pixel(&pixels, SIZE, 40, y), GREEN, "at (40, {y})");
+        assert_eq!(pixel(&pixels, SIZE, 62, y), BLUE, "at (62, {y})");
+    }
 }

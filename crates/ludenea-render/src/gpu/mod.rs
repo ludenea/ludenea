@@ -1,21 +1,25 @@
-//! The wgpu renderer (feature `gpu`): draws a render frame's sprites through a fitted 2D camera
-//! into a target view, or offscreen into RGBA pixels. Display only: nothing here feeds back
-//! into the simulation.
+//! The wgpu renderer (feature `gpu`): draws a render frame's layers of tilemaps and sprites,
+//! then the debug draw, through a fitted 2D camera into a target view, or offscreen into
+//! RGBA pixels. Display only: nothing here feeds back into the simulation.
 
+mod debug;
 mod device;
 mod sprites;
+mod tilemaps;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::mpsc;
 
 use ludenea_app::meta::Filter;
 use ludenea_draw::Color;
-use ludenea_draw::frame::{CameraView, RenderFrame};
+use ludenea_draw::frame::{CameraView, RenderFrame, SpriteItem, TilemapItem};
 use ludenea_ecs::{AssetId, Entity};
+use ludenea_math::Vec2;
 use wgpu::util::DeviceExt;
 
 use crate::atlas::{Atlas, Region};
-use crate::camera::{DEFAULT_CAMERA, fit};
+use crate::camera::{DEFAULT_CAMERA, fit, world_to_clip};
+use sprites::{BLANK, Sample};
 
 pub use device::headless;
 
@@ -55,7 +59,8 @@ pub struct Overlay {
 /// What a draw could not draw as asked.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DrawReport {
-    /// The sprites drawn as a placeholder: entity, texture, and frame.
+    /// What was drawn as a placeholder, in draw order: each sprite's entity, texture and
+    /// frame, and each tile's tilemap entity, tileset and tile index.
     pub missing: Vec<(Entity, AssetId, u32)>,
 }
 
@@ -86,8 +91,10 @@ pub struct Renderer {
     queue: wgpu::Queue,
     format: wgpu::TextureFormat,
     layout: wgpu::BindGroupLayout,
-    /// The sprite pipeline per target format, made on first use.
-    pipelines: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
+    /// The layout of a layer's view: world to clip space, at a dynamic offset.
+    view_layout: wgpu::BindGroupLayout,
+    /// The quad and debug pipelines per target format, made on first use.
+    pipelines: Vec<(wgpu::TextureFormat, Pipelines)>,
     /// One sampler per filter: nearest, then linear.
     samplers: [wgpu::Sampler; 2],
     /// Per page, its size and its bind group per filter.
@@ -95,6 +102,13 @@ pub struct Renderer {
     /// A white texel, which the placeholders sample.
     blank: wgpu::BindGroup,
     regions: BTreeMap<(AssetId, u32), Region>,
+    tilemaps: tilemaps::Cache,
+}
+
+#[derive(Clone)]
+struct Pipelines {
+    quads: wgpu::RenderPipeline,
+    debug: wgpu::RenderPipeline,
 }
 
 struct Page {
@@ -106,6 +120,19 @@ impl Renderer {
     /// A renderer drawing into targets of `format`.
     pub fn new(device: wgpu::Device, queue: wgpu::Queue, format: wgpu::TextureFormat) -> Self {
         let layout = sprites::page_layout(&device);
+        let view_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("view"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: true,
+                    min_binding_size: wgpu::BufferSize::new(VIEW_BYTES),
+                },
+                count: None,
+            }],
+        });
         let sampler = |filter: wgpu::FilterMode| {
             device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some("sprite page"),
@@ -125,11 +152,13 @@ impl Renderer {
             queue,
             format,
             layout,
+            view_layout,
             pipelines: Vec::new(),
             samplers,
             pages: Vec::new(),
             blank,
             regions: BTreeMap::new(),
+            tilemaps: tilemaps::Cache::default(),
         }
     }
 
@@ -188,6 +217,7 @@ impl Renderer {
             })
             .collect();
         self.regions = atlas.regions.clone();
+        self.tilemaps.clear();
         Ok(())
     }
 
@@ -309,8 +339,8 @@ impl Renderer {
         Ok(pixels)
     }
 
-    /// Clears `target` to the background and draws the sprites in item order, a batch per
-    /// `(layer, page, filter)` run.
+    /// Clears `target` to the background, draws the layers in order (tilemaps and sprites
+    /// by `(order, entity)` within each), then the debug draw.
     fn encode(
         &mut self,
         target: &wgpu::TextureView,
@@ -328,32 +358,131 @@ impl Renderer {
         let aspect = size.width.max(1) as f32 / size.height.max(1) as f32;
         let visible = fit(camera.view, aspect);
         let pages: Vec<(u32, u32)> = self.pages.iter().map(|page| page.size).collect();
-        let sprites = sprites::build(frame, camera, visible, &self.regions, &pages);
+        self.tilemaps
+            .update(&self.device, &frame.tilemaps, &self.regions, &pages);
 
-        let bytes: Vec<u8> = sprites
-            .instances
+        // Tilemaps before sprites, so a stable sort draws a tilemap first on a tie.
+        let mut pieces: Vec<(u16, i32, Entity, Piece<'_>)> = frame
+            .tilemaps
+            .iter()
+            .map(|item| (item.layer, item.order, item.entity, Piece::Tilemap(item)))
+            .chain(
+                frame
+                    .sprites
+                    .iter()
+                    .map(|item| (item.layer, item.order, item.entity, Piece::Sprite(item))),
+            )
+            .collect();
+        pieces.sort_by_key(|(layer, order, entity, _)| (*layer, *order, *entity));
+
+        // One view per layer drawn, then the debug draw's (parallax 1).
+        let mut views: Vec<[f32; 4]> = Vec::new();
+        let mut slots: BTreeMap<u16, u32> = BTreeMap::new();
+        let mut draws: Vec<Draw> = Vec::new();
+        let mut instances: Vec<sprites::Instance> = Vec::new();
+        let mut missing = Vec::new();
+        for (layer, _, _, piece) in pieces {
+            let slot = *slots.entry(layer).or_insert_with(|| {
+                let parallax = frame
+                    .layers
+                    .get(usize::from(layer))
+                    .map_or(1.0, |info| info.parallax);
+                views.push(view(camera, visible, parallax));
+                views.len() as u32 - 1
+            });
+            match piece {
+                Piece::Sprite(item) => {
+                    let (sample, instance) = sprites::instance(item, &self.regions, &pages);
+                    let sample = sample.unwrap_or_else(|| {
+                        missing.push((item.entity, item.texture, item.frame));
+                        BLANK
+                    });
+                    let index = instances.len() as u32;
+                    instances.push(instance);
+                    match draws.last_mut() {
+                        Some(Draw {
+                            slot: last_slot,
+                            source: Source::Sprites,
+                            sample: last,
+                            instances: run,
+                        }) if *last_slot == slot && *last == sample => run.end = index + 1,
+                        _ => draws.push(Draw {
+                            slot,
+                            source: Source::Sprites,
+                            sample,
+                            instances: index..index + 1,
+                        }),
+                    }
+                }
+                Piece::Tilemap(item) => {
+                    let Some(built) = self.tilemaps.get(item.entity) else {
+                        continue;
+                    };
+                    missing.extend_from_slice(&built.missing);
+                    for (chunk_index, chunk) in built.chunks.iter().enumerate() {
+                        for (sample, run) in &chunk.batches {
+                            draws.push(Draw {
+                                slot,
+                                source: Source::Chunk(item.entity, chunk_index),
+                                sample: *sample,
+                                instances: run.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        views.push(view(camera, visible, 1.0));
+        let debug_slot = views.len() as u32 - 1;
+
+        let instance_bytes: Vec<u8> = instances
             .iter()
             .flatten()
             .flat_map(|value| value.to_le_bytes())
             .collect();
-        let allowed = self.device.limits().max_buffer_size;
-        if bytes.len() as u64 > allowed {
-            return Err(RenderError::Limit {
-                operation: "draw",
-                limit: "max_buffer_size",
-                requested: bytes.len() as u64,
-                allowed,
-            });
+        let instances = (!instance_bytes.is_empty())
+            .then(|| {
+                self.buffer(
+                    "sprite instances",
+                    &instance_bytes,
+                    wgpu::BufferUsages::VERTEX,
+                )
+            })
+            .transpose()?;
+        let line_width = debug::LINE_PIXELS * visible.x / size.width.max(1) as f32;
+        let debug_bytes = debug::vertices(&frame.debug, overlay, line_width);
+        let debug_vertices = (!debug_bytes.is_empty())
+            .then(|| self.buffer("debug draw", &debug_bytes, wgpu::BufferUsages::VERTEX))
+            .transpose()?;
+
+        // Each view on its own aligned slot, picked by a dynamic offset.
+        let stride = self
+            .device
+            .limits()
+            .min_uniform_buffer_offset_alignment
+            .max(VIEW_BYTES as u32);
+        let mut view_bytes = vec![0; views.len() * stride as usize];
+        for (index, values) in views.iter().enumerate() {
+            let start = index * stride as usize;
+            for (at, value) in values.iter().enumerate() {
+                view_bytes[start + at * 4..start + at * 4 + 4]
+                    .copy_from_slice(&value.to_le_bytes());
+            }
         }
-        let instances = (!bytes.is_empty()).then(|| {
-            self.device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("sprite instances"),
-                    contents: &bytes,
-                    usage: wgpu::BufferUsages::VERTEX,
-                })
+        let view_buffer = self.buffer("views", &view_bytes, wgpu::BufferUsages::UNIFORM)?;
+        let view_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("views"),
+            layout: &self.view_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &view_buffer,
+                    offset: 0,
+                    size: wgpu::BufferSize::new(VIEW_BYTES),
+                }),
+            }],
         });
-        let pipeline = self.pipeline(format).clone();
+        let pipelines = self.pipelines(format).clone();
 
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
@@ -370,42 +499,115 @@ impl Renderer {
                 })],
                 ..Default::default()
             });
-            if let Some(instances) = &instances {
-                pass.set_pipeline(&pipeline);
-                pass.set_vertex_buffer(0, instances.slice(..));
-                for batch in &sprites.batches {
-                    let bind_group = match batch.key.page {
-                        Some(page) => {
-                            let filter = match batch.key.filter {
-                                Filter::Nearest => 0,
-                                Filter::Linear => 1,
-                            };
-                            &self.pages[page as usize].bind_groups[filter]
-                        }
-                        None => &self.blank,
-                    };
-                    pass.set_bind_group(0, bind_group, &[]);
-                    pass.draw(0..4, batch.instances.clone());
-                }
+            if !draws.is_empty() {
+                pass.set_pipeline(&pipelines.quads);
+            }
+            for draw in &draws {
+                let buffer = match draw.source {
+                    Source::Sprites => instances.as_ref(),
+                    Source::Chunk(entity, chunk) => self
+                        .tilemaps
+                        .get(entity)
+                        .and_then(|built| built.chunks.get(chunk))
+                        .map(|chunk| &chunk.buffer),
+                };
+                let Some(buffer) = buffer else {
+                    continue;
+                };
+                let bind_group = match draw.sample.page {
+                    Some(page) => {
+                        let filter = match draw.sample.filter {
+                            Filter::Nearest => 0,
+                            Filter::Linear => 1,
+                        };
+                        &self.pages[page as usize].bind_groups[filter]
+                    }
+                    None => &self.blank,
+                };
+                pass.set_vertex_buffer(0, buffer.slice(..));
+                pass.set_bind_group(0, bind_group, &[]);
+                pass.set_bind_group(1, &view_group, &[draw.slot * stride]);
+                pass.draw(0..4, draw.instances.clone());
+            }
+            if let Some(vertices) = &debug_vertices {
+                pass.set_pipeline(&pipelines.debug);
+                pass.set_vertex_buffer(0, vertices.slice(..));
+                pass.set_bind_group(0, &view_group, &[debug_slot * stride]);
+                pass.draw(0..debug::count(&debug_bytes), 0..1);
             }
         }
         self.queue.submit([encoder.finish()]);
-        Ok(DrawReport {
-            missing: sprites.missing,
-        })
+        Ok(DrawReport { missing })
     }
 
-    fn pipeline(&mut self, format: wgpu::TextureFormat) -> &wgpu::RenderPipeline {
+    /// A buffer holding `bytes`, refused past `max_buffer_size`.
+    fn buffer(
+        &self,
+        label: &'static str,
+        bytes: &[u8],
+        usage: wgpu::BufferUsages,
+    ) -> Result<wgpu::Buffer, RenderError> {
+        let allowed = self.device.limits().max_buffer_size;
+        if bytes.len() as u64 > allowed {
+            return Err(RenderError::Limit {
+                operation: "draw",
+                limit: "max_buffer_size",
+                requested: bytes.len() as u64,
+                allowed,
+            });
+        }
+        Ok(self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(label),
+                contents: bytes,
+                usage,
+            }))
+    }
+
+    fn pipelines(&mut self, format: wgpu::TextureFormat) -> &Pipelines {
         let index = match self.pipelines.iter().position(|(made, _)| *made == format) {
             Some(index) => index,
             None => {
-                let pipeline = sprites::pipeline(&self.device, &self.layout, format);
-                self.pipelines.push((format, pipeline));
+                let pipelines = Pipelines {
+                    quads: sprites::pipeline(&self.device, &self.layout, &self.view_layout, format),
+                    debug: debug::pipeline(&self.device, &self.view_layout, format),
+                };
+                self.pipelines.push((format, pipelines));
                 self.pipelines.len() - 1
             }
         };
         &self.pipelines[index].1
     }
+}
+
+/// The bytes of one view: world to clip scale, then translation, as `f32`.
+const VIEW_BYTES: u64 = 16;
+
+/// The view of a layer of `parallax`: `world * scale + translate` is `world_to_clip`.
+fn view(camera: &CameraView, visible: Vec2, parallax: f32) -> [f32; 4] {
+    let translate = world_to_clip(Vec2::ZERO, camera.clone(), visible, parallax);
+    [2.0 / visible.x, 2.0 / visible.y, translate[0], translate[1]]
+}
+
+/// A tilemap or a sprite, in draw order.
+enum Piece<'a> {
+    Tilemap(&'a TilemapItem),
+    Sprite(&'a SpriteItem),
+}
+
+/// One instanced draw of the quad pipeline: a run of instances from the frame's sprites or
+/// from a tilemap chunk, through a layer's view.
+struct Draw {
+    slot: u32,
+    source: Source,
+    sample: Sample,
+    instances: std::ops::Range<u32>,
+}
+
+enum Source {
+    Sprites,
+    Chunk(Entity, usize),
 }
 
 /// A texture of `width` by `height` RGBA pixels, row by row from the top-left.
