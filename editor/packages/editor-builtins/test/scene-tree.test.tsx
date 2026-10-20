@@ -13,8 +13,14 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, "offsetWidth", { configurable: true, get: () => 300 });
 });
 
-/** What the fake game holds: entity 1's components and hash can change, and its reads can fail with `failing`. */
-const world = () => ({ collider: { "ludenea::Collider": json({}) } as Record<string, unknown>, hash: "00000000000000a1", silent: false, failing: null as { code: string; message: string } | null });
+/** What the fake game holds: entity 1's components and hash can change, its reads can fail with `failing`, and `save_scene` with `saveRefused`. */
+const world = () => ({
+  collider: { "ludenea::Collider": json({}) } as Record<string, unknown>,
+  hash: "00000000000000a1",
+  silent: false,
+  failing: null as { code: string; message: string } | null,
+  saveRefused: null as { code: string; message: string } | null,
+});
 const notAlive = { code: "no_such_entity", message: "not alive" };
 
 async function sceneTree(project: (request: { type: string }) => object | undefined = () => ({ type: "done" }), held = world()) {
@@ -31,7 +37,7 @@ async function sceneTree(project: (request: { type: string }) => object | undefi
       const components = index === 0 ? { "ludenea::Pose": json({}), "ludenea::Body": json({}), "my_game::Player": json({}) } : held.collider;
       return { type: "entity", entity: command.entity, components };
     }
-    if (command.type === "save_scene") return { type: "scene", ron: "(saved)" };
+    if (command.type === "save_scene") return held.saveRefused ? { error: held.saveRefused } : { type: "scene", ron: "(saved)" };
     return { type: "done" };
   });
   act(() => host.setControl(game.client));
@@ -146,6 +152,18 @@ describe("scene tree", () => {
     expect(host.editor.document.getState().text).toBe("(on disk)");
     const errors = host.editor.console.list().filter(({ level }) => level === "error");
     expect(errors.map(({ text }) => text)).toEqual(["Save scene failed: Cannot save scenes/main.scene.ron: permission denied"]);
+  });
+
+  it("a_save_the_game_refuses_writes_nothing_and_says_why", async () => {
+    const held = { ...world(), saveRefused: { code: "invalid_scene", message: "prefab instances form a cycle" } };
+    const { host, game } = await sceneTree(undefined, held);
+    host.editor.document.setState({ current: { id: "0000000000000000000000000000000c", kind: "scene", path: "scenes/main.scene.ron" }, text: "(on disk)" });
+
+    expect(await runReported(host.editor, "scene.save")).toBe("Save scene failed: Cannot save scenes/main.scene.ron: prefab instances form a cycle");
+
+    expect(host.project.sent.filter((request) => request.type === "write_text")).toEqual([]);
+    expect(game.sent.filter((command) => command.type === "mark_scene_saved")).toEqual([]);
+    expect(host.editor.document.getState().text).toBe("(on disk)");
   });
 
   it("space_selects_a_row", async () => {
