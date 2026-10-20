@@ -307,6 +307,22 @@ fn width_past_the_device_limit_is_refused_naming_it() {
     );
     assert_eq!(code, 2, "{output}");
     assert!(output.contains("max_texture_dimension_2d"), "{output}");
+    // Refused before the scene runs: no tick is played, so no hash is printed.
+    assert!(!output.contains("hash"), "{output}");
+    assert!(!dir.join("frame.png").exists());
+}
+
+#[test]
+fn corrupt_replay_is_refused_with_its_decode_error() {
+    let guard = dir();
+    let dir = guard.path();
+    fs::write(dir.join("bad.replay"), b"not a replay").unwrap();
+    let (code, output) = cli(
+        dir,
+        &["render", "{}/bad.replay", "--tick", "0", "--out", "{}/frame.png"],
+    );
+    assert_eq!(code, 2, "{output}");
+    assert!(!output.contains("hash"), "{output}");
     assert!(!dir.join("frame.png").exists());
 }
 

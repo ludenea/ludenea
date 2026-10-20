@@ -371,6 +371,12 @@ impl Renderer {
         })
     }
 
+    /// Refuses a target of `size` wider or taller than `max_texture_dimension_2d`, as
+    /// `render_rgba` would, so a caller can fail before it does any work.
+    pub fn check_size(&self, size: Size) -> Result<(), RenderError> {
+        self.fits("render_rgba", size)
+    }
+
     /// Refuses a target wider or taller than `max_texture_dimension_2d`.
     fn fits(&self, operation: &'static str, size: Size) -> Result<(), RenderError> {
         let allowed = self.device.limits().max_texture_dimension_2d;

@@ -445,15 +445,27 @@ pub fn render(app: fn() -> App, args: &RenderArgs, out: &mut dyn Write) -> Outco
     for warning in &textures.warnings {
         say(out, format_args!("warning: {warning}"))?;
     }
-    let mut renderer = renderer(&textures.textures, out)?;
-    let replay = if is_replay {
-        Replay::decode(&read(&files.scene)?).map_err(|error| error.to_string())?
+    // A replay is decoded before the adapter opens: a corrupt one is refused without a GPU.
+    let decoded = if is_replay {
+        Some(Replay::decode(&read(&files.scene)?).map_err(|error| error.to_string())?)
     } else {
+        None
+    };
+    let size = Size {
+        width: *width,
+        height: *height,
+    };
+    let mut renderer = renderer(&textures.textures, out)?;
+    renderer
+        .check_size(size)
+        .map_err(|error| error.to_string())?;
+    let replay = match decoded {
+        Some(replay) => replay,
         // ponytail: a scene runs twice, recorded then played as a replay, so both kinds of
         // run render through one path; play the recording's edits directly if the cost shows.
-        Run::read(app, files, inputs.as_deref(), None)?
+        None => Run::read(app, files, inputs.as_deref(), None)?
             .record(*tick)
-            .map_err(|error| error.to_string())?
+            .map_err(|error| error.to_string())?,
     };
     let last = (replay.hashes.len() as u64).saturating_sub(1);
     if *tick > last {
@@ -493,10 +505,6 @@ pub fn render(app: fn() -> App, args: &RenderArgs, out: &mut dyn Write) -> Outco
     for warning in &current.warnings {
         say(out, format_args!("warning: {warning}"))?;
     }
-    let size = Size {
-        width: *width,
-        height: *height,
-    };
     let frames = Frames {
         previous: previous.as_ref(),
         current: &current,
