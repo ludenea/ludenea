@@ -2,7 +2,7 @@ import { ghost_frame } from "@ludenea/debug-draw-wasm";
 import type { ControlClient, DebugDrawFrame, Difference, DivergenceReport, Entity, Event, FileEntry, Topic, TraceComparison } from "@ludenea/control-client";
 import { definePlugin, type Disposable, type Editor } from "@ludenea/editor-shell";
 import { useEffect, useState } from "react";
-import { createStore, errorText, shared, showPanel, useGame, useStore, type Store } from "../shared";
+import { createStore, errorText, reportedOnce, shared, showPanel, useGame, useStore, type Store } from "../shared";
 import { seek } from "../timeline";
 import { css, outline } from "../viewport/overlay";
 import { loadRenderer } from "../viewport/ViewportPanel";
@@ -222,6 +222,8 @@ export const divergencePlugin = definePlugin({
     // The ghost: the compare branch drawn over the viewport while one is set.
     const ghost = createStore({ visible: true, frame: null as DebugDrawFrame | null, tick: 0, lagging: false });
     const showsGhost = () => ghost.get().visible && hasCompare();
+    // Fetched on every tick the ghost advances: a failure is reported once, until a fetch works.
+    const fetching = reportedOnce(editor, "Fetching the ghost of the compare branch");
     const fetchGhost = single(async () => {
       const control = editor.control;
       if (!control || !showsGhost()) return;
@@ -233,8 +235,9 @@ export const divergencePlugin = definePlugin({
         if (reply.type !== "ghost_draw" || editor.control !== control) return;
         await loadRenderer();
         ghost.set({ frame: JSON.parse(ghost_frame(JSON.stringify(reply.frame))) as DebugDrawFrame, tick: reply.tick, lagging: reply.lagging });
+        fetching.worked();
       } catch (error) {
-        if (editor.control === control) editor.console.report(error, "Fetching the ghost of the compare branch");
+        if (editor.control === control) fetching.failed(error);
       }
     });
     const followGhost = follower(editor, { type: "ghost" }, "ghost_advanced", () => showsGhost(), fetchGhost);

@@ -382,7 +382,10 @@ API.
   reported in the editor console (the palette also shows it in an alert for a few
   seconds), and so are the failures of viewport gestures, plugin overlays (once per
   registration), divergence seeks, timeline refreshes, entity watches, settings, and
-  plugin reloads; none of them reach only the browser's developer tools any more.
+  plugin reloads; none of them reach only the browser's developer tools any more. Work
+  repeated every frame or tick, such as fetching the debug draw or the ghost, is reported
+  once until it works again, and the scene tree reports a label it cannot read, but not one
+  of an entity gone before the read, as short-lived entities are while playing.
 - Removed: `logToConsole` from `@ludenea/editor-builtins` and the `log` option of
   `createEditor` with its `DocumentLog` type; use `editor.console`.
 - "Apply to prefab" (`Prefabs.apply`) no longer writes the prefab file. The game marks the

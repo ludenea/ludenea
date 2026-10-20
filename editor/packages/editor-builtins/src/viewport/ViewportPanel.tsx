@@ -3,7 +3,7 @@ import type { Entity, Vec2 } from "@ludenea/control-client";
 import { runReported, type Editor, type ViewportOverlay } from "@ludenea/editor-shell";
 import { useEffect, useRef, useState } from "react";
 import { captureInput } from "../input/capture";
-import { errorText, shared, useGame } from "../shared";
+import { errorText, reportedOnce, shared, useGame } from "../shared";
 import { ResimulatingNotice } from "../timeline/editing";
 import { panBy, screenToWorld, zoomAt, type Size } from "./camera";
 import { moveBy, visibleLayers, type ViewportState } from "./state";
@@ -36,18 +36,6 @@ type Press = {
 };
 
 const same = (a: Entity, b: Entity) => a.index === b.index && a.generation === b.generation;
-
-/** Reports the failure of work repeated every frame once, until it works again. */
-function reportedOnce(editor: Editor, context: string) {
-  let failing = false;
-  return {
-    failed(error: unknown) {
-      if (!failing) editor.console.report(error, context);
-      failing = true;
-    },
-    worked: () => void (failing = false),
-  };
-}
 
 /** `failedOverlays`: the plugin overlays whose failure is reported already, kept across mounts: once per registration. */
 export function ViewportPanel({ editor, state, failedOverlays }: { editor: Editor; state: ViewportState; failedOverlays: Set<ViewportOverlay> }) {

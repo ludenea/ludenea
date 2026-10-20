@@ -369,6 +369,34 @@ describe("divergence", () => {
     expect(drawn.calls.filter((call) => call.method === "fillText").map((call) => call.args[0])).toContain("Ghost lagging at tick 340");
   });
 
+  it("a_failing_ghost_fetch_is_reported_once_until_it_works_again", async () => {
+    let failing = true;
+    const { host, game } = await divergence({
+      game: (command) => {
+        if (command.type !== "get_ghost_draw") return undefined;
+        return failing ? { error: { code: "invalid_command", message: "the compare branch is gone" } } : { type: "ghost_draw", frame: circle, tick: 350, lagging: false };
+      },
+    });
+    const reports = () => host.editor.console.list().filter(({ text }) => text.startsWith("Fetching the ghost of the compare branch failed"));
+    const advance = async (tick: number) => {
+      act(() => game.push({ type: "ghost_advanced", tick }));
+      await settle();
+    };
+    await waitFor(() => expect(sentOf(game.sent, "get_ghost_draw").length).toBeGreaterThan(0));
+    await settle();
+
+    // The ghost advances at the tick rate: one failure is one entry, not one per tick.
+    for (const tick of [351, 352, 353]) await advance(tick);
+    expect(sentOf(game.sent, "get_ghost_draw").length).toBeGreaterThanOrEqual(4);
+    expect(reports()).toHaveLength(1);
+    failing = false;
+    await advance(354);
+    failing = true;
+    await advance(355);
+    await advance(356);
+    expect(reports()).toHaveLength(2);
+  });
+
   it("ghost_requests_only_layers_the_viewport_shows", async () => {
     const { host, game } = await divergence({
       plugins: [viewportPlugin],

@@ -101,6 +101,18 @@ export function showPanel(editor: Editor, id: string): void {
   void runReported(editor, command);
 }
 
+/** Reports the failure of work repeated every frame or tick once, until it works again. */
+export function reportedOnce(editor: Editor, context: string) {
+  let failing = false;
+  return {
+    failed(error: unknown) {
+      if (!failing) editor.console.report(error, context);
+      failing = true;
+    },
+    worked: () => void (failing = false),
+  };
+}
+
 /** A failure as one line for a panel to show. */
 export const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 

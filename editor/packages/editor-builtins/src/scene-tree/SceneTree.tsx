@@ -1,4 +1,4 @@
-import type { ControlClient, EntityRow } from "@ludenea/control-client";
+import { ProtocolFailure, type ControlClient, type EntityRow } from "@ludenea/control-client";
 import { isTextField, type Editor } from "@ludenea/editor-shell";
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { InstanceGroups } from "../prefabs/InstanceGroups";
@@ -88,7 +88,9 @@ function Label({ editor, control, row, labels, playing }: { editor: Editor; cont
         if (current) setRead((read) => read + 1);
       },
       (error) => {
-        editor.console.log("warning", `Cannot read the components of entity ${key} for its label: ${errorText(error)}`);
+        // While playing, a short-lived entity can be gone before its label is read: its row goes with the next query.
+        const gone = error instanceof ProtocolFailure && error.code === "no_such_entity";
+        if (!gone) editor.console.log("warning", `Cannot read the components of entity ${key} for its label: ${errorText(error)}`);
         if (current) setFailedAt(hash);
       },
     );

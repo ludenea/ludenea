@@ -13,8 +13,9 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, "offsetWidth", { configurable: true, get: () => 300 });
 });
 
-/** What the fake game holds: entity 1's components and hash can change. */
-const world = () => ({ collider: { "ludenea::Collider": json({}) } as Record<string, unknown>, hash: "00000000000000a1", silent: false, failing: false });
+/** What the fake game holds: entity 1's components and hash can change, and its reads can fail with `failing`. */
+const world = () => ({ collider: { "ludenea::Collider": json({}) } as Record<string, unknown>, hash: "00000000000000a1", silent: false, failing: null as { code: string; message: string } | null });
+const notAlive = { code: "no_such_entity", message: "not alive" };
 
 async function sceneTree(project: (request: { type: string }) => object | undefined = () => ({ type: "done" }), held = world()) {
   const host = await testEditor(builtinPlugins, project);
@@ -26,7 +27,7 @@ async function sceneTree(project: (request: { type: string }) => object | undefi
       const { index } = command.entity as { index: number };
       // Left unanswered: the label stays in flight.
       if (held.silent && index === 1) return undefined;
-      if (held.failing && index === 1) return { error: { code: "no_such_entity", message: "not alive" } };
+      if (held.failing && index === 1) return { error: held.failing };
       const components = index === 0 ? { "ludenea::Pose": json({}), "ludenea::Body": json({}), "my_game::Player": json({}) } : held.collider;
       return { type: "entity", entity: command.entity, components };
     }
@@ -184,10 +185,10 @@ describe("scene tree", () => {
   });
 
   it("a_failed_label_read_is_retried_on_the_next_hash_change", async () => {
-    const { host, game, held } = await sceneTree(undefined, { ...world(), failing: true });
+    const { host, game, held } = await sceneTree(undefined, { ...world(), failing: { code: "invalid_command", message: "cannot encode it" } });
     expect(screen.queryByText("Collider")).toBeNull();
-    expect(host.editor.console.list().map(({ level, text }) => [level, text])).toContainEqual(["warning", "Cannot read the components of entity 1v0 for its label: not alive"]);
-    held.failing = false;
+    expect(host.editor.console.list().map(({ level, text }) => [level, text])).toContainEqual(["warning", "Cannot read the components of entity 1v0 for its label: cannot encode it"]);
+    held.failing = null;
     held.hash = "00000000000000b1";
     act(() => game.push({ type: "entities_changed", filter: "", total: 2 }));
     await nextFrame();
@@ -195,8 +196,15 @@ describe("scene tree", () => {
     expect(screen.getByText("Collider")).toBeTruthy();
   });
 
+  it("a_label_of_an_entity_gone_meanwhile_is_no_console_entry", async () => {
+    // While playing, a short-lived entity can be gone before its label is read.
+    const { host } = await sceneTree(undefined, { ...world(), failing: notAlive });
+    expect(screen.queryByText("Collider")).toBeNull();
+    expect(host.editor.console.list().filter(({ text }) => text.includes("for its label"))).toEqual([]);
+  });
+
   it("a_failed_label_read_waits_for_a_pause_to_retry_while_playing", async () => {
-    const held = { ...world(), failing: true };
+    const held = { ...world(), failing: notAlive as { code: string; message: string } | null };
     const { host, game } = await sceneTree(undefined, held);
     const labelReads = () => game.sent.filter((command) => command.type === "get_entity" && (command.entity as { index: number }).index === 1).length;
     act(() => host.editor.timeline.setState({ playing: true }));
@@ -207,7 +215,7 @@ describe("scene tree", () => {
       await settle();
     }
     expect(labelReads()).toBe(1);
-    held.failing = false;
+    held.failing = null;
     act(() => host.editor.timeline.setState({ playing: false }));
     await settle();
     expect(screen.getByText("Collider")).toBeTruthy();
