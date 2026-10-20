@@ -85,17 +85,22 @@ impl App {
     /// An app with `Time`, `Rng::new(0, 0)`, and the `Prefab` asset type registered,
     /// ticking at 60 Hz.
     pub fn new() -> Self {
+        let tick_rate = 60;
         let mut app = Self {
             world: World::new(),
             schedule: ScheduleBuilder::default(),
             input: None,
-            tick_rate: 60,
+            tick_rate,
             hooks: EditorHooks::default(),
             errors: Vec::new(),
         };
-        app.resource(Time { tick: 0, dt: 0.0 })
-            .resource(Rng::new(0, 0))
-            .asset::<Prefab>();
+        // `build` sets `dt` from the final tick rate; this one already loads back.
+        app.resource(Time {
+            tick: 0,
+            dt: 1.0 / tick_rate as f32,
+        })
+        .resource(Rng::new(0, 0))
+        .asset::<Prefab>();
         app
     }
 
@@ -228,5 +233,23 @@ impl App {
             self.tick_rate,
             self.hooks,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_new_app_holds_a_time_that_loads_back() {
+        let app = App::new();
+        let time = app
+            .world
+            .resource::<Time>()
+            .expect("App::new registers Time")
+            .clone();
+        let text = ron::to_string(&time).expect("Time encodes");
+        let loaded: Result<Time, _> = ron::from_str(&text);
+        assert_eq!(loaded.as_ref().ok(), Some(&time), "{loaded:?}");
     }
 }
