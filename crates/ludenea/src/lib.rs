@@ -7,6 +7,7 @@ pub use ludenea_draw as draw;
 pub use ludenea_ecs as ecs;
 pub use ludenea_math as math;
 pub use ludenea_physics as physics;
+pub use ludenea_render as render;
 pub use ludenea_schema as schema;
 pub use serde;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
@@ -40,6 +41,9 @@ pub mod prelude {
     pub use crate::physics::{
         Body, BodyKind, Capsule, Circle, Collider, Collision, CollisionKind, PhysicsPlugin,
         PhysicsSettings, Polygon, RayHit, Shape, overlap_aabb, raycast,
+    };
+    pub use crate::render::{
+        Camera2d, Clip, RenderPlugin, Sprite, SpriteAnimation, SpriteSheet, Teleported, Tilemap,
     };
     pub use crate::schema::Schema;
 }

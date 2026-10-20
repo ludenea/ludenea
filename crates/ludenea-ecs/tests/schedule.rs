@@ -98,6 +98,26 @@ fn cycle_is_reported_with_system_names() {
 }
 
 #[test]
+fn after_if_present_orders_after_a_present_label() {
+    let log = run_log(|builder| {
+        builder.add(alpha.after_if_present(Stage::Late));
+        builder.add(beta);
+        builder.add(gamma.in_set(Stage::Late));
+    });
+    assert_eq!(log, ["beta", "gamma", "alpha"]);
+}
+
+#[test]
+fn after_if_present_ignores_an_absent_label() {
+    let log = run_log(|builder| {
+        builder.add(gamma);
+        builder.add(alpha.after_if_present(Stage::Missing));
+        builder.add(beta);
+    });
+    assert_eq!(log, ["gamma", "alpha", "beta"]);
+}
+
+#[test]
 fn after_unknown_label_is_empty_label_error() {
     let error = build_error(|builder| builder.add(alpha.after(Stage::Missing)));
     assert!(matches!(error, BuildError::EmptyLabel { label: "missing" }));

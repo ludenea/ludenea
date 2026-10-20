@@ -61,6 +61,7 @@ ludenea-schema = { path = "crates/ludenea-schema" }
 ludenea-macros = { path = "crates/ludenea-macros" }
 ludenea-physics = { path = "crates/ludenea-physics" }
 ludenea-draw = { path = "crates/ludenea-draw" }
+ludenea-render = { path = "crates/ludenea-render" }
 ludenea-control = { path = "crates/ludenea-control" }
 ludenea-cli = { path = "crates/ludenea-cli" }
 ludenea = { path = "crates/ludenea" }

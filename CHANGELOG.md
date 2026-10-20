@@ -56,6 +56,24 @@ hash, those of the golden trace and replays included.
   without a body can be placed and drawn. `ludenea_physics::Pose` and the prelude still
   export them, with the same stable name `ludenea::Pose`, serde shape, validation and
   messages. Registering `Pose` from two plugins is a no-op the second time.
+- The new `ludenea-render` crate (facade `ludenea::render`) holds the simulated render
+  components, all in the state hash: `Sprite` (texture, frame, layer, order, flips, tint),
+  `SpriteAnimation` (a clip of a `SpriteSheet` from a tick, looping or holding its last
+  frame), `Camera2d` (centred on the entity's `Pose`, `view` the minimum visible area),
+  `Tilemap` and `Teleported`, plus the `SpriteSheet` data asset of named `Clip`s.
+  `RenderPlugin` registers them with `Pose`, the `animate` system (set `render::Animate`,
+  after `physics::Step` when the app has it), which writes each animated sprite's texture
+  and frame every tick (a system switching clips orders itself `.before(Animate)` to show
+  the new clip in the same tick), and the extractor that
+  fills the render frame: the camera of the lowest entity, sprites and tilemaps sorted by
+  layer, order and entity, the entities teleported on the frame's tick, and a warning
+  naming the entity for a second camera, a missing `Pose`, an undeclared layer, or a clip
+  the sheet lacks. Loading refuses a camera view or a tilemap cell size that is not finite
+  and above 0, a tilemap whose tile count is not `width * height`, and a clip whose `count`
+  or `ticks_per_frame` is 0. The crate depends on no GPU crate.
+- `IntoSystemConfig::after_if_present(label)` orders a system after a set like `after`,
+  but ignores a label with no systems instead of refusing it with `BuildError::EmptyLabel`,
+  so a plugin can order itself after another plugin's set that the app may not add.
 - `ludenea_app::scene::SCENE_VERSION` is public, like the other format versions.
 - `ludenea_control::PROTOCOL_FINGERPRINT` and
   `ludenea_project::protocol::PROJECT_PROTOCOL_FINGERPRINT` hold the wire shape of each

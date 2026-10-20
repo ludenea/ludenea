@@ -18,6 +18,8 @@ pub struct SystemConfig {
     system: Box<dyn System>,
     sets: Vec<&'static str>,
     after: Vec<&'static str>,
+    /// Like `after`, but a label with no systems is ignored.
+    after_if_present: Vec<&'static str>,
     before: Vec<&'static str>,
 }
 
@@ -38,6 +40,15 @@ pub trait IntoSystemConfig<M>: Sized {
         config
     }
 
+    /// Runs after every system in `label`, like `after`, except that a label with no
+    /// systems is ignored instead of refused: for ordering after a plugin's set that the
+    /// app may not add.
+    fn after_if_present(self, label: impl SystemLabel) -> SystemConfig {
+        let mut config = self.into_config();
+        config.after_if_present.push(label.name());
+        config
+    }
+
     /// Runs before every system in `label`.
     fn before(self, label: impl SystemLabel) -> SystemConfig {
         let mut config = self.into_config();
@@ -52,6 +63,7 @@ impl<M, S: IntoSystem<M>> IntoSystemConfig<M> for S {
             system: self.into_system(),
             sets: Vec::new(),
             after: Vec::new(),
+            after_if_present: Vec::new(),
             before: Vec::new(),
         }
     }
@@ -128,10 +140,20 @@ impl ScheduleBuilder {
         }
         // `successors[i]` holds the systems that must run after system `i`.
         let mut successors = vec![BTreeSet::new(); self.configs.len()];
+        let none = Vec::new();
         for (index, config) in self.configs.iter().enumerate() {
-            for (labels, runs_after) in [(&config.after, true), (&config.before, false)] {
+            let constraints = [
+                (&config.after, true, true),
+                (&config.after_if_present, true, false),
+                (&config.before, false, true),
+            ];
+            for (labels, runs_after, required) in constraints {
                 for &label in labels {
-                    let others = members.get(label).ok_or(BuildError::EmptyLabel { label })?;
+                    let others = match members.get(label) {
+                        Some(others) => others,
+                        None if required => return Err(BuildError::EmptyLabel { label }),
+                        None => &none,
+                    };
                     for &other in others.iter().filter(|&&other| other != index) {
                         let (from, to) = if runs_after {
                             (other, index)
