@@ -187,6 +187,30 @@ fn render_of_a_replay_matches_render_of_its_scene_and_inputs() {
 }
 
 #[test]
+fn replay_whose_recorded_hash_differs_warns_and_still_renders() {
+    let dir = dir("replay_whose_recorded_hash_differs_warns_and_still_renders");
+    record_replay(&dir);
+    let path = dir.join("run.replay");
+    let mut replay = ludenea_app::replay::Replay::decode(&fs::read(&path).unwrap()).unwrap();
+    let played = replay.hashes[4];
+    replay.hashes[4] ^= 1;
+    let recorded = replay.hashes[4];
+    fs::write(&path, replay.encode()).unwrap();
+    let output = render(
+        &dir,
+        "{}/run.replay",
+        "4",
+        "frame",
+        &["--project", "{fixture}"],
+    );
+    let expected = format!(
+        "warning: tick 4 hash {played:016x} differs from the hash {recorded:016x} the replay recorded; run `verify` on the replay to find the first divergent tick"
+    );
+    assert!(output.lines().any(|line| line == expected), "{output}");
+    assert!(dir.join("frame.png").is_file());
+}
+
+#[test]
 fn broken_texture_warns_and_still_renders() {
     let dir = dir("broken_texture_warns_and_still_renders");
     let project = dir.join("project");

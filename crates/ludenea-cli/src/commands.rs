@@ -471,7 +471,19 @@ pub fn render(app: fn() -> App, args: &RenderArgs, out: &mut dyn Write) -> Outco
             .map_err(|error| error.to_string())?;
     }
     let current = frame(&sim)?;
-    say(out, format_args!("tick {tick} hash {:016x}", sim.hash()))?;
+    let played = sim.hash();
+    say(out, format_args!("tick {tick} hash {played:016x}"))?;
+    // Rendering goes on: the picture shows what this build plays, which is what to look at.
+    if let Some(&recorded) = replay.hashes.get(*tick as usize)
+        && played != recorded
+    {
+        say(
+            out,
+            format_args!(
+                "warning: tick {tick} hash {played:016x} differs from the hash {recorded:016x} the replay recorded; run `verify` on the replay to find the first divergent tick"
+            ),
+        )?;
+    }
     for warning in &current.warnings {
         say(out, format_args!("warning: {warning}"))?;
     }
