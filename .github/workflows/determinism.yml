@@ -49,11 +49,13 @@ jobs:
       - name: Install the pinned toolchain
         run: rustup toolchain install
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
-      - run: cargo test --locked --workspace
-      # A divergence fails the golden tests first, so the verify steps run after a failure
-      # too. Every thread count runs, even after one fails, and dumps into a folder of its own.
+      - id: tests
+        run: cargo test --locked --workspace
+      # A divergence fails the golden tests first, so the verify steps run once the tests ran,
+      # passed or not, but not after a clippy failure. Every thread count runs, even after one
+      # fails, and dumps into a folder of its own.
       - name: Verify the golden trace
-        if: success() || failure()
+        if: ${{ !cancelled() && steps.tests.outcome != 'skipped' }}
         shell: bash
         run: |
           status=0
@@ -69,7 +71,7 @@ jobs:
           done
           exit $status
       - name: Verify the golden replay
-        if: success() || failure()
+        if: ${{ !cancelled() && steps.tests.outcome != 'skipped' }}
         shell: bash
         run: |
           status=0
@@ -115,7 +117,8 @@ jobs:
       - name: Install the pinned toolchain
         run: rustup toolchain install
       - uses: bytecodealliance/actions/wasmtime/setup@v1
-      - run: cargo build --locked --release --target wasm32-wasip1 -p boxes --bin boxes
+      - id: build
+        run: cargo build --locked --release --target wasm32-wasip1 -p boxes --bin boxes
       # WebAssembly always runs on one thread. The game reaches only the working directory
       # (--dir=.), so the dumps go to dump/ in it, a folder per golden.
       - name: Verify the golden trace
@@ -128,8 +131,9 @@ jobs:
             wasmtime run --dir=. target/wasm32-wasip1/release/boxes.wasm run examples/boxes/assets/boxes.scene.ron --inputs examples/boxes/assets/boxes.inputs --ticks 10000 --trace "$dump/boxes.trace" || echo "::warning::cannot record the trace"
             exit 1
           fi
+      # Runs after a failed trace verify too, but not after a failed build.
       - name: Verify the golden replay
-        if: success() || failure()
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: wasmtime run --dir=. target/wasm32-wasip1/release/boxes.wasm verify golden/spawner.replay --dump-dir dump/boxes-spawner-1-threads
       - name: Upload the divergence dump
         if: failure()
