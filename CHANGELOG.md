@@ -497,7 +497,9 @@ API.
   session is set aside as `.ludenea/sessions/<id>.<n>.rejected.session`. Until it is, no
   session of that document is stored.
 - Undo history 4: an "Apply to prefab" entry holds the prefab text and the scene text, each
-  before and after it. Version 3 histories still read.
+  before and after it. Version 3 histories still read. A version 2 or 3 history holding a
+  group or an "Apply to prefab" entry is refused with the new `UndoError::NotInVersion`,
+  and dropped with a warning like any history that does not decode.
 - Snapshot 3: a `ludenea::Prefab` asset holds only its entities; version 2 also listed the
   component types that hold an `Entity`. Version 2 snapshots still read, and so do the
   prefab loads of version 2 edit logs, which an edit past tick 0 records for a prefab it

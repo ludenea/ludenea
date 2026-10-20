@@ -1,6 +1,6 @@
 //! The undo and redo history of an editor session.
 
-use ludenea_app::{EditLog, TimedEdit};
+use ludenea_app::{Edit, EditLog, TimedEdit};
 use ludenea_ecs::AssetId;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -16,6 +16,8 @@ pub enum UndoError {
     Decode(#[from] postcard::Error),
     #[error("the undo history has version {version}; this editor reads up to {UNDO_VERSION}")]
     Version { version: u32 },
+    #[error("the undo history has version {version}, which cannot hold {content}")]
+    NotInVersion { version: u32, content: String },
 }
 
 /// One history per session, across branches: undoing or redoing an entry first switches to
@@ -407,7 +409,12 @@ impl UndoHistory {
     /// branch then fails to undo as `NotOnBranch` and is dropped. All start with a varint,
     /// so each versioned form is tried first and must use every byte.
     pub fn decode(bytes: &[u8]) -> Result<UndoHistory, UndoError> {
-        if let Ok((3 | UNDO_VERSION, mut history)) = decode_exact::<(u32, UndoHistory)>(bytes) {
+        if let Ok((version @ (3 | UNDO_VERSION), mut history)) =
+            decode_exact::<(u32, UndoHistory)>(bytes)
+        {
+            if version == 3 {
+                history.refuse_version_4_content(version)?;
+            }
             for entry in history.undo.iter_mut().chain(&mut history.redo) {
                 if let UndoEntry::Run {
                     removed, restores, ..
@@ -419,7 +426,9 @@ impl UndoHistory {
             return Ok(history);
         }
         if let Ok((2, history)) = decode_exact::<(u32, version_2::UndoHistory)>(bytes) {
-            return Ok(history.into());
+            let history = UndoHistory::from(history);
+            history.refuse_version_4_content(2)?;
+            return Ok(history);
         }
         match decode_exact::<version_2a::UndoHistory>(bytes) {
             Ok(history) => Ok(history.into()),
@@ -429,6 +438,26 @@ impl UndoHistory {
                 _ => Err(error.into()),
             },
         }
+    }
+
+    /// Versions 2 and 3 decode with the current entries and edits, but groups and "Apply to
+    /// prefab" entries arrived with version 4.
+    fn refuse_version_4_content(&self, version: u32) -> Result<(), UndoError> {
+        for entry in self.undo.iter().chain(&self.redo) {
+            let content = match entry {
+                UndoEntry::Run { edit, .. }
+                | UndoEntry::Fork {
+                    cause: ForkCause::Edit(edit),
+                    ..
+                } if matches!(edit.edit, Edit::Group(_)) => {
+                    format!("a group (the edit at tick {})", edit.tick)
+                }
+                UndoEntry::AppliedToPrefab { .. } => "an \"Apply to prefab\" entry".to_string(),
+                _ => continue,
+            };
+            return Err(UndoError::NotInVersion { version, content });
+        }
+        Ok(())
     }
 }
 

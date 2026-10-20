@@ -455,6 +455,7 @@ fn session_export_from_2a_with_undo_history_resumes() {
 use ludenea::control::BranchId;
 use ludenea::control::branches::BranchesError;
 use ludenea::control::undo::{UNDO_VERSION, UndoError};
+use ludenea::ecs::AssetId;
 use serde::Serialize;
 
 const ROOT: BranchId = BranchId::ROOT;
@@ -1477,4 +1478,86 @@ fn a_refused_take_over_while_resimulating_keeps_the_tick_to_return_to() {
     );
     resimulate_all(&mut session, &mut sim);
     assert_eq!(session.timeline().current, 40);
+}
+
+/// The edit at tick 40 as a group, which only version 4 histories hold.
+fn group_at_40() -> TimedEdit {
+    TimedEdit {
+        tick: 40,
+        edit: Edit::Group(vec![stats_edit(&simulation(), 1_000)]),
+    }
+}
+
+/// The only warning of `session`, which dropped its undo history.
+fn dropped_history_warning(session: &Session) -> &str {
+    let timeline = session.timeline();
+    assert!(!timeline.can_undo && !timeline.can_redo);
+    let [warning] = session.warnings() else {
+        panic!("one warning: {:?}", session.warnings());
+    };
+    warning
+}
+
+#[test]
+fn a_version_2_or_3_undo_history_holding_a_group_is_dropped() {
+    let version_2 = undo_history_v2(vec![UndoEntryV2::Run {
+        edit: group_at_40(),
+    }]);
+    let version_3 = undo_history_v3(
+        Vec::new(),
+        vec![UndoEntryV3::Fork {
+            branch: BranchId(1),
+            cause: ForkCauseV3::Edit(group_at_40()),
+            name: "Branch 2".to_string(),
+            removed: Vec::new(),
+        }],
+    );
+    for (version, undo) in [(2, version_2), (3, version_3)] {
+        let (_, session) = resumed_with_undo(undo);
+        assert_eq!(
+            dropped_history_warning(&session),
+            format!(
+                "the undo history has version {version}, which cannot hold a group (the edit \
+                 at tick 40); it was dropped, so undo and redo start empty"
+            )
+        );
+    }
+}
+
+/// The entry version 4 added, at its variant index after the four entries of version 3.
+#[derive(Serialize)]
+#[expect(
+    dead_code,
+    reason = "the unit variants keep the variant index of the encoded entry"
+)]
+enum UndoEntryV4Only {
+    Scene,
+    Run,
+    Fork,
+    Asset,
+    AppliedToPrefab {
+        id: AssetId,
+        before: String,
+        after: String,
+        scene_before: String,
+        scene_after: String,
+    },
+}
+
+#[test]
+fn a_version_3_undo_history_holding_an_apply_to_prefab_entry_is_dropped() {
+    let entry = UndoEntryV4Only::AppliedToPrefab {
+        id: AssetId(7),
+        before: String::new(),
+        after: String::new(),
+        scene_before: small_scene(),
+        scene_after: small_scene(),
+    };
+    let undo = postcard::to_allocvec(&(3u32, vec![entry], Vec::<UndoEntryV4Only>::new())).unwrap();
+    let (_, session) = resumed_with_undo(undo);
+    assert_eq!(
+        dropped_history_warning(&session),
+        "the undo history has version 3, which cannot hold an \"Apply to prefab\" entry; it \
+         was dropped, so undo and redo start empty"
+    );
 }
