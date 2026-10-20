@@ -322,6 +322,25 @@ describe("inspector", () => {
     });
   });
 
+  it("a_change_to_one_selected_entity_reloads_that_entity_only", async () => {
+    const held = {
+      4: { "ludenea::Collider": json(collider) },
+      5: { "ludenea::Collider": json({ ...collider, density: 2 }) },
+      6: { "ludenea::Collider": json(collider) },
+    };
+    const { game } = await selected([entity, second, third], held);
+    const row = () => component("ludenea::Collider").getByLabelText("density").closest(".ludenea-field")!;
+    expect(row().textContent).toContain("mixed");
+    const loadedBefore = game.sent.filter((command) => command.type === "get_entity").length;
+
+    held[5] = { "ludenea::Collider": json(collider) };
+    act(() => game.push({ type: "entity_changed", entity: second, components: held[5], removed: [] }));
+    await settle();
+
+    expect(game.sent.filter((command) => command.type === "get_entity").slice(loadedBefore)).toEqual([{ type: "get_entity", entity: second }]);
+    expect(row().textContent).not.toContain("mixed");
+  });
+
   it("adding_a_component_to_a_multi_selection_inserts_it_where_it_lacks_in_one_batch", async () => {
     const { game } = await selected([entity, second, third], {
       4: { "my_game::Score": json({ points: "1" }) },

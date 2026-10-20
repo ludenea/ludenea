@@ -188,7 +188,7 @@ function assetChanges(timeline: Timeline | null): string {
   return JSON.stringify([current === 0, before, upTo, edit_ticks, undo_label, redo_label, branch]);
 }
 
-/** The selected entities' components, in selection order, reloaded when the host reports a change to one. */
+/** The selected entities' components, in selection order; a change the host reports reloads that entity only. */
 function useEntities(editor: Editor, control: ControlClient, entities: Entity[]) {
   const [loaded, setLoaded] = useState<Loaded[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -204,13 +204,19 @@ function useEntities(editor: Editor, control: ControlClient, entities: Entity[])
   useEffect(() => {
     if (entities.length === 0) return;
     let current = true;
-    const load = () =>
-      Promise.all(entities.map((entity) => onEntity(editor, control.request({ type: "get_entity", entity })))).then(
-        (replies) => current && setLoaded(replies.map(({ entity, components }) => ({ entity, components }))),
+    // Shown once every entity has loaded; replies for one entity arrive in request order.
+    const replies: (Loaded | undefined)[] = entities.map(() => undefined);
+    const load = (entity: Entity, at: number) =>
+      void onEntity(editor, control.request({ type: "get_entity", entity })).then(
+        ({ entity, components }) => {
+          replies[at] = { entity, components };
+          const all = replies.filter((reply) => reply !== undefined);
+          if (current && all.length === entities.length) setLoaded(all);
+        },
         (failure) => current && setError(errorText(failure)),
       );
-    load();
-    const watches = entities.map((entity) => editor.entities.watch(entity, load));
+    entities.forEach(load);
+    const watches = entities.map((entity, at) => editor.entities.watch(entity, () => load(entity, at)));
     return () => {
       current = false;
       watches.forEach((watch) => watch.dispose());
