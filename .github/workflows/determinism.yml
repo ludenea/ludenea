@@ -40,7 +40,7 @@ jobs:
     env:
       # The golden tests (debug) write the snapshots around a divergence here, in a folder
       # per golden and thread count; the verify steps (release) write theirs under release/.
-      # ponytail: only the release verify records the failing run's trace, so a divergence in
+      # ponytail: only the release verify records a trace after a failure, so a divergence in
       # debug alone uploads its snapshots without one; record a trace in golden.rs's verify if
       # debug and release ever disagree.
       LUDENEA_DUMP_DIR: ${{ github.workspace }}/dump
@@ -61,7 +61,9 @@ jobs:
             dump="$LUDENEA_DUMP_DIR/release/boxes-golden-$threads-threads"
             if ! cargo run --locked --release -p boxes -- verify examples/boxes/assets/boxes.scene.ron --inputs examples/boxes/assets/boxes.inputs --golden golden/boxes.trace --threads $threads --dump-dir "$dump"; then
               status=1
-              # The failing run's trace over the golden's 10,000 ticks, to compare in the editor.
+              # A trace over the golden's 10,000 ticks, to compare in the editor. It is a new
+              # run: after a divergence between two runs on one machine rather than with the
+              # golden, it can diverge at another tick, or not at all.
               cargo run --locked --release -p boxes -- run examples/boxes/assets/boxes.scene.ron --inputs examples/boxes/assets/boxes.inputs --ticks 10000 --threads $threads --trace "$dump/boxes.trace" || echo "::warning::cannot record the trace with --threads $threads"
             fi
           done
@@ -118,7 +120,9 @@ jobs:
         run: |
           dump=dump/boxes-golden-1-threads
           if ! wasmtime run --dir=. target/wasm32-wasip1/release/boxes.wasm verify examples/boxes/assets/boxes.scene.ron --inputs examples/boxes/assets/boxes.inputs --golden golden/boxes.trace --dump-dir "$dump"; then
-            # The failing run's trace over the golden's 10,000 ticks, to compare in the editor.
+            # A trace over the golden's 10,000 ticks, to compare in the editor. It is a new run:
+            # after a divergence between two runs on one machine rather than with the golden,
+            # it can diverge at another tick, or not at all.
             wasmtime run --dir=. target/wasm32-wasip1/release/boxes.wasm run examples/boxes/assets/boxes.scene.ron --inputs examples/boxes/assets/boxes.inputs --ticks 10000 --trace "$dump/boxes.trace" || echo "::warning::cannot record the trace"
             exit 1
           fi
