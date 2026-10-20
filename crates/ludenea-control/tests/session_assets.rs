@@ -1039,3 +1039,25 @@ fn a_redo_after_new_asset_texts_resimulates_the_run_it_brings_back() {
         "{reports:?}"
     );
 }
+
+#[test]
+fn a_prefab_document_that_keeps_every_asset_never_keeps_its_own_saved_text() {
+    let (mut sim, mut session) = spawner_session();
+    play(&mut session, &mut sim, 10);
+    let (replay, back) = session.export_replay(&mut sim, None);
+    assert!(back.is_none(), "{back:?}");
+    let mut session = Session::from_replay(&mut sim, &replay.unwrap()).unwrap();
+    resimulate_all(&mut session, &mut sim);
+    let mut export = session.export().unwrap();
+    assert!(export.keeps_assets);
+    // The crate prefab opened as a document, with the replay's assets kept: its own text is
+    // the document's, which a load reads through the document, not the kept asset.
+    export.scene = fs::read_to_string(CRATE_PREFAB).unwrap();
+    (export.inputs, export.edits, export.hashes) = (Vec::new(), Vec::new(), Vec::new());
+    assert!(export.assets.iter().any(|(id, _)| *id == PREFAB));
+
+    Session::resume(&mut sim, export, Document::Prefab { id: PREFAB }).unwrap();
+
+    assert!(sim.world().asset_bytes(PREFAB).is_none());
+    assert!(sim.world().asset_bytes(STATS).is_some());
+}

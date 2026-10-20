@@ -2600,7 +2600,8 @@ impl Session {
     }
 }
 
-/// `load`, keeping every asset of `assets` when `keeps_assets`.
+/// `load`, keeping every asset of `assets` when `keeps_assets`, but a prefab document's
+/// own: its text is the document's (see `Document::Prefab`), which the load reads.
 fn load_kept(
     sim: &mut Simulation,
     document: Document,
@@ -2610,7 +2611,12 @@ fn load_kept(
 ) -> Result<Vec<String>, SessionError> {
     let warnings = load(sim, document, text, assets)?;
     if keeps_assets {
-        keep_assets(sim, assets.iter().map(|(&id, text)| (id, text.as_str())))?;
+        let own = match document {
+            Document::Scene => None,
+            Document::Prefab { id } => Some(id),
+        };
+        let kept = assets.iter().filter(|&(&id, _)| Some(id) != own);
+        keep_assets(sim, kept.map(|(&id, text)| (id, text.as_str())))?;
     }
     Ok(warnings)
 }
