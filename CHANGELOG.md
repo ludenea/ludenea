@@ -264,6 +264,10 @@ hash, those of the golden trace and replays included.
 ### Control protocol
 
 - Control protocol 4, fingerprint `448e51fb92eb35de`.
+- Over `host --stdio` and in a browser worker, the events a request causes come before its
+  response, not after the response to a later request: a `load_session` sent right after
+  `load_scene` answered could be followed by the scene's `timeline_changed` (head 0), which
+  a client took for the session's.
 - `hello` and `welcome` carry `protocol_fingerprint`, a hash of the TypeScript declarations
   of every type the messages reach. The host refuses a client of another version or
   fingerprint with `version_mismatch` and says to rebuild the editor

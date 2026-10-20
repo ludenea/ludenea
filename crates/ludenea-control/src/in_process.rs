@@ -111,19 +111,27 @@ pub(crate) mod text {
     };
 
     /// Answers one protocol line of a text transport: the handshake until `connected`, then
-    /// requests. A line that is not a message gets a `Refused` or an error response.
-    pub(crate) fn answer(host: &mut Host, connected: &mut bool, line: &str) -> ServerMessage {
+    /// requests. A line that is not a message gets a `Refused` or an error response. The
+    /// events a request causes come before its response, so a client that has the response
+    /// has every event of the command, and none comes after the response to a later one.
+    pub(crate) fn answer(host: &mut Host, connected: &mut bool, line: &str) -> Vec<ServerMessage> {
         match serde_json::from_str::<ClientMessage>(line) {
-            Ok(ClientMessage::Request { id, command }) if *connected => ServerMessage::Response {
-                id,
-                result: host.handle(command),
-            },
+            Ok(ClientMessage::Request { id, command }) if *connected => {
+                let result = host.handle(command);
+                let mut messages: Vec<ServerMessage> = host
+                    .drain_events()
+                    .into_iter()
+                    .map(|event| ServerMessage::Event { event })
+                    .collect();
+                messages.push(ServerMessage::Response { id, result });
+                messages
+            }
             Ok(message) => {
                 let reply = handshake(host, message);
                 *connected = matches!(reply, ServerMessage::Welcome { .. });
-                reply
+                vec![reply]
             }
-            Err(error) => malformed(*connected, line, &error),
+            Err(error) => vec![malformed(*connected, line, &error)],
         }
     }
 
@@ -168,5 +176,141 @@ impl Transport for InProcess {
     fn request(&mut self, command: Command) -> Result<Reply, ProtocolError> {
         self.next_id += 1;
         self.host.handle(command)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::text::answer;
+    use crate::host::Host;
+    use crate::protocol::{
+        ClientMessage, Command, Event, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION, Reply, ServerMessage,
+    };
+    use crate::session::Document;
+
+    fn send(
+        host: &mut Host,
+        connected: &mut bool,
+        id: u64,
+        command: Command,
+    ) -> Vec<ServerMessage> {
+        let line = serde_json::json!({ "type": "request", "id": id, "command": command });
+        answer(host, connected, &line.to_string())
+    }
+
+    fn heads(messages: &[ServerMessage]) -> Vec<u64> {
+        messages
+            .iter()
+            .filter_map(|message| match message {
+                ServerMessage::Event {
+                    event: Event::TimelineChanged { timeline },
+                } => Some(timeline.head),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A client that sends `load_session` right after `load_scene` answered must not see the
+    /// scene's timeline (head 0) after the session's reply: it would take it for the session's.
+    #[test]
+    fn a_response_comes_after_the_events_its_command_caused() {
+        let mut host = Host::new(boxes::app).unwrap();
+        let mut connected = false;
+        let hello = ClientMessage::Hello {
+            protocol_version: PROTOCOL_VERSION,
+            protocol_fingerprint: PROTOCOL_FINGERPRINT,
+        };
+        let welcome = answer(
+            &mut host,
+            &mut connected,
+            &serde_json::json!(hello).to_string(),
+        );
+        assert!(matches!(welcome[..], [ServerMessage::Welcome { .. }]));
+        let scene = boxes::generate_scene(30, 7);
+        let load_scene = || Command::LoadScene {
+            scene: scene.clone(),
+            assets: Vec::new(),
+            document: Document::Scene,
+        };
+        send(&mut host, &mut connected, 1, load_scene());
+        let stepped = send(
+            &mut host,
+            &mut connected,
+            2,
+            Command::Step {
+                ticks: 5,
+                record_hashes: false,
+            },
+        );
+        let exported = match &send(&mut host, &mut connected, 3, Command::ExportSession)[..] {
+            [
+                ..,
+                ServerMessage::Response {
+                    result: Ok(reply), ..
+                },
+            ] => reply.clone(),
+            other => panic!("{other:?}"),
+        };
+        host.advance(0.0);
+
+        let scene_loaded = send(&mut host, &mut connected, 4, load_scene());
+        assert!(
+            matches!(
+                scene_loaded.last(),
+                Some(ServerMessage::Response {
+                    id: 4,
+                    result: Ok(Reply::Loaded { .. })
+                })
+            ),
+            "{scene_loaded:?}"
+        );
+        assert_eq!(heads(&scene_loaded), [0_u64]);
+        let Reply::Session {
+            scene,
+            saved_scene,
+            inputs,
+            edits,
+            undo,
+            hashes,
+            assets,
+            saved_assets,
+            branches,
+            ..
+        } = exported
+        else {
+            panic!("{exported:?}");
+        };
+        let load_session = Command::LoadSession {
+            scene,
+            saved_scene,
+            inputs,
+            edits,
+            undo,
+            expected: hashes,
+            assets,
+            saved_assets,
+            branches,
+            document: Document::Scene,
+            keeps_assets: false,
+        };
+        let session_loaded = send(&mut host, &mut connected, 5, load_session);
+        assert!(
+            matches!(
+                session_loaded.last(),
+                Some(ServerMessage::Response {
+                    id: 5,
+                    result: Ok(Reply::Loaded { .. })
+                })
+            ),
+            "{session_loaded:?}"
+        );
+        assert_eq!(heads(&session_loaded), heads(&stepped));
+        // Resimulation reports the session's timeline; none is the scene's, of head 0.
+        let later: Vec<ServerMessage> = host
+            .advance(0.0)
+            .into_iter()
+            .map(|event| ServerMessage::Event { event })
+            .collect();
+        assert_eq!(heads(&later), heads(&stepped));
     }
 }

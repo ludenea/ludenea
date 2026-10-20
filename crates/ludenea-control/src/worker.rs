@@ -75,7 +75,7 @@ impl WorkerHost {
         let replies: Vec<ServerMessage> = if message.trim().is_empty() {
             Vec::new()
         } else {
-            vec![answer(&mut self.host, &mut self.connected, message)]
+            answer(&mut self.host, &mut self.connected, message)
         };
         to_json(&replies)
     }

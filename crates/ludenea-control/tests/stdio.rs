@@ -33,13 +33,21 @@ fn serve(input: String) -> Vec<ServerMessage> {
         .collect()
 }
 
+/// The messages that answer a line: the events a request causes come before its response.
+fn answers(messages: Vec<ServerMessage>) -> Vec<ServerMessage> {
+    messages
+        .into_iter()
+        .filter(|message| !matches!(message, ServerMessage::Event { .. }))
+        .collect()
+}
+
 #[test]
 fn stdio_handshake_and_step_over_pipes() {
     let step = Command::Step {
         ticks: 2,
         record_hashes: true,
     };
-    let messages = serve(hello() + &request(7, &step));
+    let messages = answers(serve(hello() + &request(7, &step)));
     assert!(matches!(messages[0], ServerMessage::Welcome { .. }));
     match &messages[1] {
         ServerMessage::Response {
@@ -61,7 +69,7 @@ fn malformed_line_gets_error_not_panic() {
         + "{\"type\":\"request\",\"id\":3,\"command\":42}\n"
         + "{\"type\":\"nonsense\"}\n"
         + &request(4, &step);
-    let messages = serve(input);
+    let messages = answers(serve(input));
     assert!(matches!(
         &messages[0],
         ServerMessage::Refused { error } if error.code == ErrorCode::NotConnected
@@ -209,11 +217,13 @@ fn a_line_that_is_not_utf8_gets_an_error_and_the_session_goes_on() {
     input.extend_from_slice(request(5, &step).as_bytes());
     let mut output = Vec::new();
     serve_stdio(boxes::app, BufReader::new(Cursor::new(input)), &mut output).unwrap();
-    let messages: Vec<ServerMessage> = String::from_utf8(output)
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
+    let messages = answers(
+        String::from_utf8(output)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect(),
+    );
     assert!(matches!(
         &messages[1],
         ServerMessage::Refused { error } if error.code == ErrorCode::InvalidCommand

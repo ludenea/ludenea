@@ -43,7 +43,8 @@ pub struct Host {
     /// The timeline last reported, to emit `TimelineChanged` only on change.
     timeline: Timeline,
     subscriptions: Subscriptions,
-    /// Events produced by commands, returned by the next `advance`.
+    /// Events produced by commands, returned by the next `advance` or `drain_events`: the
+    /// text transports drain them before each response.
     events: Vec<Event>,
     /// The second simulation, built the first time the ghost is needed.
     compare: Option<CompareRun>,

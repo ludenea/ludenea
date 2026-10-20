@@ -67,17 +67,19 @@ fn serve(
         lines.extend(receiver.try_iter());
         let mut batch = Vec::new();
         for line in &lines {
-            let reply = match std::str::from_utf8(line) {
+            let replies = match std::str::from_utf8(line) {
                 Ok(line) if line.trim().is_empty() => continue,
                 Ok(line) => answer(&mut host, &mut connected, line),
-                Err(_) => ServerMessage::Refused {
+                Err(_) => vec![ServerMessage::Refused {
                     error: ProtocolError::new(
                         ErrorCode::InvalidCommand,
                         "this line is not UTF-8 text; send each message as one line of JSON",
                     ),
-                },
+                }],
             };
-            write_message(&mut batch, &reply)?;
+            for reply in &replies {
+                write_message(&mut batch, reply)?;
+            }
             // Right after the welcome: a client ignores what comes before it.
             if connected && let Some(text) = warning.take() {
                 let event = Event::Console {
@@ -169,12 +171,13 @@ mod tests {
                 },
             }
         );
-        assert!(matches!(
-            messages[2],
+        // The step's events come before its response.
+        assert!(messages[2..].iter().any(|message| matches!(
+            message,
             ServerMessage::Response {
                 id: 1,
                 result: Ok(Reply::Stepped { tick: 2, .. })
             }
-        ));
+        )));
     }
 }
