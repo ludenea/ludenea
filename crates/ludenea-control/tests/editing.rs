@@ -857,23 +857,39 @@ fn a_batch_whose_edit_fails_changes_nothing() {
 
 #[test]
 fn a_batch_refuses_a_value_changed_twice() {
-    let mut host = loaded(20);
-    step(&mut host, 10);
-    let entity = first_crate(&mut host);
-    let commands = vec![
-        set_pose(entity, &["position", "x"], json!(1.0)),
-        set_pose(entity, &["position", "y"], json!(2.0)),
-    ];
-    let error = host.handle(Command::Batch { commands }).unwrap_err();
-    assert_eq!(error.code, ErrorCode::InvalidCommand);
-    assert_eq!(
-        error.message,
-        format!(
-            "command 1 of the batch changes `ludenea::Pose` of entity {entity} again; a batch \
-             changes each component and resource once, so send the whole change in one command"
-        )
-    );
-    assert!(timeline(&mut host).edit_ticks.is_empty());
+    // Past tick 0 as a recorded edit, at tick 0 as a scene edit.
+    for tick in [10, 0] {
+        let mut host = loaded(20);
+        step(&mut host, 10);
+        ok(&mut host, Command::Seek { tick });
+        let entity = first_crate(&mut host);
+        let before = (hash(&mut host), save_scene(&mut host));
+        let commands = vec![
+            set_pose(entity, &["position", "x"], json!(1.0)),
+            set_pose(entity, &["position", "y"], json!(2.0)),
+        ];
+        let error = host.handle(Command::Batch { commands }).unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidCommand, "at tick {tick}");
+        assert_eq!(
+            error.message,
+            format!(
+                "command 1 of the batch changes `ludenea::Pose` of entity {entity} again; a \
+                 batch changes each component and resource once, so send the whole change in \
+                 one command"
+            ),
+            "at tick {tick}"
+        );
+        assert_eq!(
+            (hash(&mut host), save_scene(&mut host)),
+            before,
+            "at tick {tick}"
+        );
+        let timeline = timeline(&mut host);
+        assert!(
+            timeline.edit_ticks.is_empty() && !timeline.can_undo,
+            "at tick {tick}"
+        );
+    }
 }
 
 #[test]
