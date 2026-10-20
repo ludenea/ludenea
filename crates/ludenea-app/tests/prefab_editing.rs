@@ -179,6 +179,22 @@ fn override_value_ron_of_an_unregistered_component_is_refused() {
 }
 
 #[test]
+fn override_value_ron_of_bytes_that_do_not_decode_is_refused() {
+    let mut simulation = simulation();
+    simulation
+        .load_scene_with(&scene_with_instance(), &texts(&[(A, PREFAB)]))
+        .unwrap();
+    let error = simulation
+        .override_value_ron(&[3, 0], "prefab_editing::Tag", &[])
+        .unwrap_err();
+    assert!(
+        matches!(&error, SceneError::InvalidValue { entity: Some(entity), name, .. }
+            if entity == &[3, 0] && name == "prefab_editing::Tag"),
+        "{error:?}"
+    );
+}
+
+#[test]
 fn replace_with_instance_removes_entities() {
     let scene = "Scene(\n    version: 2,\n    next_id: 3,\n    resources: {},\n    entities: [\n        (id: 0, components: {\"prefab_editing::Tag\": (10)}),\n        (id: 1, components: {\"prefab_editing::Tag\": (11)}),\n        (id: 2, components: {\"prefab_editing::Tag\": (12)}),\n    ],\n)\n";
     let (text, instance) = replace_with_instance(scene, &[0, 2], AssetId(A)).unwrap();
