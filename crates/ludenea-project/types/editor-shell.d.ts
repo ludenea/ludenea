@@ -352,7 +352,13 @@ interface PluginFailure {
 }
 interface PluginBoundaryProps {
     editor: Editor;
-    /** What the slot renders, as the plugin registered it: a panel definition, an inspector, a decoration, or a column. */
+    /**
+     * What the slot renders, as the plugin registered it: a panel definition, an inspector, a
+     * decoration, or a column. The editor console reports a failure once per registration, for
+     * as long as the registration lives: a slot that recovers and throws again, even another
+     * error, or a second slot rendering the same registration adds no line; `fallback` still
+     * shows each failure.
+     */
     registration: object;
     /** The slot in a sentence, such as `The "Stats" panel`; the plugin's name follows it. */
     name: string;

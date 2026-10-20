@@ -33,7 +33,7 @@ export interface AssetsState {
   action: Action | null;
   menu: string | null;
   creating: NewData | null;
-  /** The open document, and data assets, changed on disk while they had unsaved edits: one banner each. */
+  /** The open document and data assets changed on disk while they had unsaved edits, and the open document whose file was deleted on disk: one banner each. */
   banners: Banner[];
   error: string | null;
   /** Why the files could not be listed. */

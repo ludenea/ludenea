@@ -48,7 +48,8 @@
 }
 
 /* Plugin columns: the entity first, taking the room left, then each column at its width.
-   The header row has the entity rows' padding and gap, so each title sits over its column. */
+   The header row has the entity rows' padding and gap, and `ExplorerPanel.tsx` sets its
+   right margin to the width of the list's scrollbar, so each title sits over its column. */
 .ludenea-dock .dv-content-container .ludenea-columns,
 .ludenea-dock .dv-content-container .ludenea-entities [role="option"] {
   display: flex;

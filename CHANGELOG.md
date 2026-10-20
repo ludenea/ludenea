@@ -456,7 +456,8 @@ hash, those of the golden trace and replays included.
   identifier. It stays with its own file while that file keeps the identifier, and follows
   none of several files that have it, as copies made with their metas do, so a save never
   goes to a copy. A move the watcher reports in several batches, as a branch checkout does,
-  is followed too, and a moved file whose text changed on the way shows as changed on disk.
+  is followed too, and a moved file whose text changed on the way is reloaded, or shows as
+  changed on disk when the editor holds unsaved edits of it.
   When the file is deleted outside the editor, the document's session is stored and the
   document stays open, with a banner offering "Save again" (`scene.save`) and "Close" (the
   new `Assets.close`, which stores the session again first); it used to close and drop the
