@@ -1,4 +1,4 @@
-import type { FileEntry, JsonValue, PathSegment } from "@ludenea/control-client";
+import type { AssetKind, FileEntry, JsonValue, PathSegment } from "@ludenea/control-client";
 import { runReported, type Editor } from "@ludenea/editor-shell";
 import { useRef, type KeyboardEvent } from "react";
 import { setAt } from "../inspector/default-value";
@@ -10,6 +10,12 @@ import { emptyValue, isComplete } from "./value";
 const ICONS: { [kind in KindName]: string } = { Scene: "▣", Prefab: "◇", Data: "≡", Replay: "▶", Trace: "∿", Snapshot: "◉", Other: "·" };
 const KINDS = Object.keys(ICONS) as KindName[];
 const OPENABLE = new Set<KindName>(["Scene", "Prefab", "Data", "Replay", "Trace", "Snapshot"]);
+
+/** What a file is, as its tooltip says: the type of a data asset, else the kind's name. */
+function kindLabel(kind: AssetKind): string {
+  if (typeof kind === "string") return kind;
+  return "Data" in kind ? kind.Data.type : "Texture";
+}
 
 export const baseName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 export const folderOf = (path: string) => path.slice(0, Math.max(path.lastIndexOf("/"), 0));
@@ -104,13 +110,7 @@ export function AssetsPanel({ editor, assets }: { editor: Editor; assets: Assets
                   aria-selected={file.path === selected}
                   tabIndex={0}
                   draggable
-                  title={
-                    typeof file.kind === "object"
-                      ? "Data" in file.kind
-                        ? file.kind.Data.type
-                        : "Texture"
-                      : file.kind
-                  }
+                  title={kindLabel(file.kind)}
                   onClick={() => select(file)}
                   onFocus={() => set({ selected: file.path })}
                   onDoubleClick={() => attempt(assets.open(file.path))}

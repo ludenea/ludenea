@@ -1,11 +1,11 @@
-import type { TypeSchema } from "@ludenea/control-client";
+import type { FileEntry, TypeSchema } from "@ludenea/control-client";
 import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { builtinPlugins } from "../src";
 import { renderPanel, setSceneDirty, settle, testEditor, testGame } from "./support";
 
 const SCENE = "scenes/main.scene.ron";
-const entries = [
+const entries: FileEntry[] = [
   { path: SCENE, id: "0000000000000000000000000000000a", kind: "Scene" },
   { path: "assets/logo.png", id: "0000000000000000000000000000000b", kind: "Other" },
 ];
@@ -44,6 +44,18 @@ async function openScene() {
 describe("assets", () => {
   beforeEach(() => localStorage.clear());
   afterEach(cleanup);
+
+  it("each_file_names_its_kind_in_its_tooltip", async () => {
+    const files: FileEntry[] = [
+      ...entries,
+      { path: "assets/settings.ron", id: SETTINGS, kind: { Data: { type: "demo::Settings" } } },
+      { path: "assets/hero.png", id: "0000000000000000000000000000000d", kind: { Texture: { pixels_per_unit: 16, grid: null, pivot: null, filter: "Nearest" } } },
+    ];
+    await browser({ text: "", files });
+
+    const title = (name: string) => screen.getByText(name).closest("li")!.getAttribute("title");
+    expect([title("main.scene.ron"), title("logo.png"), title("settings.ron"), title("hero.png")]).toEqual(["Scene", "Other", "demo::Settings", "Texture"]);
+  });
 
   it("opening_scene_loads_it_into_the_game", async () => {
     const { host, game } = await browser({ text: "(scene)" });
