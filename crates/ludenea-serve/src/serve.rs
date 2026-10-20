@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade, close_code};
-use axum::extract::{Path as UrlPath, Request, State};
+use axum::extract::{ConnectInfo, Path as UrlPath, Request, State};
 use axum::http::{HeaderMap, StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -106,13 +106,17 @@ pub async fn run(options: Options) -> Result<(), String> {
     if let Some(warning) = remote_warning(&address) {
         eprintln!("{warning}");
     }
-    axum::serve(listener, router)
-        .await
-        .map_err(|error| error.to_string())
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .map_err(|error| error.to_string())
 }
 
 async fn project_socket(
     State(app): State<App>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> Response {
@@ -123,7 +127,7 @@ async fn project_socket(
     upgrade
         .max_frame_size(MAX_MESSAGE_SIZE)
         .max_message_size(MAX_MESSAGE_SIZE)
-        .on_upgrade(move |socket| session(app, socket))
+        .on_upgrade(move |socket| session(app, socket, peer))
 }
 
 /// Listening beyond this machine lets anyone on the network edit and build the project, which
@@ -200,9 +204,9 @@ fn same_origin(headers: &HeaderMap, allowed: &[String]) -> bool {
     origin_host.is_some() && origin_host == host
 }
 
-/// One editor: requests answered in order, and the project's events once it said hello,
-/// starting with what it missed (a build started before it connected).
-async fn session(app: App, mut socket: WebSocket) {
+/// One editor, at `peer`: requests answered in order, and the project's events once it said
+/// hello, starting with what it missed (a build started before it connected).
+async fn session(app: App, mut socket: WebSocket, peer: SocketAddr) {
     let mut events = lock(&app.service).subscribe();
     let mut connected = false;
     loop {
@@ -213,7 +217,7 @@ async fn session(app: App, mut socket: WebSocket) {
                     Some(Ok(Message::Text(text))) => text,
                     Some(Err(error)) => {
                         if let Some((size, limit)) = oversized(error) {
-                            refuse_oversized(&mut socket, size, limit).await;
+                            refuse_oversized(&mut socket, peer, size, limit).await;
                         }
                         return;
                     }
@@ -279,13 +283,14 @@ fn oversized(error: axum::Error) -> Option<(usize, usize)> {
     }
 }
 
-/// Tells the editor why its message of at least `size` bytes is refused, logs it, and closes
-/// the connection, which cannot read past that message, after [`LINGER`].
-async fn refuse_oversized(socket: &mut WebSocket, size: usize, limit: usize) {
+/// Tells the editor at `peer` why its message of at least `size` bytes is refused, logs it
+/// with `peer`, and closes the connection, which cannot read past that message, after
+/// [`LINGER`].
+async fn refuse_oversized(socket: &mut WebSocket, peer: SocketAddr, size: usize, limit: usize) {
     let mib = limit >> 20;
     eprintln!(
-        "warning: refused a project message of at least {size} bytes, over the limit of \
-         {limit} bytes ({mib} MiB); its connection is closed"
+        "warning: refused a project message of at least {size} bytes from {peer}, over the \
+         limit of {limit} bytes ({mib} MiB); its connection is closed"
     );
     let error = ProjectFailure::new(
         FailureCode::InvalidRequest,

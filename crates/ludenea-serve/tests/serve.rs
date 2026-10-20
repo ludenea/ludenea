@@ -425,16 +425,20 @@ fn a_large_write_is_accepted_and_an_oversized_one_is_refused_precisely() {
         panic!("the test connects without TLS");
     };
     stream.write_all(&bytes).unwrap();
+    let peer = stream.local_addr().unwrap();
 
     let (error, close) = refusal_then_close(&mut socket);
     assert_eq!(error.code, FailureCode::InvalidRequest);
-    for text in [&error.message, &logged(&server, "refused")] {
+    let log = logged(&server, "refused");
+    for text in [&error.message, &log] {
         assert!(
             text.contains(&format!("{oversized} bytes"))
                 && text.contains(&format!("{MESSAGE_LIMIT} bytes")),
             "{text}"
         );
     }
+    // Several editors may be connected: the log names the one that sent it.
+    assert!(log.contains(&format!("from {peer}")), "{log}");
     assert_eq!(close, CloseCode::Size);
 }
 
