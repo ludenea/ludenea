@@ -319,6 +319,33 @@ describe("document store", () => {
     expect(projectRequests(project, ["set_aside_stored_session", "store_session"])).toEqual(["set_aside_stored_session", "store_session"]);
   });
 
+  it("an_export_of_the_open_document_the_next_game_refuses_sets_its_stored_session_aside", async () => {
+    const project = fakeProject();
+    const host = await testHost(undefined, project.answer);
+    const game = await gameWithSession(session("(main)"));
+    host.setControl(game.control);
+    await host.editor.document.getState().open(ids.main);
+    project.store(ids.main, mainSession);
+    const bytes = project.sessions.get(file);
+    // The export taken before a rebuild, of the open document: it carries over as it is.
+    const exported = await host.sessions.export(game.control);
+    const own = await host.sessions.own(exported);
+    expect(own).toBe(exported);
+    const next = await refusingGame();
+    host.setControl(next.control);
+
+    const restoring = host.sessions.restore(next.control, own!);
+    await host.sessions.store();
+    expect(await restoring).toBeNull();
+
+    const refused = `The game refused the session of scenes/main.scene.ron that the previous game exported: the branch tree cannot be decoded. Its stored session (${file}) is set aside; the new game loaded the document from its file, and the session is kept as ${kept}.`;
+    expect(logged(host)).toContainEqual(["warning", refused, undefined]);
+    expect(host.editor.document.getState().error).toBe(refused);
+    expect(project.sessions.get(kept)).toBe(bytes);
+    expect(project.stored(ids.main)?.saved.load.scene).toBe("(edited)");
+    expect(projectRequests(project, ["set_aside_stored_session", "store_session"])).toEqual(["set_aside_stored_session", "store_session"]);
+  });
+
   it("a_stored_session_own_gives_is_not_stored_over_until_the_game_answers_its_restore", async () => {
     const project = fakeProject();
     const host = await testHost(undefined, project.answer);

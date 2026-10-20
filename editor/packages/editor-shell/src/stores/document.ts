@@ -62,8 +62,9 @@ export interface DocumentSessions {
   /** `saved` when it belongs to the open document, else the open document's stored session, if any: restore it with `restore`. */
   own(saved: SavedSession | null): Promise<SavedSession | null>;
   /**
-   * `restoreSession`, except for a stored session `own` gave: one the game refuses is set aside
-   * before any later store of its document, with a warning, and resolves to null.
+   * `restoreSession`, except for a session `own` gave: when the game refuses it, the document's
+   * stored session is set aside before any later store of its document, with a warning, and the
+   * restore resolves to null.
    */
   restore(control: ControlClient, saved: SavedSession, tick?: number): Promise<Loaded | null>;
 }
@@ -282,12 +283,20 @@ export function createDocumentStore(options: {
   const unreadable = (document: OpenDocument, reason: string, outcome: Outcome) =>
     setAside(document, `The stored session of ${document.path} (${sessionFile(document.id)}) cannot be read: ${reason}`, outcome).warning;
   /**
-   * Restores `saved`, the stored session of `document`, into `game` at `tick`: resolves to what
-   * the game reports loaded (null when the session loaded but cannot go back to its tick), or,
-   * when the game refused it, to the warning that it was set aside, which gives the `outcome`
-   * for the document. The document's stores wait until the game takes it or it is set aside.
+   * Restores `saved`, the stored session of `document` or one the previous game `exported` of
+   * it, into `game` at `tick`: resolves to what the game reports loaded (null when the session
+   * loaded but cannot go back to its tick), or, when the game refused it, to the warning that the
+   * stored session was set aside, which gives the `outcome` for the document. The document's
+   * stores wait until the game takes it or the stored session is set aside.
    */
-  const restoreStored = async (game: ControlClient, document: OpenDocument, outcome: Outcome, saved: SavedSession, tick = saved.tick): Promise<{ loaded: Loaded | null } | { refused: string }> => {
+  const restoreStored = async (
+    game: ControlClient,
+    document: OpenDocument,
+    outcome: Outcome,
+    saved: SavedSession,
+    tick = saved.tick,
+    exported = false,
+  ): Promise<{ loaded: Loaded | null } | { refused: string }> => {
     let decide!: (kept: boolean | Promise<boolean>) => void;
     asides.set(document.id, new Promise((resolve) => (decide = resolve)));
     let accepted = false;
@@ -302,16 +311,20 @@ export function createDocumentStore(options: {
       const failure = locateAssetError(error, texts.paths);
       if (!accepted) {
         refused.add(saved);
-        const { kept, warning } = setAside(document, `The game refused the stored session of ${document.path} (${sessionFile(document.id)}): ${message(failure)}`, outcome, locationOf(failure));
+        const why = exported
+          ? `The game refused the session of ${document.path} that the previous game exported: ${message(failure)}. Its stored session (${sessionFile(document.id)}) is set aside`
+          : `The game refused the stored session of ${document.path} (${sessionFile(document.id)}): ${message(failure)}`;
+        const { kept, warning } = setAside(document, why, outcome, locationOf(failure));
         decide(kept);
         return { refused: await warning };
       }
-      log("warning", `The stored session of ${document.path} is loaded, but cannot go back to tick ${tick}: ${message(failure)}`, locationOf(failure));
+      log("warning", `The ${exported ? "" : "stored "}session of ${document.path} is loaded, but cannot go back to tick ${tick}: ${message(failure)}`, locationOf(failure));
       return { loaded: null };
     }
   };
-  // The stored sessions `own` gave, with their document, for `restore`.
-  const ownStored = new WeakMap<SavedSession, OpenDocument>();
+  // The sessions `own` gave, with their document and whether the previous game exported them
+  // (else they are stored), for `restore`.
+  const ownStored = new WeakMap<SavedSession, { document: OpenDocument; exported: boolean }>();
   // The scene and assets on disk now, so a stored session whose files changed replays against
   // them, except its unsaved scene and assets, which keep the session's text.
   const refreshed = (saved: SavedSession, text: string | null, fresh: [AssetId, string][]): SavedSession => {
@@ -520,7 +533,11 @@ export function createDocumentStore(options: {
     },
     async own(saved) {
       const document = store.getState().current;
-      if ((saved?.document ?? null) === (document?.id ?? null)) return saved;
+      if ((saved?.document ?? null) === (document?.id ?? null)) {
+        // Refused, it sets the stored session aside: the next store would overwrite it.
+        if (saved && document) ownStored.set(saved, { document, exported: true });
+        return saved;
+      }
       if (!document) return null;
       // Like a document that opens: against the scene and assets on disk now.
       const read = await stored(document);
@@ -530,13 +547,14 @@ export function createDocumentStore(options: {
       }
       if (!read) return null;
       const own = refreshed(read.saved, store.getState().text, texts.assets);
-      ownStored.set(own, document);
+      ownStored.set(own, { document, exported: false });
       return own;
     },
     async restore(control, saved, tick = saved.tick) {
-      const document = ownStored.get(saved);
-      if (!document) return restoreSession(control, saved, tick);
-      const restored = await restoreStored(control, document, LOADED_AGAIN, saved, tick);
+      const owned = ownStored.get(saved);
+      if (!owned) return restoreSession(control, saved, tick);
+      const { document, exported } = owned;
+      const restored = await restoreStored(control, document, LOADED_AGAIN, saved, tick, exported);
       if ("loaded" in restored) return restored.loaded;
       // Shown on the scene tree too, as when the document opens.
       if (store.getState().current?.id === document.id) store.setState({ error: restored.refused });

@@ -497,6 +497,11 @@ hash, those of the golden trace and replays included.
   `restore`. Closing the page stored the seed of a session guard whose game refused it back
   over the document's session, and the next open set it aside again as another
   `.rejected.session`.
+- `DocumentSessions.restore` treats an export of the open document that `own` gives back
+  like a stored session: when the game refuses it (a game rebuilt without one of its
+  components), the document's stored session is set aside with a warning, and the restore
+  resolves to null. It failed with the game's refusal, and the next store overwrote the
+  stored session with the unsaved edits it held.
 
 ### Formats
 
