@@ -17,7 +17,7 @@ const SETTINGS = "0000000000000000000000000000000c";
  * `disk.files` once set. Each file holds `disk.text`, unless `disk.texts` has its own; a write
  * goes there.
  */
-async function browser(disk: { text: string; files?: typeof entries; texts?: { [path: string]: string } } = { text: "(on disk)" }, withGame = true) {
+async function browser(disk: { text: string; files?: typeof entries; texts?: { [path: string]: string }; storeError?: string } = { text: "(on disk)" }, withGame = true) {
   const host = await testEditor(builtinPlugins, (request) => {
     const path = request.path as string;
     if (request.type === "list_files") return { type: "files", entries: disk.files ?? entries };
@@ -25,6 +25,7 @@ async function browser(disk: { text: string; files?: typeof entries; texts?: { [
     if (request.type === "write_text") disk.texts = { ...disk.texts, [path]: request.text as string };
     if (request.type === "read_asset_texts") return { type: "asset_texts", assets: [], paths: [] };
     if (request.type === "load_stored_session") return { type: "stored_session", bytes: null };
+    if (request.type === "store_session" && disk.storeError) return { error: { code: "io", message: disk.storeError } };
     if (request.type === "info") return undefined;
     return { type: "done" };
   });
@@ -300,6 +301,26 @@ describe("assets", () => {
       // Stored under the new identifier at once, where the next open and crash recovery look.
       expect(stores(host)).toEqual([expect.objectContaining({ document: LEVEL_ID })]);
       expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("a_session_that_cannot_be_stored_under_the_moved_file_s_identifier_is_logged_with_both_paths", async () => {
+      const LEVEL_ID = "0000000000000000000000000000001a";
+      const { host, disk } = await browser();
+      await openScene();
+
+      // Moved without its meta: the session is stored under the new file's identifier.
+      disk.files = [{ path: LEVEL, id: LEVEL_ID, kind: "Scene" }, entries[1]!];
+      disk.storeError = "permission denied";
+      act(() => host.project.push({ type: "files_changed", changes: [{ Removed: { path: SCENE, kind: "Scene" } }, { Created: { path: LEVEL, kind: "Scene" } }] }));
+      await settle();
+      await settle();
+
+      expect(host.editor.document.getState().current).toEqual({ id: LEVEL_ID, kind: "scene", path: LEVEL });
+      expect(host.editor.console.list().map(({ level, text }) => [level, text])).toContainEqual([
+        "warning",
+        `Cannot store the session of ${SCENE}, moved to ${LEVEL}, under its new identifier: permission denied`,
+      ]);
+      expect(screen.queryByText("permission denied")).toBeNull();
     });
 
     it("a_dirty_scene_removed_on_disk_stays_open_with_a_banner", async () => {

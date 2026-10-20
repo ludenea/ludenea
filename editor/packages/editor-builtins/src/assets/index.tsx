@@ -198,6 +198,12 @@ export const assetsPlugin = definePlugin({
      * it is really gone, the session is stored and the document stays open as deleted on disk
      * until it is saved again, closed, or found by a later batch.
      */
+    // The document stays open whether or not its session is stored: a failure is a warning.
+    const storeSession = (of: string) =>
+      documents
+        .getState()
+        .store()
+        .catch((error: unknown) => editor.console.log("warning", `Cannot store the session of ${of}: ${errorText(error)}`));
     const follow = async (open: OpenDocument, changes: FileChange[]) => {
       // Another document, or this one renamed in the editor, is open now.
       const still = () => documents.getState().current === open;
@@ -224,16 +230,12 @@ export const assetsPlugin = definePlugin({
         if (kept.length < banners.length) state.set({ banners: kept });
         if (found.id === open.id && found.path === open.path) return;
         documents.setState({ current: { ...open, id: found.id, path: found.path } });
-        if (found.id !== open.id) await documents.getState().store();
+        if (found.id !== open.id) await storeSession(`${open.path}, moved to ${found.path}, under its new identifier`);
         else if (text !== null) await onDiskChange(found.path);
         return;
       }
       if (!changes.some((change) => removedPath(change) === open.path)) return;
-      try {
-        await documents.getState().store();
-      } catch (error) {
-        editor.console.log("warning", `Cannot store the session of ${open.path}, deleted on disk: ${errorText(error)}`);
-      }
+      await storeSession(`${open.path}, deleted on disk`);
       if (still()) showBanner({ path: open.path, removed: true });
     };
     let info = project.get().info;
