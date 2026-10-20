@@ -351,7 +351,10 @@ fn collide_capsules(
 /// span `[0, length1]` of segment A, which starts at `p1`. Ids follow the
 /// polygon convention: A's edge facing B (as `Polygon::from_segment` numbers
 /// it) and B's segment end each point comes from.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "both segments, the separating offset, and both radii are distinct inputs of one clipping step"
+)]
 fn clip_capsule_segments(
     p1: Vec2,
     u1: Vec2,

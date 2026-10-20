@@ -231,8 +231,10 @@ impl ViewportRenderer {
     }
 }
 
-// Display only, never fed back into the simulation.
-#[allow(clippy::disallowed_methods)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "display only: the colour conversion never feeds back into the simulation"
+)]
 fn srgb_to_linear(value: f32) -> f32 {
     if value <= 0.04045 {
         value / 12.92

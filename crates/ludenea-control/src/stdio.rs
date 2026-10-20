@@ -113,7 +113,10 @@ fn available_threads() -> u32 {
     u32::try_from(cores.min(Parallel::MAX_THREADS)).unwrap_or(1)
 }
 
-#[allow(clippy::disallowed_methods)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the server paces play with wall-clock time, which the simulation never reads"
+)]
 fn now() -> Instant {
     Instant::now()
 }

@@ -624,8 +624,10 @@ fn checkpoint_budget_with_20_branches_of_10000_ticks() {
 
 #[test]
 #[ignore = "timing, run in release"]
-// Measuring time is outside the simulation.
-#[allow(clippy::disallowed_methods)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the test measures wall-clock time, which is outside the simulation"
+)]
 fn switch_branch_under_200_ms() {
     let (mut sim, mut session) = played(10_000, 10_000);
     let root_hashes = hashes(&session);

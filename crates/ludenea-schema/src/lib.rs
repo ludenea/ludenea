@@ -443,7 +443,10 @@ tuple!(A, B, C, D);
 struct _CompileFail;
 
 #[cfg(test)]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the test types exist only for their derived schemas, so nothing reads or builds them"
+)]
 mod tests {
     use super::*;
 

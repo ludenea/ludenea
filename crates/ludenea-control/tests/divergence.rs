@@ -512,8 +512,10 @@ fn no_work_without_request() {
 
 #[test]
 #[ignore = "timing, run in release"]
-// Measuring time is outside the simulation.
-#[allow(clippy::disallowed_methods)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the test measures wall-clock time, which is outside the simulation"
+)]
 fn report_over_600_ticks_under_one_second() {
     let mut host = Host::new(boxes::app).unwrap();
     load(

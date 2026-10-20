@@ -668,7 +668,10 @@ mod tests {
     }
 
     /// Waits for the first `GameExited` and returns its code with how long it took.
-    #[allow(clippy::disallowed_methods)]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test bounds a wait with wall-clock time"
+    )]
     fn game_exited(events: &mut broadcast::Receiver<ProjectEvent>) -> (Option<i32>, Duration) {
         let start = std::time::Instant::now();
         while start.elapsed() < Duration::from_secs(10) {
@@ -817,7 +820,10 @@ mod tests {
 
     /// Every thread of a closed project ends, watchers included, even if nothing changes.
     #[test]
-    #[allow(clippy::disallowed_methods)]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test bounds a wait with wall-clock time"
+    )]
     fn closing_a_project_stops_its_threads() {
         let dir = TempDir::new().unwrap();
         let mut service = desktop_service(&dir);

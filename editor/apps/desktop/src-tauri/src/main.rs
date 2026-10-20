@@ -274,8 +274,10 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-// `generate_context!` expands to a `HashMap`; nothing here is part of the simulation.
-#[allow(clippy::disallowed_types)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "`generate_context!` expands to a `HashMap`; the editor shell is not simulation code"
+)]
 fn main() {
     let engine_path = std::env::var_os(ENGINE_PATH_VARIABLE).map(PathBuf::from);
     let mut service = ProjectService::new(ServiceMode::Desktop, engine_path);

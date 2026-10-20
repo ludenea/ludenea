@@ -40,7 +40,10 @@ fn request(id: u64, command: &Command) -> String {
 }
 
 #[test]
-#[allow(clippy::disallowed_methods)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the test bounds the host response time with wall-clock time"
+)]
 fn printing_from_parallel_systems_never_blocks_the_host() {
     let entities: Vec<String> = (0..64)
         .map(|i| format!(r#"{{ "host::Counter": ({i}) }}"#))

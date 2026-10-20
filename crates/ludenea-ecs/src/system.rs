@@ -157,11 +157,21 @@ macro_rules! function_system {
                 info(self.name(), world, &[$($param::declare as Declare),*])
             }
 
-            #[allow(non_snake_case, unused_variables)]
+            #[allow(
+                non_snake_case,
+                unused_variables,
+                reason = "parameters are bound under their type's name, and only the \
+                          zero-parameter expansion leaves `world` unread, so neither lint fires \
+                          in every expansion and `expect` would go unfulfilled"
+            )]
             fn run(&mut self, world: &World) {
                 // Calling through a generic function pins each argument to `$param`'s
                 // item type, which the compiler cannot infer through `&mut F` alone.
-                #[allow(clippy::too_many_arguments)]
+                #[allow(
+                    clippy::too_many_arguments,
+                    reason = "one argument per system parameter; only the largest arity exceeds \
+                              the limit, so `expect` would go unfulfilled in the others"
+                )]
                 fn call<$($param),*>(mut function: impl FnMut($($param),*), $($param: $param),*) {
                     function($($param),*);
                 }

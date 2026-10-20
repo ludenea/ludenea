@@ -801,7 +801,10 @@ mod tests {
 
     /// The watcher thread holds the dropped flag until it exits.
     #[test]
-    #[allow(clippy::disallowed_methods)]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test bounds a wait with wall-clock time"
+    )]
     fn the_watcher_stops_soon_after_its_watch_is_dropped() {
         let dir = tempfile::TempDir::new().unwrap();
         fs::write(

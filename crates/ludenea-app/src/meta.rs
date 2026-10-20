@@ -218,7 +218,10 @@ mod tests {
 
     /// An empty meta left on disk long ago is not waited for at every listing.
     #[test]
-    #[allow(clippy::disallowed_methods)]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test bounds a wait with wall-clock time"
+    )]
     fn only_a_recently_created_empty_meta_may_still_be_written() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("main.scene.ron.meta");

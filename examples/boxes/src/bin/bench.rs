@@ -9,7 +9,10 @@ const WARMUP_TICKS: u32 = 120;
 const MEASURED_TICKS: u32 = 600;
 const SNAPSHOTS: u32 = 100;
 
-#[allow(clippy::disallowed_methods)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the benchmark measures wall-clock time, outside the simulation"
+)]
 fn millis_per_iteration(iterations: u32, mut work: impl FnMut()) -> f64 {
     let start = Instant::now();
     for _ in 0..iterations {

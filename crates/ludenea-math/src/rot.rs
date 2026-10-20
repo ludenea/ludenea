@@ -47,7 +47,10 @@ impl Rot {
     }
 
     /// `self * other`
-    #[allow(clippy::should_implement_trait)]
+    #[expect(
+        clippy::should_implement_trait,
+        reason = "composition is a named method beside `inv_mul`, not the `*` operator"
+    )]
     pub fn mul(self, other: Rot) -> Rot {
         Rot {
             cos: self.cos * other.cos - self.sin * other.sin,

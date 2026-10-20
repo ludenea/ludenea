@@ -289,8 +289,14 @@ struct Recorder {
 }
 
 impl ScheduleObserver for Recorder {
-    // Measuring time is outside the simulation: it never feeds back into it.
-    #[allow(clippy::disallowed_methods)]
+    // Only native builds read the clock, so only they expect the lint.
+    #[cfg_attr(
+        not(target_family = "wasm"),
+        expect(
+            clippy::disallowed_methods,
+            reason = "profiling measures wall-clock time, which never feeds back into the simulation"
+        )
+    )]
     fn before_system(&mut self, _: usize) {
         #[cfg(not(target_family = "wasm"))]
         {

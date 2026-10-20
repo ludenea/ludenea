@@ -33,9 +33,8 @@ impl Pacer {
     }
 
     /// Sets the speed multiplier, clamped to `[0.1, 8.0]`.
-    #[allow(clippy::disallowed_methods)]
     pub fn set_speed(&mut self, speed: f32) {
-        self.speed = speed.clamp(0.1, 8.0);
+        self.speed = ludenea_math::clamp(speed, 0.1, 8.0);
     }
 
     /// The ticks due after `elapsed_seconds` more time, at most `MAX_TICKS_PER_FRAME` times

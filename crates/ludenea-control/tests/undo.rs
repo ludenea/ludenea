@@ -488,10 +488,15 @@ fn branch_hashes(session: &mut Session, sim: &mut Simulation, id: BranchId) -> V
 
 /// The undo entry milestone 2b wrote before branches had their own entries.
 #[derive(Serialize)]
-#[allow(dead_code)]
 enum UndoEntryV2 {
-    Scene { before: String, after: String },
-    Run { edit: TimedEdit },
+    #[expect(dead_code, reason = "kept so `Run` encodes with its version 2 index")]
+    Scene {
+        before: String,
+        after: String,
+    },
+    Run {
+        edit: TimedEdit,
+    },
 }
 
 fn undo_history_v2(undo: Vec<UndoEntryV2>) -> Vec<u8> {

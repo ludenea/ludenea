@@ -644,7 +644,10 @@ mod version_1 {
 
     #[derive(Serialize)]
     pub enum Edit {
-        #[allow(dead_code)]
+        #[expect(
+            dead_code,
+            reason = "kept so the later variants encode with their version 1 indices"
+        )]
         Spawn {
             components: Vec<(String, Vec<u8>)>,
         },

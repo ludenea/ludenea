@@ -86,8 +86,10 @@ pub fn cos(angle: f32) -> f32 {
 }
 
 /// Box2D v3 polynomial `atan2`; `atan2(0, 0) == 0`.
-// Constants are kept as published by Box2D.
-#[allow(clippy::excessive_precision)]
+#[expect(
+    clippy::excessive_precision,
+    reason = "the constants are kept exactly as Box2D publishes them"
+)]
 pub fn atan2(y: f32, x: f32) -> f32 {
     let (ax, ay) = (x.abs(), y.abs());
     let a = min(ay, ax) / (max(ay, ax) + f32::MIN_POSITIVE);
@@ -147,7 +149,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::disallowed_methods)]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the platform `f64` functions are the reference the approximation is measured against"
+    )]
     fn sin_cos_error_is_below_two_thousandths() {
         let mut worst = 0.0f64;
         for i in 0..100_000 {
@@ -160,7 +165,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::disallowed_methods)]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the platform `f64` functions are the reference the approximation is measured against"
+    )]
     fn atan2_error_is_below_one_ten_thousandth_radian() {
         let mut worst = 0.0f64;
         for magnitude in [0.01f32, 1.0, 1000.0] {

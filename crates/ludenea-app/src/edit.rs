@@ -229,7 +229,10 @@ pub mod version_1 {
 
     #[derive(Deserialize)]
     pub struct EditLog {
-        #[allow(dead_code)]
+        #[expect(
+            dead_code,
+            reason = "decoded to match the layout; `EditLog::decode` reads the version first"
+        )]
         version: u32,
         edits: Vec<TimedEdit>,
     }
