@@ -445,6 +445,48 @@ describe("assets", () => {
       expect(screen.getByRole("alert").textContent).toContain(`${SCENE} was deleted on disk`);
     });
 
+    it("a_scene_removed_on_disk_whose_session_cannot_be_stored_keeps_its_banner_and_says_why", async () => {
+      const { host, disk } = await browser();
+      await openScene();
+      disk.files = [entries[1]!];
+      disk.storeError = "permission denied";
+      act(() => host.project.push({ type: "files_changed", changes: [{ Removed: { path: SCENE, kind: "Scene" } }] }));
+      await settle();
+
+      expect(host.editor.console.list().map(({ level, text }) => [level, text])).toContainEqual(["warning", `Cannot store the session of ${SCENE}, deleted on disk: permission denied`]);
+      expect(screen.getByRole("alert").textContent).toContain(`${SCENE} was deleted on disk`);
+      expect(host.editor.document.getState().current).toEqual({ id: SCENE_ID, kind: "scene", path: SCENE });
+    });
+
+    it("closing_a_scene_removed_on_disk_whose_session_cannot_be_stored_keeps_it_open", async () => {
+      const { host, disk } = await browser();
+      await openScene();
+      disk.files = [entries[1]!];
+      act(() => host.project.push({ type: "files_changed", changes: [{ Removed: { path: SCENE, kind: "Scene" } }] }));
+      await settle();
+      disk.storeError = "permission denied";
+
+      fireEvent.click(within(screen.getByRole("alert")).getByRole("button", { name: "Close" }));
+      await settle();
+
+      expect(host.editor.document.getState().current).toEqual({ id: SCENE_ID, kind: "scene", path: SCENE });
+      expect(screen.getByText(`${SCENE} stays open: its session cannot be stored: permission denied`)).toBeTruthy();
+      expect(screen.getByRole("alert").textContent).toContain(`${SCENE} was deleted on disk`);
+    });
+
+    it("the_banner_of_a_scene_removed_on_disk_goes_once_another_document_is_open", async () => {
+      const { host, disk } = await browser();
+      await openScene();
+      disk.files = [entries[1]!];
+      act(() => host.project.push({ type: "files_changed", changes: [{ Removed: { path: SCENE, kind: "Scene" } }] }));
+      await settle();
+      expect(screen.getByRole("alert").textContent).toContain(`${SCENE} was deleted on disk`);
+
+      act(() => host.editor.document.setState({ current: { id: "0000000000000000000000000000001b", kind: "scene", path: LEVEL } }));
+
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
     it("closing_a_scene_removed_on_disk_stores_its_session_first", async () => {
       const { host, disk } = await browser();
       await openScene();
