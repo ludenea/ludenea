@@ -166,10 +166,15 @@ mod tests {
             doc,
             "      # - run: cargo doc --locked --no-deps --workspace\n",
         );
-        let test = "      - run: cargo test --locked --workspace\n";
+        let host_clippy =
+            "      - run: cargo clippy --locked --workspace --all-targets -- -D warnings\n";
         let elsewhere = workflow
             .replace(doc, "")
-            .replace(test, &format!("{doc}{test}"));
+            .replace(host_clippy, &format!("{host_clippy}{doc}"));
+        assert!(
+            elsewhere.contains(doc),
+            "the native job has no host clippy step"
+        );
         let flags_in_a_comment = workflow.replace(
             "      RUSTDOCFLAGS: -D warnings\n",
             "      # RUSTDOCFLAGS: -D warnings\n",
