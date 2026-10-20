@@ -50,7 +50,11 @@ impl Asset for Prefab {
                     )
                 })?;
                 (codec.decode)(bytes).map_err(|reason| {
-                    format!("entity {address:?}: component `{name}` does not decode: {reason}")
+                    format!(
+                        "entity {address:?}: component `{name}` does not decode: {reason}; the \
+                         component likely changed since the prefab was saved: save it again \
+                         with this build, or load it into the game that made it"
+                    )
                 })?;
             }
         }

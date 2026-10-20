@@ -737,7 +737,9 @@ fn inserting_a_prefab_asset_this_world_cannot_spawn_is_refused() {
                 entities: vec![entity(&[0], &[(Health::NAME, trailing)])],
             },
             format!(
-                "entity [0]: component `{}` does not decode: 1 unexpected trailing bytes",
+                "entity [0]: component `{}` does not decode: 1 unexpected trailing bytes; \
+                 the component likely changed since the prefab was saved: save it again with \
+                 this build, or load it into the game that made it",
                 Health::NAME
             ),
         ),
