@@ -33,7 +33,7 @@ use crate::branches::{BranchId, BranchInfo, BranchTree, BranchesError, Segment, 
 use crate::checkpoints::{CHECKPOINT_BUDGET, Checkpoints};
 use crate::subscriptions::Introspection;
 use crate::undo::{
-    ForkCause, ROOT_FORKED, UndoEntry, UndoError, UndoHistory, not_within, removed_by_run, unfit,
+    ForkCause, ROOT_FORKED, UndoEntry, UndoHistory, not_within, removed_by_run, unfit,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -51,8 +51,6 @@ pub enum SessionError {
     NothingToUndo,
     #[error("there is nothing to redo")]
     NothingToRedo,
-    #[error(transparent)]
-    Undo(#[from] UndoError),
     #[error(transparent)]
     Edit(#[from] EditError),
     /// The message leaves the entity out: callers name it in their context.

@@ -239,6 +239,8 @@ API.
   with `SessionError::BranchesDecode`, "the branch tree cannot be decoded", though nothing
   was decoded, and an undo of a fork entry naming the root with
   `SessionError::NoSuchBranch`, "there is no branch 0".
+- Removed: `SessionError::Undo`, which nothing returns since `Session::resume` drops an
+  undo history that does not decode with a warning. `UndoError` stays, in those warnings.
 
 ### Control protocol
 

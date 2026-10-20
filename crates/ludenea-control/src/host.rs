@@ -1549,8 +1549,7 @@ fn session_error(error: &SessionError) -> ProtocolError {
         SessionError::Panicked(_) => ErrorCode::SystemPanicked,
         SessionError::NothingToUndo => ErrorCode::NothingToUndo,
         SessionError::NothingToRedo => ErrorCode::NothingToRedo,
-        SessionError::Undo(_)
-        | SessionError::BranchesDecode(_)
+        SessionError::BranchesDecode(_)
         | SessionError::Unfit { .. }
         | SessionError::CannotFork { .. }
         | SessionError::NoSuchBranch(_)
