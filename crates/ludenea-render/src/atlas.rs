@@ -24,7 +24,7 @@ pub struct TextureSource<'a> {
 }
 
 /// The packed pages, where each frame `(texture, frame)` lies in them, and the textures that
-/// could not be packed.
+/// could not be packed, sorted by identifier.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Atlas {
     pub pages: Vec<AtlasPage>,
@@ -97,6 +97,34 @@ pub enum TextureError {
         path: Option<String>,
         reason: String,
     },
+    /// Another source has the same identifier, so a sprite naming it could mean either: none
+    /// of them is packed.
+    #[error(
+        "{}: another texture has the same identifier, so none of them is packed; give each its own meta",
+        named(*id, path)
+    )]
+    Duplicate { id: AssetId, path: Option<String> },
+}
+
+impl TextureError {
+    /// The identifier of the refused texture.
+    pub fn id(&self) -> AssetId {
+        self.source().0
+    }
+
+    /// The project path of the refused texture, when known.
+    pub fn path(&self) -> Option<&str> {
+        self.source().1.as_deref()
+    }
+
+    fn source(&self) -> (AssetId, &Option<String>) {
+        let (Self::Decode { id, path, .. }
+        | Self::Grid { id, path, .. }
+        | Self::TooLarge { id, path, .. }
+        | Self::Meta { id, path, .. }
+        | Self::Duplicate { id, path }) = self;
+        (*id, path)
+    }
 }
 
 /// "texture `<id>` (`<path>`)", or without the path when it is not known.
@@ -136,21 +164,32 @@ struct Frame<'a> {
 /// packs the frames by shelves, tallest first then by `(id, frame)`, into pages of at most
 /// `max_page` pixels a side, opening a new page when one is full.
 ///
-/// A texture that cannot be decoded, cut, or fitted is left out and its error is kept in
-/// `Atlas::errors`; the others still pack. When every source is refused there is nothing to
-/// upload, and the errors are returned alone.
-pub fn pack(sources: &[TextureSource<'_>], max_page: u32) -> Result<Atlas, Vec<TextureError>> {
+/// A texture that cannot be decoded, cut, or fitted, and every texture sharing its identifier
+/// with another source, is left out and its error is kept in `Atlas::errors`, sorted by
+/// identifier; the others still pack. When every source is refused the atlas has no page.
+pub fn pack(sources: &[TextureSource<'_>], max_page: u32) -> Atlas {
+    let mut counts: BTreeMap<AssetId, usize> = BTreeMap::new();
+    for source in sources {
+        *counts.entry(source.id).or_default() += 1;
+    }
     let mut errors = Vec::new();
     let mut textures = Vec::new();
     for source in sources {
-        match prepare(source, max_page) {
+        let prepared = if counts[&source.id] > 1 {
+            Err(TextureError::Duplicate {
+                id: source.id,
+                path: source.path.map(str::to_string),
+            })
+        } else {
+            prepare(source, max_page)
+        };
+        match prepared {
             Ok(texture) => textures.push((source.id, texture)),
             Err(error) => errors.push(error),
         }
     }
-    if textures.is_empty() && !errors.is_empty() {
-        return Err(errors);
-    }
+    // The message names the path and the reason, so the order holds whatever the input order.
+    errors.sort_by_cached_key(|error| (error.id(), error.to_string()));
 
     let mut frames: Vec<Frame<'_>> = textures
         .iter()
@@ -199,11 +238,11 @@ pub fn pack(sources: &[TextureSource<'_>], max_page: u32) -> Result<Atlas, Vec<T
         blit_extruded(&mut pages[frame.region.page as usize], frame);
         regions.insert((frame.id, frame.index), frame.region);
     }
-    Ok(Atlas {
+    Atlas {
         pages,
         regions,
         errors,
-    })
+    }
 }
 
 /// Validates, decodes, and cuts one source.

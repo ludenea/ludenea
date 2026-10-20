@@ -542,18 +542,13 @@ fn draw(
             meta,
         })
         .collect();
-    let (atlas, errors) = match pack(&sources, renderer.max_page_side()) {
-        Ok(atlas) => (Some(atlas), Vec::new()),
-        Err(errors) => (None, errors),
-    };
-    for error in atlas.iter().flat_map(|atlas| &atlas.errors).chain(&errors) {
+    let atlas = pack(&sources, renderer.max_page_side());
+    for error in &atlas.errors {
         say(out, format_args!("warning: {error}"))?;
     }
-    if let Some(atlas) = &atlas {
-        renderer
-            .set_atlas(atlas)
-            .map_err(|error| error.to_string())?;
-    }
+    renderer
+        .set_atlas(&atlas)
+        .map_err(|error| error.to_string())?;
     renderer
         .render_rgba(size, frames, overlay)
         .map_err(|error| error.to_string())

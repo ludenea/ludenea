@@ -63,7 +63,7 @@ fn upload(renderer: &mut Renderer, png: &[u8], meta: &TextureMeta) -> Atlas {
         png,
         meta,
     }];
-    let atlas = pack(&sources, renderer.max_page_side()).unwrap();
+    let atlas = pack(&sources, renderer.max_page_side());
     assert!(atlas.errors.is_empty(), "{:?}", atlas.errors);
     renderer.set_atlas(&atlas).unwrap();
     atlas

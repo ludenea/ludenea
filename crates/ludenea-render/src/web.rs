@@ -10,7 +10,7 @@ use wasm_bindgen::prelude::*;
 use web_sys::HtmlCanvasElement;
 use web_sys::js_sys::Uint8Array;
 
-use crate::atlas::{self, Atlas, TextureError, TextureSource};
+use crate::atlas::{self, TextureError, TextureSource};
 use crate::gpu::{Frames, Overlay, RenderError, Renderer, Size};
 
 /// One texture of `set_textures`, whose PNG comes in a separate array.
@@ -31,13 +31,9 @@ struct Refused {
 
 impl From<&TextureError> for Refused {
     fn from(error: &TextureError) -> Self {
-        let (TextureError::Decode { id, path, .. }
-        | TextureError::Grid { id, path, .. }
-        | TextureError::TooLarge { id, path, .. }
-        | TextureError::Meta { id, path, .. }) = error;
         Refused {
-            id: *id,
-            path: path.clone(),
+            id: error.id(),
+            path: error.path().map(str::to_string),
             message: error.to_string(),
         }
     }
@@ -180,13 +176,7 @@ impl WebRenderer {
                 meta: &source.meta,
             })
             .collect();
-        // When every texture is refused, none is left to draw.
-        let atlas =
-            atlas::pack(&sources, self.renderer.max_page_side()).unwrap_or_else(|errors| Atlas {
-                pages: Vec::new(),
-                regions: Default::default(),
-                errors,
-            });
+        let atlas = atlas::pack(&sources, self.renderer.max_page_side());
         self.renderer.set_atlas(&atlas).map_err(failure)?;
         let refused: Vec<Refused> = atlas.errors.iter().map(Refused::from).collect();
         serde_json::to_string(&refused).map_err(failure)

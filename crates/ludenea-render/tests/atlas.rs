@@ -68,7 +68,7 @@ fn assert_frame(atlas: &Atlas, region: Region, left: u32, top: u32, tag: u8) {
 fn single_image_is_one_frame() {
     let image = png(3, 5, 7);
     let meta = TextureMeta::default();
-    let atlas = pack(&[source(1, &image, &meta)], PAGE).unwrap();
+    let atlas = pack(&[source(1, &image, &meta)], PAGE);
 
     assert_eq!(atlas.regions.len(), 1);
     assert!(atlas.errors.is_empty());
@@ -93,7 +93,7 @@ fn grid_cuts_frames_row_major() {
         filter: Filter::Linear,
         ..grid(2, 1, 0, 0)
     };
-    let atlas = pack(&[source(1, &image, &meta)], PAGE).unwrap();
+    let atlas = pack(&[source(1, &image, &meta)], PAGE);
 
     assert_eq!(atlas.regions.len(), 4);
     for (frame, (left, top)) in [(0, 0), (2, 0), (0, 1), (2, 1)].into_iter().enumerate() {
@@ -111,7 +111,7 @@ fn margins_and_spacing_are_honoured() {
     // margin 1, two 2x2 frames 1 pixel apart: 1 + 2 + 1 + 2 + 1 = 7 wide, 1 + 2 + 1 = 4 high.
     let image = png(7, 4, 9);
     let meta = grid(2, 2, 1, 1);
-    let atlas = pack(&[source(1, &image, &meta)], PAGE).unwrap();
+    let atlas = pack(&[source(1, &image, &meta)], PAGE);
 
     assert_eq!(atlas.regions.len(), 2);
     assert_frame(&atlas, region(&atlas, 1, 0), 1, 1, 9);
@@ -122,7 +122,7 @@ fn margins_and_spacing_are_honoured() {
 fn frames_are_extruded_by_one_pixel() {
     let image = png(2, 2, 5);
     let meta = TextureMeta::default();
-    let atlas = pack(&[source(1, &image, &meta)], PAGE).unwrap();
+    let atlas = pack(&[source(1, &image, &meta)], PAGE);
     let region = region(&atlas, 1, 0);
     let page = &atlas.pages[region.page as usize];
     assert!(region.x >= 1 && region.y >= 1, "room for the extrusion");
@@ -154,11 +154,10 @@ fn packing_is_reproducible_byte_for_byte() {
     ];
     let reordered = [sources[2], sources[0], sources[1]];
 
-    let first = pack(&sources, 12).unwrap();
-    let second = pack(&reordered, 12).unwrap();
+    let first = pack(&sources, 12);
+    let second = pack(&reordered, 12);
 
-    assert_eq!(first.regions, second.regions);
-    assert_eq!(first.pages, second.pages);
+    assert_eq!(first, second);
     assert!(first.pages.len() > 1, "the small page splits the frames");
 }
 
@@ -167,7 +166,7 @@ fn full_page_opens_a_second_page() {
     // Six 4x4 frames, 6x6 once extruded: a 12x12 page holds four of them.
     let image = png(12, 8, 4);
     let meta = grid(4, 4, 0, 0);
-    let atlas = pack(&[source(1, &image, &meta)], 12).unwrap();
+    let atlas = pack(&[source(1, &image, &meta)], 12);
 
     assert_eq!(atlas.pages.len(), 2);
     for page in &atlas.pages {
@@ -188,7 +187,7 @@ fn texture_larger_than_a_page_is_too_large() {
     let large = png(11, 4, 1);
     let fits = png(10, 10, 2);
     let meta = TextureMeta::default();
-    let atlas = pack(&[source(1, &large, &meta), source(2, &fits, &meta)], 12).unwrap();
+    let atlas = pack(&[source(1, &large, &meta), source(2, &fits, &meta)], 12);
 
     assert_eq!(
         atlas.errors,
@@ -224,8 +223,7 @@ fn truncated_png_is_refused_and_others_still_pack() {
             unnamed,
         ],
         PAGE,
-    )
-    .unwrap();
+    );
 
     assert_eq!(atlas.regions.len(), 1);
     assert_frame(&atlas, region(&atlas, 1, 0), 0, 0, 1);
@@ -259,8 +257,7 @@ fn grid_larger_than_image_is_refused_naming_sizes() {
     let atlas = pack(
         &[source(1, &image, &meta), source(2, &other, &single)],
         PAGE,
-    )
-    .unwrap();
+    );
 
     assert_eq!(
         atlas.errors,
@@ -283,7 +280,7 @@ fn partial_last_frame_is_refused() {
     // 2x2 frames 1 pixel apart cut 5 pixels into two whole frames; 6 leaves a partial third.
     let image = png(6, 2, 1);
     let meta = grid(2, 2, 0, 1);
-    let error = pack(&[source(1, &image, &meta)], PAGE).unwrap_err();
+    let error = pack(&[source(1, &image, &meta)], PAGE).errors;
 
     assert_eq!(
         error,
@@ -303,7 +300,7 @@ fn invalid_meta_is_refused_naming_the_field() {
         pixels_per_unit: 0,
         ..TextureMeta::default()
     };
-    let error = pack(&[source(1, &image, &meta)], PAGE).unwrap_err();
+    let error = pack(&[source(1, &image, &meta)], PAGE).errors;
 
     assert_eq!(
         error,
@@ -317,8 +314,69 @@ fn invalid_meta_is_refused_naming_the_field() {
 }
 
 #[test]
+fn textures_sharing_an_identifier_are_all_refused() {
+    let image = png(2, 2, 1);
+    let other = png(2, 2, 2);
+    let meta = TextureMeta::default();
+    let first = TextureSource {
+        path: Some("art/b.png"),
+        ..source(1, &image, &meta)
+    };
+    let second = TextureSource {
+        path: Some("art/a.png"),
+        ..source(1, &image, &meta)
+    };
+    let atlas = pack(&[first, source(2, &other, &meta), second], PAGE);
+
+    let duplicate = |path: &str| TextureError::Duplicate {
+        id: AssetId(1),
+        path: Some(path.to_string()),
+    };
+    assert_eq!(atlas.errors, [duplicate("art/a.png"), duplicate("art/b.png")]);
+    let message = atlas.errors[0].to_string();
+    for part in [&AssetId(1).to_string(), "art/a.png", "identifier"] {
+        assert!(message.contains(part), "{message} names {part}");
+    }
+    assert_eq!(
+        atlas.regions.keys().copied().collect::<Vec<_>>(),
+        [(AssetId(2), 0)]
+    );
+}
+
+#[test]
+fn refused_textures_are_sorted_by_identifier() {
+    let image = png(2, 2, 1);
+    let broken = b"not a png".to_vec();
+    let meta = TextureMeta::default();
+    let sources = [
+        source(3, &broken, &meta),
+        source(1, &image, &meta),
+        source(2, &broken, &meta),
+    ];
+    let reordered = [sources[2], sources[1], sources[0]];
+
+    let atlas = pack(&sources, PAGE);
+    let ids: Vec<AssetId> = atlas.errors.iter().map(TextureError::id).collect();
+    assert_eq!(ids, [AssetId(2), AssetId(3)]);
+    assert_eq!(atlas, pack(&reordered, PAGE));
+}
+
+#[test]
+fn every_texture_refused_leaves_an_empty_atlas_with_the_errors() {
+    let broken = b"not a png".to_vec();
+    let meta = TextureMeta::default();
+    let atlas = pack(&[source(1, &broken, &meta)], PAGE);
+    assert!(atlas.pages.is_empty() && atlas.regions.is_empty());
+    assert!(
+        matches!(atlas.errors[..], [TextureError::Decode { .. }]),
+        "{:?}",
+        atlas.errors
+    );
+}
+
+#[test]
 fn no_sources_pack_into_an_empty_atlas() {
-    let atlas = pack(&[], PAGE).unwrap();
+    let atlas = pack(&[], PAGE);
     assert!(atlas.pages.is_empty() && atlas.regions.is_empty() && atlas.errors.is_empty());
 }
 
@@ -344,7 +402,7 @@ fn grayscale_and_palette_pngs_decode_to_rgba() {
         Some(vec![1, 2, 3, 4, 5, 6]),
     );
     let meta = TextureMeta::default();
-    let atlas = pack(&[source(1, &gray, &meta), source(2, &indexed, &meta)], PAGE).unwrap();
+    let atlas = pack(&[source(1, &gray, &meta), source(2, &indexed, &meta)], PAGE);
 
     let colors = |id| {
         let region = region(&atlas, id, 0);
@@ -362,11 +420,11 @@ fn grayscale_and_palette_pngs_decode_to_rgba() {
 fn huge_spacing_and_margin_with_one_frame_do_not_panic() {
     let image = png(4, 4, 6);
     let spacing = grid(4, 4, 0, u32::MAX);
-    let atlas = pack(&[source(1, &image, &spacing)], PAGE).unwrap();
+    let atlas = pack(&[source(1, &image, &spacing)], PAGE);
     assert_frame(&atlas, region(&atlas, 1, 0), 0, 0, 6);
 
     let margin = grid(4, 4, u32::MAX, 0);
-    let error = pack(&[source(1, &image, &margin)], PAGE).unwrap_err();
+    let error = pack(&[source(1, &image, &margin)], PAGE).errors;
     assert!(
         matches!(error[..], [TextureError::Grid { .. }]),
         "{error:?}"
@@ -406,7 +464,7 @@ fn png_declaring_huge_dimensions_is_refused_without_allocating() {
     bytes.extend(chunk(b"IEND", &[]));
 
     let meta = TextureMeta::default();
-    let error = pack(&[source(1, &bytes, &meta)], PAGE).unwrap_err();
+    let error = pack(&[source(1, &bytes, &meta)], PAGE).errors;
     match &error[..] {
         [TextureError::Decode { id, reason, .. }] => {
             assert_eq!(*id, AssetId(1));
