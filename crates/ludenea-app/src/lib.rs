@@ -10,6 +10,7 @@ pub mod meta;
 pub mod panic;
 pub mod parallel;
 pub mod path;
+pub mod pose;
 pub mod prefab;
 pub mod raw_input;
 pub mod replay;

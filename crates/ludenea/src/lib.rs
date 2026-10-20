@@ -26,6 +26,7 @@ macro_rules! worker_entry {
 }
 
 pub mod prelude {
+    pub use crate::app::pose::Pose;
     pub use crate::app::{
         App, Edit, EditLog, Input, InputLog, Inputs, Plugin, RawInput, Rng, Sim, Simulation, Time,
         TimedEdit,
@@ -38,7 +39,7 @@ pub mod prelude {
     pub use crate::math::{Aabb, Rot, Transform, Vec2};
     pub use crate::physics::{
         Body, BodyKind, Capsule, Circle, Collider, Collision, CollisionKind, PhysicsPlugin,
-        PhysicsSettings, Polygon, Pose, RayHit, Shape, overlap_aabb, raycast,
+        PhysicsSettings, Polygon, RayHit, Shape, overlap_aabb, raycast,
     };
     pub use crate::schema::Schema;
 }

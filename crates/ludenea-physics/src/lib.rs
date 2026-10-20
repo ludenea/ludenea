@@ -15,10 +15,11 @@ pub mod step;
 pub use broad_phase::{Proxy, find_pairs};
 pub use components::{
     Body, BodyKind, Collider, MAX_CONTACT_DAMPING_RATIO, MAX_DENSITY, MAX_FRICTION, MAX_GRAVITY,
-    MAX_GRAVITY_SCALE, MAX_RESTITUTION, MAX_SUBSTEPS, MIN_MASS, PhysicsSettings, Pose, PoseError,
+    MAX_GRAVITY_SCALE, MAX_RESTITUTION, MAX_SUBSTEPS, MIN_MASS, PhysicsSettings,
 };
 pub use contacts::{CachedContact, CachedPoint, ContactCache};
 pub use events::{Collision, CollisionKind};
+pub use ludenea_app::pose::{Pose, PoseError};
 pub use manifold::{Manifold, ManifoldPoint, collide};
 pub use mass::{MassData, mass_data};
 pub use plugin::{PhysicsPlugin, Step};

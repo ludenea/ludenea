@@ -1,11 +1,12 @@
 use ludenea_app::{App, Plugin, Sim};
 use ludenea_ecs::{IntoSystemConfig, SystemLabel};
 
-use crate::components::{Body, Collider, PhysicsSettings, Pose};
+use crate::components::{Body, Collider, PhysicsSettings};
 use crate::contacts::ContactCache;
 use crate::editor::{DEBUG_LAYERS, draw, pick};
 use crate::events::Collision;
 use crate::step::physics_step;
+use ludenea_app::pose::Pose;
 
 /// Rigid body physics: registers the physics components and resources and runs one
 /// physics step per tick in the `Step` set.

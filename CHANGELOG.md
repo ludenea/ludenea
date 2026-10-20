@@ -40,6 +40,10 @@ hash, those of the golden trace and replays included.
 
 ### Rust API
 
+- `Pose` and `PoseError` move from `ludenea-physics` to `ludenea_app::pose`, so an entity
+  without a body can be placed and drawn. `ludenea_physics::Pose` and the prelude still
+  export them, with the same stable name `ludenea::Pose`, serde shape, validation and
+  messages. Registering `Pose` from two plugins is a no-op the second time.
 - `ludenea_app::scene::SCENE_VERSION` is public, like the other format versions.
 - `ludenea_control::PROTOCOL_FINGERPRINT` and
   `ludenea_project::protocol::PROJECT_PROTOCOL_FINGERPRINT` hold the wire shape of each

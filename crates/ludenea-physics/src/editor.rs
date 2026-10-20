@@ -6,11 +6,12 @@ use ludenea_debug_draw::{Color, DebugDrawFrame, Primitive};
 use ludenea_ecs::{Entity, Query, World};
 use ludenea_math::{Aabb, Transform, Vec2};
 
-use crate::components::{Body, BodyKind, Collider, Pose};
+use crate::components::{Body, BodyKind, Collider};
 use crate::contacts::ContactCache;
 use crate::queries::{overlap_aabb, shape_contains};
 use crate::shape::Shape;
 use crate::step::SPECULATIVE_DISTANCE;
+use ludenea_app::pose::Pose;
 
 const COLLIDERS: &str = "physics.colliders";
 /// Contacts of the pairs the last step found touching, at the current poses: after an edit
