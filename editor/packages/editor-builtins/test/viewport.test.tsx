@@ -453,6 +453,23 @@ describe("viewport", () => {
     expect(host.editor.console.list().map(({ text }) => text)).toEqual([reported, reported]);
   });
 
+  it("a_refused_pick_is_reported_in_the_editor_console", async () => {
+    const { host, view } = await viewport((command) => (command.type === "pick" ? { error: { code: "system_panicked", message: "the game panicked while picking" } } : undefined));
+    const reported = ["error", "Picking an entity in the viewport failed: the game panicked while picking"];
+    // A click: reported once, not again on release.
+    fireEvent.pointerDown(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    fireEvent.pointerUp(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    await settle();
+    expect(host.editor.console.list().map(({ level, text }) => [level, text])).toEqual([reported]);
+    // A drag: the same.
+    fireEvent.pointerDown(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    fireEvent.pointerMove(view, { buttons: 1, clientX: 300, clientY: 150, pointerId: 1 });
+    fireEvent.pointerUp(view, { button: 0, clientX: 300, clientY: 150, pointerId: 1 });
+    await settle();
+    expect(host.editor.console.list().map(({ level, text }) => [level, text])).toEqual([reported, reported]);
+    expect(host.editor.selection.getState().entities).toEqual([]);
+  });
+
   it("a_failing_overlay_is_reported_once_per_registration", async () => {
     const { host } = await viewport();
     const broken = {

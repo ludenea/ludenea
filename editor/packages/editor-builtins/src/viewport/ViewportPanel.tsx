@@ -224,20 +224,22 @@ export function ViewportPanel({ editor, state, failedOverlays }: { editor: Edito
       released.last = local(event);
       const control = editor.control;
       const { selection } = editor;
+      // A failed pick was reported on press: the release reports only its own failure.
+      const reportedOnPress = () => {};
       if (!released.moved) {
         released.picked.then((entities) => {
           const hit = entities[0];
           if (!released.shift) selection.getState().select(hit ? [hit] : []);
           else if (hit) selection.getState().add(hit);
-        }, report("Picking an entity in the viewport"));
+        }, reportedOnPress);
         return;
       }
       // A drag moves the selection it started on by the same offset, as one edit on release.
       const offset = dragOffset(released);
       released.picked
-        .then(() => {
-          if (released.target && control) return moveBy(editor, control, dragged(released.target), offset, state);
-        })
+        .then(async () => {
+          if (released.target && control) await moveBy(editor, control, dragged(released.target), offset, state);
+        }, reportedOnPress)
         .catch(report("Moving the dragged entities in the viewport"));
     };
 
