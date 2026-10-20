@@ -502,6 +502,9 @@ hash, those of the golden trace and replays included.
   components), the document's stored session is set aside with a warning, and the restore
   resolves to null. It failed with the game's refusal, and the next store overwrote the
   stored session with the unsaved edits it held.
+- `Assets.reload` and `Assets.keepMine` take a `ChangedBanner`, and `Assets.close` a
+  `RemovedBanner`, the two kinds of `Banner`: they took any banner, so `close` could close a
+  document whose file was only changed on disk.
 
 ### Formats
 

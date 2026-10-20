@@ -11,7 +11,11 @@ export type Action = { kind: "rename" | "move" | "delete"; path: string };
  * text) or a data asset; or the open document's file was deleted on disk (`removed`), while
  * the document stays open with its session.
  */
-export type Banner = { path: string; text: string } | { path: string; asset: AssetId } | { path: string; removed: true };
+export type Banner = ChangedBanner | RemovedBanner;
+/** A file changed on disk while the editor held unsaved edits of it: reload it or keep the editor's version. */
+export type ChangedBanner = { path: string; text: string } | { path: string; asset: AssetId };
+/** The open document's file was deleted on disk: save it again or close it. */
+export type RemovedBanner = { path: string; removed: true };
 
 /** A file kind without its data type: what the browser shows and filters by. */
 export type KindName = "Scene" | "Prefab" | "Data" | "Replay" | "Trace" | "Snapshot" | "Other";
@@ -54,11 +58,11 @@ export interface Assets {
   move(path: string, folder: string): Promise<void>;
   remove(path: string): Promise<void>;
   /** Takes the disk's version of the file `banner` names. */
-  reload(banner: Banner): Promise<void>;
+  reload(banner: ChangedBanner): Promise<void>;
   /** Keeps the editor's version of the file `banner` names. */
-  keepMine(banner: Banner): void;
+  keepMine(banner: ChangedBanner): void;
   /** Closes the open document whose file `banner` says was deleted on disk, once its session is stored. */
-  close(banner: Banner): Promise<void>;
+  close(banner: RemovedBanner): Promise<void>;
 }
 
 const changedPath = (change: FileChange) => ("Changed" in change ? change.Changed.path : "Created" in change ? change.Created.path : null);
