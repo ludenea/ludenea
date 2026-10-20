@@ -1449,3 +1449,32 @@ fn a_redo_of_an_edit_before_its_branch_forks_is_dropped() {
         Err(SessionError::NothingToRedo)
     ));
 }
+
+#[test]
+fn a_refused_take_over_while_resimulating_keeps_the_tick_to_return_to() {
+    let tree = StoredTree {
+        current: ROOT,
+        next: u32::MAX,
+        branches: vec![tree_branch(0, None, 0)],
+    };
+    let (mut sim, export) = exported_with_tree(tree);
+    let mut session = resume(&mut sim, export);
+    resimulate_all(&mut session, &mut sim);
+    session.seek(&mut sim, 40).unwrap();
+    // Resimulation shows tick 0, then returns to tick 40 once it gets there.
+    let scene = session.scene().to_string();
+    session
+        .replace_scene(&mut sim, scene, AssetTexts::new())
+        .unwrap();
+    session.resimulate(&mut sim, 10).unwrap();
+    assert_eq!(session.timeline().current, 0);
+
+    let result = session.step(&mut sim, Some(&live_spawn()));
+
+    assert!(
+        matches!(result, Err(SessionError::CannotFork { tick: 0, .. })),
+        "{result:?}"
+    );
+    resimulate_all(&mut session, &mut sim);
+    assert_eq!(session.timeline().current, 40);
+}

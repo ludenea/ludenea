@@ -625,16 +625,17 @@ impl Session {
         {
             return Err(SessionError::Resimulating { up_to });
         }
-        self.return_to = None;
+        let return_to = self.return_to.take();
         let recorded = self.inputs.tick(tick).map(<[u8]>::to_vec);
         let take_over = live.filter(|live| recorded.as_deref() != Some(*live));
         self.run_tick(sim, take_over.or(recorded.as_deref()))?;
         if let Some(live) = take_over {
             let before = self.tree.current();
             if let Err(error) = self.fork_or_discard_after(tick) {
-                // The take-over is refused. The error to report is the fork's, wherever
-                // coming back ends.
+                // The take-over is refused, and a resimulation still returns where it was
+                // to. The error to report is the fork's, wherever coming back ends.
                 let _ = self.come_back(sim, tick);
+                self.return_to = return_to;
                 return Err(error);
             }
             self.record_input(sim, tick, live.to_vec());
