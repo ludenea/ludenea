@@ -242,6 +242,78 @@ describe("decorations and columns", () => {
     expect(devtools).not.toHaveBeenCalled();
   });
 
+  it("a_decoration_registered_again_renders_without_its_mark", async () => {
+    const host = await testEditor(builtinPlugins);
+    const game = await testGame(
+      (command) => (command.type === "get_entity" ? { type: "entity", entity, components: { "ludenea::Collider": { type: "json", value: collider } } } : { type: "done" }),
+      { components: [{ name: "ludenea::Collider", schema: schemas.collider }] },
+    );
+    act(() => host.setControl(game.client));
+    act(() => host.editor.selection.getState().select([entity]));
+    renderPanel(host, "ludenea.inspector");
+    await settle();
+    let loaded = false;
+    const decoration = {
+      id: "test.prefab",
+      render: ({ path }: { path: unknown[] }) => {
+        if (!loaded) throw new Error("the prefab state is not loaded");
+        return path.length === 0 ? <span aria-label="prefab state">loaded</span> : null;
+      },
+    };
+    let registration!: { dispose(): void };
+    act(() => void (registration = host.editor.inspectors.decorate(decoration)));
+    const failure = 'The "test.prefab" decoration of plugin "editor" failed: the prefab state is not loaded';
+    const section = () => within(screen.getByRole("region", { name: "ludenea::Collider" }));
+    expect(section().getAllByRole("button", { name: failure })).toHaveLength(8);
+
+    // Its plugin reloads with the state it lacked: the new registration starts unmarked.
+    loaded = true;
+    act(() => {
+      registration.dispose();
+      host.editor.inspectors.decorate({ ...decoration });
+    });
+
+    expect(section().queryByRole("button", { name: failure })).toBeNull();
+    expect(section().getByLabelText("prefab state").textContent).toBe("loaded");
+  });
+
+  it("an_explorer_column_registered_again_reads_its_cells_without_their_mark", async () => {
+    const host = await testEditor(builtinPlugins);
+    const game = await testGame((command) =>
+      command.type === "query_entities" ? { type: "entities", total: 2, rows: [0, 1].map((index) => ({ entity: { index, generation: 0 }, hash: "0000000000000000" })) } : { type: "done" },
+    );
+    act(() => host.setControl(game.client));
+    renderPanel(host, "ludenea.explorer");
+    await settle();
+    let loaded = false;
+    const prefab: ExplorerColumn = {
+      id: "test.prefab",
+      title: "Prefab",
+      width: 80,
+      value(entity) {
+        if (entity.index === 1 && !loaded) throw new Error("the prefab list is not loaded");
+        return "ball";
+      },
+    };
+    let registration!: { dispose(): void };
+    act(() => void (registration = host.editor.explorer.columns.register(prefab)));
+    await settle();
+    const failure = 'The "Prefab" explorer column of plugin "editor" failed: the prefab list is not loaded';
+    const rows = () => screen.getAllByRole("option");
+    expect(within(rows()[1]!).getByRole("img", { name: failure })).toBeTruthy();
+
+    // Without a subscription to say it changed, a new registration is what reads it again.
+    loaded = true;
+    act(() => {
+      registration.dispose();
+      host.editor.explorer.columns.register({ ...prefab });
+    });
+    await settle();
+
+    expect(within(rows()[1]!).getByText("ball")).toBeTruthy();
+    expect(within(rows()[1]!).queryByRole("img")).toBeNull();
+  });
+
   it("an_explorer_column_whose_subscription_throws_costs_only_that_subscription", async () => {
     const devtools = vi.spyOn(console, "error");
     const listeners = new Set<() => void>();
