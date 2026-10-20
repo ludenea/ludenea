@@ -3,7 +3,7 @@
 pub use ludenea_app as app;
 pub use ludenea_cli as cli;
 pub use ludenea_control as control;
-pub use ludenea_debug_draw as debug_draw;
+pub use ludenea_draw as draw;
 pub use ludenea_ecs as ecs;
 pub use ludenea_math as math;
 pub use ludenea_physics as physics;

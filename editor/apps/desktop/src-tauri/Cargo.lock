@@ -2271,7 +2271,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 name = "ludenea-app"
 version = "0.1.0"
 dependencies = [
- "ludenea-debug-draw",
+ "ludenea-draw",
  "ludenea-ecs",
  "ludenea-math",
  "postcard",
@@ -2290,7 +2290,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
  "ludenea-app",
- "ludenea-debug-draw",
+ "ludenea-draw",
  "ludenea-ecs",
  "ludenea-math",
  "postcard",
@@ -2298,15 +2298,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "ludenea-debug-draw"
-version = "0.1.0"
-dependencies = [
- "ludenea-ecs",
- "ludenea-math",
- "serde",
 ]
 
 [[package]]
@@ -2318,6 +2309,15 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tokio",
+]
+
+[[package]]
+name = "ludenea-draw"
+version = "0.1.0"
+dependencies = [
+ "ludenea-ecs",
+ "ludenea-math",
+ "serde",
 ]
 
 [[package]]

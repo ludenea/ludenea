@@ -7,7 +7,7 @@
 //! `wasm-game <package> <out-dir>` builds a game library for the browser and writes its
 //! JavaScript glue (`game.js`) and module (`game_bg.wasm`) to `<out-dir>`.
 //!
-//! `wasm-renderer <out-dir>` builds the viewport renderer (`ludenea-debug-draw` with its
+//! `wasm-renderer <out-dir>` builds the viewport renderer (`ludenea-draw` with its
 //! `render` feature) and writes `debug_draw.js`, `debug_draw.d.ts`, and `debug_draw_bg.wasm`.
 
 use std::error::Error;
@@ -31,7 +31,7 @@ const CHECKS: &[&str] = &[
     "doc --locked --no-deps --workspace",
     // The browser: the facade's entry, the Web Worker transport, and the viewport renderer.
     "clippy --locked --target wasm32-unknown-unknown -p ludenea -p ludenea-control -p boxes --lib -- -D warnings",
-    "clippy --locked --target wasm32-unknown-unknown -p ludenea-debug-draw --features render --lib -- -D warnings",
+    "clippy --locked --target wasm32-unknown-unknown -p ludenea-draw --features render --lib -- -D warnings",
     // WebAssembly outside the browser: the command line tool that verifies the goldens.
     "clippy --locked --target wasm32-wasip1 -p boxes --bins -- -D warnings",
 ];
@@ -82,7 +82,7 @@ fn wasm_game(package: &str, out_dir: &str) -> Result<(), Box<dyn Error>> {
 fn wasm_renderer(out_dir: &str) -> Result<(), Box<dyn Error>> {
     // `cargo rustc` makes the module without declaring a `cdylib` in the crate, which would
     // otherwise link a native library on every workspace build.
-    let package = "ludenea-debug-draw";
+    let package = "ludenea-draw";
     let module = build(
         package,
         &["rustc", "--features", "render", "--crate-type", "cdylib"],

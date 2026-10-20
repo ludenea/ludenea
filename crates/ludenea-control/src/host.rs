@@ -8,7 +8,7 @@ use ludenea_app::{
     Simulation, ValueKind, catch_panic,
 };
 
-use ludenea_debug_draw::DebugDrawFrame;
+use ludenea_draw::DebugDrawFrame;
 use ludenea_ecs::{AssetId, Entity, EntityFilter, FilterError, Snapshot};
 use serde_json::Value as JsonValue;
 

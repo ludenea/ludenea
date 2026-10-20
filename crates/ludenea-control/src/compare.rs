@@ -6,7 +6,7 @@
 use std::collections::BTreeSet;
 
 use ludenea_app::Simulation;
-use ludenea_debug_draw::DebugDrawFrame;
+use ludenea_draw::DebugDrawFrame;
 use ludenea_ecs::Snapshot;
 
 use crate::branches::BranchId;

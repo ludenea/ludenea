@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 /// `from_angle`, `integrate`, and `normalize` give `IDENTITY` for an input they cannot turn
 /// into a unit rotation; code that writes the fields directly keeps them unit length.
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize, Schema)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Rot {
     pub cos: f32,
     pub sin: f32,

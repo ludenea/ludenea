@@ -1,7 +1,8 @@
 use std::any::TypeId;
 use std::collections::{BTreeMap, BTreeSet};
 
-use ludenea_debug_draw::DebugDrawFrame;
+use ludenea_draw::DebugDrawFrame;
+use ludenea_draw::frame::{LayerInfo, RenderFrame};
 use ludenea_ecs::{AssetId, EcsError, Entity};
 use ludenea_math::Vec2;
 
@@ -196,13 +197,45 @@ impl Simulation {
 
     /// What every registered drawer draws for the requested layers.
     pub fn debug_draw(&self, layers: &BTreeSet<String>) -> Result<DebugDrawFrame, SimError> {
+        self.guarded(|| self.draw_debug(layers))
+    }
+
+    /// What a renderer draws at this tick: the render layers, what every extractor adds in
+    /// registration order, and the debug draw of `debug_layers`. Never changes the state.
+    pub fn render_frame(&self, debug_layers: &BTreeSet<String>) -> Result<RenderFrame, SimError> {
         self.guarded(|| {
-            let mut frame = DebugDrawFrame::default();
-            for draw in &self.hooks.drawers {
-                draw(&self.world, layers, &mut frame);
+            let mut frame = RenderFrame {
+                tick: self.tick(),
+                camera: None,
+                layers: self
+                    .hooks
+                    .render_layers
+                    .iter()
+                    .map(|&(name, parallax)| LayerInfo {
+                        name: name.to_string(),
+                        parallax,
+                    })
+                    .collect(),
+                sprites: Vec::new(),
+                tilemaps: Vec::new(),
+                teleported: Vec::new(),
+                debug: DebugDrawFrame::default(),
+                warnings: Vec::new(),
+            };
+            for extract in &self.hooks.extractors {
+                extract(&self.world, &mut frame);
             }
+            frame.debug = self.draw_debug(debug_layers);
             frame
         })
+    }
+
+    fn draw_debug(&self, layers: &BTreeSet<String>) -> DebugDrawFrame {
+        let mut frame = DebugDrawFrame::default();
+        for draw in &self.hooks.drawers {
+            draw(&self.world, layers, &mut frame);
+        }
+        frame
     }
 
     /// The entities under `point` according to every registered picker, ascending.

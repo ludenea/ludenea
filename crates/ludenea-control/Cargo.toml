@@ -5,13 +5,13 @@ edition.workspace = true
 
 [features]
 # TypeScript bindings of the protocol; off by default to keep simulation builds lean.
-ts = ["dep:ts-rs", "ludenea-app/ts", "ludenea-ecs/ts", "ludenea-debug-draw/ts", "ludenea-math/ts"]
+ts = ["dep:ts-rs", "ludenea-app/ts", "ludenea-ecs/ts", "ludenea-draw/ts", "ludenea-math/ts"]
 
 [dependencies]
 ts-rs = { workspace = true, optional = true }
 ludenea-app.workspace = true
 ludenea-ecs.workspace = true
-ludenea-debug-draw.workspace = true
+ludenea-draw.workspace = true
 ludenea-math.workspace = true
 base64.workspace = true
 serde.workspace = true

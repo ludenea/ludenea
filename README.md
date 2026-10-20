@@ -33,6 +33,7 @@ for any thread count. The guarantee rests on:
 | `crates/ludenea-macros`  | Derive macros                                   |
 | `crates/ludenea-app`     | Simulation loop, scenes, and input logs         |
 | `crates/ludenea-physics` | Rigid body physics                              |
+| `crates/ludenea-draw`    | Render frame and debug draw data, GPU free      |
 | `crates/ludenea-control` | Versioned control protocol and host             |
 | `crates/ludenea-cli`     | `run`, `verify`, and `diff` commands            |
 | `crates/ludenea`         | Facade crate re-exporting the engine            |

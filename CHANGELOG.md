@@ -40,6 +40,18 @@ hash, those of the golden trace and replays included.
 
 ### Rust API
 
+- Breaking: the `ludenea-debug-draw` crate is renamed `ludenea-draw`, and the facade's
+  `ludenea::debug_draw` is now `ludenea::draw`, with no alias. Its types keep their names.
+- `ludenea_draw::frame::RenderFrame` is what a renderer draws for one tick: the camera
+  view, the render layers in draw order, sprites, tilemaps, the entities teleported this
+  tick, the debug draw, and warnings. `Color` derives `Schema`, so components can hold it.
+- `App::render_layer(name, parallax)` declares a render layer, drawn in declaration order;
+  `build` refuses a name declared twice with the new `AppError::DuplicateLayer`.
+  `App::extractor` registers an `ExtractFn` that adds a world's content to the frame.
+- `Simulation::render_frame(debug_layers)` builds the frame of the current tick: its tick
+  and layers, then every extractor in registration order, then the debug draw of
+  `debug_layers`. A panic of an extractor comes back as `SimError::Panicked`, as a
+  drawer's does, and building the frame never changes the state.
 - `Pose` and `PoseError` move from `ludenea-physics` to `ludenea_app::pose`, so an entity
   without a body can be placed and drawn. `ludenea_physics::Pose` and the prelude still
   export them, with the same stable name `ludenea::Pose`, serde shape, validation and

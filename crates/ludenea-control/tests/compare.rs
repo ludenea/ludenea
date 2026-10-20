@@ -7,7 +7,7 @@ use ludenea::control::{
     BranchId, Bytes, Command, ConsoleLevel, Document, Event, FieldTarget, Hash64, Host,
     PathSegment, Reply, Timeline, Topic,
 };
-use ludenea::debug_draw::DebugDrawFrame;
+use ludenea::draw::DebugDrawFrame;
 use ludenea::ecs::{AssetId, Entity};
 use ludenea::prelude::{App, Sim};
 use serde_json::json;

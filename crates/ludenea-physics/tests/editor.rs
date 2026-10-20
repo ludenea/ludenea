@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use ludenea_app::{App, Simulation};
-use ludenea_debug_draw::Primitive;
+use ludenea_draw::Primitive;
 use ludenea_ecs::Entity;
 use ludenea_math::Vec2;
 use ludenea_physics::{Body, Circle, Collider, PhysicsPlugin, Polygon, Pose, Shape};

@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use ludenea_debug_draw::{Color, DebugDrawFrame, Primitive};
+use ludenea_draw::{Color, DebugDrawFrame, Primitive};
 use ludenea_ecs::{Entity, Query, World};
 use ludenea_math::{Aabb, Transform, Vec2};
 

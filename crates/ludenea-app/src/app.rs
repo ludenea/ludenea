@@ -1,7 +1,8 @@
 use std::any::{TypeId, type_name};
 use std::collections::BTreeSet;
 
-use ludenea_debug_draw::DebugDrawFrame;
+use ludenea_draw::DebugDrawFrame;
+use ludenea_draw::frame::RenderFrame;
 use ludenea_ecs::{
     Asset, BuildError, Component, EcsError, Event, IntoSystemConfig, Prefab, Resource,
     ScheduleBuilder, World, check_not_recursive,
@@ -17,11 +18,16 @@ use crate::{Parallel, RawInput, Rng, SceneError, Simulation, Time};
 pub type DebugDrawFn = fn(&World, &BTreeSet<String>, &mut DebugDrawFrame);
 /// The entities under a world point.
 pub type PickFn = fn(&World, Vec2) -> Vec<Entity>;
+/// Adds what a world draws to a render frame, such as its sprites or its camera.
+pub type ExtractFn = fn(&World, &mut RenderFrame);
 
-/// The editor hooks an app registered, handed to its `Simulation`.
+/// The editor and render hooks an app registered, handed to its `Simulation`.
 #[derive(Default)]
 pub(crate) struct EditorHooks {
     pub(crate) layers: BTreeSet<&'static str>,
+    /// Render layers and their parallax, in draw order.
+    pub(crate) render_layers: Vec<(&'static str, f32)>,
+    pub(crate) extractors: Vec<ExtractFn>,
     pub(crate) drawers: Vec<DebugDrawFn>,
     pub(crate) pickers: Vec<PickFn>,
     pub(crate) mapping: Option<RawMapping>,
@@ -51,6 +57,8 @@ pub enum AppError {
     Ecs(#[from] EcsError),
     #[error("app schedule is invalid: {0}")]
     Build(#[from] BuildError),
+    #[error("the render layer `{0}` is declared twice; give each layer its own name")]
+    DuplicateLayer(String),
     #[error(
         "the input mapping builds `{mapping}` but the app's input type is {input}; map the type given to `App::input`"
     )]
@@ -189,6 +197,19 @@ impl App {
         self
     }
 
+    /// Declares a render layer; layers draw in declaration order. `parallax` 1.0 moves with
+    /// the world, 0.0 is fixed to the screen. `build` refuses a name declared twice.
+    pub fn render_layer(&mut self, name: &'static str, parallax: f32) -> &mut Self {
+        self.hooks.render_layers.push((name, parallax));
+        self
+    }
+
+    /// Registers an extractor, run by `Simulation::render_frame` in registration order.
+    pub fn extractor(&mut self, extract: ExtractFn) -> &mut Self {
+        self.hooks.extractors.push(extract);
+        self
+    }
+
     /// Registers a picker that finds the entities under a world point.
     pub fn picker(&mut self, pick: PickFn) -> &mut Self {
         self.hooks.pickers.push(pick);
@@ -209,6 +230,15 @@ impl App {
     pub fn build(mut self) -> Result<Simulation, AppError> {
         if let Some(error) = self.errors.into_iter().next() {
             return Err(error.into());
+        }
+        let mut declared = BTreeSet::new();
+        if let Some((name, _)) = self
+            .hooks
+            .render_layers
+            .iter()
+            .find(|(name, _)| !declared.insert(*name))
+        {
+            return Err(AppError::DuplicateLayer(name.to_string()));
         }
         if let Some(mapping) = &self.hooks.mapping
             && self.input.as_ref().map(|input| input.id) != Some(mapping.id)

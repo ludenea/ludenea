@@ -5,7 +5,7 @@ use base64::engine::general_purpose::STANDARD;
 use ludenea_app::RawInput;
 use ludenea_app::prefab::InstanceInfo;
 use ludenea_app::trace::TraceComparison;
-use ludenea_debug_draw::DebugDrawFrame;
+use ludenea_draw::DebugDrawFrame;
 use ludenea_ecs::hash::hex_u64;
 use ludenea_ecs::schema::TypeSchema;
 use ludenea_ecs::{AssetId, Difference, Entity, HashTree};
