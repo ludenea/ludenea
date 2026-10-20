@@ -42,8 +42,10 @@ export function decodeStoredSession(bytes: string): StoredSession {
   }
   if (!isObject(value)) return { unreadable: "it is not a JSON object" };
   let saved: unknown;
-  if (!("version" in value)) saved = fromVersion0(value);
-  else if (value.version === STORED_SESSION_VERSION) saved = value.saved;
+  if (!("version" in value)) {
+    if (value.unsavedAssets !== undefined && !isTexts(value.unsavedAssets)) return { unreadable: "its unsavedAssets is not a list of asset identifiers" };
+    saved = fromVersion0(value);
+  } else if (value.version === STORED_SESSION_VERSION) saved = value.saved;
   else return { unreadable: `it has version ${JSON.stringify(value.version)}, and this editor reads version ${STORED_SESSION_VERSION} and the unversioned form before it` };
   const fault = faultOf(saved);
   return fault === null ? { saved: saved as SavedSession } : { unreadable: fault };
@@ -61,14 +63,14 @@ function fromVersion0({ unsavedAssets, ...saved }: Record<string, unknown>): unk
   if (!isObject(saved.load)) return saved;
   const load = { ...saved.load };
   if (!("saved_assets" in load)) {
-    const unsaved = Array.isArray(unsavedAssets) ? unsavedAssets : [];
-    load.saved_assets = unsaved.map((id: unknown) => [id, ""]);
+    load.saved_assets = (isTexts(unsavedAssets) ? unsavedAssets : []).map((id) => [id, ""]);
   }
   if (load.document === "Prefab" && isText(saved.document)) load.document = { Prefab: { id: saved.document } };
   return { ...saved, load };
 }
 
 const isText = (value: unknown) => typeof value === "string";
+const isTexts = (value: unknown): value is string[] => Array.isArray(value) && value.every(isText);
 const isPairs = (value: unknown) => Array.isArray(value) && value.every((pair) => Array.isArray(pair) && pair.length === 2 && isText(pair[0]) && isText(pair[1]));
 
 /**
@@ -83,7 +85,7 @@ const FIELDS: [path: string, valid: (value: unknown) => boolean, what: string][]
   ["load.scene", isText, "a text"],
   ["load.saved_scene", (value) => value === null || isText(value), "a text or null"],
   ["load.inputs", isText, "base64 bytes"],
-  ["load.expected", (value) => Array.isArray(value) && value.every(isText), "a list of hashes"],
+  ["load.expected", isTexts, "a list of hashes"],
   ["load.assets", isPairs, "a list of [asset, text] pairs"],
   ["load.saved_assets", isPairs, "a list of [asset, text] pairs"],
   ["load.keeps_assets", (value) => typeof value === "boolean", "true or false"],

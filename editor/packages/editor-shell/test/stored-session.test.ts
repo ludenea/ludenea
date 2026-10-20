@@ -28,6 +28,14 @@ describe("stored sessions", () => {
     });
   });
 
+  it("an_unversioned_stored_session_with_unsaved_assets_that_are_not_identifiers_names_them", () => {
+    const { saved_assets: _, ...load } = saved("(main)").load;
+    const read = (unsavedAssets: unknown) => decodeStoredSession(storedBytes({ load, tick: 0, document: null, unsavedAssets }));
+
+    expect(read([1])).toEqual({ unreadable: "its unsavedAssets is not a list of asset identifiers" });
+    expect(read("a")).toEqual({ unreadable: "its unsavedAssets is not a list of asset identifiers" });
+  });
+
   it("an_unreadable_stored_session_says_what_is_wrong", () => {
     const valid = saved("(main)");
     const read = (value: unknown) => decodeStoredSession(storedBytes(value));
