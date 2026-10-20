@@ -49,9 +49,11 @@ cargo test --locked --workspace
 ```
 
 On a divergence, the golden tests write the snapshots of the first divergent tick and the
-one before it into the folder `LUDENEA_DUMP_DIR` names, else into the temporary directory.
-CI sets it to `dump/` and uploads the dumps of a failing run as artifacts, one per
-operating system, target, and thread count.
+one before it into a folder per golden and thread count, such as `boxes-golden-2-threads`,
+under the folder `LUDENEA_DUMP_DIR` names, else under the temporary directory. Give it an
+absolute path: cargo runs the tests from `examples/boxes`, so a relative one resolves there.
+CI sets it to `dump/` in the checkout and uploads the dumps of a failing run as artifacts,
+one per operating system, target, and thread count.
 
 Run the lint checks CI runs: formatting (the engine and the desktop backend), clippy on the
 host and on WebAssembly, and the API documentation, with warnings denied:
