@@ -47,7 +47,9 @@ hash, those of the golden trace and replays included.
   entities teleported this tick, the debug draw, and warnings. `Color` derives `Schema`, so
   components can hold it.
 - `App::render_layer(name, parallax)` declares a render layer, drawn in declaration order;
-  `build` refuses a name declared twice with the new `AppError::DuplicateLayer`.
+  `build` refuses a name declared twice with the new `AppError::DuplicateLayer`, and a
+  parallax that is NaN or infinite with the new `AppError::NonFiniteParallax`, naming the
+  layer and the value.
   `App::extractor` registers an `ExtractFn` that adds a world's content to the frame.
 - `Simulation::render_frame(debug_layers)` builds the frame of the current tick: its tick
   and layers, then every extractor in registration order, then the debug draw of
@@ -61,36 +63,50 @@ hash, those of the golden trace and replays included.
   components, all in the state hash: `Sprite` (texture, frame, layer, order, flips, tint),
   `SpriteAnimation` (a clip of a `SpriteSheet` from a tick, looping or holding its last
   frame), `Camera2d` (centred on the entity's `Pose`, `view` the minimum visible area),
-  `Tilemap` and `Teleported`, plus the `SpriteSheet` data asset of named `Clip`s.
+  `Tilemap` and `Teleported`, plus the `SpriteSheet` data asset of named `Clip`s. The
+  prelude exports `Sprite`, `SpriteAnimation`, `SpriteSheet`, `Clip`, `Camera2d`,
+  `Tilemap`, `Teleported` and `RenderPlugin`.
   `RenderPlugin` registers them with `Pose`, the `animate` system (set `render::Animate`,
   after `physics::Step` when the app has it), which writes each animated sprite's texture
   and frame every tick (a system switching clips orders itself `.before(Animate)` to show
   the new clip in the same tick), and the extractor that
   fills the render frame: the camera of the lowest entity, sprites and tilemaps sorted by
-  layer, order and entity, the entities teleported on the frame's tick, and a warning
-  naming the entity for a second camera, a missing `Pose`, an undeclared layer, or a clip
-  the sheet lacks. Loading refuses a camera view or a tilemap cell size that is not finite
+  layer, order and entity, the entities teleported on the frame's tick (added to those
+  earlier extractors listed, sorted by entity without duplicates), and a warning naming
+  the entity for a second camera, a sprite, tilemap or camera without a `Pose`, an
+  animation without a `Sprite`, an undeclared layer, or a clip the sheet lacks. Loading refuses a camera view or a tilemap cell size that is not finite
   and above 0, a tilemap whose tile count is not `width * height`, and a clip whose `count`
   or `ticks_per_frame` is 0. The crate depends on no GPU crate.
 - `ludenea-render` also draws. `atlas::pack` decodes PNG textures, cuts each into frames by
   its `TextureMeta`, and packs the frames, extruded by 1 pixel, into reproducible
-  `AtlasPage`s; a texture that does not decode, fit its grid, or fit a page is left out
-  with a `TextureError` naming it and the numbers, and the others still pack.
+  `AtlasPage`s. It always returns an `Atlas`: a texture that does not decode, fit its
+  grid, or fit a page, and every texture sharing its identifier with another
+  (`TextureError::Duplicate`), is left out with a `TextureError` naming it and the
+  numbers, kept in `Atlas::errors` sorted by identifier, and the others still pack.
+  `TextureError::id` and `TextureError::path` name the refused texture.
   `interpolate` blends two render frames for drawing between ticks (not teleported
   entities, nor a camera that changed entity). Behind feature `gpu`, the wgpu `Renderer`
   draws a frame's sprites, tilemaps, layers with parallax, camera and debug draw to a
-  target or offscreen (`render_rgba`), drawing a magenta placeholder for a missing texture
-  or frame, splitting atlases and batches below the device limits, and returning the
+  target (`draw`, returning a `DrawReport`) or offscreen (`render_rgba`, returning a
+  `Rendered` with the RGBA pixels and the `DrawReport`), drawing a magenta placeholder for
+  a missing texture or frame, which the report names, splitting atlases and batches below the device limits, and returning the
   device's errors and its loss as `RenderError` values; `gpu::headless` opens a device
   without a window. Behind feature `web`, the same renderer draws into a browser canvas
   with WebGPU or WebGL2.
 - The command line tool's new `render` draws a tick of a scene (with its `--inputs` and
   `--edits`) or of a `.replay` offscreen and writes it to a PNG: `--tick`, `--out`,
   `--width` and `--height` (1280 by 720 by default), and `--debug-layer` for each debug
-  draw layer to show. It prints the tick's state hash, which rendering never changes. The
-  project's textures (each `.png` with a texture meta, found by the new
+  draw layer to show. It prints the tick's state hash, which rendering never changes, and
+  for a replay a warning when that hash differs from the one the replay recorded. The
+  project's textures (each `.png` whose meta makes it a texture, found by the new
   `ludenea_cli::assets::project_textures`) are packed into the atlas; a texture that does
-  not pack is a warning and draws as placeholders. A tick past the end of a replay and an
+  not pack is a warning and draws as placeholders, and each sprite or tile drawn as a
+  placeholder is a warning naming the entity, the texture and the frame.
+- `Meta::texture(path)` is the one rule the editor listing and the command line share for
+  whether a file is a texture: a PNG (its extension in any case, see the new
+  `meta::is_png`) whose meta is a texture meta, or `Other` as metas written before
+  textures had settings are, which reads as the default texture meta. A texture meta on
+  any other file makes no texture. A tick past the end of a replay and an
   unknown debug layer are refused with exit code 2. It needs a GPU adapter, hardware or
   software, and is not in WebAssembly builds.
 - `ludenea_app::replay::play_tick` plays one tick of a replay `load_replay` loaded: its
