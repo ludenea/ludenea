@@ -369,8 +369,10 @@ hash, those of the golden trace and replays included.
   when a tick panics, instead of panicking again on every advance. A panic in the compare
   or divergence simulation, as while it restores a checkpoint, stops only the ghost or
   the report, as a panic in one of their ticks does. A report that failed tries again
-  only once the state changes, or on `get_divergence` or a new subscription, instead of
-  rebuilding its simulations and logging the failure on every advance. When the session cannot come back,
+  only once the runs it compares change (a command that changes the state, or a
+  resimulation), or on `get_divergence` or a new subscription, instead of rebuilding its
+  simulations and logging the failure on every advance; playing does not retry it. When the
+  session cannot come back,
   commands that change the state and `play` are refused with that error, and time stops,
   until `load_scene`, `load_session` or `load_replay` starts a new session, or a later
   panic brings it back. A session that comes back to tick 0 instead of its tick is consistent
