@@ -1567,14 +1567,17 @@ impl Session {
 
     /// Brings the session back after game code panicked anywhere in it, with its own
     /// bookkeeping left halfway: ends a resimulation as a failing tick ends it, then loads the
-    /// scene again and comes back to the current tick (see `reload`).
-    pub fn recover(&mut self, sim: &mut Simulation) -> Result<(), SessionError> {
+    /// scene again and comes back to the current tick (see `reload`). Returns why, when it
+    /// came back to a consistent tick but not that one (see `come_back`); an error leaves the
+    /// world and the session apart.
+    pub fn recover(&mut self, sim: &mut Simulation) -> Result<Option<SessionError>, SessionError> {
         // A panic that unwound through `come_back` left it set.
         self.coming_back = false;
         if let Some(tick) = self.end_resimulation() {
             self.current = tick;
         }
-        self.reload(sim)
+        self.load_into(sim)?;
+        Ok(self.come_back_to(sim, self.current)?.err())
     }
 
     fn resimulate_within(
@@ -2079,6 +2082,16 @@ impl Session {
     // ponytail: tick 0 rather than the latest checkpoint that restores; search back through
     // the checkpoints if landing far behind the failing one matters.
     fn come_back(&mut self, sim: &mut Simulation, tick: u64) -> Result<(), SessionError> {
+        self.come_back_to(sim, tick)?
+    }
+
+    /// `come_back`, telling apart a world that agrees with `current` again, with why it is
+    /// not at `tick` (the inner error), from one that does not (the outer error).
+    fn come_back_to(
+        &mut self,
+        sim: &mut Simulation,
+        tick: u64,
+    ) -> Result<Result<(), SessionError>, SessionError> {
         self.coming_back = true;
         let replayed = self.replay_to(sim, tick);
         let at_current = matches!(replayed, Err(SessionError::Panicked(_)))
@@ -2087,14 +2100,14 @@ impl Session {
         let error = match replayed {
             Ok(()) => {
                 self.current = tick;
-                return Ok(());
+                return Ok(Ok(()));
             }
-            Err(error) if at_current => return Err(error),
+            Err(error) if at_current => return Ok(Err(error)),
             Err(error) => error,
         };
         self.replay_to(sim, 0)?;
         self.current = 0;
-        Err(error)
+        Ok(Err(error))
     }
 
     /// Puts the world back to `state`, a snapshot of the current tick taken before the world

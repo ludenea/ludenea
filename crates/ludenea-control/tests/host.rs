@@ -1471,3 +1471,112 @@ fn a_game_whose_built_world_saves_but_does_not_load_is_refused() {
         "{message}"
     );
 }
+
+static TOUCHY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static TOUCHY_FRAGILE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static TOUCHY_BROKEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Writes itself, except once after `TOUCHY` is armed; loads unless `TOUCHY_FRAGILE` is on.
+#[derive(Component)]
+struct Touchy(u32);
+
+impl Serialize for Touchy {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let armed = TOUCHY.swap(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(!armed, "the touchy value broke");
+        serializer.serialize_newtype_struct("Touchy", &self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for Touchy {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Raw(u32);
+        let Raw(value) = Raw::deserialize(deserializer)?;
+        let fragile = TOUCHY_FRAGILE.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(!fragile, "the touchy value cannot load");
+        Ok(Touchy(value))
+    }
+}
+
+/// Panics on every tick while `TOUCHY_BROKEN` is on.
+fn touchy_tick(_touchy: Query<&Touchy>) {
+    let broken = TOUCHY_BROKEN.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(!broken, "the touchy tick broke");
+}
+
+fn touchy_host() -> Host {
+    let app = || {
+        let mut app = App::new();
+        app.component::<Touchy>().system(Sim, touchy_tick);
+        app
+    };
+    let mut host = Host::new(app).unwrap();
+    host.handle(touchy_load()).unwrap();
+    host
+}
+
+fn touchy_load() -> Command {
+    Command::LoadScene {
+        scene: r#"Scene(version: 1, resources: {}, entities: [{ "host::Touchy": (1) }])"#.into(),
+        assets: Vec::new(),
+        document: Document::Scene,
+    }
+}
+
+// The `Touchy` tests share its switches, so one test runs them in turn.
+#[test]
+fn a_session_that_comes_back_after_a_panic_takes_changes_again() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let step = Command::Step {
+        ticks: 1,
+        record_hashes: false,
+    };
+
+    // A recover that succeeds ends the refusals of an earlier one that failed.
+    let mut host = touchy_host();
+    TOUCHY_FRAGILE.store(true, SeqCst);
+    let error = host.handle(touchy_load()).unwrap_err();
+    TOUCHY_FRAGILE.store(false, SeqCst);
+    assert!(
+        error
+            .message
+            .contains("cannot come back to a consistent tick"),
+        "{}",
+        error.message
+    );
+    TOUCHY.store(true, SeqCst);
+    let error = host.handle(Command::TakeSnapshot).unwrap_err();
+    assert!(
+        error
+            .message
+            .starts_with("the game panicked at tick 0: the touchy value broke (")
+            && error.message.ends_with("; the session is back at tick 0"),
+        "{}",
+        error.message
+    );
+    host.handle(step.clone()).unwrap();
+    assert_eq!(host.tick(), 1);
+
+    // A session that falls back to tick 0 is consistent there.
+    let mut host = touchy_host();
+    for _ in 0..5 {
+        host.handle(step.clone()).unwrap();
+    }
+    TOUCHY_BROKEN.store(true, SeqCst);
+    TOUCHY.store(true, SeqCst);
+    let error = host.handle(Command::TakeSnapshot).unwrap_err();
+    TOUCHY_BROKEN.store(false, SeqCst);
+    assert!(
+        error
+            .message
+            .starts_with("the game panicked at tick 5: the touchy value broke (")
+            && error.message.contains("; the session is back at tick 0: ")
+            && error.message.contains("the touchy tick broke"),
+        "{}",
+        error.message
+    );
+    assert_eq!(host.tick(), 0);
+    host.handle(step).unwrap();
+    assert_eq!(host.tick(), 1);
+}

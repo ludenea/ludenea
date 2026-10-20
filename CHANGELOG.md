@@ -224,7 +224,9 @@ API.
   changes. `World::insert_asset` does both.
 - The new `Session::recover` brings a session back after game code panicked anywhere in
   it: it ends a resimulation the panic interrupted, as a tick that fails ends it, then
-  reloads to the current tick.
+  reloads to the current tick. It returns `Result<Option<SessionError>, SessionError>`:
+  `Ok(Some(why))` when it came back to a consistent tick other than the current one, such
+  as tick 0, and an error only when the world and the session no longer agree.
 - `record_replay`, `record_loaded_replay`, `play_replay` and `load_replay` return the new
   `ReplayError::Panicked { panic, snapshot }` when the game panics, with the snapshot of
   the state a panicking tick ran from, where the panic used to unwind through them.
@@ -356,7 +358,9 @@ API.
   or divergence simulation, as while it restores a checkpoint, stops only the ghost or
   the report, as a panic in one of their ticks does. When the session cannot come back,
   commands that change the state are refused with that error, and time stops, until
-  `load_scene`, `load_session` or `load_replay` starts a new session. A recorded edit whose
+  `load_scene`, `load_session` or `load_replay` starts a new session, or a later panic
+  brings it back. A session that comes back to tick 0 instead of its tick is consistent
+  there: the message says "the session is back at tick 0" and why. A recorded edit whose
   type now panics on its value is dropped while resimulating and reported with
   `edit_dropped`, as an edit that no longer applies is.
 - The `system_panicked` message and the console name the system and the source location,

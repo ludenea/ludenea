@@ -59,8 +59,8 @@ pub struct Host {
     /// Whether a requested report is not complete yet: it runs until it is.
     divergence_asked: bool,
     /// Why the session could not come back to a consistent tick after the game panicked:
-    /// until a new session loads, commands that change the state are refused with it and
-    /// time does not pass.
+    /// until a new session loads or a later recover succeeds, commands that change the
+    /// state are refused with it and time does not pass.
     inconsistent: Option<String>,
 }
 
@@ -235,17 +235,22 @@ impl Host {
     /// session ends a resimulation the panic interrupted and reloads to its current tick (see
     /// `Session::recover`). The compare and divergence simulations are built again on next
     /// use. Writes the error to the console, pauses with `Panicked`, and returns it. When the
-    /// session cannot come back, the host refuses to go on until a new session loads.
+    /// session cannot come back to a consistent tick, the host refuses to go on until a new
+    /// session loads or a later recover succeeds.
     fn recover(&mut self, mut panic: Box<GamePanic>) -> ProtocolError {
         panic.tick = self.simulation.tick();
         self.compare = None;
         self.ghost_reported = None;
         self.divergence = None;
         let message = match catch_panic(panic.tick, || self.session.recover(&mut self.simulation)) {
-            Ok(Ok(())) => format!(
-                "{panic}; the session is back at tick {}",
-                self.session.timeline().current
-            ),
+            Ok(Ok(why)) => {
+                self.inconsistent = None;
+                let current = self.session.timeline().current;
+                match why {
+                    None => format!("{panic}; the session is back at tick {current}"),
+                    Some(why) => format!("{panic}; the session is back at tick {current}: {why}"),
+                }
+            }
             Ok(Err(error)) => self.inconsistent_after(&panic, &error),
             Err(again) => self.inconsistent_after(&panic, &again),
         };
