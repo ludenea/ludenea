@@ -213,7 +213,8 @@ fn expand_schema(input: &DeriveInput) -> syn::Result<TokenStream2> {
     })
 }
 
-/// The generic types whose schema describes their items, as `ludenea_schema` implements it.
+/// The generic types whose schema describes their items, as `ludenea_schema` implements it
+/// (its generic `Schema` impls point back here; keep the two lists in step).
 /// A `Handle<T>` is not one: its schema names the asset type without describing it.
 const ITEM_CONTAINERS: [&str; 4] = ["Option", "Vec", "BTreeSet", "BTreeMap"];
 

@@ -226,6 +226,10 @@ primitive! {
     String => String, () => Unit,
 }
 
+// The generic types whose schema describes their items. `ITEM_CONTAINERS` in
+// `ludenea-macros` lists the named ones (arrays and tuples are matched by syntax), so the
+// derive refuses a type that names itself through them: a generic impl added here that
+// describes its items goes into that list too.
 impl<T: Schema> Schema for Option<T> {
     fn schema() -> TypeSchema {
         TypeSchema::Option {
