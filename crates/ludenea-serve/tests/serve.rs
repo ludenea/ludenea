@@ -76,6 +76,9 @@ fn serve_with(options: &[&str]) -> Server {
     let (lines, log) = mpsc::channel();
     std::thread::spawn(move || {
         for line in stderr.lines().map_while(Result::ok) {
+            // Captured with the test's output, so a failing test shows what the server said,
+            // a panic included.
+            eprintln!("{line}");
             if lines.send(line).is_err() {
                 break;
             }
