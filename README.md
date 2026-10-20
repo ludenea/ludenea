@@ -36,7 +36,7 @@ for any thread count. The guarantee rests on:
 | `crates/ludenea-draw`    | Render frame and debug draw data, GPU free      |
 | `crates/ludenea-render`  | Render components, extraction, wgpu renderer    |
 | `crates/ludenea-control` | Versioned control protocol and host             |
-| `crates/ludenea-cli`     | `run`, `verify`, and `diff` commands            |
+| `crates/ludenea-cli`     | `run`, `verify`, `diff`, and `render` commands  |
 | `crates/ludenea`         | Facade crate re-exporting the engine            |
 | `crates/ludenea-project` | Projects, builds, and plugin bundling           |
 | `crates/ludenea-serve`   | The `ludenea` tool: `new` and `serve`           |
@@ -111,6 +111,17 @@ Record it again after a deliberate change to the simulation (its hashes change w
 
 ```sh
 cargo run --locked --release -p boxes --bin record-replay -- golden/spawner.replay
+```
+
+Render a tick of a scene or replay to a PNG (1280 by 720 unless `--width` and `--height`
+say otherwise; repeat `--debug-layer` to draw debug layers over it). A scene runs with its
+`--inputs` and `--edits`; the textures are the project's PNGs with a texture meta, and one
+that cannot be packed is a warning, drawn as a magenta placeholder. Like the GPU tests, it
+needs a GPU adapter, hardware or software, and fails naming what was tried without one:
+
+```sh
+cargo run --locked --release -p boxes -- render golden/spawner.replay --tick 300 \
+  --out spawner.png --debug-layer physics.colliders
 ```
 
 Run the benchmark:

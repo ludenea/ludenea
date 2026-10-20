@@ -381,6 +381,18 @@ fn load(
     Ok((inputs, edits))
 }
 
+/// Plays tick `tick` of a replay that `load_replay` loaded into `sim`: applies the recorded
+/// edits of `tick`, then steps with its recorded input. Hashes are not compared. A panic of
+/// the game is `ReplayError::Panicked`.
+pub fn play_tick(
+    sim: &mut Simulation,
+    inputs: &InputLog,
+    edits: &EditLog,
+    tick: u64,
+) -> Result<(), ReplayError> {
+    guarded(sim, |sim| step(sim, inputs, edits, tick))
+}
+
 /// Applies the edits of `tick`, then steps with its inputs.
 fn step(
     sim: &mut Simulation,
@@ -437,7 +449,7 @@ fn simulate_to(
     to: u64,
 ) -> Result<(), ReplayError> {
     for tick in from..to {
-        step(sim, inputs, edits, tick)?;
+        play_tick(sim, inputs, edits, tick)?;
     }
     Ok(())
 }

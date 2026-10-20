@@ -1,0 +1,3 @@
+name = "render"
+engine = "0.1.0"
+default_scene = "scenes/main.scene.ron"

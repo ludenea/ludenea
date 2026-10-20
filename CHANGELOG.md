@@ -72,6 +72,29 @@ hash, those of the golden trace and replays included.
   the sheet lacks. Loading refuses a camera view or a tilemap cell size that is not finite
   and above 0, a tilemap whose tile count is not `width * height`, and a clip whose `count`
   or `ticks_per_frame` is 0. The crate depends on no GPU crate.
+- `ludenea-render` also draws. `atlas::pack` decodes PNG textures, cuts each into frames by
+  its `TextureMeta`, and packs the frames, extruded by 1 pixel, into reproducible
+  `AtlasPage`s; a texture that does not decode, fit its grid, or fit a page is left out
+  with a `TextureError` naming it and the numbers, and the others still pack.
+  `interpolate` blends two render frames for drawing between ticks (not teleported
+  entities, nor a camera that changed entity). Behind feature `gpu`, the wgpu `Renderer`
+  draws a frame's sprites, tilemaps, layers with parallax, camera and debug draw to a
+  target or offscreen (`render_rgba`), drawing a magenta placeholder for a missing texture
+  or frame, splitting atlases and batches below the device limits, and returning the
+  device's errors and its loss as `RenderError` values; `gpu::headless` opens a device
+  without a window. Behind feature `web`, the same renderer draws into a browser canvas
+  with WebGPU or WebGL2.
+- The command line tool's new `render` draws a tick of a scene (with its `--inputs` and
+  `--edits`) or of a `.replay` offscreen and writes it to a PNG: `--tick`, `--out`,
+  `--width` and `--height` (1280 by 720 by default), and `--debug-layer` for each debug
+  draw layer to show. It prints the tick's state hash, which rendering never changes. The
+  project's textures (each `.png` with a texture meta, found by the new
+  `ludenea_cli::assets::project_textures`) are packed into the atlas; a texture that does
+  not pack is a warning and draws as placeholders. A tick past the end of a replay and an
+  unknown debug layer are refused with exit code 2. It needs a GPU adapter, hardware or
+  software, and is not in WebAssembly builds.
+- `ludenea_app::replay::play_tick` plays one tick of a replay `load_replay` loaded: its
+  recorded edits, then its recorded input.
 - `IntoSystemConfig::after_if_present(label)` orders a system after a set like `after`,
   but ignores a label with no systems instead of refusing it with `BuildError::EmptyLabel`,
   so a plugin can order itself after another plugin's set that the app may not add.

@@ -193,6 +193,11 @@ fn send(client: &mut InProcess, command: Command) -> Result<Reply, String> {
     reply
 }
 
+fn is_replay(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension == "replay")
+}
+
 fn read(path: &Path) -> Result<Vec<u8>, String> {
     fs::read(path).map_err(|error| format!("cannot read {}: {error}", path.display()))
 }
@@ -297,11 +302,7 @@ pub fn verify(app: fn() -> App, args: &VerifyArgs, out: &mut dyn Write) -> Outco
         threads,
         dump_dir,
     } = args;
-    if files
-        .scene
-        .extension()
-        .is_some_and(|extension| extension == "replay")
-    {
+    if is_replay(&files.scene) {
         if inputs.is_some() || golden.is_some() || files.edits.is_some() || files.project.is_some()
         {
             return Err(
@@ -389,4 +390,185 @@ pub fn host(app: fn() -> App, _args: &HostArgs) -> Outcome {
     ludenea_control::stdio::serve_stdio(app, input, std::io::stdout())
         .map_err(|error| error.to_string())?;
     Ok(0)
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[derive(Args)]
+pub struct RenderArgs {
+    /// A scene, run from its load with `--inputs` and `--edits`, or a `.replay`, which renders
+    /// its own run; textures come from the project folder either way.
+    #[command(flatten)]
+    files: RunFiles,
+    #[arg(long)]
+    inputs: Option<PathBuf>,
+    /// The tick to draw; 0 is the scene as loaded.
+    #[arg(long)]
+    tick: u64,
+    /// The PNG to write.
+    #[arg(long)]
+    out: PathBuf,
+    #[arg(long, default_value_t = 1280, value_parser = clap::value_parser!(u32).range(1..))]
+    width: u32,
+    #[arg(long, default_value_t = 720, value_parser = clap::value_parser!(u32).range(1..))]
+    height: u32,
+    /// A debug draw layer to draw over the frame; repeat it for several.
+    #[arg(long = "debug-layer")]
+    debug_layers: Vec<String>,
+}
+
+/// Runs to `--tick`, draws the frames of that tick and the one before it at the later one
+/// (`alpha` 1, as a game shows a tick it just ran) offscreen, and writes the pixels as a
+/// PNG. Texture errors are warnings: what they leave out is drawn as placeholders.
+#[cfg(not(target_family = "wasm"))]
+pub fn render(app: fn() -> App, args: &RenderArgs, out: &mut dyn Write) -> Outcome {
+    use ludenea_app::replay::{load_replay, play_tick};
+    use ludenea_render::gpu::{Frames, Overlay, Size};
+
+    let RenderArgs {
+        files,
+        inputs,
+        tick,
+        out: path,
+        width,
+        height,
+        debug_layers,
+    } = args;
+    let mut sim = simulation(app, None)?;
+    let debug_layers = known_debug_layers(&sim, debug_layers)?;
+    let replay = if is_replay(&files.scene) {
+        if inputs.is_some() || files.edits.is_some() {
+            return Err(
+                "a replay holds its own inputs and edits; drop --inputs and --edits".into(),
+            );
+        }
+        Replay::decode(&read(&files.scene)?).map_err(|error| error.to_string())?
+    } else {
+        // ponytail: a scene runs twice, recorded then played as a replay, so both kinds of
+        // run render through one path; play the recording's edits directly if the cost shows.
+        Run::read(app, files, inputs.as_deref(), None)?
+            .record(*tick)
+            .map_err(|error| error.to_string())?
+    };
+    let last = (replay.hashes.len() as u64).saturating_sub(1);
+    if *tick > last {
+        return Err(format!(
+            "cannot render tick {tick}: the replay ends at tick {last}"
+        ));
+    }
+    let (recorded_inputs, recorded_edits) =
+        load_replay(&mut sim, &replay).map_err(|error| error.to_string())?;
+    let frame = |sim: &Simulation| {
+        sim.render_frame(&debug_layers)
+            .map_err(|error| format!("cannot extract the render frame: {error}"))
+    };
+    // Tick 0 has no tick before it: its frame is drawn alone.
+    let mut previous = None;
+    for at in 0..*tick {
+        if at + 1 == *tick {
+            previous = Some(frame(&sim)?);
+        }
+        play_tick(&mut sim, &recorded_inputs, &recorded_edits, at)
+            .map_err(|error| error.to_string())?;
+    }
+    let current = frame(&sim)?;
+    say(out, format_args!("tick {tick} hash {:016x}", sim.hash()))?;
+    for warning in &current.warnings {
+        say(out, format_args!("warning: {warning}"))?;
+    }
+    let textures = crate::assets::project_textures(&files.scene, files.project.as_deref())?;
+    let size = Size {
+        width: *width,
+        height: *height,
+    };
+    let frames = Frames {
+        previous: previous.as_ref(),
+        current: &current,
+        alpha: 1.0,
+    };
+    let overlay = Overlay {
+        debug_layers,
+        ..Overlay::default()
+    };
+    let pixels = draw(&textures, size, frames, &overlay, out)?;
+    write(path, &encode_png(size, &pixels)?)?;
+    say(out, format_args!("wrote {}", path.display()))?;
+    Ok(0)
+}
+
+/// `names` as a set, each one a debug draw layer of the game.
+#[cfg(not(target_family = "wasm"))]
+fn known_debug_layers(
+    sim: &Simulation,
+    names: &[String],
+) -> Result<std::collections::BTreeSet<String>, String> {
+    let known = sim.debug_layers();
+    if let Some(unknown) = names.iter().find(|name| !known.contains(&name.as_str())) {
+        let known = match known.is_empty() {
+            true => "this game has none".to_string(),
+            false => format!("its layers: {}", known.join(", ")),
+        };
+        return Err(format!("no debug draw layer `{unknown}`; {known}"));
+    }
+    Ok(names.iter().cloned().collect())
+}
+
+/// Draws `frames` on a headless device with `textures` packed into its atlas, warning about
+/// each texture left out, and reads the pixels back.
+#[cfg(not(target_family = "wasm"))]
+fn draw(
+    textures: &[(
+        ludenea_ecs::AssetId,
+        String,
+        Vec<u8>,
+        ludenea_app::meta::TextureMeta,
+    )],
+    size: ludenea_render::gpu::Size,
+    frames: ludenea_render::gpu::Frames<'_>,
+    overlay: &ludenea_render::gpu::Overlay,
+    out: &mut dyn Write,
+) -> Result<Vec<u8>, String> {
+    use ludenea_render::atlas::{TextureSource, pack};
+    use ludenea_render::gpu::{Renderer, headless};
+
+    let (device, queue) = pollster::block_on(headless()).map_err(|error| error.to_string())?;
+    // `render_rgba` draws in RGBA whatever the format; this one is for `draw`, unused here.
+    let mut renderer = Renderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm);
+    let sources: Vec<TextureSource<'_>> = textures
+        .iter()
+        .map(|(id, path, png, meta)| TextureSource {
+            id: *id,
+            path: Some(path),
+            png,
+            meta,
+        })
+        .collect();
+    let (atlas, errors) = match pack(&sources, renderer.max_page_side()) {
+        Ok(atlas) => (Some(atlas), Vec::new()),
+        Err(errors) => (None, errors),
+    };
+    for error in atlas.iter().flat_map(|atlas| &atlas.errors).chain(&errors) {
+        say(out, format_args!("warning: {error}"))?;
+    }
+    if let Some(atlas) = &atlas {
+        renderer
+            .set_atlas(atlas)
+            .map_err(|error| error.to_string())?;
+    }
+    renderer
+        .render_rgba(size, frames, overlay)
+        .map_err(|error| error.to_string())
+}
+
+/// Tightly packed RGBA rows, top row first, as an 8-bit RGBA PNG.
+#[cfg(not(target_family = "wasm"))]
+fn encode_png(size: ludenea_render::gpu::Size, rgba: &[u8]) -> Result<Vec<u8>, String> {
+    let fail = |error: png::EncodingError| format!("cannot encode the PNG: {error}");
+    let mut bytes = Vec::new();
+    let mut encoder = png::Encoder::new(&mut bytes, size.width, size.height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().map_err(fail)?;
+    writer.write_image_data(rgba).map_err(fail)?;
+    writer.finish().map_err(fail)?;
+    Ok(bytes)
 }

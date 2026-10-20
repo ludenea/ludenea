@@ -1618,9 +1618,13 @@ dependencies = [
  "ludenea-app",
  "ludenea-control",
  "ludenea-ecs",
+ "ludenea-render",
+ "png",
+ "pollster",
  "serde",
  "serde_json",
  "tempfile",
+ "wgpu",
  "xxhash-rust",
 ]
 

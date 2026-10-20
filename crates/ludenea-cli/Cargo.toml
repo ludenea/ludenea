@@ -7,9 +7,18 @@ edition.workspace = true
 clap.workspace = true
 ludenea-app.workspace = true
 ludenea-control.workspace = true
+ludenea-ecs.workspace = true
+
+# `render` draws offscreen with the wgpu renderer, which WebAssembly builds of a game leave out.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+ludenea-render = { workspace = true, features = ["gpu"] }
+png.workspace = true
+pollster.workspace = true
+wgpu.workspace = true
 
 [dev-dependencies]
-ludenea-ecs.workspace = true
+ludenea-render.workspace = true
+png.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
