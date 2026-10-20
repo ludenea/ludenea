@@ -814,3 +814,155 @@ fn a_recorded_edit_whose_value_now_panics_is_dropped_while_resimulating() {
     );
     assert_eq!(timeline(&mut fresh).simulated, 5);
 }
+
+/// An asset type whose default panics.
+#[derive(Asset, serde::Serialize, serde::Deserialize)]
+struct Calm {
+    level: u32,
+}
+
+impl Default for Calm {
+    fn default() -> Self {
+        panic!("no calm by default")
+    }
+}
+
+/// An asset type whose `try_from` panics on a level of 13.
+#[derive(Asset, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "MoodLevel")]
+struct Mood {
+    level: u32,
+}
+
+#[derive(serde::Deserialize)]
+struct MoodLevel {
+    level: u32,
+}
+
+impl TryFrom<MoodLevel> for Mood {
+    type Error = String;
+
+    fn try_from(MoodLevel { level }: MoodLevel) -> Result<Self, String> {
+        assert!(level != 13, "13 is a bad mood");
+        Ok(Mood { level })
+    }
+}
+
+/// Holds the `Mood` its scene loads.
+#[derive(Component, serde::Serialize, serde::Deserialize)]
+struct Moody {
+    mood: Handle<Mood>,
+}
+
+const MOOD: ludenea::ecs::AssetId = ludenea::ecs::AssetId(0xd);
+
+/// An app whose editor hooks and asset types panic.
+fn hooks_app() -> App {
+    let mut app = App::new();
+    app.component::<Moody>()
+        .asset::<Mood>()
+        .asset_with_default::<Calm>()
+        .picker(|_, _| panic!("no picking here"))
+        .debug_draw(&["broken"], |_, _, _| panic!("no drawing here"));
+    app
+}
+
+fn hooks_host() -> Host {
+    let mut host = Host::new(hooks_app).unwrap();
+    ok(
+        &mut host,
+        Command::LoadScene {
+            scene: format!(
+                r#"Scene(version: 1, resources: {{}}, entities: [{{ "running::Moody": (mood: "{MOOD}") }}])"#
+            ),
+            assets: vec![(
+                MOOD,
+                format!("(type: \"{}\", value: (level: 1))", Mood::NAME),
+            )],
+            document: Document::Scene,
+        },
+    );
+    host
+}
+
+/// The panic of game code run outside a tick, named as a system panic is, and caught where it
+/// ran: the host neither recovers the session nor pauses.
+fn assert_panicked(host: &mut Host, error: &ProtocolError, message: &str) {
+    assert_eq!(error.code, ErrorCode::SystemPanicked, "{}", error.message);
+    // After the command's context, when it gives one.
+    let panicked = error.message.find("the game panicked").unwrap_or(0);
+    let located = error.message[panicked..]
+        .strip_prefix(&format!("the game panicked at tick 0: {message} ("))
+        .and_then(|rest| rest.strip_suffix(')'));
+    assert!(
+        located.is_some_and(|location| location.contains("running.rs:")),
+        "{}",
+        error.message
+    );
+    let events = host.drain_events();
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::Paused { .. })),
+        "{events:?}"
+    );
+}
+
+#[test]
+fn a_panicking_picker_or_debug_drawer_fails_its_command_and_keeps_the_host() {
+    let mut host = hooks_host();
+
+    let picked = host
+        .handle(Command::Pick {
+            point: Vec2::new(0.0, 0.0),
+        })
+        .unwrap_err();
+    let drawn = host
+        .handle(Command::GetDebugDraw {
+            layers: vec!["broken".to_string()],
+        })
+        .unwrap_err();
+
+    assert_panicked(&mut host, &picked, "no picking here");
+    assert_panicked(&mut host, &drawn, "no drawing here");
+    assert_eq!(step(&mut host, 1).len(), 1);
+}
+
+#[test]
+fn a_panicking_asset_default_fails_new_asset_value_and_keeps_the_host() {
+    let mut host = hooks_host();
+
+    let error = host
+        .handle(Command::NewAssetValue {
+            asset: Calm::NAME.to_string(),
+        })
+        .unwrap_err();
+
+    assert_panicked(&mut host, &error, "no calm by default");
+    assert_eq!(step(&mut host, 1).len(), 1);
+}
+
+#[test]
+fn a_panicking_asset_try_from_fails_set_asset_field_and_changes_nothing() {
+    let mut host = hooks_host();
+    let before = ok(&mut host, Command::GetAsset { id: MOOD });
+
+    let error = host
+        .handle(Command::SetAssetField {
+            id: MOOD,
+            path: vec![PathSegment::Field {
+                name: "level".to_string(),
+            }],
+            value: serde_json::json!(13),
+        })
+        .unwrap_err();
+
+    assert_panicked(&mut host, &error, "13 is a bad mood");
+    assert!(
+        error.message.contains(&format!("asset {MOOD}")),
+        "{}",
+        error.message
+    );
+    assert_eq!(ok(&mut host, Command::GetAsset { id: MOOD }), before);
+    assert!(!timeline(&mut host).can_undo);
+}
