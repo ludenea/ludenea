@@ -312,12 +312,11 @@ impl BranchTree {
         for stored in branches {
             let id = stored.id;
             let branch = stored.into_branch(true)?;
-            let parent = branch.parent.ok_or(BranchesError::Tree)?;
             let known = |id| self.branches.contains_key(&id) || back.iter().any(|(b, _)| *b == id);
-            // A parent is older than its children, so the tree has no cycle.
-            if !known(parent) || known(id) || parent >= id {
-                return Err(BranchesError::Tree);
+            if known(id) {
+                return Err(BranchesError::Taken(id));
             }
+            check_link(id, branch.parent, known)?;
             if id == BranchId::LAST {
                 return Err(BranchesError::Exhausted);
             }
@@ -342,7 +341,10 @@ impl BranchTree {
     /// `tick`, as an undo entry of a history written before branches does, when the edit
     /// lies before the branch's fork or the cut leaves a child forking past the run.
     pub fn check_redo_within(&self, id: BranchId, tick: u64) -> Result<(), BranchesError> {
-        let branch = self.branches.get(&id).ok_or(BranchesError::Tree)?;
+        let branch = self
+            .branches
+            .get(&id)
+            .ok_or(BranchesError::NoSuchBranch(id))?;
         if tick < branch.fork_tick {
             return Err(BranchesError::Run);
         }
@@ -506,14 +508,15 @@ impl BranchTree {
             let id = branch.id;
             branches.insert(id, branch.into_branch(id != stored.current)?);
         }
-        // A parent is always older than its children, so the tree has no cycle.
-        let linked = branches.iter().all(|(&id, branch)| match branch.parent {
-            None => id == BranchId::ROOT,
-            Some(parent) => parent < id && branches.contains_key(&parent),
-        });
         let known = |id| branches.contains_key(&id);
-        if !known(BranchId::ROOT) || !known(stored.current) || !linked {
-            return Err(BranchesError::Tree);
+        if !known(BranchId::ROOT) {
+            return Err(BranchesError::NoRoot);
+        }
+        if !known(stored.current) {
+            return Err(BranchesError::NoCurrent(stored.current));
+        }
+        for (&id, branch) in &branches {
+            check_link(id, branch.parent, known)?;
         }
         if known(BranchId::LAST) {
             return Err(BranchesError::Exhausted);
@@ -586,14 +589,42 @@ impl BranchTree {
     }
 }
 
+/// Refuses a link of branch `id` to `parent` that would not make a tree: only the root
+/// forks from nothing, and a parent is older than its children, so the tree has no cycle.
+fn check_link(
+    id: BranchId,
+    parent: Option<BranchId>,
+    known: impl Fn(BranchId) -> bool,
+) -> Result<(), BranchesError> {
+    match parent {
+        None if id == BranchId::ROOT => Ok(()),
+        None => Err(BranchesError::NoParent(id)),
+        Some(parent) if !known(parent) => Err(BranchesError::MissingParent { branch: id, parent }),
+        Some(parent) if parent >= id => Err(BranchesError::YoungerParent { branch: id, parent }),
+        Some(_) => Ok(()),
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum BranchesError {
     #[error(transparent)]
     Postcard(#[from] postcard::Error),
     #[error(transparent)]
     Log(#[from] ludenea_app::SimError),
-    #[error("a branch's parent is missing or not older than it, or its identifier is taken")]
-    Tree,
+    #[error("branch {} forks from branch {}, which the tree does not have", .branch.0, .parent.0)]
+    MissingParent { branch: BranchId, parent: BranchId },
+    #[error("branch {} forks from branch {}, which is not older than it", .branch.0, .parent.0)]
+    YoungerParent { branch: BranchId, parent: BranchId },
+    #[error("branch {} forks from no branch, but only the root does", .0.0)]
+    NoParent(BranchId),
+    #[error("branch {} is in the tree already: identifiers are never reused", .0.0)]
+    Taken(BranchId),
+    #[error("the tree has no root branch")]
+    NoRoot,
+    #[error("the current branch, branch {}, is not in the tree", .0.0)]
+    NoCurrent(BranchId),
+    #[error("there is no branch {}", .0.0)]
+    NoSuchBranch(BranchId),
     #[error(
         "branch identifiers are exhausted: they are never reused, and none is left for a new branch"
     )]
@@ -786,6 +817,35 @@ mod tests {
     }
 
     #[test]
+    fn decode_names_the_branch_whose_link_is_refused() {
+        let root = || stored(0, None, (0, 0));
+        let refusal = |branches| decode(branches, 50).err().map(|error| error.to_string());
+        assert_eq!(
+            refusal(vec![root(), stored(3, Some(9), (0, 0))]).as_deref(),
+            Some("branch 3 forks from branch 9, which the tree does not have")
+        );
+        assert_eq!(
+            refusal(vec![root(), stored(1, None, (0, 0))]).as_deref(),
+            Some("branch 1 forks from no branch, but only the root does")
+        );
+        assert_eq!(
+            refusal(vec![stored(1, Some(0), (0, 0))]).as_deref(),
+            Some("the tree has no root branch")
+        );
+        let bytes = postcard::to_allocvec(&StoredTree {
+            current: BranchId(4),
+            next: 3,
+            branches: vec![root()],
+        })
+        .unwrap();
+        let error = BranchTree::decode(&bytes, &EditLog::new(), 50).err();
+        assert_eq!(
+            error.map(|error| error.to_string()).as_deref(),
+            Some("the current branch, branch 4, is not in the tree")
+        );
+    }
+
+    #[test]
     fn put_back_puts_back_nothing_when_one_branch_does_not_fit() {
         let mut tree = BranchTree::default();
         let put_back =
@@ -795,10 +855,25 @@ mod tests {
             ..stored(2, Some(1), (0, 0))
         };
         for (unfit, refusal) in [
-            (stored(2, Some(9), (0, 0)), BranchesError::Tree),
+            (
+                stored(2, Some(9), (0, 0)),
+                BranchesError::MissingParent {
+                    branch: BranchId(2),
+                    parent: BranchId(9),
+                },
+            ),
             // A parent younger than its child, or a branch the tree has.
-            (stored(2, Some(3), (0, 0)), BranchesError::Tree),
-            (stored(0, Some(1), (0, 0)), BranchesError::Tree),
+            (
+                stored(2, Some(3), (0, 0)),
+                BranchesError::YoungerParent {
+                    branch: BranchId(2),
+                    parent: BranchId(3),
+                },
+            ),
+            (
+                stored(0, Some(1), (0, 0)),
+                BranchesError::Taken(BranchId::ROOT),
+            ),
             (last, BranchesError::Exhausted),
         ] {
             let branches = vec![

@@ -229,6 +229,10 @@ API.
   and exit with code 2, where Rust's panic text and code 101 named neither the tick nor
   the system; `verify` also writes the state the panicking tick ran from to
   `tick-3.snap` in `--dump-dir`.
+- Removed: `BranchesError::Tree`, which named no branch. A branch tree or a redo whose
+  branches do not link up is refused with the new `BranchesError::MissingParent`,
+  `YoungerParent`, `NoParent`, `Taken`, `NoRoot`, `NoCurrent`, or `NoSuchBranch`, each
+  naming the branch, such as "branch 3 forks from branch 9, which the tree does not have".
 
 ### Control protocol
 

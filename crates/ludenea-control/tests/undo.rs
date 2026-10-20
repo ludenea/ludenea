@@ -1129,7 +1129,7 @@ fn entries_naming_a_branch_the_session_does_not_have_are_dropped_on_resume() {
         [
             "the undo history's `Undo edit at tick 30` names branch 7, which the session does not have; it was dropped",
             "the undo history's `Redo edit at tick 30` names branch 8, which the session does not have; it was dropped",
-            "the undo history's `Redo edit at tick 30` restores branches that do not fit: a branch's parent is missing or not older than it, or its identifier is taken; it was dropped",
+            "the undo history's `Redo edit at tick 30` restores branches that do not fit: branch 1 forks from branch 9, which the tree does not have; it was dropped",
         ]
     );
     let timeline = session.timeline();

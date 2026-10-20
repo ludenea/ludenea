@@ -2624,7 +2624,7 @@ fn override_value(
 
 /// Whether an undo or redo failed for good: its entry is dropped. That includes removed
 /// branches that do not decode or do not fit the tree (`BranchesDecode`, such as
-/// `BranchesError::Tree` or `Fork`), which only corrupt data holds.
+/// `BranchesError::MissingParent` or `Fork`), which only corrupt data holds.
 fn is_dropped<T>(result: &Result<T, SessionError>) -> bool {
     matches!(
         result,
