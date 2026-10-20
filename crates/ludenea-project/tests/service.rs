@@ -18,6 +18,7 @@ use ludenea_project::{AssetKind, BuildEvent, Project};
 use tempfile::TempDir;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::error::TryRecvError;
+use ts_rs::TS;
 
 const POLL: Duration = Duration::from_millis(20);
 /// Fifteen minutes of polls: a first build compiles the whole engine.
@@ -322,6 +323,31 @@ fn every_request_names_the_replies_it_gets() {
         },
         ProjectRequest::Build,
     ];
+    let tag = |request: &ProjectRequest| serde_json::to_value(request).unwrap()["type"].clone();
+    let mut covered: Vec<String> = requests
+        .iter()
+        .chain(&[
+            ProjectRequest::Create {
+                parent: String::new(),
+                name: String::new(),
+                engine_path: None,
+            },
+            ProjectRequest::GameEndpoint,
+            ProjectRequest::RestartGame,
+        ])
+        .map(|request| tag(request).as_str().unwrap().to_owned())
+        .collect();
+    covered.sort();
+    let mut declared: Vec<String> = ProjectRequest::decl(&ts_rs::Config::default())
+        .split("\"type\": \"")
+        .skip(1)
+        .map(|rest| rest[..rest.find('"').unwrap()].to_owned())
+        .collect();
+    declared.sort();
+    assert_eq!(
+        covered, declared,
+        "the requests run here and the ones left out (left) miss a request type (right)"
+    );
     for request in requests {
         let name = format!("{request:?}");
         let expected = request.reply_types();
