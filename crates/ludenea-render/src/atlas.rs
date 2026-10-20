@@ -109,15 +109,15 @@ pub enum TextureError {
 impl TextureError {
     /// The identifier of the refused texture.
     pub fn id(&self) -> AssetId {
-        self.source().0
+        self.origin().0
     }
 
     /// The project path of the refused texture, when known.
     pub fn path(&self) -> Option<&str> {
-        self.source().1.as_deref()
+        self.origin().1.as_deref()
     }
 
-    fn source(&self) -> (AssetId, &Option<String>) {
+    fn origin(&self) -> (AssetId, &Option<String>) {
         let (Self::Decode { id, path, .. }
         | Self::Grid { id, path, .. }
         | Self::TooLarge { id, path, .. }
