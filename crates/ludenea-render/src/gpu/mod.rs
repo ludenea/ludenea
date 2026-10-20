@@ -71,6 +71,14 @@ pub struct DrawReport {
     pub missing: Vec<(Entity, AssetId, u32)>,
 }
 
+/// What `render_rgba` read back, and what it could not draw as asked.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Rendered {
+    /// `width * 4` bytes of RGBA per row, tightly packed, top row first.
+    pub rgba: Vec<u8>,
+    pub report: DrawReport,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RenderError {
     #[error("no GPU adapter: tried {0}")]
@@ -281,17 +289,17 @@ impl Renderer {
         })
     }
 
-    /// Draws `frames` offscreen and reads it back: `size.width * 4` bytes of RGBA per row,
-    /// tightly packed, top row first. A target with no pixels gives no bytes; one past
-    /// `max_texture_dimension_2d`, or whose read-back is past `max_buffer_size`, is refused.
-    /// Not on WebAssembly: it waits for the GPU, which a browser's thread cannot do.
+    /// Draws `frames` offscreen and reads it back, with the report `draw` gives. A target
+    /// with no pixels gives no bytes and draws nothing; one past `max_texture_dimension_2d`,
+    /// or whose read-back is past `max_buffer_size`, is refused. Not on WebAssembly: it waits
+    /// for the GPU, which a browser's thread cannot do.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn render_rgba(
         &mut self,
         size: Size,
         frames: Frames<'_>,
         overlay: &Overlay,
-    ) -> Result<Vec<u8>, RenderError> {
+    ) -> Result<Rendered, RenderError> {
         self.guarded("render_rgba", |renderer| {
             renderer.read_back(size, frames, overlay)
         })
@@ -353,9 +361,9 @@ impl Renderer {
         size: Size,
         frames: Frames<'_>,
         overlay: &Overlay,
-    ) -> Result<Vec<u8>, RenderError> {
+    ) -> Result<Rendered, RenderError> {
         if size.width == 0 || size.height == 0 {
-            return Ok(Vec::new());
+            return Ok(Rendered::default());
         }
         self.fits("render_rgba", size)?;
         // Rows are copied out padded to the copy alignment, then packed. The side fits the
@@ -388,7 +396,7 @@ impl Renderer {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        self.encode(
+        let report = self.encode(
             &texture.create_view(&Default::default()),
             RGBA,
             size,
@@ -436,12 +444,12 @@ impl Renderer {
         let mapped = buffer
             .get_mapped_range(..)
             .map_err(|error| failed(error.to_string()))?;
-        let pixels = mapped
+        let rgba = mapped
             .chunks_exact(padded as usize)
             .flat_map(|line| &line[..row as usize])
             .copied()
             .collect();
-        Ok(pixels)
+        Ok(Rendered { rgba, report })
     }
 
     /// Clears `target` to the background, draws the layers in order (tilemaps and sprites

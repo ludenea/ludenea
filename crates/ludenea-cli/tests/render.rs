@@ -207,6 +207,26 @@ fn broken_texture_warns_and_still_renders() {
 }
 
 #[test]
+fn sprite_with_an_unknown_texture_warns_naming_it() {
+    let dir = dir("sprite_with_an_unknown_texture_warns_naming_it");
+    let project = dir.join("project");
+    copy(&fixture(), &project);
+    let scene = project.join("scenes/main.scene.ron");
+    let text = fs::read_to_string(&scene).unwrap().replace(
+        "\"ludenea::Sprite\": (texture: \"000000000000000000000000000000a1\"",
+        "\"ludenea::Sprite\": (texture: \"000000000000000000000000000000ff\"",
+    );
+    fs::write(&scene, text).unwrap();
+    let output = render(&dir, "{}/project/scenes/main.scene.ron", "0", "frame", &[]);
+    assert!(
+        output.lines().any(|line| line
+            == "warning: entity 1v0: frame 1 of texture 000000000000000000000000000000ff is not loaded, so a placeholder is drawn"),
+        "{output}"
+    );
+    assert_eq!(decode(&dir.join("frame.png")).pixel(32, 16), MAGENTA);
+}
+
+#[test]
 fn tick_past_a_replay_end_is_refused() {
     let dir = dir("tick_past_a_replay_end_is_refused");
     record_replay(&dir);

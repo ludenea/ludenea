@@ -116,11 +116,11 @@ fn render(renderer: &mut Renderer, size: Size, frame: &RenderFrame) -> Vec<u8> {
         current: frame,
         alpha: 1.0,
     };
-    let pixels = renderer
+    let rendered = renderer
         .render_rgba(size, frames, &Overlay::default())
         .unwrap();
-    assert_eq!(pixels.len(), (size.width * size.height * 4) as usize);
-    pixels
+    assert_eq!(rendered.rgba.len(), (size.width * size.height * 4) as usize);
+    rendered.rgba
 }
 
 fn pixel(pixels: &[u8], size: Size, x: u32, y: u32) -> [u8; 4] {
@@ -361,7 +361,22 @@ fn missing_texture_draws_a_placeholder_and_reports_it() {
         sprite(drawn, Vec2::new(1.0, 1.0)),
     ]);
 
-    let pixels = render(&mut renderer, SIZE, &scene);
+    let expected = DrawReport {
+        missing: vec![(unloaded, AssetId(99), 3), (missing_frame, AssetId(1), 5)],
+    };
+    let rendered = renderer
+        .render_rgba(
+            SIZE,
+            Frames {
+                previous: None,
+                current: &scene,
+                alpha: 1.0,
+            },
+            &Overlay::default(),
+        )
+        .unwrap();
+    assert_eq!(rendered.report, expected);
+    let pixels = rendered.rgba;
     // One magenta world unit on each missing sprite, and the rest of the frame draws.
     assert_eq!(pixel(&pixels, SIZE, 16, 48), MAGENTA);
     assert_eq!(pixel(&pixels, SIZE, 48, 48), MAGENTA);
@@ -391,12 +406,7 @@ fn missing_texture_draws_a_placeholder_and_reports_it() {
     let report = renderer
         .draw(&view, SIZE, frames, &Overlay::default())
         .unwrap();
-    assert_eq!(
-        report,
-        DrawReport {
-            missing: vec![(unloaded, AssetId(99), 3), (missing_frame, AssetId(1), 5)],
-        }
-    );
+    assert_eq!(report, expected);
 }
 
 #[test]
@@ -478,7 +488,7 @@ fn overlay_camera_overrides_the_frame_camera() {
         current: &scene,
         alpha: 1.0,
     };
-    let pixels = renderer.render_rgba(SIZE, frames, &overlay).unwrap();
+    let pixels = renderer.render_rgba(SIZE, frames, &overlay).unwrap().rgba;
     assert_eq!(pixel(&pixels, SIZE, 32, 32), RED);
 }
 
@@ -672,7 +682,7 @@ fn render_with(renderer: &mut Renderer, frame: &RenderFrame, overlay: &Overlay) 
         current: frame,
         alpha: 1.0,
     };
-    renderer.render_rgba(SIZE, frames, overlay).unwrap()
+    renderer.render_rgba(SIZE, frames, overlay).unwrap().rgba
 }
 
 fn report(device: &wgpu::Device, renderer: &mut Renderer, frame: &RenderFrame) -> DrawReport {
@@ -1061,6 +1071,7 @@ fn previous_frame_and_alpha_draw_in_between() {
         renderer
             .render_rgba(SIZE, frames, &Overlay::default())
             .unwrap()
+            .rgba
     };
     // Halfway: the sprite centred on (0, 1), pixels 24..40 across and 8..24 down; the cell at
     // world [-1, 0] by [-2, -1], pixels 16..32 across and 48..64 down.

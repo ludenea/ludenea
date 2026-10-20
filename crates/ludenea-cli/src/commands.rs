@@ -513,7 +513,7 @@ fn known_debug_layers(
 }
 
 /// Draws `frames` on a headless device with `textures` packed into its atlas, warning about
-/// each texture left out, and reads the pixels back.
+/// each texture left out and each frame drawn as a placeholder, and reads the pixels back.
 #[cfg(not(target_family = "wasm"))]
 fn draw(
     textures: &[(
@@ -549,9 +549,18 @@ fn draw(
     renderer
         .set_atlas(&atlas)
         .map_err(|error| error.to_string())?;
-    renderer
+    let rendered = renderer
         .render_rgba(size, frames, overlay)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    for (entity, texture, frame) in &rendered.report.missing {
+        say(
+            out,
+            format_args!(
+                "warning: entity {entity}: frame {frame} of texture {texture} is not loaded, so a placeholder is drawn"
+            ),
+        )?;
+    }
+    Ok(rendered.rgba)
 }
 
 /// Tightly packed RGBA rows, top row first, as an 8-bit RGBA PNG.
