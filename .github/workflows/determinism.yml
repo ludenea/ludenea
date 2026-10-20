@@ -110,6 +110,29 @@ jobs:
             dump/release/*-8-threads
           if-no-files-found: ignore
 
+  # The wgpu renderer's tests, which draw offscreen and read the pixels back. Runners have no
+  # GPU, so each uses a software adapter: lavapipe (Mesa's Vulkan) on Linux, WARP (the
+  # Direct3D 12 fallback adapter) on Windows, and Metal on macOS. Without an adapter the tests
+  # fail naming what was tried; they never skip.
+  render:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+      - name: Install lavapipe
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --locked -p ludenea-render --features gpu --all-targets -- -D warnings
+      - run: cargo test --locked -p ludenea-render --features gpu
+
   wasm:
     runs-on: ubuntu-24.04
     steps:

@@ -34,7 +34,7 @@ for any thread count. The guarantee rests on:
 | `crates/ludenea-app`     | Simulation loop, scenes, and input logs         |
 | `crates/ludenea-physics` | Rigid body physics                              |
 | `crates/ludenea-draw`    | Render frame and debug draw data, GPU free      |
-| `crates/ludenea-render`  | Render components, animation, and extraction    |
+| `crates/ludenea-render`  | Render components, extraction, wgpu renderer    |
 | `crates/ludenea-control` | Versioned control protocol and host             |
 | `crates/ludenea-cli`     | `run`, `verify`, and `diff` commands            |
 | `crates/ludenea`         | Facade crate re-exporting the engine            |
@@ -60,10 +60,20 @@ CI sets it to `dump/` in the checkout and uploads the dumps of a failing run as 
 one per operating system, target, and thread count.
 
 Run the lint checks CI runs: formatting (the engine and the desktop backend), clippy on the
-host and on WebAssembly, and the API documentation, with warnings denied:
+host (with and without the wgpu renderer) and on WebAssembly, and the API documentation, with
+warnings denied:
 
 ```sh
 cargo xtask check
+```
+
+Run the renderer's GPU tests, which draw offscreen and compare the pixels read back. They need
+a GPU adapter, hardware or software: without one they fail naming what was tried, they never
+skip. CI runs them on a software adapter: lavapipe on Linux (the `mesa-vulkan-drivers`
+package), WARP on Windows (built in), and Metal on macOS.
+
+```sh
+cargo test --locked -p ludenea-render --features gpu
 ```
 
 Check that the tests catch every mutant of the canonical state hash serializer, as the

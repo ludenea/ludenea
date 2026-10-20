@@ -1,11 +1,15 @@
 //! Rendering: the simulated render components (sprites, their animation, the camera and
-//! tilemaps), the `animate` system, and the extraction of a world into a render frame. This
-//! part depends on no GPU crate, so the simulation never pulls one.
+//! tilemaps), the `animate` system, the extraction of a world into a render frame, atlas
+//! packing, and the camera's math. All of it depends on no GPU crate, so the simulation never pulls
+//! one; the wgpu renderer is `gpu`, behind the feature of the same name.
 
 pub mod animate;
 pub mod atlas;
+pub mod camera;
 pub mod components;
 pub mod extract;
+#[cfg(feature = "gpu")]
+pub mod gpu;
 pub mod sheet;
 
 use ludenea_app::pose::Pose;
