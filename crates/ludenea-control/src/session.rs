@@ -2288,6 +2288,9 @@ impl Session {
     /// After new logs, which define a new linear run: only tick 0 stays simulated, the
     /// session is at tick 0, and recorded edits are checked on this state by resimulation.
     fn reset_future(&mut self, sim: &mut Simulation) -> Result<(), SessionError> {
+        // Tick 0 is common to every branch: when it does not restore, the tree and the
+        // hashes stay as they were.
+        self.restore_checkpoint(sim, 0)?;
         self.history
             .keep_on_root(&self.tree.path(self.tree.current()), &self.edits);
         self.tree = BranchTree::default();
@@ -2295,7 +2298,6 @@ impl Session {
         self.hashes.truncate(1);
         self.update_head();
         self.current = 0;
-        self.restore_checkpoint(sim, 0)?;
         self.start_resimulation(sim)
     }
 
