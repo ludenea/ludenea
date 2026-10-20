@@ -208,7 +208,7 @@ describe("prefabs", () => {
 
     renderPanel(host, "ludenea.scene-tree");
     const group = screen.getAllByRole("group", { name: "ball.prefab.ron" })[1]!;
-    expect(within(group).getByLabelText("unsaved changes")).toBeTruthy();
+    expect(within(group).getByRole("img", { name: "unsaved changes" })).toBeTruthy();
     // The summary toggles the group: it holds no other control.
     const summary = group.querySelector<HTMLElement>(":scope > summary")!;
     expect(within(summary).queryByRole("button")).toBeNull();
@@ -221,7 +221,7 @@ describe("prefabs", () => {
     expect(host.project.sent).toContainEqual({ type: "write_text", path: "assets/ball.prefab.ron", text: "(applied)" });
     expect(sent(game, "mark_asset_saved")).toEqual([{ type: "mark_asset_saved", id: BALL, text: "(applied)" }]);
     expect(host.editor.timeline.getState().timeline?.unsaved_assets).toEqual([]);
-    expect(within(group).queryByLabelText("unsaved changes")).toBeNull();
+    expect(within(group).queryByRole("img", { name: "unsaved changes" })).toBeNull();
   });
 
   it("undoing_an_apply_brings_the_override_back_and_leaves_the_prefab_saved", async () => {

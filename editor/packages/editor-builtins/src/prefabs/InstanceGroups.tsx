@@ -54,7 +54,7 @@ function Group({ editor, prefabs, instance }: { editor: Editor; prefabs: Prefabs
       <summary title={instance.prefab}>{name}</summary>
       {unsaved && (
         <div>
-          <span aria-label="unsaved changes">●</span>{" "}
+          <span role="img" aria-label="unsaved changes">●</span>{" "}
           <button aria-label={`Save prefab ${name}`} onClick={save}>
             Save prefab
           </button>

@@ -161,7 +161,7 @@ describe("assets", () => {
 
     it("a_prefab_change_reloads_the_open_scene_and_keeps_its_unsaved_edits", async () => {
       const { host, game, disk, texts, changed } = await project();
-      expect(screen.getByLabelText("unsaved changes")).toBeTruthy();
+      expect(screen.getByRole("img", { name: "unsaved changes" })).toBeTruthy();
 
       disk.ball = "(bigger ball)";
       await changed("assets/ball.prefab.ron", "Prefab");
@@ -169,7 +169,7 @@ describe("assets", () => {
       expect(game.sent.filter((command) => command.type === "load_session")).toMatchObject([{ scene: "(edited)", saved_scene: `(${SCENE})`, assets: texts() }]);
       expect(game.sent.filter((command) => command.type === "replace_scene")).toEqual([]);
       expect(host.editor.timeline.getState().timeline?.scene_dirty).toBe(true);
-      expect(screen.getByLabelText("unsaved changes")).toBeTruthy();
+      expect(screen.getByRole("img", { name: "unsaved changes" })).toBeTruthy();
 
       // Away and back: the stored session still holds the edited scene.
       await act(() => host.editor.document.getState().open(OTHER));
@@ -200,12 +200,12 @@ describe("assets", () => {
   it("unsaved_marker_follows_scene_dirty", async () => {
     const { host } = await browser();
     await openScene();
-    expect(screen.queryByLabelText("unsaved changes")).toBeNull();
+    expect(screen.queryByRole("img", { name: "unsaved changes" })).toBeNull();
 
     setSceneDirty(host, true);
-    expect(screen.getByLabelText("unsaved changes")).toBeTruthy();
+    expect(screen.getByRole("img", { name: "unsaved changes" })).toBeTruthy();
     setSceneDirty(host, false);
-    expect(screen.queryByLabelText("unsaved changes")).toBeNull();
+    expect(screen.queryByRole("img", { name: "unsaved changes" })).toBeNull();
   });
 
   it("rename_through_command_sends_rename", async () => {
@@ -272,7 +272,7 @@ describe("assets", () => {
       await settle();
 
       expect(host.editor.document.getState().current).toEqual({ id: SCENE_ID, kind: "scene", path: LEVEL });
-      expect(screen.getByLabelText("unsaved changes")).toBeTruthy();
+      expect(screen.getByRole("img", { name: "unsaved changes" })).toBeTruthy();
       expect(screen.queryByRole("alert")).toBeNull();
       await host.editor.commands.run("scene.save");
       expect(writes(host)).toEqual([{ type: "write_text", path: LEVEL, text: "(saved)" }]);
@@ -729,7 +729,7 @@ describe("data assets, replays, traces, and snapshots", () => {
     type("gravity_scale", "2");
     await settle();
     expect(host.editor.timeline.getState().timeline?.unsaved_assets).toEqual([SETTINGS]);
-    expect(screen.queryByLabelText("unsaved changes")).toBeNull();
+    expect(screen.queryByRole("img", { name: "unsaved changes" })).toBeNull();
     await expect(host.editor.commands.run("inspector.save-asset")).rejects.toThrow("assets/run.replay is a replay");
     expect(host.project.sent.filter((request) => request.type === "write_text")).toEqual([]);
   });
@@ -774,12 +774,12 @@ describe("data assets, replays, traces, and snapshots", () => {
     fireEvent.click(screen.getByText("settings.ron"));
     await settle();
     expect(host.editor.selection.getState().asset).toBe(SETTINGS);
-    expect(screen.queryByLabelText("unsaved changes")).toBeNull();
+    expect(screen.queryByRole("img", { name: "unsaved changes" })).toBeNull();
 
     type("gravity_scale", "2");
     await settle();
     expect(game.sent).toContainEqual({ type: "set_asset_field", id: SETTINGS, path: [{ type: "field", name: "gravity_scale" }], value: 2 });
-    expect(screen.getByLabelText("unsaved changes")).toBeTruthy();
+    expect(screen.getByRole("img", { name: "unsaved changes" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Apply to asset" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Save asset" }));
@@ -789,7 +789,7 @@ describe("data assets, replays, traces, and snapshots", () => {
     expect(host.project.sent).toContainEqual({ type: "write_text", path: "assets/settings.ron", text: "(gravity_scale: 2.0)" });
     // Saved once its file holds the text.
     expect(game.sent.at(-1)).toEqual({ type: "mark_asset_saved", id: SETTINGS, text: "(gravity_scale: 2.0)" });
-    expect(screen.queryByLabelText("unsaved changes")).toBeNull();
+    expect(screen.queryByRole("img", { name: "unsaved changes" })).toBeNull();
   });
 
   it("a_failed_asset_write_keeps_the_asset_unsaved", async () => {
@@ -805,7 +805,7 @@ describe("data assets, replays, traces, and snapshots", () => {
     await settle();
 
     expect(game.sent.filter((command) => command.type === "mark_asset_saved")).toEqual([]);
-    expect(screen.getByLabelText("unsaved changes")).toBeTruthy();
+    expect(screen.getByRole("img", { name: "unsaved changes" })).toBeTruthy();
   });
 
   it("the_unsaved_marker_follows_the_game", async () => {
@@ -817,10 +817,10 @@ describe("data assets, replays, traces, and snapshots", () => {
     // An undo, a redo, or another client: the game says which assets differ from their file.
     act(() => game.push({ type: "timeline_changed", timeline: timeline(0, [SETTINGS]) }));
     await settle();
-    expect(screen.getByLabelText("unsaved changes")).toBeTruthy();
+    expect(screen.getByRole("img", { name: "unsaved changes" })).toBeTruthy();
     act(() => game.push({ type: "timeline_changed", timeline: timeline(0) }));
     await settle();
-    expect(screen.queryByLabelText("unsaved changes")).toBeNull();
+    expect(screen.queryByRole("img", { name: "unsaved changes" })).toBeNull();
   });
 
   it("apply_to_asset_shown_past_tick_0", async () => {
@@ -833,12 +833,12 @@ describe("data assets, replays, traces, and snapshots", () => {
     await settle();
     expect(game.sent).toContainEqual({ type: "set_asset_field", id: SETTINGS, path: [{ type: "field", name: "gravity_scale" }], value: 2 });
     // Past tick 0 the edit is recorded, the file's text is unchanged.
-    expect(screen.queryByLabelText("unsaved changes")).toBeNull();
+    expect(screen.queryByRole("img", { name: "unsaved changes" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Apply to asset" }));
     await settle();
     expect(game.sent).toContainEqual({ type: "apply_to_asset", id: SETTINGS });
-    expect(screen.getByLabelText("unsaved changes")).toBeTruthy();
+    expect(screen.getByRole("img", { name: "unsaved changes" })).toBeTruthy();
   });
 
   it("replay_with_other_types_shows_banner_and_divergence", async () => {
@@ -928,7 +928,7 @@ describe("data assets, replays, traces, and snapshots", () => {
     expect(screen.queryByRole("alert")).toBeNull();
     fireEvent.click(screen.getByText("sword.ron"));
     await settle();
-    expect(screen.getByLabelText("unsaved changes")).toBeTruthy();
+    expect(screen.getByRole("img", { name: "unsaved changes" })).toBeTruthy();
   });
 
   it("an_asset_save_reported_on_disk_before_the_game_confirms_it_shows_no_banner", async () => {
@@ -1006,7 +1006,7 @@ describe("data assets, replays, traces, and snapshots", () => {
     // The game keeps the session's text of each unsaved asset.
     expect(game.sent.filter((command) => command.type === "replace_scene")).toEqual([{ type: "replace_scene", scene: "(scene changed)", assets: disk }]);
     expect(host.editor.timeline.getState().timeline?.unsaved_assets).toEqual([SETTINGS, SWORD]);
-    expect(screen.getByLabelText("unsaved changes")).toBeTruthy();
+    expect(screen.getByRole("img", { name: "unsaved changes" })).toBeTruthy();
   });
 
   it("the_asset_section_refetches_on_changes_not_on_every_tick", async () => {

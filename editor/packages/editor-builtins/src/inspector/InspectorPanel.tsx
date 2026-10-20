@@ -161,7 +161,7 @@ function DataAsset({ editor, control, id }: { editor: Editor; control: ControlCl
     <>
       <h2>
         Data asset {asset && shortName(asset.asset)}
-        {unsaved && <span aria-label="unsaved changes"> ●</span>}{" "}
+        {unsaved && <span role="img" aria-label="unsaved changes"> ●</span>}{" "}
         {unsaved && <button onClick={run("inspector.save-asset")}>Save asset</button>}
         {tick > 0 && (
           <button disabled={resimulating} onClick={run("inspector.apply-to-asset")}>

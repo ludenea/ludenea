@@ -137,7 +137,7 @@ export function AssetsPanel({ editor, assets }: { editor: Editor; assets: Assets
                   {file.path === openScene && (
                     <span className="ludenea-open-scene">
                       {" "}
-                      (open){unsaved && <span aria-label="unsaved changes"> ●</span>}
+                      (open){unsaved && <span role="img" aria-label="unsaved changes"> ●</span>}
                     </span>
                   )}
                   {menu === file.path && <ContextMenu file={file} assets={assets} attempt={attempt} />}
