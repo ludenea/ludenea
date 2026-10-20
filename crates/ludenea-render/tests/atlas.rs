@@ -291,6 +291,58 @@ fn partial_last_frame_is_refused() {
             grid: meta.grid.unwrap(),
         }]
     );
+    let message = error[0].to_string();
+    for part in [
+        "2x2 frames",
+        "margin 0",
+        "spacing 1",
+        "6x2 image",
+        "whole frames",
+    ] {
+        assert!(message.contains(part), "{message} names {part}");
+    }
+}
+
+#[test]
+fn margin_leaving_a_partial_frame_is_refused() {
+    // A margin of 1 on both sides leaves 5 pixels: two 2-pixel frames and a partial third.
+    let image = png(7, 2, 1);
+    let meta = grid(2, 2, 1, 0);
+    let error = pack(&[source(1, &image, &meta)], PAGE).errors;
+
+    assert_eq!(
+        error,
+        [TextureError::Grid {
+            id: AssetId(1),
+            path: Some("art/hero.png".to_string()),
+            image: (7, 2),
+            grid: meta.grid.unwrap(),
+        }]
+    );
+}
+
+#[test]
+fn adjacent_frames_do_not_bleed_into_each_other_extrusion() {
+    // Two 2x2 frames side by side in the image: each extruded border repeats its own frame's
+    // edge, never the neighbouring frame's pixels.
+    let image = png(4, 2, 8);
+    let meta = grid(2, 2, 0, 0);
+    let atlas = pack(&[source(1, &image, &meta)], PAGE);
+
+    for (frame, left) in [(0, 0), (1, 2)] {
+        let region = region(&atlas, 1, frame);
+        let page = &atlas.pages[region.page as usize];
+        for y in 0..4 {
+            for x in 0..4 {
+                let nearest = (left + x.clamp(1, 2) - 1, y.clamp(1, 2) - 1);
+                assert_eq!(
+                    pixel(page, region.x + x - 1, region.y + y - 1),
+                    [nearest.0 as u8, nearest.1 as u8, 8, 255],
+                    "frame {frame}, extruded pixel ({x}, {y})"
+                );
+            }
+        }
+    }
 }
 
 #[test]
