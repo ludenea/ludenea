@@ -30,8 +30,11 @@ export class ProjectClient {
       const message = parseFrame<ProjectServerMessage>(raw);
       if (message?.type === "response") requests.resolve(message.id, message.result);
       else if (message?.type === "event") this.dispatch(message.event);
-      // A message the service cannot read whole (one over its size limit) has no request id:
-      // it refuses it, then closes the connection, so no waiting request will be answered.
+      // A refusal carries no request id. The server refuses a message over its size limit,
+      // then closes the connection, so no waiting request will be answered. The service also
+      // refuses a message without an id that it cannot read, and keeps the connection: the
+      // requests waiting then fail too, and their late answers are dropped. This client sends
+      // an id with every request, so only the refusal of an oversized message reaches it.
       else if (message?.type === "refused") requests.rejectAll(message.error.message);
     });
     transport.onClose((reason) => {
