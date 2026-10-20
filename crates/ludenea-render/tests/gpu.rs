@@ -993,3 +993,25 @@ fn a_tilemap_larger_than_a_chunk_draws_every_cell() {
         assert_eq!(pixel(&pixels, SIZE, 62, y), BLUE, "at (62, {y})");
     }
 }
+
+#[test]
+fn a_tilemap_whose_tiles_do_not_match_its_size_draws_nothing_at_once() {
+    let mut renderer = renderer();
+    tileset(&mut renderer);
+    // Walking 10^10 cells would hang the draw (the test would never finish): the item is
+    // skipped instead, and so is one with more tiles than cells.
+    let huge = tilemap(entity(), Vec2::ZERO, 100_000, 100_000, Vec::new());
+    let short = tilemap(
+        entity(),
+        Vec2::new(-2.0, -2.0),
+        1,
+        1,
+        vec![Some(0), Some(1)],
+    );
+    let scene = with_tilemaps(Vec::new(), vec![huge, short]);
+    let pixels = render(&mut renderer, SIZE, &scene);
+    assert!(
+        pixels.chunks_exact(4).all(|texel| texel == background()),
+        "something was drawn"
+    );
+}

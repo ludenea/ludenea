@@ -90,6 +90,16 @@ fn extract_tilemaps(world: &World, frame: &mut RenderFrame) {
         let Some(layer) = layer(frame, entity, "tilemap", &tilemap.layer) else {
             continue;
         };
+        let cells = u64::from(tilemap.width) * u64::from(tilemap.height);
+        if tilemap.tiles.len() as u64 != cells {
+            frame.warnings.push(format!(
+                "entity {entity}: tilemap is {} by {} cells, so it needs {cells} tiles, but it has {}; it is not drawn",
+                tilemap.width,
+                tilemap.height,
+                tilemap.tiles.len()
+            ));
+            continue;
+        }
         frame.tilemaps.push(TilemapItem {
             entity,
             layer,

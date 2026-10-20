@@ -315,3 +315,27 @@ fn plugin_does_not_change_boxes_hashes() {
     }
     assert_eq!(hashes, golden.hashes);
 }
+
+#[test]
+fn tilemap_whose_tiles_do_not_match_its_size_is_skipped_with_a_warning() {
+    let mut simulation = simulation();
+    let entity = spawn(&mut simulation, Some(Vec2::ZERO));
+    let tilemap = Tilemap {
+        tileset: AssetId(9),
+        cell_size: Vec2::new(1.0, 1.0),
+        width: 3,
+        height: 2,
+        tiles: vec![Some(0); 4],
+        layer: "world".into(),
+        order: 0,
+    };
+    simulation.world_mut().insert(entity, tilemap).unwrap();
+    let frame = frame(&simulation);
+    assert!(frame.tilemaps.is_empty());
+    assert_eq!(
+        frame.warnings,
+        [format!(
+            "entity {entity}: tilemap is 3 by 2 cells, so it needs 6 tiles, but it has 4; it is not drawn"
+        )]
+    );
+}

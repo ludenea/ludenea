@@ -45,6 +45,7 @@ impl Cache {
         regions: &BTreeMap<(AssetId, u32), Region>,
         pages: &[(u32, u32)],
     ) {
+        let items: Vec<&TilemapItem> = items.iter().filter(|item| well_formed(item)).collect();
         let present: BTreeSet<Entity> = items.iter().map(|item| item.entity).collect();
         self.0.retain(|entity, _| present.contains(entity));
         for item in items {
@@ -64,9 +65,15 @@ impl Cache {
     }
 }
 
+/// Whether `item` has one tile per cell. Extraction refuses other tilemaps, but a frame from
+/// the control protocol may hold one: it is not drawn, and its cells are never walked.
+fn well_formed(item: &TilemapItem) -> bool {
+    item.tiles.len() as u64 == u64::from(item.width) * u64::from(item.height)
+}
+
 /// The chunks of `item`, row by row of chunks from the bottom-left. A tile fills its cell; a
-/// tile whose region is missing is a magenta cell and is reported. A cell past the end of
-/// `tiles` is empty.
+/// tile whose region is missing is a magenta cell and is reported. Only the rows `tiles`
+/// reaches are walked, and a cell past its end is empty.
 fn build(
     device: &wgpu::Device,
     item: &TilemapItem,
@@ -80,7 +87,14 @@ fn build(
     };
     let (cell_width, cell_height) = (item.cell_size.x, item.cell_size.y);
     let size = [cell_width, cell_height];
-    for first_row in (0..item.height).step_by(CHUNK as usize) {
+    // `well_formed` already holds; this keeps the walk bounded by the tiles regardless.
+    let rows = match u64::from(item.width) {
+        0 => 0,
+        width => (item.tiles.len() as u64)
+            .div_ceil(width)
+            .min(u64::from(item.height)) as u32,
+    };
+    for first_row in (0..rows).step_by(CHUNK as usize) {
         for first_column in (0..item.width).step_by(CHUNK as usize) {
             // The chunk's corner is the instances' centre, so their offsets stay small.
             let corner = [
@@ -89,7 +103,7 @@ fn build(
             ];
             let mut instances: Vec<Instance> = Vec::new();
             let mut batches: Vec<(Sample, Range<u32>)> = Vec::new();
-            for row in first_row..(first_row + CHUNK).min(item.height) {
+            for row in first_row..(first_row + CHUNK).min(rows) {
                 for column in first_column..(first_column + CHUNK).min(item.width) {
                     let cell = u64::from(row) * u64::from(item.width) + u64::from(column);
                     let Some(&Some(tile)) = usize::try_from(cell)
