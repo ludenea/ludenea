@@ -1,11 +1,11 @@
 //! Scene queries over the colliders: raycasts and box overlaps.
 
+use ludenea_app::pose::Pose;
 use ludenea_ecs::{Entity, Query};
 use ludenea_math::{Aabb, Transform, Vec2, clamp};
 
 use crate::components::Collider;
 use crate::shape::Shape;
-use ludenea_app::pose::Pose;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct RayHit {

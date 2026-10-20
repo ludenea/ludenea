@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use ludenea_app::pose::Pose;
 use ludenea_app::{Parallel, Time};
 use ludenea_ecs::{Entity, EventWriter, Query, Res, ResMut, Runtime};
 use ludenea_math::{Rot, Transform, Vec2, max};
@@ -14,7 +15,6 @@ use crate::manifold::collide;
 use crate::mass::mass_data;
 use crate::shape::LINEAR_SLOP;
 use crate::solver::{ConstraintPoint, ContactConstraint, RIGID, SolverBody, StepContext, solve};
-use ludenea_app::pose::Pose;
 
 pub(crate) const SPECULATIVE_DISTANCE: f32 = 4.0 * LINEAR_SLOP;
 
