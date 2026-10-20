@@ -129,7 +129,6 @@ impl UndoEntry {
         current_edits: &EditLog,
         current_head: u64,
     ) -> Result<(), String> {
-        let unfit = |error: BranchesError| format!("restores branches that do not fit: {error}");
         match self {
             UndoEntry::Scene { .. }
             | UndoEntry::Asset { .. }
@@ -158,7 +157,7 @@ impl UndoEntry {
                 let Some(own) = stored.next() else {
                     return tree
                         .check_redo_within(*branch, edit.tick)
-                        .map_err(|error| format!("cannot be redone within its branch: {error}"));
+                        .map_err(not_within);
                 };
                 let (segment, _) = own.into_segment().map_err(unfit)?;
                 // Redo brings the branch's run back as `own` holds it, and puts back the
@@ -198,9 +197,23 @@ fn unknown(branch: BranchId) -> String {
 
 fn not_root(branch: BranchId) -> Result<(), String> {
     match branch {
-        BranchId::ROOT => Err("names the root branch as the branch it forked".to_string()),
+        BranchId::ROOT => Err(ROOT_FORKED.to_string()),
         _ => Ok(()),
     }
+}
+
+/// Why a `Fork` entry naming the root cannot be undone or redone.
+pub(crate) const ROOT_FORKED: &str =
+    "names the root branch as the branch it forked, but the root forks from nothing";
+
+/// Why a redo cannot put back the branches it restores.
+pub(crate) fn unfit(error: BranchesError) -> String {
+    format!("restores branches that do not fit: {error}")
+}
+
+/// Why an entry of a history written before branches cannot be redone within its branch.
+pub(crate) fn not_within(error: BranchesError) -> String {
+    format!("cannot be redone within its branch: {error}")
 }
 
 /// An entry moves from `undo` to `redo` when undone, and back when redone; an entry whose

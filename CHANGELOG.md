@@ -233,6 +233,12 @@ API.
   branches do not link up is refused with the new `BranchesError::MissingParent`,
   `YoungerParent`, `NoParent`, `Taken`, `NoRoot`, `NoCurrent`, or `NoSuchBranch`, each
   naming the branch, such as "branch 3 forks from branch 9, which the tree does not have".
+- An undo or redo entry that cannot work on the session's branches, as only a crafted
+  history holds, fails with the new `SessionError::Unfit`, which names the entry and why,
+  as the warnings of a resume do, and drops it. A redo whose branches no longer fit failed
+  with `SessionError::BranchesDecode`, "the branch tree cannot be decoded", though nothing
+  was decoded, and an undo of a fork entry naming the root with
+  `SessionError::NoSuchBranch`, "there is no branch 0".
 
 ### Control protocol
 

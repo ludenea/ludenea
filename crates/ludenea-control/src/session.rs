@@ -32,7 +32,9 @@ use serde::{Deserialize, Serialize};
 use crate::branches::{BranchId, BranchInfo, BranchTree, BranchesError, Segment, StoredBranch};
 use crate::checkpoints::{CHECKPOINT_BUDGET, Checkpoints};
 use crate::subscriptions::Introspection;
-use crate::undo::{ForkCause, UndoEntry, UndoError, UndoHistory, removed_by_run};
+use crate::undo::{
+    ForkCause, ROOT_FORKED, UndoEntry, UndoError, UndoHistory, not_within, removed_by_run, unfit,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
@@ -87,6 +89,11 @@ pub enum SessionError {
     RootBranch,
     #[error("the branch tree cannot be decoded: {0}")]
     BranchesDecode(#[from] BranchesError),
+    /// An undo or redo `action`, such as `Redo edit at tick 40`, that cannot work on the
+    /// session's branches, as only a crafted history holds. The entry is dropped from the
+    /// history, so the next undo or redo goes on.
+    #[error("the undo history's `{action}` {reason}; it was dropped")]
+    Unfit { action: String, reason: String },
     /// Branch identifiers are never reused: once the session handed out the last one, the
     /// edit or take-over at `tick` changes nothing.
     #[error(
@@ -733,6 +740,8 @@ impl Session {
         entry: &mut UndoEntry,
     ) -> Result<Option<(BranchId, u64)>, SessionError> {
         let players = self.inputs.players;
+        let action = format!("Undo {}", entry.describe());
+        let refused = |reason: String| SessionError::Unfit { action, reason };
         match entry {
             UndoEntry::Scene { before, .. } => {
                 self.load_scene_version(sim, before.clone())?;
@@ -761,8 +770,9 @@ impl Session {
                     .tree
                     .get(*branch)
                     .ok_or(SessionError::NoSuchBranch(*branch))?;
-                // The root forks from nothing: an entry naming it is dropped.
-                let parent = forked.parent.ok_or(SessionError::NoSuchBranch(*branch))?;
+                let parent = forked
+                    .parent
+                    .ok_or_else(|| refused(ROOT_FORKED.to_string()))?;
                 name.clone_from(&forked.name);
                 let (subtree, tick) = (self.tree.subtree(*branch), cause.tick());
                 self.switch_to(sim, parent, tick)?;
@@ -814,6 +824,8 @@ impl Session {
         sim: &mut Simulation,
         entry: &mut UndoEntry,
     ) -> Result<Option<(BranchId, u64)>, SessionError> {
+        let action = format!("Redo {}", entry.describe());
+        let refused = |reason: String| SessionError::Unfit { action, reason };
         match entry {
             UndoEntry::Scene { after, .. } => {
                 self.load_scene_version(sim, after.clone())?;
@@ -840,7 +852,9 @@ impl Session {
             } => {
                 let stored = StoredBranch::decode(removed)?;
                 let ids: Vec<BranchId> = stored.iter().map(StoredBranch::id).collect();
-                self.tree.put_back(stored, &self.edits, self.head)?;
+                self.tree
+                    .put_back(stored, &self.edits, self.head)
+                    .map_err(|error| refused(unfit(error)))?;
                 if let Err(error) = self.switch_to(sim, *branch, cause.tick()) {
                     // The branch cannot be shown: the redo is refused, and the branches go
                     // back to the entry.
@@ -875,7 +889,7 @@ impl Session {
                         if let Err(error) = self.tree.put_back(descendants, &self.edits, self.head)
                         {
                             self.splice(&undone, defaults.as_deref());
-                            return Err(error.into());
+                            return Err(refused(unfit(error)));
                         }
                         // A segment stored before a rebuild resimulates from the fork tick.
                         let fork_tick = self.tree.current_branch().fork_tick;
@@ -902,7 +916,9 @@ impl Session {
                     // An entry of a history written before branches: as in 2a, within
                     // the branch, whose run is cut after `tick`.
                     None => {
-                        self.tree.check_redo_within(*branch, tick)?;
+                        self.tree
+                            .check_redo_within(*branch, tick)
+                            .map_err(|error| refused(not_within(error)))?;
                         self.seek(sim, tick)?;
                         sim.apply_edit(&edit.edit)?;
                         self.discard_after(tick);
@@ -2623,14 +2639,15 @@ fn override_value(
 }
 
 /// Whether an undo or redo failed for good: its entry is dropped. That includes removed
-/// branches that do not decode or do not fit the tree (`BranchesDecode`, such as
-/// `BranchesError::MissingParent` or `Fork`), which only corrupt data holds.
+/// branches that do not decode (`BranchesDecode`) or do not fit the tree (`Unfit`), which
+/// only corrupt data holds.
 fn is_dropped<T>(result: &Result<T, SessionError>) -> bool {
     matches!(
         result,
         Err(SessionError::NotOnBranch { .. }
             | SessionError::NoSuchBranch(_)
-            | SessionError::BranchesDecode(_))
+            | SessionError::BranchesDecode(_)
+            | SessionError::Unfit { .. })
     )
 }
 
@@ -2691,10 +2708,13 @@ mod tests {
             removed: Vec::new(),
         });
 
-        assert!(matches!(
-            session.undo(&mut sim),
-            Err(SessionError::NoSuchBranch(BranchId::ROOT))
-        ));
+        let error = session.undo(&mut sim).unwrap_err();
+
+        assert!(matches!(error, SessionError::Unfit { .. }), "{error:?}");
+        assert_eq!(
+            error.to_string(),
+            "the undo history's `Undo take-over at tick 5` names the root branch as the branch it forked, but the root forks from nothing; it was dropped"
+        );
         assert!(!session.timeline().can_undo);
     }
 
@@ -2729,10 +2749,13 @@ mod tests {
         };
         session.history.redone(entry, false);
 
-        assert!(matches!(
-            session.redo(&mut sim),
-            Err(SessionError::BranchesDecode(BranchesError::Fork))
-        ));
+        let error = session.redo(&mut sim).unwrap_err();
+
+        assert!(matches!(error, SessionError::Unfit { .. }), "{error:?}");
+        assert_eq!(
+            error.to_string(),
+            "the undo history's `Redo edit at tick 40` cannot be redone within its branch: a branch forks outside its parent's run; it was dropped"
+        );
         assert!(!session.timeline().can_redo);
         let export = session.export().unwrap();
         Session::resume(&mut sim, export, Document::Scene).unwrap();

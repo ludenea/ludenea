@@ -1551,6 +1551,7 @@ fn session_error(error: &SessionError) -> ProtocolError {
         SessionError::NothingToRedo => ErrorCode::NothingToRedo,
         SessionError::Undo(_)
         | SessionError::BranchesDecode(_)
+        | SessionError::Unfit { .. }
         | SessionError::CannotFork { .. }
         | SessionError::NoSuchBranch(_)
         | SessionError::RootBranch

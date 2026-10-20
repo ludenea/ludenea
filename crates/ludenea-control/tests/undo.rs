@@ -1036,7 +1036,7 @@ fn a_fork_entry_naming_the_root_is_dropped_not_a_panic() {
     assert_eq!(
         session.warnings(),
         [
-            "the undo history's `Undo take-over at tick 5` names the root branch as the branch it forked; it was dropped"
+            "the undo history's `Undo take-over at tick 5` names the root branch as the branch it forked, but the root forks from nothing; it was dropped"
         ]
     );
     assert!(matches!(
