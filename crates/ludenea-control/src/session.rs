@@ -1318,7 +1318,7 @@ impl Session {
     }
 
     /// Sets the override of `component` at `path` on `entity` of the instance at `instance`
-    /// to the RON `value`, like a tick 0 edit.
+    /// to the RON `value`: the scene edit of `SceneChange::Override` (see `edit_scene`).
     pub fn set_override(
         &mut self,
         sim: &mut Simulation,
@@ -1328,9 +1328,14 @@ impl Session {
         path: &[PathSegment],
         value: &str,
     ) -> Result<(), SessionError> {
-        self.ensure_resimulated()?;
-        let scene = prefab::set_override(&self.scene, instance, entity, component, path, value)?;
-        self.change_scene(sim, scene)
+        let change = SceneChange::Override {
+            instance: instance.to_vec(),
+            entity: entity.to_vec(),
+            component: component.to_string(),
+            path: path.to_vec(),
+            value: value.to_string(),
+        };
+        self.edit_scene(sim, &[change]).map(drop)
     }
 
     /// The prefab file of the scene entities `entities` as the scene holds them (see

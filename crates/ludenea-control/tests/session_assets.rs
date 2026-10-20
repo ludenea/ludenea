@@ -5,7 +5,7 @@ use boxes::SpawnerStats;
 use ludenea::app::prefab::{create_prefab, place_instance, save_prefab_checked};
 use ludenea::cli::assets::project_assets;
 use ludenea::control::session::Document;
-use ludenea::control::{Resimulation, Session, SessionError};
+use ludenea::control::{Resimulation, SceneChange, Session, SessionError};
 use ludenea::ecs::{Asset, AssetId, Component};
 use ludenea::prelude::*;
 use ludenea_app::path::PathSegment;
@@ -1060,4 +1060,31 @@ fn a_prefab_document_that_keeps_every_asset_never_keeps_its_own_saved_text() {
 
     assert!(sim.world().asset_bytes(PREFAB).is_none());
     assert!(sim.world().asset_bytes(STATS).is_some());
+}
+
+#[test]
+fn an_override_is_one_scene_change_whichever_call_sets_it() {
+    let y = [field("position"), field("y")];
+    let (mut sim, mut set) = spawner_session();
+    let scene = set.scene().to_string();
+    set.set_override(&mut sim, &[6], &[0], Pose::NAME, &y, "3.0")
+        .unwrap();
+    let (mut other, mut edited) = spawner_session();
+    let change = SceneChange::Override {
+        instance: vec![6],
+        entity: vec![0],
+        component: Pose::NAME.to_string(),
+        path: y.to_vec(),
+        value: "3.0".to_string(),
+    };
+    edited.edit_scene(&mut other, &[change]).unwrap();
+
+    assert_ne!(set.scene(), scene);
+    assert_eq!(set.scene(), edited.scene());
+    assert_eq!(set.timeline(), edited.timeline());
+    resimulate_all(&mut set, &mut sim);
+    resimulate_all(&mut edited, &mut other);
+    set.undo(&mut sim).unwrap();
+    edited.undo(&mut other).unwrap();
+    assert_eq!((set.scene(), edited.scene()), (&*scene, &*scene));
 }
