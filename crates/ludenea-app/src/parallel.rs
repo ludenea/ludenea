@@ -198,9 +198,9 @@ mod tests {
                 )
             );
         }
-        for threads in [1, Parallel::MAX_THREADS] {
-            assert_eq!(Parallel::try_new(threads).unwrap().threads(), threads);
-        }
+        assert_eq!(Parallel::try_new(1).unwrap().threads(), 1);
+        // Checked, not started: 256 threads fail under a low process limit.
+        assert_eq!(Parallel::check(Parallel::MAX_THREADS), Ok(()));
     }
 
     #[cfg(not(target_family = "wasm"))]
