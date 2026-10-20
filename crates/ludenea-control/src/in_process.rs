@@ -125,16 +125,23 @@ pub(crate) fn answer(host: &mut Host, connected: &mut bool, line: &str) -> Serve
     all(target_arch = "wasm32", target_os = "unknown")
 ))]
 fn malformed(connected: bool, line: &str, error: &serde_json::Error) -> ServerMessage {
-    /// The version of a hello of another shape, such as one from a protocol version before
-    /// `protocol_fingerprint`, so it is refused as such.
-    fn hello_version(line: &str) -> Option<u32> {
+    /// A hello of another shape: the version it gives, if any, so one from a protocol
+    /// version before `protocol_fingerprint` is refused as such.
+    fn unreadable_hello(line: &str) -> Option<Option<u32>> {
         #[derive(serde::Deserialize)]
         #[serde(tag = "type", rename_all = "snake_case")]
         enum AnyHello {
-            Hello { protocol_version: u32 },
+            Hello {
+                #[serde(default)]
+                protocol_version: serde_json::Value,
+            },
         }
         let AnyHello::Hello { protocol_version } = serde_json::from_str(line).ok()?;
-        Some(protocol_version)
+        Some(
+            protocol_version
+                .as_u64()
+                .and_then(|version| u32::try_from(version).ok()),
+        )
     }
 
     let id = serde_json::from_str::<serde_json::Value>(line)
@@ -142,9 +149,18 @@ fn malformed(connected: bool, line: &str, error: &serde_json::Error) -> ServerMe
         .and_then(|value| value.get("id")?.as_u64());
     match (connected, id) {
         (false, _) => ServerMessage::Refused {
-            error: match hello_version(line) {
-                Some(version) if version != PROTOCOL_VERSION => version_mismatch(version),
-                _ => ProtocolError::new(ErrorCode::NotConnected, "send Hello before any request"),
+            error: match unreadable_hello(line) {
+                Some(Some(version)) if version != PROTOCOL_VERSION => version_mismatch(version),
+                Some(_) => ProtocolError::new(
+                    ErrorCode::InvalidCommand,
+                    format!(
+                        "cannot read this hello: {error}; a hello needs protocol_version and \
+                         protocol_fingerprint"
+                    ),
+                ),
+                None => {
+                    ProtocolError::new(ErrorCode::NotConnected, "send Hello before any request")
+                }
             },
         },
         (true, Some(id)) => ServerMessage::Response {

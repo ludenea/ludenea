@@ -232,7 +232,10 @@ API.
   of every type the messages reach. The host refuses a client of another version or
   fingerprint with `version_mismatch` and says to rebuild the editor
   (`pnpm -C editor build`) and the game from the same checkout; a `hello` of an earlier
-  version, without the fingerprint, is refused the same way.
+  version, without the fingerprint, is refused the same way. A `hello` of this version
+  that does not decode, such as one without `protocol_fingerprint`, is refused with
+  `invalid_command`, its decoding error, and the fields a `hello` needs, instead of
+  "send Hello before any request".
 - `set_threads` refuses a count outside 1 to 256, or one the system cannot start, with
   `invalid_command`, and the previous count stays; it ended the game process before.
   `host --stdio` starts on every core up to 256, and on one thread with a console warning
@@ -336,7 +339,9 @@ API.
 
 - Project protocol 3, fingerprint `70a550015903ce41`.
 - `hello` and `welcome` carry `protocol_fingerprint`, as in the control protocol, and the
-  service refuses a client of another version or fingerprint the same way.
+  service refuses a client of another version or fingerprint the same way, and a `hello`
+  that does not decode with `invalid_request`, its decoding error, and the fields a
+  `hello` needs.
 - `game_output` events and the `line` events of a build carry a line that is not UTF-8
   with replacement characters. Such a line used to end the relay of its stream: on the
   game's standard output, every later protocol message was lost.

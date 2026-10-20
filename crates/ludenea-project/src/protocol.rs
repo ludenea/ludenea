@@ -390,16 +390,23 @@ pub fn handshake(protocol_version: u32, protocol_fingerprint: Hash64) -> Project
     }
 }
 
-/// The version of a hello of another shape, such as one from a protocol version before
-/// `protocol_fingerprint`, so it is refused as such.
-pub(crate) fn hello_version(text: &str) -> Option<u32> {
+/// A hello of another shape: the version it gives, if any, so one from a protocol version
+/// before `protocol_fingerprint` is refused as such.
+pub(crate) fn unreadable_hello(text: &str) -> Option<Option<u32>> {
     #[derive(Deserialize)]
     #[serde(tag = "type", rename_all = "snake_case")]
     enum AnyHello {
-        Hello { protocol_version: u32 },
+        Hello {
+            #[serde(default)]
+            protocol_version: serde_json::Value,
+        },
     }
     let AnyHello::Hello { protocol_version } = serde_json::from_str(text).ok()?;
-    Some(protocol_version)
+    Some(
+        protocol_version
+            .as_u64()
+            .and_then(|version| u32::try_from(version).ok()),
+    )
 }
 
 /// The refusal of a client of another project protocol version.

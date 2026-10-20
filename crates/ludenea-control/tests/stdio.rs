@@ -127,6 +127,32 @@ fn a_hello_of_an_earlier_version_is_refused_as_such() {
     );
 }
 
+#[test]
+fn a_hello_that_does_not_decode_says_what_it_needs() {
+    let fingerprint = serde_json::json!(PROTOCOL_FINGERPRINT);
+    let unreadable = [
+        serde_json::json!({ "type": "hello", "protocol_version": PROTOCOL_VERSION }),
+        serde_json::json!({ "type": "hello", "protocol_version": PROTOCOL_VERSION, "protocol_fingerprint": 42 }),
+        serde_json::json!({ "type": "hello", "protocol_fingerprint": fingerprint }),
+    ];
+    for hello in unreadable {
+        let messages = serve(line(hello.clone()));
+        let ServerMessage::Refused { error } = &messages[0] else {
+            panic!("{hello}: {:?}", messages[0]);
+        };
+        assert_eq!(error.code, ErrorCode::InvalidCommand, "{hello}");
+        let reason = serde_json::from_str::<ClientMessage>(&hello.to_string()).unwrap_err();
+        assert_eq!(
+            error.message,
+            format!(
+                "cannot read this hello: {reason}; a hello needs protocol_version and \
+                 protocol_fingerprint"
+            ),
+            "{hello}"
+        );
+    }
+}
+
 /// Delivers its chunks one after another, waiting before each, then ends.
 struct Script(std::vec::IntoIter<(Duration, String)>);
 

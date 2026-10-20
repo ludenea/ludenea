@@ -175,6 +175,35 @@ fn hello_of_an_earlier_version_is_refused_as_such() {
 }
 
 #[test]
+fn a_hello_that_does_not_decode_says_what_it_needs() {
+    let unreadable = [
+        format!(r#"{{"type":"hello","protocol_version":{PROJECT_PROTOCOL_VERSION}}}"#),
+        format!(
+            r#"{{"type":"hello","protocol_version":{PROJECT_PROTOCOL_VERSION},"protocol_fingerprint":42}}"#
+        ),
+        r#"{"type":"hello"}"#.to_string(),
+    ];
+    for hello in unreadable {
+        let mut service = ProjectService::new(ServiceMode::Desktop, None);
+        let mut connected = false;
+        let ProjectServerMessage::Refused { error } = service.answer(&mut connected, &hello) else {
+            panic!("{hello} is welcomed");
+        };
+        assert_eq!(error.code, FailureCode::InvalidRequest, "{hello}");
+        let reason = serde_json::from_str::<ProjectClientMessage>(&hello).unwrap_err();
+        assert_eq!(
+            error.message,
+            format!(
+                "cannot read this hello: {reason}; a hello needs protocol_version and \
+                 protocol_fingerprint"
+            ),
+            "{hello}"
+        );
+        assert!(!connected);
+    }
+}
+
+#[test]
 fn hello_with_another_fingerprint_is_refused() {
     let other = Hash64(PROJECT_PROTOCOL_FINGERPRINT.0 ^ 1);
     let message = refused_hello(&hello(PROJECT_PROTOCOL_VERSION, other));

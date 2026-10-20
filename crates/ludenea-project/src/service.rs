@@ -14,7 +14,7 @@ use tokio::sync::broadcast;
 use crate::protocol::{
     AssetTexts, FailureCode, PROJECT_PROTOCOL_VERSION, ProjectClientMessage, ProjectEvent,
     ProjectFailure, ProjectInfo, ProjectReply, ProjectRequest, ProjectServerMessage, ServiceMode,
-    handshake, hello_version, version_mismatch,
+    handshake, unreadable_hello, version_mismatch,
 };
 use crate::{
     BuildArtifact, BuildError, BuildEvent, BuildTarget, GameProcess, PluginEvent, Project,
@@ -177,13 +177,22 @@ impl ProjectService {
                     .ok()
                     .and_then(|value| value.get("id")?.as_u64());
                 match (*connected, id) {
-                    (false, _) => match hello_version(text) {
-                        Some(version) if version != PROJECT_PROTOCOL_VERSION => {
+                    (false, _) => match unreadable_hello(text) {
+                        Some(Some(version)) if version != PROJECT_PROTOCOL_VERSION => {
                             ProjectServerMessage::Refused {
                                 error: version_mismatch(version),
                             }
                         }
-                        _ => not_connected(),
+                        Some(_) => ProjectServerMessage::Refused {
+                            error: ProjectFailure::new(
+                                FailureCode::InvalidRequest,
+                                format!(
+                                    "cannot read this hello: {error}; a hello needs \
+                                     protocol_version and protocol_fingerprint"
+                                ),
+                            ),
+                        },
+                        None => not_connected(),
                     },
                     (true, Some(id)) => ProjectServerMessage::Response {
                         id,
