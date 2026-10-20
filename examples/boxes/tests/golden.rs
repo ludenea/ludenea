@@ -27,9 +27,12 @@ fn dump_dir(ludenea_dump_dir: Option<OsString>) -> PathBuf {
         .map_or_else(std::env::temp_dir, PathBuf::from)
 }
 
+/// The variable that names the dump folder, which CI's native jobs set.
+const DUMP_DIR_VARIABLE: &str = "LUDENEA_DUMP_DIR";
+
 /// The dump folder of the golden run `name`, as a command line argument.
 fn run_dump_dir(name: &str) -> String {
-    let dir = dump_dir(std::env::var_os("LUDENEA_DUMP_DIR")).join(name);
+    let dir = dump_dir(std::env::var_os(DUMP_DIR_VARIABLE)).join(name);
     dir.into_os_string()
         .into_string()
         .expect("LUDENEA_DUMP_DIR or the temporary directory is UTF-8")
@@ -40,6 +43,18 @@ fn dump_dir_follows_ludenea_dump_dir() {
     assert_eq!(dump_dir(Some("ci/dump".into())), PathBuf::from("ci/dump"));
     assert_eq!(dump_dir(Some(OsString::new())), std::env::temp_dir());
     assert_eq!(dump_dir(None), std::env::temp_dir());
+}
+
+#[test]
+fn ci_sets_the_dump_dir_variable() {
+    let workflow = include_str!("../../../.github/workflows/determinism.yml");
+    let key = format!("{DUMP_DIR_VARIABLE}: ");
+    assert!(
+        workflow
+            .lines()
+            .any(|line| line.trim_start().starts_with(&key)),
+        "the workflow does not set {DUMP_DIR_VARIABLE}"
+    );
 }
 
 fn verify(threads: &str) {
