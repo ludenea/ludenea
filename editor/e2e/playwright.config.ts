@@ -12,6 +12,9 @@ export default defineConfig({
   // The golden check runs 10,000 ticks of a release build in the worker, and the first spec
   // waits for the first build (`FIRST_BUILD_MS` in project.ts).
   timeout: (process.env.CI ? 20 : 10) * 60 * 1000,
+  // On CI the whole run stops after 4 hours, inside the editor job's `timeout-minutes`, which
+  // the per-test timeout alone no longer bounds; 0 is no limit.
+  globalTimeout: process.env.CI ? 4 * 60 * 60 * 1000 : 0,
   // The specs share one cargo target directory, and the performance spec measures frame times:
   // one at a time.
   workers: 1,

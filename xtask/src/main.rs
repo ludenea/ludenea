@@ -1,8 +1,8 @@
 //! Workspace tasks, run with `cargo xtask <task>`.
 //!
 //! `check` runs the lint checks CI runs: formatting (the engine and the desktop backend),
-//! clippy on the host (with and without the wgpu renderer) and on WebAssembly, and the API documentation, with warnings denied. It
-//! stops at the first that fails.
+//! clippy on the host (with and without the wgpu renderer) and on WebAssembly, and the API
+//! documentation, with warnings denied. It stops at the first that fails.
 //!
 //! `wasm-game <package> <out-dir>` builds a game library for the browser and writes its
 //! JavaScript glue (`game.js`) and module (`game_bg.wasm`) to `<out-dir>`.
@@ -170,7 +170,8 @@ mod tests {
     const WORKFLOW: &str = include_str!("../../.github/workflows/determinism.yml");
 
     /// CI runs each check as a step of its own (the host clippy in the native jobs, the
-    /// renderer's clippy in the render jobs, the rest once in the lint job), so a check added here must be added there too.
+    /// renderer's clippy in the render jobs, the rest once in the lint job), so a check added
+    /// here must be added there too.
     #[test]
     fn ci_runs_every_check() {
         assert_eq!(missing_checks(WORKFLOW), Vec::<String>::new());

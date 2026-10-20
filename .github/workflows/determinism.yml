@@ -178,8 +178,9 @@ jobs:
 
   editor:
     runs-on: ubuntu-24.04
-    # Above the end-to-end budget (thirteen tests of at most 20 minutes each on CI) plus the
-    # builds and checks before it, so a hang is cut off without cutting a cold run short.
+    # Above the end-to-end budget (24 tests, of at most 20 minutes each and 4 hours in all on
+    # CI, `globalTimeout` in playwright.config.ts) plus the builds and checks before it, so a
+    # hang is cut off without cutting a cold run short.
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
