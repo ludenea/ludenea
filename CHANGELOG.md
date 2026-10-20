@@ -262,8 +262,9 @@ API.
 - A command that has to restore a checkpoint the game's own types refuse, such as `seek`,
   fails with `invalid_snapshot` and names the tick, the entity, and why its type refuses
   the value; it ended the game process before. A seek, undo, or redo that fails this way
-  changes nothing, and a branch switch stays on the current branch, or on the target at its
-  first stale tick. When the session cannot come back to its tick after a game panic, a
+  changes nothing, but an undo or redo that shows another branch stays on that branch,
+  where it switched first, and a branch switch stays on the current branch, or on the
+  target at its first stale tick. When the session cannot come back to its tick after a game panic, a
   snapshot restore, a replay export, resimulation, or a failed apply to the scene, it goes
   to a tick it can show, tick 0 at worst. While the current state itself holds such a
   value, resimulation and an edit whose asset loads are taken back replay the current tick

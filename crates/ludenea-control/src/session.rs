@@ -69,10 +69,11 @@ pub enum SessionError {
     #[error(transparent)]
     Snapshot(#[from] SnapshotError),
     /// A system left a value its own type refuses to load in the state recorded at `tick`,
-    /// so that state cannot come back. A seek, undo, or redo changes nothing; a branch switch
-    /// stays on the current branch, or on the target at its first stale tick. Coming back
-    /// to the current tick after the world left it goes to a tick the session can show,
-    /// tick 0 at worst.
+    /// so that state cannot come back. A seek changes nothing, and so does an undo or redo,
+    /// but one that shows another branch stays on that branch, where it switched first; a
+    /// branch switch stays on the current branch, or on the target at its first stale
+    /// tick. Coming back to the current tick after the world left it goes to a tick
+    /// the session can show, tick 0 at worst.
     #[error(
         "the checkpoint of tick {tick} cannot be restored: {source}; a system wrote that value, so fix the system and load the session again"
     )]
@@ -890,13 +891,25 @@ impl Session {
                 restores,
             } => {
                 let tick = edit.tick;
+                let mut stored = removed_by_run(removed)?.into_iter();
+                let own = stored.next();
+                // The refusals that only read the tree come before the switch. A branch the
+                // tree does not have is the switch's to refuse.
+                if let Some(target) = self.tree.get(*branch) {
+                    match own {
+                        Some(_) => edit_after_fork(*branch, target.fork_tick, tick),
+                        None => self
+                            .tree
+                            .check_redo_within(*branch, tick)
+                            .map_err(not_within),
+                    }
+                    .map_err(&refused)?;
+                }
                 self.switch_to(sim, *branch, tick)?;
                 self.ensure_resimulated()?;
-                let mut stored = removed_by_run(removed)?.into_iter();
-                match stored.next() {
+                match own {
                     Some(own) => {
                         let fork_tick = self.tree.current_branch().fork_tick;
-                        edit_after_fork(*branch, fork_tick, tick).map_err(refused)?;
                         let (segment, stale) = own.into_segment()?;
                         let descendants: Vec<StoredBranch> = stored.collect();
                         let ids: Vec<BranchId> = descendants.iter().map(StoredBranch::id).collect();
@@ -936,9 +949,6 @@ impl Session {
                     // An entry of a history written before branches: as in 2a, within
                     // the branch, whose run is cut after `tick`.
                     None => {
-                        self.tree
-                            .check_redo_within(*branch, tick)
-                            .map_err(|error| refused(not_within(error)))?;
                         self.seek(sim, tick)?;
                         sim.apply_edit(&edit.edit)?;
                         self.discard_after(tick);
@@ -2788,9 +2798,8 @@ mod tests {
         let resource = "boxes::ContactStats".to_string();
         let edit = Edit::SetResource { resource, value };
         session.seek(&mut sim, 50).unwrap();
-        // Forks Branch 1 from the root at tick 50.
+        // Forks Branch 1 from the root at tick 50, which stays current.
         session.edit(&mut sim, edit.clone()).unwrap();
-        session.switch_branch(&mut sim, BranchId::ROOT).unwrap();
         // An entry of a history written before branches, which no check let in.
         let entry = UndoEntry::Run {
             branch: BranchId::ROOT,
@@ -2807,6 +2816,8 @@ mod tests {
             error.to_string(),
             "the undo history's `Redo edit at tick 40` cannot be redone within its branch: a branch forks outside its parent's run; it was dropped"
         );
+        // Refused before it switched to the entry's branch.
+        assert_eq!(session.current_branch(), BranchId(1));
         assert!(!session.timeline().can_redo);
         let export = session.export().unwrap();
         Session::resume(&mut sim, export, Document::Scene).unwrap();
