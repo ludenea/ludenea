@@ -3,6 +3,7 @@
 //! part depends on no GPU crate, so the simulation never pulls one.
 
 pub mod animate;
+pub mod atlas;
 pub mod components;
 pub mod extract;
 pub mod sheet;

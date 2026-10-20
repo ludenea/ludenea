@@ -47,6 +47,7 @@ wasm-bindgen-cli-support = "=0.2.129"
 wasm-bindgen-futures = "0.4.79"
 web-sys = "0.3.106"
 wgpu = { version = "=30.0.1", default-features = false }
+png = "=0.18.1"
 cargo_metadata = "0.23.1"
 # Every rolldown crate on the same exact version: they are released together.
 rolldown = "=1.2.14"
