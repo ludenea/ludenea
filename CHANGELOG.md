@@ -14,10 +14,10 @@ this table in the same commit.
 | Format                 | Constant                   | Current | Oldest readable               |
 | ---------------------- | -------------------------- | ------- | ----------------------------- |
 | Control protocol       | `PROTOCOL_VERSION`         | 4       | 4                             |
-| Project protocol       | `PROJECT_PROTOCOL_VERSION` | 3       | 3                             |
+| Project protocol       | `PROJECT_PROTOCOL_VERSION` | 4       | 4                             |
 | Scene (`.scene.ron`)   | `SCENE_VERSION`            | 2       | 1                             |
 | Prefab (`.prefab.ron`) | `PREFAB_VERSION`           | 1       | 1                             |
-| Meta (`.meta`)         | `META_VERSION`             | 1       | 1                             |
+| Meta (`.meta`)         | `META_VERSION`             | 2       | 1                             |
 | Replay (`.replay`)     | `REPLAY_VERSION`           | 1       | 1                             |
 | Trace (`.trace`)       | `TRACE_VERSION`            | 1       | 1                             |
 | Snapshot (`.snap`)     | `SNAPSHOT_VERSION`         | 3       | 2                             |
@@ -423,7 +423,8 @@ hash, those of the golden trace and replays included.
 
 ### Project protocol
 
-- Project protocol 3, fingerprint `70a550015903ce41`.
+- Project protocol 4, fingerprint `96f47cb59cf37239`: `AssetKind` gains `Texture(TextureMeta)`,
+  so a listing tells a PNG and how it is cut into frames.
 - `hello` and `welcome` carry `protocol_fingerprint`, as in the control protocol, and the
   service refuses a client of another version or fingerprint the same way, and a `hello`
   that does not decode with `invalid_request`, its decoding error, and the fields a
@@ -552,6 +553,11 @@ hash, those of the golden trace and replays included.
 
 ### Formats
 
+- Meta 2: `Texture(TextureMeta)` describes how a PNG is cut into frames (pixels per unit,
+  an optional frame grid, a pivot, and a filter); version 1 metas still read. A `.png`
+  without a meta gets one with the defaults (16 pixels per unit, no grid, centred pivot,
+  `Nearest`), and a texture meta with a pixels per unit or frame size of 0 is refused,
+  naming the field.
 - Edit log 3: an edit can be a group (`Edit::Group`), last, so versions 2 and 1 still read;
   a version 2 log that holds a group is refused with `SimError::EditLogDecode`.
   The undo history (version 4) and replays embed edits, so they may hold groups too; a

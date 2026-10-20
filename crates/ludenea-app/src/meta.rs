@@ -13,7 +13,7 @@ use std::time::Duration;
 use ludenea_ecs::AssetId;
 use serde::{Deserialize, Serialize};
 
-pub const META_VERSION: u32 = 1;
+pub const META_VERSION: u32 = 2;
 
 /// What a project file is. Only a meta makes a `.ron` file a data asset.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,6 +22,7 @@ pub enum AssetKind {
     Scene,
     Prefab,
     Data { r#type: String },
+    Texture(TextureMeta),
     Replay,
     Trace,
     Snapshot,
@@ -37,12 +38,76 @@ impl AssetKind {
             (".replay", Self::Replay),
             (".trace", Self::Trace),
             (".snap", Self::Snapshot),
+            (".png", Self::Texture(TextureMeta::default())),
         ];
         kinds
             .into_iter()
             .find(|(extension, _)| path.ends_with(extension))
             .map_or(Self::Other, |(_, kind)| kind)
     }
+}
+
+/// How a PNG is cut into frames and drawn.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export_to = "project/"))]
+pub struct TextureMeta {
+    /// How many pixels span one world unit.
+    pub pixels_per_unit: u32,
+    /// The frame grid; `None` makes the whole image one frame.
+    pub grid: Option<Grid>,
+    /// The pivot in pixels from the frame's top-left corner; `None` is the frame's centre.
+    pub pivot: Option<(u32, u32)>,
+    pub filter: Filter,
+}
+
+impl Default for TextureMeta {
+    fn default() -> Self {
+        Self {
+            pixels_per_unit: 16,
+            grid: None,
+            pivot: None,
+            filter: Filter::Nearest,
+        }
+    }
+}
+
+impl TextureMeta {
+    /// Refuses a meta no image can be cut by, naming the field.
+    pub fn validate(&self) -> Result<(), String> {
+        let fields = [
+            ("pixels_per_unit", Some(self.pixels_per_unit)),
+            (
+                "grid.frame_width",
+                self.grid.as_ref().map(|grid| grid.frame_width),
+            ),
+            (
+                "grid.frame_height",
+                self.grid.as_ref().map(|grid| grid.frame_height),
+            ),
+        ];
+        match fields.into_iter().find(|(_, value)| *value == Some(0)) {
+            Some((field, _)) => Err(format!("{field} must be at least 1")),
+            None => Ok(()),
+        }
+    }
+}
+
+/// A grid of equal frames, `margin` pixels in from the image edge and `spacing` pixels apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export_to = "project/"))]
+pub struct Grid {
+    pub frame_width: u32,
+    pub frame_height: u32,
+    pub margin: u32,
+    pub spacing: u32,
+}
+
+/// How a texture is sampled when scaled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export_to = "project/"))]
+pub enum Filter {
+    Nearest,
+    Linear,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,7 +158,11 @@ impl Meta {
         } else {
             text
         };
-        ron::from_str(&text).map_err(|error| error.to_string())
+        let meta: Meta = ron::from_str(&text).map_err(|error| error.to_string())?;
+        if let AssetKind::Texture(texture) = &meta.kind {
+            texture.validate()?;
+        }
+        Ok(meta)
     }
 
     /// Reads the meta, creating it with a random identifier only when it does not exist.
@@ -204,6 +273,62 @@ mod tests {
                 kind: AssetKind::Scene,
             }
         );
+    }
+
+    #[test]
+    fn version_1_meta_still_reads() {
+        let text = "Meta(version: 1, id: \"0000000000000000000000000000002a\", kind: Other)\n";
+        assert_eq!(ron::from_str::<Meta>(text).unwrap().version, 1);
+        assert_eq!(META_VERSION, 2);
+    }
+
+    #[test]
+    fn png_gets_a_default_texture_meta() {
+        assert_eq!(
+            AssetKind::of("assets/hero.png"),
+            AssetKind::Texture(TextureMeta {
+                pixels_per_unit: 16,
+                grid: None,
+                pivot: None,
+                filter: Filter::Nearest,
+            })
+        );
+    }
+
+    fn sheet_meta() -> Meta {
+        Meta {
+            version: META_VERSION,
+            id: AssetId(42),
+            kind: AssetKind::Texture(TextureMeta {
+                grid: Some(Grid {
+                    frame_width: 100,
+                    frame_height: 55,
+                    margin: 0,
+                    spacing: 0,
+                }),
+                ..TextureMeta::default()
+            }),
+        }
+    }
+
+    #[test]
+    fn texture_meta_round_trips() {
+        let text = "Meta(version: 2, id: \"0000000000000000000000000000002a\", kind: Texture((pixels_per_unit: 16, grid: Some((frame_width: 100, frame_height: 55, margin: 0, spacing: 0)), pivot: None, filter: Nearest)))";
+        assert_eq!(ron::from_str::<Meta>(text).unwrap(), sheet_meta());
+        let written = ron::to_string(&sheet_meta()).unwrap();
+        assert_eq!(ron::from_str::<Meta>(&written).unwrap(), sheet_meta());
+    }
+
+    #[test]
+    fn texture_meta_with_zero_frame_width_is_refused_naming_the_field() {
+        let mut meta = sheet_meta();
+        let AssetKind::Texture(texture) = &mut meta.kind else {
+            unreachable!()
+        };
+        texture.grid.as_mut().unwrap().frame_width = 0;
+        let text = ron::to_string(&meta).unwrap();
+        let error = Meta::parse(Path::new("hero.png.meta"), text).unwrap_err();
+        assert!(error.contains("grid.frame_width"), "{error}");
     }
 
     #[test]

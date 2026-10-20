@@ -104,7 +104,13 @@ export function AssetsPanel({ editor, assets }: { editor: Editor; assets: Assets
                   aria-selected={file.path === selected}
                   tabIndex={0}
                   draggable
-                  title={typeof file.kind === "object" ? file.kind.Data.type : file.kind}
+                  title={
+                    typeof file.kind === "object"
+                      ? "Data" in file.kind
+                        ? file.kind.Data.type
+                        : "Texture"
+                      : file.kind
+                  }
                   onClick={() => select(file)}
                   onFocus={() => set({ selected: file.path })}
                   onDoubleClick={() => attempt(assets.open(file.path))}

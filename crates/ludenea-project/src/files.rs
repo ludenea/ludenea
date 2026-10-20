@@ -54,7 +54,7 @@ fn meta_path(file: &Path) -> PathBuf {
 /// a data asset.
 fn kind_of(path: &str, meta: Option<&Meta>) -> AssetKind {
     match meta.map(|meta| &meta.kind) {
-        Some(data @ AssetKind::Data { .. }) => data.clone(),
+        Some(declared @ (AssetKind::Data { .. } | AssetKind::Texture(_))) => declared.clone(),
         _ => AssetKind::of(path),
     }
 }
@@ -217,6 +217,7 @@ impl Project {
             AssetKind::Data { .. } => {
                 path.ends_with(".ron") && AssetKind::of(path) == AssetKind::Other
             }
+            AssetKind::Texture(_) => path.ends_with(".png"),
             other => AssetKind::of(path) == *other,
         };
         if !fits {
