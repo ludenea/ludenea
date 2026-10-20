@@ -54,12 +54,18 @@ const isObject = (value: unknown): value is Record<string, unknown> => typeof va
 /**
  * Version 0, the unversioned `SavedSession`, listed its unsaved assets in `unsavedAssets`
  * before `load.saved_assets` held their saved text. That text was not stored: an empty one
- * keeps each unsaved, and opening the document replaces it with the file's.
+ * keeps each unsaved, and opening the document replaces it with the file's. Its load named a
+ * prefab document `"Prefab"`, whose asset is the session's `document`.
  */
 function fromVersion0({ unsavedAssets, ...saved }: Record<string, unknown>): unknown {
-  if (!isObject(saved.load) || "saved_assets" in saved.load) return saved;
-  const unsaved = Array.isArray(unsavedAssets) ? unsavedAssets : [];
-  return { ...saved, load: { ...saved.load, saved_assets: unsaved.map((id: unknown) => [id, ""]) } };
+  if (!isObject(saved.load)) return saved;
+  const load = { ...saved.load };
+  if (!("saved_assets" in load)) {
+    const unsaved = Array.isArray(unsavedAssets) ? unsavedAssets : [];
+    load.saved_assets = unsaved.map((id: unknown) => [id, ""]);
+  }
+  if (load.document === "Prefab" && isText(saved.document)) load.document = { Prefab: { id: saved.document } };
+  return { ...saved, load };
 }
 
 const isText = (value: unknown) => typeof value === "string";

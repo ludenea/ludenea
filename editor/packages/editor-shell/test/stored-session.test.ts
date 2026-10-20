@@ -17,6 +17,17 @@ describe("stored sessions", () => {
     expect(decodeStoredSession(encodeStoredSession(saved(scene)))).toEqual({ saved: saved(scene) });
   });
 
+  it("an_unversioned_stored_session_of_a_prefab_names_its_asset", () => {
+    const prefab = "000000000000000000000000000000b0";
+    // Before versions, the load named a prefab document "Prefab" and the stored session its asset.
+    const { saved_assets: _, ...load } = saved("(prefab)").load;
+    const unversioned = { load: { ...load, document: "Prefab" }, tick: 3, document: prefab, unsavedAssets: [] };
+
+    expect(decodeStoredSession(storedBytes(unversioned))).toEqual({
+      saved: { load: { ...load, saved_assets: [], document: { Prefab: { id: prefab } } }, tick: 3, document: prefab },
+    });
+  });
+
   it("an_unreadable_stored_session_says_what_is_wrong", () => {
     const valid = saved("(main)");
     const read = (value: unknown) => decodeStoredSession(storedBytes(value));

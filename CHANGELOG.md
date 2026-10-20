@@ -453,8 +453,9 @@ API.
   The undo history (version 4) and replays embed edits, so they may hold groups too; a
   replay keeps its version, and its edit log names its own.
 - Stored session 1: `.ludenea/sessions/<id>.session` holds `{ version: 1, saved }`, the
-  `SavedSession` in an envelope. The unversioned form before it still reads, and the
-  assets it lists in `unsavedAssets` stay unsaved. A stored session that cannot be read
+  `SavedSession` in an envelope. The unversioned form before it still reads: the assets it
+  lists in `unsavedAssets` stay unsaved, and its `"Prefab"` document names the prefab's
+  asset, its `document`, as the game now asks. A stored session that cannot be read
   (not base64, not JSON, a shape the editor does not know, or another version), or that
   the game refuses, no longer blocks opening its document and is never overwritten: the
   document opens from its file, a warning names the session file and the reason, and the
