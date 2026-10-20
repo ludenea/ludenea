@@ -1,7 +1,7 @@
 // Decorations and columns are registered on the shell's `Editor` and rendered by the built-in
 // inspector and explorer, so their rendering is tested here, next to those panels.
 import { definePlugin, type ExplorerColumn } from "@ludenea/editor-shell";
-import { act, cleanup, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { useEffect } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { builtinPlugins } from "../src";
@@ -102,7 +102,7 @@ describe("decorations and columns", () => {
     const failure = 'The "test.broken" decoration of plugin "editor" failed: the prefab state is not loaded';
     const section = within(screen.getByRole("region", { name: "ludenea::Collider" }));
     // The component itself, its shape, the circle, its center, x, y, radius, and density.
-    expect(section.getAllByRole("img", { name: failure })).toHaveLength(8);
+    expect(section.getAllByRole("button", { name: failure })).toHaveLength(8);
     expect((section.getByLabelText("density") as HTMLInputElement).value).toBe("1");
     expect(reported(host)).toEqual([failure]);
     expect(devtools).not.toHaveBeenCalled();
@@ -139,18 +139,18 @@ describe("decorations and columns", () => {
     });
     const failure = 'The "test.prefab" decoration of plugin "editor" failed: the prefab state is not loaded';
     const section = () => within(screen.getByRole("region", { name: "ludenea::Collider" }));
-    expect(section().getAllByRole("img", { name: failure })).toHaveLength(8);
+    expect(section().getAllByRole("button", { name: failure })).toHaveLength(8);
 
     // Another entity: the decoration renders again.
     act(() => host.editor.selection.getState().select([{ index: 5, generation: 1 }]));
     await settle();
-    expect(section().queryByRole("img")).toBeNull();
+    expect(section().queryByRole("button", { name: failure })).toBeNull();
     expect(section().getByLabelText("prefab state").textContent).toBe("5");
 
     // Back on the first, which still fails: marked again, not reported twice.
     act(() => host.editor.selection.getState().select([entity]));
     await settle();
-    expect(section().getAllByRole("img", { name: failure })).toHaveLength(8);
+    expect(section().getAllByRole("button", { name: failure })).toHaveLength(8);
 
     // The state loads, then the component changes: every field's decoration renders again, and
     // the decorations that did not fail keep their state.
@@ -160,11 +160,43 @@ describe("decorations and columns", () => {
     act(() => game.push({ type: "entity_changed", entity, components: value(), removed: [] }));
     await settle();
     expect((section().getByLabelText("density") as HTMLInputElement).value).toBe("2");
-    expect(section().queryByRole("img")).toBeNull();
+    expect(section().queryByRole("button", { name: failure })).toBeNull();
     expect(section().getByLabelText("prefab state").textContent).toBe("4");
     expect(mounts).toBe(counted);
     expect(reported(host)).toEqual([failure]);
     expect(devtools).not.toHaveBeenCalled();
+  });
+
+  it("clicking_a_failed_decoration_s_mark_renders_it_again", async () => {
+    const host = await testEditor(builtinPlugins);
+    const game = await testGame(
+      (command) => (command.type === "get_entity" ? { type: "entity", entity, components: { "ludenea::Collider": { type: "json", value: collider } } } : { type: "done" }),
+      { components: [{ name: "ludenea::Collider", schema: schemas.collider }] },
+    );
+    act(() => host.setControl(game.client));
+    act(() => host.editor.selection.getState().select([entity]));
+    renderPanel(host, "ludenea.inspector");
+    await settle();
+    let loaded = false;
+    act(() => {
+      host.editor.inspectors.decorate({
+        id: "test.prefab",
+        render: ({ path }) => {
+          if (!loaded) throw new Error("the prefab state is not loaded");
+          return path.length === 0 ? <span aria-label="prefab state">loaded</span> : null;
+        },
+      });
+    });
+    const failure = 'The "test.prefab" decoration of plugin "editor" failed: the prefab state is not loaded';
+    const section = () => within(screen.getByRole("region", { name: "ludenea::Collider" }));
+
+    // The state loads while neither the entity nor the component changes (a paused game).
+    loaded = true;
+    for (const mark of section().getAllByRole("button", { name: failure })) fireEvent.click(mark);
+
+    expect(section().getByLabelText("prefab state").textContent).toBe("loaded");
+    expect(section().queryByRole("button", { name: failure })).toBeNull();
+    expect(reported(host)).toEqual([failure]);
   });
 
   it("an_explorer_column_that_throws_marks_its_cells_until_it_answers", async () => {

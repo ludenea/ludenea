@@ -505,6 +505,9 @@ hash, those of the golden trace and replays included.
 - `Assets.reload` and `Assets.keepMine` take a `ChangedBanner`, and `Assets.close` a
   `RemovedBanner`, the two kinds of `Banner`: they took any banner, so `close` could close a
   document whose file was only changed on disk.
+- The mark of a field decoration that failed is a button that renders the decoration again,
+  for one that fails until state it reads loads while its field stays the same (a paused
+  game); it stayed until the entity or the component changed.
 
 ### Formats
 

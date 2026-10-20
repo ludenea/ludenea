@@ -1,7 +1,7 @@
 import type { Entity, JsonValue, PathSegment, TypeSchema } from "@ludenea/control-client";
 import { PluginBoundary, type Editor, type FieldDecoration } from "@ludenea/editor-shell";
 import { useSyncExternalStore, type ReactNode } from "react";
-import { failureMark } from "../../shared/FailureMark";
+import { retryMark } from "../../shared/FailureMark";
 import { defaultValue, variantValue } from "../default-value";
 import { AssetField, BoolField, EntityField, FieldRow, LargeIntegerField, MixedMark, NumberField, StringField, pathText, useCommit, type Edit } from "./inputs";
 
@@ -38,7 +38,7 @@ export function Field(props: FieldProps) {
       </div>
       <span className="ludenea-decorations">
         {decorations.map((decoration) => (
-          <PluginBoundary key={decoration.id} editor={editor} registration={decoration} name={`The "${decoration.id}" decoration`} fallback={failureMark} resetKeys={[owner.entity, owner.value]}>
+          <PluginBoundary key={decoration.id} editor={editor} registration={decoration} name={`The "${decoration.id}" decoration`} fallback={retryMark} resetKeys={[owner.entity, owner.value]}>
             <Decoration decoration={decoration} editor={editor} entity={owner.entity} component={owner.component} path={path} />
           </PluginBoundary>
         ))}
