@@ -1196,6 +1196,42 @@ fn a_redo_of_a_previous_build_whose_replay_to_the_fork_panics_changes_nothing() 
     assert_eq!(session.timeline().edit_ticks, [20, 40]);
 }
 
+static REDO_TRAP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Panics at tick 35, once each time it is armed.
+fn redo_trap(time: Res<Time>) {
+    if time.tick == 35 && REDO_TRAP.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        panic!("redo trap");
+    }
+}
+
+#[test]
+fn a_redone_fork_whose_replay_panics_once_stays_on_the_redone_branch() {
+    let mut app = boxes::app();
+    app.system(Sim, redo_trap);
+    let (mut sim, mut session) = marked(app);
+    play(&mut session, &mut sim, 60);
+    session.seek(&mut sim, 40).unwrap();
+    let edit = stats_edit(&sim, 1_000);
+    session.edit(&mut sim, edit).unwrap();
+    let forked = session.timeline().branch;
+    play(&mut session, &mut sim, 10);
+    session.undo(&mut sim).unwrap();
+
+    // Showing tick 40 on the redone branch replays it from the checkpoint of tick 32.
+    REDO_TRAP.store(true, std::sync::atomic::Ordering::Relaxed);
+    let result = quietly(|| session.redo(&mut sim));
+    REDO_TRAP.store(false, std::sync::atomic::Ordering::Relaxed);
+
+    // The redone branch is current, so the redo is done; showing the tick replays again.
+    assert!(result.is_ok(), "{result:?}");
+    let timeline = session.timeline();
+    assert_eq!((timeline.branch, timeline.current), (forked, 40));
+    assert!(timeline.branches.iter().any(|branch| branch.id == forked));
+    assert!(timeline.can_undo && !timeline.can_redo);
+    assert_eq!(sim.tick(), 40);
+}
+
 #[test]
 fn a_panic_whose_tick_cannot_come_back_moves_to_tick_0() {
     let mut app = boxes::app();

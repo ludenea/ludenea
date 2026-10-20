@@ -866,9 +866,12 @@ impl Session {
                     self.tree.remove(&ids);
                     return Err(refused(reason));
                 }
-                if let Err(error) = self.switch_to(sim, *branch, cause.tick()) {
+                if let Err(error) = self.switch_to(sim, *branch, cause.tick())
+                    && !ids.contains(&self.tree.current())
+                {
                     // The branch cannot be shown: the redo is refused, and the branches go
-                    // back to the entry.
+                    // back to the entry. Once one of them is current, the redo is done
+                    // either way, and showing the tick reports the failure.
                     self.tree.remove(&ids);
                     return Err(error);
                 }
