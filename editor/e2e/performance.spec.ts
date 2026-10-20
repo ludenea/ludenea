@@ -41,47 +41,11 @@ const percentile = (values: number[], fraction: number) => {
 };
 
 /**
- * Opens the bench scene, selects a dynamic body in the inspector (as while editing), forks a
- * branch by moving it at a past tick, shows the parent branch as the ghost, then plays for
- * `PLAY_MS` while recording frame times. `beforePlay` runs just before Play.
+ * Starts recording the duration of each frame, each tick the timeline shows with when it first
+ * showed it, and how many times the shown contact cache changes. The returned function stops
+ * the recording and returns what it recorded.
  */
-async function playWithBranchAndGhost(page: Page, beforePlay: () => Promise<void> = async () => {}) {
-  const errors = collectErrors(page);
-  const opened = Date.now();
-  await page.goto(served.url);
-  await page.getByRole("tab", { name: "Assets" }).click();
-  await expect(page.getByRole("tree", { name: "Assets" }).getByRole("treeitem", { name: /bench\.scene\.ron/ })).toBeVisible();
-  const interactiveMs = Date.now() - opened;
-
-  await openScene(page, "bench.scene.ron");
-  await waitForGame(page);
-  await page.getByRole("tab", { name: "Scene" }).click();
-  // The scene tree lists the bench scene, not the template's four entities.
-  await expect(page.getByRole("listbox", { name: "Entities" }).getByRole("option").nth(20)).toBeVisible({ timeout: 60_000 });
-  // A dynamic body in the inspector, as while editing.
-  await page.getByRole("listbox", { name: "Entities" }).getByRole("option").nth(10).click();
-  await page.getByRole("tab", { name: "Viewport" }).click();
-  await page.getByRole("tab", { name: "Timeline" }).click();
-
-  // That body moved at a past tick forks a branch; the parent branch is the ghost.
-  for (let step = 0; step < 3; step++) await button(page, "Step").click();
-  await expectTick(page, 3);
-  await seek(page, 1);
-  await page.getByRole("tab", { name: "Inspector" }).click();
-  const x = page.getByRole("region", { name: "ludenea::Pose" }).getByLabel("position.x");
-  await x.fill("1.5");
-  await x.press("Enter");
-  await page.getByRole("tab", { name: "Timeline" }).click();
-  const lanes = page.getByRole("list", { name: "Branches" }).getByRole("listitem");
-  await expect(lanes).toHaveCount(2);
-  await button(page, "Compare with").click();
-  const compare = page.getByRole("group", { name: "Compare branch" });
-  await compare.getByLabel("Branch").selectOption({ index: 0 });
-  await compare.getByRole("button", { name: "Compare" }).click();
-  await expect(lanes.nth(0)).toContainText("compare");
-
-  await beforePlay();
-  const start = await timeline(page);
+async function recordFrames(page: Page) {
   await page.evaluate(() => {
     const times: number[] = [];
     const ticks: { tick: number; at: number }[] = [];
@@ -126,28 +90,83 @@ async function playWithBranchAndGhost(page: Page, beforePlay: () => Promise<void
       observer.disconnect();
     };
   });
+  return () =>
+    page.evaluate(() => {
+      window.__stopFrames!();
+      return { frames: window.__frameTimes!, ticks: window.__ticksShown!, cacheChanges: window.__cacheChanges! };
+    });
+}
+
+/**
+ * Logs and annotates the report `describe` makes of the frames' statistics, checks that frames
+ * were recorded and, on the reference machine, their 95th percentile; returns the report.
+ */
+function reportFrames(frames: number[], describe: (stats: string) => string): string {
+  const p95 = percentile(frames, 0.95);
+  const report = describe(`${frames.length} frames, 95th percentile ${p95.toFixed(1)} ms, worst ${Math.max(...frames).toFixed(1)} ms`);
+  console.log(`performance: ${report}`);
+  test.info().annotations.push({ type: "performance", description: report });
+  expect(frames.length).toBeGreaterThan(0);
+  if (strict) expect(p95, report).toBeLessThanOrEqual(17);
+  return report;
+}
+
+/**
+ * Opens the bench scene, selects a dynamic body in the inspector (as while editing), forks a
+ * branch by moving it at a past tick, shows the parent branch as the ghost, then plays for
+ * `PLAY_MS` while recording frame times. `beforePlay` runs just before Play.
+ */
+async function playWithBranchAndGhost(page: Page, beforePlay: () => Promise<void> = async () => {}) {
+  const errors = collectErrors(page);
+  const opened = Date.now();
+  await page.goto(served.url);
+  await page.getByRole("tab", { name: "Assets" }).click();
+  await expect(page.getByRole("tree", { name: "Assets" }).getByRole("treeitem", { name: /bench\.scene\.ron/ })).toBeVisible();
+  const interactiveMs = Date.now() - opened;
+
+  await openScene(page, "bench.scene.ron");
+  await waitForGame(page);
+  await page.getByRole("tab", { name: "Scene" }).click();
+  // The scene tree lists the bench scene, not the template's four entities.
+  await expect(page.getByRole("listbox", { name: "Entities" }).getByRole("option").nth(20)).toBeVisible({ timeout: 60_000 });
+  // A dynamic body in the inspector, as while editing.
+  await page.getByRole("listbox", { name: "Entities" }).getByRole("option").nth(10).click();
+  await page.getByRole("tab", { name: "Viewport" }).click();
+  await page.getByRole("tab", { name: "Timeline" }).click();
+
+  // That body moved at a past tick forks a branch; the parent branch is the ghost.
+  for (let step = 0; step < 3; step++) await button(page, "Step").click();
+  await expectTick(page, 3);
+  await seek(page, 1);
+  await page.getByRole("tab", { name: "Inspector" }).click();
+  const x = page.getByRole("region", { name: "ludenea::Pose" }).getByLabel("position.x");
+  await x.fill("1.5");
+  await x.press("Enter");
+  await page.getByRole("tab", { name: "Timeline" }).click();
+  const lanes = page.getByRole("list", { name: "Branches" }).getByRole("listitem");
+  await expect(lanes).toHaveCount(2);
+  await button(page, "Compare with").click();
+  const compare = page.getByRole("group", { name: "Compare branch" });
+  await compare.getByLabel("Branch").selectOption({ index: 0 });
+  await compare.getByRole("button", { name: "Compare" }).click();
+  await expect(lanes.nth(0)).toContainText("compare");
+
+  await beforePlay();
+  const start = await timeline(page);
+  const stop = await recordFrames(page);
   await button(page, "Play").click();
   await page.waitForTimeout(PLAY_MS);
-  const { frames, ticks, cacheChanges } = await page.evaluate(() => {
-    window.__stopFrames!();
-    return { frames: window.__frameTimes!, ticks: window.__ticksShown!, cacheChanges: window.__cacheChanges! };
-  });
+  const { frames, ticks, cacheChanges } = await stop();
   await button(page, "Pause").click();
   await expect(button(page, "Play")).toBeVisible();
 
-  const p95 = percentile(frames, 0.95);
   // From the first tick shown after Play to the last one shown while sampling, so neither the
   // click nor the pause counts.
   const first = ticks.find(({ tick }) => tick > start.current);
   const final = ticks.at(-1);
   const rate = first && final && final.at > first.at ? ((final.tick - first.tick) * 1000) / (final.at - first.at) : 0;
-  const report = `interactive in ${interactiveMs} ms; ${frames.length} frames, 95th percentile ${p95.toFixed(1)} ms, worst ${Math.max(...frames).toFixed(1)} ms; simulation at ${rate.toFixed(1)} ticks per second`;
-  console.log(`performance: ${report}`);
-  test.info().annotations.push({ type: "performance", description: report });
-
-  expect(frames.length).toBeGreaterThan(0);
+  const report = reportFrames(frames, (stats) => `interactive in ${interactiveMs} ms; ${stats}; simulation at ${rate.toFixed(1)} ticks per second`);
   await expectNoErrors(page, errors);
-  if (strict) expect(p95, report).toBeLessThanOrEqual(17);
   return { interactiveMs, report, cacheChanges };
 }
 
@@ -220,32 +239,12 @@ test("the_explorer_lists_100000_entities_with_only_the_visible_rows_while_playin
   await expect.poll(columns).toEqual({ scrollbar: 15, columns: 2, offsets: [[0, 0], [0, 0]] });
   await scrollbars.evaluate((style) => style.parentNode?.removeChild(style));
 
-  await page.evaluate(() => {
-    const times: number[] = [];
-    let last = performance.now();
-    let running = true;
-    const frame = (now: number) => {
-      if (!running) return;
-      times.push(now - last);
-      last = now;
-      requestAnimationFrame(frame);
-    };
-    requestAnimationFrame((now) => {
-      last = now;
-      requestAnimationFrame(frame);
-    });
-    window.__frameTimes = times;
-    window.__stopFrames = () => {
-      running = false;
-    };
-  });
-  // The timeline shares the bottom dock with the explorer: played from the command palette.
+  // The timeline shares the bottom dock with the explorer: played from the command palette,
+  // which has closed when recording starts, so its frames are not counted.
   await runCommand(page, "Play or pause");
+  const stop = await recordFrames(page);
   await page.waitForTimeout(PLAY_MS);
-  const frames = await page.evaluate(() => {
-    window.__stopFrames!();
-    return window.__frameTimes!;
-  });
+  const { frames } = await stop();
   const playing = await layout();
   await runCommand(page, "Play or pause");
   await page.getByRole("tab", { name: "Timeline" }).click();
@@ -253,13 +252,8 @@ test("the_explorer_lists_100000_entities_with_only_the_visible_rows_while_playin
   expect((await timeline(page)).current).toBeGreaterThan(0);
 
   expect(playing.options).toBeLessThan(100);
-  const p95 = percentile(frames, 0.95);
-  const report = `explorer while playing: ${frames.length} frames, 95th percentile ${p95.toFixed(1)} ms, worst ${Math.max(...frames).toFixed(1)} ms`;
-  console.log(`performance: ${report}`);
-  test.info().annotations.push({ type: "performance", description: report });
-  expect(frames.length).toBeGreaterThan(0);
+  reportFrames(frames, (stats) => `explorer while playing: ${stats}`);
   await expectNoErrors(page, errors);
-  if (strict) expect(p95, report).toBeLessThanOrEqual(17);
 });
 
 test("the UI stays at 60 fps while the inspector follows the contact cache", async ({ page }) => {
