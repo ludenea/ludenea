@@ -672,6 +672,61 @@ fn prefab_document_saves_prefab_text() {
     assert!(pose_at(&sim, &[0]).contains("x:2.5"));
 }
 
+/// The x of entity [0]'s pose in the prefab asset `PREFAB` the world holds.
+fn held_prefab_x(sim: &Simulation) -> f32 {
+    let (_, bytes) = sim
+        .world()
+        .asset_bytes(PREFAB)
+        .expect("the prefab is loaded");
+    let prefab: ludenea::ecs::Prefab = postcard::from_bytes(&bytes).unwrap();
+    let root = prefab
+        .entities
+        .iter()
+        .find(|entity| entity.address == [0])
+        .unwrap();
+    let (_, pose) = root
+        .components
+        .iter()
+        .find(|(name, _)| name == Pose::NAME)
+        .unwrap();
+    postcard::from_bytes::<Pose>(pose).unwrap().position.x
+}
+
+#[test]
+fn a_handle_to_the_open_prefab_loads_its_edited_text() {
+    let spawn = |sim: &Simulation| Edit::Spawn {
+        components: vec![(
+            "boxes::Spawner".to_string(),
+            component(
+                sim,
+                "boxes::Spawner",
+                json!({ "prefab": PREFAB.to_string(), "stats": STATS.to_string() }),
+            ),
+        )],
+    };
+    // At tick 0, the spawner joins the document.
+    let (mut sim, mut session) = prefab_session();
+    let moved = insert_pose(&sim, vec![0], 2.5);
+    session.edit(&mut sim, moved).unwrap();
+    let spawner = spawn(&sim);
+    session.edit(&mut sim, spawner).unwrap();
+    assert_eq!(held_prefab_x(&sim), 2.5);
+
+    // Past tick 0, the load the spawn needs is recorded with the document's text.
+    let (mut sim, mut session) = prefab_session();
+    let moved = insert_pose(&sim, vec![0], 2.5);
+    session.edit(&mut sim, moved).unwrap();
+    play(&mut session, &mut sim, 5);
+    let spawner = spawn(&sim);
+    session.edit(&mut sim, spawner).unwrap();
+    assert!(
+        matches!(&edits(&session)[0].edit, Edit::LoadAsset { id, .. } if *id == PREFAB),
+        "{:?}",
+        edits(&session)
+    );
+    assert_eq!(held_prefab_x(&sim), 2.5);
+}
+
 #[test]
 fn placing_a_prefab_inside_itself_is_refused() {
     let (mut sim, mut session) = prefab_session();
