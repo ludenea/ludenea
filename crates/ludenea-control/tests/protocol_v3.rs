@@ -1138,6 +1138,45 @@ fn place_instance_over_protocol() {
 }
 
 #[test]
+fn an_instance_with_no_identifier_left_is_an_invalid_edit_and_changes_nothing() {
+    // The highest `next_id` a file holds: the instance would take it and leave none.
+    let last = format!("next_id: {},", u32::MAX - 1);
+    let scene = fs::read_to_string(SPAWNER_SCENE)
+        .unwrap()
+        .replacen("next_id: 7,", &last, 1);
+    let (mut host, reply) = spawner_host(scene);
+    let Reply::Loaded { load_addresses, .. } = reply else {
+        panic!("{reply:?}");
+    };
+    let (ground, _) = load_addresses
+        .into_iter()
+        .find(|(_, address)| address == &[0])
+        .unwrap();
+    let text = scene_text(&mut host);
+    assert!(text.contains(&last), "{text}");
+    let before = instances(&mut host);
+
+    for command in [
+        Command::PlaceInstance { prefab: PREFAB },
+        Command::ReplaceWithInstance {
+            entities: vec![ground],
+            prefab: AssetId(7),
+            prefab_text: fs::read_to_string(CRATE_PREFAB).unwrap(),
+        },
+    ] {
+        let name = format!("{command:?}");
+        let error = host.handle(command).unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidEdit, "{name}");
+        assert!(
+            error.message.contains("renumber the scene"),
+            "{name}: {error:?}"
+        );
+        assert_eq!(scene_text(&mut host), text, "{name}");
+        assert_eq!(instances(&mut host), before, "{name}");
+    }
+}
+
+#[test]
 fn a_prefab_document_refuses_an_instance_of_itself() {
     let mut host = Host::new(boxes::app).unwrap();
     let text = fs::read_to_string(CRATE_PREFAB).unwrap();
