@@ -93,20 +93,22 @@ export function parseFrame<T>(raw: string): T | undefined {
 /** What a hello and a welcome both carry: the two must be equal. */
 type ProtocolIdentity = { protocol_version: number; protocol_fingerprint: string };
 
-const REBUILD = "rebuild the editor (pnpm -C editor build) and the engine from the same checkout";
+/** The protocol a handshake is for, and the peer that speaks it, as their refusals name them. */
+export type ProtocolPeer = { protocol: "protocol" | "project protocol"; peer: "game" | "service" };
 
 /** Why a welcome from a peer built from another revision of the protocol is refused, if it is. */
-function mismatch(hello: ProtocolIdentity, welcome: Partial<ProtocolIdentity>): ProtocolFailure<"version_mismatch"> | undefined {
+function mismatch(hello: ProtocolIdentity, welcome: Partial<ProtocolIdentity>, { protocol, peer }: ProtocolPeer): ProtocolFailure<"version_mismatch"> | undefined {
+  const rebuild = `rebuild the editor (pnpm -C editor build) and the ${peer} from the same checkout`;
   if (welcome.protocol_version !== hello.protocol_version) {
     return new ProtocolFailure(
       "version_mismatch",
-      `the engine speaks protocol ${String(welcome.protocol_version)}, this client speaks ${hello.protocol_version}; ${REBUILD}`,
+      `the ${peer} speaks ${protocol} ${String(welcome.protocol_version)}, this client speaks ${hello.protocol_version}; ${rebuild}`,
     );
   }
   if (welcome.protocol_fingerprint !== hello.protocol_fingerprint) {
     return new ProtocolFailure(
       "version_mismatch",
-      `the engine speaks another revision of protocol ${hello.protocol_version} (fingerprint ${String(welcome.protocol_fingerprint)}, this client ${hello.protocol_fingerprint}); ${REBUILD}`,
+      `the ${peer} speaks another revision of ${protocol} ${hello.protocol_version} (fingerprint ${String(welcome.protocol_fingerprint)}, this client ${hello.protocol_fingerprint}); ${rebuild}`,
     );
   }
   return undefined;
@@ -116,11 +118,13 @@ function mismatch(hello: ProtocolIdentity, welcome: Partial<ProtocolIdentity>): 
  * Sends `hello` and resolves with what `accept` makes of the peer's welcome, called as the
  * welcome arrives so the client it builds misses nothing right behind it (a close). A refusal, or
  * a welcome of another protocol version or fingerprint than `hello`'s, closes the transport and
- * rejects with a `ProtocolFailure` carrying its code; a closed transport rejects too.
+ * rejects with a `ProtocolFailure` carrying its code; a closed transport rejects too. A mismatch
+ * names `speaker`'s protocol and peer.
  */
 export function handshake<M extends { type: string }, T>(
   transport: MessageTransport,
   hello: ProtocolIdentity & { type: "hello" },
+  speaker: ProtocolPeer,
   accept: (welcome: Extract<M, { type: "welcome" }>) => T,
 ): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -136,7 +140,7 @@ export function handshake<M extends { type: string }, T>(
       const message = parseFrame<M>(raw);
       if (message?.type === "welcome") {
         stop();
-        const failure = mismatch(hello, message as Partial<ProtocolIdentity>);
+        const failure = mismatch(hello, message as Partial<ProtocolIdentity>, speaker);
         if (failure) fail(failure);
         else resolve(accept(message as Extract<M, { type: "welcome" }>));
       } else if (message?.type === "refused") {
@@ -190,7 +194,7 @@ export class ControlClient {
 
   static connect(transport: MessageTransport): Promise<ControlClient> {
     const hello = { type: "hello", protocol_version: PROTOCOL_VERSION, protocol_fingerprint: PROTOCOL_FINGERPRINT } satisfies ClientMessage;
-    return handshake<ServerMessage, ControlClient>(transport, hello, (welcome) => new ControlClient(transport, new RequestTracker(transport), welcome.game));
+    return handshake<ServerMessage, ControlClient>(transport, hello, { protocol: "protocol", peer: "game" }, (welcome) => new ControlClient(transport, new RequestTracker(transport), welcome.game));
   }
 
   /**

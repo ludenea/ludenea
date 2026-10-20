@@ -38,6 +38,14 @@ describe("ProjectClient", () => {
     expect(closes).toEqual(["closed"]);
   });
 
+  it("connect_rejects_a_welcome_of_another_revision_naming_the_project_protocol_and_the_service", async () => {
+    const transport = fakeTransport(() => [JSON.stringify({ type: "welcome", ...identity, protocol_fingerprint: "0123456789abcdef" })]);
+    const failure = await ProjectClient.connect(transport).catch((error) => error);
+    expect(failure.message).toBe(
+      `the service speaks another revision of project protocol ${PROJECT_PROTOCOL_VERSION} (fingerprint 0123456789abcdef, this client ${PROJECT_PROTOCOL_FINGERPRINT}); rebuild the editor (pnpm -C editor build) and the service from the same checkout`,
+    );
+  });
+
   it("connect_rejects_a_refusal_with_its_message", async () => {
     const transport = fakeTransport(() => [
       JSON.stringify({ type: "refused", error: { code: "version_mismatch", message: "service speaks 1" } }),

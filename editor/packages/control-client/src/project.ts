@@ -46,7 +46,7 @@ export class ProjectClient {
       protocol_version: PROJECT_PROTOCOL_VERSION,
       protocol_fingerprint: PROJECT_PROTOCOL_FINGERPRINT,
     } satisfies ProjectClientMessage;
-    return handshake<ProjectServerMessage, ProjectClient>(transport, hello, () => new ProjectClient(transport, new RequestTracker<ProjectOutcome>(transport)));
+    return handshake<ProjectServerMessage, ProjectClient>(transport, hello, { protocol: "project protocol", peer: "service" }, () => new ProjectClient(transport, new RequestTracker<ProjectOutcome>(transport)));
   }
 
   async request<R extends ProjectRequest>(request: R): Promise<ProjectReplyFor<R>> {

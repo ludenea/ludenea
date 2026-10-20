@@ -489,6 +489,10 @@ hash, those of the golden trace and replays included.
   and sets a field, adds a component to the entities lacking it, or removes one from all of
   them. Custom inspectors, field decorations, and "Apply to scene" stay with one entity
   selected: `inspector.apply-to-scene` refuses several.
+- `handshake` takes the `ProtocolPeer` it is for after the hello, and its `version_mismatch`
+  names that protocol and peer, as the game and the service do: `ControlClient.connect`
+  says "the game speaks protocol ..." and `ProjectClient.connect` "the service speaks
+  project protocol ...", where both said "the engine speaks protocol ...".
 
 ### Formats
 

@@ -1455,17 +1455,23 @@ type ProtocolIdentity = {
     protocol_version: number;
     protocol_fingerprint: string;
 };
+/** The protocol a handshake is for, and the peer that speaks it, as their refusals name them. */
+type ProtocolPeer = {
+    protocol: "protocol" | "project protocol";
+    peer: "game" | "service";
+};
 /**
  * Sends `hello` and resolves with what `accept` makes of the peer's welcome, called as the
  * welcome arrives so the client it builds misses nothing right behind it (a close). A refusal, or
  * a welcome of another protocol version or fingerprint than `hello`'s, closes the transport and
- * rejects with a `ProtocolFailure` carrying its code; a closed transport rejects too.
+ * rejects with a `ProtocolFailure` carrying its code; a closed transport rejects too. A mismatch
+ * names `speaker`'s protocol and peer.
  */
 function handshake<M extends {
     type: string;
 }, T>(transport: MessageTransport, hello: ProtocolIdentity & {
     type: "hello";
-}, accept: (welcome: Extract<M, {
+}, speaker: ProtocolPeer, accept: (welcome: Extract<M, {
     type: "welcome";
 }>) => T): Promise<T>;
 /**
@@ -1556,5 +1562,5 @@ function startWorkerGame(options: {
 }): WorkerGame;
 
 export { ControlClient, PROJECT_PROTOCOL_FINGERPRINT, PROJECT_PROTOCOL_VERSION, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION, ProjectClient, ProtocolFailure, RequestTracker, fakeTransport, handshake, parseFrame, postMessageTransport, startWorkerGame, tauriTransport, unwrap, webSocketTransport };
-export type { AssetId, AssetKind, AssetTexts, BranchId, BranchInfo, BuildEvent, Bytes, Cause, ClientMessage, Color, Command, ComponentValue, ConsoleLevel, DebugDrawFrame, Diagnostic, Difference, DivergenceKind, DivergenceReport, Document, Entity, EntityDivergence, EntityHash, EntityRow, ErrorCode, Event, FailureCode, FieldSchema, FieldTarget, FileChange, FileEntry, GameInfo, GameOutput, Hash64, HashTree, InstanceInfo, Item, JsonValue, MessageTransport, NamedHash, NamedSchema, Outcome, OutputStream, OverrideInfo, PathSegment, PauseReason, PluginBundle, PluginSource, Primitive, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo, ProjectOutcome, ProjectReply, ProjectReplyFor, ProjectReplyTypes, ProjectRequest, ProjectServerMessage, ProtocolError, RawGamepad, RawInput, RecordedEvent, Reply, ReplyFor, ReplyTypes, RootCause, RootCauseKind, ServerMessage, ServiceMode, SyncPoint, SystemRow, Timeline, Topic, TraceComparison, TypeSchema, VariantFields, VariantSchema, Vec2, WorkerCrash, WorkerGame };
+export type { AssetId, AssetKind, AssetTexts, BranchId, BranchInfo, BuildEvent, Bytes, Cause, ClientMessage, Color, Command, ComponentValue, ConsoleLevel, DebugDrawFrame, Diagnostic, Difference, DivergenceKind, DivergenceReport, Document, Entity, EntityDivergence, EntityHash, EntityRow, ErrorCode, Event, FailureCode, FieldSchema, FieldTarget, FileChange, FileEntry, GameInfo, GameOutput, Hash64, HashTree, InstanceInfo, Item, JsonValue, MessageTransport, NamedHash, NamedSchema, Outcome, OutputStream, OverrideInfo, PathSegment, PauseReason, PluginBundle, PluginSource, Primitive, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo, ProjectOutcome, ProjectReply, ProjectReplyFor, ProjectReplyTypes, ProjectRequest, ProjectServerMessage, ProtocolError, ProtocolPeer, RawGamepad, RawInput, RecordedEvent, Reply, ReplyFor, ReplyTypes, RootCause, RootCauseKind, ServerMessage, ServiceMode, SyncPoint, SystemRow, Timeline, Topic, TraceComparison, TypeSchema, VariantFields, VariantSchema, Vec2, WorkerCrash, WorkerGame };
 }

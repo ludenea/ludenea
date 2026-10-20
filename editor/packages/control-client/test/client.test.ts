@@ -47,8 +47,9 @@ describe("ControlClient", () => {
     const failure = await ControlClient.connect(transport).catch((error) => error);
     expect(failure).toBeInstanceOf(ProtocolFailure);
     expect(failure.code).toBe("version_mismatch");
-    expect(failure.message).toContain(`protocol ${PROTOCOL_VERSION - 1}, this client speaks ${PROTOCOL_VERSION}`);
-    expect(failure.message).toContain("pnpm -C editor build");
+    expect(failure.message).toBe(
+      `the game speaks protocol ${PROTOCOL_VERSION - 1}, this client speaks ${PROTOCOL_VERSION}; rebuild the editor (pnpm -C editor build) and the game from the same checkout`,
+    );
     expect(closes).toEqual(["closed"]);
   });
 
