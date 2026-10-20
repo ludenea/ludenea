@@ -389,16 +389,41 @@ impl UndoHistory {
     }
 
     /// After a rebuild: the branches undo removed hold hashes of the previous build, so
-    /// they resimulate when redo brings them back. Only redo entries hold removed branches.
+    /// they resimulate when redo brings them back.
     pub fn mark_removed_stale(&mut self) -> Result<(), BranchesError> {
-        for entry in &mut self.redo {
-            if let UndoEntry::Run { removed, .. } | UndoEntry::Fork { removed, .. } = entry
-                && !removed.is_empty()
-            {
-                *removed = StoredBranch::mark_stale(removed)?;
-            }
-        }
+        let stale = self.removed_marked_stale()?;
+        self.put_removed(stale);
         Ok(())
+    }
+
+    /// The branches undo removed, marked stale, for `put_removed`: apart, so a command that
+    /// fails between the two leaves them as they were. Only redo entries hold removed branches.
+    pub fn removed_marked_stale(&self) -> Result<Vec<Vec<u8>>, BranchesError> {
+        self.redo
+            .iter()
+            .filter_map(|entry| match entry {
+                UndoEntry::Run { removed, .. } | UndoEntry::Fork { removed, .. } => Some(removed),
+                _ => None,
+            })
+            .map(|removed| {
+                if removed.is_empty() {
+                    Ok(Vec::new())
+                } else {
+                    StoredBranch::mark_stale(removed)
+                }
+            })
+            .collect()
+    }
+
+    /// Puts back the branches `removed_marked_stale` gave, in the same redo entries.
+    pub fn put_removed(&mut self, stale: Vec<Vec<u8>>) {
+        let entries = self.redo.iter_mut().filter_map(|entry| match entry {
+            UndoEntry::Run { removed, .. } | UndoEntry::Fork { removed, .. } => Some(removed),
+            _ => None,
+        });
+        for (removed, stale) in entries.zip(stale) {
+            *removed = stale;
+        }
     }
 
     pub fn encode(&self) -> Vec<u8> {

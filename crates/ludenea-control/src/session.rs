@@ -1265,11 +1265,13 @@ impl Session {
         scene: String,
         mut assets: AssetTexts,
     ) -> Result<(), SessionError> {
-        if scene == self.scene {
-            // No undo entry clears the redo stack: the branches it brings back hold hashes
-            // of the previous asset texts, so they resimulate.
-            self.history.mark_removed_stale()?;
-        }
+        // No undo entry clears the redo stack: the branches it brings back hold hashes of the
+        // previous asset texts, so they resimulate once the scene loads.
+        let stale = if scene == self.scene {
+            Some(self.history.removed_marked_stale()?)
+        } else {
+            None
+        };
         let mut saved_assets = AssetTexts::new();
         for (&id, file) in &mut assets {
             if let Some(text) = self.assets.get(&id)
@@ -1280,6 +1282,9 @@ impl Session {
             }
         }
         self.warnings = self.load_scene(sim, &scene, &assets)?;
+        if let Some(stale) = stale {
+            self.history.put_removed(stale);
+        }
         self.assets = assets;
         self.saved_assets = saved_assets;
         self.saved_scene = scene.clone();

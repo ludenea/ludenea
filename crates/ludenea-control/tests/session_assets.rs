@@ -1106,6 +1106,34 @@ fn a_redo_after_new_asset_texts_resimulates_the_run_it_brings_back() {
 }
 
 #[test]
+fn a_refused_replace_scene_keeps_the_redo_hashes() {
+    let (mut sim, mut session) = spawner_session();
+    let scene = session.scene().to_string();
+    play(&mut session, &mut sim, 100);
+    let value = sim
+        .encode_json_value(
+            ValueKind::Resource,
+            "boxes::ContactStats",
+            json!({ "begins": 1, "ends": 0 }),
+        )
+        .unwrap();
+    let resource = "boxes::ContactStats".to_string();
+    session
+        .edit(&mut sim, Edit::SetResource { resource, value })
+        .unwrap();
+    session.undo(&mut sim).unwrap();
+    resimulate_all(&mut session, &mut sim);
+    // The same scene with an asset text that does not parse: refused, it changes nothing.
+    let mut broken = assets();
+    broken.insert(STATS, "(every_ticks:".to_string());
+
+    session.replace_scene(&mut sim, scene, broken).unwrap_err();
+    session.redo(&mut sim).unwrap();
+
+    assert!(!session.timeline().resimulating);
+}
+
+#[test]
 fn a_prefab_document_that_keeps_every_asset_never_keeps_its_own_saved_text() {
     let (mut sim, mut session) = spawner_session();
     play(&mut session, &mut sim, 10);
