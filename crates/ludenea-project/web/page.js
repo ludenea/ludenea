@@ -17,7 +17,8 @@ const save = document.getElementById("save");
 const FUNCTION_KEY = /^F\d+$/;
 /** With Control or Meta, the shortcuts a player must keep: reload (R), close the tab or the
  * window (W), the address bar (L), a new tab (T), and quit (Q). Every other combination, such
- * as Control with WASD, reaches the game. */
+ * as Control with WASD, reaches the game; zoom (Control with Plus, Minus or 0) is deliberately
+ * left to the game too, so a page that plays never changes size under the player. */
 const SHORTCUTS = new Set(["KeyR", "KeyW", "KeyL", "KeyT", "KeyQ"]);
 const META = new Set(["MetaLeft", "MetaRight"]);
 /** The modifier keys, which report their own keyup. */
