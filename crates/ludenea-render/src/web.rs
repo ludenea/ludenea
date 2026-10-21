@@ -3,7 +3,7 @@
 //! `cargo xtask wasm-render`. Display only: nothing here feeds back into the simulation.
 
 use ludenea_app::meta::TextureMeta;
-use ludenea_draw::frame::RenderFrame;
+use ludenea_draw::frame::{CameraView, RenderFrame};
 use ludenea_ecs::AssetId;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -11,7 +11,7 @@ use web_sys::HtmlCanvasElement;
 use web_sys::js_sys::Uint8Array;
 
 use crate::atlas::{self, TextureError, TextureSource};
-use crate::gpu::{Frames, Overlay, RenderError, Renderer, Size};
+use crate::gpu::{Overlay, RenderError, Renderer, Size};
 
 /// One texture of `set_textures`, whose PNG comes in a separate array.
 #[derive(Deserialize)]
@@ -200,15 +200,15 @@ impl WebRenderer {
         self.surface.configure(&self.device, &self.config);
     }
 
-    /// Draws `current_json` (a `RenderFrame`), blended from `previous_json` by `alpha` when it
-    /// is given, under `overlay_json` (`{ debug_layers, selected, camera }`, each optional).
-    /// Returns the `DrawReport` as JSON. An error is the renderer's message, and an error the
-    /// GPU raised since the last call is returned by this one.
-    pub fn draw(
+    /// Sets the frames to draw, once per tick: `current_json` (a `RenderFrame`), blended
+    /// from `previous_json` when it is given, under `overlay_json` (`{ debug_layers,
+    /// selected }`, each optional). Returns the `DrawReport` as JSON. An error is the
+    /// renderer's message, and an error the GPU raised since the last call is returned by
+    /// this one.
+    pub fn set_frames(
         &mut self,
         previous_json: Option<String>,
         current_json: &str,
-        alpha: f32,
         overlay_json: &str,
     ) -> Result<String, JsValue> {
         let previous: Option<RenderFrame> = previous_json
@@ -217,20 +217,29 @@ impl WebRenderer {
             .map_err(failure)?;
         let current: RenderFrame = serde_json::from_str(current_json).map_err(failure)?;
         let overlay: Overlay = serde_json::from_str(overlay_json).map_err(failure)?;
-        let texture = self.texture()?;
-        let view = texture.texture.create_view(&Default::default());
-        let frames = Frames {
-            previous: previous.as_ref(),
-            current: &current,
-            alpha,
-        };
-        // The size asked, so the renderer refuses one past the limit.
         let report = self
             .renderer
-            .draw(&view, self.size, frames, &overlay)
+            .set_frames(previous.as_ref(), &current, &overlay)
+            .map_err(failure)?;
+        serde_json::to_string(&report).map_err(failure)
+    }
+
+    /// Draws the frames set last into the canvas, `alpha` of the way from the previous tick
+    /// to the current one, through `camera_json` (a `CameraView`, `{ center, view }`, the
+    /// editor's free camera) when it is given. An error is the renderer's message.
+    pub fn draw(&mut self, alpha: f32, camera_json: Option<String>) -> Result<(), JsValue> {
+        let camera: Option<CameraView> = camera_json
+            .map(|json| serde_json::from_str(&json))
+            .transpose()
+            .map_err(failure)?;
+        let texture = self.texture()?;
+        let view = texture.texture.create_view(&Default::default());
+        // The size asked, so the renderer refuses one past the limit.
+        self.renderer
+            .draw(&view, self.size, alpha, camera)
             .map_err(failure)?;
         self.queue.present(texture);
-        serde_json::to_string(&report).map_err(failure)
+        Ok(())
     }
 }
 

@@ -5,12 +5,15 @@ use std::collections::BTreeMap;
 use ludenea_app::meta::Filter;
 use ludenea_draw::frame::SpriteItem;
 use ludenea_ecs::AssetId;
+use ludenea_math::{Rot, Vec2};
 
 use crate::atlas::Region;
+use crate::interpolate::SpriteMotion;
 
-/// The floats of one instance, in the shader's `Instance` order: center, axis_x, axis_y,
-/// offset, size, uv_min, uv_size (two each), tint (four).
-pub(super) const INSTANCE_FLOATS: usize = 18;
+/// The floats of one instance, in the shader's `Instance` order: the centre at the previous
+/// tick and at the current one, the rotation at the previous tick (two each), the arc to the
+/// current rotation (one), offset, size, uv_min, uv_size (two each), tint (four).
+pub(super) const INSTANCE_FLOATS: usize = 19;
 pub(super) type Instance = [f32; INSTANCE_FLOATS];
 
 const SHADER: &str = include_str!("shaders/sprite.wgsl");
@@ -59,19 +62,24 @@ pub(super) fn uv(region: &Region, page: (u32, u32)) -> (Sample, [f32; 4]) {
     (sample, uv)
 }
 
-/// The sprite's instance in world space and what it samples, or `None` for the sample when
-/// its region is missing and it is drawn as a placeholder.
+/// The sprite's instance in world space, moving by `motion` between the two ticks, and what
+/// it samples, or `None` for the sample when its region is missing and it is drawn as a
+/// placeholder.
 pub(super) fn instance(
     item: &SpriteItem,
+    motion: &SpriteMotion,
     regions: &BTreeMap<(AssetId, u32), Region>,
     pages: &[(u32, u32)],
 ) -> (Option<Sample>, Instance) {
     match find(regions, pages, item.texture, item.frame) {
         Some((region, page)) => {
             let (sample, uv) = uv(region, page);
-            (Some(sample), place(item, textured(item, region, uv)))
+            (
+                Some(sample),
+                place(item, motion, textured(item, region, uv)),
+            )
         }
-        None => (None, place(item, placeholder())),
+        None => (None, place(item, motion, placeholder())),
     }
 }
 
@@ -108,9 +116,10 @@ fn placeholder() -> Quad {
     }
 }
 
-/// Places a quad on the sprite's pose in world space: flips mirror it around the pivot, and
-/// the rotation turns it. The layer's view puts it in clip space on the GPU.
-fn place(item: &SpriteItem, mut quad: Quad) -> Instance {
+/// Places a quad on the sprite's motion in world space: flips mirror it around the pivot, and
+/// the shader moves and turns it between the two ticks. The layer's view puts it in clip
+/// space on the GPU.
+fn place(item: &SpriteItem, motion: &SpriteMotion, mut quad: Quad) -> Instance {
     if item.flip_x {
         quad.offset[0] = -quad.offset[0];
         quad.size[0] = -quad.size[0];
@@ -119,19 +128,11 @@ fn place(item: &SpriteItem, mut quad: Quad) -> Instance {
         quad.offset[1] = -quad.offset[1];
         quad.size[1] = -quad.size[1];
     }
-    let (cos, sin) = (item.rotation.cos, item.rotation.sin);
-    let position = [item.position.x, item.position.y];
-    instance_of(
-        position,
-        [cos, sin, -sin, cos],
-        quad.offset,
-        quad.size,
-        quad.uv,
-        quad.tint,
-    )
+    instance_of(motion, &quad)
 }
 
-/// An unrotated quad at `center`, in world space: a tile of a tilemap chunk.
+/// An unrotated quad at `center`, in world space, still between the ticks: a tile of a
+/// tilemap chunk.
 pub(super) fn tile(
     center: [f32; 2],
     offset: [f32; 2],
@@ -139,21 +140,56 @@ pub(super) fn tile(
     uv: [f32; 4],
     placeholder: bool,
 ) -> Instance {
-    let tint = if placeholder { PLACEHOLDER } else { WHITE };
-    instance_of(center, [1.0, 0.0, 0.0, 1.0], offset, size, uv, tint)
+    let center = Vec2::new(center[0], center[1]);
+    let still = SpriteMotion {
+        from: center,
+        to: center,
+        rotation: Rot::IDENTITY,
+        arc: 0.0,
+    };
+    let quad = Quad {
+        offset,
+        size,
+        uv,
+        tint: if placeholder { PLACEHOLDER } else { WHITE },
+    };
+    instance_of(&still, &quad)
 }
 
-fn instance_of(
-    center: [f32; 2],
-    axes: [f32; 4],
-    offset: [f32; 2],
-    size: [f32; 2],
-    uv: [f32; 4],
-    tint: [f32; 4],
-) -> Instance {
+/// The instance of `quad` moving by `motion`, in the shader's `Instance` order.
+fn instance_of(motion: &SpriteMotion, quad: &Quad) -> Instance {
+    let SpriteMotion {
+        from,
+        to,
+        rotation,
+        arc,
+    } = *motion;
+    let Quad {
+        offset,
+        size,
+        uv,
+        tint,
+    } = quad;
     [
-        center[0], center[1], axes[0], axes[1], axes[2], axes[3], offset[0], offset[1], size[0],
-        size[1], uv[0], uv[1], uv[2], uv[3], tint[0], tint[1], tint[2], tint[3],
+        from.x,
+        from.y,
+        to.x,
+        to.y,
+        rotation.cos,
+        rotation.sin,
+        arc,
+        offset[0],
+        offset[1],
+        size[0],
+        size[1],
+        uv[0],
+        uv[1],
+        uv[2],
+        uv[3],
+        tint[0],
+        tint[1],
+        tint[2],
+        tint[3],
     ]
 }
 
@@ -208,8 +244,8 @@ pub(super) fn pipeline(
         immediate_size: 0,
     });
     let attributes = wgpu::vertex_attr_array![
-        0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32x2,
-        4 => Float32x2, 5 => Float32x2, 6 => Float32x2, 7 => Float32x4
+        0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32,
+        4 => Float32x2, 5 => Float32x2, 6 => Float32x2, 7 => Float32x2, 8 => Float32x4
     ];
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("sprite"),

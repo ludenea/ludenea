@@ -110,6 +110,20 @@ hash, those of the golden trace and replays included.
   there is no hardware adapter or its device cannot be opened, and
   `gpu::headless_with_limits` does the same with adjusted device limits. Behind feature
   `web`, the same renderer draws into a browser canvas with WebGPU or WebGL2.
+- Breaking: the renderer keeps a frame's geometry on the GPU between ticks.
+  `Renderer::set_frames(previous, current, overlay)`, once per tick, uploads every sprite
+  instance with both ticks' transforms, the tilemap chunks (kept while their tiles do not
+  change) and the views' layout, reusing and growing its buffers, and returns the
+  `DrawReport`. `draw(target, size, alpha, camera)` and `render_rgba(size, alpha, camera)`
+  then draw the frames set last at any `alpha` (clamped, NaN as 1) by writing only the
+  views; the shader blends the positions and turns the rotation along the shorter arc, as
+  before, and the debug draw is rebuilt only when the target size or the current visible
+  area changes. `render_rgba` returns the RGBA pixels, and `camera` (the editor's free
+  camera) replaces `Overlay::camera`. `Frames`, `Rendered` and `Overlay::camera` are
+  removed, `interpolate` is no longer public, and `set_atlas` drops the frames set before
+  it. `Renderer::stats` returns `RenderStats`, the buffers created and the bytes written
+  since the renderer was made. The browser's `WebRenderer` follows: `set_frames(previous,
+  current, overlay)` returns the report, and `draw(alpha, camera)` draws.
 - The command line tool's new `render` draws a tick of a scene (with its `--inputs` and
   `--edits`) or of a `.replay` offscreen and writes it to a PNG: `--tick`, `--out`,
   `--width` and `--height` (1280 by 720 by default), and `--debug-layer` for each debug

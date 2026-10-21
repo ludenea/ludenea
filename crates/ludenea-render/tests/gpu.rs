@@ -13,11 +13,10 @@ use ludenea_draw::frame::{
 use ludenea_draw::mesh::HIGHLIGHT;
 use ludenea_draw::{Color, Primitive};
 use ludenea_ecs::{AssetId, Entity, World};
-use ludenea_math::{Rot, Vec2};
+use ludenea_math::{PI, Rot, Vec2};
 use ludenea_render::atlas::{Atlas, AtlasPage, TextureSource, pack};
 use ludenea_render::gpu::{
-    BACKGROUND, DrawReport, Frames, Overlay, RenderError, Renderer, Size, headless,
-    headless_with_limits,
+    BACKGROUND, DrawReport, Overlay, RenderError, Renderer, Size, headless, headless_with_limits,
 };
 
 const SIZE: Size = Size {
@@ -120,16 +119,12 @@ fn frame(sprites: Vec<SpriteItem>) -> RenderFrame {
 }
 
 fn render(renderer: &mut Renderer, size: Size, frame: &RenderFrame) -> Vec<u8> {
-    let frames = Frames {
-        previous: None,
-        current: frame,
-        alpha: 1.0,
-    };
-    let rendered = renderer
-        .render_rgba(size, frames, &Overlay::default())
+    renderer
+        .set_frames(None, frame, &Overlay::default())
         .unwrap();
-    assert_eq!(rendered.rgba.len(), (size.width * size.height * 4) as usize);
-    rendered.rgba
+    let rgba = renderer.render_rgba(size, 1.0, None).unwrap();
+    assert_eq!(rgba.len(), (size.width * size.height * 4) as usize);
+    rgba
 }
 
 fn pixel(pixels: &[u8], size: Size, x: u32, y: u32) -> [u8; 4] {
@@ -402,19 +397,11 @@ fn missing_texture_draws_a_placeholder_and_reports_it() {
     let expected = DrawReport {
         missing: vec![(unloaded, AssetId(99), 3), (missing_frame, AssetId(1), 5)],
     };
-    let rendered = renderer
-        .render_rgba(
-            SIZE,
-            Frames {
-                previous: None,
-                current: &scene,
-                alpha: 1.0,
-            },
-            &Overlay::default(),
-        )
+    let report = renderer
+        .set_frames(None, &scene, &Overlay::default())
         .unwrap();
-    assert_eq!(rendered.report, expected);
-    let pixels = rendered.rgba;
+    assert_eq!(report, expected);
+    let pixels = renderer.render_rgba(SIZE, 1.0, None).unwrap();
     // One magenta world unit on each missing sprite, and the rest of the frame draws.
     assert_eq!(pixel(&pixels, SIZE, 16, 48), MAGENTA);
     assert_eq!(pixel(&pixels, SIZE, 48, 48), MAGENTA);
@@ -436,14 +423,10 @@ fn missing_texture_draws_a_placeholder_and_reports_it() {
         view_formats: &[],
     });
     let view = target.create_view(&Default::default());
-    let frames = Frames {
-        previous: None,
-        current: &scene,
-        alpha: 1.0,
-    };
     let report = renderer
-        .draw(&view, SIZE, frames, &Overlay::default())
+        .set_frames(None, &scene, &Overlay::default())
         .unwrap();
+    renderer.draw(&view, SIZE, 1.0, None).unwrap();
     assert_eq!(report, expected);
 }
 
@@ -520,24 +503,29 @@ fn a_frame_without_a_camera_shows_twenty_by_eleven_and_a_quarter_units() {
 }
 
 #[test]
-fn overlay_camera_overrides_the_frame_camera() {
+fn free_camera_moves_the_view_without_set_frames() {
     let mut renderer = renderer();
     upload(&mut renderer, &solid(RED), &TextureMeta::default());
     let scene = frame(vec![sprite(entity(), Vec2::new(10.0, 10.0))]);
-    let overlay = Overlay {
-        camera: Some(CameraView {
-            center: Vec2::new(10.0, 10.0),
+    renderer
+        .set_frames(None, &scene, &Overlay::default())
+        .unwrap();
+    // The frame's camera, around the origin, does not show the sprite.
+    let pixels = renderer.render_rgba(SIZE, 1.0, None).unwrap();
+    assert_eq!(pixel(&pixels, SIZE, 32, 32), background());
+    // The free camera overrides it, and moving it needs no new frames.
+    let free = |x: f32| {
+        Some(CameraView {
+            center: Vec2::new(x, 10.0),
             view: Vec2::new(4.0, 4.0),
-        }),
-        ..Overlay::default()
+        })
     };
-    let frames = Frames {
-        previous: None,
-        current: &scene,
-        alpha: 1.0,
-    };
-    let pixels = renderer.render_rgba(SIZE, frames, &overlay).unwrap().rgba;
+    let pixels = renderer.render_rgba(SIZE, 1.0, free(10.0)).unwrap();
     assert_eq!(pixel(&pixels, SIZE, 32, 32), RED);
+    // One unit to the right, the sprite moves 16 pixels left.
+    let pixels = renderer.render_rgba(SIZE, 1.0, free(11.0)).unwrap();
+    assert_eq!(pixel(&pixels, SIZE, 20, 32), RED);
+    assert_eq!(pixel(&pixels, SIZE, 32, 32), background());
 }
 
 #[test]
@@ -655,19 +643,14 @@ fn render_rgba_of_an_empty_target_is_empty() {
 #[test]
 fn render_rgba_refuses_a_target_larger_than_the_device_allows() {
     let mut renderer = renderer();
-    let scene = frame(Vec::new());
-    let frames = Frames {
-        previous: None,
-        current: &scene,
-        alpha: 1.0,
-    };
+    renderer
+        .set_frames(None, &frame(Vec::new()), &Overlay::default())
+        .unwrap();
     let huge = Size {
         width: u32::MAX,
         height: 1,
     };
-    let error = renderer
-        .render_rgba(huge, frames, &Overlay::default())
-        .unwrap_err();
+    let error = renderer.render_rgba(huge, 1.0, None).unwrap_err();
     assert!(
         matches!(
             error,
@@ -699,18 +682,15 @@ fn render_rgba_refuses_a_target_whose_read_back_exceeds_the_buffer_limit() {
         limits.max_buffer_size
     );
     let mut renderer = Renderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm);
-    let scene = frame(Vec::new());
-    let frames = Frames {
-        previous: None,
-        current: &scene,
-        alpha: 1.0,
-    };
+    renderer
+        .set_frames(None, &frame(Vec::new()), &Overlay::default())
+        .unwrap();
     let size = Size {
         width: side,
         height: side,
     };
     assert_eq!(
-        renderer.render_rgba(size, frames, &Overlay::default()),
+        renderer.render_rgba(size, 1.0, None),
         Err(RenderError::Limit {
             operation: "render_rgba",
             limit: "max_buffer_size",
@@ -779,12 +759,8 @@ fn layer(name: &str, parallax: f32) -> LayerInfo {
 }
 
 fn render_with(renderer: &mut Renderer, frame: &RenderFrame, overlay: &Overlay) -> Vec<u8> {
-    let frames = Frames {
-        previous: None,
-        current: frame,
-        alpha: 1.0,
-    };
-    renderer.render_rgba(SIZE, frames, overlay).unwrap().rgba
+    renderer.set_frames(None, frame, overlay).unwrap();
+    renderer.render_rgba(SIZE, 1.0, None).unwrap()
 }
 
 fn report(device: &wgpu::Device, renderer: &mut Renderer, frame: &RenderFrame) -> DrawReport {
@@ -798,7 +774,8 @@ fn report(device: &wgpu::Device, renderer: &mut Renderer, frame: &RenderFrame) -
     .unwrap()
 }
 
-/// Draws `frame` with `renderer` into a new `SIZE` target of `format`, told it is `size`.
+/// Sets `frame` alone and draws it with `renderer` into a new `SIZE` target of `format`,
+/// told it is `size`, returning the report of `set_frames`.
 fn draw(
     device: &wgpu::Device,
     renderer: &mut Renderer,
@@ -820,17 +797,9 @@ fn draw(
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     });
-    let frames = Frames {
-        previous: None,
-        current: frame,
-        alpha: 1.0,
-    };
-    renderer.draw(
-        &target.create_view(&Default::default()),
-        size,
-        frames,
-        &Overlay::default(),
-    )
+    let report = renderer.set_frames(None, frame, &Overlay::default())?;
+    renderer.draw(&target.create_view(&Default::default()), size, 1.0, None)?;
+    Ok(report)
 }
 
 #[test]
@@ -1040,7 +1009,6 @@ fn debug_draw_is_on_top() {
     let overlay = Overlay {
         debug_layers: BTreeSet::from(["physics".to_string()]),
         selected: BTreeSet::from([picked]),
-        ..Overlay::default()
     };
     let pixels = render_with(&mut renderer, &scene, &overlay);
     assert_eq!(pixel(&pixels, SIZE, 32, 32), BLUE);
@@ -1230,17 +1198,11 @@ fn previous_frame_and_alpha_draw_in_between() {
         vec![sprite(moving, Vec2::new(1.0, 1.0))],
         vec![tilemap(map, Vec2::new(0.0, -2.0), 1, 1, vec![Some(1)])],
     );
-    let between = |renderer: &mut Renderer, alpha: f32| {
-        let frames = Frames {
-            previous: Some(&previous),
-            current: &current,
-            alpha,
-        };
-        renderer
-            .render_rgba(SIZE, frames, &Overlay::default())
-            .unwrap()
-            .rgba
-    };
+    renderer
+        .set_frames(Some(&previous), &current, &Overlay::default())
+        .unwrap();
+    let between =
+        |renderer: &mut Renderer, alpha: f32| renderer.render_rgba(SIZE, alpha, None).unwrap();
     // Halfway: the sprite centred on (0, 1), pixels 24..40 across and 8..24 down; the cell at
     // world [-1, 0] by [-2, -1], pixels 16..32 across and 48..64 down.
     let pixels = between(&mut renderer, 0.5);
@@ -1255,6 +1217,153 @@ fn previous_frame_and_alpha_draw_in_between() {
     assert_eq!(pixel(&pixels, SIZE, 32, 16), background());
     assert_eq!(pixel(&pixels, SIZE, 40, 56), GREEN);
     assert_eq!(pixel(&pixels, SIZE, 24, 56), background());
+    // Alpha is clamped, and NaN draws `current`.
+    assert_eq!(between(&mut renderer, 3.0), pixels);
+    assert_eq!(between(&mut renderer, f32::NAN), pixels);
+    let before = between(&mut renderer, -1.0);
+    assert_eq!(pixel(&before, SIZE, 16, 16), RED);
+    assert_eq!(pixel(&before, SIZE, 48, 16), background());
+}
+
+#[test]
+fn draw_between_ticks_creates_no_buffer() {
+    let mut renderer = renderer();
+    upload(&mut renderer, &solid(RED), &TextureMeta::default());
+    let mut world = World::new();
+    let previous = frame(
+        (0..10_000)
+            .map(|index| sprite(world.spawn(), Vec2::new(index as f32 / 1_000.0, 0.0)))
+            .collect(),
+    );
+    let mut current = previous.clone();
+    for item in &mut current.sprites {
+        item.position.y = 1.0;
+    }
+    renderer
+        .set_frames(Some(&previous), &current, &Overlay::default())
+        .unwrap();
+    renderer.render_rgba(SIZE, 0.25, None).unwrap();
+    let before = renderer.stats();
+    renderer.render_rgba(SIZE, 0.75, None).unwrap();
+    let after = renderer.stats();
+    assert_eq!(after.buffers_created, before.buffers_created);
+    let written = after.bytes_written - before.bytes_written;
+    assert!(written < 4096, "{written} bytes written between two draws");
+}
+
+#[test]
+fn set_frames_reuses_the_instance_buffers_that_fit() {
+    let mut renderer = renderer();
+    let mut world = World::new();
+    let many = frame(
+        (0..1_000)
+            .map(|_| sprite(world.spawn(), Vec2::ZERO))
+            .collect(),
+    );
+    let few = frame((0..10).map(|_| sprite(world.spawn(), Vec2::ZERO)).collect());
+    renderer
+        .set_frames(None, &many, &Overlay::default())
+        .unwrap();
+    let created = renderer.stats().buffers_created;
+    renderer
+        .set_frames(Some(&many), &few, &Overlay::default())
+        .unwrap();
+    renderer
+        .set_frames(Some(&few), &many, &Overlay::default())
+        .unwrap();
+    assert_eq!(renderer.stats().buffers_created, created);
+}
+
+/// A sprite two units wide and one tall, red on its left half and blue on its right, so a
+/// half turn shows.
+fn two_halves(renderer: &mut Renderer) {
+    let texture = png(32, 16, |x, _| if x < 16 { RED } else { BLUE });
+    upload(renderer, &texture, &TextureMeta::default());
+}
+
+#[test]
+fn halfway_rotation_matches_the_shorter_arc() {
+    let mut renderer = renderer();
+    two_halves(&mut renderer);
+    let turning = entity();
+    let degrees = PI / 180.0;
+    let at = |angle: f32| {
+        let mut item = sprite(turning, Vec2::ZERO);
+        item.rotation = Rot::from_angle(angle * degrees);
+        frame(vec![item])
+    };
+    // From 170 to -170 degrees: the shorter arc crosses 180, where red is on the right; the
+    // longer one would cross 0, where red is on the left.
+    renderer
+        .set_frames(Some(&at(170.0)), &at(-170.0), &Overlay::default())
+        .unwrap();
+    let pixels = renderer.render_rgba(SIZE, 0.5, None).unwrap();
+    assert_eq!(pixel(&pixels, SIZE, 18, 32), BLUE);
+    assert_eq!(pixel(&pixels, SIZE, 46, 32), RED);
+    // Level at 180 degrees: half a unit above the centre is clear.
+    assert_eq!(pixel(&pixels, SIZE, 18, 22), background());
+    assert_eq!(pixel(&pixels, SIZE, 46, 42), background());
+}
+
+#[test]
+fn teleported_sprite_is_not_blended() {
+    let mut renderer = renderer();
+    upload(&mut renderer, &solid(RED), &TextureMeta::default());
+    let mut world = World::new();
+    let (jumping, appearing) = (world.spawn(), world.spawn());
+    let previous = frame(vec![sprite(jumping, Vec2::new(-1.0, 1.0))]);
+    let mut current = frame(vec![
+        sprite(jumping, Vec2::new(1.0, 1.0)),
+        sprite(appearing, Vec2::new(-1.0, -1.0)),
+    ]);
+    current.teleported = vec![jumping];
+    renderer
+        .set_frames(Some(&previous), &current, &Overlay::default())
+        .unwrap();
+    // Halfway, both are where `current` puts them: centred on (1, 1) and (-1, -1).
+    let pixels = renderer.render_rgba(SIZE, 0.5, None).unwrap();
+    assert_eq!(pixel(&pixels, SIZE, 48, 16), RED);
+    assert_eq!(pixel(&pixels, SIZE, 32, 16), background());
+    assert_eq!(pixel(&pixels, SIZE, 16, 48), RED);
+}
+
+#[test]
+fn camera_is_blended_unless_it_switched_or_teleported() {
+    let mut renderer = renderer();
+    upload(&mut renderer, &solid(RED), &TextureMeta::default());
+    let (camera, still) = (entity(), entity());
+    let at = |x: f32, entity: Entity| {
+        let mut scene = frame(vec![sprite(still, Vec2::ZERO)]);
+        scene.camera = Some(CameraItem {
+            entity,
+            center: Vec2::new(x, 0.0),
+            view: Vec2::new(4.0, 4.0),
+        });
+        scene
+    };
+    // From x = 0 to x = 2, halfway at 1: the sprite at the origin is 16 pixels left of centre.
+    renderer
+        .set_frames(
+            Some(&at(0.0, camera)),
+            &at(2.0, camera),
+            &Overlay::default(),
+        )
+        .unwrap();
+    let pixels = renderer.render_rgba(SIZE, 0.5, None).unwrap();
+    assert_eq!(pixel(&pixels, SIZE, 16, 32), RED);
+    assert_eq!(pixel(&pixels, SIZE, 0, 32), background());
+    // A switched camera, or a teleported one, is drawn where `current` has it: the sprite at
+    // 32 pixels left of centre.
+    let mut teleported = at(2.0, camera);
+    teleported.teleported = vec![camera];
+    for current in [at(2.0, entity()), teleported] {
+        renderer
+            .set_frames(Some(&at(0.0, camera)), &current, &Overlay::default())
+            .unwrap();
+        let pixels = renderer.render_rgba(SIZE, 0.5, None).unwrap();
+        assert_eq!(pixel(&pixels, SIZE, 4, 32), RED);
+        assert_eq!(pixel(&pixels, SIZE, 16, 32), background());
+    }
 }
 
 /// A device that allows buffers of at most `max_buffer_size` bytes, so a test can reach the

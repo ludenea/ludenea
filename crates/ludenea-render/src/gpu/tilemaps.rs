@@ -2,7 +2,8 @@
 //! pipeline, kept until its tilemap's tiles change, and drawn in one draw per run of tiles
 //! sampling the same page, so a chunk spanning several atlas pages or holding placeholders
 //! is several draws. The instances are relative to the tilemap's position, which its view
-//! adds on the GPU, so a moving (or interpolated) tilemap keeps its chunks.
+//! adds on the GPU, so a moving (or interpolated) tilemap keeps its chunks: they stay on the
+//! GPU from tick to tick until its tiles change.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
@@ -10,8 +11,8 @@ use std::ops::Range;
 use ludenea_draw::frame::TilemapItem;
 use ludenea_ecs::{AssetId, Entity};
 
-use super::fill;
 use super::sprites::{self, BLANK, Instance, Sample};
+use super::{RenderStats, fill};
 use crate::atlas::Region;
 
 /// The side of a chunk, in cells.
@@ -47,6 +48,7 @@ impl Cache {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        stats: &mut RenderStats,
         items: &[&TilemapItem],
         regions: &BTreeMap<(AssetId, u32), Region>,
         pages: &[(u32, u32)],
@@ -59,8 +61,10 @@ impl Cache {
                 .get(&item.entity)
                 .is_none_or(|built| !same_tiles(&built.item, item))
             {
-                self.0
-                    .insert(item.entity, build(device, queue, item, regions, pages));
+                self.0.insert(
+                    item.entity,
+                    build(device, queue, stats, item, regions, pages),
+                );
             }
         }
     }
@@ -91,6 +95,7 @@ fn same_tiles(a: &TilemapItem, b: &TilemapItem) -> bool {
 fn build(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
+    stats: &mut RenderStats,
     item: &TilemapItem,
     regions: &BTreeMap<(AssetId, u32), Region>,
     pages: &[(u32, u32)],
@@ -159,10 +164,11 @@ fn build(
                 .flatten()
                 .flat_map(|value| value.to_le_bytes())
                 .collect();
-            // At most 32 * 32 instances of 72 bytes: far below any buffer limit.
+            // At most 32 * 32 instances of 76 bytes: far below any buffer limit.
             let buffer = fill(
                 device,
                 queue,
+                stats,
                 "tilemap chunk",
                 &bytes,
                 wgpu::BufferUsages::VERTEX,

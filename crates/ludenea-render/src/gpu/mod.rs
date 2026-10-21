@@ -1,6 +1,8 @@
 //! The wgpu renderer (feature `gpu`): draws a render frame's layers of tilemaps and sprites,
 //! then the debug draw, through a fitted 2D camera into a target view, or offscreen into
-//! RGBA pixels. Display only: nothing here feeds back into the simulation.
+//! RGBA pixels, anywhere between the previous tick and the current one. The geometry is
+//! uploaded once per tick and stays on the GPU; a draw writes only the views, and the shader
+//! interpolates. Display only: nothing here feeds back into the simulation.
 
 mod debug;
 mod device;
@@ -13,8 +15,8 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use ludenea_app::meta::Filter;
-use ludenea_draw::Color;
 use ludenea_draw::frame::{CameraView, RenderFrame, SpriteItem, TilemapItem};
+use ludenea_draw::{Color, DebugDrawFrame};
 use ludenea_ecs::{AssetId, Entity};
 use ludenea_math::Vec2;
 use serde::{Deserialize, Serialize};
@@ -22,7 +24,7 @@ use wgpu::util::DeviceExt;
 
 use crate::atlas::{Atlas, Region};
 use crate::camera::{DEFAULT_CAMERA, fit, world_to_clip};
-use crate::interpolate::interpolate;
+use crate::interpolate::{Pairing, camera_at, clamp_alpha};
 use sprites::{BLANK, INSTANCE_FLOATS, Sample};
 
 pub use device::{headless, headless_with_limits};
@@ -47,40 +49,29 @@ pub struct Size {
     pub height: u32,
 }
 
-/// The frames to draw: `current`, and the one before it with how far between them to draw.
-/// With `previous`, what is drawn is `interpolate(previous, current, alpha)`.
-#[derive(Clone, Copy, Debug)]
-pub struct Frames<'a> {
-    pub previous: Option<&'a RenderFrame>,
-    pub current: &'a RenderFrame,
-    pub alpha: f32,
-}
-
-/// What the viewer adds over the frame: the debug draw layers to show, the selected entities,
-/// and a camera that overrides the frame's (the editor's free camera). Each field may be left
-/// out of its JSON, which `web` reads.
+/// What the viewer adds over the frame: the debug draw layers to show and the selected
+/// entities. Each field may be left out of its JSON, which `web` reads.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct Overlay {
     pub debug_layers: BTreeSet<String>,
     pub selected: BTreeSet<Entity>,
-    pub camera: Option<CameraView>,
 }
 
-/// What a draw could not draw as asked.
+/// What `set_frames` could not prepare as asked.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct DrawReport {
-    /// What was drawn as a placeholder, in draw order: each sprite's entity, texture and
+    /// What is drawn as a placeholder, in draw order: each sprite's entity, texture and
     /// frame, and each tile's tilemap entity, tileset and tile index.
     pub missing: Vec<(Entity, AssetId, u32)>,
 }
 
-/// What `render_rgba` read back, and what it could not draw as asked.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Rendered {
-    /// `width * 4` bytes of RGBA per row, tightly packed, top row first.
-    pub rgba: Vec<u8>,
-    pub report: DrawReport,
+/// What the renderer did to the GPU since it was made, for diagnostics: the buffers it
+/// created and the bytes it wrote into buffers (textures are not counted).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RenderStats {
+    pub buffers_created: u64,
+    pub bytes_written: u64,
 }
 
 /// Why the renderer could not do what was asked. Non-exhaustive: later versions may add
@@ -110,25 +101,29 @@ pub enum RenderError {
     InvalidAtlas { page: usize, reason: String },
 }
 
-/// Draws render frames with one device. Pages come from `set_atlas`; until then, and for any
-/// sprite whose region is not in the atlas, a magenta placeholder is drawn.
+/// Draws render frames with one device, in two steps: `set_frames`, once per tick, uploads
+/// the geometry of the current frame with both ticks' transforms, and `draw` (or
+/// `render_rgba`), once per displayed frame, draws it `alpha` of the way from the previous
+/// tick to the current one, writing only the views. Pages come from `set_atlas`; until then,
+/// and for any sprite whose region is not in the atlas, a magenta placeholder is drawn. Until
+/// the first `set_frames`, a draw shows the background alone.
 ///
 /// The renderer handles its device's errors: an error the device raises outside an error
-/// scope is returned by the next `set_atlas`, `draw` or `render_rgba` as `RenderError::Gpu`.
-/// Its operation is the call's own when the error was raised while the call ran, and
-/// `"earlier GPU work"` when it was pending before the call (raised by the host's own use of
-/// the device, or after an earlier call returned); the call then does nothing. A call that
-/// returns `Gpu` with its own operation ran: `set_atlas` has replaced the atlas, and `draw`
-/// has submitted its work. Once the device is lost, every call returns
-/// `RenderError::DeviceLost` without touching it, and the caller makes a new renderer on a
-/// new device.
+/// scope is returned by the next `set_atlas`, `set_frames`, `draw` or `render_rgba` as
+/// `RenderError::Gpu`. Its operation is the call's own when the error was raised while the
+/// call ran, and `"earlier GPU work"` when it was pending before the call (raised by the
+/// host's own use of the device, or after an earlier call returned); the call then does
+/// nothing. A call that returns `Gpu` with its own operation ran: `set_atlas` has replaced the
+/// atlas, `set_frames` the frames, and `draw` has submitted its work. Once the device is lost,
+/// every call returns `RenderError::DeviceLost` without touching it, and the caller makes a
+/// new renderer on a new device.
 pub struct Renderer {
     device: wgpu::Device,
     faults: Arc<Mutex<Faults>>,
     queue: wgpu::Queue,
     format: wgpu::TextureFormat,
     layout: wgpu::BindGroupLayout,
-    /// The layout of a layer's view: world to clip space, at a dynamic offset.
+    /// The layout of a view: world to clip space and alpha, at a dynamic offset.
     view_layout: wgpu::BindGroupLayout,
     /// The quad and debug pipelines per target format, made on first use.
     pipelines: Vec<(wgpu::TextureFormat, Pipelines)>,
@@ -140,6 +135,24 @@ pub struct Renderer {
     blank: wgpu::BindGroup,
     regions: BTreeMap<(AssetId, u32), Region>,
     tilemaps: tilemaps::Cache,
+    /// What the last `set_frames` prepared, which every draw until the next one reuses.
+    scene: Scene,
+    /// The sprite instances, one buffer per part of at most `per_buffer` instances, kept
+    /// across ticks and replaced by a larger one only when a part outgrows it.
+    instances: Vec<wgpu::Buffer>,
+    /// The debug draw's vertices, kept and grown like `instances`, and how many vertices of
+    /// each buffer the current debug draw uses (none past the last one it fills).
+    debug: Vec<wgpu::Buffer>,
+    debug_counts: Vec<u32>,
+    /// The target size and visible area the debug vertices were built for (their outlines'
+    /// width depends on both), or `None` when `set_frames` changed the debug draw since.
+    debug_built_for: Option<(Size, Vec2)>,
+    /// The views' uniform buffer and its bind group, replaced when the views outgrow it.
+    views: Option<(wgpu::Buffer, wgpu::BindGroup)>,
+    /// The target and read-back buffer of `render_rgba`, kept while the size stays.
+    #[cfg(not(target_arch = "wasm32"))]
+    offscreen: Option<Offscreen>,
+    stats: RenderStats,
 }
 
 /// What the device reported through its callbacks, waiting for the next call to return it.
@@ -163,6 +176,38 @@ struct Pipelines {
 struct Page {
     size: (u32, u32),
     bind_groups: [wgpu::BindGroup; 2],
+}
+
+/// The current frame as `set_frames` prepared it: its draws in order, the views they go
+/// through, its camera at both ticks, and its debug draw with the overlay to show it with.
+#[derive(Default)]
+struct Scene {
+    draws: Vec<Draw>,
+    /// The view of each slot before the debug draw's, in slot order.
+    slots: Vec<Slot>,
+    /// The frame's camera at the previous tick and at the current one.
+    camera: Option<(CameraView, CameraView)>,
+    debug: DebugDrawFrame,
+    overlay: Overlay,
+}
+
+/// A view of a layer of `parallax`, for geometry placed relative to `origin`, given at the
+/// previous tick and at the current one: zero for a layer's sprites, the tilemap's position
+/// for a tilemap's chunks.
+struct Slot {
+    parallax: f32,
+    origin: (Vec2, Vec2),
+}
+
+/// The offscreen target of `render_rgba` and the buffer its pixels are read back through.
+#[cfg(not(target_arch = "wasm32"))]
+struct Offscreen {
+    size: Size,
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    buffer: wgpu::Buffer,
+    /// The bytes of one read-back row, padded to the copy alignment.
+    padded: u32,
 }
 
 impl Renderer {
@@ -223,6 +268,15 @@ impl Renderer {
             blank,
             regions: BTreeMap::new(),
             tilemaps: tilemaps::Cache::default(),
+            scene: Scene::default(),
+            instances: Vec::new(),
+            debug: Vec::new(),
+            debug_counts: Vec::new(),
+            debug_built_for: None,
+            views: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            offscreen: None,
+            stats: RenderStats::default(),
         }
     }
 
@@ -231,11 +285,18 @@ impl Renderer {
         MAX_PAGE_SIDE.min(self.device.limits().max_texture_dimension_2d)
     }
 
+    /// The buffers created and the bytes written into buffers since the renderer was made.
+    pub fn stats(&self) -> RenderStats {
+        self.stats
+    }
+
     /// Uploads the atlas's pages, replacing the previous atlas. A page wider or taller than
     /// `max_page_side` is refused with `RenderError::Limit`, naming `max_page_side` when the
     /// renderer's 4096 cap binds and `max_texture_dimension_2d` when the device's limit does,
     /// and a page with a side of 0 or whose pixels do not match its size with
-    /// `RenderError::InvalidAtlas`; the previous atlas then stays.
+    /// `RenderError::InvalidAtlas`; the previous atlas then stays. A new atlas drops the frames
+    /// set before, which sample the previous one: until the next `set_frames`, a draw shows
+    /// the background and the debug draw.
     pub fn set_atlas(&mut self, atlas: &Atlas) -> Result<(), RenderError> {
         self.guarded("set_atlas", |renderer| renderer.replace_atlas(atlas))
     }
@@ -300,39 +361,63 @@ impl Renderer {
             .collect();
         self.regions = atlas.regions.clone();
         self.tilemaps.clear();
+        // The draws set before sample the previous atlas's pages and regions.
+        self.scene.draws.clear();
         Ok(())
     }
 
-    /// Draws `frames` into `target`, a view of `size` pixels in the renderer's format. A size
-    /// past `max_texture_dimension_2d` is refused. Of tilemaps sharing an entity, which only
-    /// a malformed frame holds, the first well-formed one listed is drawn and the others are
-    /// skipped.
+    /// Prepares `current` for drawing, blended from `previous` when it is given: builds and
+    /// uploads every sprite instance with both ticks' transforms (equal for an entity new in
+    /// `current` or teleported on its tick), the tilemap chunks (a tilemap whose tiles did not
+    /// change keeps its chunks), and the views' layout, reusing the buffers that fit. The
+    /// debug draw of `overlay`'s layers, its selected entities highlighted, is built at the
+    /// next draw. Of tilemaps sharing an entity, which only a malformed frame holds, the first
+    /// well-formed one listed is drawn and the others are skipped. Returns what is drawn as a
+    /// placeholder.
+    pub fn set_frames(
+        &mut self,
+        previous: Option<&RenderFrame>,
+        current: &RenderFrame,
+        overlay: &Overlay,
+    ) -> Result<DrawReport, RenderError> {
+        self.guarded("set_frames", |renderer| {
+            renderer.prepare(previous, current, overlay)
+        })
+    }
+
+    /// Draws the frames set last into `target`, a view of `size` pixels in the renderer's
+    /// format, `alpha` of the way from the previous tick to the current one (clamped to 0 to
+    /// 1, NaN as 1), through `camera` when it is given (the editor's free camera) and else
+    /// the frame's camera, blended. It writes the views and nothing else, unless the size or
+    /// the current frame's visible area changed, which rebuilds the debug draw's outlines. A
+    /// size past `max_texture_dimension_2d` is refused.
     pub fn draw(
         &mut self,
         target: &wgpu::TextureView,
         size: Size,
-        frames: Frames<'_>,
-        overlay: &Overlay,
-    ) -> Result<DrawReport, RenderError> {
+        alpha: f32,
+        camera: Option<CameraView>,
+    ) -> Result<(), RenderError> {
         self.guarded("draw", |renderer| {
             renderer.fits("draw", size)?;
-            renderer.encode(target, renderer.format, size, frames, overlay)
+            renderer.encode(target, renderer.format, size, alpha, camera)
         })
     }
 
-    /// Draws `frames` offscreen and reads it back, with the report `draw` gives. A target
-    /// with no pixels gives no bytes and draws nothing; one past `max_texture_dimension_2d`,
-    /// or whose read-back is past `max_buffer_size`, is refused. Not on WebAssembly: it waits
-    /// for the GPU, which a browser's thread cannot do.
+    /// Draws as `draw` does, offscreen, and reads the pixels back: `width * 4` bytes of RGBA
+    /// per row, tightly packed, top row first. A target with no pixels gives no bytes and
+    /// draws nothing; one past `max_texture_dimension_2d`, or whose read-back is past
+    /// `max_buffer_size`, is refused. Not on WebAssembly: it waits for the GPU, which a
+    /// browser's thread cannot do.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn render_rgba(
         &mut self,
         size: Size,
-        frames: Frames<'_>,
-        overlay: &Overlay,
-    ) -> Result<Rendered, RenderError> {
+        alpha: f32,
+        camera: Option<CameraView>,
+    ) -> Result<Vec<u8>, RenderError> {
         self.guarded("render_rgba", |renderer| {
-            renderer.read_back(size, frames, overlay)
+            renderer.read_back(size, alpha, camera)
         })
     }
 
@@ -397,11 +482,11 @@ impl Renderer {
     fn read_back(
         &mut self,
         size: Size,
-        frames: Frames<'_>,
-        overlay: &Overlay,
-    ) -> Result<Rendered, RenderError> {
+        alpha: f32,
+        camera: Option<CameraView>,
+    ) -> Result<Vec<u8>, RenderError> {
         if size.width == 0 || size.height == 0 {
-            return Ok(Rendered::default());
+            return Ok(Vec::new());
         }
         self.fits("render_rgba", size)?;
         // Rows are copied out padded to the copy alignment, then packed. The side fits the
@@ -419,43 +504,27 @@ impl Renderer {
                 allowed,
             });
         }
+        // Taken while in use: a read-back that fails leaves it out, and the next call makes
+        // a new one rather than reuse a buffer in an unknown state.
+        let offscreen = match self.offscreen.take() {
+            Some(offscreen) if offscreen.size == size => offscreen,
+            _ => self.offscreen(size, padded, read_back),
+        };
+        self.encode(&offscreen.view, RGBA, size, alpha, camera)?;
+
         let extent = wgpu::Extent3d {
             width: size.width,
             height: size.height,
             depth_or_array_layers: 1,
         };
-        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("offscreen"),
-            size: extent,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: RGBA,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let report = self.encode(
-            &texture.create_view(&Default::default()),
-            RGBA,
-            size,
-            frames,
-            overlay,
-        )?;
-
-        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("offscreen read-back"),
-            size: read_back,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
         let mut encoder = self.device.create_command_encoder(&Default::default());
         encoder.copy_texture_to_buffer(
-            texture.as_image_copy(),
+            offscreen.texture.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
+                buffer: &offscreen.buffer,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(padded),
+                    bytes_per_row: Some(offscreen.padded),
                     rows_per_image: Some(size.height),
                 },
             },
@@ -464,10 +533,12 @@ impl Renderer {
         self.queue.submit([encoder.finish()]);
 
         let (sender, receiver) = mpsc::channel();
-        buffer.map_async(wgpu::MapMode::Read, .., move |result| {
-            // The receiver waits below, so it is still there.
-            let _ = sender.send(result);
-        });
+        offscreen
+            .buffer
+            .map_async(wgpu::MapMode::Read, .., move |result| {
+                // The receiver waits below, so it is still there.
+                let _ = sender.send(result);
+            });
         let failed = |message: String| RenderError::Gpu {
             operation: "render_rgba",
             message,
@@ -479,61 +550,90 @@ impl Renderer {
             .recv()
             .map_err(|_| failed("the read-back was dropped before it completed".to_string()))?
             .map_err(|error| failed(error.to_string()))?;
-        let mapped = buffer
-            .get_mapped_range(..)
-            .map_err(|error| failed(error.to_string()))?;
-        let rgba = mapped
-            .chunks_exact(padded as usize)
-            .flat_map(|line| &line[..row as usize])
-            .copied()
-            .collect();
-        Ok(Rendered { rgba, report })
+        let rgba = {
+            let mapped = offscreen
+                .buffer
+                .get_mapped_range(..)
+                .map_err(|error| failed(error.to_string()))?;
+            mapped
+                .chunks_exact(offscreen.padded as usize)
+                .flat_map(|line| &line[..row as usize])
+                .copied()
+                .collect()
+        };
+        offscreen.buffer.unmap();
+        self.offscreen = Some(offscreen);
+        Ok(rgba)
     }
 
-    /// Clears `target` to the background, draws the layers in order (tilemaps and sprites
-    /// by `(order, entity)` within each), then the debug draw.
-    fn encode(
+    /// A new offscreen target of `size` and its read-back buffer of `read_back` bytes, rows
+    /// of `padded` bytes.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn offscreen(&mut self, size: Size, padded: u32, read_back: u64) -> Offscreen {
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("offscreen"),
+            size: wgpu::Extent3d {
+                width: size.width,
+                height: size.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: RGBA,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        self.stats.buffers_created += 1;
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("offscreen read-back"),
+            size: read_back,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        Offscreen {
+            size,
+            view: texture.create_view(&Default::default()),
+            texture,
+            buffer,
+            padded,
+        }
+    }
+
+    /// Builds the scene of `current`: the draws of its layers in order (tilemaps and sprites
+    /// by `(order, entity)` within each), and uploads its sprite instances.
+    fn prepare(
         &mut self,
-        target: &wgpu::TextureView,
-        format: wgpu::TextureFormat,
-        size: Size,
-        frames: Frames<'_>,
+        previous: Option<&RenderFrame>,
+        current: &RenderFrame,
         overlay: &Overlay,
     ) -> Result<DrawReport, RenderError> {
-        let interpolated;
-        let frame = match frames.previous {
-            Some(previous) => {
-                interpolated = interpolate(previous, frames.current, frames.alpha);
-                &interpolated
-            }
-            None => frames.current,
-        };
-        let camera = overlay
-            .camera
-            .clone()
-            .or_else(|| frame.camera.as_ref().map(CameraView::from))
-            .unwrap_or(DEFAULT_CAMERA);
-        let camera = &camera;
-        let aspect = size.width.max(1) as f32 / size.height.max(1) as f32;
-        let visible = fit(camera.view, aspect);
+        // Sprite instances go in buffers of at most `per_buffer`, below `max_buffer_size`.
+        let per_buffer = self.per_buffer("set_frames", INSTANCE_BYTES)?;
         let pages: Vec<(u32, u32)> = self.pages.iter().map(|page| page.size).collect();
         // A well-formed frame has one tilemap per entity; of a malformed frame's duplicates,
         // only the first well-formed one listed is built and drawn.
         let mut seen = BTreeSet::new();
-        let tilemaps: Vec<&TilemapItem> = frame
+        let tilemaps: Vec<&TilemapItem> = current
             .tilemaps
             .iter()
             .filter(|item| tilemaps::well_formed(item) && seen.insert(item.entity))
             .collect();
-        self.tilemaps
-            .update(&self.device, &self.queue, &tilemaps, &self.regions, &pages);
+        self.tilemaps.update(
+            &self.device,
+            &self.queue,
+            &mut self.stats,
+            &tilemaps,
+            &self.regions,
+            &pages,
+        );
 
         // Tilemaps before sprites, so a stable sort draws a tilemap first on a tie.
         let mut pieces: Vec<(u16, i32, Entity, Piece<'_>)> = tilemaps
             .iter()
             .map(|&item| (item.layer, item.order, item.entity, Piece::Tilemap(item)))
             .chain(
-                frame
+                current
                     .sprites
                     .iter()
                     .map(|item| (item.layer, item.order, item.entity, Piece::Sprite(item))),
@@ -542,29 +642,32 @@ impl Renderer {
         pieces.sort_by_key(|(layer, order, entity, _)| (*layer, *order, *entity));
 
         // One view per layer of sprites drawn and one per tilemap (its layer's, moved to the
-        // tilemap's position, so its chunks do not depend on it), then the debug draw's.
-        let mut views: Vec<[f32; 4]> = Vec::new();
-        let mut slots: BTreeMap<u16, u32> = BTreeMap::new();
-        let mut draws: Vec<Draw> = Vec::new();
-        let mut instances: Vec<sprites::Instance> = Vec::new();
-        // Sprite instances go in buffers of at most `per_buffer`, below `max_buffer_size`.
-        let per_buffer = self.per_buffer(INSTANCE_BYTES)?;
-        let mut missing = Vec::new();
-        let layer_view = |layer: u16| {
-            let parallax = frame
+        // tilemap's position, so its chunks do not depend on it).
+        let pairing = Pairing::new(previous, current);
+        let parallax = |layer: u16| {
+            current
                 .layers
                 .get(usize::from(layer))
-                .map_or(1.0, |info| info.parallax);
-            view(camera, visible, parallax)
+                .map_or(1.0, |info| info.parallax)
         };
+        let mut slots: Vec<Slot> = Vec::new();
+        let mut layer_slots: BTreeMap<u16, u32> = BTreeMap::new();
+        let mut draws: Vec<Draw> = Vec::new();
+        let mut instances: Vec<sprites::Instance> = Vec::new();
+        let mut missing = Vec::new();
         for (layer, _, _, piece) in pieces {
             match piece {
                 Piece::Sprite(item) => {
-                    let slot = *slots.entry(layer).or_insert_with(|| {
-                        views.push(layer_view(layer));
-                        views.len() as u32 - 1
+                    let slot = *layer_slots.entry(layer).or_insert_with(|| {
+                        slots.push(Slot {
+                            parallax: parallax(layer),
+                            origin: (Vec2::ZERO, Vec2::ZERO),
+                        });
+                        slots.len() as u32 - 1
                     });
-                    let (sample, instance) = sprites::instance(item, &self.regions, &pages);
+                    let motion = pairing.sprite(item);
+                    let (sample, instance) =
+                        sprites::instance(item, &motion, &self.regions, &pages);
                     let sample = sample.unwrap_or_else(|| {
                         missing.push((item.entity, item.texture, item.frame));
                         BLANK
@@ -593,8 +696,11 @@ impl Renderer {
                     let Some(built) = self.tilemaps.get(item.entity) else {
                         continue;
                     };
-                    views.push(moved(layer_view(layer), item.position));
-                    let slot = views.len() as u32 - 1;
+                    slots.push(Slot {
+                        parallax: parallax(layer),
+                        origin: pairing.tilemap(item),
+                    });
+                    let slot = slots.len() as u32 - 1;
                     missing.extend_from_slice(&built.missing);
                     for (chunk_index, chunk) in built.chunks.iter().enumerate() {
                         for (sample, run) in &chunk.batches {
@@ -609,72 +715,95 @@ impl Renderer {
                 }
             }
         }
-        views.push(view(camera, visible, 1.0));
+
+        let cap = (per_buffer * INSTANCE_BYTES) as u64;
+        for (part, chunk) in instances.chunks(per_buffer).enumerate() {
+            let bytes: Vec<u8> = chunk
+                .iter()
+                .flatten()
+                .flat_map(|value| value.to_le_bytes())
+                .collect();
+            let buffer = reserve(
+                &self.device,
+                &mut self.stats,
+                &mut self.instances,
+                part,
+                bytes.len() as u64,
+                cap,
+                "sprite instances",
+            );
+            write(&self.queue, &mut self.stats, buffer, &bytes);
+        }
+        self.scene = Scene {
+            draws,
+            slots,
+            camera: pairing.camera(current),
+            debug: current.debug.clone(),
+            overlay: overlay.clone(),
+        };
+        self.debug_built_for = None;
+        Ok(DrawReport { missing })
+    }
+
+    /// Clears `target` to the background, draws the scene `alpha` of the way between its
+    /// ticks, then the debug draw.
+    fn encode(
+        &mut self,
+        target: &wgpu::TextureView,
+        format: wgpu::TextureFormat,
+        size: Size,
+        alpha: f32,
+        camera: Option<CameraView>,
+    ) -> Result<(), RenderError> {
+        let alpha = clamp_alpha(alpha);
+        let aspect = size.width.max(1) as f32 / size.height.max(1) as f32;
+        // The camera shown, and the current tick's, whose visible area the debug draw's
+        // outlines follow, as the debug draw is the current tick's.
+        let (shown, current) = match (camera, &self.scene.camera) {
+            (Some(free), _) => (free.clone(), free),
+            (None, Some((from, to))) => (camera_at(from, to, alpha), to.clone()),
+            (None, None) => (DEFAULT_CAMERA, DEFAULT_CAMERA),
+        };
+        let visible = fit(shown.view, aspect);
+        let built_for = (size, fit(current.view, aspect));
+        if self.debug_built_for != Some(built_for) {
+            self.build_debug(size, built_for.1)?;
+            self.debug_built_for = Some(built_for);
+        }
+
+        // One view per slot, then the debug draw's, each on its own aligned slot of the
+        // uniform buffer, picked by a dynamic offset.
+        let views: Vec<[f32; 4]> = self
+            .scene
+            .slots
+            .iter()
+            .map(|slot| {
+                let origin = Vec2::lerp(slot.origin.0, slot.origin.1, alpha);
+                moved(view(&shown, visible, slot.parallax), origin)
+            })
+            .chain([view(&shown, visible, 1.0)])
+            .collect();
         let debug_slot = views.len() as u32 - 1;
-
-        let instances: Vec<wgpu::Buffer> = instances
-            .chunks(per_buffer)
-            .map(|part| {
-                let bytes: Vec<u8> = part
-                    .iter()
-                    .flatten()
-                    .flat_map(|value| value.to_le_bytes())
-                    .collect();
-                fill(
-                    &self.device,
-                    &self.queue,
-                    "sprite instances",
-                    &bytes,
-                    wgpu::BufferUsages::VERTEX,
-                )
-            })
-            .collect();
-        let line_width = debug::LINE_PIXELS * visible.x / size.width.max(1) as f32;
-        let debug_bytes = debug::vertices(&frame.debug, overlay, line_width);
-        // Whole triangles per buffer, below `max_buffer_size`.
-        let triangle = 3 * debug::VERTEX_BYTES;
-        let debug_vertices: Vec<(wgpu::Buffer, u32)> = debug_bytes
-            .chunks(self.per_buffer(triangle)?.saturating_mul(triangle))
-            .map(|part| {
-                let buffer = fill(
-                    &self.device,
-                    &self.queue,
-                    "debug draw",
-                    part,
-                    wgpu::BufferUsages::VERTEX,
-                );
-                (buffer, debug::count(part))
-            })
-            .collect();
-
-        // Each view on its own aligned slot, picked by a dynamic offset.
         let stride = self
             .device
             .limits()
             .min_uniform_buffer_offset_alignment
             .max(VIEW_BYTES as u32);
-        let mut view_bytes = vec![0; views.len() * stride as usize];
+        // Up to the end of the last view, so the slots' padding is not written.
+        let mut view_bytes = vec![0; (views.len() - 1) * stride as usize + VIEW_BYTES as usize];
         for (index, values) in views.iter().enumerate() {
             let start = index * stride as usize;
-            for (at, value) in values.iter().enumerate() {
+            for (at, value) in values.iter().chain([&alpha]).enumerate() {
                 view_bytes[start + at * 4..start + at * 4 + 4]
                     .copy_from_slice(&value.to_le_bytes());
             }
         }
-        let view_buffer = self.buffer("views", &view_bytes, wgpu::BufferUsages::UNIFORM)?;
-        let view_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("views"),
-            layout: &self.view_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &view_buffer,
-                    offset: 0,
-                    size: wgpu::BufferSize::new(VIEW_BYTES),
-                }),
-            }],
-        });
+        self.write_views(&view_bytes)?;
         let pipelines = self.pipelines(format).clone();
+        let Some((_, view_group)) = &self.views else {
+            // `write_views` made it.
+            return Ok(());
+        };
 
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
@@ -691,12 +820,12 @@ impl Renderer {
                 })],
                 ..Default::default()
             });
-            if !draws.is_empty() {
+            if !self.scene.draws.is_empty() {
                 pass.set_pipeline(&pipelines.quads);
             }
-            for draw in &draws {
+            for draw in &self.scene.draws {
                 let buffer = match draw.source {
-                    Source::Sprites(part) => instances.get(part),
+                    Source::Sprites(part) => self.instances.get(part),
                     Source::Chunk(entity, chunk) => self
                         .tilemaps
                         .get(entity)
@@ -718,47 +847,99 @@ impl Renderer {
                 };
                 pass.set_vertex_buffer(0, buffer.slice(..));
                 pass.set_bind_group(0, bind_group, &[]);
-                pass.set_bind_group(1, &view_group, &[draw.slot * stride]);
+                pass.set_bind_group(1, view_group, &[draw.slot * stride]);
                 pass.draw(0..4, draw.instances.clone());
             }
-            if !debug_vertices.is_empty() {
+            if !self.debug_counts.is_empty() {
                 pass.set_pipeline(&pipelines.debug);
-                pass.set_bind_group(0, &view_group, &[debug_slot * stride]);
+                pass.set_bind_group(0, view_group, &[debug_slot * stride]);
             }
-            for (vertices, count) in &debug_vertices {
+            for (vertices, &count) in self.debug.iter().zip(&self.debug_counts) {
                 pass.set_vertex_buffer(0, vertices.slice(..));
-                pass.draw(0..*count, 0..1);
+                pass.draw(0..count, 0..1);
             }
         }
         self.queue.submit([encoder.finish()]);
-        Ok(DrawReport { missing })
+        Ok(())
     }
 
-    /// A buffer holding `bytes`, refused past `max_buffer_size`.
-    fn buffer(
-        &self,
-        label: &'static str,
-        bytes: &[u8],
-        usage: wgpu::BufferUsages,
-    ) -> Result<wgpu::Buffer, RenderError> {
+    /// Builds and uploads the scene's debug draw for a target of `size` showing `visible`:
+    /// outlines `LINE_PIXELS` wide, in whole triangles per buffer below `max_buffer_size`.
+    fn build_debug(&mut self, size: Size, visible: Vec2) -> Result<(), RenderError> {
+        let line_width = debug::LINE_PIXELS * visible.x / size.width.max(1) as f32;
+        let bytes = debug::vertices(&self.scene.debug, &self.scene.overlay, line_width);
+        let triangle = 3 * debug::VERTEX_BYTES;
+        let per_buffer = self.per_buffer("draw", triangle)?.saturating_mul(triangle);
+        self.debug_counts.clear();
+        for (part, chunk) in bytes.chunks(per_buffer).enumerate() {
+            let buffer = reserve(
+                &self.device,
+                &mut self.stats,
+                &mut self.debug,
+                part,
+                chunk.len() as u64,
+                per_buffer as u64,
+                "debug draw",
+            );
+            write(&self.queue, &mut self.stats, buffer, chunk);
+            self.debug_counts.push(debug::count(chunk));
+        }
+        Ok(())
+    }
+
+    /// Writes `bytes` at the start of the views' buffer, replaced by a larger one (and its
+    /// bind group with it) when it is too small; refused past `max_buffer_size`.
+    fn write_views(&mut self, bytes: &[u8]) -> Result<(), RenderError> {
+        let needed = bytes.len() as u64;
         let allowed = self.device.limits().max_buffer_size;
-        if bytes.len() as u64 > allowed {
+        if needed > allowed {
             return Err(RenderError::Limit {
                 operation: "draw",
                 limit: "max_buffer_size",
-                requested: bytes.len() as u64,
+                requested: needed,
                 allowed,
             });
         }
-        Ok(fill(&self.device, &self.queue, label, bytes, usage))
+        if self
+            .views
+            .as_ref()
+            .is_none_or(|(buffer, _)| buffer.size() < needed)
+        {
+            let size = grown(needed, allowed);
+            self.stats.buffers_created += 1;
+            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("views"),
+                size,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("views"),
+                layout: &self.view_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &buffer,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(VIEW_BYTES),
+                    }),
+                }],
+            });
+            self.views = Some((buffer, group));
+        }
+        if let Some((buffer, _)) = &self.views {
+            write(&self.queue, &mut self.stats, buffer, bytes);
+        }
+        Ok(())
     }
 
-    /// How many items of `unit` bytes fit in one buffer; refused if not even one does.
-    fn per_buffer(&self, unit: usize) -> Result<usize, RenderError> {
+    /// How many items of `unit` bytes fit in one buffer; refused for `operation` if not even
+    /// one does.
+    fn per_buffer(&self, operation: &'static str, unit: usize) -> Result<usize, RenderError> {
         let allowed = self.device.limits().max_buffer_size;
         match usize::try_from(allowed / unit as u64).unwrap_or(usize::MAX) {
             0 => Err(RenderError::Limit {
-                operation: "draw",
+                operation,
                 limit: "max_buffer_size",
                 requested: unit as u64,
                 allowed,
@@ -783,8 +964,9 @@ impl Renderer {
     }
 }
 
-/// The bytes of one view: world to clip scale, then translation, as `f32`.
-const VIEW_BYTES: u64 = 16;
+/// The bytes of one view: world to clip scale, then translation, then alpha and padding, as
+/// `f32`.
+const VIEW_BYTES: u64 = 32;
 
 /// The bytes of one sprite or tile instance.
 const INSTANCE_BYTES: usize = INSTANCE_FLOATS * 4;
@@ -813,7 +995,7 @@ enum Piece<'a> {
 }
 
 /// One instanced draw of the quad pipeline: a run of instances from the frame's sprites or
-/// from a tilemap chunk, through a layer's view.
+/// from a tilemap chunk, through a view.
 struct Draw {
     slot: u32,
     source: Source,
@@ -822,9 +1004,60 @@ struct Draw {
 }
 
 enum Source {
-    /// One of the frame's sprite instance buffers.
+    /// One of the sprite instance buffers.
     Sprites(usize),
     Chunk(Entity, usize),
+}
+
+/// The size of a buffer made to hold `needed` bytes: the next power of two, so a growing
+/// scene makes a buffer only now and then, but at most `cap` (and never below `needed`).
+fn grown(needed: u64, cap: u64) -> u64 {
+    needed
+        .checked_next_power_of_two()
+        .unwrap_or(needed)
+        .min(cap)
+        .max(needed)
+}
+
+/// `buffers[index]` holding at least `needed` bytes (a multiple of 4), made or replaced by a
+/// `grown` one when it is missing or too small. `index` is at most `buffers.len()`.
+fn reserve<'a>(
+    device: &wgpu::Device,
+    stats: &mut RenderStats,
+    buffers: &'a mut Vec<wgpu::Buffer>,
+    index: usize,
+    needed: u64,
+    cap: u64,
+    label: &'static str,
+) -> &'a wgpu::Buffer {
+    if buffers
+        .get(index)
+        .is_none_or(|buffer| buffer.size() < needed)
+    {
+        stats.buffers_created += 1;
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: grown(needed, cap),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        if index < buffers.len() {
+            buffers[index] = buffer;
+        } else {
+            buffers.push(buffer);
+        }
+    }
+    &buffers[index]
+}
+
+/// Writes `bytes` (a multiple of 4 bytes long) at the start of `buffer`, through the queue,
+/// so a write the device refuses raises an error instead of panicking.
+fn write(queue: &wgpu::Queue, stats: &mut RenderStats, buffer: &wgpu::Buffer, bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    stats.bytes_written += bytes.len() as u64;
+    queue.write_buffer(buffer, 0, bytes);
 }
 
 /// A new buffer holding `bytes`, a multiple of 4 bytes long. It is written through the queue,
@@ -832,17 +1065,19 @@ enum Source {
 fn fill(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
+    stats: &mut RenderStats,
     label: &'static str,
     bytes: &[u8],
     usage: wgpu::BufferUsages,
 ) -> wgpu::Buffer {
+    stats.buffers_created += 1;
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),
         size: bytes.len() as u64,
         usage: usage | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    queue.write_buffer(&buffer, 0, bytes);
+    write(queue, stats, &buffer, bytes);
     buffer
 }
 

@@ -47,6 +47,21 @@ test("draws_the_reference_frame", async ({ page }) => {
   const { report, pixels } = await page.evaluate((points) => window.fixture.drawReference(points), samples.map(([, point]) => point));
   expect(report).toEqual({ missing: [] });
   for (const [index, [name, , expected]] of samples.entries()) expect(pixels[index], name).toEqual(expected);
+
+  // Drawn again at alpha 1 without new frames, the sprite is where it moved to: pixels 40 to
+  // 56 across.
+  const moved = await page.evaluate(
+    (points) => window.fixture.redraw(1, points),
+    [[44, 8], [52, 8], [35, 8]] as Point[],
+  );
+  expect(moved).toEqual([LEFT, RIGHT, BACKGROUND]);
+  // The free camera, 1 unit right of the frame's, moves the view without new frames: the
+  // sprite 16 pixels left.
+  const panned = await page.evaluate(
+    (points) => window.fixture.redraw(1, points, { center: { x: 3, y: 0 }, view: { x: 8, y: 8 } }),
+    [[28, 8], [36, 8], [52, 8]] as Point[],
+  );
+  expect(panned).toEqual([LEFT, RIGHT, BACKGROUND]);
 });
 
 test("sixty_thousand_sprites_then_one_both_draw", async ({ page }) => {

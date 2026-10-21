@@ -1,9 +1,9 @@
 //! Rendering: the simulated render components (sprites, their animation, the camera and
 //! tilemaps), the `animate` system, the extraction of a world into a render frame, atlas
-//! packing, interpolation between two frames, and the camera's math. All of it depends on no
-//! GPU crate, so the simulation never pulls one; the wgpu renderer is `gpu`,
-//! behind the feature of the same name, and `web` (feature `web`, browser only) draws with it
-//! into a canvas.
+//! packing, and the camera's math. All of it depends on no GPU crate, so the simulation never
+//! pulls one; the wgpu renderer is `gpu`, behind the feature of the same name, which
+//! interpolates between two frames on the GPU, and `web` (feature `web`, browser only) draws
+//! with it into a canvas.
 
 pub mod animate;
 pub mod atlas;
@@ -12,7 +12,8 @@ pub mod components;
 pub mod extract;
 #[cfg(feature = "gpu")]
 pub mod gpu;
-pub mod interpolate;
+#[cfg(feature = "gpu")]
+mod interpolate;
 pub mod sheet;
 #[cfg(all(feature = "web", target_arch = "wasm32", target_os = "unknown"))]
 pub mod web;
@@ -26,7 +27,6 @@ pub use components::{
     Camera2d, CameraError, Sprite, SpriteAnimation, Teleported, Tilemap, TilemapError,
 };
 pub use extract::extract;
-pub use interpolate::interpolate;
 pub use sheet::{AnimationError, Clip, SheetError, SpriteSheet};
 
 /// Registers the render components, `Pose`, the `SpriteSheet` asset, the `animate` system in

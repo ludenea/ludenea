@@ -77,6 +77,16 @@ the workspace tests above, need one too. CI provides lavapipe on Linux (the
 cargo test --locked -p ludenea-render --features gpu
 ```
 
+The renderer uploads a frame's geometry once per tick and keeps it on the GPU: a draw between
+two ticks writes only the views, and the shader interpolates. Its frame budget test draws
+10,000 sprites 144 times per pair of ticks and reports the CPU time of one draw;
+`PERF_STRICT=1` asserts a 95th percentile below 1 ms, which holds on the reference machine (an
+Apple M-series; about 0.2 ms on an Apple M5):
+
+```sh
+PERF_STRICT=1 cargo test --release --locked -p ludenea-render --features gpu --test perf -- --ignored --nocapture
+```
+
 Check that the tests catch every mutant of the canonical state hash serializer, as the
 `mutants` workflow does when the serializer or the `ludenea-ecs` tests change (install the
 tool with `cargo install --locked cargo-mutants@27.1.0`):

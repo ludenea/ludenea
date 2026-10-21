@@ -424,7 +424,7 @@ pub struct RenderArgs {
 #[cfg(not(target_family = "wasm"))]
 pub fn render(app: fn() -> App, args: &RenderArgs, out: &mut dyn Write) -> Outcome {
     use ludenea_app::replay::{load_replay, play_tick};
-    use ludenea_render::gpu::{Frames, Overlay, Size};
+    use ludenea_render::gpu::{Overlay, Size};
 
     let RenderArgs {
         files,
@@ -505,16 +505,14 @@ pub fn render(app: fn() -> App, args: &RenderArgs, out: &mut dyn Write) -> Outco
     for warning in &current.warnings {
         say(out, format_args!("warning: {warning}"))?;
     }
-    let frames = Frames {
-        previous: previous.as_ref(),
-        current: &current,
-        alpha: 1.0,
-    };
     let overlay = Overlay {
         debug_layers,
         ..Overlay::default()
     };
-    let pixels = draw(&mut renderer, size, frames, &overlay, out)?;
+    let report = renderer
+        .set_frames(previous.as_ref(), &current, &overlay)
+        .map_err(|error| error.to_string())?;
+    let pixels = draw(&mut renderer, size, &report, out)?;
     write(path, &encode_png(size, &pixels)?)?;
     say(out, format_args!("wrote {}", path.display()))?;
     Ok(0)
@@ -569,20 +567,19 @@ fn renderer(
     Ok(renderer)
 }
 
-/// Draws `frames` offscreen, warning about each frame drawn as a placeholder, and reads the
-/// pixels back.
+/// Draws the frames set last offscreen at the current tick (alpha 1), warning about each
+/// frame `report` names as drawn as a placeholder, and reads the pixels back.
 #[cfg(not(target_family = "wasm"))]
 fn draw(
     renderer: &mut ludenea_render::gpu::Renderer,
     size: ludenea_render::gpu::Size,
-    frames: ludenea_render::gpu::Frames<'_>,
-    overlay: &ludenea_render::gpu::Overlay,
+    report: &ludenea_render::gpu::DrawReport,
     out: &mut dyn Write,
 ) -> Result<Vec<u8>, String> {
-    let rendered = renderer
-        .render_rgba(size, frames, overlay)
+    let rgba = renderer
+        .render_rgba(size, 1.0, None)
         .map_err(|error| error.to_string())?;
-    for (entity, texture, frame) in &rendered.report.missing {
+    for (entity, texture, frame) in &report.missing {
         say(
             out,
             format_args!(
@@ -590,7 +587,7 @@ fn draw(
             ),
         )?;
     }
-    Ok(rendered.rgba)
+    Ok(rgba)
 }
 
 /// Tightly packed RGBA rows, top row first, as an 8-bit RGBA PNG.

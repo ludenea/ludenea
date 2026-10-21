@@ -73,10 +73,21 @@ function pixels(points) {
   return points.map(([x, y]) => Array.from(copy.getImageData(x, y, 1, 1).data));
 }
 
-/** Draws `current`, or `alpha` of the way from `previous` to it when `previous` is given. */
+/**
+ * Sets the frames, `current` and the `previous` one when given, then draws `alpha` of the way
+ * from `previous` to `current`. Returns the report of `set_frames`.
+ */
 function draw(current, overlay = {}, previous = undefined, alpha = 1) {
   const before = previous === undefined ? undefined : JSON.stringify(previous);
-  return JSON.parse(renderer.draw(before, JSON.stringify(current), alpha, JSON.stringify(overlay)));
+  const report = JSON.parse(renderer.set_frames(before, JSON.stringify(current), JSON.stringify(overlay)));
+  renderer.draw(alpha, undefined);
+  return report;
+}
+
+/** Draws the frames already set at `alpha`, through the free `camera` when given, and reads `points`. */
+function redraw(alpha, points, camera = undefined) {
+  renderer.draw(alpha, camera === undefined ? undefined : JSON.stringify(camera));
+  return pixels(points);
 }
 
 /**
@@ -174,4 +185,4 @@ function resize(width, height) {
   renderer.resize(width, height, 1);
 }
 
-window.fixture = { start, drawReference, drawSprites, drawError, failOnTheDevice, loseTheDevice, createOn, resize };
+window.fixture = { start, drawReference, redraw, drawSprites, drawError, failOnTheDevice, loseTheDevice, createOn, resize };
