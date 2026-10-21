@@ -231,6 +231,52 @@ fn a_failing_extraction_logs_once_and_play_continues() {
     assert!(errors.is_empty(), "{errors:?}");
 }
 
+/// A game whose extractor panics on every frame.
+fn broken_app() -> App {
+    let mut app = App::new();
+    app.extractor(|_, _| panic!("always broken"));
+    app
+}
+
+#[test]
+fn an_extractor_failing_on_every_tick_logs_once() {
+    let mut host = Host::new(broken_app).unwrap();
+    subscribe(&mut host);
+    play(&mut host);
+    let (errors, frame_ticks) = play_eight(&mut host);
+    assert!(frame_ticks.is_empty(), "{frame_ticks:?}");
+    assert_eq!(host.tick(), 8, "play continues");
+    let [error] = errors.as_slice() else {
+        panic!("{errors:?}")
+    };
+    assert!(
+        error.starts_with("render frame of tick 1: the game panicked: always broken ("),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_scene_load_reports_the_same_cause_again() {
+    let mut host = Host::new(broken_app).unwrap();
+    subscribe(&mut host);
+    play(&mut host);
+    assert_eq!(play_eight(&mut host).0.len(), 1);
+    ok(
+        &mut host,
+        Command::LoadScene {
+            scene: "Scene(version: 2, next_id: 0, resources: {}, entities: [])".into(),
+            assets: Vec::new(),
+            document: Document::Scene,
+        },
+    );
+    play(&mut host);
+    let (errors, _) = play_eight(&mut host);
+    let [error] = errors.as_slice() else {
+        panic!("{errors:?}")
+    };
+    assert!(error.starts_with("render frame of tick 1: "), "{error}");
+}
+
 /// The hash after playing to tick 300, subscribed to `RenderFrames` or not.
 fn hash_at_300(subscribed: bool) -> Hash64 {
     let mut host = boxes_host();

@@ -503,8 +503,8 @@ hash, those of the golden trace and replays included.
   last two ticks it played (one when it played one), oldest first, and `progress`, the
   fraction of the next tick that play owes. New `set_pushed_layers` (`debug_layers`) sets
   the debug layers those frames draw, none until set. A frame that fails to extract pushes
-  nothing for that advance and writes `render frame of tick N: <cause>` to the console once;
-  play goes on. The browser worker posts these frames postcard-encoded in transferred
+  nothing for that advance and writes `render frame of tick N: <cause>` to the console, once
+  per cause (at its first tick) until a scene or a session loads; play goes on. The browser worker posts these frames postcard-encoded in transferred
   buffers, which the control client hands to listeners as `Uint8Array`s.
   New in the Rust API: `Host::tick_progress`, the fraction of the next tick that play owes,
   and `protocol::encode_frame`, a render frame's postcard encoding.

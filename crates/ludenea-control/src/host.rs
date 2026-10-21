@@ -739,6 +739,7 @@ impl Host {
                 self.session
                     .replace_scene(sim, scene, assets.into_iter().collect())
                     .map_err(|e| self.fail(e))?;
+                self.subscriptions.forget_frame_failures();
                 Ok(self.loaded())
             }
             Command::LoadSession {
@@ -1407,6 +1408,7 @@ impl Host {
 
     /// Takes over a new session, paused.
     fn load(&mut self, mut session: Session) {
+        self.subscriptions.forget_frame_failures();
         // Records of the old session never match the new one's hashes, unless it is the same.
         session.introspection = self.session.introspection.take();
         self.session = session;

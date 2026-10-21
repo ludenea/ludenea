@@ -42,8 +42,8 @@ pub(crate) struct Subscriptions {
     render_frames: bool,
     /// The debug layers of the pushed frames.
     pushed_layers: BTreeSet<String>,
-    /// The extraction failures already reported, each reported once. They grow with the
-    /// console lines reported, one per failing tick at most.
+    /// The causes of the extraction failures already reported, without their tick: each is
+    /// reported once, at its first tick, until a scene or a session loads.
     failed_frames: BTreeSet<String>,
 }
 
@@ -127,17 +127,27 @@ impl Subscriptions {
     }
 
     /// The frame of the current tick with the pushed debug layers. On failure, the console
-    /// error that reports it, `None` when the same failure was reported already.
+    /// error that reports it, `None` when its cause was reported already.
     pub(crate) fn extract_frame(
         &mut self,
         sim: &Simulation,
     ) -> Result<RenderFrame, Option<String>> {
         sim.render_frame(&self.pushed_layers).map_err(|error| {
-            let message = format!("render frame of tick {}: {error}", sim.tick());
-            self.failed_frames
-                .insert(message.clone())
-                .then_some(message)
+            // The panic's own text names the tick: the cause leaves it out, so an extractor
+            // that fails on every tick is reported once.
+            let cause = match &error {
+                SimError::Panicked(panic) => format!("the game panicked: {}", panic.detail()),
+                other => other.to_string(),
+            };
+            let message = format!("render frame of tick {}: {cause}", sim.tick());
+            self.failed_frames.insert(cause).then_some(message)
         })
+    }
+
+    /// Reports every extraction failure again, as for a new game: a scene or a session
+    /// loaded.
+    pub(crate) fn forget_frame_failures(&mut self) {
+        self.failed_frames.clear();
     }
 
     /// Counts `seconds` of play toward the next check of the subscribed resources.
