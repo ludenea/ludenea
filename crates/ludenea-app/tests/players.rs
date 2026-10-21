@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
 use ludenea_app::players::{
-    Claim, ClaimError, KeyboardPart, LiveDevices, MAX_LOCAL_PLAYERS, automatic_claims,
-    check_claims, split,
+    Claim, ClaimError, KeyboardPart, LiveDevices, Lobby, LobbyEvent, LobbyPress, MAX_LOCAL_PLAYERS,
+    automatic_claims, check_claims, split,
 };
 use ludenea_app::{App, RawGamepad, RawInput};
 use ludenea_ecs::schema::Schema;
@@ -256,4 +256,180 @@ fn check_claims_reports_the_first_clashing_pair_gamepad_before_keyboard() {
         ]),
         Err(ClaimError::KeyboardOverlap { players: (0, 1) })
     );
+}
+
+fn key_claim(part: KeyboardPart) -> Claim {
+    Claim {
+        keyboard: Some(part),
+        gamepad: None,
+    }
+}
+
+fn pad_claim(gamepad: u32) -> Claim {
+    Claim {
+        keyboard: None,
+        gamepad: Some(gamepad),
+    }
+}
+
+fn button(gamepad: u32, button: usize) -> LobbyPress<'static> {
+    LobbyPress::Button { gamepad, button }
+}
+
+#[test]
+fn key_claims_its_half() {
+    let mut lobby = Lobby::new();
+    assert_eq!(
+        lobby.press(LobbyPress::Key("KeyA")),
+        LobbyEvent::Claimed { player: 0 }
+    );
+    assert_eq!(
+        lobby.press(LobbyPress::Key("ArrowUp")),
+        LobbyEvent::Claimed { player: 1 }
+    );
+    assert_eq!(
+        lobby.claims(),
+        [
+            key_claim(KeyboardPart::Left),
+            key_claim(KeyboardPart::Right)
+        ]
+    );
+}
+
+#[test]
+fn same_half_twice_claims_once() {
+    let mut lobby = Lobby::new();
+    lobby.press(LobbyPress::Key("KeyA"));
+    assert_eq!(lobby.press(LobbyPress::Key("KeyS")), LobbyEvent::Ignored);
+    assert_eq!(lobby.claims().len(), 1);
+}
+
+#[test]
+fn gamepad_button_claims_its_slot() {
+    let mut lobby = Lobby::new();
+    assert_eq!(lobby.press(button(2, 0)), LobbyEvent::Claimed { player: 0 });
+    assert_eq!(lobby.press(button(2, 1)), LobbyEvent::Ignored);
+    assert_eq!(lobby.claims(), [pad_claim(2)]);
+}
+
+#[test]
+fn start_without_claims_is_ignored() {
+    let mut lobby = Lobby::new();
+    assert_eq!(lobby.press(LobbyPress::Key("Enter")), LobbyEvent::Ignored);
+    assert_eq!(lobby.press(button(0, 9)), LobbyEvent::Ignored);
+    assert!(!lobby.started());
+}
+
+#[test]
+fn enter_starts_with_the_claims_in_order() {
+    let mut lobby = Lobby::new();
+    lobby.press(button(1, 0));
+    lobby.press(button(0, 0));
+    assert_eq!(
+        lobby.press(LobbyPress::Key("Enter")),
+        LobbyEvent::Started {
+            claims: vec![pad_claim(1), pad_claim(0)]
+        }
+    );
+    assert!(lobby.started());
+    assert_eq!(lobby.claims(), [pad_claim(1), pad_claim(0)]);
+
+    let mut by_start = Lobby::new();
+    by_start.press(button(0, 0));
+    assert_eq!(
+        by_start.press(button(0, 9)),
+        LobbyEvent::Started {
+            claims: vec![pad_claim(0)]
+        }
+    );
+}
+
+#[test]
+fn lone_keyboard_half_becomes_whole_at_start() {
+    let mut lobby = Lobby::new();
+    lobby.press(LobbyPress::Key("KeyD"));
+    lobby.press(button(0, 0));
+    let event = lobby.press(LobbyPress::Key("Enter"));
+    let expected = vec![key_claim(KeyboardPart::Whole), pad_claim(0)];
+    assert_eq!(
+        event,
+        LobbyEvent::Started {
+            claims: expected.clone()
+        }
+    );
+    assert_eq!(lobby.claims(), expected);
+
+    let mut two = Lobby::new();
+    two.press(LobbyPress::Key("KeyD"));
+    two.press(LobbyPress::Key("KeyL"));
+    two.press(LobbyPress::Key("Enter"));
+    assert_eq!(
+        two.claims(),
+        [
+            key_claim(KeyboardPart::Left),
+            key_claim(KeyboardPart::Right)
+        ]
+    );
+}
+
+#[test]
+fn fifth_claim_is_full() {
+    let mut lobby = Lobby::new();
+    for slot in 0..MAX_LOCAL_PLAYERS as u32 {
+        assert!(matches!(
+            lobby.press(button(slot, 0)),
+            LobbyEvent::Claimed { .. }
+        ));
+    }
+    assert_eq!(lobby.press(button(9, 0)), LobbyEvent::Full);
+    assert_eq!(lobby.press(LobbyPress::Key("KeyA")), LobbyEvent::Full);
+    assert_eq!(lobby.press(button(0, 1)), LobbyEvent::Ignored);
+    assert_eq!(lobby.claims().len(), MAX_LOCAL_PLAYERS);
+}
+
+#[test]
+fn escape_releases_both_halves_and_compacts() {
+    let mut lobby = Lobby::new();
+    lobby.press(button(0, 0));
+    lobby.press(LobbyPress::Key("KeyA"));
+    lobby.press(button(1, 0));
+    lobby.press(LobbyPress::Key("ArrowLeft"));
+    assert_eq!(
+        lobby.press(LobbyPress::Key("Escape")),
+        LobbyEvent::Released {
+            players: vec![1, 3]
+        }
+    );
+    assert_eq!(lobby.claims(), [pad_claim(0), pad_claim(1)]);
+    assert_eq!(lobby.press(LobbyPress::Key("Escape")), LobbyEvent::Ignored);
+}
+
+#[test]
+fn select_releases_its_gamepad() {
+    let mut lobby = Lobby::new();
+    lobby.press(button(0, 0));
+    lobby.press(button(1, 0));
+    assert_eq!(lobby.press(button(3, 8)), LobbyEvent::Ignored);
+    assert_eq!(
+        lobby.press(button(0, 8)),
+        LobbyEvent::Released { players: vec![0] }
+    );
+    assert_eq!(lobby.claims(), [pad_claim(1)]);
+}
+
+#[test]
+fn presses_after_start_are_ignored() {
+    let mut lobby = Lobby::new();
+    lobby.press(button(0, 0));
+    lobby.press(LobbyPress::Key("Enter"));
+    for press in [
+        LobbyPress::Key("KeyA"),
+        LobbyPress::Key("Escape"),
+        button(1, 0),
+        button(0, 8),
+        button(0, 9),
+    ] {
+        assert_eq!(lobby.press(press), LobbyEvent::Ignored);
+    }
+    assert_eq!(lobby.claims(), [pad_claim(0)]);
 }

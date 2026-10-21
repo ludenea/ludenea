@@ -170,3 +170,134 @@ pub fn split(devices: &LiveDevices, claims: &[Claim]) -> Vec<Option<RawInput>> {
         })
         .collect()
 }
+
+/// Gamepad API standard button indices the lobby treats as controls, never as claims.
+const SELECT_BUTTON: usize = 8;
+const START_BUTTON: usize = 9;
+
+/// A press the lobby reacts to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LobbyPress<'a> {
+    /// A `KeyboardEvent.code` value.
+    Key(&'a str),
+    /// A gamepad button in the Gamepad API standard order: 8 is Select, 9 is Start.
+    Button { gamepad: u32, button: usize },
+}
+
+/// What a press did to the lobby.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LobbyEvent {
+    Claimed {
+        player: usize,
+    },
+    /// The slot indices released, as they were before the slots were compacted, ascending.
+    Released {
+        players: Vec<usize>,
+    },
+    /// Every slot is taken.
+    Full,
+    /// The match begins with these claims.
+    Started {
+        claims: Vec<Claim>,
+    },
+    Ignored,
+}
+
+/// The pre-match lobby: local players claim slots with their devices, then start the match.
+/// A key of a keyboard half or a gamepad button (except Start and Select) claims the next
+/// free slot for that device; `Escape` releases the keyboard's claims and Select its gamepad;
+/// `Enter` or Start begins the match once a slot is claimed.
+#[derive(Debug, Default)]
+pub struct Lobby {
+    claims: Vec<Claim>,
+    started: bool,
+}
+
+impl Lobby {
+    pub fn new() -> Lobby {
+        Lobby::default()
+    }
+
+    /// The claims in slot order; after `Started`, the final claims of the match.
+    pub fn claims(&self) -> &[Claim] {
+        &self.claims
+    }
+
+    pub fn started(&self) -> bool {
+        self.started
+    }
+
+    pub fn press(&mut self, press: LobbyPress<'_>) -> LobbyEvent {
+        if self.started {
+            return LobbyEvent::Ignored;
+        }
+        match press {
+            LobbyPress::Key("Enter") => self.start(),
+            LobbyPress::Button {
+                button: START_BUTTON,
+                ..
+            } => self.start(),
+            LobbyPress::Key("Escape") => self.release(|claim| claim.keyboard.is_some()),
+            LobbyPress::Button {
+                gamepad,
+                button: SELECT_BUTTON,
+            } => self.release(|claim| claim.gamepad == Some(gamepad)),
+            LobbyPress::Key(code) => {
+                let part = KeyboardPart::of(code);
+                self.claim(Claim {
+                    keyboard: Some(part),
+                    gamepad: None,
+                })
+            }
+            LobbyPress::Button { gamepad, .. } => self.claim(Claim {
+                keyboard: None,
+                gamepad: Some(gamepad),
+            }),
+        }
+    }
+
+    fn claim(&mut self, claim: Claim) -> LobbyEvent {
+        if self.claims.contains(&claim) {
+            return LobbyEvent::Ignored;
+        }
+        if self.claims.len() >= MAX_LOCAL_PLAYERS {
+            return LobbyEvent::Full;
+        }
+        self.claims.push(claim);
+        LobbyEvent::Claimed {
+            player: self.claims.len() - 1,
+        }
+    }
+
+    fn release(&mut self, held: impl Fn(&Claim) -> bool) -> LobbyEvent {
+        let players: Vec<usize> = (0..self.claims.len())
+            .filter(|&index| held(&self.claims[index]))
+            .collect();
+        if players.is_empty() {
+            return LobbyEvent::Ignored;
+        }
+        let mut index = 0;
+        self.claims.retain(|_| {
+            index += 1;
+            !players.contains(&(index - 1))
+        });
+        LobbyEvent::Released { players }
+    }
+
+    fn start(&mut self) -> LobbyEvent {
+        if self.claims.is_empty() {
+            return LobbyEvent::Ignored;
+        }
+        let mut halves = self
+            .claims
+            .iter_mut()
+            .filter(|claim| claim.keyboard.is_some());
+        if let (Some(only), None) = (halves.next(), halves.next()) {
+            only.keyboard = Some(KeyboardPart::Whole);
+        }
+        self.started = true;
+        LobbyEvent::Started {
+            claims: self.claims.clone(),
+        }
+    }
+}
