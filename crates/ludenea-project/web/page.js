@@ -12,8 +12,16 @@ const lobbyView = document.getElementById("lobby");
 const slots = document.getElementById("slots");
 const save = document.getElementById("save");
 
-/** Keys the browser keeps for itself even during a match. */
-const BROWSER_KEYS = /^F\d+$/;
+/** Function keys reload, toggle fullscreen and open the developer tools: the browser keeps
+ * them (they still count as held for the game). */
+const FUNCTION_KEY = /^F\d+$/;
+/** The modifiers themselves, which a game may map like any other key. */
+const MODIFIERS = new Set(["ControlLeft", "ControlRight", "MetaLeft", "MetaRight"]);
+/** The renderer's message for a canvas without a texture this frame, which passes. */
+const TRANSIENT_DRAW = "draw again on the next frame";
+/** Consecutive transient draw failures, about two seconds of frames, after which the page
+ * gives up and says why. */
+const MAX_TRANSIENT_DRAWS = 120;
 /** A gamepad button counts as pressed above this value, as the game's input reads it. */
 const PRESSED = 0.5;
 
@@ -23,10 +31,13 @@ let tickRate = 60;
 let renderer;
 let lobby;
 let worker;
-/** The JSON of the frames of the last two ticks, and whether the renderer has them. */
-let previousFrame;
-let currentFrame;
-let framesSet = true;
+/** The JSON of the newest frame and its tick, until the renderer has it; the tick of the
+ * frame pushed last, which the next one blends from when it is the very next tick. */
+let pendingFrame;
+let pendingTick = 0;
+let pushedTick;
+let transientDraws = 0;
+let draws = 0;
 /** The host's progress into the next tick when the current frame arrived, and when it did. */
 let progress = 0;
 let arrival = 0;
@@ -40,28 +51,29 @@ function say(message) {
   if (!failed) status.textContent = message;
 }
 
-function fail(message) {
+/**
+ * Stops the page and shows `message`. A game that failed keeps its worker, so "Save replay"
+ * still saves the ticks that ran; `keepWorker` false ends the worker (a crash, a page error).
+ */
+function fail(message, { keepWorker = false } = {}) {
   if (failed) return;
   failed = true;
   playing = false;
   status.textContent = message;
   document.body.dataset.failed = "true";
-  worker?.terminate();
-}
-
-/** `claim`'s devices in words, as the native window's title names them. */
-function devices(claim) {
-  const keyboard = { Whole: "keyboard", Left: "left keyboard half", Right: "right keyboard half" }[claim.keyboard];
-  const gamepad = claim.gamepad === null ? undefined : `gamepad ${claim.gamepad + 1}`;
-  return [keyboard, gamepad].filter((part) => part !== undefined).join(" and ");
+  if (!keepWorker) {
+    worker?.terminate();
+    save.disabled = true;
+  }
 }
 
 function showLobby() {
-  const claims = JSON.parse(lobby.claimsJson());
+  // The engine names each claim's devices, as the native window's title does.
+  const described = JSON.parse(lobby.describeClaims());
   for (const [index, slot] of [...slots.children].entries()) {
-    const claim = claims[index];
-    slot.textContent = claim === undefined ? "Free" : `Player ${index + 1}: ${devices(claim)}`;
-    slot.toggleAttribute("data-claimed", claim !== undefined);
+    const devices = described[index];
+    slot.textContent = devices === undefined ? "Free" : `Player ${index + 1}: ${devices}`;
+    slot.toggleAttribute("data-claimed", devices !== undefined);
   }
 }
 
@@ -103,6 +115,13 @@ function pollLobbyButtons(pads) {
   lobbyButtons = pads.map((pad) => pad?.buttons ?? []);
 }
 
+/** Releases every key (the page lost the keyboard) and tells the game at once: on a hidden
+ * tab no animation frame runs, but the worker keeps playing. */
+function releaseKeys() {
+  held.clear();
+  if (playing) sendDevices(gamepads());
+}
+
 function sendDevices(pads) {
   const devices = JSON.stringify({ keys: [...held].sort(), gamepads: pads });
   if (devices === sentDevices) return;
@@ -120,18 +139,30 @@ function animate() {
   if (playing) sendDevices(pads);
   else if (lobby && !lobby.started) pollLobbyButtons(pads);
   try {
-    if (!framesSet && currentFrame !== undefined) {
-      framesSet = true;
-      const report = JSON.parse(renderer.set_frames(previousFrame, currentFrame, "{}"));
+    if (pendingFrame !== undefined) {
+      const frame = pendingFrame;
+      pendingFrame = undefined;
+      // Blended from the frame pushed last only when it is the tick before: after a step of
+      // several ticks, a seek, or frames this page had no time to draw, it shows as is.
+      const follows = pushedTick !== undefined && pendingTick === pushedTick + 1;
+      pushedTick = pendingTick;
+      const report = JSON.parse(renderer.push_frame(frame, "{}", follows));
       if (report.missing.length > 0) console.warn(`${report.missing.length} sprites or tiles have no texture`, report.missing);
     }
-    if (currentFrame !== undefined) {
+    if (pushedTick !== undefined) {
       const alpha = Math.min(Math.max(progress + ((performance.now() - arrival) * tickRate) / 1000, 0), 1);
       renderer.draw(alpha, undefined);
+      transientDraws = 0;
+      document.body.dataset.draws = String(++draws);
     }
   } catch (error) {
-    // A canvas without a texture this frame draws again on the next one; it says so.
-    console.error(String(error));
+    const message = String(error);
+    // A canvas without a texture this frame draws again on the next one; it says so. Any
+    // other error, or one that never passes, stops the page with its cause.
+    if (!message.includes(TRANSIENT_DRAW) || ++transientDraws > MAX_TRANSIENT_DRAWS) {
+      return fail(`the game cannot be drawn: ${message}`, { keepWorker: true });
+    }
+    console.warn(message);
   }
   requestAnimationFrame(animate);
 }
@@ -146,9 +177,8 @@ function onWorkerMessage({ data }) {
       chooseClaims();
       break;
     case "frame":
-      previousFrame = currentFrame;
-      currentFrame = data.frame;
-      framesSet = false;
+      pendingFrame = data.frame;
+      pendingTick = data.tick;
       progress = data.progress;
       arrival = performance.now();
       document.body.dataset.tick = String(data.tick);
@@ -160,8 +190,12 @@ function onWorkerMessage({ data }) {
     case "console":
       (data.level === "error" ? console.error : data.level === "warning" ? console.warn : console.info)(data.text);
       break;
+    case "replay_failed":
+      // Beside a failure already shown, not in place of it.
+      status.textContent = `${failed ? `${status.textContent}; ` : ""}the replay cannot be saved: ${data.message}`;
+      break;
     case "failed":
-      fail(data.message);
+      fail(data.message, { keepWorker: true });
       break;
     case "crashed":
       fail(`the game crashed at tick ${data.tick}: ${data.message}`);
@@ -193,7 +227,8 @@ function download(base64) {
   link.href = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
   link.download = `${name}.replay`;
   link.click();
-  URL.revokeObjectURL(link.href);
+  // After the click has started the download.
+  setTimeout(() => URL.revokeObjectURL(link.href), 60_000);
 }
 
 async function fetchBytes(file) {
@@ -211,14 +246,19 @@ async function loadAtlas() {
 
 function captureKeys() {
   addEventListener("keydown", (event) => {
-    if (BROWSER_KEYS.test(event.code) || event.ctrlKey || event.metaKey) return;
-    event.preventDefault();
+    // A shortcut with Control or Meta (reload, close, address bar) stays the browser's; the
+    // modifier itself, and every key, still count as held.
+    const shortcut = FUNCTION_KEY.test(event.code) || ((event.ctrlKey || event.metaKey) && !MODIFIERS.has(event.code));
+    if (!shortcut) event.preventDefault();
     held.add(event.code);
     if (lobby && !lobby.started && !event.repeat) lobbyPress(lobby.pressKey(event.code));
   });
   addEventListener("keyup", (event) => held.delete(event.code));
   // Keys released while the page had no focus never report it.
-  addEventListener("blur", () => held.clear());
+  addEventListener("blur", releaseKeys);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) releaseKeys();
+  });
 }
 
 async function main() {

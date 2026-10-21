@@ -7,7 +7,8 @@
 //   { type: "start", claims }          one claim per player
 //   { type: "devices", devices }       what is held, as `set_live_input` takes it
 //   { type: "export_replay" }
-// and receives `loaded`, `frame`, `replay`, `console`, `failed`, and the panic hook's `crashed`.
+// and receives `loaded`, `frame`, `replay`, `replay_failed`, `console`, `failed`, and the panic
+// hook's `crashed`. After `failed` the game no longer plays, but its replay can still be saved.
 
 import init, { createHost } from "./game.js";
 
@@ -56,10 +57,11 @@ function handleEvents(events) {
   }
   if (ticked === undefined || failed) return;
   tick = ticked.tick;
-  const { frame } = request({ type: "get_render_frame", debug_layers: [] });
+  // The frame's text as the host writes it, forwarded without parsing it here. When a step
+  // ran several ticks, only the newest is posted; the page sees the gap in `tick`.
   self.postMessage({
     type: "frame",
-    frame: JSON.stringify(frame),
+    frame: host.renderFrameJson([]),
     tick: ticked.tick,
     hash: ticked.hash,
     progress: host.tickProgress(),
@@ -122,17 +124,27 @@ let loaded = Promise.resolve();
 self.addEventListener("message", ({ data }) => {
   // Messages wait for the game to load and keep their order.
   loaded = loaded.then(async () => {
+    if (data.type === "export_replay") return exportReplay();
     if (failed) return;
     try {
       if (data.type === "init") await load(data.ticks);
       else if (data.type === "start") start(data.claims);
       else if (data.type === "devices") request({ type: "set_live_input", devices: data.devices });
-      else if (data.type === "export_replay") {
-        const { replay } = request({ type: "export_replay", branch: null });
-        self.postMessage({ type: "replay", replay });
-      }
     } catch (error) {
       fail(error instanceof Error ? error.message : String(error));
     }
   });
 });
+
+/** Posts the replay of the match, after a failure of the game too: it holds the ticks that
+ * ran, as the native window's `--record` does. A replay that cannot be made is reported on its
+ * own and leaves the game as it is. */
+function exportReplay() {
+  try {
+    if (host === undefined) throw new Error("the game is not loaded");
+    const { replay } = request({ type: "export_replay", branch: null });
+    self.postMessage({ type: "replay", replay });
+  } catch (error) {
+    self.postMessage({ type: "replay_failed", message: error instanceof Error ? error.message : String(error) });
+  }
+}

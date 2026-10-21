@@ -60,6 +60,12 @@ test("draws_the_swarm", async ({ page }) => {
   );
   // 10,000 bugs fill the view: far more body pixels than a few stray sprites would draw.
   expect(bodies).toBeGreaterThan(10_000);
+  // Reported, not asserted: how often the page draws while the swarm plays.
+  const draws = async () => Number(await page.locator("body").getAttribute("data-draws"));
+  const [before, from] = [await draws(), Date.now()];
+  await page.waitForTimeout(3000);
+  const rate = ((await draws()) - before) / ((Date.now() - from) / 1000);
+  console.log(`standalone: the page draws ${rate.toFixed(1)} frames per second`);
   await expect(page.locator("#status")).toHaveText("Playing with 1 player");
   expect(errors).toEqual([]);
 });
@@ -86,7 +92,8 @@ test("lobby_claims_two_keyboard_halves_and_starts", async ({ page }) => {
   // Escape gives the keyboard's slots back; claimed again, they come back in order.
   await page.keyboard.press("Escape");
   await expect(slots).toHaveText(["Free", "Free", "Free", "Free"]);
-  await page.keyboard.press("KeyQ");
+  // A modifier is a key like any other: Control claims the left half.
+  await page.keyboard.press("ControlLeft");
   await page.keyboard.press("ArrowLeft");
   await expect(slots).toHaveText(["Player 1: left keyboard half", "Player 2: right keyboard half", "Free", "Free"]);
   await page.keyboard.press("Enter");
@@ -127,4 +134,61 @@ test("players_out_of_range_is_refused_naming_the_range", async ({ page }) => {
   await open(page, "?players=5");
   await expect(page.locator("#status")).toContainText("a game holds 1 to 4 local players");
   await expect(page.locator("body")).toHaveAttribute("data-failed", "true");
+});
+
+test("losing_focus_releases_the_held_keys_at_once", async ({ page }) => {
+  // Every message the page posts to the worker, in order.
+  await page.addInitScript(() => {
+    const posted: unknown[] = [];
+    (window as unknown as { posted: unknown[] }).posted = posted;
+    const post = Worker.prototype.postMessage;
+    Worker.prototype.postMessage = function (this: Worker, message: unknown, ...rest: never[]) {
+      posted.push(message);
+      return post.call(this, message, ...rest);
+    };
+  });
+  const errors = await open(page, "?players=1");
+  await reach(page, 1);
+  const lastKeys = () =>
+    page.evaluate(() => {
+      const posted = (window as unknown as { posted: { type: string; devices?: { keys: string[] } }[] }).posted;
+      return posted.filter((message) => message.type === "devices").at(-1)?.devices?.keys;
+    });
+  await page.keyboard.down("KeyD");
+  await expect.poll(lastKeys).toEqual(["KeyD"]);
+  // Sent in the blur itself, not on a later animation frame, which a hidden tab never runs.
+  const afterBlur = await page.evaluate(() => {
+    dispatchEvent(new Event("blur"));
+    const posted = (window as unknown as { posted: { type: string; devices?: { keys: string[] } }[] }).posted;
+    return posted.at(-1);
+  });
+  expect(afterBlur).toEqual({ type: "devices", devices: { keys: [], gamepads: [] } });
+  // The same when the tab is hidden.
+  await page.keyboard.up("KeyD");
+  await page.keyboard.down("KeyA");
+  await expect.poll(lastKeys).toEqual(["KeyA"]);
+  const afterHiding = await page.evaluate(() => {
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+    document.dispatchEvent(new Event("visibilitychange"));
+    const posted = (window as unknown as { posted: { type: string; devices?: { keys: string[] } }[] }).posted;
+    return posted.at(-1);
+  });
+  expect(afterHiding).toEqual({ type: "devices", devices: { keys: [], gamepads: [] } });
+  await page.keyboard.up("KeyA");
+  expect(errors).toEqual([]);
+});
+
+test("a_draw_that_cannot_happen_stops_the_page_with_its_cause", async ({ page }) => {
+  await open(page, "?players=1");
+  await reach(page, 1);
+  // A canvas past every device's texture limit: each draw fails with the limit error.
+  await page.evaluate(() => {
+    document.getElementById("game")!.style.width = "100000px";
+    dispatchEvent(new Event("resize"));
+  });
+  await expect(page.locator("#status")).toContainText("the game cannot be drawn");
+  await expect(page.locator("#status")).toContainText("max_texture_dimension_2d");
+  await expect(page.locator("body")).toHaveAttribute("data-failed", "true");
+  // The game did not fail: its replay can still be saved.
+  await expect(page.getByRole("button", { name: "Save replay" })).toBeEnabled();
 });
