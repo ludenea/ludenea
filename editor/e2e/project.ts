@@ -1,5 +1,5 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, type Page } from "@playwright/test";
@@ -165,6 +165,26 @@ export function serveBoxes(port: number, prepare: (root: string) => void = () =>
       mkdirSync(join(root, directory));
     }
     prepare(root);
+  });
+}
+
+/**
+ * A project made by `ludenea new` whose game is the `swarm` example (10,000 animated sprites):
+ * its sources, under the crate name `swarm`, and its assets, with its scene as the default one.
+ */
+export function serveSwarm(port: number): Promise<ServedProject> {
+  const swarm = join(repository, "examples/swarm");
+  return serveProject("swarm", port, (root) => {
+    for (const file of ["lib.rs", "assets.rs"]) copyFileSync(join(swarm, "src", file), join(root, "src", file));
+    for (const directory of ["assets", "scenes"]) rmSync(join(root, directory), { recursive: true, force: true });
+    mkdirSync(join(root, "scenes"));
+    cpSync(join(swarm, "assets"), join(root, "assets"), { recursive: true });
+    const manifest = join(root, "ludenea.toml");
+    writeFileSync(manifest, readFileSync(manifest, "utf8").replace(/^default_scene = .*$/m, 'default_scene = "assets/swarm.scene.ron"'));
+    // The swarm draws its sprite sheet with `png` (its asset generator), at the engine's version.
+    const png = /^png = .*$/m.exec(readFileSync(join(repository, "Cargo.toml"), "utf8"))![0];
+    const cargo = join(root, "Cargo.toml");
+    writeFileSync(cargo, readFileSync(cargo, "utf8").replace("[dependencies]\n", `[dependencies]\n${png}\n`));
   });
 }
 

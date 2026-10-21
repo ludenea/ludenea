@@ -1,11 +1,10 @@
-import { ghost_frame } from "@ludenea/debug-draw-wasm";
+import init, { ghost_frame } from "@ludenea/debug-draw-wasm";
 import type { ControlClient, DebugDrawFrame, Difference, DivergenceReport, Entity, Event, FileEntry, Topic, TraceComparison } from "@ludenea/control-client";
 import { definePlugin, type Disposable, type Editor } from "@ludenea/editor-shell";
 import { useEffect, useState } from "react";
 import { createStore, errorText, reportedOnce, shared, showPanel, useGame, useStore, type Store } from "../shared";
 import { seek } from "../timeline";
 import { css, outline } from "../viewport/overlay";
-import { loadRenderer } from "../viewport/ViewportPanel";
 import { CausalReport } from "./CausalReport";
 import { SnapshotDiff } from "./SnapshotDiff";
 import { TraceViewer } from "./TraceViewer";
@@ -15,6 +14,10 @@ const DIVERGENCE_TICKS = 600;
 /** How often a comparison with the session follows it while playing. */
 const FOLLOW_PLAYING_MS = 1000;
 const LAGGING = "#ffb000";
+
+let loaded: Promise<unknown> | undefined;
+/** Loads the module that styles the ghost once, for every use of it. */
+const loadGhostStyle = () => (loaded ??= init());
 
 /** A file compared with another file or, while `against` is null, with the current session. */
 export type Comparison<R> = { path: string | null; against: string | null; result: R | null; error: string | null };
@@ -233,7 +236,7 @@ export const divergencePlugin = definePlugin({
         const reply = await control.request({ type: "get_ghost_draw", tick: editor.timeline.getState().timeline?.current ?? 0, layers });
         // A host that answers something else (a test double) leaves the ghost as it is.
         if (reply.type !== "ghost_draw" || editor.control !== control) return;
-        await loadRenderer();
+        await loadGhostStyle();
         ghost.set({ frame: JSON.parse(ghost_frame(JSON.stringify(reply.frame))) as DebugDrawFrame, tick: reply.tick, lagging: reply.lagging });
         fetching.worked();
       } catch (error) {

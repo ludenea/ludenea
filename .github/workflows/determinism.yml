@@ -226,6 +226,7 @@ jobs:
       - run: pnpm -C editor install --frozen-lockfile
       - run: pnpm -C editor exec playwright install --with-deps chromium
       - run: pnpm -C editor build:wasm
+      - run: pnpm -C editor build:render
       - run: pnpm -C editor typecheck
       - run: pnpm -C editor test
       # Regenerated from scratch, so a removed or renamed type leaves a stale file behind
@@ -310,8 +311,9 @@ jobs:
           cache: pnpm
           cache-dependency-path: editor/pnpm-lock.yaml
       - run: pnpm -C editor install --frozen-lockfile
-      # The desktop front end bundles the viewport renderer and the shared modules.
+      # The desktop front end bundles the renderers and the shared modules.
       - run: pnpm -C editor build:wasm
+      - run: pnpm -C editor build:render
       - run: pnpm -C editor/shared build
       - run: pnpm -C editor/apps/desktop build
       - run: cargo clippy --manifest-path editor/apps/desktop/src-tauri/Cargo.toml --locked -- -D warnings

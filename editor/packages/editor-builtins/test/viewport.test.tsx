@@ -1,10 +1,15 @@
-import type { DebugDrawFrame, Entity, GameInfo } from "@ludenea/control-client";
+/// <reference types="node" />
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import type { CameraItem, DebugDrawFrame, Entity, GameInfo, RenderFrame, TextureMeta } from "@ludenea/control-client";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { consolePlugin } from "../src/console";
 import { viewportPlugin } from "../src/viewport";
 import { shared } from "../src/shared";
-import { bounds, screenToWorld, worldToScreen, zoomAt } from "../src/viewport/camera";
-import { renderers } from "./fake-renderer";
+import { tickOf } from "../src/viewport/frames";
+import { bounds, fromCameraItem, screenToWorld, toCameraView, worldToScreen, zoomAt } from "../src/viewport/camera";
+import { renderers, script, type WebRenderer } from "./fake-render-wasm";
 import { renderFrame, renderPanel, settle, testEditor, testGame } from "./support";
 
 const entity = (index: number): Entity => ({ index, generation: 0 });
@@ -30,8 +35,11 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, "clientHeight", { configurable: true, get: () => size.height });
 });
 
-async function viewport(answer: (command: Command) => object | undefined = () => undefined, info: Partial<GameInfo> = {}) {
-  const host = await testEditor([viewportPlugin]);
+type Answer = (command: Command) => object | undefined;
+
+/** The viewport over a game answering `answer` (frames of tick 7 by default), in an editor whose project answers `project`. */
+async function viewport(answer: Answer = () => undefined, info: Partial<GameInfo> = {}, project?: Answer) {
+  const host = await testEditor([viewportPlugin], project);
   const game = await testGame((command) => answer(command) ?? (command.type === "get_render_frame" ? renderFrame(7) : { type: "done" }), {
     debug_layers: ["colliders", "contacts"],
     ...info,
@@ -43,6 +51,35 @@ async function viewport(answer: (command: Command) => object | undefined = () =>
 }
 
 const sentOf = (sent: Command[], type: string) => sent.filter((command) => command.type === type);
+/** The render frame of `tick`, with `extra` fields. */
+const frameAt = (tick: number, extra: Partial<RenderFrame> = {}): RenderFrame => ({ ...renderFrame(tick).frame, ...extra });
+/** `frame` as the fake renderer reads bytes: its JSON in UTF-8. */
+const bytesOf = (frame: RenderFrame) => new TextEncoder().encode(JSON.stringify(frame)).buffer as ArrayBuffer;
+const ticksPushed = (renderer: WebRenderer) => renderer.pushed.map((frame) => frame.tick);
+const drawsOf = (renderer: WebRenderer) => renderer.calls.filter((call) => call.method === "draw").map((call) => call.args as [number, string | null]);
+/** The commands that follow the pushed frames. */
+const following = (sent: Command[]) => sent.filter((command) => ["set_pushed_layers", "subscribe", "unsubscribe"].includes(command.type));
+/** Lets `count` animation frames run. */
+const animationFrames = (count: number) =>
+  act(async () => {
+    for (let frame = 0; frame < count; frame++) await new Promise((resolve) => requestAnimationFrame(resolve));
+  });
+const ticked = (tick: number, rate: number) => ({ type: "ticked", tick, hash: `000000000000${String(tick).padStart(4, "0")}`, pending: false, playing: true, effective_rate: rate });
+
+/** Shows tick `current` of `hash` on the timeline, as a refresh after a step, seek, edit, or pause does. */
+function atTick(host: { editor: { timeline: { setState(state: object): void } } }, current: number, hash = `00000000000000${String(current).padStart(2, "0")}`) {
+  const timeline = { head: current, simulated: current, current, checkpoints: [], edit_ticks: [], can_undo: false, can_redo: false, undo_label: null, redo_label: null, resimulating: false, branch: 0, branches: [], compare: null, scene_dirty: false, unsaved_assets: [] };
+  act(() => host.editor.timeline.setState({ timeline, hash }));
+}
+
+const META: TextureMeta = { pixels_per_unit: 16, grid: null, pivot: null, filter: "Nearest" };
+const UNREADABLE = "00000000000000000000000000000000";
+/** A project of two textures and a scene; `read_binary` answers each PNG's path as its bytes. */
+const textures = (entries: { path: string; id: string }[]): Answer => (request) => {
+  if (request.type === "list_files") return { type: "files", entries: [...entries.map(({ path, id }) => ({ path, id, kind: { Texture: META } })), { path: "scenes/main.scene.ron", id: "00000000000000000000000000000c01", kind: "Scene" }] };
+  if (request.type === "read_binary") return { type: "bytes", bytes: btoa(request.path as string) };
+  return undefined;
+};
 
 describe("camera", () => {
   it("screen_to_world_inverts_world_to_screen", () => {
@@ -71,6 +108,15 @@ describe("camera", () => {
     expect(bounds(frame, ["colliders"], [entity(3)])).toBeNull();
   });
 
+  it("the_camera_view_shows_what_the_editor_camera_does", () => {
+    const camera = { center: { x: 3, y: -2 }, pixelsPerMeter: 40 };
+    expect(toCameraView(camera, size)).toEqual({ center: { x: 3, y: -2 }, view: { x: 10, y: 7.5 } });
+    // The game camera's minimum view widened to the viewport's shape, at the same scale on both axes.
+    const item: CameraItem = { entity: entity(1), center: { x: 1, y: 2 }, view: { x: 8, y: 8 } };
+    expect(fromCameraItem(item, size)).toEqual({ center: { x: 1, y: 2 }, pixelsPerMeter: 37.5 });
+    expect(toCameraView(fromCameraItem(item, size), size).view).toEqual({ x: 400 / 37.5, y: 8 });
+  });
+
   it("zoom_keeps_point_under_cursor", () => {
     const camera = { center: { x: 1, y: 1 }, pixelsPerMeter: 50 };
     const cursor = { x: 320, y: 40 };
@@ -92,6 +138,7 @@ describe("viewport", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    script.refused = [];
   });
 
   it("click_sends_pick_and_selects", async () => {
@@ -249,8 +296,7 @@ describe("viewport", () => {
     expect(context.tick).toBe(7);
     expect(context.selection).toEqual([entity(3)]);
     expect(context.worldToScreen({ x: 1, y: 1 })).toEqual({ x: 250, y: 100 });
-    const renderer = renderers.at(-1)!;
-    expect(renderer.calls.some((call) => call.method === "draw" && call.args[0] === JSON.stringify(frame))).toBe(true);
+    expect(renderers.at(-1)!.pushed.at(-1)!.debug).toEqual(frame);
   });
 
   it("delete_despawns_the_selection_while_paused", async () => {
@@ -266,7 +312,12 @@ describe("viewport", () => {
   });
 
   /** The camera the renderer last drew with: center x, center y, pixels per meter. */
-  const camera = () => renderers.at(-1)!.calls.filter((call) => call.method === "set_camera").at(-1)?.args;
+  const camera = () => {
+    const drawn = drawsOf(renderers.at(-1)!).at(-1)?.[1];
+    if (!drawn) return undefined;
+    const { center, view } = JSON.parse(drawn) as { center: { x: number; y: number }; view: { x: number; y: number } };
+    return [center.x, center.y, size.width / view.x];
+  };
   const circleOf = (index: number, x: number, y: number): DebugDrawFrame => ({
     layers: { colliders: [{ entity: entity(index), primitive: { type: "circle", center: { x, y }, radius: 0.5, color: 0xffffffff, fill: false } }] },
   });
@@ -357,16 +408,17 @@ describe("viewport", () => {
   it("a_skipped_draw_is_drawn_again_while_paused", async () => {
     const { host } = await viewport();
     const renderer = renderers.at(-1)!;
-    const draws = () => renderer.calls.filter((call) => call.method === "draw").length;
+    const draws = () => drawsOf(renderer).length;
     await waitFor(() => expect(draws()).toBeGreaterThan(0));
+    await animationFrames(2);
     const before = draws();
     renderer.skips = 2;
-    // Any change asks for a repaint; the two skipped ones are retried without another.
+    // Any change asks for a repaint; the two skipped ones (no surface texture) are retried without another.
     act(() => host.editor.selection.getState().select([entity(9)]));
-    await act(async () => {
-      for (let frame = 0; frame < 3; frame++) await new Promise((resolve) => requestAnimationFrame(resolve));
-    });
-    expect(draws()).toBeGreaterThanOrEqual(before + 3);
+    await animationFrames(5);
+    expect(draws()).toBe(before + 3);
+    // Not a failure: nothing is reported.
+    expect(host.editor.console.list()).toEqual([]);
   });
 
   it("a_pixel_ratio_change_resizes_the_drawing_buffer", async () => {
@@ -430,26 +482,31 @@ describe("viewport", () => {
     ]);
   });
 
-  it("a_render_frame_failing_every_frame_is_reported_once_until_it_works_again", async () => {
+  it("a_render_frame_failing_every_time_is_reported_once_until_it_works_again", async () => {
     let refuse = true;
-    const { host, game } = await viewport((command) =>
-      refuse && command.type === "get_render_frame" ? { error: { code: "internal", message: "the debug draw panicked" } } : undefined,
-    );
+    let tick = 0;
+    const { host, game } = await viewport((command) => {
+      if (command.type !== "get_render_frame") return undefined;
+      return refuse ? { error: { code: "internal", message: "the extraction panicked" } } : renderFrame(tick);
+    });
     const fetched = () => sentOf(game.sent, "get_render_frame").length;
-    const moreFrames = async () => {
-      const before = fetched();
-      await waitFor(() => expect(fetched()).toBeGreaterThan(before + 2));
+    // Each step while paused fetches the tick on screen.
+    const steps = async () => {
+      for (let step = 0; step < 3; step++) {
+        const before = fetched();
+        atTick(host, ++tick);
+        await waitFor(() => expect(fetched()).toBe(before + 1));
+        await settle();
+      }
     };
-    const reported = "Fetching the debug draw failed: the debug draw panicked";
-    // Playing fetches every frame.
-    act(() => host.editor.timeline.setState({ playing: true }));
-    await moreFrames();
+    const reported = "Fetching the render frame failed: the extraction panicked";
+    await steps();
     expect(host.editor.console.list().map(({ text }) => text)).toEqual([reported]);
 
     refuse = false;
-    await moreFrames();
+    await steps();
     refuse = true;
-    await moreFrames();
+    await steps();
     expect(host.editor.console.list().map(({ text }) => text)).toEqual([reported, reported]);
   });
 
@@ -523,5 +580,328 @@ describe("viewport", () => {
     act(() => host.editor.timeline.setState({ playing: true }));
     await expect(host.editor.commands.run("viewport.nudge-right")).rejects.toThrow(/pause/);
     expect(sentOf(game.sent, "get_entity")).toEqual([]);
+  });
+});
+
+describe("viewport frames", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    drawn = fakeContext();
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => drawn.context as unknown as CanvasRenderingContext2D);
+  });
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    script.refused = [];
+  });
+
+  const BUG = "000000000000000000000000000b0601";
+  const play = (host: { editor: { timeline: { setState(state: object): void } } }) => act(() => host.editor.timeline.setState({ playing: true }));
+  const pause = (host: { editor: { timeline: { setState(state: object): void } } }) => act(() => host.editor.timeline.setState({ playing: false }));
+
+  it("the_tick_of_a_frame_in_postcard_is_read_without_decoding_it", () => {
+    // The renderer's fixture, written by the engine's postcard encoding of the frame beside it.
+    const fixtures = join(import.meta.dirname, "../../../e2e/fixtures/renderer");
+    const frame = JSON.parse(readFileSync(join(fixtures, "frame.json"), "utf8")) as RenderFrame;
+    expect(tickOf(new Uint8Array(readFileSync(join(fixtures, "frame.postcard"))))).toBe(frame.tick);
+    // A tick past one byte, and one past 32 bits, as postcard writes a `u64`.
+    expect(tickOf(new Uint8Array([0xac, 0x02, 0x00]))).toBe(300);
+    expect(tickOf(new Uint8Array([0x80, 0x80, 0x80, 0x80, 0x80, 0x01]))).toBe(2 ** 35);
+    expect(() => tickOf(new Uint8Array([0x80]))).toThrow("the 1 bytes end inside the tick of a render frame");
+  });
+
+  it("a_texture_whose_png_cannot_be_read_is_left_out_and_logged_once", async () => {
+    const project = textures([{ path: "assets/bug.png", id: BUG }, { path: "assets/gone.png", id: "000000000000000000000000000b0602" }]);
+    const { host } = await viewport(undefined, {}, (request) =>
+      request.type === "read_binary" && request.path === "assets/gone.png" ? { error: { code: "io", message: "no such file" } } : project(request),
+    );
+    const renderer = renderers.at(-1)!;
+    await waitFor(() => expect(renderer.calls.some((call) => call.method === "set_textures")).toBe(true));
+    const [sources] = renderer.calls.find((call) => call.method === "set_textures")!.args as [{ path: string }[]];
+    expect(sources.map(({ path }) => path)).toEqual(["assets/bug.png"]);
+    cleanup();
+    renderPanel(host, "ludenea.viewport");
+    await waitFor(() => expect(renderers.at(-1)!.calls.some((call) => call.method === "set_textures")).toBe(true));
+    expect(host.editor.console.list().map(({ level, text }) => [level, text])).toEqual([["warning", "assets/gone.png: no such file"]]);
+  });
+
+  it("textures_that_cannot_be_listed_are_reported_and_the_frame_still_drawn", async () => {
+    const { host } = await viewport(undefined, {}, (request) => (request.type === "list_files" ? { error: { code: "io", message: "the project folder is gone" } } : undefined));
+    await waitFor(() => expect(host.editor.console.list()).toHaveLength(1));
+    expect(host.editor.console.list().map(({ level, text }) => [level, text])).toEqual([["error", "Loading the textures for the viewport failed: the project folder is gone"]]);
+    expect(ticksPushed(renderers.at(-1)!)).toEqual([7]);
+  });
+
+  it("a_frame_the_renderer_refuses_is_reported_once", async () => {
+    const { host, game } = await viewport();
+    const renderer = renderers.at(-1)!;
+    vi.spyOn(renderer, "push_frame_bytes").mockImplementation(() => {
+      throw Object.assign(new Error("the 3 bytes are not a render frame in postcard"), { name: "InvalidInput" });
+    });
+    play(host);
+    await settle();
+    act(() => game.pushFrames(0, [bytesOf(frameAt(8)), bytesOf(frameAt(9))]));
+    expect(host.editor.console.list().map(({ text }) => text)).toEqual(["Showing the render frame failed: the 3 bytes are not a render frame in postcard"]);
+  });
+
+  it("textures_are_uploaded_when_the_renderer_is_created", async () => {
+    await viewport(undefined, {}, textures([{ path: "assets/bug.png", id: BUG }]));
+    const renderer = renderers.at(-1)!;
+    await waitFor(() => expect(renderer.calls.some((call) => call.method === "set_textures")).toBe(true));
+    const [sources, pngs] = renderer.calls.find((call) => call.method === "set_textures")!.args as [unknown, Uint8Array[]];
+    expect(sources).toEqual([{ id: BUG, path: "assets/bug.png", meta: META }]);
+    expect(pngs.map((png) => new TextDecoder().decode(png))).toEqual(["assets/bug.png"]);
+    // New textures blank the canvas: the frame on screen is pushed again after them.
+    const methods = () => renderer.calls.map((call) => call.method);
+    await waitFor(() => expect(methods().lastIndexOf("push_frame")).toBeGreaterThan(methods().indexOf("set_textures")));
+    expect(renderer.pushed.at(-1)!.tick).toBe(7);
+  });
+
+  it("a_refused_texture_is_logged_once", async () => {
+    script.refused = [{ id: BUG, path: "assets/bug.png", message: "the 16 by 16 grid does not fit the 8 by 8 image" }];
+    const { host } = await viewport(undefined, {}, textures([{ path: "assets/bug.png", id: BUG }]));
+    await waitFor(() => expect(host.editor.console.list()).toHaveLength(1));
+    // A viewport mounted anew uploads the textures again: the refusal is not news.
+    cleanup();
+    renderPanel(host, "ludenea.viewport");
+    await waitFor(() => expect(renderers.at(-1)!.calls.some((call) => call.method === "set_textures")).toBe(true));
+    await settle();
+    expect(host.editor.console.list().map(({ level, text }) => [level, text])).toEqual([["warning", "assets/bug.png: the 16 by 16 grid does not fit the 8 by 8 image"]]);
+  });
+
+  it("a_texture_with_an_unreadable_meta_is_left_out_with_its_warning", async () => {
+    const host = await testEditor([viewportPlugin, consolePlugin], textures([{ path: "assets/bug.png", id: BUG }, { path: "assets/broken.png", id: UNREADABLE }]));
+    const game = await testGame((command) => (command.type === "get_render_frame" ? renderFrame(7) : { type: "done" }));
+    act(() => host.setControl(game.client));
+    renderPanel(host, "ludenea.console");
+    renderPanel(host, "ludenea.viewport");
+    // The project service reports the unreadable meta once.
+    act(() => host.project.push({ type: "warning", message: "assets/broken.png.meta cannot be read: expected `Meta`" }));
+    const renderer = renderers.at(-1)!;
+    await waitFor(() => expect(renderer.calls.some((call) => call.method === "set_textures")).toBe(true));
+    const [sources] = renderer.calls.find((call) => call.method === "set_textures")!.args as [{ path: string }[]];
+    expect(sources.map(({ path }) => path)).toEqual(["assets/bug.png"]);
+    expect(host.project.sent.filter((request) => request.type === "read_binary").map((request) => request.path)).toEqual(["assets/bug.png"]);
+    await settle();
+    expect(screen.getAllByText(/broken\.png/)).toHaveLength(1);
+  });
+
+  it("playing_subscribes_and_pushes_each_frame_in_order", async () => {
+    const { host, game } = await viewport();
+    const renderer = renderers.at(-1)!;
+    await waitFor(() => expect(ticksPushed(renderer)).toEqual([7]));
+    play(host);
+    await settle();
+    expect(following(game.sent)).toEqual([
+      { type: "set_pushed_layers", debug_layers: ["colliders", "contacts"] },
+      { type: "subscribe", topic: { type: "render_frames" } },
+    ]);
+    // JSON frames, then bytes as the worker sends them: each pushed in order.
+    act(() => game.push({ type: "render_frames", frames: [frameAt(8), frameAt(9)], progress: 0.25 }));
+    act(() => game.pushFrames(0.5, [bytesOf(frameAt(10)), bytesOf(frameAt(11))]));
+    expect(ticksPushed(renderer)).toEqual([7, 8, 9, 10, 11]);
+    const pushes = renderer.calls.filter((call) => call.method.startsWith("push_frame")).slice(1);
+    expect(pushes.map((call) => call.method)).toEqual(["push_frame", "push_frame", "push_frame_bytes", "push_frame_bytes"]);
+    expect(pushes.map((call) => call.args[1])).toEqual(Array(4).fill({ debug_layers: ["colliders", "contacts"], selected: [] }));
+    await animationFrames(2);
+    expect(host.editor.console.list()).toEqual([]);
+  });
+
+  it("pausing_unsubscribes_and_draws_the_tick_on_screen_at_alpha_1", async () => {
+    let onScreen = 7;
+    const { host, game } = await viewport((command) => (command.type === "get_render_frame" ? renderFrame(onScreen) : undefined));
+    const renderer = renderers.at(-1)!;
+    play(host);
+    await settle();
+    act(() => game.push({ type: "render_frames", frames: [frameAt(8), frameAt(9)], progress: 0.5 }));
+    onScreen = 9;
+    pause(host);
+    atTick(host, 9);
+    await settle();
+    expect(following(game.sent).at(-1)).toEqual({ type: "unsubscribe", topic: { type: "render_frames" } });
+    // The tick on screen is fetched once paused (and again after the timeline's refresh).
+    expect(sentOf(game.sent, "get_render_frame").length).toBeGreaterThan(1);
+    const shown = ticksPushed(renderer);
+    expect(shown.slice(0, 4)).toEqual([7, 8, 9, 9]);
+    expect(new Set(shown.slice(2))).toEqual(new Set([9]));
+    // Frames still on their way when play stopped are not the tick on screen.
+    act(() => game.push({ type: "render_frames", frames: [frameAt(10)], progress: 0 }));
+    expect(ticksPushed(renderer)).toEqual(shown);
+    await animationFrames(2);
+    expect(drawsOf(renderer).at(-1)![0]).toBe(1);
+  });
+
+  it("stepping_while_paused_draws_the_new_tick_at_alpha_1", async () => {
+    let onScreen = 7;
+    const { host, game } = await viewport((command) => (command.type === "get_render_frame" ? renderFrame(onScreen) : undefined));
+    const renderer = renderers.at(-1)!;
+    atTick(host, 7);
+    await settle();
+    onScreen = 8;
+    atTick(host, 8);
+    await waitFor(() => expect(ticksPushed(renderer).at(-1)).toBe(8));
+    expect(following(game.sent)).toEqual([]);
+    await animationFrames(2);
+    expect(drawsOf(renderer).at(-1)![0]).toBe(1);
+  });
+
+  it("alpha_is_extrapolated_and_clamped_at_any_speed", async () => {
+    const { host, game } = await viewport();
+    const renderer = renderers.at(-1)!;
+    let now = 1000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    atTick(host, 7);
+    play(host);
+    const alphaAfter = async (elapsed: number, from: number) => {
+      now = from + elapsed;
+      await animationFrames(2);
+      return drawsOf(renderer).at(-1)![0];
+    };
+    // A quarter speed: 15 ticks a second.
+    act(() => game.push(ticked(8, 15)));
+    act(() => game.push({ type: "render_frames", frames: [frameAt(8)], progress: 0.2 }));
+    expect(await alphaAfter(20, 1000)).toBeCloseTo(0.5, 5);
+    expect(await alphaAfter(100, 1000)).toBe(1);
+    // Four times the speed: 240 ticks a second.
+    now = 2000;
+    act(() => game.push(ticked(10, 240)));
+    act(() => game.push({ type: "render_frames", frames: [frameAt(9), frameAt(10)], progress: 0.1 }));
+    expect(await alphaAfter(2, 2000)).toBeCloseTo(0.58, 5);
+    expect(await alphaAfter(10, 2000)).toBe(1);
+  });
+
+  it("toggling_a_layer_while_playing_keeps_frames_coming", async () => {
+    const { host, game } = await viewport();
+    const renderer = renderers.at(-1)!;
+    play(host);
+    await settle();
+    await act(() => host.editor.commands.run("viewport.toggle-layer.colliders"));
+    await settle();
+    expect(following(game.sent)).toEqual([
+      { type: "set_pushed_layers", debug_layers: ["colliders", "contacts"] },
+      { type: "subscribe", topic: { type: "render_frames" } },
+      { type: "set_pushed_layers", debug_layers: ["contacts"] },
+    ]);
+    expect(sentOf(game.sent, "get_render_frame")).toHaveLength(1);
+    act(() => game.push({ type: "render_frames", frames: [frameAt(8)], progress: 0 }));
+    expect(ticksPushed(renderer).at(-1)).toBe(8);
+    expect(renderer.calls.at(-1)!.args[1]).toEqual({ debug_layers: ["contacts"], selected: [] });
+  });
+
+  it("a_reply_older_than_the_newest_frame_is_dropped", async () => {
+    let held: ((reply: object) => void) | null = null;
+    let hold = false;
+    let onScreen = 7;
+    const { host, game } = await viewport((command) => {
+      if (command.type !== "get_render_frame") return undefined;
+      if (!hold) return renderFrame(onScreen);
+      return new Promise((resolve) => (held = resolve));
+    });
+    const renderer = renderers.at(-1)!;
+    atTick(host, 7);
+    await settle();
+    // A request sent while paused, answered after play pushed newer frames.
+    hold = true;
+    atTick(host, 7, "00000000000000ee");
+    await settle();
+    expect(held).not.toBeNull();
+    play(host);
+    await settle();
+    act(() => game.push({ type: "render_frames", frames: [frameAt(8), frameAt(9)], progress: 0 }));
+    held!(renderFrame(7));
+    await settle();
+    expect(ticksPushed(renderer).slice(-2)).toEqual([8, 9]);
+
+    // While paused: a reply for a tick the timeline left before it came is dropped.
+    hold = false;
+    onScreen = 9;
+    pause(host);
+    atTick(host, 9);
+    await settle();
+    hold = true;
+    held = null;
+    onScreen = 3;
+    atTick(host, 3);
+    await settle();
+    onScreen = 5;
+    hold = false;
+    atTick(host, 5);
+    held!(renderFrame(3));
+    await settle();
+    expect(ticksPushed(renderer).slice(-2)).toEqual([9, 5]);
+  });
+
+  it("selecting_while_paused_pushes_the_frame_again", async () => {
+    const { host, game } = await viewport();
+    const renderer = renderers.at(-1)!;
+    await waitFor(() => expect(ticksPushed(renderer)).toEqual([7]));
+    const requests = game.sent.length;
+    act(() => host.editor.selection.getState().select([entity(3)]));
+    expect(ticksPushed(renderer).at(-1)).toBe(7);
+    expect(renderer.calls.filter((call) => call.method === "push_frame").at(-1)!.args[1]).toEqual({ debug_layers: ["colliders", "contacts"], selected: [entity(3)] });
+    expect(game.sent).toHaveLength(requests);
+  });
+
+  it("game_camera_toggle_keeps_overlay_and_pick_aligned", async () => {
+    const camera: CameraItem = { entity: entity(1), center: { x: 10, y: 5 }, view: { x: 8, y: 6 } };
+    const label: DebugDrawFrame = { layers: { colliders: [{ entity: null, primitive: { type: "label", at: { x: 10, y: 5 }, text: "camera", color: 0xffffffff } }] } };
+    const { host, game, view } = await viewport((command) => {
+      if (command.type === "get_render_frame") return { type: "render_frame", frame: frameAt(7, { camera, debug: label }) };
+      if (command.type === "pick") return { type: "picked", entities: [] };
+      return undefined;
+    });
+    const renderer = renderers.at(-1)!;
+    await waitFor(() => expect(drawsOf(renderer).at(-1)?.[1]).toBe(JSON.stringify({ center: { x: 0, y: 0 }, view: { x: 8, y: 6 } })));
+
+    await act(() => host.editor.commands.run("viewport.toggle-game-camera"));
+    await animationFrames(2);
+    expect(drawsOf(renderer).at(-1)![1]).toBeNull();
+    // 50 pixels per meter around (10, 5): the label at the camera's center is drawn at the view's.
+    await waitFor(() => expect(drawn.calls.filter((call) => call.method === "fillText").at(-1)?.args).toEqual(["camera", 200, 150]));
+    fireEvent.pointerDown(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    fireEvent.pointerUp(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    await settle();
+    expect(sentOf(game.sent, "pick").at(-1)).toEqual({ type: "pick", point: { x: 11, y: 6 } });
+
+    await act(() => host.editor.commands.run("viewport.toggle-game-camera"));
+    await animationFrames(2);
+    expect(drawsOf(renderer).at(-1)![1]).not.toBeNull();
+    expect(host.editor.commands.list().find((command) => command.id === "viewport.toggle-game-camera")?.title).toBe("View through the game camera");
+  });
+
+  it("a_new_game_subscribes_again", async () => {
+    const { host, game } = await viewport();
+    const renderer = renderers.at(-1)!;
+    play(host);
+    await settle();
+    const other = await testGame((command) => (command.type === "get_render_frame" ? renderFrame(0) : { type: "done" }), { debug_layers: ["colliders"] });
+    act(() => host.setControl(other.client));
+    await settle();
+    // The game left is not told anything more; the new one, playing, is followed.
+    expect(following(game.sent)).toHaveLength(2);
+    act(() => other.push(ticked(1, 60)));
+    await settle();
+    expect(following(other.sent)).toEqual([
+      { type: "set_pushed_layers", debug_layers: ["colliders"] },
+      { type: "subscribe", topic: { type: "render_frames" } },
+    ]);
+    act(() => game.push({ type: "render_frames", frames: [frameAt(50)], progress: 0 }));
+    act(() => other.pushFrames(0, [bytesOf(frameAt(2))]));
+    expect(ticksPushed(renderer).at(-1)).toBe(2);
+    expect(ticksPushed(renderer)).not.toContain(50);
+  });
+
+  it("drawing_between_frames_sends_no_request", async () => {
+    const { host, game } = await viewport();
+    const renderer = renderers.at(-1)!;
+    play(host);
+    await settle();
+    act(() => game.pushFrames(0, [bytesOf(frameAt(8))]));
+    const requests = game.sent.length;
+    const draws = drawsOf(renderer).length;
+    await animationFrames(5);
+    // Every animation frame draws while playing, between the frames the host pushes.
+    expect(drawsOf(renderer).length).toBeGreaterThanOrEqual(draws + 4);
+    expect(game.sent).toHaveLength(requests);
   });
 });

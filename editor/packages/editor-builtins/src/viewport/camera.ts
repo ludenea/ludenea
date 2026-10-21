@@ -1,10 +1,30 @@
-import type { DebugDrawFrame, Entity, Vec2 } from "@ludenea/control-client";
+import type { CameraItem, DebugDrawFrame, Entity, Vec2 } from "@ludenea/control-client";
 
 /** What the viewport looks at: `center` in meters, the scale in CSS pixels per meter. */
 export type Camera = { center: Vec2; pixelsPerMeter: number };
 /** The viewport's size in CSS pixels. */
 export type Size = { width: number; height: number };
+/** A camera as the renderer takes it: `view` is the minimum visible width and height, in meters. */
+export type CameraView = { center: Vec2; view: Vec2 };
 type Point = { x: number; y: number };
+
+/** A side of 0 pixels counts as 1, as the renderer draws it. */
+const sides = ({ width, height }: Size) => ({ width: Math.max(width, 1), height: Math.max(height, 1) });
+
+/** The renderer's camera showing what `camera` shows in a viewport of `size`. */
+export function toCameraView({ center, pixelsPerMeter }: Camera, size: Size): CameraView {
+  const { width, height } = sides(size);
+  return { center, view: { x: width / pixelsPerMeter, y: height / pixelsPerMeter } };
+}
+
+/**
+ * The editor camera showing what the game camera `item` shows in a viewport of `size`: its
+ * minimum view fits, widened on the longer side, at the same scale on both axes.
+ */
+export function fromCameraItem({ center, view }: Pick<CameraItem, "center" | "view">, size: Size): Camera {
+  const { width, height } = sides(size);
+  return { center, pixelsPerMeter: Math.min(width / view.x, height / view.y) };
+}
 
 export const MIN_PIXELS_PER_METER = 2;
 export const MAX_PIXELS_PER_METER = 2000;

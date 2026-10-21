@@ -11,8 +11,11 @@ export type ViewportState = Store<{
   size: Size;
   /** Debug layers toggled off, by name; the game's other layers are drawn. */
   hidden: string[];
+  /** The debug drawing of the frame on screen, which the overlay's labels and outlines read. */
   frame: DebugDrawFrame | null;
   tick: number;
+  /** Whether the viewport shows what the game camera shows instead of the editor camera. */
+  gameCamera: boolean;
   /** Bumped to ask the panel for a fresh frame (after an edit). */
   revision: number;
 }>;

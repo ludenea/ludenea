@@ -8,6 +8,7 @@ import {
   fakeTransport,
   type DebugDrawFrame,
   type GameInfo,
+  type PushedFrames,
   type RenderFrame,
   type TypeSchema,
 } from "@ludenea/control-client";
@@ -29,7 +30,13 @@ async function fake<C>(
   connect: (transport: ReturnType<typeof fakeTransport>) => Promise<C>,
 ) {
   const sent: Message[] = [];
-  const transport = fakeTransport((raw) => {
+  // Render frames as bytes, as the worker transport delivers them.
+  const frames = new Set<(pushed: PushedFrames) => void>();
+  const onFrames = (listener: (pushed: PushedFrames) => void) => {
+    frames.add(listener);
+    return () => void frames.delete(listener);
+  };
+  const transport = Object.assign(fakeTransport((raw) => {
     const message = JSON.parse(raw);
     if (message.type === "hello") return [JSON.stringify(welcome)];
     sent.push(message[field]);
@@ -41,9 +48,14 @@ async function fake<C>(
       return [];
     }
     return reply ? [response(reply)] : [];
-  });
+  }), { onFrames });
   const client = await connect(transport);
-  return { client, sent, push: (event: object) => transport.push(JSON.stringify({ type: "event", event })) };
+  return {
+    client,
+    sent,
+    push: (event: object) => transport.push(JSON.stringify({ type: "event", event })),
+    pushFrames: (progress: number, buffers: ArrayBuffer[]) => frames.forEach((listener) => listener({ type: "render_frames", progress, frames: buffers })),
+  };
 }
 
 export const testProject = (answer: Answer = () => undefined) =>

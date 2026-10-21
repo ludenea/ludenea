@@ -23,6 +23,7 @@ export const viewportPlugin = definePlugin({
       hidden: layers.get().hidden,
       frame: null as DebugDrawFrame | null,
       tick: 0,
+      gameCamera: false,
       revision: 0,
     });
     const camera = (change: (camera: Camera, size: Size) => Camera) => {
@@ -79,10 +80,16 @@ export const viewportPlugin = definePlugin({
         });
       },
     });
+    editor.commands.register({
+      id: "viewport.toggle-game-camera",
+      title: "View through the game camera",
+      run: () => state.set({ gameCamera: !state.get().gameCamera }),
+    });
     registerPlayerCommands(editor);
     editor.shortcuts.register({ key: "+", command: "viewport.zoom-in" });
     editor.shortcuts.register({ key: "-", command: "viewport.zoom-out" });
     editor.shortcuts.register({ key: "F", command: "viewport.frame-selection" });
+    editor.shortcuts.register({ key: "C", command: "viewport.toggle-game-camera" });
 
     // One toggle per layer the running game declares: the only way to show or hide a layer.
     let toggles: Disposable[] = [];
@@ -104,11 +111,12 @@ export const viewportPlugin = definePlugin({
     const stopLayers = layers.subscribe(() => state.set({ hidden: layers.get().hidden }));
 
     const failedOverlays = new Set<ViewportOverlay>();
+    const textureWarnings = new Set<string>();
     editor.panels.register({
       id: "ludenea.viewport",
       title: "Viewport",
       defaultPosition: "center",
-      component: ({ editor }) => <ViewportPanel editor={editor} state={state} failedOverlays={failedOverlays} />,
+      component: ({ editor }) => <ViewportPanel editor={editor} state={state} failedOverlays={failedOverlays} textureWarnings={textureWarnings} />,
     });
     return () => {
       stopLayers();

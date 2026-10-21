@@ -1,13 +1,15 @@
-import init, { ViewportRenderer } from "@ludenea/debug-draw-wasm";
+import init, { WebRenderer } from "@ludenea/render-wasm";
 import type { Entity, Vec2 } from "@ludenea/control-client";
 import { runReported, type Editor, type ViewportOverlay } from "@ludenea/editor-shell";
 import { useEffect, useRef, useState } from "react";
 import { captureInput } from "../input/capture";
 import { errorText, reportedOnce, shared, useGame } from "../shared";
 import { ResimulatingNotice } from "../timeline/editing";
-import { panBy, screenToWorld, zoomAt, type Size } from "./camera";
+import { fromCameraItem, panBy, screenToWorld, toCameraView, zoomAt, type Camera, type Size } from "./camera";
+import { FrameFeed } from "./frames";
 import { moveBy, visibleLayers, type ViewportState } from "./state";
 import { drawOverlay } from "./overlay";
+import { loadTextures } from "./textures";
 
 /** Pointer travel, in CSS pixels, past which a press is a drag rather than a click. */
 const DRAG_THRESHOLD = 3;
@@ -16,11 +18,23 @@ const ARROWS: { [key: string]: string } = { ArrowLeft: "left", ArrowRight: "righ
 
 let loaded: Promise<unknown> | undefined;
 /** Loads the renderer's WebAssembly module once, for every use of it. */
-export const loadRenderer = () => (loaded ??= init());
+const loadRenderer = () => (loaded ??= init());
 
-async function createRenderer(canvas: HTMLCanvasElement): Promise<ViewportRenderer> {
+async function createRenderer(canvas: HTMLCanvasElement): Promise<WebRenderer> {
   await loadRenderer();
-  return ViewportRenderer.create(canvas);
+  return WebRenderer.create(canvas);
+}
+
+/** A texture the renderer could not load: it draws as a placeholder. */
+type Refused = { id: string; path: string | null; message: string };
+
+/** The editor camera showing what `renderer` last drew through the game camera, in a viewport of `size`. */
+function shownCamera(renderer: WebRenderer, size: Size): Camera {
+  const at = (x: number, y: number) => JSON.parse(renderer.screen_to_world(x, y, 1, null)) as Vec2;
+  // A side of 0 pixels counts as 1, as the renderer draws it.
+  const [topLeft, bottomRight] = [at(0, 0), at(Math.max(size.width, 1), Math.max(size.height, 1))];
+  const center = { x: (topLeft.x + bottomRight.x) / 2, y: (topLeft.y + bottomRight.y) / 2 };
+  return fromCameraItem({ center, view: { x: bottomRight.x - topLeft.x, y: topLeft.y - bottomRight.y } }, size);
 }
 
 type Point = { x: number; y: number };
@@ -37,8 +51,21 @@ type Press = {
 
 const same = (a: Entity, b: Entity) => a.index === b.index && a.generation === b.generation;
 
-/** `failedOverlays`: the plugin overlays whose failure is reported already, kept across mounts: once per registration. */
-export function ViewportPanel({ editor, state, failedOverlays }: { editor: Editor; state: ViewportState; failedOverlays: Set<ViewportOverlay> }) {
+/**
+ * `failedOverlays`: the plugin overlays whose failure is reported already, kept across mounts: once
+ * per registration. `textureWarnings`: the texture warnings logged already, kept across mounts.
+ */
+export function ViewportPanel({
+  editor,
+  state,
+  failedOverlays,
+  textureWarnings,
+}: {
+  editor: Editor;
+  state: ViewportState;
+  failedOverlays: Set<ViewportOverlay>;
+  textureWarnings: Set<string>;
+}) {
   const game = useGame(editor);
   const root = useRef<HTMLDivElement>(null);
   const gpu = useRef<HTMLCanvasElement>(null);
@@ -48,20 +75,27 @@ export function ViewportPanel({ editor, state, failedOverlays }: { editor: Edito
   useEffect(() => {
     const element = root.current!;
     const context = overlay.current!.getContext("2d");
-    let renderer: ViewportRenderer | null = null;
+    let renderer: WebRenderer | null = null;
     let rendered: Size & { ratio: number } = { width: 0, height: 0, ratio: 0 };
     let ratio = window.devicePixelRatio || 1;
     let disposed = false;
-    // `dirty`: a new frame is needed; `repaint`: the current one must be drawn again.
-    let dirty = true;
+    // The current frame must be drawn again (paused; playing draws every animation frame).
     let repaint = true;
-    let inFlight = false;
     let press: Press | null = null;
     let space = false;
     let seen = state.get();
     const report = (context: string) => (error: unknown) => editor.console.report(error, context);
-    const fetching = reportedOnce(editor, "Fetching the debug draw");
     const drawing = reportedOnce(editor, "Drawing the viewport");
+    const warnOnce = (text: string) => {
+      if (textureWarnings.has(text)) return;
+      textureWarnings.add(text);
+      editor.console.log("warning", text);
+    };
+    const feed = new FrameFeed(editor, {
+      layers: () => visibleLayers(editor.control, state),
+      selection: () => editor.selection.getState().entities,
+      pushed: ({ tick, debug }) => state.set({ frame: debug, tick }),
+    });
     const overlayFailed = (overlay: ViewportOverlay, error: unknown) => {
       if (failedOverlays.has(overlay)) return;
       failedOverlays.add(overlay);
@@ -77,39 +111,41 @@ export function ViewportPanel({ editor, state, failedOverlays }: { editor: Edito
     const resizes = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
     resizes?.observe(element);
 
+    // Textures belong to the project: loaded for each renderer, which starts blank without them.
+    const uploadTextures = (target: WebRenderer) =>
+      loadTextures(editor.project, warnOnce)
+        .then(({ sources, pngs }) => {
+          if (disposed || renderer !== target) return;
+          const refused = JSON.parse(target.set_textures(JSON.stringify(sources), pngs)) as Refused[];
+          for (const { id, path, message } of refused) warnOnce(`${path ?? id}: ${message}`);
+          // New textures blank the canvas until the next push.
+          feed.again();
+          repaint = true;
+        })
+        .catch((error) => {
+          if (!disposed) editor.console.report(error, "Loading the textures for the viewport");
+        });
+
     createRenderer(gpu.current!).then(
       (created) => {
         if (disposed) return created.free();
         renderer = created;
+        feed.setTarget(created);
         repaint = true;
+        void uploadTextures(created);
       },
       (error) => setFailure(`The viewport cannot render: ${errorText(error)}`),
     );
 
-    const fetchFrame = () => {
-      const control = editor.control;
-      if (!control || inFlight) return;
-      inFlight = true;
-      dirty = false;
-      control
-        .request({ type: "get_render_frame", debug_layers: visibleLayers(control, state) })
-        .then(
-          // The viewport draws the debug drawing only until it moves to the new renderer.
-          ({ frame }) => {
-            fetching.worked();
-            if (!disposed && editor.control === control) state.set({ frame: frame.debug, tick: frame.tick });
-          },
-          // A game being replaced refuses its last request: only the current game's failures count.
-          (error) => {
-            if (!disposed && editor.control === control) fetching.failed(error);
-          },
-        )
-        .finally(() => (inFlight = false));
+    // What the overlay, picking and tools see through: the game camera as drawn, or the editor's.
+    const viewCamera = (): Camera => {
+      const { camera, size, gameCamera } = state.get();
+      return gameCamera && renderer ? shownCamera(renderer, size) : camera;
     };
 
     const paint = () => {
       repaint = false;
-      const { camera, size, frame, tick } = state.get();
+      const { camera, size, frame, tick, gameCamera } = state.get();
       const layers = visibleLayers(editor.control, state);
       const selection = editor.selection.getState().entities;
       if (renderer) {
@@ -118,12 +154,12 @@ export function ViewportPanel({ editor, state, failedOverlays }: { editor: Edito
             renderer.resize(size.width, size.height, ratio);
             rendered = { ...size, ratio };
           }
-          renderer.set_camera(camera.center.x, camera.center.y, camera.pixelsPerMeter);
-          // No surface texture this time: draw again on the next animation frame.
-          if (!renderer.draw(JSON.stringify(frame ?? { layers: {} }), JSON.stringify(layers), JSON.stringify(selection))) repaint = true;
+          renderer.draw(feed.alpha(performance.now()), gameCamera ? null : JSON.stringify(toCameraView(camera, size)));
           drawing.worked();
         } catch (error) {
-          drawing.failed(error);
+          // The canvas has no texture this frame (hidden or occluded): draw again on the next one.
+          if (error instanceof Error && error.name === "NoSurfaceTexture") repaint = true;
+          else drawing.failed(error);
         }
       }
       if (!context) return;
@@ -134,44 +170,41 @@ export function ViewportPanel({ editor, state, failedOverlays }: { editor: Edito
       const overlays = editor.overlays.list();
       // One unregistered then registered again is a new registration: its failure is news.
       for (const overlay of failedOverlays) if (!overlays.includes(overlay)) failedOverlays.delete(overlay);
-      drawOverlay(context, { camera, size, frame, layers, tick, selection, overlays, drag }, ratio, overlayFailed);
+      drawOverlay(context, { camera: viewCamera(), size, frame, layers, tick, selection, overlays, drag }, ratio, overlayFailed);
     };
 
-    // One request in flight at most: every animation frame while playing, on change otherwise.
+    // Every animation frame while playing, between the ticks the host pushes; on change otherwise.
     let animation = requestAnimationFrame(function loop() {
       // Moving the window to another screen or zooming the page changes it, with no event here.
       if ((window.devicePixelRatio || 1) !== ratio) {
         ratio = window.devicePixelRatio || 1;
         repaint = true;
       }
-      if (editor.timeline.getState().playing || dirty) fetchFrame();
-      if (repaint) paint();
+      if (editor.timeline.getState().playing || repaint) paint();
       animation = requestAnimationFrame(loop);
     });
 
     const stops = [
       state.subscribe(() => {
         const next = state.get();
-        if (next.hidden !== seen.hidden || next.revision !== seen.revision) dirty = true;
+        if (next.hidden !== seen.hidden) feed.layersChanged();
+        if (next.revision !== seen.revision) feed.refresh();
         seen = next;
         repaint = true;
       }),
-      editor.timeline.subscribe(() => (dirty = true)),
-      editor.selection.subscribe(() => (repaint = true)),
-      shared(editor).overlays.subscribe(() => (repaint = true)),
-      subscribeGame(editor, () => {
-        // Another game: its failures are news.
-        fetching.worked();
-        state.set({ frame: null, tick: 0 });
-        dirty = true;
+      editor.selection.subscribe(() => {
+        feed.again();
+        repaint = true;
       }),
+      shared(editor).overlays.subscribe(() => (repaint = true)),
+      subscribeGame(editor, () => (repaint = true)),
     ];
 
     const local = (event: MouseEvent): Point => {
       const rect = element.getBoundingClientRect();
       return { x: event.clientX - rect.left, y: event.clientY - rect.top };
     };
-    const world = (point: Point) => screenToWorld(state.get().camera, state.get().size, point);
+    const world = (point: Point) => screenToWorld(viewCamera(), state.get().size, point);
     const dragOffset = ({ start, last }: Press): Vec2 => {
       const [from, to] = [world(start), world(last)];
       return { x: to.x - from.x, y: to.y - from.y };
@@ -300,11 +333,12 @@ export function ViewportPanel({ editor, state, failedOverlays }: { editor: Edito
       stopCapture();
       resizes?.disconnect();
       stops.forEach((stop) => stop());
+      feed.dispose();
       for (const [type, listener] of listeners) element.removeEventListener(type, listener);
       element.removeEventListener("wheel", onWheel);
       renderer?.free();
     };
-  }, [editor, state]);
+  }, [editor, state, failedOverlays, textureWarnings]);
 
   const fill = { position: "absolute", inset: 0, width: "100%", height: "100%" } as const;
   return (

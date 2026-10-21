@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { expect, test, type Page } from "@playwright/test";
-import { button, collectErrors, expectNoErrors, expectTick, launchArgs, openScene, repository, runCommand, seek, serveProject, timeline, waitForGame, type ServedProject } from "./project";
+import { devices, expect, test, type Page } from "@playwright/test";
+import { button, collectErrors, expectNoErrors, expectTick, launchArgs, openScene, repository, runCommand, seek, serveProject, serveSwarm, timeline, waitForGame, type ServedProject } from "./project";
 
 declare global {
   interface Window {
@@ -12,6 +12,8 @@ declare global {
     __stopFrames?: () => void;
     /** How many times the shown contact cache changed while frames were recorded. */
     __cacheChanges?: number;
+    /** The render frames the game's worker posted as bytes, and the frame fetches posted to it while `playing`. */
+    __renderFrames?: { frames: number; bytes: number; fetches: number; playing: boolean };
   }
 }
 
@@ -25,15 +27,19 @@ const strict = process.env.PERF_STRICT === "1";
 // Chromium hides them), so a test can give the page scrollbars that take room.
 test.use({ launchOptions: { args: launchArgs, ignoreDefaultArgs: ["--hide-scrollbars"] } });
 
-let served: ServedProject;
+let served: ServedProject | undefined;
 
 // A project each: a stored session of the bench scene would bring its branches back.
-test.beforeEach(async () => {
+async function serveBench(): Promise<ServedProject> {
   expect(existsSync(BENCH_SCENE), `${BENCH_SCENE} is missing: run cargo run -p boxes --bin editor-bench`).toBe(true);
   served = await serveProject("bench_game", 4314, (root) => copyFileSync(BENCH_SCENE, join(root, "scenes/bench.scene.ron")));
-});
+  return served;
+}
 
-test.afterEach(() => served?.stop());
+test.afterEach(() => {
+  served?.stop();
+  served = undefined;
+});
 
 const percentile = (values: number[], fraction: number) => {
   const sorted = [...values].sort((a, b) => a - b);
@@ -99,15 +105,16 @@ async function recordFrames(page: Page) {
 
 /**
  * Logs and annotates the report `describe` makes of the frames' statistics, checks that frames
- * were recorded and, on the reference machine, their 95th percentile; returns the report.
+ * were recorded and, on the reference machine, that their 95th percentile is within `budget`
+ * milliseconds; returns the report.
  */
-function reportFrames(frames: number[], describe: (stats: string) => string): string {
+function reportFrames(frames: number[], describe: (stats: string) => string, budget = 17): string {
   const p95 = percentile(frames, 0.95);
   const report = describe(`${frames.length} frames, 95th percentile ${p95.toFixed(1)} ms, worst ${Math.max(...frames).toFixed(1)} ms`);
   console.log(`performance: ${report}`);
   test.info().annotations.push({ type: "performance", description: report });
   expect(frames.length).toBeGreaterThan(0);
-  if (strict) expect(p95, report).toBeLessThanOrEqual(17);
+  if (strict) expect(p95, report).toBeLessThanOrEqual(budget);
   return report;
 }
 
@@ -117,9 +124,10 @@ function reportFrames(frames: number[], describe: (stats: string) => string): st
  * `PLAY_MS` while recording frame times. `beforePlay` runs just before Play.
  */
 async function playWithBranchAndGhost(page: Page, beforePlay: () => Promise<void> = async () => {}) {
+  const { url } = await serveBench();
   const errors = collectErrors(page);
   const opened = Date.now();
-  await page.goto(served.url);
+  await page.goto(url);
   await page.getByRole("tab", { name: "Assets" }).click();
   await expect(page.getByRole("tree", { name: "Assets" }).getByRole("treeitem", { name: /bench\.scene\.ron/ })).toBeVisible();
   const interactiveMs = Date.now() - opened;
@@ -176,8 +184,9 @@ test("the UI stays at 60 fps with 100,000 entities, a branch, and the ghost", as
 });
 
 test("the_explorer_lists_100000_entities_with_only_the_visible_rows_while_playing", async ({ page }) => {
+  const { url } = await serveBench();
   const errors = collectErrors(page);
-  await page.goto(served.url);
+  await page.goto(url);
   await openScene(page, "bench.scene.ron");
   await waitForGame(page);
   await page.getByRole("tab", { name: "Explorer" }).click();
@@ -266,3 +275,82 @@ test("the UI stays at 60 fps while the inspector follows the contact cache", asy
   // The shown values change while playing, not only once paused.
   expect(cacheChanges).toBeGreaterThan(1);
 });
+
+// On the reference machine the swarm draws with the machine's GPU, as the editor does for its
+// users; elsewhere with SwiftShader, without a GPU, which only reports the numbers: drawing
+// 10,000 sprites in software is far over the budget.
+test("playing_the_swarm_keeps_p95_under_20_ms", async ({ page: configured, playwright }) => {
+  const gpu = strict ? await playwright.chromium.launch({ args: ["--enable-gpu"] }) : null;
+  try {
+    await playTheSwarm(gpu ? await gpu.newPage(devices["Desktop Chrome"]) : configured);
+  } finally {
+    await gpu?.close();
+  }
+});
+
+/** Plays the swarm in the editor, viewed through its game camera, while recording frame times. */
+async function playTheSwarm(page: Page) {
+  const { url } = (served = await serveSwarm(4322));
+  // Counts what crosses between the page and the game's worker: the frames it posts as bytes
+  // (transferred buffers), and any frame the page fetches while the swarm plays.
+  await page.addInitScript(() => {
+    const counts = { frames: 0, bytes: 0, fetches: 0, playing: false };
+    window.__renderFrames = counts;
+    const post = Worker.prototype.postMessage as (this: Worker, ...args: unknown[]) => void;
+    Worker.prototype.postMessage = function (this: Worker, ...args: unknown[]) {
+      if (counts.playing && typeof args[0] === "string" && args[0].includes('"get_render_frame"')) counts.fetches++;
+      post.apply(this, args);
+    };
+    window.Worker = class extends Worker {
+      constructor(...args: ConstructorParameters<typeof Worker>) {
+        super(...args);
+        this.addEventListener("message", ({ data }: MessageEvent<{ type?: string; frames?: unknown[] }>) => {
+          if (data?.type !== "render_frames") return;
+          for (const frame of data.frames ?? []) {
+            if (!(frame instanceof ArrayBuffer)) continue;
+            counts.frames++;
+            counts.bytes += frame.byteLength;
+          }
+        });
+      }
+    };
+  });
+  const errors = collectErrors(page);
+  await page.goto(url);
+  // The swarm's scene opens as the project's default one.
+  await waitForGame(page);
+  await page.getByRole("tab", { name: "Scene" }).click();
+  await expect(page.getByRole("listbox", { name: "Entities" }).getByRole("option").nth(20)).toBeVisible({ timeout: 60_000 });
+  await page.getByRole("tab", { name: "Viewport" }).click();
+  await page.getByRole("tab", { name: "Timeline" }).click();
+  // The whole swarm, as its camera sees it.
+  await runCommand(page, "View through the game camera");
+  const viewport = page.getByRole("application", { name: "Viewport" });
+  const paused = await viewport.screenshot();
+
+  await page.evaluate(() => (window.__renderFrames!.playing = true));
+  const stop = await recordFrames(page);
+  await button(page, "Play").click();
+  await page.waitForTimeout(PLAY_MS);
+  const { frames } = await stop();
+  // Still playing, after the measure: what the viewport shows moves.
+  const [playing, later] = [await viewport.screenshot(), await page.waitForTimeout(250).then(() => viewport.screenshot())];
+  const pushed = await page.evaluate(() => {
+    window.__renderFrames!.playing = false;
+    return { ...window.__renderFrames! };
+  });
+  await button(page, "Pause").click();
+  await expect(button(page, "Play")).toBeVisible();
+
+  const report = reportFrames(
+    frames,
+    (stats) => `swarm: ${stats}; ${pushed.frames} frames pushed as bytes, ${Math.round(pushed.bytes / Math.max(pushed.frames, 1))} bytes each`,
+    20,
+  );
+  // The frames come from the host as bytes, never fetched while playing, and are drawn.
+  expect(pushed.frames, report).toBeGreaterThan(PLAY_MS / 100);
+  expect(pushed.fetches, report).toBe(0);
+  expect(playing.equals(paused), "the viewport shows the swarm moving").toBe(false);
+  expect(later.equals(playing), "the viewport shows the swarm moving").toBe(false);
+  await expectNoErrors(page, errors);
+}

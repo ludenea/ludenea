@@ -222,8 +222,9 @@ marks the fields whose values differ. The session (scene, input log, and edit lo
 in the command line tool to the same hashes, tick for tick. The game always runs apart from
 the interface (a Web Worker in the browser, a separate process on the desktop), so the
 interface stays responsive while it simulates.
-Panels: scene tree, inspector, viewport with physics debug drawing, timeline, asset
-browser, entity explorer, physics, and console, all reachable from the command palette.
+Panels: scene tree, inspector, viewport (the game as its renderer draws it, with the physics
+debug drawing on top), timeline, asset browser, entity explorer, physics, and console, all
+reachable from the command palette.
 A project opens with the document last open in it, or else with the `default_scene` of its
 `ludenea.toml`; without one (or with its file missing) nothing opens and the console says
 why. Double-click a scene, prefab, or replay in the asset browser to open another.
@@ -293,6 +294,20 @@ native process:
 ```sh
 LUDENEA_ENGINE_PATH=$PWD pnpm -C editor/apps/desktop tauri dev -- -- ~/games/my_game
 ```
+
+### Viewport
+
+The viewport draws the game with the renderer the game runs with (`ludenea-render`, on WebGPU,
+or WebGL2 where the browser offers no WebGPU adapter): its sprites, tilemaps, and layers, with
+the debug layers shown on top, the selected entities' shapes highlighted. While the game plays,
+the game pushes the frame of each tick it runs (as bytes, from the browser's worker) and the
+viewport draws between the last two, as the game's own window does; paused, it shows the tick
+on screen, fetched again after a step, a seek, an undo, an edit, a reload, or a change of debug
+layers. The project's textures are loaded when the viewport opens; one that cannot be read or
+packed is logged once in the console and drawn as a magenta placeholder. "View through the game
+camera" (`C`) shows what the game's camera sees instead of the editor's free camera; picking
+and dragging follow it. The desktop editor on Linux (WebKitGTK) has no WebGPU: its viewport
+draws with WebGL2, or, without WebGL2 either, says it cannot render and why.
 
 ### Prefabs
 
@@ -395,8 +410,8 @@ The front end lives in `editor/` (pnpm workspace; Node.js 24 and the pnpm versio
 
 ```sh
 pnpm -C editor install --frozen-lockfile
-pnpm -C editor build:wasm              # viewport renderer, before typecheck and build
-pnpm -C editor build:render            # browser renderer, into editor/packages/render-wasm
+pnpm -C editor build:wasm              # the divergence ghost's style, before typecheck and build
+pnpm -C editor build:render            # the viewport's renderer, into editor/packages/render-wasm
 pnpm -C editor typecheck
 pnpm -C editor test
 pnpm -C editor build
@@ -404,9 +419,12 @@ pnpm -C editor build
 
 End-to-end tests (Playwright, Chromium) drive the built web editor against
 `ludenea serve`: the golden trace and replay in a browser, a session replayed by the command
-line tool, plugin parity, prefabs, branches, the divergence tools, saved replays, and
-fluidity with 100,000 entities, a branch, and the ghost. `PERF_STRICT=1` turns the frame
-time report into assertions, on the reference machine (an Apple M-series):
+line tool, plugin parity, prefabs, branches, the divergence tools, saved replays,
+fluidity with 100,000 entities, a branch, and the ghost, and the swarm's 10,000 sprites
+playing in the viewport from frames the game's worker pushes as bytes. `PERF_STRICT=1` turns
+the frame time reports into assertions on the reference machine (an Apple M-series): 17 ms at
+the 95th percentile for the editor's panels, and 20 ms for the swarm, which then draws with
+the machine's GPU:
 
 ```sh
 cargo xtask wasm-game boxes editor/e2e/golden/pkg
