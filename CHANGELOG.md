@@ -504,8 +504,14 @@ hash, those of the golden trace and replays included.
   fraction of the next tick that play owes. New `set_pushed_layers` (`debug_layers`) sets
   the debug layers those frames draw, none until set. A frame that fails to extract pushes
   nothing for that advance and writes `render frame of tick N: <cause>` to the console, once
-  per cause (at its first tick) until a scene or a session loads; play goes on. The browser worker posts these frames postcard-encoded in transferred
-  buffers, which the control client hands to listeners as `Uint8Array`s.
+  per cause (at its first tick) until a scene or a session loads; play goes on. The browser
+  worker posts these frames postcard-encoded in transferred buffers, which the control
+  client hands to listeners as `Uint8Array`s.
+  In the control client, `ControlClient.on` is typed on the new `ClientEvent`: the
+  protocol's events with `render_frames` as the new `RenderFramesEvent`, whose `frames` are
+  `Uint8Array`s over a worker and `RenderFrame`s over the other transports.
+  `MessageTransport` gains an optional `onFrames` for the frames a transport carries as
+  bytes (the new `PushedFrames`), which `startWorkerGame` and `postMessageTransport` provide.
   New in the Rust API: `Host::tick_progress`, the fraction of the next tick that play owes,
   and `protocol::encode_frame`, a render frame's postcard encoding.
   A debug draw `Primitive`, and so a `RenderFrame`, now decodes from postcard: the formats
