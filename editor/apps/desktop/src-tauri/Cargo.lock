@@ -2361,6 +2361,7 @@ dependencies = [
  "ludenea-app",
  "ludenea-control",
  "ludenea-ecs",
+ "ludenea-render",
  "ludenea-schema",
  "notify",
  "notify-debouncer-full",
@@ -2376,6 +2377,20 @@ dependencies = [
  "toml 1.1.8+spec-1.1.0",
  "wasm-bindgen-cli-support",
  "xxhash-rust",
+]
+
+[[package]]
+name = "ludenea-render"
+version = "0.1.0"
+dependencies = [
+ "ludenea-app",
+ "ludenea-draw",
+ "ludenea-ecs",
+ "ludenea-math",
+ "png 0.18.1",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

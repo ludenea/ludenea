@@ -19,6 +19,7 @@ this table in the same commit.
 | Prefab (`.prefab.ron`) | `PREFAB_VERSION`           | 1       | 1                             |
 | Meta (`.meta`)         | `META_VERSION`             | 2       | 1                             |
 | Atlas (`atlas.json`)   | `ATLAS_VERSION`            | 1       | 1                             |
+| Web game (`game.json`) | `WEB_GAME_VERSION`         | 1       | 1                             |
 | Replay (`.replay`)     | `REPLAY_VERSION`           | 1       | 1                             |
 | Trace (`.trace`)       | `TRACE_VERSION`            | 1       | 1                             |
 | Snapshot (`.snap`)     | `SNAPSHOT_VERSION`         | 3       | 2                             |
@@ -41,6 +42,28 @@ hash, those of the golden trace and replays included.
 
 ### Rust API
 
+- `ludenea build <project> --web --out <folder>` builds a game as a standalone static web page,
+  which any web server serves without the editor or `ludenea serve`: the simulation runs in
+  a Web Worker driving the control `WorkerHost`, the page draws with `WebRenderer` between
+  the last two ticks, runs the lobby in the page (four slots naming their devices) or skips
+  it on `?players=N`, captures keys and gamepads, stops at `?ticks=N`, offers "Save replay"
+  (downloaded as `<name>.replay`), and says to serve the folder over HTTP when opened from a
+  file. It exits with code 2 on any failure. `Project::build_web(out, output)` does the
+  build: it refuses a game whose `Cargo.toml` has no `web` feature forwarding `ludenea/web`
+  (`BuildError::NoWebFeature`, naming the line to add under `[features]`), builds the library
+  for `wasm32-unknown-unknown` with that feature, packs the textures with pages of at most
+  2048 pixels a side and fails listing every texture that cannot be read or packed
+  (`BuildError::Textures`), and writes `index.html`, `page.js`, `worker.js`, `style.css`,
+  `game.js`, `game_bg.wasm`, `game.json` and the atlas files (`atlas/atlas.json`,
+  `atlas/page-<n>.png`) into a staging folder beside `out` before it replaces `out`, so a
+  failed build leaves the previous one as it was. An existing `out` that is neither empty nor
+  a previous web build is refused (`BuildError::NotAWebBuild`), as is a project without a
+  `default_scene` (`BuildError::NoScene`) and game files that cannot be read
+  (`BuildError::Assets`); a file of the build that cannot be read or written is named
+  (`BuildError::File`). `game.json` (`WEB_GAME_VERSION` 1) holds `version`, `name`, the
+  scene text (`scene`) and the asset texts (`assets`, `[identifier, text]` pairs); the page
+  refuses another version. The project template declares `[features] web = ["ludenea/web"]`;
+  a project made before needs that line.
 - `ludenea_runtime::web` (feature `web`, `wasm32-unknown-unknown` only) exports the
   standalone web page's lobby: `WebLobby` (`new`, `pressKey(code)` and
   `pressButton(gamepad, button)` returning the `LobbyEvent` as JSON, `claimsJson()`,

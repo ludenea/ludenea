@@ -17,6 +17,10 @@ doc = false
 name = "swarm"
 path = "src/main.rs"
 
+[features]
+# The standalone web page (`ludenea build --web`).
+web = ["ludenea/web"]
+
 [dependencies]
 ludenea.workspace = true
 png.workspace = true

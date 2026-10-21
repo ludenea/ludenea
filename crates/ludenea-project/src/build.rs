@@ -84,6 +84,31 @@ pub enum BuildError {
     MissingArtifact(&'static str),
     #[error("wasm-bindgen failed: {0}")]
     Bindgen(String),
+    /// The game's `Cargo.toml` has no `web` feature forwarding the engine's, as projects made
+    /// before the web page have.
+    #[error(
+        "the game has no web feature: add `web = [\"ludenea/web\"]` under `[features]` in its Cargo.toml"
+    )]
+    NoWebFeature,
+    /// No scene to put in the page: `ludenea.toml` names no `default_scene`.
+    #[error("no scene to build: set default_scene in ludenea.toml")]
+    NoScene,
+    /// The scene or the assets it may reach cannot be read.
+    #[error("cannot read the game's files: {0}")]
+    Assets(String),
+    /// Every texture that cannot be read or packed into the page's atlas: a shipped page never
+    /// draws placeholders.
+    #[error("textures cannot be packed for the web:{}", .0.iter().map(|error| format!("\n  {error}")).collect::<String>())]
+    Textures(Vec<String>),
+    /// A file or folder of the build cannot be read or written.
+    #[error("{}: {source}", .path.display())]
+    File { path: PathBuf, source: io::Error },
+    /// The output folder exists and does not hold a web build, so it is not replaced.
+    #[error(
+        "{} is not a web build (it has no game.json) and is not empty: choose another --out",
+        .0.display()
+    )]
+    NotAWebBuild(PathBuf),
 }
 
 impl Project {
@@ -110,9 +135,25 @@ fn run(
     target: BuildTarget,
     output: &Sender<BuildEvent>,
 ) -> Result<BuildArtifact, BuildError> {
-    let count_file = root
-        .join(".ludenea/build")
-        .join(format!("{}.count", target.name()));
+    let produced = cargo_build(root, package, target, &[], target.name(), output)?;
+    match target {
+        BuildTarget::Native => Ok(BuildArtifact::Native { binary: produced }),
+        BuildTarget::Wasm => bind(root, &produced).map(|dir| BuildArtifact::Wasm { dir }),
+    }
+}
+
+/// Runs `cargo build --release` of the game for `target` with `features`, reporting on
+/// `output`, and returns the binary (native) or the module (wasm). `count` names the file
+/// that keeps the number of artifacts of the previous build of this kind.
+pub(crate) fn cargo_build(
+    root: &Path,
+    package: &str,
+    target: BuildTarget,
+    features: &[&str],
+    count: &str,
+    output: &Sender<BuildEvent>,
+) -> Result<PathBuf, BuildError> {
+    let count_file = root.join(".ludenea/build").join(format!("{count}.count"));
     let total = fs::read_to_string(&count_file)
         .ok()
         .and_then(|text| text.trim().parse().ok());
@@ -128,6 +169,9 @@ fn run(
         BuildTarget::Native => command.args(["--bin", package]),
         BuildTarget::Wasm => command.args(["--lib", "--target", WASM_TARGET]),
     };
+    if !features.is_empty() {
+        command.args(["--features", &features.join(",")]);
+    }
     let mut child = command
         .arg("--message-format=json")
         .stdout(Stdio::piped())
@@ -191,15 +235,10 @@ fn run(
         let _ =
             fs::create_dir_all(directory).and_then(|()| fs::write(&count_file, done.to_string()));
     }
-    match target {
-        BuildTarget::Native => produced
-            .map(|binary| BuildArtifact::Native { binary })
-            .ok_or(BuildError::MissingArtifact("binary")),
-        BuildTarget::Wasm => {
-            let module = produced.ok_or(BuildError::MissingArtifact("module"))?;
-            bind(root, &module).map(|dir| BuildArtifact::Wasm { dir })
-        }
-    }
+    produced.ok_or(BuildError::MissingArtifact(match target {
+        BuildTarget::Native => "binary",
+        BuildTarget::Wasm => "module",
+    }))
 }
 
 /// Relays cargo's own output, line by line, until it ends.
@@ -263,7 +302,7 @@ fn bind(root: &Path, module: &Path) -> Result<PathBuf, BuildError> {
 }
 
 /// Writes the glue into `staging` and returns the hash of the module, as hex.
-fn generate(module: &Path, staging: &Path) -> Result<String, BuildError> {
+pub(crate) fn generate(module: &Path, staging: &Path) -> Result<String, BuildError> {
     Bindgen::new()
         .input_path(module)
         .web(true)

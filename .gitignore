@@ -1,5 +1,7 @@
 .superpowers/
 /target/
+# The build counts of the example projects built by the project tools.
+/examples/*/.ludenea/
 node_modules/
 dist/
 dump/
@@ -7,6 +9,7 @@ dump/
 editor/**/dist/
 editor/e2e/golden/pkg/
 editor/e2e/fixtures/renderer/pkg/
+editor/e2e/fixtures/standalone/
 editor/test-results/
 editor/playwright-report/
 *.tsbuildinfo

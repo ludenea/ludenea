@@ -26,25 +26,25 @@ for any thread count. The guarantee rests on:
 
 ## Workspace layout
 
-| Path                     | Purpose                                         |
-| ------------------------ | ----------------------------------------------- |
-| `crates/ludenea-math`    | Deterministic vectors, rotations, and functions |
-| `crates/ludenea-ecs`     | World, queries, snapshots, and state hashing    |
-| `crates/ludenea-macros`  | Derive macros                                   |
-| `crates/ludenea-app`     | Simulation loop, scenes, and input logs         |
-| `crates/ludenea-physics` | Rigid body physics                              |
-| `crates/ludenea-draw`    | Render frame and debug draw data, GPU free      |
-| `crates/ludenea-render`  | Render components, extraction, wgpu renderer    |
-| `crates/ludenea-control` | Versioned control protocol and host             |
-| `crates/ludenea-cli`     | `run`, `verify`, `diff`, `render`, and `play`   |
-| `crates/ludenea-runtime` | Game runner and native window                   |
-| `crates/ludenea`         | Facade crate re-exporting the engine            |
-| `crates/ludenea-project` | Projects, builds, and plugin bundling           |
-| `crates/ludenea-serve`   | The `ludenea` tool: `new`, `serve`, and `play`  |
-| `editor`                 | The editor: web and desktop applications        |
-| `examples/boxes`         | Reference scenario, golden trace, and benchmark |
-| `examples/swarm`         | Runtime test game: 10,000 sprites, 4 players    |
-| `golden`                 | Golden hash traces                              |
+| Path                     | Purpose                                             |
+| ------------------------ | --------------------------------------------------- |
+| `crates/ludenea-math`    | Deterministic vectors, rotations, and functions     |
+| `crates/ludenea-ecs`     | World, queries, snapshots, and state hashing        |
+| `crates/ludenea-macros`  | Derive macros                                       |
+| `crates/ludenea-app`     | Simulation loop, scenes, and input logs             |
+| `crates/ludenea-physics` | Rigid body physics                                  |
+| `crates/ludenea-draw`    | Render frame and debug draw data, GPU free          |
+| `crates/ludenea-render`  | Render components, extraction, wgpu renderer        |
+| `crates/ludenea-control` | Versioned control protocol and host                 |
+| `crates/ludenea-cli`     | `run`, `verify`, `diff`, `render`, and `play`       |
+| `crates/ludenea-runtime` | Game runner, native window, web page exports        |
+| `crates/ludenea`         | Facade crate re-exporting the engine                |
+| `crates/ludenea-project` | Projects, builds, and plugin bundling               |
+| `crates/ludenea-serve`   | The `ludenea` tool: `new`, `serve`, `play`, `build` |
+| `editor`                 | The editor: web and desktop applications            |
+| `examples/boxes`         | Reference scenario, golden trace, and benchmark     |
+| `examples/swarm`         | Runtime test game: 10,000 sprites, 4 players        |
+| `golden`                 | Golden hash traces                                  |
 
 ## Commands
 
@@ -239,6 +239,20 @@ the build or the launch fails:
 cargo run --locked -p ludenea-serve -- play ~/games/my_game -- --players 2
 ```
 
+Build it as a standalone web page, a static folder any web server serves without the editor:
+`ludenea build --web` builds the game for the browser (with its `web` feature, which the
+template declares; a project made before needs `web = ["ludenea/web"]` under `[features]` in
+its `Cargo.toml`) and writes the page, the game, its scene, and its textures packed in pages
+of at most 2048 pixels a side into `--out`. A texture that cannot be read or packed fails the
+build, and a failed build leaves the previous page as it was. The page opens on the lobby
+(`?players=N` skips it, `?ticks=N` stops play at that tick) and offers "Save replay"; it does
+not run from a `file:` address, so serve the folder:
+
+```sh
+cargo run --locked -p ludenea-serve -- build ~/games/my_game --web --out ~/games/my_game-web
+python3 -m http.server --directory ~/games/my_game-web
+```
+
 Serve it with the editor and open `http://127.0.0.1:7878` in a browser; the editor is
 usable at once, and the game appears when its first build finishes:
 
@@ -387,9 +401,15 @@ time report into assertions, on the reference machine (an Apple M-series):
 cargo xtask wasm-game boxes editor/e2e/golden/pkg
 cargo xtask wasm-render editor/e2e/fixtures/renderer/pkg
 cargo run --locked -p boxes --bin editor-bench
-cargo build --locked -p ludenea-serve
+cargo build --locked -p ludenea-serve -p swarm
+cargo run --locked -p ludenea-serve -- build examples/swarm --web --out editor/e2e/fixtures/standalone
 pnpm -C editor e2e
 ```
+
+The standalone page's tests (`editor/e2e/standalone.spec.ts`) open the swarm built as a web
+page: it draws, its hash at tick 300 matches `swarm run --hash`, the lobby claims keyboard
+halves, a saved replay verifies with `swarm verify`, and a `file:` address says to serve the
+folder.
 
 The renderer's pixel tests (`editor/e2e/renderer.spec.ts`) draw a reference frame with the
 browser renderer (`ludenea-render` with its `web` feature) and run twice, once per backend,

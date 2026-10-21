@@ -12,6 +12,7 @@ pub mod protocol;
 pub mod service;
 mod template;
 mod types;
+mod web;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
@@ -31,6 +32,7 @@ pub use game::{GameOutput, GameProcess, OutputStream};
 pub use manifest::Manifest;
 pub use meta::AssetKind;
 pub use plugins::{PluginBundle, PluginEvent, PluginSource};
+pub use web::WEB_GAME_VERSION;
 
 #[derive(thiserror::Error, Debug)]
 pub enum ProjectError {

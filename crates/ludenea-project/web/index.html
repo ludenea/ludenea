@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ludenea game</title>
+    <link rel="stylesheet" href="style.css" />
+    <script type="module" src="page.js"></script>
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+    <section id="lobby" hidden>
+      <h1 id="game-name"></h1>
+      <ol id="slots">
+        <li>Free</li>
+        <li>Free</li>
+        <li>Free</li>
+        <li>Free</li>
+      </ol>
+      <p>
+        Press a key of a keyboard half or a gamepad button to join. Escape or Select leaves;
+        Enter or Start begins the match.
+      </p>
+    </section>
+    <footer id="bar">
+      <button id="save" type="button" disabled>Save replay</button>
+      <output id="status" role="status">Loading the game...</output>
+    </footer>
+    <script>
+      // A module script does not load from a file: page, so this classic one says why.
+      if (location.protocol === "file:") {
+        document.getElementById("status").textContent =
+          "This page cannot run from a file: serve its folder over HTTP (for example with " +
+          "`python3 -m http.server` run inside it) and open the address the server prints.";
+        document.body.dataset.failed = "true";
+      }
+    </script>
+  </body>
+</html>

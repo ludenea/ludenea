@@ -1,0 +1,74 @@
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #121214;
+  color: #e8e8ec;
+  font: 15px/1.4 system-ui, sans-serif;
+}
+
+#game {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+}
+
+#lobby {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgb(18 18 20 / 80%);
+}
+
+#lobby[hidden] {
+  display: none;
+}
+
+#lobby h1 {
+  margin: 0;
+  font-size: 28px;
+}
+
+#slots {
+  display: grid;
+  grid-template-columns: repeat(2, 240px);
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+#slots li {
+  padding: 16px;
+  border: 1px solid #3a3a42;
+  border-radius: 6px;
+  text-align: center;
+}
+
+#slots li[data-claimed] {
+  border-color: #60a0ff;
+}
+
+#bar {
+  position: fixed;
+  left: 8px;
+  bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#status {
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: rgb(18 18 20 / 70%);
+}
+
+body[data-failed] #status {
+  color: #ff8080;
+}

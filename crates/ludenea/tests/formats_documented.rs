@@ -22,6 +22,7 @@ fn every_format_version_is_in_the_changelog() {
         ("PREFAB_VERSION", ludenea::app::PREFAB_VERSION),
         ("META_VERSION", ludenea::app::meta::META_VERSION),
         ("ATLAS_VERSION", ludenea_render::atlas::ATLAS_VERSION),
+        ("WEB_GAME_VERSION", ludenea_project::WEB_GAME_VERSION),
         ("REPLAY_VERSION", ludenea::app::replay::REPLAY_VERSION),
         ("TRACE_VERSION", ludenea::app::trace::TRACE_VERSION),
         ("SNAPSHOT_VERSION", ludenea::ecs::SNAPSHOT_VERSION),

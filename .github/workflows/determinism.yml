@@ -250,6 +250,10 @@ jobs:
       - run: pnpm -C editor build
       - run: cargo build --locked -p ludenea-serve --features embed-editor
       - run: cargo build --locked -p ludenea-serve
+      # The standalone page's tests (standalone.spec.ts) open the swarm built as a web page and
+      # check it against the swarm's own command line tool.
+      - run: cargo build --locked -p swarm
+      - run: cargo run --locked -p ludenea-serve -- build examples/swarm --web --out editor/e2e/fixtures/standalone
       # The performance test only reports its numbers here: it asserts on the reference
       # machine (PERF_STRICT=1).
       - run: pnpm -C editor e2e

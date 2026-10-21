@@ -4,7 +4,14 @@ import { defineConfig, type Plugin } from "vite";
 
 const repository = resolve(import.meta.dirname, "../..");
 /** The types a browser needs to run a module and stream a WebAssembly one; others go untyped. */
-const TYPES: Record<string, string> = { ".html": "text/html", ".js": "text/javascript", ".wasm": "application/wasm" };
+const TYPES: Record<string, string> = {
+  ".html": "text/html",
+  ".js": "text/javascript",
+  ".wasm": "application/wasm",
+  ".css": "text/css",
+  ".json": "application/json",
+  ".png": "image/png",
+};
 
 /** Serves the files of `directory` under the URL `prefix`, read-only. */
 function mount(prefix: string, directory: string): Plugin {
@@ -40,5 +47,7 @@ export default defineConfig({
     mount("/assets", join(repository, "examples/boxes/assets")),
     mount("/golden", join(repository, "golden")),
     mount("/renderer", join(import.meta.dirname, "fixtures/renderer")),
+    // A game built as a standalone web page (`ludenea build examples/swarm --web --out ...`).
+    mount("/standalone", join(import.meta.dirname, "fixtures/standalone")),
   ],
 });

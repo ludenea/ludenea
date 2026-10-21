@@ -2068,6 +2068,7 @@ dependencies = [
  "ludenea-control",
  "ludenea-ecs",
  "ludenea-project",
+ "ludenea-render",
  "ludenea-schema",
  "notify",
  "notify-debouncer-full",

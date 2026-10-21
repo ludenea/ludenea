@@ -4,11 +4,12 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use ludenea_project::Project;
 
+mod build;
 mod play;
 mod serve;
 
 #[derive(Parser)]
-#[command(about = "Create and edit Ludenea games")]
+#[command(about = "Create, edit, and build Ludenea games")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -60,6 +61,16 @@ enum Command {
         #[arg(last = true)]
         args: Vec<String>,
     },
+    /// Build the project as a standalone web page: a static folder any web server can serve.
+    Build {
+        project: PathBuf,
+        /// Build for the web (the only target for now).
+        #[arg(long, required = true)]
+        web: bool,
+        /// The folder to write the page to; a previous web build there is replaced.
+        #[arg(long)]
+        out: PathBuf,
+    },
 }
 
 fn main() -> ExitCode {
@@ -72,6 +83,17 @@ fn main() -> ExitCode {
         } => {
             return match play::run(&project, scene.as_deref(), &args) {
                 Ok(code) => ExitCode::from(code),
+                Err(message) => {
+                    eprintln!("error: {message}");
+                    ExitCode::from(2)
+                }
+            };
+        }
+        // Every failure is 2, as for `play`.
+        Command::Build { project, web, out } => {
+            debug_assert!(web, "clap requires --web");
+            return match build::web(&project, &out) {
+                Ok(()) => ExitCode::SUCCESS,
                 Err(message) => {
                     eprintln!("error: {message}");
                     ExitCode::from(2)

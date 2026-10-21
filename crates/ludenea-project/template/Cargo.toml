@@ -8,6 +8,9 @@ default-run = "{{name}}"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+web = ["ludenea/web"]
+
 [dependencies]
 ludenea = { path = "{{engine_path}}/crates/ludenea" }
 serde = { version = "1", features = ["derive"] }
