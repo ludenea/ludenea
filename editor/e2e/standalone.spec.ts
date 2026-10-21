@@ -142,8 +142,20 @@ interface Posted {
   devices?: { keys: string[]; gamepads: unknown[] };
 }
 
-/** Records every message the page posts to the worker, from the next navigation on. */
-async function recordPosts(page: Page): Promise<void> {
+/** The pad `withPad` puts in slot 0, as the page sends it: button 0 held. */
+const PAD = { buttons: [1], axes: [0, 0] };
+
+/**
+ * Records every message the page posts to the worker, from the next navigation on; with
+ * `withPad`, the browser reports one gamepad, in slot 0, holding its first button.
+ */
+async function recordPosts(page: Page, { withPad = false } = {}): Promise<void> {
+  if (withPad) {
+    await page.addInitScript(() => {
+      const pad = { connected: true, index: 0, buttons: [{ value: 1, pressed: true }], axes: [0, 0] };
+      Object.defineProperty(navigator, "getGamepads", { configurable: true, value: () => [pad, null, null, null] });
+    });
+  }
   await page.addInitScript(() => {
     const posted: unknown[] = [];
     (window as unknown as { posted: unknown[] }).posted = posted;
@@ -162,19 +174,25 @@ function lastKeys(page: Page): Promise<string[] | undefined> {
 
 const RELEASED = { type: "devices", devices: { keys: [], gamepads: [] } };
 
+/** Dispatches a cancelable key event to the page; false when the page kept it from the browser. */
+function dispatchKey(page: Page, type: "keydown" | "keyup", code: string, modifiers: { ctrlKey?: boolean; metaKey?: boolean } = {}): Promise<boolean> {
+  return page.evaluate(([type, code, modifiers]) => dispatchEvent(new KeyboardEvent(type, { code, cancelable: true, ...modifiers })), [type, code, modifiers] as const);
+}
+
 test("losing_focus_releases_the_held_keys_at_once", async ({ page }) => {
-  await recordPosts(page);
+  await recordPosts(page, { withPad: true });
   const errors = await open(page, "?players=1");
   await reach(page, 1);
   await page.keyboard.down("KeyD");
   await expect.poll(() => lastKeys(page)).toEqual(["KeyD"]);
   // Sent in the blur itself, not on a later animation frame, which a hidden tab never runs.
+  // A blurred page still reads the gamepads: the pad stays held.
   const afterBlur = await page.evaluate(() => {
     dispatchEvent(new Event("blur"));
     return (window as unknown as { posted: Posted[] }).posted.at(-1);
   });
-  expect(afterBlur).toEqual(RELEASED);
-  // The same when the tab is hidden, gamepads released too.
+  expect(afterBlur).toEqual({ type: "devices", devices: { keys: [], gamepads: [PAD] } });
+  // A hidden tab cannot read them: the keys and the pad are released.
   await page.keyboard.up("KeyD");
   await page.keyboard.down("KeyA");
   await expect.poll(() => lastKeys(page)).toEqual(["KeyA"]);
@@ -192,11 +210,14 @@ test("control_with_a_game_key_reaches_the_game", async ({ page }) => {
   await recordPosts(page);
   const errors = await open(page, "?players=1");
   await reach(page, 1);
-  await page.keyboard.down("ControlLeft");
-  await page.keyboard.down("KeyD");
+  // Kept from the browser (Control with D bookmarks the page) and held for the game; Control
+  // with R still reloads.
+  expect(await dispatchKey(page, "keydown", "ControlLeft", { ctrlKey: true })).toBe(false);
+  expect(await dispatchKey(page, "keydown", "KeyD", { ctrlKey: true })).toBe(false);
   await expect.poll(() => lastKeys(page)).toEqual(["ControlLeft", "KeyD"]);
-  await page.keyboard.up("KeyD");
-  await page.keyboard.up("ControlLeft");
+  expect(await dispatchKey(page, "keydown", "KeyR", { ctrlKey: true })).toBe(true);
+  for (const code of ["KeyR", "KeyD", "ControlLeft"]) await dispatchKey(page, "keyup", code);
+  await expect.poll(() => lastKeys(page)).toEqual([]);
   expect(errors).toEqual([]);
 });
 
