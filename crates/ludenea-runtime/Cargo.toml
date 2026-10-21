@@ -9,8 +9,10 @@ edition.workspace = true
 native = ["dep:winit", "dep:gilrs", "dep:ludenea-render", "dep:wgpu", "dep:pollster"]
 # The standalone web page's exports (the lobby, and the browser renderer it links), in the
 # browser only: the renderer's `web` feature and wasm-bindgen are declared for
-# `wasm32-unknown-unknown` alone. Cargo cannot limit a feature to a target, so elsewhere the
-# feature only enables the renderer as the native window has it.
+# `wasm32-unknown-unknown` alone. Cargo cannot limit a feature to a target, so on any other
+# target the feature still enables the renderer as the native window has it (`gpu`: wgpu on the
+# native backends). Only a game's browser build turns it on (`ludenea build --web`), as
+# `ludenea-render`'s own `web` feature does.
 web = ["dep:ludenea-render", "dep:wasm-bindgen", "dep:serde_json"]
 
 [dependencies]
