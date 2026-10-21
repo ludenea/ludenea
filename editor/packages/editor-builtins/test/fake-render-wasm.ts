@@ -14,10 +14,18 @@ const DEFAULT_CAMERA: CameraView = { center: { x: 0, y: 0 }, view: { x: 20, y: 1
 /** Every renderer created, most recent last. */
 export const renderers: WebRenderer[] = [];
 
-/** What the next renderers do: the textures `set_textures` refuses. */
-export const script: { refused: Refused[] } = { refused: [] };
+/** What the next renderers do: the textures `set_textures` refuses; and what the next `init` throws. */
+export const script: { refused: Refused[]; initError: Error | null } = { refused: [], initError: null };
 
-export default async function init(): Promise<void> {}
+/** Every call of `init`. */
+export const inits: unknown[] = [];
+
+export default async function init(): Promise<void> {
+  inits.push(null);
+  const error = script.initError;
+  script.initError = null;
+  if (error) throw error;
+}
 
 /** A JavaScript `Error` named as the real renderer names its errors. */
 export function named(name: string, message: string): Error {

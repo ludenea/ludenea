@@ -4,8 +4,17 @@ import { runReported, type Editor } from "@ludenea/editor-shell";
 import { useLayoutEffect, useRef, useSyncExternalStore, type UIEvent } from "react";
 
 let renderModule: Promise<unknown> | undefined;
-/** Loads the renderer's WebAssembly module once for every built-in: loaded twice, it would be two instances. */
-export const loadRenderModule = () => (renderModule ??= init());
+/**
+ * Loads the renderer's WebAssembly module once for every built-in: loaded twice, it would be two
+ * instances. A load that fails is tried again on the next call.
+ */
+export function loadRenderModule(): Promise<unknown> {
+  renderModule ??= init().catch((error: unknown) => {
+    renderModule = undefined;
+    throw error;
+  });
+  return renderModule;
+}
 
 /** The project folders the asset browser lists. */
 export const ASSET_FOLDERS = ["assets", "scenes"];

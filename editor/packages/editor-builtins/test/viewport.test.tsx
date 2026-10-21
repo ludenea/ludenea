@@ -133,6 +133,20 @@ describe("camera", () => {
   });
 });
 
+describe("loadRenderModule", () => {
+  it("a_failed_load_is_tried_again_on_the_next_call", async () => {
+    vi.resetModules();
+    const fake = await import("./fake-render-wasm");
+    const { loadRenderModule } = await import("../src/shared");
+    fake.script.initError = new Error("the module cannot be fetched");
+    await expect(loadRenderModule()).rejects.toThrow("the module cannot be fetched");
+    await expect(loadRenderModule()).resolves.toBeUndefined();
+    // Loaded once it worked: not again.
+    await loadRenderModule();
+    expect(fake.inits).toHaveLength(2);
+  });
+});
+
 describe("viewport", () => {
   beforeEach(() => {
     localStorage.clear();
