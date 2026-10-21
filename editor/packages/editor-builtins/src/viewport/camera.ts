@@ -58,7 +58,8 @@ export const panBy = (camera: Camera, dx: number, dy: number): Camera => ({
   center: { x: camera.center.x - dx / camera.pixelsPerMeter, y: camera.center.y + dy / camera.pixelsPerMeter },
 });
 
-const sameEntity = (a: Entity | null, b: Entity) => a !== null && a.index === b.index && a.generation === b.generation;
+export const same = (a: Entity, b: Entity) => a.index === b.index && a.generation === b.generation;
+const sameEntity = (a: Entity | null, b: Entity) => a !== null && same(a, b);
 
 /** The smallest box holding both, either of which may be missing. */
 export function union(a: Box | null, b: Box | null): Box | null {

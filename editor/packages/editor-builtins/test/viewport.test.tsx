@@ -617,6 +617,18 @@ describe("viewport", () => {
     expect(host.editor.console.list().map(({ level, text }) => [level, text])).toEqual([["error", "Drawing the viewport failed: the surface is lost"]]);
   });
 
+  it("a_failing_sprite_pick_keeps_the_host_hits_and_is_reported", async () => {
+    const { host, view } = await viewport((command) => (command.type === "pick" ? { type: "picked", entities: [entity(1)] } : undefined));
+    renderers.at(-1)!.pickError = new Error("the camera is not a CameraView");
+    fireEvent.pointerDown(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    fireEvent.pointerUp(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    await settle();
+    expect(host.editor.selection.getState().entities).toEqual([entity(1)]);
+    expect(host.editor.console.list().map(({ level, text }) => [level, text])).toEqual([
+      ["error", "Picking the sprites and tilemaps in the viewport failed: the camera is not a CameraView"],
+    ]);
+  });
+
   it("a_refused_pick_is_reported_in_the_editor_console", async () => {
     const { host, view } = await viewport((command) => (command.type === "pick" ? { error: { code: "system_panicked", message: "the game panicked while picking" } } : undefined));
     const reported = ["error", "Picking an entity in the viewport failed: the game panicked while picking"];
@@ -958,7 +970,8 @@ describe("viewport frames", () => {
     fireEvent.pointerUp(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
     await settle();
     expect(sentOf(game.sent, "pick").at(-1)).toEqual({ type: "pick", point: { x: 11, y: 6 } });
-    expect(renderer.calls.filter((call) => call.method === "pick").at(-1)!.args).toEqual([250, 100, JSON.stringify({ center: { x: 10, y: 5 }, view: { x: 8, y: 6 } })]);
+    // Through the game camera the renderer draws and picks with the frame's camera, as shown.
+    expect(renderer.calls.filter((call) => call.method === "pick").at(-1)!.args).toEqual([250, 100, null]);
 
     await act(() => host.editor.commands.run("viewport.toggle-game-camera"));
     await animationFrames(2);

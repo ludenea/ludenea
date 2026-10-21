@@ -5,9 +5,9 @@ import { useEffect, useRef, useState } from "react";
 import { captureInput } from "../input/capture";
 import { errorText, loadRenderModule, reportedOnce, shared, useGame } from "../shared";
 import { ResimulatingNotice } from "../timeline/editing";
-import { fromCameraItem, panBy, screenToWorld, toCameraView, zoomAt, type Box, type Camera, type Size } from "./camera";
+import { fromCameraItem, panBy, same, screenToWorld, toCameraView, zoomAt, type Box, type Camera, type Size } from "./camera";
 import { FrameFeed } from "./frames";
-import { mergeHits, moveBy, moveCamera, same, visibleLayers, type Shown, type ViewportState } from "./state";
+import { mergeHits, moveBy, moveCamera, visibleLayers, type Shown, type ViewportState } from "./state";
 import { drawOverlay } from "./overlay";
 import { loadTextures } from "./textures";
 
@@ -140,6 +140,11 @@ export function ViewportPanel({
       return gameCamera && renderer ? shownCamera(renderer, size) : camera;
     };
     shown.camera = viewCamera;
+    // The camera the renderer draws and picks through: the frame's own (null) through the game camera, else the editor's.
+    const drawnCamera = (): string | null => {
+      const { camera, size, gameCamera } = state.get();
+      return gameCamera ? null : JSON.stringify(toCameraView(camera, size));
+    };
     // What the last draw showed of `entities`' sprites and tilemaps.
     const drawnBounds = (entities: readonly Entity[]): Box | null => {
       const box = renderer?.bounds(JSON.stringify(entities));
@@ -149,7 +154,7 @@ export function ViewportPanel({
 
     const paint = () => {
       repaint = false;
-      const { camera, size, frame, tick, gameCamera } = state.get();
+      const { size, frame, tick } = state.get();
       const layers = visibleLayers(editor.control, state);
       const selection = editor.selection.getState().entities;
       if (renderer) {
@@ -158,7 +163,7 @@ export function ViewportPanel({
             renderer.resize(size.width, size.height, ratio);
             rendered = { ...size, ratio };
           }
-          renderer.draw(feed.alpha(performance.now()), gameCamera ? null : JSON.stringify(toCameraView(camera, size)));
+          renderer.draw(feed.alpha(performance.now()), drawnCamera());
           drawing.worked();
         } catch (error) {
           // The canvas has no texture this frame (hidden or occluded): draw again on the next one.
@@ -219,6 +224,17 @@ export function ViewportPanel({
       return entities.some((entity) => same(entity, target)) ? entities : [target];
     };
 
+    // The sprites and tilemaps drawn under `at`, topmost first; none when the renderer cannot say.
+    const spritesAt = (at: Point): Entity[] => {
+      if (!renderer) return [];
+      try {
+        return JSON.parse(renderer.pick(at.x, at.y, drawnCamera())) as Entity[];
+      } catch (error) {
+        editor.console.report(error, "Picking the sprites and tilemaps in the viewport");
+        return [];
+      }
+    };
+
     const onPointerDown = (event: PointerEvent) => {
       element.focus();
       const at = local(event);
@@ -226,12 +242,9 @@ export function ViewportPanel({
       if (event.button === 1 || (event.button === 0 && space)) {
         press = { mode: "pan", start: at, last: at, moved: false, shift: false };
       } else if (event.button === 0 && control) {
-        // The renderer answers for what it drew last, so it is asked now, through the camera on screen.
-        const drawn = new Promise<Entity[]>((resolve) =>
-          resolve(renderer ? (JSON.parse(renderer.pick(at.x, at.y, JSON.stringify(toCameraView(viewCamera(), state.get().size)))) as Entity[]) : []),
-        );
-        const hosted = control.request({ type: "pick", point: world(at) }).then(({ entities }) => entities);
-        const picked = Promise.all([hosted, drawn]).then(([host, sprites]) => mergeHits(host, sprites));
+        // The renderer answers for what it drew last, so it is asked now; its failure leaves the host's hits.
+        const sprites = spritesAt(at);
+        const picked = control.request({ type: "pick", point: world(at) }).then(({ entities }) => mergeHits(entities, sprites));
         const current: Press = { mode: "select", start: at, last: at, moved: false, shift: event.shiftKey, picked };
         picked.then((entities) => {
           const selection = editor.selection.getState();

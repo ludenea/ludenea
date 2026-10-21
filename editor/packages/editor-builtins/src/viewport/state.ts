@@ -3,7 +3,7 @@ import type { Editor } from "@ludenea/editor-shell";
 import { onEntity } from "../inspector";
 import type { Store } from "../shared";
 import { assertEditable, batched, edit } from "../timeline/editing";
-import type { Box, Camera, Size } from "./camera";
+import { same, type Box, type Camera, type Size } from "./camera";
 
 /** What the viewport's commands and panel share; kept while the panel is hidden. */
 export type ViewportState = Store<{
@@ -35,8 +35,6 @@ export const cameraOnScreen = (state: ViewportState, shown: Shown): Camera => (s
 export function moveCamera(state: ViewportState, shown: Shown, change: (camera: Camera, size: Size) => Camera): void {
   state.set({ camera: change(cameraOnScreen(state, shown), state.get().size), gameCamera: false });
 }
-
-export const same = (a: Entity, b: Entity) => a.index === b.index && a.generation === b.generation;
 
 /** What a click hits: the host's hits (colliders) first, then the renderer's (sprites and tilemaps) not among them. */
 export const mergeHits = (host: readonly Entity[], drawn: readonly Entity[]): Entity[] => [...host, ...drawn.filter((entity) => !host.some((hit) => same(hit, entity)))];

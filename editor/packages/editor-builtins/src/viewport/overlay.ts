@@ -1,6 +1,6 @@
 import type { Color, DebugDrawFrame, Entity, Primitive, Vec2 } from "@ludenea/control-client";
 import type { ViewportOverlay } from "@ludenea/editor-shell";
-import { worldToScreen, type Camera, type Size } from "./camera";
+import { same, worldToScreen, type Camera, type Size } from "./camera";
 
 /** The color the renderer highlights selected entities with. */
 const HIGHLIGHT = "#ffd400";
@@ -18,7 +18,6 @@ export type OverlayScene = {
 };
 
 export const css = (color: Color) => `rgba(${color >>> 24}, ${(color >>> 16) & 255}, ${(color >>> 8) & 255}, ${(color & 255) / 255})`;
-const same = (a: Entity | null, b: Entity) => a !== null && a.index === b.index && a.generation === b.generation;
 
 /** Draws what the GPU renderer does not: labels, the drag outline, and plugin overlays; `failed` hears each overlay that throws. */
 export function drawOverlay(context: CanvasRenderingContext2D, scene: OverlayScene, pixelRatio: number, failed: (overlay: ViewportOverlay, error: unknown) => void): void {
@@ -42,7 +41,7 @@ export function drawOverlay(context: CanvasRenderingContext2D, scene: OverlaySce
     context.lineWidth = 1.5;
     context.setLineDash([4, 3]);
     for (const { entity, primitive } of items) {
-      if (!drag.entities.some((dragged) => same(entity, dragged))) continue;
+      if (entity === null || !drag.entities.some((dragged) => same(entity, dragged))) continue;
       context.beginPath();
       outline(context, primitive, moved, camera.pixelsPerMeter);
       context.stroke();

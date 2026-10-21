@@ -54,6 +54,8 @@ export class WebRenderer implements Shape {
   hits: Entity[] = [];
   /** What `bounds` answers for any entities: the box of the sprites and tilemaps drawn. */
   box: { min: Vec2; max: Vec2 } | undefined = undefined;
+  /** What `pick` throws instead of answering, while set. */
+  pickError: Error | null = null;
   private css = { width: 1, height: 1 };
 
   static async create(canvas: HTMLCanvasElement): Promise<WebRenderer> {
@@ -90,6 +92,7 @@ export class WebRenderer implements Shape {
 
   pick(x: number, y: number, camera?: string | null): string {
     this.calls.push({ method: "pick", args: [x, y, camera ?? null] });
+    if (this.pickError) throw this.pickError;
     return JSON.stringify(this.hits);
   }
 
