@@ -226,7 +226,8 @@ impl WebRenderer {
 
     /// Draws the frames set last into the canvas, `alpha` of the way from the previous tick
     /// to the current one, through `camera_json` (a `CameraView`, `{ center, view }`, the
-    /// editor's free camera) when it is given. An error is the renderer's message.
+    /// editor's free camera) when it is given. An error is the renderer's message, and an
+    /// error the GPU raised since the last call is returned by this one.
     pub fn draw(&mut self, alpha: f32, camera_json: Option<String>) -> Result<(), JsValue> {
         let camera: Option<CameraView> = camera_json
             .map(|json| serde_json::from_str(&json))
