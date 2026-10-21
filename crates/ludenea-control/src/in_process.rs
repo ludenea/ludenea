@@ -109,6 +109,8 @@ pub(crate) mod text {
     use crate::protocol::{
         ClientMessage, ErrorCode, PROTOCOL_VERSION, ProtocolError, ServerMessage, unreadable_hello,
     };
+    #[cfg(any(test, all(target_arch = "wasm32", target_os = "unknown")))]
+    use crate::protocol::{Command, Reply};
 
     /// Answers one protocol line of a text transport: the handshake until `connected`, then
     /// requests. A line that is not a message gets a `Refused` or an error response. The
@@ -132,6 +134,79 @@ pub(crate) mod text {
                 vec![reply]
             }
             Err(error) => vec![malformed(*connected, line, &error)],
+        }
+    }
+
+    /// A host behind a text transport that also hands out the raw frame text: the messages
+    /// `answer` gives, plus `render_frame_json`, the encoding of `get_render_frame` reduced to
+    /// its frame. The events that call causes wait in `pending` and come first in the next
+    /// `handle` or `advance`, so none is lost and their order is kept. The Web Worker's
+    /// transport; the standard streams answer with `answer` alone.
+    #[cfg(any(test, all(target_arch = "wasm32", target_os = "unknown")))]
+    pub(crate) struct TextHost {
+        pub(crate) host: Host,
+        connected: bool,
+        pending: Vec<ServerMessage>,
+    }
+
+    #[cfg(any(test, all(target_arch = "wasm32", target_os = "unknown")))]
+    impl TextHost {
+        pub(crate) fn new(host: Host) -> TextHost {
+            TextHost {
+                host,
+                connected: false,
+                pending: Vec::new(),
+            }
+        }
+
+        /// The messages `answer` gives for `line`, after the events still pending.
+        pub(crate) fn handle(&mut self, line: &str) -> Vec<ServerMessage> {
+            let mut messages = std::mem::take(&mut self.pending);
+            if !line.trim().is_empty() {
+                messages.extend(answer(&mut self.host, &mut self.connected, line));
+            }
+            messages
+        }
+
+        /// The events of `elapsed_seconds` of play and resimulation, after the events still
+        /// pending.
+        pub(crate) fn advance(&mut self, elapsed_seconds: f64) -> Vec<ServerMessage> {
+            let mut messages = std::mem::take(&mut self.pending);
+            messages.extend(
+                self.host
+                    .advance(elapsed_seconds)
+                    .into_iter()
+                    .map(|event| ServerMessage::Event { event }),
+            );
+            messages
+        }
+
+        /// Runs `get_render_frame` as a request would, refused before the hello as `answer`
+        /// refuses a request (`NotConnected`), and returns the frame as JSON; the events it
+        /// causes become pending.
+        pub(crate) fn render_frame_json(
+            &mut self,
+            debug_layers: Vec<String>,
+        ) -> Result<String, ProtocolError> {
+            if !self.connected {
+                return Err(ProtocolError::new(
+                    ErrorCode::NotConnected,
+                    "send Hello before any request",
+                ));
+            }
+            let result = self.host.handle(Command::GetRenderFrame { debug_layers });
+            self.pending.extend(
+                self.host
+                    .drain_events()
+                    .into_iter()
+                    .map(|event| ServerMessage::Event { event }),
+            );
+            match result? {
+                Reply::RenderFrame { frame } => {
+                    Ok(serde_json::to_string(&frame).expect("a render frame serializes"))
+                }
+                other => unreachable!("GetRenderFrame answers RenderFrame, not {other:?}"),
+            }
         }
     }
 
@@ -181,7 +256,7 @@ impl Transport for InProcess {
 
 #[cfg(test)]
 mod tests {
-    use super::text::answer;
+    use super::text::{TextHost, answer};
     use crate::host::Host;
     use crate::protocol::{
         ClientMessage, Command, Event, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION, Reply, ServerMessage,
@@ -312,5 +387,63 @@ mod tests {
             .map(|event| ServerMessage::Event { event })
             .collect();
         assert_eq!(heads(&later), heads(&stepped));
+    }
+
+    fn hello() -> String {
+        serde_json::json!(ClientMessage::Hello {
+            protocol_version: PROTOCOL_VERSION,
+            protocol_fingerprint: PROTOCOL_FINGERPRINT,
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn the_raw_frame_is_refused_before_the_hello_as_a_request_is() {
+        let mut text = TextHost::new(Host::new(boxes::app).unwrap());
+        let refused = text.render_frame_json(Vec::new()).unwrap_err();
+        let request = serde_json::json!({
+            "type": "request",
+            "id": 1,
+            "command": Command::GetRenderFrame { debug_layers: Vec::new() },
+        });
+        let ServerMessage::Refused { error } = &text.handle(&request.to_string())[0] else {
+            panic!("a request before the hello is refused");
+        };
+        assert_eq!(&refused, error);
+        assert!(matches!(
+            &text.handle(&hello())[..],
+            [ServerMessage::Welcome { .. }]
+        ));
+        let frame: serde_json::Value =
+            serde_json::from_str(&text.render_frame_json(Vec::new()).unwrap()).unwrap();
+        assert_eq!(frame["tick"], 0);
+    }
+
+    #[test]
+    fn events_around_the_raw_frame_come_with_the_next_call_in_order() {
+        let mut text = TextHost::new(Host::new(boxes::app).unwrap());
+        text.handle(&hello());
+        // A command run on the host directly leaves its events queued, as a command the raw
+        // frame runs would.
+        text.host
+            .handle(Command::LoadScene {
+                scene: boxes::generate_scene(5, 7),
+                assets: Vec::new(),
+                document: Document::Scene,
+            })
+            .unwrap();
+        text.render_frame_json(Vec::new()).unwrap();
+        let next = text.advance(0.0);
+        assert!(
+            next.iter().any(|message| matches!(
+                message,
+                ServerMessage::Event {
+                    event: Event::Ticked { tick: 0, .. }
+                }
+            )),
+            "{next:?}"
+        );
+        // Delivered once.
+        assert!(text.advance(0.0).is_empty());
     }
 }

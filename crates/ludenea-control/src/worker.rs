@@ -16,8 +16,8 @@ use ludenea_app::App;
 use wasm_bindgen::prelude::*;
 
 use crate::host::Host;
-use crate::in_process::text::answer;
-use crate::protocol::{Command, Reply, ServerMessage};
+use crate::in_process::text::TextHost;
+use crate::protocol::ServerMessage;
 
 /// The tick the host was at when the current call began, for the panic hook.
 // ponytail: a panic in the middle of a multi-tick call reports the tick the call started
@@ -35,8 +35,7 @@ extern "C" {
 
 #[wasm_bindgen]
 pub struct WorkerHost {
-    host: Host,
-    connected: bool,
+    text: TextHost,
 }
 
 impl WorkerHost {
@@ -57,63 +56,53 @@ impl WorkerHost {
         }));
         let host = Host::new(app).unwrap_or_else(|error| panic!("cannot build the game: {error}"));
         WorkerHost {
-            host,
-            connected: false,
+            text: TextHost::new(host),
         }
     }
 
     fn record_tick(&self) {
-        TICK.store(self.host.tick(), Ordering::Relaxed);
+        TICK.store(self.text.host.tick(), Ordering::Relaxed);
     }
 }
 
 #[wasm_bindgen]
 impl WorkerHost {
-    /// Answers one protocol message; returns a JSON array of `ServerMessage`.
+    /// Answers one protocol message; returns a JSON array of `ServerMessage`, after the
+    /// events a `renderFrameJson` caused since the last call.
     pub fn handle(&mut self, message: &str) -> String {
         self.record_tick();
-        let replies: Vec<ServerMessage> = if message.trim().is_empty() {
-            Vec::new()
-        } else {
-            answer(&mut self.host, &mut self.connected, message)
-        };
-        to_json(&replies)
+        to_json(&self.text.handle(message))
     }
 
     /// Lets `elapsed_ms` milliseconds of play and resimulation pass; returns a JSON array of
-    /// `Event` messages.
+    /// `Event` messages, after the events a `renderFrameJson` caused since the last call.
     pub fn advance(&mut self, elapsed_ms: f64) -> String {
         self.record_tick();
-        let events: Vec<ServerMessage> = self
-            .host
-            .advance(elapsed_ms / 1000.0)
-            .into_iter()
-            .map(|event| ServerMessage::Event { event })
-            .collect();
-        to_json(&events)
+        to_json(&self.text.advance(elapsed_ms / 1000.0))
     }
 
-    /// The `RenderFrame` of the current tick as JSON, with the debug drawing of
-    /// `debug_layers`: what `get_render_frame` replies, without the response around it, so a
-    /// page forwards the frame text to its renderer as is. Events the command causes come with
-    /// the next `advance` or `handle`; an error is the refusal's message.
+    /// The transport's raw encoding of `get_render_frame`: the same command, refused before
+    /// the hello as `handle` refuses a request, whose reply is reduced to the `RenderFrame` as
+    /// JSON, so a page forwards the frame text to its renderer as is. The events it causes
+    /// come first in the next `handle` or `advance`. An error is `<code>: <message>`.
     #[wasm_bindgen(js_name = renderFrameJson)]
     pub fn render_frame_json(&mut self, debug_layers: Vec<String>) -> Result<String, JsValue> {
         self.record_tick();
-        match self.host.handle(Command::GetRenderFrame { debug_layers }) {
-            Ok(Reply::RenderFrame { frame }) => {
-                Ok(serde_json::to_string(&frame).expect("a render frame serializes"))
-            }
-            Ok(other) => unreachable!("GetRenderFrame answers RenderFrame, not {other:?}"),
-            Err(error) => Err(JsValue::from_str(&error.message)),
-        }
+        self.text.render_frame_json(debug_layers).map_err(|error| {
+            let code = serde_json::to_value(error.code).expect("an error code serializes");
+            JsValue::from_str(&format!(
+                "{}: {}",
+                code.as_str().unwrap_or("error"),
+                error.message
+            ))
+        })
     }
 
     /// The fraction of the next tick that play owes, from 0 to below 1: what the page
     /// interpolates the last two ticks with.
     #[wasm_bindgen(js_name = tickProgress)]
     pub fn tick_progress(&self) -> f64 {
-        self.host.tick_progress()
+        self.text.host.tick_progress()
     }
 }
 
