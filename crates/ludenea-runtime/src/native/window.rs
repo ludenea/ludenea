@@ -130,6 +130,9 @@ struct Session<'out> {
     slots: gamepads::Slots,
     /// The `KeyboardEvent.code` names of the keys held down.
     keys: BTreeSet<String>,
+    /// The keys held when the match started, such as the Enter that started it: they reach
+    /// the game only once pressed again, not through the keyboard's repeats.
+    held_at_start: BTreeSet<String>,
     overlay: Overlay,
     lobby_overlay: Overlay,
     /// The display holds no frame of the match yet.
@@ -177,6 +180,7 @@ impl<'out> Session<'out> {
             gilrs,
             slots,
             keys: BTreeSet::new(),
+            held_at_start: BTreeSet::new(),
             overlay,
             lobby_overlay,
             fresh: true,
@@ -293,6 +297,7 @@ impl<'out> Session<'out> {
         self.print_messages();
         started?;
         self.started = true;
+        self.held_at_start = std::mem::take(&mut self.keys);
         self.fresh = true;
         self.last = None;
         if let Some(window) = &self.window {
@@ -444,12 +449,17 @@ impl<'out> Session<'out> {
         };
         match state {
             ElementState::Pressed => {
+                if repeat && self.held_at_start.contains(name) {
+                    return Ok(());
+                }
+                self.held_at_start.remove(name);
                 self.keys.insert(name.to_string());
                 if !repeat && !self.started {
                     self.press(LobbyPress::Key(name))?;
                 }
             }
             ElementState::Released => {
+                self.held_at_start.remove(name);
                 self.keys.remove(name);
             }
         }
@@ -609,6 +619,47 @@ mod tests {
         assert_eq!(session.finish(Ok(())), Err(failure));
         let replay = Replay::decode(&std::fs::read(&record).unwrap()).unwrap();
         assert_eq!(replay.hashes.len(), 6, "ticks 0 to 5");
+    }
+
+    #[test]
+    fn the_keys_that_start_the_match_reach_the_game_only_once_pressed_again() {
+        let options = PlayOptions {
+            files: GameFiles {
+                scene: "Scene(version: 2, next_id: 0, resources: {}, entities: [])".to_string(),
+                assets: Vec::new(),
+                edits: None,
+            },
+            textures: Vec::new(),
+            players: None,
+            ticks: None,
+            record: None,
+            fullscreen: false,
+            vsync: true,
+            stats: false,
+            threads: None,
+            debug_layers: Vec::new(),
+            size: (64, 64),
+            title: "test".to_string(),
+        };
+        let runner = Runner::load(swarm::app, &options.files, None, Vec::new()).unwrap();
+        let mut out = Vec::new();
+        let mut session = Session::new(runner, options, &mut out);
+        let (pressed, released) = (ElementState::Pressed, ElementState::Released);
+        // A claims the left half, Enter starts the match: both are still held.
+        session.key(KeyCode::KeyA, pressed, false).unwrap();
+        session.key(KeyCode::Enter, pressed, false).unwrap();
+        assert!(session.started);
+        assert!(session.keys.is_empty(), "{:?}", session.keys);
+        // The keyboard repeats them while they stay down: they stay out of the game.
+        session.key(KeyCode::KeyA, pressed, true).unwrap();
+        session.key(KeyCode::Enter, pressed, true).unwrap();
+        assert!(session.keys.is_empty(), "{:?}", session.keys);
+        // Released and pressed again, a key reaches the game.
+        session.key(KeyCode::Enter, released, false).unwrap();
+        session.key(KeyCode::Enter, pressed, false).unwrap();
+        session.key(KeyCode::KeyD, pressed, false).unwrap();
+        let held: Vec<&str> = session.keys.iter().map(String::as_str).collect();
+        assert_eq!(held, ["Enter", "KeyD"]);
     }
 
     #[test]
