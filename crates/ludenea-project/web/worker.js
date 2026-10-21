@@ -7,6 +7,7 @@
 //   { type: "start", claims }          one claim per player
 //   { type: "devices", devices }       what is held, as `set_live_input` takes it
 //   { type: "export_replay" }
+//   { type: "stop" }                   the page failed: stop playing for good
 // and receives `loaded`, `frame`, `replay`, `replay_failed`, `console`, `failed`, and the panic
 // hook's `crashed`. After `failed` the game no longer plays, but its replay can still be saved.
 
@@ -130,11 +131,20 @@ self.addEventListener("message", ({ data }) => {
       if (data.type === "init") await load(data.ticks);
       else if (data.type === "start") start(data.claims);
       else if (data.type === "devices") request({ type: "set_live_input", devices: data.devices });
+      else if (data.type === "stop") stop();
     } catch (error) {
       fail(error instanceof Error ? error.message : String(error));
     }
   });
 });
+
+/** Stops play for good, the page having failed: no tick runs after it, so the replay ends
+ * where the page stopped. Only `export_replay` is answered afterwards. */
+function stop() {
+  clearInterval(timer);
+  failed = true;
+  request({ type: "pause" });
+}
 
 /** Posts the replay of the match, after a failure of the game too: it holds the ticks that
  * ran, as the native window's `--record` does. A replay that cannot be made is reported on its

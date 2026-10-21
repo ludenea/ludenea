@@ -15,8 +15,10 @@ const save = document.getElementById("save");
 /** Function keys reload, toggle fullscreen and open the developer tools: the browser keeps
  * them (they still count as held for the game). */
 const FUNCTION_KEY = /^F\d+$/;
-/** The modifiers themselves, which a game may map like any other key. */
-const MODIFIERS = new Set(["ControlLeft", "ControlRight", "MetaLeft", "MetaRight"]);
+/** With Control or Meta, the shortcuts a player must keep: reload (R), close the tab or the
+ * window (W), the address bar (L), a new tab (T), and quit (Q). Every other combination, such
+ * as Control with WASD, reaches the game. */
+const SHORTCUTS = new Set(["KeyR", "KeyW", "KeyL", "KeyT", "KeyQ"]);
 /** The renderer's message for a canvas without a texture this frame, which passes. */
 const TRANSIENT_DRAW = "draw again on the next frame";
 /** Consecutive transient draw failures, about two seconds of frames, after which the page
@@ -62,6 +64,10 @@ function fail(message, { keepWorker = false } = {}) {
   if (!keepWorker) {
     worker?.terminate();
     save.disabled = true;
+  } else if (worker !== undefined) {
+    // The game keeps nothing held and stops playing: its replay ends here, as it was.
+    worker.postMessage({ type: "devices", devices: { keys: [], gamepads: [] } });
+    worker.postMessage({ type: "stop" });
   }
 }
 
@@ -113,11 +119,12 @@ function pollLobbyButtons(pads) {
   lobbyButtons = pads.map((pad) => pad?.buttons ?? []);
 }
 
-/** Releases every key (the page lost the keyboard) and tells the game at once: on a hidden
- * tab no animation frame runs, but the worker keeps playing. */
-function releaseKeys() {
+/** Releases every key (the page lost the keyboard), and the gamepads too when the tab is
+ * hidden (the page cannot read them then), and tells the game at once: on a hidden tab no
+ * animation frame runs, but the worker keeps playing. The next frame shown sends them again. */
+function releaseDevices({ gamepadsToo }) {
   held.clear();
-  if (playing) sendDevices(gamepads());
+  if (playing) sendDevices(gamepadsToo ? [] : gamepads());
 }
 
 function sendDevices(pads) {
@@ -243,18 +250,17 @@ async function loadAtlas() {
 
 function captureKeys() {
   addEventListener("keydown", (event) => {
-    // A shortcut with Control or Meta (reload, close, address bar) stays the browser's; the
-    // modifier itself, and every key, still count as held.
-    const shortcut = FUNCTION_KEY.test(event.code) || ((event.ctrlKey || event.metaKey) && !MODIFIERS.has(event.code));
+    // The browser keeps its shortcuts; every key, those included, counts as held.
+    const shortcut = FUNCTION_KEY.test(event.code) || ((event.ctrlKey || event.metaKey) && SHORTCUTS.has(event.code));
     if (!shortcut) event.preventDefault();
     held.add(event.code);
     if (lobby && !lobby.started && !event.repeat) lobbyPress(lobby.pressKey(event.code));
   });
   addEventListener("keyup", (event) => held.delete(event.code));
   // Keys released while the page had no focus never report it.
-  addEventListener("blur", releaseKeys);
+  addEventListener("blur", () => releaseDevices({ gamepadsToo: false }));
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) releaseKeys();
+    if (document.hidden) releaseDevices({ gamepadsToo: true });
   });
 }
 

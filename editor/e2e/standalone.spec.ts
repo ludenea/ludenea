@@ -136,8 +136,14 @@ test("players_out_of_range_is_refused_naming_the_range", async ({ page }) => {
   await expect(page.locator("body")).toHaveAttribute("data-failed", "true");
 });
 
-test("losing_focus_releases_the_held_keys_at_once", async ({ page }) => {
-  // Every message the page posts to the worker, in order.
+/** A message the page posted to the worker. */
+interface Posted {
+  type: string;
+  devices?: { keys: string[]; gamepads: unknown[] };
+}
+
+/** Records every message the page posts to the worker, from the next navigation on. */
+async function recordPosts(page: Page): Promise<void> {
   await page.addInitScript(() => {
     const posted: unknown[] = [];
     (window as unknown as { posted: unknown[] }).posted = posted;
@@ -147,40 +153,59 @@ test("losing_focus_releases_the_held_keys_at_once", async ({ page }) => {
       return post.call(this, message, ...rest);
     };
   });
+}
+
+/** The keys of the last devices the page sent. */
+function lastKeys(page: Page): Promise<string[] | undefined> {
+  return page.evaluate(() => (window as unknown as { posted: Posted[] }).posted.filter((message) => message.type === "devices").at(-1)?.devices?.keys);
+}
+
+const RELEASED = { type: "devices", devices: { keys: [], gamepads: [] } };
+
+test("losing_focus_releases_the_held_keys_at_once", async ({ page }) => {
+  await recordPosts(page);
   const errors = await open(page, "?players=1");
   await reach(page, 1);
-  const lastKeys = () =>
-    page.evaluate(() => {
-      const posted = (window as unknown as { posted: { type: string; devices?: { keys: string[] } }[] }).posted;
-      return posted.filter((message) => message.type === "devices").at(-1)?.devices?.keys;
-    });
   await page.keyboard.down("KeyD");
-  await expect.poll(lastKeys).toEqual(["KeyD"]);
+  await expect.poll(() => lastKeys(page)).toEqual(["KeyD"]);
   // Sent in the blur itself, not on a later animation frame, which a hidden tab never runs.
   const afterBlur = await page.evaluate(() => {
     dispatchEvent(new Event("blur"));
-    const posted = (window as unknown as { posted: { type: string; devices?: { keys: string[] } }[] }).posted;
-    return posted.at(-1);
+    return (window as unknown as { posted: Posted[] }).posted.at(-1);
   });
-  expect(afterBlur).toEqual({ type: "devices", devices: { keys: [], gamepads: [] } });
-  // The same when the tab is hidden.
+  expect(afterBlur).toEqual(RELEASED);
+  // The same when the tab is hidden, gamepads released too.
   await page.keyboard.up("KeyD");
   await page.keyboard.down("KeyA");
-  await expect.poll(lastKeys).toEqual(["KeyA"]);
+  await expect.poll(() => lastKeys(page)).toEqual(["KeyA"]);
   const afterHiding = await page.evaluate(() => {
     Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
     document.dispatchEvent(new Event("visibilitychange"));
-    const posted = (window as unknown as { posted: { type: string; devices?: { keys: string[] } }[] }).posted;
-    return posted.at(-1);
+    return (window as unknown as { posted: Posted[] }).posted.at(-1);
   });
-  expect(afterHiding).toEqual({ type: "devices", devices: { keys: [], gamepads: [] } });
+  expect(afterHiding).toEqual(RELEASED);
   await page.keyboard.up("KeyA");
   expect(errors).toEqual([]);
 });
 
-test("a_draw_that_cannot_happen_stops_the_page_with_its_cause", async ({ page }) => {
+test("control_with_a_game_key_reaches_the_game", async ({ page }) => {
+  await recordPosts(page);
+  const errors = await open(page, "?players=1");
+  await reach(page, 1);
+  await page.keyboard.down("ControlLeft");
+  await page.keyboard.down("KeyD");
+  await expect.poll(() => lastKeys(page)).toEqual(["ControlLeft", "KeyD"]);
+  await page.keyboard.up("KeyD");
+  await page.keyboard.up("ControlLeft");
+  expect(errors).toEqual([]);
+});
+
+test("a_draw_that_cannot_happen_stops_the_page_and_the_match", async ({ page }) => {
+  await recordPosts(page);
   await open(page, "?players=1");
   await reach(page, 1);
+  await page.keyboard.down("KeyD");
+  await expect.poll(() => lastKeys(page)).toEqual(["KeyD"]);
   // A canvas past every device's texture limit: each draw fails with the limit error.
   await page.evaluate(() => {
     document.getElementById("game")!.style.width = "100000px";
@@ -189,6 +214,18 @@ test("a_draw_that_cannot_happen_stops_the_page_with_its_cause", async ({ page })
   await expect(page.locator("#status")).toContainText("the game cannot be drawn");
   await expect(page.locator("#status")).toContainText("max_texture_dimension_2d");
   await expect(page.locator("body")).toHaveAttribute("data-failed", "true");
-  // The game did not fail: its replay can still be saved.
-  await expect(page.getByRole("button", { name: "Save replay" })).toBeEnabled();
+  // The held key is released, then play stops: no tick runs after it.
+  const last = await page.evaluate(() => (window as unknown as { posted: Posted[] }).posted.slice(-2));
+  expect(last).toEqual([RELEASED, { type: "stop" }]);
+  await page.waitForTimeout(500);
+  const stoppedAt = await page.locator("body").getAttribute("data-tick");
+  await page.waitForTimeout(1000);
+  await expect(page.locator("body")).toHaveAttribute("data-tick", stoppedAt!);
+  await page.keyboard.up("KeyD");
+  // The game did not fail: its replay is saved and verifies.
+  const downloaded = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Save replay" }).click();
+  const file = join(mkdtempSync(join(tmpdir(), "ludenea-standalone-")), "swarm.replay");
+  await (await downloaded).saveAs(file);
+  expect(swarm(["verify", file])).toContain(`${Number(stoppedAt) + 1} hashes match`);
 });
