@@ -13,8 +13,8 @@ export interface WorkerGame {
 }
 
 /** Starts a game's WebAssembly build in `host-worker.ts`. Protocol text travels as strings,
- * pushed render frames as transferred buffers; a crash (posted as an object, or an uncaught worker error) is reported once and closes
- * the transport. Recovering is up to the caller. */
+ * pushed render frames as transferred buffers; a crash (posted as an object, or an uncaught
+ * worker error) is reported once and closes the transport. Recovering is up to the caller. */
 export function startWorkerGame(options: { workerUrl: URL; glueUrl: string }): WorkerGame {
   const worker = new Worker(options.workerUrl, { type: "module" });
   const messages = new Listeners<string>();

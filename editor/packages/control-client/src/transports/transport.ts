@@ -1,4 +1,5 @@
-/** The render frames a worker posts as bytes: each a postcard-encoded `RenderFrame` in a buffer of its own. */
+/** The render frames a worker posts as bytes: each a postcard-encoded `RenderFrame` in a
+ * buffer of its own. */
 export interface PushedFrames {
   type: "render_frames";
   progress: number;
@@ -15,7 +16,8 @@ export function isPushedFrames(data: unknown): data is PushedFrames {
 export interface MessageTransport {
   send(message: string): void;
   onMessage(listener: (message: string) => void): () => void;
-  /** The frames posted as bytes, in order with the text messages; only the transports that carry bytes have it. */
+  /** The frames posted as bytes, in order with the text messages; only the transports that
+   * carry bytes have it. */
   onFrames?(listener: (frames: PushedFrames) => void): () => void;
   onClose(listener: (reason: string) => void): () => void;
   close(): void;

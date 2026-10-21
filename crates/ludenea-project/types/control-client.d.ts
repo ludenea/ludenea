@@ -1585,7 +1585,8 @@ type ProjectReplyTypes = {
     write_text: "done";
 };
 
-/** The render frames a worker posts as bytes: each a postcard-encoded `RenderFrame` in a buffer of its own. */
+/** The render frames a worker posts as bytes: each a postcard-encoded `RenderFrame` in a
+ * buffer of its own. */
 interface PushedFrames {
     type: "render_frames";
     progress: number;
@@ -1595,7 +1596,8 @@ interface PushedFrames {
 interface MessageTransport {
     send(message: string): void;
     onMessage(listener: (message: string) => void): () => void;
-    /** The frames posted as bytes, in order with the text messages; only the transports that carry bytes have it. */
+    /** The frames posted as bytes, in order with the text messages; only the transports that
+     * carry bytes have it. */
     onFrames?(listener: (frames: PushedFrames) => void): () => void;
     onClose(listener: (reason: string) => void): () => void;
     close(): void;
@@ -1656,7 +1658,8 @@ function handshake<M extends {
 }, speaker: ProtocolPeer, accept: (welcome: Extract<M, {
     type: "welcome";
 }>) => T): Promise<T>;
-/** Render frames pushed during play: postcard bytes over a worker, JSON frames over the other transports. */
+/** Render frames pushed during play: postcard bytes over a worker, JSON frames over the
+ * other transports. */
 type RenderFramesEvent = {
     type: "render_frames";
     progress: number;
@@ -1664,7 +1667,8 @@ type RenderFramesEvent = {
 } | Extract<Event, {
     type: "render_frames";
 }>;
-/** What `ControlClient.on` delivers: the protocol's events, with the frames as their transport carries them. */
+/** What `ControlClient.on` delivers: the protocol's events, with the frames as their
+ * transport carries them. */
 type ClientEvent = Exclude<Event, {
     type: "render_frames";
 }> | RenderFramesEvent;
@@ -1749,8 +1753,8 @@ interface WorkerGame {
     terminate(): void;
 }
 /** Starts a game's WebAssembly build in `host-worker.ts`. Protocol text travels as strings,
- * pushed render frames as transferred buffers; a crash (posted as an object, or an uncaught worker error) is reported once and closes
- * the transport. Recovering is up to the caller. */
+ * pushed render frames as transferred buffers; a crash (posted as an object, or an uncaught
+ * worker error) is reported once and closes the transport. Recovering is up to the caller. */
 function startWorkerGame(options: {
     workerUrl: URL;
     glueUrl: string;

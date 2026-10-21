@@ -154,10 +154,12 @@ export function handshake<M extends { type: string }, T>(
   });
 }
 
-/** Render frames pushed during play: postcard bytes over a worker, JSON frames over the other transports. */
+/** Render frames pushed during play: postcard bytes over a worker, JSON frames over the
+ * other transports. */
 export type RenderFramesEvent = { type: "render_frames"; progress: number; frames: Uint8Array[] } | Extract<Event, { type: "render_frames" }>;
 
-/** What `ControlClient.on` delivers: the protocol's events, with the frames as their transport carries them. */
+/** What `ControlClient.on` delivers: the protocol's events, with the frames as their
+ * transport carries them. */
 export type ClientEvent = Exclude<Event, { type: "render_frames" }> | RenderFramesEvent;
 
 type Listener = (event: never) => void;
