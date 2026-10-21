@@ -391,6 +391,23 @@ describe("viewport", () => {
     await waitFor(() => expect(camera()).toEqual([0, -1, 50]));
   });
 
+  it("a_press_on_the_resimulating_notice_still_selects_and_pans", async () => {
+    const { host, game } = await viewport((command) => (command.type === "pick" ? { type: "picked", entities: [entity(1)] } : undefined));
+    const timeline = { head: 9, simulated: 3, current: 3, checkpoints: [], edit_ticks: [], can_undo: false, can_redo: false, undo_label: null, redo_label: null, resimulating: true, branch: 0, branches: [], compare: null, scene_dirty: false, unsaved_assets: [] };
+    act(() => host.editor.timeline.setState({ timeline }));
+    // Text over the viewport is part of its surface, unlike its controls.
+    const notice = screen.getByRole("status");
+    fireEvent.pointerDown(notice, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    fireEvent.pointerUp(notice, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    await settle();
+    expect(sentOf(game.sent, "pick")).toEqual([{ type: "pick", point: { x: 1, y: 1 } }]);
+    expect(host.editor.selection.getState().entities).toEqual([entity(1)]);
+    fireEvent.pointerDown(notice, { button: 1, clientX: 200, clientY: 150, pointerId: 1 });
+    fireEvent.pointerMove(notice, { clientX: 150, clientY: 150, pointerId: 1 });
+    fireEvent.pointerUp(notice, { button: 1, clientX: 150, clientY: 150, pointerId: 1 });
+    await waitFor(() => expect(camera()).toEqual([1, 0, 50]));
+  });
+
   it("wheel_zooms_at_the_cursor", async () => {
     const { view } = await viewport();
     fireEvent.wheel(view, { deltaY: -200, clientX: 200, clientY: 150 });

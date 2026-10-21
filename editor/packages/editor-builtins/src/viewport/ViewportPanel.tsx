@@ -313,9 +313,12 @@ export function ViewportPanel({
       }
     };
 
+    // Presses and keys on the viewport's controls (the alert and its Retry) are theirs: capturing
+    // the pointer would take their click. Text over the viewport is part of its surface.
+    const onControl = (event: Event) => event.target instanceof Element && event.target.closest("button, [role=alert]") !== null;
+
     const onPointerDown = (event: PointerEvent) => {
-      // A press on the viewport's controls (the alert's Retry) is theirs: capturing the pointer would take their click.
-      if (event.target !== element && event.target !== gpu) return;
+      if (onControl(event)) return;
       element.focus();
       const at = local(event);
       const control = editor.control;
@@ -392,8 +395,7 @@ export function ViewportPanel({
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
-      // Keys typed on the viewport's controls are theirs.
-      if (event.target !== element) return;
+      if (onControl(event)) return;
       if (event.key === " ") {
         space = true;
         event.preventDefault();
