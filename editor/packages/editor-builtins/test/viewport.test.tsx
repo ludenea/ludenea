@@ -1210,6 +1210,27 @@ describe("viewport frames", () => {
       expect(host.editor.console.list().map(({ text }) => text)).toEqual(["assets/bug.png: the image is not a PNG", "assets/bug.png: the image is not a PNG"]);
     });
 
+    it("a_created_png_with_an_unreadable_meta_is_left_to_the_projects_own_warning", async () => {
+      const project = mutable([bug]);
+      const host = await testEditor([viewportPlugin, consolePlugin], project.answer);
+      const game = await testGame((command) => (command.type === "get_render_frame" ? renderFrame(7) : { type: "done" }));
+      act(() => host.setControl(game.client));
+      renderPanel(host, "ludenea.viewport");
+      renderPanel(host, "ludenea.console");
+      await settle();
+      const renderer = renderers.at(-1)!;
+      await uploaded(renderer, 1);
+      project.entries = [bug, { path: "assets/new.png", id: UNREADABLE }];
+      pushed(host, { type: "warning", message: "assets/new.png.meta cannot be read: expected `Meta`" });
+      pushed(host, { type: "files_changed", changes: [{ Created: { path: "assets/new.png", kind: "Other" } }] });
+      await settle();
+      await settle();
+      expect(uploads(renderer)).toHaveLength(1);
+      // Exactly the project's own warning is on the console, none of the viewport's.
+      expect(screen.getAllByText(/new\.png/)).toHaveLength(1);
+      expect(screen.getByText(/new\.png\.meta cannot be read/)).toBeTruthy();
+    });
+
     it("a_texture_changed_before_a_lost_device_is_uploaded_to_the_new_renderer", async () => {
       const project = mutable([bug]);
       const { host } = await viewport(undefined, {}, project.answer);
