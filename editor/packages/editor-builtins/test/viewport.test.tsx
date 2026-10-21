@@ -10,7 +10,7 @@ import { shared } from "../src/shared";
 import { tickOf } from "../src/viewport/frames";
 import { mergeHits } from "../src/viewport/state";
 import { bounds, fromCameraItem, screenToWorld, toCameraView, worldToScreen, zoomAt } from "../src/viewport/camera";
-import { renderers, script, type WebRenderer } from "./fake-render-wasm";
+import { named, panic, renderers, script, type WebRenderer } from "./fake-render-wasm";
 import { renderFrame, renderPanel, settle, testEditor, testGame } from "./support";
 
 const entity = (index: number): Entity => ({ index, generation: 0 });
@@ -69,6 +69,10 @@ const circleAt = (index: number, x: number, y: number): DebugDrawFrame => ({
   layers: { colliders: [{ entity: { index, generation: 0 }, primitive: { type: "circle", center: { x, y }, radius: 0.5, color: 0xffffffff, fill: false } }] },
 });
 const ticked = (tick: number, rate: number) => ({ type: "ticked", tick, hash: `000000000000${String(tick).padStart(4, "0")}`, pending: false, playing: true, effective_rate: rate });
+
+type Timeline = { editor: { timeline: { setState(state: object): void } } };
+const play = (host: Timeline) => act(() => host.editor.timeline.setState({ playing: true }));
+const pause = (host: Timeline) => act(() => host.editor.timeline.setState({ playing: false }));
 
 /** Shows tick `current` of `hash` on the timeline, as a refresh after a step, seek, edit, or pause does. */
 function atTick(host: { editor: { timeline: { setState(state: object): void } } }, current: number, hash = `00000000000000${String(current).padStart(2, "0")}`) {
@@ -508,7 +512,7 @@ describe("viewport", () => {
     await waitFor(() => expect(draws()).toBeGreaterThan(0));
     await animationFrames(2);
     const before = draws();
-    renderer.skips = 2;
+    renderer.fail("NoSurfaceTexture", 2);
     // Any change asks for a repaint; the two skipped ones (no surface texture) are retried without another.
     act(() => host.editor.selection.getState().select([entity(9)]));
     await animationFrames(5);
@@ -691,6 +695,189 @@ describe("viewport", () => {
   });
 });
 
+describe("viewport failures", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    drawn = fakeContext();
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => drawn.context as unknown as CanvasRenderingContext2D);
+  });
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    script.refused = [];
+    script.createError = null;
+  });
+  // The renderers of earlier tests are not counted.
+  beforeEach(() => void renderers.splice(0));
+
+  const STOPPED = "The viewport stopped rendering: ";
+  const alert = () => screen.queryByRole("alert");
+  const retry = () => act(async () => fireEvent.click(screen.getByRole("button", { name: "Retry" })));
+  const canvasOf = (renderer: WebRenderer) => renderer.calls.find((call) => call.method === "create")!.args[0] as HTMLCanvasElement;
+  const freed = (renderer: WebRenderer) => renderer.calls.some((call) => call.method === "free");
+  /** A viewport that drew its first frame, and its renderer. */
+  const drawing = async (...args: Parameters<typeof viewport>) => {
+    const opened = await viewport(...args);
+    const renderer = renderers.at(-1)!;
+    await waitFor(() => expect(drawsOf(renderer).length).toBeGreaterThan(0));
+    return { ...opened, renderer };
+  };
+  /** Asks the paused viewport to draw again. */
+  const repaint = (host: { editor: { selection: { getState(): { select(entities: Entity[]): void } } } }) =>
+    act(() => host.editor.selection.getState().select([entity(Math.floor(Math.random() * 1000))]));
+  /** Loses `renderer`'s device and waits for the viewport to replace it or to stop. */
+  const loseTheDevice = async (host: Parameters<typeof repaint>[0], renderer: WebRenderer) => {
+    const count = renderers.length;
+    renderer.fail("DeviceLost");
+    repaint(host);
+    await waitFor(() => expect(renderers.length > count || alert() !== null).toBe(true));
+    await settle();
+  };
+
+  it("a_draw_that_keeps_failing_offers_a_retry", async () => {
+    const { host, renderer } = await drawing();
+    renderer.fail("Gpu");
+    play(host);
+    await waitFor(() => expect(alert()?.textContent).toContain(`${STOPPED}drawing failed on the GPU: out of memory`));
+    // Three failing draws in a row stop the loop: no fourth.
+    const draws = drawsOf(renderer).length;
+    await animationFrames(5);
+    expect(drawsOf(renderer).length).toBe(draws);
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.queryByText(/cannot render/)).toBeNull();
+    expect(freed(renderer)).toBe(true);
+    expect(host.editor.console.list().map(({ text }) => text)).toEqual(["Drawing the viewport failed: drawing failed on the GPU: out of memory"]);
+  });
+
+  it("two_failing_draws_then_one_that_works_keep_drawing", async () => {
+    const { host, renderer } = await drawing();
+    renderer.fail("Gpu", 2);
+    play(host);
+    await animationFrames(5);
+    renderer.fail("Gpu", 2);
+    await animationFrames(5);
+    expect(alert()).toBeNull();
+    expect(freed(renderer)).toBe(false);
+  });
+
+  it("retry_recreates_the_renderer_and_draws_again", async () => {
+    const { host, renderer } = await drawing();
+    renderer.fail("Gpu");
+    play(host);
+    await waitFor(() => expect(alert()).not.toBeNull());
+    pause(host);
+    await retry();
+    await waitFor(() => expect(renderers.length).toBe(2));
+    const recreated = renderers.at(-1)!;
+    await waitFor(() => expect(drawsOf(recreated).length).toBeGreaterThan(0));
+    expect(alert()).toBeNull();
+    expect(ticksPushed(recreated).at(-1)).toBe(7);
+    // On a canvas of its own: the one the failing renderer configured is gone.
+    expect(canvasOf(recreated)).not.toBe(canvasOf(renderer));
+    expect(canvasOf(renderer).isConnected).toBe(false);
+    expect(canvasOf(recreated).isConnected).toBe(true);
+  });
+
+  it("a_lost_device_recreates_the_renderer_once_with_textures_and_frame", async () => {
+    const BUG = "000000000000000000000000000b0601";
+    const { host, renderer } = await drawing(undefined, {}, textures([{ path: "assets/bug.png", id: BUG }]));
+    await waitFor(() => expect(renderer.calls.some((call) => call.method === "set_textures")).toBe(true));
+    await loseTheDevice(host, renderer);
+    expect(renderers).toHaveLength(2);
+    const recreated = renderers.at(-1)!;
+    expect(freed(renderer)).toBe(true);
+    // A lost WebGPU context cannot be configured again: the renderer gets a new canvas.
+    expect(canvasOf(recreated)).not.toBe(canvasOf(renderer));
+    expect(canvasOf(renderer).isConnected).toBe(false);
+    await waitFor(() => expect(recreated.calls.some((call) => call.method === "set_textures")).toBe(true));
+    const [sources] = recreated.calls.find((call) => call.method === "set_textures")!.args as [{ id: string }[]];
+    expect(sources.map(({ id }) => id)).toEqual([BUG]);
+    expect(ticksPushed(recreated).at(-1)).toBe(7);
+    await waitFor(() => expect(drawsOf(recreated).length).toBeGreaterThan(0));
+    expect(recreated.calls.find((call) => call.method === "resize")?.args).toEqual([400, 300, 1]);
+    expect(alert()).toBeNull();
+    expect(host.editor.console.list().map(({ level, text }) => [level, text])).toEqual([
+      ["warning", "The GPU device of the viewport was lost (the GPU device was lost: Destroyed): the viewport created its renderer again"],
+    ]);
+  });
+
+  it("a_second_loss_within_a_minute_shows_the_alert", async () => {
+    const now = vi.spyOn(performance, "now");
+    const { host, renderer } = await drawing();
+    await loseTheDevice(host, renderer);
+    const recreated = renderers.at(-1)!;
+    await waitFor(() => expect(drawsOf(recreated).length).toBeGreaterThan(0));
+    await loseTheDevice(host, recreated);
+    expect(renderers).toHaveLength(2);
+    expect(alert()?.textContent).toContain(`${STOPPED}the GPU device was lost: Destroyed`);
+    expect(freed(recreated)).toBe(true);
+
+    // Retried, the viewport draws again; a loss a minute after the last recreation is recovered from.
+    await retry();
+    await waitFor(() => expect(renderers).toHaveLength(3));
+    const retried = renderers.at(-1)!;
+    await waitFor(() => expect(drawsOf(retried).length).toBeGreaterThan(0));
+    const later = performance.now() + 61_000;
+    now.mockReturnValue(later);
+    await loseTheDevice(host, retried);
+    expect(renderers).toHaveLength(4);
+    expect(alert()).toBeNull();
+  });
+
+  it("a_failed_creation_shows_the_alert_with_retry", async () => {
+    script.createError = named("NoAdapter", "the browser offers no GPU adapter: WebGPU and WebGL2 are both unavailable");
+    await viewport();
+    await waitFor(() => expect(alert()?.textContent).toContain(`${STOPPED}the browser offers no GPU adapter: WebGPU and WebGL2 are both unavailable`));
+    expect(renderers).toHaveLength(0);
+    await retry();
+    await waitFor(() => expect(renderers).toHaveLength(1));
+    await waitFor(() => expect(drawsOf(renderers[0]!).length).toBeGreaterThan(0));
+    expect(alert()).toBeNull();
+  });
+
+  it("a_panic_shows_the_alert", async () => {
+    const { host, renderer } = await drawing();
+    play(host);
+    act(() => panic("panicked at crates/ludenea-render/src/gpu/mod.rs:10:5:\nthe atlas overflowed"));
+    await waitFor(() => expect(alert()?.textContent).toContain(`${STOPPED}panicked at crates/ludenea-render/src/gpu/mod.rs:10:5:\nthe atlas overflowed`));
+    const draws = drawsOf(renderer).length;
+    await animationFrames(3);
+    expect(drawsOf(renderer).length).toBe(draws);
+    // The module stopped in the middle of a call: the renderer is dropped, not freed.
+    expect(freed(renderer)).toBe(false);
+    await retry();
+    await waitFor(() => expect(renderers).toHaveLength(2));
+    expect(alert()).toBeNull();
+  });
+
+  it("missing_surface_textures_never_show_the_alert", async () => {
+    const { host, renderer } = await drawing();
+    renderer.fail("NoSurfaceTexture", 10);
+    play(host);
+    await animationFrames(15);
+    expect(alert()).toBeNull();
+    expect(freed(renderer)).toBe(false);
+    expect(host.editor.console.list()).toEqual([]);
+  });
+
+  it("the_session_keeps_playing_while_the_viewport_is_stopped", async () => {
+    const { host, game, renderer } = await drawing();
+    renderer.fail("Gpu");
+    play(host);
+    await waitFor(() => expect(alert()).not.toBeNull());
+    const sent = game.sent.length;
+    // The game keeps pushing its frames, and the editor keeps its timeline playing.
+    act(() => game.pushFrames(0, [bytesOf(frameAt(8)), bytesOf(frameAt(9))]));
+    await animationFrames(3);
+    expect(host.editor.timeline.getState().playing).toBe(true);
+    expect(game.sent.slice(sent)).toEqual([]);
+    // Retried, the viewport draws the newest frame the game pushed meanwhile.
+    await retry();
+    await waitFor(() => expect(renderers).toHaveLength(2));
+    expect(ticksPushed(renderers[1]!)).toEqual([8, 9]);
+  });
+});
+
 describe("viewport frames", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -704,8 +891,6 @@ describe("viewport frames", () => {
   });
 
   const BUG = "000000000000000000000000000b0601";
-  const play = (host: { editor: { timeline: { setState(state: object): void } } }) => act(() => host.editor.timeline.setState({ playing: true }));
-  const pause = (host: { editor: { timeline: { setState(state: object): void } } }) => act(() => host.editor.timeline.setState({ playing: false }));
 
   it("the_tick_of_a_frame_in_postcard_is_read_without_decoding_it", () => {
     // The renderer's fixture, written by the engine's postcard encoding of the frame beside it.

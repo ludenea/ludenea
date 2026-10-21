@@ -140,7 +140,7 @@ Grouped so each item's foundations come first: ECS rewriter before scene work, P
 74. **FND-6** [P2, M] Project builds and the game-process lifecycle tested on macOS, Linux and Windows (after FND-1)
 75. **DSK-3** [P1, M] Windows: games run from a private copy, without console windows, with plain paths (after FND-6)
 76. **VPR-1** [P1, M] The renderer tested on WebGL2 and WebGPU with pixel checks (after FND-1)
-77. **VPR-2** [P1, M] GPU errors captured, device limits respected, failures shown with a retry (after VPR-1)
+77. **VPR-2** [P1, M] GPU errors captured, device limits respected, failures shown with a retry (after VPR-1) (done)
 78. **INT-2** [P1, M] Events and Commands answered for any simulated tick (after RUN-2)
 79. **INT-4** [P1, M] Introspection states tested at every level (after INT-2)
 
@@ -2600,6 +2600,7 @@ Subsystem: ludenea-debug-draw (mesh and wgpu renderer), viewport panel, game-fac
 - Locations and files: `crates/ludenea-debug-draw/src/render.rs:85-204`, `editor/packages/editor-builtins/src/viewport/ViewportPanel.tsx:72-117,291-293`, `editor/packages/editor-builtins/test/fake-renderer.ts`.
 - Acceptance: device.on_uncaptured_error stores errors that draw and resize return as Err naming the operation and the limit; a panic hook forwards messages; vertex data is split below max_buffer_size and the surface clamped to max_texture_dimension_2d; after repeated failures the panel stops and shows The viewport stopped rendering: <reason> (role=alert) with Retry; a lost device recreates the renderer once.
 - First failing test: renderer.spec.ts: 58,300 circles then a one-circle frame both draw on both backends; viewport.test.tsx a_draw_that_keeps_failing_offers_a_retry.
+- Status: done. `e24834e` names the browser renderer's errors (`DeviceLost`, `Gpu`, `Limit` and the rest) and adds the panic handler, with its fixes `e0858df` to `2f8dde2`; the `ludenea-render` renderer that replaced the debug draw renderer respects the device limits. The commit "🐛 fix(editor-builtins): recover the viewport from a lost GPU and offer a retry" stops the viewport with the alert and Retry after three failing draws, a panic or a failed creation, and creates the renderer again on a new canvas after a lost device, once a minute at most.
 
 #### VPR-3: Non-finite primitives dropped with a located warning
 

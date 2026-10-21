@@ -14,8 +14,8 @@ const DEFAULT_CAMERA: CameraView = { center: { x: 0, y: 0 }, view: { x: 20, y: 1
 /** Every renderer created, most recent last. */
 export const renderers: WebRenderer[] = [];
 
-/** What the next renderers do: the textures `set_textures` refuses; and what the next `init` throws. */
-export const script: { refused: Refused[]; initError: Error | null } = { refused: [], initError: null };
+/** What the next renderers do: the textures `set_textures` refuses; what the next `init` and the next `create` throw. */
+export const script: { refused: Refused[]; initError: Error | null; createError: Error | null } = { refused: [], initError: null, createError: null };
 
 /** Every call of `init`. */
 export const inits: unknown[] = [];
@@ -42,14 +42,30 @@ export function ghostFrame(frame: string): string {
   return frame;
 }
 
-export function setPanicHandler(): void {}
+let panicHandler: ((message: string) => void) | null = null;
+
+export function setPanicHandler(handler: (message: string) => void): void {
+  panicHandler = handler;
+}
+
+/** Calls the handler `setPanicHandler` set last with `message`, as the real module does when it panics. */
+export function panic(message: string): void {
+  panicHandler?.(message);
+}
+
+/** What the real renderer says with each name it gives its errors. */
+const MESSAGES: { [name: string]: string } = {
+  NoSurfaceTexture: "the canvas has no texture this frame",
+  DeviceLost: "the GPU device was lost: Destroyed",
+  Gpu: "drawing failed on the GPU: out of memory",
+};
 
 export class WebRenderer implements Shape {
   readonly calls: { method: string; args: unknown[] }[] = [];
   /** The frames pushed, oldest first. */
   readonly pushed: RenderFrame[] = [];
-  /** How many of the next draws find no surface texture. */
-  skips = 0;
+  /** The error the next draws throw, by name, and how many of them do. */
+  private failing = { name: "", count: 0 };
   /** What `pick` answers, topmost first, wherever it is asked. */
   hits: Entity[] = [];
   /** What `bounds` answers for any entities: the box of the sprites and tilemaps drawn. */
@@ -59,6 +75,9 @@ export class WebRenderer implements Shape {
   private css = { width: 1, height: 1 };
 
   static async create(canvas: HTMLCanvasElement): Promise<WebRenderer> {
+    const error = script.createError;
+    script.createError = null;
+    if (error) throw error;
     const renderer = new WebRenderer();
     renderer.calls.push({ method: "create", args: [canvas] });
     renderers.push(renderer);
@@ -85,9 +104,14 @@ export class WebRenderer implements Shape {
 
   draw(alpha: number, camera?: string | null) {
     this.calls.push({ method: "draw", args: [alpha, camera ?? null] });
-    if (this.skips === 0) return;
-    this.skips--;
-    throw named("NoSurfaceTexture", "the canvas has no texture this frame");
+    if (this.failing.count === 0) return;
+    this.failing.count--;
+    throw named(this.failing.name, MESSAGES[this.failing.name] ?? `${this.failing.name} on purpose`);
+  }
+
+  /** The next `count` draws throw the error the real renderer names `name`; `NoSurfaceTexture` is a hidden canvas. */
+  fail(name: string, count = Infinity) {
+    this.failing = { name, count };
   }
 
   pick(x: number, y: number, camera?: string | null): string {

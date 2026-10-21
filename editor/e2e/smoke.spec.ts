@@ -54,7 +54,7 @@ test("web editor opens the template project", async ({ page }) => {
   const viewport = page.getByRole("application", { name: "Viewport" });
   await expect(viewport).toBeVisible();
   await expect(viewport).not.toContainText("No game is running.", { timeout: FIRST_BUILD_MS });
-  await expect(viewport).not.toContainText("cannot render");
+  await expect(viewport).not.toContainText("stopped rendering");
   // The project opened its default scene: the scene tree lists its entities without a double click.
   await page.getByRole("tab", { name: "Scene" }).click();
   await expect(page.getByRole("listbox", { name: "Entities" }).getByRole("option").first()).toBeVisible();

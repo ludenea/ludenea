@@ -1,4 +1,4 @@
-import { WebRenderer } from "@ludenea/render-wasm";
+import { setPanicHandler, WebRenderer } from "@ludenea/render-wasm";
 import type { Entity, Vec2 } from "@ludenea/control-client";
 import { runReported, type Editor, type ViewportOverlay } from "@ludenea/editor-shell";
 import { useEffect, useRef, useState } from "react";
@@ -15,10 +15,24 @@ import { loadTextures } from "./textures";
 const DRAG_THRESHOLD = 3;
 const WHEEL_ZOOM = 0.0015;
 const ARROWS: { [key: string]: string } = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" };
+/** Failing draws in a row (a hidden canvas aside) after which the viewport stops and offers a retry. */
+const FAILED_DRAWS_TO_STOP = 3;
+/** A lost GPU device is recovered from at most once in this time; a second loss stops the viewport. */
+const RECREATION_INTERVAL_MS = 60_000;
+const FILL = { position: "absolute", inset: 0, width: "100%", height: "100%" } as const;
 
-async function createRenderer(canvas: HTMLCanvasElement): Promise<WebRenderer> {
+/** Creates a renderer on `canvas`; `panicked` hears the message of any panic in the renderer's module. */
+async function createRenderer(canvas: HTMLCanvasElement, panicked: (message: string) => void): Promise<WebRenderer> {
   await loadRenderModule();
+  setPanicHandler(panicked);
   return WebRenderer.create(canvas);
+}
+
+/** A canvas for one renderer: a lost WebGPU context cannot be configured again, so a new renderer gets a new canvas. */
+function gpuCanvas(): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  canvas.style.cssText = "position: absolute; inset: 0; width: 100%; height: 100%";
+  return canvas;
 }
 
 /** A texture the renderer could not load: it draws as a placeholder. */
@@ -65,8 +79,8 @@ export function ViewportPanel({
 }) {
   const game = useGame(editor);
   const root = useRef<HTMLDivElement>(null);
-  const gpu = useRef<HTMLCanvasElement>(null);
   const overlay = useRef<HTMLCanvasElement>(null);
+  const retry = useRef(() => {});
   const [failure, setFailure] = useState<string | null>(null);
 
   useEffect(() => {
@@ -76,6 +90,15 @@ export function ViewportPanel({
     let rendered: Size & { ratio: number } = { width: 0, height: 0, ratio: 0 };
     let ratio = window.devicePixelRatio || 1;
     let disposed = false;
+    // The GPU canvas is the panel's own, not React's: it is replaced with each renderer.
+    let canvas: HTMLCanvasElement | null = null;
+    // Stopped after a failure the viewport does not recover from alone, until a retry.
+    let stopped = false;
+    let failedDraws = 0;
+    // When the renderer was last created again after a lost device (`performance.now()`).
+    let recreated = -Infinity;
+    // Counts the creations started: one finishing after a newer one or a stop is dropped.
+    let creations = 0;
     // The current frame must be drawn again (paused; playing draws every animation frame).
     let repaint = true;
     let press: Press | null = null;
@@ -123,16 +146,62 @@ export function ViewportPanel({
           if (!disposed) editor.console.report(error, "Loading the textures for the viewport");
         });
 
-    createRenderer(gpu.current!).then(
-      (created) => {
-        if (disposed) return created.free();
-        renderer = created;
-        feed.setTarget(created);
-        repaint = true;
-        void uploadTextures(created);
-      },
-      (error) => setFailure(`The viewport cannot render: ${errorText(error)}`),
-    );
+    // Drops the renderer, freed unless `free` is false: the frames wait for the next one, which starts with them.
+    const release = (free = true) => {
+      const dropped = renderer;
+      renderer = null;
+      feed.setTarget(null);
+      rendered = { width: 0, height: 0, ratio: 0 };
+      if (free) dropped?.free();
+    };
+
+    // Stops drawing and shows `message` with a retry; the session goes on.
+    const stop = (message: string, free = true) => {
+      if (stopped || disposed) return;
+      stopped = true;
+      creations++;
+      release(free);
+      setFailure(message);
+    };
+    // A panic aborts the module in the middle of a call: the renderer it was using is dropped, not freed.
+    const panicked = (message: string) => stop(message, false);
+
+    const start = () => {
+      const creation = ++creations;
+      stopped = false;
+      failedDraws = 0;
+      setFailure(null);
+      const fresh = gpuCanvas();
+      if (canvas) canvas.replaceWith(fresh);
+      else overlay.current!.before(fresh);
+      canvas = fresh;
+      createRenderer(fresh, panicked).then(
+        (created) => {
+          if (disposed || creation !== creations) return created.free();
+          renderer = created;
+          feed.setTarget(created);
+          repaint = true;
+          void uploadTextures(created);
+        },
+        (error) => {
+          if (creation === creations) stop(errorText(error));
+        },
+      );
+    };
+    retry.current = () => {
+      if (stopped && !disposed) start();
+    };
+    start();
+
+    // Recovers from a lost GPU device by creating the renderer again, once in a while at most.
+    const deviceLost = (error: Error) => {
+      const now = performance.now();
+      if (now - recreated < RECREATION_INTERVAL_MS) return stop(error.message);
+      recreated = now;
+      editor.console.log("warning", `The GPU device of the viewport was lost (${error.message}): the viewport created its renderer again`);
+      release();
+      start();
+    };
 
     // What the overlay, picking and tools see through: the game camera as drawn, or the editor's.
     const viewCamera = (): Camera => {
@@ -165,10 +234,18 @@ export function ViewportPanel({
           }
           renderer.draw(feed.alpha(performance.now()), drawnCamera());
           drawing.worked();
+          failedDraws = 0;
         } catch (error) {
+          const name = error instanceof Error ? error.name : null;
           // The canvas has no texture this frame (hidden or occluded): draw again on the next one.
-          if (error instanceof Error && error.name === "NoSurfaceTexture") repaint = true;
-          else drawing.failed(error);
+          if (name === "NoSurfaceTexture") repaint = true;
+          else if (name === "DeviceLost") deviceLost(error as Error);
+          else {
+            drawing.failed(error);
+            // Drawn again on the next frame, until it works or fails too often.
+            repaint = true;
+            if (++failedDraws >= FAILED_DRAWS_TO_STOP) stop(errorText(error));
+          }
         }
       }
       if (!context) return;
@@ -189,7 +266,7 @@ export function ViewportPanel({
         ratio = window.devicePixelRatio || 1;
         repaint = true;
       }
-      if (editor.timeline.getState().playing || repaint) paint();
+      if (!stopped && (editor.timeline.getState().playing || repaint)) paint();
       animation = requestAnimationFrame(loop);
     });
 
@@ -361,16 +438,22 @@ export function ViewportPanel({
       for (const [type, listener] of listeners) element.removeEventListener(type, listener);
       element.removeEventListener("wheel", onWheel);
       renderer?.free();
+      canvas?.remove();
+      retry.current = () => {};
     };
   }, [editor, state, failedOverlays, textureWarnings, shown]);
 
-  const fill = { position: "absolute", inset: 0, width: "100%", height: "100%" } as const;
   return (
     <div ref={root} role="application" aria-label="Viewport" tabIndex={0} style={{ position: "relative", width: "100%", height: "100%", overflow: "hidden", outline: "none" }}>
-      <canvas ref={gpu} style={fill} />
-      <canvas ref={overlay} style={{ ...fill, pointerEvents: "none" }} />
-      {(failure || !game) && (
-        <p className="ludenea-muted" style={{ position: "absolute", margin: 8 }}>{failure ?? "No game is running."}</p>
+      <canvas ref={overlay} style={{ ...FILL, pointerEvents: "none" }} />
+      {failure && (
+        <div role="alert" className="ludenea-banner" style={{ position: "absolute", margin: 8 }}>
+          The viewport stopped rendering: {failure}
+          <button onClick={() => retry.current()}>Retry</button>
+        </div>
+      )}
+      {!failure && !game && (
+        <p className="ludenea-muted" style={{ position: "absolute", margin: 8 }}>No game is running.</p>
       )}
       <div style={{ position: "absolute", bottom: 0, margin: 8 }}>
         <ResimulatingNotice editor={editor} />

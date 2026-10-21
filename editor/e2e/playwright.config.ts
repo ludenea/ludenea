@@ -4,8 +4,8 @@ import { launchArgs } from "./project";
 const port = 4310;
 /** The renderer's pixel tests, run once per browser backend; every other spec runs once. */
 const renderer = /renderer\.spec\.ts$/;
-/** The renderer's tests that only WebGPU needs. */
-const webgpu = /renderer-webgpu\.spec\.ts$/;
+/** The renderer's and the viewport's tests that only WebGPU needs. */
+const webgpu = /(renderer|viewport)-webgpu\.spec\.ts$/;
 
 export default defineConfig({
   testDir: ".",

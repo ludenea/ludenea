@@ -308,8 +308,12 @@ packed is logged once in the console and drawn as a magenta placeholder. "View t
 camera" (`C`) shows what the game's camera sees instead of the editor's free camera; picking
 and dragging follow it, and panning, zooming, or framing the selection leaves it for the
 editor's camera, starting from the same view. The desktop editor on Linux (WebKitGTK) has no
-WebGPU: its viewport draws with WebGL2, or, without WebGL2 either, says it cannot render and
-why.
+WebGPU: its viewport draws with WebGL2. When the GPU device is lost (a driver reset, a GPU
+removed), the viewport creates its renderer again on a new canvas, with the project's textures
+and the frame on screen, and logs a warning. When it cannot render (no GPU adapter, a second lost
+device within a minute, three failing draws in a row, or a panic in the renderer), it stops and
+shows "The viewport stopped rendering" with the reason and a Retry button; the session keeps
+playing meanwhile.
 
 ### Prefabs
 
