@@ -541,10 +541,13 @@ pub struct PlayArgs {
     /// The scene to play; prefabs, data assets and textures come from the project folder.
     #[command(flatten)]
     files: RunFiles,
-    /// Skip the lobby with this many local players, from 1 to 4: one holds the keyboard and
-    /// the first gamepad; with more, the first two share the keyboard's halves.
     #[arg(
         long,
+        help = format!(
+            "Skip the lobby with this many local players, from 1 to {}: one holds the keyboard \
+             and the first gamepad; with more, the first two share the keyboard's halves",
+            ludenea_app::players::MAX_LOCAL_PLAYERS
+        ),
         value_parser = clap::value_parser!(u8).range(1..=ludenea_app::players::MAX_LOCAL_PLAYERS as i64)
     )]
     players: Option<u8>,
