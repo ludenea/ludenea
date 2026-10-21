@@ -10,7 +10,12 @@ export interface LoadedTextures {
 /** The id the project gives every file whose meta cannot be read; its own warning names the file. */
 const UNREADABLE = /^0+$/;
 
-const decode = (base64: string) => Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
+function decode(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
 
 /**
  * Every `Texture` asset of the project with its PNG. A texture whose meta cannot be read is
