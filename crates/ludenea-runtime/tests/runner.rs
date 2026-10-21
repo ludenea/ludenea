@@ -308,9 +308,8 @@ fn markers(simulation: &Simulation) -> Vec<Marker> {
         .collect()
 }
 
-/// Live input differing from the recorded future before the edit's tick would take over:
-/// the session forks a branch there, as editing the past does, and the loaded edit stays on
-/// the branch left behind. The players press keys from the tick after the edit only.
+/// The players press keys only after the edit's tick: the match follows the recorded future
+/// up to the edit, which applies and stays in the replay of the branch played.
 #[test]
 fn loaded_edits_apply_and_stay_in_the_replay() {
     let mut runner = started(marked_app, &files_with_edit(spawn_marker()), 1);
@@ -373,4 +372,25 @@ fn a_first_frame_that_cannot_draw_is_a_load_error() {
         Err(RuntimeError::Load(message)) => assert!(message.contains("no frame"), "{message}"),
         other => panic!("expected a load error, got {other:?}"),
     }
+}
+
+/// Keys pressed before the edit's tick take over there: the session forks a branch, as
+/// editing the past does, and the branch played holds none of the edits after that tick.
+#[test]
+fn input_before_a_loaded_edit_forks_and_the_replay_leaves_it_out() {
+    let mut runner = started(marked_app, &files_with_edit(spawn_marker()), 1);
+    let mut frame = 0;
+    while runner.tick() < 2 * EDIT_TICK {
+        let pressing = runner.tick() < EDIT_TICK / 2 && frame % 3 == 0;
+        let devices = keys(if pressing { &["Space"] } else { &[] });
+        runner.frame(1.0 / 60.0, &devices).unwrap();
+        frame += 1;
+    }
+    let replay = Replay::decode(&runner.export_replay().unwrap()).unwrap();
+    let edits = EditLog::decode(&replay.edits).unwrap();
+    assert_eq!(edits.edits, [], "the forked branch holds no later edit");
+    let mut simulation = marked_app().build().unwrap();
+    let report = play_replay(&mut simulation, &replay, |_, _| {}).unwrap();
+    assert_eq!(report.outcome, ReplayOutcome::Matched);
+    assert_eq!(markers(&simulation), []);
 }
