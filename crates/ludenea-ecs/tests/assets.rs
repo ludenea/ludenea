@@ -67,6 +67,21 @@ fn handle_encodes_and_hashes_like_its_asset_id() {
 }
 
 #[test]
+fn world_hash_is_the_root_of_its_tree() {
+    let mut world = with_assets();
+    let other = world.spawn();
+    world.insert(other, Weapon(5)).unwrap();
+    let gone = world.spawn();
+    world.despawn(gone).unwrap();
+    world.spawn();
+    assert_eq!(world.hash(), world.hash_tree().root);
+    world
+        .insert_asset_ron(ID, "test::Stats", "(damage: 4, cooldown: 2)")
+        .unwrap();
+    assert_eq!(world.hash(), world.hash_tree().root);
+}
+
+#[test]
 fn handle_schema_names_its_asset_type() {
     assert_eq!(
         Handle::<Stats>::schema(),

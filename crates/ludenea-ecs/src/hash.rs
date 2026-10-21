@@ -88,11 +88,29 @@ pub struct HashTree {
 }
 
 impl World {
+    /// The root of `hash_tree`, hashed without building the tree.
     pub fn hash(&self) -> u64 {
-        self.hash_tree().root
+        let mut root = Xxh3::new();
+        for leaf in &self.resource_leaves() {
+            write_named(&mut root, leaf);
+        }
+        for entity in self.entities() {
+            let mut leaf = Xxh3::new();
+            for (name, entry) in &self.components {
+                entry.storage.visit(entity.index(), &mut |value| {
+                    write_leaf(&mut leaf, name, (entry.codec.hash)(value));
+                });
+            }
+            root.update(&entity.index().to_le_bytes());
+            root.update(&entity.generation().to_le_bytes());
+            root.update(&leaf.digest().to_le_bytes());
+        }
+        root.digest()
     }
 
-    pub fn hash_tree(&self) -> HashTree {
+    /// The resource leaves of `hash_tree`: the registered resources, then the entities and
+    /// assets leaves.
+    fn resource_leaves(&self) -> Vec<NamedHash> {
         let mut resources = self.resource_hashes();
         resources.push(NamedHash {
             name: ENTITIES_LEAF.to_string(),
@@ -104,6 +122,11 @@ impl World {
                 hash: self.assets_hash(),
             });
         }
+        resources
+    }
+
+    pub fn hash_tree(&self) -> HashTree {
+        let resources = self.resource_leaves();
 
         // Components are visited in name order, so each entity's list comes out sorted.
         let mut components: BTreeMap<u32, Vec<NamedHash>> = BTreeMap::new();
@@ -195,9 +218,13 @@ fn entity_leaf(entity: Entity, components: Vec<NamedHash>) -> EntityHash {
 }
 
 fn write_named(hasher: &mut Xxh3, leaf: &NamedHash) {
-    hasher.update(&(leaf.name.len() as u64).to_le_bytes());
-    hasher.update(leaf.name.as_bytes());
-    hasher.update(&leaf.hash.to_le_bytes());
+    write_leaf(hasher, &leaf.name, leaf.hash);
+}
+
+fn write_leaf(hasher: &mut Xxh3, name: &str, hash: u64) {
+    hasher.update(&(name.len() as u64).to_le_bytes());
+    hasher.update(name.as_bytes());
+    hasher.update(&hash.to_le_bytes());
 }
 
 #[derive(Debug)]
