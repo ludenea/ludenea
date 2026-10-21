@@ -55,16 +55,17 @@ hash, those of the golden trace and replays included.
 - Breaking: `TextureError::Grid` holds the `reason` (`FramesError::Grid`'s message) instead
   of the `image` size and the `grid`; its message is unchanged.
 - `WebRenderer::push_frame_bytes(bytes, overlay)` pushes a frame in the control protocol's
-  postcard encoding (`ludenea_control::protocol::encode_frame`), as the session's worker sends
-  it. `push_frame` and `push_frame_bytes` return `{ tick, missing, debug }`: the frame's tick
-  and debug draw beside what is drawn as a placeholder. `pick(x, y, camera)`,
+  postcard encoding (`ludenea_control::protocol::encode_frame`), as the session's worker
+  sends it. `push_frame` and `push_frame_bytes` return `{ tick, missing, debug }`: the
+  frame's tick and debug draw beside what is drawn as a placeholder. `pick(x, y, camera)`,
   `bounds(entities)` and `screen_to_world(x, y, parallax, camera)` answer for what the last
   `draw` showed (the frame pushed last, blended at that draw's alpha), in CSS pixels of the
   canvas's layout until the first `resize`; `pick` and `bounds` find nothing from new
   textures to the next push. `panicForTesting` exists only in a build with the `test-hooks`
-  feature (`cargo xtask wasm-render --test-hooks`), for the renderer page's tests. The free functions `textureFrames(png, meta)`, `ghostFrame(frame)` (the
-  ghost style of a debug draw, as `ludenea_draw`'s viewport renderer has it) and
-  `setPanicHandler(handler)` (called with the message of any panic in the module) join it.
+  feature (`cargo xtask wasm-render --test-hooks`), for the renderer page's tests. The free
+  functions `textureFrames(png, meta)`, `ghostFrame(frame)` (the ghost style of a debug
+  draw, as `ludenea_draw`'s viewport renderer has it) and `setPanicHandler(handler)` (called
+  with the message of any panic in the module) join it.
 - Breaking: every `WebRenderer` error is a JavaScript `Error` whose `name` says what failed
   (`NoAdapter`, `Gpu`, `Limit`, `DeviceLost`, `InvalidAtlas`, `InvalidInput`, `Surface`,
   `NoSurfaceTexture`) and whose `message` is the cause, instead of a string. A lost device is
