@@ -42,6 +42,7 @@ for any thread count. The guarantee rests on:
 | `crates/ludenea-serve`   | The `ludenea` tool: `new` and `serve`           |
 | `editor`                 | The editor: web and desktop applications        |
 | `examples/boxes`         | Reference scenario, golden trace, and benchmark |
+| `examples/swarm`         | Runtime test game: 10,000 sprites, 4 players    |
 | `golden`                 | Golden hash traces                              |
 
 ## Commands

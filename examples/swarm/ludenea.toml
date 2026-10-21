@@ -1,0 +1,3 @@
+name = "swarm"
+engine = "0.1.0"
+default_scene = "assets/swarm.scene.ron"

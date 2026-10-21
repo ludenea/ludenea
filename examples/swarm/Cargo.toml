@@ -1,0 +1,26 @@
+[package]
+name = "swarm"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+default-run = "swarm"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# Same name as the `generate` of boxes: skip it in `cargo doc`, whose output paths would collide.
+[[bin]]
+name = "generate"
+doc = false
+
+[[bin]]
+name = "swarm"
+path = "src/main.rs"
+
+[dependencies]
+ludenea.workspace = true
+png.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+postcard.workspace = true

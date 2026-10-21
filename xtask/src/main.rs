@@ -37,7 +37,7 @@ const CHECKS: &[&str] = &[
     "doc --locked --no-deps --workspace",
     // The browser: the facade's entry, the Web Worker transport, the viewport renderer, and
     // the renderer on WebGPU and WebGL2.
-    "clippy --locked --target wasm32-unknown-unknown -p ludenea -p ludenea-control -p boxes --lib -- -D warnings",
+    "clippy --locked --target wasm32-unknown-unknown -p ludenea -p ludenea-control -p boxes -p swarm --lib -- -D warnings",
     "clippy --locked --target wasm32-unknown-unknown -p ludenea-draw --features render --lib -- -D warnings",
     "clippy --locked --target wasm32-unknown-unknown -p ludenea-render --features web --lib -- -D warnings",
     // WebAssembly outside the browser: the command line tool that verifies the goldens.
