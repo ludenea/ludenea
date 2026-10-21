@@ -18,6 +18,7 @@ this table in the same commit.
 | Scene (`.scene.ron`)   | `SCENE_VERSION`            | 2       | 1                             |
 | Prefab (`.prefab.ron`) | `PREFAB_VERSION`           | 1       | 1                             |
 | Meta (`.meta`)         | `META_VERSION`             | 2       | 1                             |
+| Atlas (`atlas.json`)   | `ATLAS_VERSION`            | 1       | 1                             |
 | Replay (`.replay`)     | `REPLAY_VERSION`           | 1       | 1                             |
 | Trace (`.trace`)       | `TRACE_VERSION`            | 1       | 1                             |
 | Snapshot (`.snap`)     | `SNAPSHOT_VERSION`         | 3       | 2                             |
@@ -40,6 +41,15 @@ hash, those of the golden trace and replays included.
 
 ### Rust API
 
+- `ludenea_render::atlas::Atlas::to_files` writes a packed atlas as an `AtlasFiles`: a JSON
+  manifest (`atlas.json`, `ATLAS_VERSION` 1: `version`, `pages` of `{ file, width, height }`
+  and `regions` of `{ id, frame, region }`) and one PNG per page (`page-<n>.png`), byte for
+  byte reproducible (the PNGs use no compression and no filter, so the bytes do not depend on
+  the compressor features cargo unifies). `Atlas::from_files` reads them back, refusing a
+  newer version, a missing page, a page of another size, a region outside its page and an
+  undecodable PNG with `AtlasFileError`. Textures left out of the atlas are not written.
+  `WebRenderer::set_atlas(manifest, pages)` uploads such an atlas in the browser and, like
+  `set_textures`, blanks the sprites until the next `set_frames`.
 - `ludenea play <project> [--scene PATH] [-- args...]` builds a project natively and runs its
   binary's `play` with `--project` and the forwarded arguments, returning the game's exit
   code (2 when the build or the launch fails, or without a scene: pass `--scene` or set

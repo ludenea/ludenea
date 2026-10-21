@@ -1,6 +1,8 @@
 use ludenea_app::meta::{Filter, Grid, TextureMeta};
 use ludenea_ecs::AssetId;
-use ludenea_render::atlas::{Atlas, AtlasPage, Region, TextureError, TextureSource, pack};
+use ludenea_render::atlas::{
+    ATLAS_VERSION, Atlas, AtlasFileError, AtlasPage, Region, TextureError, TextureSource, pack,
+};
 
 const PAGE: u32 = 4096;
 
@@ -527,4 +529,134 @@ fn png_declaring_huge_dimensions_is_refused_without_allocating() {
         }
         other => panic!("expected a decode error, got {other:?}"),
     }
+}
+
+fn sheet() -> Atlas {
+    let image = png(8, 4, 3);
+    let other = png(5, 5, 9);
+    let atlas = pack(
+        &[
+            source(1, &image, &grid(4, 4, 0, 0)),
+            source(2, &other, &TextureMeta::default()),
+        ],
+        PAGE,
+    );
+    assert!(atlas.errors.is_empty());
+    atlas
+}
+
+fn manifest_with(edit: impl FnOnce(&mut serde_json::Value)) -> String {
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&sheet().to_files().manifest).unwrap();
+    edit(&mut manifest);
+    manifest.to_string()
+}
+
+fn page_refs(pages: &[Vec<u8>]) -> Vec<&[u8]> {
+    pages.iter().map(Vec::as_slice).collect()
+}
+
+#[test]
+fn atlas_round_trips_through_files() {
+    let atlas = sheet();
+    let files = atlas.to_files();
+    assert!(files.manifest.contains("page-0.png"));
+    let read = Atlas::from_files(&files.manifest, &page_refs(&files.pages)).unwrap();
+    assert_eq!(read, atlas);
+}
+
+#[test]
+fn to_files_is_reproducible() {
+    let first = sheet().to_files();
+    let second = sheet().to_files();
+    assert_eq!(first, second);
+}
+
+#[test]
+fn newer_version_is_refused_as_a_version() {
+    // The rest of the manifest is not even valid: the version is read first.
+    let manifest = format!(r#"{{"version": {}, "pages": "?"}}"#, ATLAS_VERSION + 1);
+    assert_eq!(
+        Atlas::from_files(&manifest, &[]),
+        Err(AtlasFileError::Version {
+            found: ATLAS_VERSION + 1,
+            supported: ATLAS_VERSION
+        })
+    );
+}
+
+#[test]
+fn missing_page_is_refused() {
+    let files = sheet().to_files();
+    assert_eq!(
+        Atlas::from_files(&files.manifest, &[]),
+        Err(AtlasFileError::MissingPage { index: 0 })
+    );
+}
+
+#[test]
+fn page_of_another_size_is_refused_naming_both_sizes() {
+    let files = sheet().to_files();
+    let (width, height) = (sheet().pages[0].width, sheet().pages[0].height);
+    let manifest = manifest_with(|manifest| manifest["pages"][0]["width"] = (width + 1).into());
+    let error = Atlas::from_files(&manifest, &page_refs(&files.pages)).unwrap_err();
+    assert_eq!(
+        error,
+        AtlasFileError::PageSize {
+            index: 0,
+            expected: (width + 1, height),
+            found: (width, height)
+        }
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains(&format!("{}x{height}", width + 1))
+            && message.contains(&format!("{width}x{height}"))
+    );
+}
+
+#[test]
+fn region_outside_its_page_is_refused() {
+    let files = sheet().to_files();
+    let width = sheet().pages[0].width;
+    for edit in [
+        (|m: &mut serde_json::Value, w: u32| m["regions"][0]["region"]["x"] = w.into())
+            as fn(&mut _, u32),
+        |m, _| m["regions"][0]["region"]["page"] = 7.into(),
+        |m, _| m["regions"][0]["region"]["width"] = 0.into(),
+    ] {
+        let manifest = manifest_with(|manifest| edit(manifest, width));
+        assert!(
+            matches!(
+                Atlas::from_files(&manifest, &page_refs(&files.pages)),
+                Err(AtlasFileError::RegionOutside { .. })
+            ),
+            "{manifest}"
+        );
+    }
+}
+
+#[test]
+fn malformed_files_are_refused_without_panicking() {
+    let files = sheet().to_files();
+    assert!(matches!(
+        Atlas::from_files("not json", &[]),
+        Err(AtlasFileError::Json(_))
+    ));
+    assert!(matches!(
+        Atlas::from_files(r#"{"version": 0}"#, &[]),
+        Err(AtlasFileError::Json(_))
+    ));
+    assert!(matches!(
+        Atlas::from_files(&files.manifest, &[b"not a png".as_slice()]),
+        Err(AtlasFileError::Decode { index: 0, .. })
+    ));
+    let twice = manifest_with(|m| {
+        let first = m["regions"][0].clone();
+        m["regions"].as_array_mut().unwrap().push(first);
+    });
+    assert!(matches!(
+        Atlas::from_files(&twice, &page_refs(&files.pages)),
+        Err(AtlasFileError::Json(_))
+    ));
 }

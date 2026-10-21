@@ -182,6 +182,16 @@ impl WebRenderer {
         serde_json::to_string(&refused).map_err(failure)
     }
 
+    /// Uploads a packed atlas from its files (`manifest` is `atlas.json`, `pages` the PNGs of
+    /// `page-<n>.png` in order), replacing the previous textures. Like `set_textures`, it
+    /// blanks the sprites until the next `set_frames`. A refused file is the error message.
+    pub fn set_atlas(&mut self, manifest: &str, pages: Vec<Uint8Array>) -> Result<(), JsValue> {
+        let pages: Vec<Vec<u8>> = pages.iter().map(Uint8Array::to_vec).collect();
+        let pages: Vec<&[u8]> = pages.iter().map(Vec::as_slice).collect();
+        let atlas = atlas::Atlas::from_files(manifest, &pages).map_err(failure)?;
+        self.renderer.set_atlas(&atlas).map_err(failure)
+    }
+
     /// `width` and `height` in CSS pixels; the canvas gets `pixel_ratio` times more, at least
     /// 1 pixel a side. It cannot report an error, so an oversized size surfaces on the next
     /// `draw`: a side past the device's `max_texture_dimension_2d` keeps the canvas at that

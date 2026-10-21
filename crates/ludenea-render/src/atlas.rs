@@ -7,6 +7,7 @@ use std::io::Cursor;
 
 use ludenea_app::meta::{Filter, Grid, TextureMeta};
 use ludenea_ecs::AssetId;
+use serde::{Deserialize, Serialize};
 
 /// How many bytes one decoded PNG may take, checked against its declared dimensions before
 /// the pixel buffer is allocated (the decoder's own limit only covers its internal buffers):
@@ -41,7 +42,7 @@ pub struct AtlasPage {
 }
 
 /// A frame's rectangle in its page, without the extrusion around it, and how it is drawn.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Region {
     pub page: u32,
     pub x: u32,
@@ -444,4 +445,189 @@ fn blit_extruded(page: &mut AtlasPage, frame: &Frame<'_>) {
             page.rgba[to..to + 4].copy_from_slice(&image.rgba[from..from + 4]);
         }
     }
+}
+
+/// The version of the atlas files `Atlas::to_files` writes.
+pub const ATLAS_VERSION: u32 = 1;
+
+/// A packed atlas as files: `atlas.json` and one PNG per page, `page-<n>.png` for page `n`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AtlasFiles {
+    pub manifest: String,
+    pub pages: Vec<Vec<u8>>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Manifest {
+    version: u32,
+    pages: Vec<ManifestPage>,
+    regions: Vec<ManifestRegion>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ManifestPage {
+    file: String,
+    width: u32,
+    height: u32,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ManifestRegion {
+    id: AssetId,
+    frame: u32,
+    region: Region,
+}
+
+/// Why atlas files could not be read.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum AtlasFileError {
+    #[error("the atlas is version {found}, but this build reads up to version {supported}")]
+    Version { found: u32, supported: u32 },
+    #[error("invalid atlas manifest: {0}")]
+    Json(String),
+    #[error("the manifest lists page {index}, but no PNG was given for it")]
+    MissingPage { index: usize },
+    #[error(
+        "page {index} is {}x{} in the manifest but its PNG is {}x{}",
+        expected.0, expected.1, found.0, found.1
+    )]
+    PageSize {
+        index: usize,
+        expected: (u32, u32),
+        found: (u32, u32),
+    },
+    #[error("frame {frame} of texture {id} lies outside page {page}")]
+    RegionOutside { id: AssetId, frame: u32, page: u32 },
+    #[error("cannot decode the PNG of page {index}: {reason}")]
+    Decode { index: usize, reason: String },
+}
+
+impl Atlas {
+    /// The atlas as files. Textures that were not packed (`errors`) are not written.
+    ///
+    /// Reproducible byte for byte: the manifest is pretty-printed with fields in declaration
+    /// order and regions in `(id, frame)` order, and the pages are PNGs written with no
+    /// compression and no filter. The `png` crate picks its deflate and filter strategies from
+    /// the compressor features that cargo unifies across the workspace, so any other setting
+    /// would change the bytes between a `-p` and a `--workspace` build.
+    pub fn to_files(&self) -> AtlasFiles {
+        let manifest = Manifest {
+            version: ATLAS_VERSION,
+            pages: self
+                .pages
+                .iter()
+                .zip(0..)
+                .map(|(page, index)| ManifestPage {
+                    file: format!("page-{index}.png"),
+                    width: page.width,
+                    height: page.height,
+                })
+                .collect(),
+            regions: self
+                .regions
+                .iter()
+                .map(|(&(id, frame), &region)| ManifestRegion { id, frame, region })
+                .collect(),
+        };
+        AtlasFiles {
+            // Plain structs of numbers and strings: serializing them cannot fail.
+            manifest: serde_json::to_string_pretty(&manifest)
+                .expect("a manifest of numbers and strings serializes"),
+            pages: self.pages.iter().map(encode_page).collect(),
+        }
+    }
+
+    /// Reads atlas files: the manifest and the PNG of each page it lists, in order (the file
+    /// names are informative; extra PNGs are ignored). The version is read first, then every
+    /// page and region is checked. The result has no `errors`.
+    pub fn from_files(manifest: &str, pages: &[&[u8]]) -> Result<Atlas, AtlasFileError> {
+        let value: serde_json::Value = serde_json::from_str(manifest)
+            .map_err(|error| AtlasFileError::Json(error.to_string()))?;
+        let found = value
+            .get("version")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|version| u32::try_from(version).ok())
+            .filter(|&version| version >= 1)
+            .ok_or_else(|| {
+                AtlasFileError::Json("`version` must be a whole number from 1".to_string())
+            })?;
+        if found > ATLAS_VERSION {
+            return Err(AtlasFileError::Version {
+                found,
+                supported: ATLAS_VERSION,
+            });
+        }
+        let manifest: Manifest = serde_json::from_value(value)
+            .map_err(|error| AtlasFileError::Json(error.to_string()))?;
+
+        let mut decoded = Vec::with_capacity(manifest.pages.len());
+        for (index, listed) in manifest.pages.iter().enumerate() {
+            let png = pages
+                .get(index)
+                .ok_or(AtlasFileError::MissingPage { index })?;
+            let image = decode(png).map_err(|reason| AtlasFileError::Decode { index, reason })?;
+            if (image.width, image.height) != (listed.width, listed.height) {
+                return Err(AtlasFileError::PageSize {
+                    index,
+                    expected: (listed.width, listed.height),
+                    found: (image.width, image.height),
+                });
+            }
+            decoded.push(AtlasPage {
+                width: image.width,
+                height: image.height,
+                rgba: image.rgba,
+            });
+        }
+
+        let mut regions = BTreeMap::new();
+        for ManifestRegion { id, frame, region } in manifest.regions {
+            let outside = AtlasFileError::RegionOutside {
+                id,
+                frame,
+                page: region.page,
+            };
+            let page = decoded.get(region.page as usize).ok_or(outside.clone())?;
+            let fits = region.width > 0
+                && region.height > 0
+                && u64::from(region.x) + u64::from(region.width) <= u64::from(page.width)
+                && u64::from(region.y) + u64::from(region.height) <= u64::from(page.height);
+            if !fits {
+                return Err(outside);
+            }
+            if region.pixels_per_unit == 0 {
+                return Err(AtlasFileError::Json(format!(
+                    "frame {frame} of texture {id} has pixels_per_unit 0"
+                )));
+            }
+            if regions.insert((id, frame), region).is_some() {
+                return Err(AtlasFileError::Json(format!(
+                    "frame {frame} of texture {id} is listed twice"
+                )));
+            }
+        }
+        Ok(Atlas {
+            pages: decoded,
+            regions,
+            errors: Vec::new(),
+        })
+    }
+}
+
+/// A page as an 8-bit RGBA PNG with no compression and no filter (see `Atlas::to_files`).
+fn encode_page(page: &AtlasPage) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let mut encoder = png::Encoder::new(&mut bytes, page.width, page.height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_compression(png::Compression::NoCompression);
+    encoder.set_filter(png::Filter::NoFilter);
+    // Pages come from `pack` or `from_files`: a non-zero size and `width * height * 4` bytes,
+    // which are the only reasons encoding to memory fails.
+    let mut writer = encoder.write_header().expect("a page has a PNG header");
+    writer
+        .write_image_data(&page.rgba)
+        .expect("a page's pixels match its size");
+    writer.finish().expect("a PNG ends in memory");
+    bytes
 }
