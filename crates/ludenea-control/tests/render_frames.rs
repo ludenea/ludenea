@@ -309,8 +309,9 @@ fn worker_frames_decode_to_the_same_frames() {
     set_layers(&mut host, &layers);
     play(&mut host);
     let [(frames, _)] = pushed(&advance(&mut host, 2, 0.0)).try_into().unwrap();
-    assert!(!frames[1].debug.layers.is_empty());
+    assert_eq!(frames.len(), 2);
     for frame in &frames {
+        assert!(!frame.debug.layers.is_empty(), "tick {}", frame.tick);
         let bytes = protocol::encode_frame(frame);
         let decoded: RenderFrame = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(&decoded, frame);
