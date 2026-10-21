@@ -1,7 +1,7 @@
 //! What the window shows before the match: the lobby's slots as a debug draw (the renderer
 //! draws no text), and the window title, which names each claim and how to start.
 
-use ludenea_app::players::{Claim, KeyboardPart, Lobby, MAX_LOCAL_PLAYERS};
+use ludenea_app::players::{KeyboardPart, Lobby, MAX_LOCAL_PLAYERS};
 use ludenea_draw::frame::RenderFrame;
 use ludenea_draw::{Color, DebugDrawFrame, Primitive};
 use ludenea_math::Vec2;
@@ -98,29 +98,12 @@ pub fn title(game: &str, lobby: &Lobby) -> String {
         .claims()
         .iter()
         .enumerate()
-        .map(|(player, claim)| format!("player {} {}", player + 1, devices(claim)))
+        .map(|(player, claim)| format!("player {} {}", player + 1, claim.describe()))
         .collect();
     format!(
         "{game}: {}; Enter or Start to play, Escape or Select to leave",
         claims.join(", ")
     )
-}
-
-/// The devices of `claim`, in words.
-fn devices(claim: &Claim) -> String {
-    let keyboard = claim.keyboard.map(|part| match part {
-        KeyboardPart::Whole => "keyboard".to_string(),
-        KeyboardPart::Left => "left keyboard half".to_string(),
-        KeyboardPart::Right => "right keyboard half".to_string(),
-    });
-    let gamepad = claim
-        .gamepad
-        .map(|slot| format!("gamepad {}", u64::from(slot) + 1));
-    [keyboard, gamepad]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join(" and ")
 }
 
 #[cfg(test)]

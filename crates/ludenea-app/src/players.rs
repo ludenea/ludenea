@@ -79,6 +79,27 @@ pub struct Claim {
     pub gamepad: Option<u32>,
 }
 
+impl Claim {
+    /// The devices held, in words, as the runtimes show them: "left keyboard half and
+    /// gamepad 1" (gamepad slots counted from 1), or "no device".
+    pub fn describe(&self) -> String {
+        let keyboard = self.keyboard.map(|part| match part {
+            KeyboardPart::Whole => "keyboard".to_string(),
+            KeyboardPart::Left => "left keyboard half".to_string(),
+            KeyboardPart::Right => "right keyboard half".to_string(),
+        });
+        let gamepad = self
+            .gamepad
+            .map(|slot| format!("gamepad {}", u64::from(slot) + 1));
+        let parts: Vec<String> = [keyboard, gamepad].into_iter().flatten().collect();
+        if parts.is_empty() {
+            "no device".to_string()
+        } else {
+            parts.join(" and ")
+        }
+    }
+}
+
 /// What is held down right now, before it is split between players.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]

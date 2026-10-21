@@ -489,3 +489,22 @@ fn lobby_events_serialize_tagged_for_the_web_page() {
         })
     );
 }
+
+#[test]
+fn a_claim_describes_its_devices_in_words() {
+    let claim = |keyboard, gamepad| Claim { keyboard, gamepad };
+    assert_eq!(
+        claim(Some(KeyboardPart::Whole), None).describe(),
+        "keyboard"
+    );
+    assert_eq!(
+        claim(Some(KeyboardPart::Left), Some(0)).describe(),
+        "left keyboard half and gamepad 1"
+    );
+    assert_eq!(
+        claim(Some(KeyboardPart::Right), None).describe(),
+        "right keyboard half"
+    );
+    assert_eq!(claim(None, Some(u32::MAX)).describe(), "gamepad 4294967296");
+    assert_eq!(claim(None, None).describe(), "no device");
+}

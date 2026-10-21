@@ -55,6 +55,14 @@ impl WebLobby {
         claims_json(self.lobby.claims())
     }
 
+    /// The devices of each claim in slot order, in words, as JSON (`["left keyboard half",
+    /// ...]`): what the page shows in the slots, as the native window's title names them.
+    #[wasm_bindgen(js_name = describeClaims)]
+    pub fn describe_claims(&self) -> String {
+        let described: Vec<String> = self.lobby.claims().iter().map(Claim::describe).collect();
+        serde_json::to_string(&described).expect("strings serialize")
+    }
+
     #[wasm_bindgen(getter)]
     pub fn started(&self) -> bool {
         self.lobby.started()
