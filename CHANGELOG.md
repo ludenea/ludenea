@@ -45,6 +45,10 @@ hash, those of the golden trace and replays included.
 - `Claim::describe` names a claim's devices in words ("left keyboard half and gamepad 1");
   the native window's title and the web page's lobby (`WebLobby::describeClaims`, a JSON
   array of those texts in slot order) both show it.
+- `WorkerHost::renderFrameJson(layers)` returns the current tick's `RenderFrame` as JSON, so
+  a page forwards the frame text without parsing it. `WebRenderer::push_frame(current,
+  overlay, follows)` sets the next frame, blended from the frame pushed before it only when
+  `follows` says it is the very next tick, so a page parses each frame once.
 - `ludenea build <project> --web --out <folder>` builds a game as a standalone static web page,
   which any web server serves without the editor or `ludenea serve`: the simulation runs in
   a Web Worker driving the control `WorkerHost`, the page draws with `WebRenderer` between

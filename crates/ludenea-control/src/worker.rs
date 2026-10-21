@@ -17,7 +17,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::host::Host;
 use crate::in_process::text::answer;
-use crate::protocol::ServerMessage;
+use crate::protocol::{Command, Reply, ServerMessage};
 
 /// The tick the host was at when the current call began, for the panic hook.
 // ponytail: a panic in the middle of a multi-tick call reports the tick the call started
@@ -91,6 +91,22 @@ impl WorkerHost {
             .map(|event| ServerMessage::Event { event })
             .collect();
         to_json(&events)
+    }
+
+    /// The `RenderFrame` of the current tick as JSON, with the debug drawing of
+    /// `debug_layers`: what `get_render_frame` replies, without the response around it, so a
+    /// page forwards the frame text to its renderer as is. Events the command causes come with
+    /// the next `advance` or `handle`; an error is the refusal's message.
+    #[wasm_bindgen(js_name = renderFrameJson)]
+    pub fn render_frame_json(&mut self, debug_layers: Vec<String>) -> Result<String, JsValue> {
+        self.record_tick();
+        match self.host.handle(Command::GetRenderFrame { debug_layers }) {
+            Ok(Reply::RenderFrame { frame }) => {
+                Ok(serde_json::to_string(&frame).expect("a render frame serializes"))
+            }
+            Ok(other) => unreachable!("GetRenderFrame answers RenderFrame, not {other:?}"),
+            Err(error) => Err(JsValue::from_str(&error.message)),
+        }
     }
 
     /// The fraction of the next tick that play owes, from 0 to below 1: what the page

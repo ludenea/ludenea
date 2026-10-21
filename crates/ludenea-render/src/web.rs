@@ -50,6 +50,8 @@ pub struct WebRenderer {
     backend: &'static str,
     /// The size asked by the last `resize`, which the surface may be clamped below.
     size: Size,
+    /// The current frame of the last `push_frame`, the previous one of the next.
+    pushed: Option<RenderFrame>,
 }
 
 fn failure(error: impl std::fmt::Display) -> JsValue {
@@ -139,6 +141,7 @@ impl WebRenderer {
             renderer,
             backend,
             size: Size { width, height },
+            pushed: None,
         })
     }
 
@@ -231,6 +234,28 @@ impl WebRenderer {
             .renderer
             .set_frames(previous.as_ref(), &current, &overlay)
             .map_err(failure)?;
+        serde_json::to_string(&report).map_err(failure)
+    }
+
+    /// Sets the frame of the next tick, `current_json` (a `RenderFrame`), under
+    /// `overlay_json` as `set_frames` takes it, blended from the frame pushed last when
+    /// `follows` says the new one is the very next tick, else drawn as is. Each frame is read
+    /// once: a page pushing one frame per tick parses no frame twice. Returns the
+    /// `DrawReport` as JSON; errors as `set_frames`.
+    pub fn push_frame(
+        &mut self,
+        current_json: &str,
+        overlay_json: &str,
+        follows: bool,
+    ) -> Result<String, JsValue> {
+        let current: RenderFrame = serde_json::from_str(current_json).map_err(failure)?;
+        let overlay: Overlay = serde_json::from_str(overlay_json).map_err(failure)?;
+        let previous = self.pushed.take().filter(|_| follows);
+        let report = self
+            .renderer
+            .set_frames(previous.as_ref(), &current, &overlay)
+            .map_err(failure)?;
+        self.pushed = Some(current);
         serde_json::to_string(&report).map_err(failure)
     }
 
