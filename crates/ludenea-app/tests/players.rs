@@ -433,3 +433,27 @@ fn presses_after_start_are_ignored() {
     }
     assert_eq!(lobby.claims(), [pad_claim(0)]);
 }
+
+#[test]
+fn at_capacity_a_claimed_half_is_ignored_and_a_new_device_is_full() {
+    let mut lobby = Lobby::new();
+    lobby.press(LobbyPress::Key("KeyA"));
+    for slot in 0..(MAX_LOCAL_PLAYERS - 1) as u32 {
+        lobby.press(button(slot, 0));
+    }
+    assert_eq!(lobby.claims().len(), MAX_LOCAL_PLAYERS);
+    assert_eq!(lobby.press(LobbyPress::Key("KeyS")), LobbyEvent::Ignored);
+    assert_eq!(lobby.press(LobbyPress::Key("ArrowUp")), LobbyEvent::Full);
+}
+
+#[test]
+fn claim_after_release_takes_the_freed_index() {
+    let mut lobby = Lobby::new();
+    lobby.press(button(0, 0));
+    lobby.press(button(1, 0));
+    lobby.press(button(2, 0));
+    lobby.press(button(0, 8));
+    assert_eq!(lobby.claims(), [pad_claim(1), pad_claim(2)]);
+    assert_eq!(lobby.press(button(5, 0)), LobbyEvent::Claimed { player: 2 });
+    assert_eq!(lobby.claims(), [pad_claim(1), pad_claim(2), pad_claim(5)]);
+}
