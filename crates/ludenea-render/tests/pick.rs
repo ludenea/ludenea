@@ -322,3 +322,22 @@ fn screen_to_world_inverts_world_to_clip() {
     let middle = screen_to_world(Vec2::new(32.0, 16.0), size, camera.clone(), 0.5);
     assert_eq!(middle, Vec2::new(1.5, -0.5));
 }
+
+#[test]
+fn pick_and_bounds_follow_a_rotation_that_is_not_unit_length() {
+    // The shader turns along `(cos, sin)` and `(-sin, cos)` as given, so a rotation of length 2
+    // also doubles the quad: 2 by 1 units from the bottom-left pivot become 2 left by 4 up.
+    let regions = regions(32, 16, (0, 16));
+    let hero = entity();
+    let mut item = sprite(hero, Vec2::ZERO);
+    item.rotation = Rot { cos: 0.0, sin: 2.0 };
+    let frame = frame(1.0, vec![item], Vec::new());
+
+    assert_eq!(at(&frame, &regions, (-1.0, 3.5)), [hero]);
+    assert_eq!(at(&frame, &regions, (-1.0, 4.5)), []);
+    assert_eq!(at(&frame, &regions, (-2.5, 1.0)), []);
+    assert_eq!(
+        bounds(&frame, &regions, &BTreeSet::from([hero])),
+        Some((Vec2::new(-2.0, 0.0), Vec2::new(0.0, 4.0)))
+    );
+}
