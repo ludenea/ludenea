@@ -221,6 +221,25 @@ test("control_with_a_game_key_reaches_the_game", async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test("releasing_meta_releases_the_keys_pressed_with_it", async ({ page }) => {
+  await recordPosts(page);
+  const errors = await open(page, "?players=1");
+  await reach(page, 1);
+  // macOS sends no keyup for D released while Meta is down.
+  await dispatchKey(page, "keydown", "ShiftLeft");
+  await dispatchKey(page, "keydown", "MetaLeft", { metaKey: true });
+  await dispatchKey(page, "keydown", "KeyD", { metaKey: true });
+  await expect.poll(() => lastKeys(page)).toEqual(["KeyD", "MetaLeft", "ShiftLeft"]);
+  // Sent in Meta's keyup itself; the other modifiers report their own keyup.
+  const afterMeta = await page.evaluate(() => {
+    dispatchEvent(new KeyboardEvent("keyup", { code: "MetaLeft" }));
+    return (window as unknown as { posted: Posted[] }).posted.at(-1);
+  });
+  expect(afterMeta).toEqual({ type: "devices", devices: { keys: ["ShiftLeft"], gamepads: [] } });
+  await dispatchKey(page, "keyup", "ShiftLeft");
+  expect(errors).toEqual([]);
+});
+
 test("a_draw_that_cannot_happen_stops_the_page_and_the_match", async ({ page }) => {
   await recordPosts(page);
   await open(page, "?players=1");

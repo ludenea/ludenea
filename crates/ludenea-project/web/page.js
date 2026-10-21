@@ -19,6 +19,9 @@ const FUNCTION_KEY = /^F\d+$/;
  * window (W), the address bar (L), a new tab (T), and quit (Q). Every other combination, such
  * as Control with WASD, reaches the game. */
 const SHORTCUTS = new Set(["KeyR", "KeyW", "KeyL", "KeyT", "KeyQ"]);
+const META = new Set(["MetaLeft", "MetaRight"]);
+/** The modifier keys, which report their own keyup. */
+const MODIFIER_KEYS = new Set([...META, "ShiftLeft", "ShiftRight", "ControlLeft", "ControlRight", "AltLeft", "AltRight"]);
 /** The renderer's message for a canvas without a texture this frame, which passes. */
 const TRANSIENT_DRAW = "draw again on the next frame";
 /** Consecutive transient draw failures, about two seconds of frames, after which the page
@@ -256,7 +259,15 @@ function captureKeys() {
     held.add(event.code);
     if (lobby && !lobby.started && !event.repeat) lobbyPress(lobby.pressKey(event.code));
   });
-  addEventListener("keyup", (event) => held.delete(event.code));
+  addEventListener("keyup", (event) => {
+    held.delete(event.code);
+    // macOS sends no keyup for a key released while Meta is down: when Meta goes up, every
+    // key but the modifiers counts as released, and the game hears it now.
+    if (META.has(event.code) && ![...META].some((code) => held.has(code))) {
+      for (const code of held) if (!MODIFIER_KEYS.has(code)) held.delete(code);
+      if (playing) sendDevices(gamepads());
+    }
+  });
   // Keys released while the page had no focus never report it.
   addEventListener("blur", () => releaseDevices({ gamepadsToo: false }));
   document.addEventListener("visibilitychange", () => {
