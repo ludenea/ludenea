@@ -52,7 +52,7 @@ export class FrameFeed {
   private target: FrameTarget | null = null;
   /** The last two frames pushed, oldest first: pushed again in order, they blend as before. */
   private frames: Frame[] = [];
-  /** The tick of the newest frame pushed; -1 once the timeline goes back. */
+  /** The tick of the newest frame pushed; -1 once the timeline goes back, pauses, or moves while paused. */
   private newest = -1;
   private timing = { progress: 0, rate: 0, arrival: 0 };
   /** The game the feed subscribed to while it plays. */
@@ -141,9 +141,12 @@ export class FrameFeed {
     if (state.playing !== previous.playing) {
       if (state.playing) return this.follow();
       this.unfollow();
+      // Paused, the tick on screen decides, even behind frames play pushed past it.
+      this.newest = -1;
       return this.fetch();
     }
     if (state.playing) return;
+    if (current !== before) this.newest = -1;
     if (current !== before || state.hash !== previous.hash || state.pending !== previous.pending || state.timeline?.branch !== previous.timeline?.branch) this.fetch();
   }
 
@@ -189,7 +192,8 @@ export class FrameFeed {
         ({ frame }) => {
           if (this.editor.control !== control) return;
           this.fetchFailures.worked();
-          this.replied(frame);
+          // Asked before a change (of layers, an edit, the tick): the request that follows answers.
+          if (!this.stale) this.replied(frame);
         },
         (error) => {
           if (this.editor.control === control) this.fetchFailures.failed(error);
@@ -212,6 +216,7 @@ export class FrameFeed {
     const { playing, effectiveRate } = this.editor.timeline.getState();
     // What play pushed on its way to a pause: the tick on screen is fetched instead.
     if (!playing) return;
+    let shown = false;
     for (const frame of frames as (Uint8Array | RenderFrame)[]) {
       if (frame instanceof Uint8Array) {
         let tick: number;
@@ -221,17 +226,20 @@ export class FrameFeed {
           this.pushFailures.failed(error);
           continue;
         }
-        this.show({ bytes: frame }, tick);
-      } else this.show({ json: JSON.stringify(frame) }, frame.tick);
+        shown = this.show({ bytes: frame }, tick) || shown;
+      } else shown = this.show({ json: JSON.stringify(frame) }, frame.tick) || shown;
     }
-    this.timing = { progress, rate: effectiveRate, arrival: performance.now() };
+    // The timing belongs to the frames on screen: an event dropped whole leaves it.
+    if (shown) this.timing = { progress, rate: effectiveRate, arrival: performance.now() };
   }
 
-  private show(frame: Frame, tick: number): void {
-    if (tick < this.newest) return;
+  /** Shows `frame` unless it is older than the newest one shown; returns whether it did. */
+  private show(frame: Frame, tick: number): boolean {
+    if (tick < this.newest) return false;
     this.newest = tick;
     this.frames = [...this.frames.slice(-1), frame];
     this.push(frame);
+    return true;
   }
 
   private push(frame: Frame): void {

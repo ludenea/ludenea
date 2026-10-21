@@ -869,6 +869,75 @@ describe("viewport frames", () => {
     expect(host.editor.commands.list().find((command) => command.id === "viewport.toggle-game-camera")?.title).toBe("View through the game camera");
   });
 
+  it("a_reply_sent_before_a_change_at_the_same_tick_is_dropped", async () => {
+    const debug = (text: string): DebugDrawFrame => ({ layers: { contacts: [{ entity: null, primitive: { type: "label", at: { x: 0, y: 0 }, text, color: 0 } }] } });
+    let held: ((reply: object) => void) | null = null;
+    let hold = false;
+    const { host, view } = await viewport((command) => {
+      if (command.type === "get_entity") return { type: "entity", entity: entity(1), components: { "ludenea::Pose": pose(1, 1) } };
+      if (command.type !== "get_render_frame") return undefined;
+      if (hold) return new Promise((resolve) => (held = resolve));
+      return { type: "render_frame", frame: frameAt(7, { debug: debug("current") }) };
+    });
+    const renderer = renderers.at(-1)!;
+    atTick(host, 7);
+    await settle();
+    // A request at tick 7 held while the layers change and an edit lands at the same tick.
+    hold = true;
+    atTick(host, 7, "00000000000000ee");
+    await settle();
+    expect(held).not.toBeNull();
+    hold = false;
+    await act(() => host.editor.commands.run("viewport.toggle-layer.colliders"));
+    act(() => host.editor.selection.getState().select([entity(1)]));
+    fireEvent.keyDown(view, { key: "ArrowRight" });
+    await settle();
+    held!({ type: "render_frame", frame: frameAt(7, { debug: debug("stale") }) });
+    await settle();
+    await waitFor(() => expect(renderer.pushed.at(-1)!.debug).toEqual(debug("current")));
+    expect(renderer.pushed.some((frame) => JSON.stringify(frame.debug) === JSON.stringify(debug("stale")))).toBe(false);
+  });
+
+  it("paused_the_tick_on_screen_is_drawn_even_behind_the_frames_pushed", async () => {
+    let onScreen = 7;
+    const { host, game } = await viewport((command) => (command.type === "get_render_frame" ? renderFrame(onScreen) : undefined));
+    const renderer = renderers.at(-1)!;
+    atTick(host, 7);
+    play(host);
+    await settle();
+    // Play pushed tick 10 before the pause; the timeline stopped on tick 9.
+    act(() => game.push({ type: "render_frames", frames: [frameAt(8), frameAt(9)], progress: 0 }));
+    act(() => game.push({ type: "render_frames", frames: [frameAt(10)], progress: 0 }));
+    onScreen = 9;
+    pause(host);
+    atTick(host, 9);
+    await waitFor(() => expect(ticksPushed(renderer).at(-1)).toBe(9));
+    // Stepping back, then forward again.
+    onScreen = 8;
+    atTick(host, 8);
+    await waitFor(() => expect(ticksPushed(renderer).at(-1)).toBe(8));
+    onScreen = 9;
+    atTick(host, 9);
+    await waitFor(() => expect(ticksPushed(renderer).at(-1)).toBe(9));
+  });
+
+  it("frames_all_dropped_leave_the_timing_as_it_was", async () => {
+    const { host, game } = await viewport();
+    const renderer = renderers.at(-1)!;
+    let now = 1000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    atTick(host, 9);
+    play(host);
+    act(() => game.push(ticked(9, 15)));
+    act(() => game.push({ type: "render_frames", frames: [frameAt(9)], progress: 0.2 }));
+    now = 1010;
+    // Older than the newest shown: dropped, and its progress with it.
+    act(() => game.push({ type: "render_frames", frames: [frameAt(8)], progress: 0.9 }));
+    now = 1020;
+    await animationFrames(2);
+    expect(drawsOf(renderer).at(-1)![0]).toBeCloseTo(0.5, 5);
+  });
+
   it("a_new_game_subscribes_again", async () => {
     const { host, game } = await viewport();
     const renderer = renderers.at(-1)!;
