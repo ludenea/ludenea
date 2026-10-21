@@ -447,7 +447,15 @@ impl Display {
             // A texture refused because the device was lost while it was asked for.
             Err(error) => match renderer.check_device() {
                 Err(RenderError::DeviceLost(cause)) => Err(Failure::Lost(cause)),
-                _ => Err(Failure::Failed(error)),
+                Ok(()) => Err(Failure::Failed(error)),
+                // The GPU's own errors, often why the texture was refused.
+                Err(pending) => Err(Failure::Failed(RuntimeError::Gpu(format!(
+                    "{}; {pending}",
+                    match error {
+                        RuntimeError::Gpu(message) | RuntimeError::Window(message) => message,
+                        other => other.to_string(),
+                    }
+                )))),
             },
         }
     }
@@ -512,6 +520,8 @@ mod tests {
         Validation,
         /// The device is lost while the texture is asked for, which the GPU then refuses.
         DeviceLost,
+        /// The device raises an error while the texture is asked for, which it then refuses.
+        GpuError,
     }
 
     /// An offscreen stand-in for a window's surface.
@@ -544,6 +554,16 @@ mod tests {
                 Outcome::Validation => Acquired::Validation,
                 Outcome::DeviceLost => {
                     lose(&self.device);
+                    Acquired::Validation
+                }
+                Outcome::GpuError => {
+                    // A buffer both read and written by the host is invalid.
+                    let _invalid = self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("invalid"),
+                        size: 4,
+                        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::MAP_WRITE,
+                        mapped_at_creation: false,
+                    });
                     Acquired::Validation
                 }
             }
@@ -799,6 +819,24 @@ mod tests {
             log.borrow_mut().outcomes.push_back(Outcome::Outdated);
             assert!(!drawn(&mut presenter).unwrap(), "{name}: a new run starts");
         }
+    }
+
+    #[test]
+    fn a_refused_texture_names_the_gpu_errors_behind_it() {
+        let log = Rc::new(RefCell::new(Log::default()));
+        let opened = Rc::new(RefCell::new(Vec::new()));
+        let mut display = display(&log, &opened, &Rc::new(RefCell::new(false)));
+        let runner = empty_game();
+        let (previous, current) = runner.frames();
+        log.borrow_mut().outcomes.push_back(Outcome::GpuError);
+        let error = display
+            .show(previous, current.unwrap(), &Overlay::default(), true, 1.0)
+            .unwrap_err();
+        let RuntimeError::Gpu(message) = &error else {
+            panic!("{error}");
+        };
+        assert!(message.contains("refused"), "{message}");
+        assert!(message.contains("earlier GPU work"), "{message}");
     }
 
     #[test]
