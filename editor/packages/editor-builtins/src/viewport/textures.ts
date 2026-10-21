@@ -45,9 +45,10 @@ const changeOf = (change: FileChange): { path: string; removed: boolean; texture
  * `current` after `changes`: the changed and created textures read again, the removed ones (and
  * those that stopped being textures) dropped. A new version that cannot be used (unreadable
  * meta or PNG, or refused by `textureFrames`) leaves the previous one in the set, and `warn`
- * hears `<path>: <cause>`. Returns `current` itself when no texture is concerned.
+ * hears `<path>: <cause>`, and `loaded` hears
+ * the path of each version that works. Returns `current` itself when no texture is concerned.
  */
-export async function reloadChanged(current: LoadedTextures, changes: FileChange[], project: ProjectClient, warn: (text: string) => void = () => {}): Promise<LoadedTextures> {
+export async function reloadChanged(current: LoadedTextures, changes: FileChange[], project: ProjectClient, warn: (text: string) => void = () => {}, loaded: (path: string) => void = () => {}): Promise<LoadedTextures> {
   const known = (path: string) => current.sources.some((source) => source.path === path);
   const concerned = changes.map(changeOf).filter(({ path, texture }) => texture || known(path));
   if (concerned.length === 0) return current;
@@ -79,6 +80,7 @@ export async function reloadChanged(current: LoadedTextures, changes: FileChange
     try {
       const png = decode((await project.request({ type: "read_binary", path })).bytes);
       textureFrames(png, JSON.stringify(entry.kind.Texture));
+      loaded(path);
       const source = { id: entry.id, path, meta: entry.kind.Texture };
       const index = sources.findIndex((candidate) => candidate.path === path);
       if (index < 0) {

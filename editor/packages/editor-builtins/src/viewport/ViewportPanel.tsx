@@ -156,7 +156,9 @@ export function ViewportPanel({
       let before: LoadedTextures | null = null;
       const next = known.then((current) => {
         before = current;
-        return reloadChanged(current, changes, editor.project, warnOnce).catch((error) => {
+        // A fresh warning for each break: a version that works clears its path's earlier ones.
+        const loaded = (path: string) => textureWarnings.forEach((text) => text.startsWith(`${path}: `) && textureWarnings.delete(text));
+        return reloadChanged(current, changes, editor.project, warnOnce, loaded).catch((error) => {
           if (!disposed) editor.console.report(error, "Reloading the textures for the viewport");
           return current;
         });

@@ -1183,6 +1183,25 @@ describe("viewport frames", () => {
       expect(await uploaded(renderer, 2)).toEqual([{ id: NEWER, path: "assets/bug.png", meta: META }]);
     });
 
+    it("the_same_break_after_a_fix_warns_again", async () => {
+      const project = mutable([bug]);
+      const { host } = await viewport(undefined, {}, project.answer);
+      const renderer = renderers.at(-1)!;
+      await uploaded(renderer, 1);
+      const change = async (id: string, count: number) => {
+        project.entries = [{ ...bug, id }];
+        pushed(host, files("assets/bug.png", { Texture: META }));
+        await uploaded(renderer, count);
+      };
+      script.invalidTextures = { "assets/bug.png": "the image is not a PNG" };
+      await change(NEWER, 2);
+      script.invalidTextures = {};
+      await change(OTHER, 3);
+      script.invalidTextures = { "assets/bug.png": "the image is not a PNG" };
+      await change(NEWER, 4);
+      expect(host.editor.console.list().map(({ text }) => text)).toEqual(["assets/bug.png: the image is not a PNG", "assets/bug.png: the image is not a PNG"]);
+    });
+
     it("a_texture_changed_before_a_lost_device_is_uploaded_to_the_new_renderer", async () => {
       const project = mutable([bug]);
       const { host } = await viewport(undefined, {}, project.answer);
