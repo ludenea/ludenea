@@ -1,8 +1,9 @@
-//! The runner: drives the in-process control host for a game that plays on its own (a native
-//! window, a web page). It loads the game, starts the match with its players' claims, and per
+//! The runner: drives the in-process control host for a game that plays on its own in the
+//! native window. It loads the game, starts the match with its players' claims, and per
 //! displayed frame sends the live devices, lets the host's pacer run the ticks due, and fetches
 //! the render frame of the newest tick. Every step goes through host commands, so a played
-//! match records the same session as the editor.
+//! match records the same session as the editor. The web page does not use it: its worker
+//! sends the same commands to the browser's `WorkerHost`.
 
 use ludenea_app::App;
 use ludenea_app::players::{Claim, LiveDevices};
