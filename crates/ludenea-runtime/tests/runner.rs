@@ -374,8 +374,9 @@ fn a_first_frame_that_cannot_draw_is_a_load_error() {
     }
 }
 
-/// Keys pressed before the edit's tick take over there: the session forks a branch, as
-/// editing the past does, and the branch played holds none of the edits after that tick.
+/// The players take over at their first key press, which comes before the edit's tick: the
+/// session forks a branch at that press, as editing the past does, and the branch played
+/// holds none of the edits after it, the loaded one included.
 #[test]
 fn input_before_a_loaded_edit_forks_and_the_replay_leaves_it_out() {
     let mut runner = started(marked_app, &files_with_edit(spawn_marker()), 1);
