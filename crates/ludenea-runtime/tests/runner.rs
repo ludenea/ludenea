@@ -294,6 +294,53 @@ fn files_with_edit(edit: Edit) -> GameFiles {
     }
 }
 
+fn spawn_marker() -> Edit {
+    Edit::Spawn {
+        components: vec![(
+            "runner::Marker".to_string(),
+            postcard::to_allocvec(&Marker { value: 7 }).unwrap(),
+        )],
+    }
+}
+
+fn markers(simulation: &Simulation) -> Vec<Marker> {
+    let world = simulation.world();
+    world
+        .entities()
+        .filter_map(|entity| world.get::<Marker>(entity).map(|marker| marker.clone()))
+        .collect()
+}
+
+/// Live input differing from the recorded future before the edit's tick would take over:
+/// the session forks a branch there, as editing the past does, and the loaded edit stays on
+/// the branch left behind. The players press keys from the tick after the edit only.
+#[test]
+fn loaded_edits_apply_and_stay_in_the_replay() {
+    let mut runner = started(marked_app, &files_with_edit(spawn_marker()), 1);
+    let mut frame = 0;
+    while runner.tick() < 2 * EDIT_TICK {
+        let pressing = runner.tick() > EDIT_TICK && frame % 3 == 0;
+        let devices = keys(if pressing { &["Space"] } else { &[] });
+        runner.frame(1.0 / 60.0, &devices).unwrap();
+        frame += 1;
+    }
+    let replay = Replay::decode(&runner.export_replay().unwrap()).unwrap();
+    let edits = EditLog::decode(&replay.edits).unwrap();
+    assert_eq!(edits.edits.len(), 1, "{edits:?}");
+    assert_eq!(edits.edits[0].tick, EDIT_TICK);
+    let mut simulation = marked_app().build().unwrap();
+    let report = play_replay(&mut simulation, &replay, |_, _| {}).unwrap();
+    assert_eq!(report.outcome, ReplayOutcome::Matched);
+    assert_eq!(markers(&simulation), [Marker { value: 7 }]);
+    let inputs = InputLog::decode(&replay.inputs).unwrap();
+    let pressed = (0..2 * EDIT_TICK).filter(|&tick| {
+        let input: Vec<Pressed> = postcard::from_bytes(inputs.tick(tick).unwrap()).unwrap();
+        input[0].any
+    });
+    assert!(pressed.count() > 0, "live input after the edit is recorded");
+    assert!(runner.take_messages().is_empty());
+}
+
 #[test]
 fn an_edit_that_no_longer_applies_is_a_warning_naming_its_tick() {
     let unknown = Edit::Spawn {
