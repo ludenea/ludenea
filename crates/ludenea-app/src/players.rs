@@ -32,6 +32,8 @@ const LEFT_HALF: &[&str] = &[
     "KeyF",
     "KeyG",
     "ShiftLeft",
+    // Left of `KeyZ` on ISO keyboards, AZERTY included.
+    "IntlBackslash",
     "KeyZ",
     "KeyX",
     "KeyC",

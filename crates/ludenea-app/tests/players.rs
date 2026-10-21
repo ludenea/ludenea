@@ -29,6 +29,8 @@ fn left_half_holds_wasd_and_space() {
         "Space",
         "ShiftLeft",
         "Digit1",
+        // Left of `KeyZ` on ISO keyboards, AZERTY included.
+        "IntlBackslash",
     ] {
         assert_eq!(KeyboardPart::of(code), KeyboardPart::Left, "{code}");
         assert!(KeyboardPart::Left.contains(code), "{code}");
