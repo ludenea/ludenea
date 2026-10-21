@@ -50,7 +50,7 @@ pub fn run(root: &Path, scene: Option<&Path>, args: &[String]) -> Result<u8, Str
     exit_code(&binary, status.code())
 }
 
-/// The exit code of the tool for the game's `code`, or why there is none.
+/// The game's exit `code` as this tool's own, or why it cannot be passed on.
 fn exit_code(binary: &Path, code: Option<i32>) -> Result<u8, String> {
     match code {
         Some(code) => u8::try_from(code).map_err(|_| {
