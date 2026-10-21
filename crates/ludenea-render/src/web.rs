@@ -27,6 +27,7 @@ use web_sys::js_sys::{Error, Function, Uint8Array};
 use crate::atlas::{self, TextureError, TextureSource};
 use crate::camera::{DEFAULT_CAMERA, screen_to_world};
 use crate::gpu::{DrawReport, Overlay, RenderError, Renderer, Size};
+use crate::interpolate::blended;
 use crate::pick;
 
 /// One texture of `set_textures`, whose PNG comes in a separate array.
@@ -85,8 +86,15 @@ pub struct WebRenderer {
     size: Size,
     /// The size of the last `resize` in CSS pixels, which `pick` and `screen_to_world` read.
     css_size: Size,
-    /// The frame of the last `push_frame`, which the next one blends from.
+    /// The frame of the last push, which the next one blends from.
     pushed: Option<RenderFrame>,
+    /// The frame pushed before it, which it is drawn blended from when it follows it.
+    before: Option<RenderFrame>,
+    /// How far from `before` to `pushed` the last successful `draw` showed; 1 until a draw
+    /// after each push.
+    drawn_alpha: f32,
+    /// Whether new textures blanked the canvas since the last push: nothing is drawn to pick.
+    blank: bool,
 }
 
 /// A JavaScript `Error` of `name` whose message is `error`.
@@ -219,6 +227,9 @@ impl WebRenderer {
             size: Size { width, height },
             css_size: Size { width, height },
             pushed: None,
+            before: None,
+            drawn_alpha: 1.0,
+            blank: false,
         })
     }
 
@@ -231,7 +242,8 @@ impl WebRenderer {
     /// Packs `pngs` into an atlas and uploads it, replacing the previous textures.
     /// `sources_json` is `[{ id, path, meta }]`, one per PNG in the same order. Returns the
     /// textures that could not be loaded as JSON, `[{ id, path, message }]`; they draw as
-    /// placeholders and the others draw.
+    /// placeholders and the others draw. The canvas shows nothing until the next push, so
+    /// until then `pick` hits nothing and `bounds` is `undefined`.
     pub fn set_textures(
         &mut self,
         sources_json: &str,
@@ -258,18 +270,22 @@ impl WebRenderer {
             .collect();
         let atlas = atlas::pack(&sources, self.renderer.max_page_side());
         self.renderer.set_atlas(&atlas).map_err(render_failure)?;
+        self.blank = true;
         let refused: Vec<Refused> = atlas.errors.iter().map(Refused::from).collect();
         to_json(&refused)
     }
 
     /// Uploads a packed atlas from its files (`manifest` is `atlas.json`, `pages` the PNGs of
     /// `page-<n>.png` in order), replacing the previous textures. Like `set_textures`, it
-    /// blanks the sprites until the next `push_frame`. A refused file is the error message.
+    /// blanks the canvas until the next push, and `pick` and `bounds` with it. A refused file
+    /// is `InvalidInput`.
     pub fn set_atlas(&mut self, manifest: &str, pages: Vec<Uint8Array>) -> Result<(), JsValue> {
         let pages: Vec<Vec<u8>> = pages.iter().map(Uint8Array::to_vec).collect();
         let pages: Vec<&[u8]> = pages.iter().map(Vec::as_slice).collect();
         let atlas = atlas::Atlas::from_files(manifest, &pages).map_err(invalid)?;
-        self.renderer.set_atlas(&atlas).map_err(render_failure)
+        self.renderer.set_atlas(&atlas).map_err(render_failure)?;
+        self.blank = true;
+        Ok(())
     }
 
     /// `width` and `height` in CSS pixels; the canvas gets `pixel_ratio` times more, at least
@@ -342,20 +358,22 @@ impl WebRenderer {
             .draw(&view, self.size, alpha, camera)
             .map_err(render_failure)?;
         self.queue.present(texture);
+        self.drawn_alpha = alpha;
         Ok(())
     }
 
-    /// The entities drawn under `(x, y)`, in CSS pixels from the canvas's top-left, in the
-    /// frame pushed last, topmost first, as a JSON `Entity[]` (`pick::pick`): seen through
-    /// `camera_json` (a `CameraView`) when given, else through the frame's camera, as `draw`
-    /// shows it at the current tick. Empty before the first frame.
+    /// The entities drawn under `(x, y)`, in CSS pixels from the canvas's top-left, topmost
+    /// first, as a JSON `Entity[]` (`pick::pick`), in what the last `draw` showed: the frame
+    /// pushed last, blended from the one before at that draw's `alpha` (as is before a draw).
+    /// Seen through `camera_json` (a `CameraView`) when given, else through the frame's camera
+    /// as shown. Empty before the first frame, and from new textures to the next push.
     pub fn pick(&self, x: f32, y: f32, camera_json: Option<String>) -> Result<String, JsValue> {
         let camera = camera_from(camera_json)?;
-        let hits: Vec<Entity> = match &self.pushed {
+        let hits: Vec<Entity> = match self.shown().filter(|_| !self.blank) {
             Some(frame) => {
-                let camera = camera.unwrap_or_else(|| shown(frame));
+                let camera = camera.unwrap_or_else(|| frame_camera(&frame));
                 pick::pick(
-                    frame,
+                    &frame,
                     self.renderer.regions(),
                     Vec2::new(x, y),
                     self.css_size,
@@ -368,21 +386,22 @@ impl WebRenderer {
     }
 
     /// The world box `{ min, max }` of the drawn sprites and tilemaps of `entities_json` (an
-    /// `Entity[]`) on layers of parallax 1 in the frame pushed last, as JSON (`pick::bounds`);
-    /// `undefined` when none is drawn there, or before the first frame.
+    /// `Entity[]`) on layers of parallax 1, as JSON (`pick::bounds`), in what the last `draw`
+    /// showed, as `pick` reads it; `undefined` when none is drawn there, before the first
+    /// frame, and from new textures to the next push.
     pub fn bounds(&self, entities_json: &str) -> Result<Option<String>, JsValue> {
         let entities: BTreeSet<Entity> = serde_json::from_str(entities_json).map_err(invalid)?;
-        let Some(frame) = &self.pushed else {
+        let Some(frame) = self.shown().filter(|_| !self.blank) else {
             return Ok(None);
         };
-        pick::bounds(frame, self.renderer.regions(), &entities)
+        pick::bounds(&frame, self.renderer.regions(), &entities)
             .map(|(min, max)| to_json(&Bounds { min, max }))
             .transpose()
     }
 
     /// The world point a layer of `parallax` shows at `(x, y)`, in CSS pixels from the
     /// canvas's top-left, as a JSON `Vec2`: through `camera_json` (a `CameraView`) when given,
-    /// else through the camera of the frame pushed last (or the default camera before one).
+    /// else through the camera the last `draw` showed (or the default camera before a frame).
     pub fn screen_to_world(
         &self,
         x: f32,
@@ -390,8 +409,10 @@ impl WebRenderer {
         parallax: f32,
         camera_json: Option<String>,
     ) -> Result<String, JsValue> {
-        let camera = camera_from(camera_json)?
-            .unwrap_or_else(|| self.pushed.as_ref().map_or(DEFAULT_CAMERA, shown));
+        let camera = camera_from(camera_json)?.unwrap_or_else(|| {
+            self.shown()
+                .map_or(DEFAULT_CAMERA, |frame| frame_camera(&frame))
+        });
         to_json(&screen_to_world(
             Vec2::new(x, y),
             self.css_size,
@@ -401,8 +422,8 @@ impl WebRenderer {
     }
 }
 
-/// The camera `draw` shows `frame` through at its tick without a free camera.
-fn shown(frame: &RenderFrame) -> CameraView {
+/// The camera `draw` shows `frame` through without a free camera.
+fn frame_camera(frame: &RenderFrame) -> CameraView {
     frame
         .camera
         .as_ref()
@@ -410,6 +431,13 @@ fn shown(frame: &RenderFrame) -> CameraView {
 }
 
 impl WebRenderer {
+    /// The frame the last `draw` showed: the frame pushed last, blended from the one before
+    /// at that draw's alpha.
+    fn shown(&self) -> Option<RenderFrame> {
+        let pushed = self.pushed.as_ref()?;
+        Some(blended(self.before.as_ref(), pushed, self.drawn_alpha))
+    }
+
     /// Sets `current` as the frame to draw under `overlay_json`, and keeps it.
     fn push(&mut self, current: RenderFrame, overlay_json: &str) -> Result<String, JsValue> {
         let overlay: Overlay = serde_json::from_str(overlay_json).map_err(invalid)?;
@@ -417,6 +445,9 @@ impl WebRenderer {
             .renderer
             .set_frames(self.pushed.as_ref(), &current, &overlay)
             .map_err(render_failure)?;
+        self.before = self.pushed.take();
+        self.drawn_alpha = 1.0;
+        self.blank = false;
         let pushed = self.pushed.insert(current);
         to_json(&Pushed {
             tick: pushed.tick,

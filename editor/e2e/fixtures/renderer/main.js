@@ -20,6 +20,12 @@ async function start() {
   await init();
   renderer = await WebRenderer.create(canvas);
   renderer.resize(SIZE, SIZE, 1);
+  const errors = await loadTextures();
+  return { backend: renderer.backend, errors };
+}
+
+/** Loads the textures into the renderer: the ones it refused. */
+async function loadTextures() {
   const sources = [
     // Frame 0: the left half one colour, the right half another; frame 1: a third colour.
     { id: SPRITES, path: "sprites.png", meta: meta(grid) },
@@ -30,8 +36,7 @@ async function start() {
     ["sprites.png", "tiles.png"].map(async (file) => new Uint8Array(await (await fetch(file)).arrayBuffer())),
   );
   pngs.push(new Uint8Array([1, 2, 3]));
-  const errors = JSON.parse(renderer.set_textures(JSON.stringify(sources), pngs));
-  return { backend: renderer.backend, errors };
+  return JSON.parse(renderer.set_textures(JSON.stringify(sources), pngs));
 }
 
 /** The rotation of `degrees`, counterclockwise. */
@@ -245,6 +250,44 @@ function badInputs() {
   };
 }
 
+/**
+ * A sprite pushed at (0, 3.5) then at (1, 3.5) on the next tick: what a click hits at pixels
+ * 34 (drawn only halfway, from x 0 to 1) and 52 (drawn only at the current tick, from 0.5 to
+ * 1.5) along row 8, before any draw and after a draw halfway.
+ */
+function pickHalfway() {
+  tick += 2;
+  const at = (x) => frame([sprite(1, [x, 3.5])]);
+  push(at(0), {}, tick - 1);
+  push(at(1), {}, tick);
+  const answers = () => ({
+    halfway: JSON.parse(renderer.pick(34, 8, undefined)),
+    current: JSON.parse(renderer.pick(52, 8, undefined)),
+    bounds: JSON.parse(renderer.bounds(JSON.stringify([entity(1)])) ?? "null"),
+  });
+  const beforeDraw = answers();
+  renderer.draw(0.5, undefined);
+  return { beforeDraw, afterDraw: answers() };
+}
+
+/**
+ * Draws a sprite at (0, 2), loads the textures again (which blanks the canvas until the next
+ * push), then pushes it again: what a click at pixel (32, 32) hits at each step.
+ */
+async function pickAcrossNewTextures() {
+  const hero = () => frame([sprite(1, [0, 2])]);
+  const answers = () => ({
+    picked: JSON.parse(renderer.pick(32, 32, undefined)),
+    bounds: JSON.parse(renderer.bounds(JSON.stringify([entity(1)])) ?? "null"),
+  });
+  draw(hero());
+  const drawn = answers();
+  await loadTextures();
+  const blank = answers();
+  draw(hero());
+  return { drawn, blank, pushedAgain: answers() };
+}
+
 /** Sets a panic handler, then panics in the module: what the handler received. */
 function panicked() {
   const received = [];
@@ -298,4 +341,6 @@ window.fixture = {
   framesOf,
   badInputs,
   panicked,
+  pickHalfway,
+  pickAcrossNewTextures,
 };

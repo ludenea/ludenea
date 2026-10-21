@@ -33,7 +33,10 @@ pub(crate) struct SpriteMotion {
 
 impl SpriteMotion {
     /// The centre and rotation `alpha` of the way, as the shader computes them.
-    #[cfg(test)]
+    #[cfg(any(
+        test,
+        all(feature = "web", target_arch = "wasm32", target_os = "unknown")
+    ))]
     fn at(&self, alpha: f32) -> (Vec2, Rot) {
         let alpha = clamp_alpha(alpha);
         let center = Vec2::lerp(self.from, self.to, alpha);
@@ -121,6 +124,37 @@ impl<'a> Pairing<'a> {
         };
         Some((from, to))
     }
+}
+
+/// `current` as a draw shows it `alpha` of the way from `previous` (blended only when
+/// `current` follows it, as `Renderer::set_frames` blends): each sprite at its centre and
+/// rotation, each tilemap at its position, and the camera, all blended as the shader blends
+/// them. What the browser renderer's `pick` and `bounds` read to answer for what was drawn.
+#[cfg(any(
+    test,
+    all(feature = "web", target_arch = "wasm32", target_os = "unknown")
+))]
+pub(crate) fn blended(
+    previous: Option<&RenderFrame>,
+    current: &RenderFrame,
+    alpha: f32,
+) -> RenderFrame {
+    let previous = previous.filter(|previous| current.follows(previous));
+    let alpha = clamp_alpha(alpha);
+    let pairing = Pairing::new(previous, current);
+    let mut shown = current.clone();
+    for item in &mut shown.sprites {
+        (item.position, item.rotation) = pairing.sprite(item).at(alpha);
+    }
+    for item in &mut shown.tilemaps {
+        let (from, to) = pairing.tilemap(item);
+        item.position = Vec2::lerp(from, to, alpha);
+    }
+    if let (Some(camera), Some((from, to))) = (&mut shown.camera, pairing.camera(current)) {
+        let view = camera_at(&from, &to, alpha);
+        (camera.center, camera.view) = (view.center, view.view);
+    }
+    shown
 }
 
 /// The camera `alpha` (already clamped) of the way from `from` to `to`.
@@ -218,6 +252,50 @@ mod tests {
             pairing.tilemap(&current.tilemaps[0]),
             (Vec2::new(-4.0, 2.0), Vec2::new(0.0, 0.0))
         );
+    }
+
+    #[test]
+    fn blended_frame_is_what_a_draw_shows() {
+        let mut world = World::new();
+        let (a, b, eye) = (world.spawn(), world.spawn(), world.spawn());
+        let mut previous = frame(
+            1,
+            vec![sprite(a, Vec2::new(0.0, 0.0), Rot::IDENTITY)],
+            vec![tilemap(b, Vec2::new(-4.0, 2.0))],
+        );
+        previous.camera = camera(eye, Vec2::new(0.0, 0.0), Vec2::new(4.0, 4.0));
+        let quarter = Rot { cos: 0.0, sin: 1.0 };
+        let mut current = frame(
+            2,
+            vec![sprite(a, Vec2::new(2.0, -4.0), quarter)],
+            vec![tilemap(b, Vec2::new(0.0, 0.0))],
+        );
+        current.camera = camera(eye, Vec2::new(2.0, 0.0), Vec2::new(8.0, 4.0));
+
+        let shown = super::blended(Some(&previous), &current, 0.5);
+        assert_eq!(shown.sprites[0].position, Vec2::new(1.0, -2.0));
+        let rotation = shown.sprites[0].rotation;
+        // An eighth of a turn.
+        let eighth = std::f32::consts::FRAC_1_SQRT_2;
+        assert!(
+            close(rotation.cos, eighth) && close(rotation.sin, eighth),
+            "{rotation:?}"
+        );
+        assert_eq!(shown.tilemaps[0].position, Vec2::new(-2.0, 1.0));
+        let camera = shown.camera.as_ref().unwrap();
+        assert_eq!(
+            (camera.center, camera.view),
+            (Vec2::new(1.0, 0.0), Vec2::new(6.0, 4.0))
+        );
+
+        // At the current tick, and after a gap in ticks, the frame as it is.
+        assert_eq!(super::blended(Some(&previous), &current, 1.0), current);
+        let later = RenderFrame {
+            tick: 3,
+            ..current.clone()
+        };
+        assert_eq!(super::blended(Some(&previous), &later, 0.5), later);
+        assert_eq!(super::blended(None, &current, 0.5), current);
     }
 
     #[test]

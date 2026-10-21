@@ -159,6 +159,22 @@ test("pick_bounds_and_screen_to_world_answer_for_the_pushed_frame", async ({ pag
   expect(answers.background).toEqual({ x: -2, y: 2 });
 });
 
+test("pick_and_bounds_answer_for_what_the_last_draw_showed", async ({ page }) => {
+  await start(page);
+  const { beforeDraw, afterDraw } = await page.evaluate(() => window.fixture.pickHalfway());
+  // Before a draw, the newest frame: the sprite from x 0.5 to 1.5.
+  expect(beforeDraw).toEqual({ halfway: [], current: [HERO], bounds: { min: { x: 0.5, y: 3 }, max: { x: 1.5, y: 4 } } });
+  // Drawn halfway, from x 0 to 1: a click hits it where it is shown.
+  expect(afterDraw).toEqual({ halfway: [HERO], current: [], bounds: { min: { x: 0, y: 3 }, max: { x: 1, y: 4 } } });
+});
+
+test("new_textures_leave_nothing_to_pick_until_the_next_push", async ({ page }) => {
+  await start(page);
+  const answers = await page.evaluate(() => window.fixture.pickAcrossNewTextures());
+  const shown = { picked: [HERO], bounds: { min: { x: -0.5, y: 1.5 }, max: { x: 0.5, y: 2.5 } } };
+  expect(answers).toEqual({ drawn: shown, blank: { picked: [], bounds: null }, pushedAgain: shown });
+});
+
 test("texture_frames_from_the_page", async ({ page }) => {
   await start(page);
   const grid = { frame_width: 16, frame_height: 16, margin: 0, spacing: 0 };

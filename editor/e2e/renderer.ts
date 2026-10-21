@@ -30,6 +30,10 @@ export interface Vec2 {
   x: number;
   y: number;
 }
+export interface Bounds {
+  min: Vec2;
+  max: Vec2;
+}
 /** A texture the renderer refused. */
 export interface Refused {
   id: string;
@@ -58,13 +62,15 @@ declare global {
       ): {
         picked: Entity[];
         pickedThroughAFreeCamera: Entity[];
-        bounds: { min: Vec2; max: Vec2 } | null;
+        bounds: Bounds | null;
         world: Vec2;
         background: Vec2;
       };
       framesOf(meta: unknown): Promise<{ frames?: unknown; error?: Thrown }>;
       badInputs(): Record<"json" | "overlay" | "bytes" | "camera" | "pngCount", Thrown | null>;
       panicked(): { received: string[]; thrown: boolean };
+      pickHalfway(): Record<"beforeDraw" | "afterDraw", { halfway: Entity[]; current: Entity[]; bounds: Bounds | null }>;
+      pickAcrossNewTextures(): Promise<Record<"drawn" | "blank" | "pushedAgain", { picked: Entity[]; bounds: Bounds | null }>>;
     };
   }
 }
