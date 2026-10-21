@@ -14,7 +14,7 @@ use ludenea_app::project::{project_assets, project_textures};
 use ludenea_control::{ClientMessage, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION};
 use ludenea_ecs::AssetId;
 use ludenea_render::atlas::{self, TextureSource};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::Project;
 use crate::build::{BuildError, BuildEvent, BuildTarget, cargo_build, generate};
@@ -49,6 +49,15 @@ struct WebGame<'a> {
     assets: Vec<(AssetId, &'a str)>,
 }
 
+/// What marks a folder's `game.json` as a web build's: the fields every version holds.
+#[derive(Deserialize)]
+struct WebGameMark {
+    #[expect(dead_code, reason = "parsed only to recognize a web build's game.json")]
+    version: u32,
+    #[expect(dead_code, reason = "parsed only to recognize a web build's game.json")]
+    scene: String,
+}
+
 impl Project {
     /// Builds the game as a standalone web page into `out` on a background thread, reporting
     /// on `output`; the last event is always `Finished`. Returns `out`.
@@ -57,7 +66,8 @@ impl Project {
     /// pages of at most 2048 pixels, and one that cannot be read or packed fails the build.
     /// Everything is written into a staging folder beside `out` first, so a failed build
     /// leaves the previous `out` as it was; an existing `out` is replaced only if it is empty
-    /// or a previous web build (it holds `game.json`).
+    /// or a previous web build (its `game.json` holds a version and a scene), checked before
+    /// the build and again right before the replacement.
     pub fn build_web(
         &self,
         out: &Path,
@@ -144,7 +154,8 @@ fn check_web_feature(root: &Path) -> Result<(), BuildError> {
 }
 
 /// Refuses to replace an `out` that is a file or a folder holding something other than a
-/// web build, which replacing would delete.
+/// web build (a `game.json` that is a web build's, with a version and a scene), which
+/// replacing would delete.
 fn check_replaceable(out: &Path) -> Result<(), BuildError> {
     let Some(metadata) = existing(out)? else {
         return Ok(());
@@ -153,11 +164,17 @@ fn check_replaceable(out: &Path) -> Result<(), BuildError> {
     if !metadata.is_dir() {
         return Err(refuse());
     }
-    let empty = fs::read_dir(out).map_err(at(out))?.next().is_none();
-    if empty || out.join("game.json").is_file() {
-        Ok(())
-    } else {
-        Err(refuse())
+    if fs::read_dir(out).map_err(at(out))?.next().is_none() {
+        return Ok(());
+    }
+    let game = out.join("game.json");
+    if !existing(&game)?.is_some_and(|metadata| metadata.is_file()) {
+        return Err(refuse());
+    }
+    let text = fs::read(&game).map_err(at(&game))?;
+    match serde_json::from_slice::<WebGameMark>(&text) {
+        Ok(_) => Ok(()),
+        Err(_) => Err(refuse()),
     }
 }
 
@@ -280,8 +297,10 @@ fn write_game(name: &str, scene: &Path, root: &Path, dir: &Path) -> Result<(), B
 }
 
 /// Puts `staging` in place of `out`: the old `out` is moved aside first and removed once
-/// `staging` took its place, or moved back if it could not.
+/// `staging` took its place, or moved back if it could not. `out` is checked again first,
+/// as it may have changed during the build.
 fn replace(staging: &Path, out: &Path) -> Result<(), BuildError> {
+    check_replaceable(out)?;
     if existing(out)?.is_none() {
         return fs::rename(staging, out).map_err(at(out));
     }
@@ -321,13 +340,33 @@ mod tests {
         }
     }
 
+    /// A `game.json` as a web build writes it.
+    const GAME_JSON: &str = r#"{"version":1,"name":"site","scene":"Scene()","assets":[]}"#;
+
+    #[test]
+    fn replace_checks_out_again_and_refuses_a_folder_that_became_something_else() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let out = dir.path().join("site");
+        let staging = sibling(&out, "staging");
+        fs::create_dir_all(&staging).unwrap();
+        fs::write(staging.join("game.json"), GAME_JSON).unwrap();
+        // Something else took `out` while the game was building.
+        fs::create_dir_all(&out).unwrap();
+        fs::write(out.join("notes.txt"), "keep").unwrap();
+        assert!(matches!(
+            replace(&staging, &out),
+            Err(BuildError::NotAWebBuild(_))
+        ));
+        assert_eq!(fs::read_to_string(out.join("notes.txt")).unwrap(), "keep");
+    }
+
     #[test]
     fn replace_swaps_a_previous_build_and_leaves_nothing_beside() {
         let dir = tempfile::TempDir::new().unwrap();
         let out = dir.path().join("site");
         let staging = sibling(&out, "staging");
         fs::create_dir_all(&out).unwrap();
-        fs::write(out.join("game.json"), "old").unwrap();
+        fs::write(out.join("game.json"), GAME_JSON).unwrap();
         fs::write(out.join("stale.js"), "old").unwrap();
         fs::create_dir_all(&staging).unwrap();
         fs::write(staging.join("game.json"), "new").unwrap();
@@ -347,8 +386,26 @@ mod tests {
         assert!(check_replaceable(&empty).is_ok());
         let build = dir.path().join("build");
         fs::create_dir(&build).unwrap();
-        fs::write(build.join("game.json"), "{}").unwrap();
+        fs::write(build.join("game.json"), GAME_JSON).unwrap();
         assert!(check_replaceable(&build).is_ok());
+        // A `game.json` that is not a web build's manifest does not make one.
+        for text in [
+            "{}",
+            r#"{"version":1}"#,
+            r#"{"scene":"Scene()"}"#,
+            "not json",
+        ] {
+            let unrelated = dir.path().join("unrelated");
+            fs::create_dir_all(&unrelated).unwrap();
+            fs::write(unrelated.join("game.json"), text).unwrap();
+            assert!(
+                matches!(
+                    check_replaceable(&unrelated),
+                    Err(BuildError::NotAWebBuild(_))
+                ),
+                "{text}"
+            );
+        }
         let other = dir.path().join("other");
         fs::create_dir(&other).unwrap();
         fs::write(other.join("notes.txt"), "keep").unwrap();

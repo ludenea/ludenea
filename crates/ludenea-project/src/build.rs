@@ -105,7 +105,7 @@ pub enum BuildError {
     File { path: PathBuf, source: io::Error },
     /// The output folder exists and does not hold a web build, so it is not replaced.
     #[error(
-        "{} is not a web build (it has no game.json) and is not empty: choose another --out",
+        "{} is not a web build (it has no game.json with a version and a scene) and is not empty: choose another --out",
         .0.display()
     )]
     NotAWebBuild(PathBuf),

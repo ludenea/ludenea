@@ -213,7 +213,8 @@ fn broken_texture_fails_the_web_build_listing_it() {
     // A previous build, which a failed one leaves as it was.
     let out = dir.path().join("site");
     fs::create_dir_all(&out).unwrap();
-    fs::write(out.join("game.json"), "previous").unwrap();
+    let previous = r#"{"version":1,"name":"previous","scene":"Scene()","assets":[]}"#;
+    fs::write(out.join("game.json"), previous).unwrap();
     let (result, events) = build_web(&project, &out);
     let Err(BuildError::Textures(errors)) = &result else {
         panic!("{result:?}");
@@ -231,10 +232,7 @@ fn broken_texture_fails_the_web_build_listing_it() {
         Some(BuildEvent::Finished { ok: false })
     ));
     assert_eq!(files(&out), ["game.json"]);
-    assert_eq!(
-        fs::read_to_string(out.join("game.json")).unwrap(),
-        "previous"
-    );
+    assert_eq!(fs::read_to_string(out.join("game.json")).unwrap(), previous);
     // No staging folder is left behind.
     let mut siblings: Vec<_> = fs::read_dir(dir.path())
         .unwrap()
