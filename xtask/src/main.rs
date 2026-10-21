@@ -31,9 +31,10 @@ const CHECKS: &[&str] = &[
     // The desktop backend, outside the workspace with a lockfile of its own.
     "fmt --manifest-path editor/apps/desktop/src-tauri/Cargo.toml --all --check",
     "clippy --locked --workspace --all-targets -- -D warnings",
-    // The wgpu renderer, off in the workspace build.
+    // The wgpu renderer on its own, with its tests' feature.
     "clippy --locked -p ludenea-render --features gpu --all-targets -- -D warnings",
-    // The native window's keys and gamepads, off in the workspace build.
+    // The native window on its own: the workspace build turns it on only through the command
+    // line tool, which leaves the runtime's own tests without their feature.
     "clippy --locked -p ludenea-runtime --features native --all-targets -- -D warnings",
     // Warnings are denied through `RUSTDOCFLAGS`, which `check` sets.
     "doc --locked --no-deps --workspace",
