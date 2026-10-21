@@ -27,6 +27,8 @@ use crate::camera::{DEFAULT_CAMERA, fit, world_to_clip};
 use crate::interpolate::{Pairing, camera_at, clamp_alpha};
 use sprites::{BLANK, INSTANCE_FLOATS, Sample};
 
+#[cfg(not(target_arch = "wasm32"))]
+pub use device::for_surface;
 pub use device::{headless, headless_with_limits};
 
 /// The color a target is cleared to before anything is drawn.

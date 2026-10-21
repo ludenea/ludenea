@@ -1962,6 +1962,7 @@ dependencies = [
  "ludenea-control",
  "ludenea-ecs",
  "ludenea-render",
+ "ludenea-runtime",
  "png",
  "pollster",
  "serde",
@@ -2117,11 +2118,14 @@ dependencies = [
  "ludenea-control",
  "ludenea-draw",
  "ludenea-ecs",
+ "ludenea-math",
  "ludenea-render",
+ "pollster",
  "postcard",
  "serde",
  "swarm",
  "thiserror 2.0.21",
+ "wgpu",
  "winit",
 ]
 

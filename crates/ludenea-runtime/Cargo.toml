@@ -6,18 +6,21 @@ edition.workspace = true
 [features]
 # The native window: winit, gilrs, and the wgpu renderer, on native targets only. Without it the
 # runtime depends on no window, gamepad, or GPU crate.
-native = ["dep:winit", "dep:gilrs", "dep:ludenea-render"]
+native = ["dep:winit", "dep:gilrs", "dep:ludenea-render", "dep:wgpu", "dep:pollster"]
 
 [dependencies]
 ludenea-app.workspace = true
 ludenea-control.workspace = true
 ludenea-draw.workspace = true
 ludenea-ecs.workspace = true
+ludenea-math.workspace = true
 thiserror.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 gilrs = { workspace = true, optional = true }
 ludenea-render = { workspace = true, optional = true, features = ["gpu"] }
+pollster = { workspace = true, optional = true }
+wgpu = { workspace = true, optional = true }
 winit = { workspace = true, optional = true }
 
 [dev-dependencies]

@@ -62,6 +62,32 @@ hash, those of the golden trace and replays included.
   and keeps each pad's slot while it is unplugged (`Slots`). Without the feature the crate
   depends on no window, gamepad or GPU crate. On Linux, the feature needs libudev's
   development files to build.
+- `ludenea_runtime::native::play` runs a game in a winit window: the lobby (unless
+  `PlayOptions::players` is given), then the match, drawn with the wgpu renderer at the
+  display's rate between the last two ticks, with the keyboard and up to four gamepads.
+  `PlayOptions` names the files, textures, players, `ticks` to stop at, the replay to
+  `record` (written when the window closes, after a failure too), fullscreen, vsync,
+  `stats`, threads, debug layers, size and title; `PlayOutcome` holds the tick reached and
+  the frame time summary. F11 toggles borderless fullscreen. `native::surface::Presenter`
+  presents to the window's surface: it skips drawing at zero size and while the window is
+  hidden, configures the surface again when it is lost or outdated (failing once it stays so
+  for 60 frames), skips a frame that timed out, and fails on a texture the GPU refuses. A
+  lost device is replaced by a new device, renderer and atlas, and the frame drawn again;
+  when that cannot open, or the new device is lost too, play fails with both causes. `native::lobby::frame` draws the lobby on the debug layer
+  `runtime.lobby` and `native::lobby::title` names each claim and how to start.
+  `native::gamepads::button_index` and `native::gamepads::state` read a gilrs pad in the
+  standard layout. `RuntimeError::Record` reports a replay that cannot be written.
+- `ludenea_render::gpu::for_surface(window)` opens a surface on a window and a device that
+  presents to it, made with the window's display handle, with the same fallback adapter and
+  `RenderError::NoAdapter` as `headless`; it also returns the adapter, whose capabilities
+  the surface is configured from. Not on WebAssembly.
+- The command line tool's new `play` plays a scene in a native window: `--players` (1 to 4,
+  skipping the lobby), `--ticks`, `--record`, `--fullscreen`, `--no-vsync`, `--stats` (the
+  frame time percentiles, printed when the window closes), `--threads`, `--debug-layer`,
+  `--width` and `--height` (1280 by 720 logical pixels by default), with `--project` and
+  `--edits` as for `run`. Texture warnings are as in `render`; the game is loaded before
+  the window opens, and a failure exits with code 2. Not in WebAssembly builds, which stay
+  headless.
 - Breaking: `ludenea_cli::assets` moves to `ludenea_app::project` (`project_assets`,
   `project_textures`, `ProjectTextures`, `ProjectTexture`), with no alias, so the runtime
   and the project tools read a project's files without depending on the command line tool.

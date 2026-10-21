@@ -36,8 +36,8 @@ for any thread count. The guarantee rests on:
 | `crates/ludenea-draw`    | Render frame and debug draw data, GPU free      |
 | `crates/ludenea-render`  | Render components, extraction, wgpu renderer    |
 | `crates/ludenea-control` | Versioned control protocol and host             |
-| `crates/ludenea-cli`     | `run`, `verify`, `diff`, and `render` commands  |
-| `crates/ludenea-runtime` | Game runner, native keys and gamepads           |
+| `crates/ludenea-cli`     | `run`, `verify`, `diff`, `render`, and `play`   |
+| `crates/ludenea-runtime` | Game runner and native window                   |
 | `crates/ludenea`         | Facade crate re-exporting the engine            |
 | `crates/ludenea-project` | Projects, builds, and plugin bundling           |
 | `crates/ludenea-serve`   | The `ludenea` tool: `new` and `serve`           |
@@ -145,6 +145,31 @@ without one; the textures and the adapter are checked before the run:
 ```sh
 cargo run --locked --release -p boxes -- render golden/spawner.replay --tick 300 \
   --out spawner.png --debug-layer physics.colliders
+```
+
+Play a game in a window. It opens on the lobby: each local player (up to four) claims a slot
+with a key of a keyboard half or a gamepad button, Escape or Select gives it back, and Enter or
+Start begins the match; the window title names each claim. `--players N` skips the lobby: one
+player holds the keyboard and the first gamepad, two share the keyboard's halves. F11 toggles
+borderless fullscreen (`--fullscreen` starts there), `--record` writes the replay when the
+window closes, after a failure of the game too, and `--ticks` closes it once the match reaches
+that tick. A failure exits with code 2:
+
+```sh
+cargo run --locked --release -p swarm -- play examples/swarm/assets/swarm.scene.ron \
+  --record swarm.replay
+cargo run --locked --release -p swarm -- verify swarm.replay
+```
+
+Measure the frame times: `--no-vsync` draws as fast as the GPU allows, and `--stats` prints the
+50th, 95th and 99th percentiles of the frames displayed when the window closes. The target is a
+95th percentile at or below 6.94 ms (144 frames per second) on the reference machine; the
+window must be on screen, since a hidden window (another desktop, a locked screen) displays no
+frame:
+
+```sh
+cargo run --locked --release -p swarm -- play examples/swarm/assets/swarm.scene.ron \
+  --players 1 --no-vsync --ticks 1200 --stats
 ```
 
 Run the benchmark:

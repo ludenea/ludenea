@@ -9,9 +9,11 @@ ludenea-app.workspace = true
 ludenea-control.workspace = true
 ludenea-ecs.workspace = true
 
-# `render` draws offscreen with the wgpu renderer, which WebAssembly builds of a game leave out.
+# `render` draws offscreen with the wgpu renderer, and `play` opens the native window: WebAssembly
+# builds of a game leave both out and stay headless.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 ludenea-render = { workspace = true, features = ["gpu"] }
+ludenea-runtime = { workspace = true, features = ["native"] }
 png.workspace = true
 pollster.workspace = true
 wgpu.workspace = true

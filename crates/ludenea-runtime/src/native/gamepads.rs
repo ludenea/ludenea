@@ -18,7 +18,7 @@ const DPAD_LEFT: usize = 14;
 const DPAD_RIGHT: usize = 15;
 
 /// The standard index of `button`, or `None` for a button the layout does not have.
-fn button_index(button: Button) -> Option<usize> {
+pub fn button_index(button: Button) -> Option<usize> {
     Some(match button {
         Button::South => 0,
         Button::East => 1,
@@ -71,6 +71,49 @@ pub fn standard(
         }
     }
     pad
+}
+
+/// Every button and axis gilrs names, whose values make a pad's state.
+const GILRS_BUTTONS: [Button; 17] = [
+    Button::South,
+    Button::East,
+    Button::West,
+    Button::North,
+    Button::LeftTrigger,
+    Button::RightTrigger,
+    Button::LeftTrigger2,
+    Button::RightTrigger2,
+    Button::Select,
+    Button::Start,
+    Button::LeftThumb,
+    Button::RightThumb,
+    Button::DPadUp,
+    Button::DPadDown,
+    Button::DPadLeft,
+    Button::DPadRight,
+    Button::Mode,
+];
+const GILRS_AXES: [Axis; 6] = [
+    Axis::LeftStickX,
+    Axis::LeftStickY,
+    Axis::RightStickX,
+    Axis::RightStickY,
+    Axis::DPadX,
+    Axis::DPadY,
+];
+
+/// The state of a connected `gamepad` in the standard layout (see `standard`).
+pub fn state(gamepad: gilrs::Gamepad<'_>) -> RawGamepad {
+    standard(
+        GILRS_BUTTONS.into_iter().filter_map(|button| {
+            gamepad
+                .button_data(button)
+                .map(|data| (button, data.value()))
+        }),
+        GILRS_AXES
+            .into_iter()
+            .filter_map(|axis| gamepad.axis_data(axis).map(|data| (axis, data.value()))),
+    )
 }
 
 /// Presses button `index` to `value` unless something pressed it further already: a d-pad

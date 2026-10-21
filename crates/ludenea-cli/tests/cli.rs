@@ -761,3 +761,45 @@ fn verifying_a_replay_of_a_game_that_panics_dumps_the_state_the_tick_ran_from() 
     assert!(out.trim_end().ends_with("tick-3.snap"), "{out}");
     assert_eq!(snapshot_hash(&dir.join("dump/tick-3.snap")), expected[3]);
 }
+
+#[test]
+fn play_help_lists_its_flags() {
+    let dir = dir("play-help");
+    let (code, out) = cli(&dir, &["play", "--help"]);
+    assert_eq!(code, 0, "{out}");
+    for flag in [
+        "--players",
+        "--ticks",
+        "--record",
+        "--fullscreen",
+        "--no-vsync",
+        "--stats",
+        "--threads",
+        "--debug-layer",
+        "--width",
+        "--height",
+        "--project",
+        "--edits",
+    ] {
+        assert!(out.contains(flag), "{flag} missing from:\n{out}");
+    }
+}
+
+#[test]
+fn play_refuses_five_players() {
+    let dir = dir("play-five");
+    let (code, out) = cli(&dir, &["play", "{}/scene.ron", "--players", "5"]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("--players"), "{out}");
+    assert!(out.contains("1..=4") || out.contains("1..5"), "{out}");
+}
+
+#[test]
+fn play_with_a_bad_scene_exits_2_before_opening_a_window() {
+    let dir = dir("play-bad-scene");
+    fs::write(dir.join("broken.ron"), "Scene(version: 1, entities: [").unwrap();
+    // A window would block the test until closed: an error here proves none opened.
+    let (code, out) = cli(&dir, &["play", "{}/broken.ron", "--players", "1"]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.starts_with("error: cannot load the game: "), "{out}");
+}

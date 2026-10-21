@@ -118,7 +118,7 @@ fn thread_count(value: &str) -> Result<usize, Box<dyn std::error::Error + Send +
 /// Plays `replay` against its hashes and tells whether they all match; on the first
 /// mismatch reports it and writes the snapshots of that tick and the one before into
 /// `dump_dir`, as for a panic of the game (see `failure`).
-fn play(
+fn check_replay(
     app: fn() -> App,
     replay: &Replay,
     threads: Option<usize>,
@@ -311,7 +311,7 @@ pub fn verify(app: fn() -> App, args: &VerifyArgs, out: &mut dyn Write) -> Outco
             );
         }
         let replay = Replay::decode(&read(&files.scene)?).map_err(|error| error.to_string())?;
-        return match play(app, &replay, *threads, dump_dir, out)? {
+        return match check_replay(app, &replay, *threads, dump_dir, out)? {
             true => matched(out, replay.hashes.len()),
             false => Ok(1),
         };
@@ -341,7 +341,7 @@ pub fn verify(app: fn() -> App, args: &VerifyArgs, out: &mut dyn Write) -> Outco
     let got = replay.hashes[tick as usize];
     // Played again against the golden hashes, to stop at the first mismatch with dumps.
     replay.hashes = golden.hashes;
-    if play(app, &replay, *threads, dump_dir, out)? {
+    if check_replay(app, &replay, *threads, dump_dir, out)? {
         mismatch(out, tick, replay.hashes[tick as usize], got)?;
         say(
             out,
@@ -533,6 +533,98 @@ fn known_debug_layers(
         return Err(format!("no debug draw layer `{unknown}`; {known}"));
     }
     Ok(names.iter().cloned().collect())
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[derive(Args)]
+pub struct PlayArgs {
+    /// The scene to play; prefabs, data assets and textures come from the project folder.
+    #[command(flatten)]
+    files: RunFiles,
+    /// Skip the lobby with this many local players, from 1 to 4: one holds the keyboard and
+    /// the first gamepad; with more, the first two share the keyboard's halves.
+    #[arg(long, value_parser = clap::value_parser!(u8).range(1..=4))]
+    players: Option<u8>,
+    /// Close the window once the match reaches this tick.
+    #[arg(long)]
+    ticks: Option<u64>,
+    /// Write the match as a replay to this file when the window closes, after a failure too.
+    #[arg(long)]
+    record: Option<PathBuf>,
+    /// Open borderless fullscreen; F11 toggles it while playing.
+    #[arg(long)]
+    fullscreen: bool,
+    /// Draw as fast as possible instead of in step with the display.
+    #[arg(long)]
+    no_vsync: bool,
+    /// Print the frame time percentiles when the window closes.
+    #[arg(long)]
+    stats: bool,
+    #[arg(long, value_parser = thread_count, help = threads_help())]
+    threads: Option<usize>,
+    /// A debug draw layer to draw over the game; repeat it for several.
+    #[arg(long = "debug-layer")]
+    debug_layers: Vec<String>,
+    /// The window's width in logical pixels.
+    #[arg(long, default_value_t = 1280, value_parser = clap::value_parser!(u32).range(1..))]
+    width: u32,
+    /// The window's height in logical pixels.
+    #[arg(long, default_value_t = 720, value_parser = clap::value_parser!(u32).range(1..))]
+    height: u32,
+}
+
+/// Loads the scene with its project's assets, textures (texture warnings as in `render`) and
+/// edits, then plays it in a window. Everything is read and the game loaded before the window
+/// opens, so bad files fail at once.
+#[cfg(not(target_family = "wasm"))]
+pub fn play(app: fn() -> App, args: &PlayArgs, out: &mut dyn Write) -> Outcome {
+    use ludenea_runtime::GameFiles;
+    use ludenea_runtime::native::PlayOptions;
+
+    let files = &args.files;
+    if is_replay(&files.scene) {
+        return Err(format!(
+            "{} is a replay; play runs a scene (`verify` checks a replay, `render` draws one)",
+            files.scene.display()
+        ));
+    }
+    let scene = String::from_utf8(read(&files.scene)?)
+        .map_err(|_| format!("{} is not valid UTF-8", files.scene.display()))?;
+    let assets = project_assets(&files.scene, files.project.as_deref())?;
+    let edits = files.edits.as_deref().map(read).transpose()?;
+    let sim = simulation(app, None)?;
+    let debug_layers = known_debug_layers(&sim, &args.debug_layers)?;
+    let textures = ludenea_app::project::project_textures(&files.scene, files.project.as_deref())?;
+    for warning in &textures.warnings {
+        say(out, format_args!("warning: {warning}"))?;
+    }
+    let title = files
+        .scene
+        .file_name()
+        .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+    let options = PlayOptions {
+        files: GameFiles {
+            scene,
+            assets: assets.texts.into_iter().collect(),
+            edits,
+        },
+        textures: textures.textures,
+        players: args.players,
+        ticks: args.ticks,
+        record: args.record.clone(),
+        fullscreen: args.fullscreen,
+        vsync: !args.no_vsync,
+        stats: args.stats,
+        threads: args.threads,
+        debug_layers: debug_layers.into_iter().collect(),
+        size: (args.width, args.height),
+        title,
+    };
+    let outcome = ludenea_runtime::native::play(app, options).map_err(|error| error.to_string())?;
+    if let Some(stats) = outcome.stats {
+        say(out, format_args!("ticks {}, {stats}", outcome.ticks))?;
+    }
+    Ok(0)
 }
 
 /// A renderer on a headless device with `textures` packed into its atlas, warning about

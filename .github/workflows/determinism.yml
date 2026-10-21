@@ -59,17 +59,25 @@ jobs:
         run: rustup toolchain install
       # The command line tool's render tests (crates/ludenea-cli/tests/render.rs) draw
       # offscreen: see the render job for the adapter each runner uses. gilrs, the native
-      # window's gamepad library, builds against libudev.
-      - name: Install lavapipe and libudev
+      # window's gamepad library, builds against libudev. Xvfb is the display the native
+      # window opens on.
+      - name: Install lavapipe, libudev and Xvfb
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y mesa-vulkan-drivers libudev-dev
+          sudo apt-get install -y mesa-vulkan-drivers libudev-dev xvfb
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo clippy --locked -p ludenea-runtime --features native --all-targets -- -D warnings
       - id: tests
         run: cargo test --locked --workspace
       - run: cargo test --locked -p ludenea-runtime --features native
+      # The native window end to end, on a virtual display and lavapipe: a short match played
+      # and recorded, whose replay must verify.
+      - name: Play and verify a match in the native window
+        if: runner.os == 'Linux'
+        run: |
+          xvfb-run --auto-servernum cargo run --locked --release -p swarm -- play examples/swarm/assets/swarm.scene.ron --players 1 --ticks 120 --record play/swarm.replay
+          cargo run --locked --release -p swarm -- verify play/swarm.replay
       # A divergence fails the golden tests first, so the verify steps run once the tests ran,
       # passed or not, but not after a clippy failure. Every thread count runs, even after one
       # fails, and dumps into a folder of its own.

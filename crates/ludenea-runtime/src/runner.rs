@@ -58,6 +58,9 @@ pub enum RuntimeError {
     /// The window cannot open or keep running, with its cause.
     #[error("the window failed: {0}")]
     Window(String),
+    /// The replay of the match cannot be exported or written, with its cause.
+    #[error("cannot record the replay: {0}")]
+    Record(String),
 }
 
 /// A game played through its control host.

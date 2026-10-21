@@ -1,4 +1,4 @@
-//! The `ludenea` command line: `run`, `verify`, `diff`, `render`, and `host`. A game
+//! The `ludenea` command line: `run`, `verify`, `diff`, `render`, `play`, and `host`. A game
 //! provides its own `main` and passes its app constructor to [`main`].
 
 mod commands;
@@ -30,6 +30,10 @@ enum Cmd {
     /// Draw a tick of a scene or replay to a PNG, offscreen on a GPU adapter.
     #[cfg(not(target_family = "wasm"))]
     Render(commands::RenderArgs),
+    /// Play the game in a window: a lobby where local players claim their keyboard half or
+    /// gamepad (unless --players is given), then the match.
+    #[cfg(not(target_family = "wasm"))]
+    Play(commands::PlayArgs),
     /// Serve the game to the editor over stdin and stdout.
     #[cfg(not(target_family = "wasm"))]
     Host(commands::HostArgs),
@@ -56,6 +60,8 @@ pub fn run<S: AsRef<str>>(app: fn() -> App, args: &[S], out: &mut dyn Write) -> 
         Cmd::Diff(args) => commands::diff(app, args, out),
         #[cfg(not(target_family = "wasm"))]
         Cmd::Render(args) => commands::render(app, args, out),
+        #[cfg(not(target_family = "wasm"))]
+        Cmd::Play(args) => commands::play(app, args, out),
         #[cfg(not(target_family = "wasm"))]
         Cmd::Host(args) => commands::host(app, args),
     };
