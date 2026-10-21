@@ -54,6 +54,7 @@ export async function reloadChanged(current: LoadedTextures, changes: FileChange
   if (concerned.length === 0) return current;
   const reread = concerned.filter(({ removed }) => !removed).map(({ path }) => path);
   const { entries } = reread.length > 0 ? await project.request({ type: "list_files" }) : { entries: [] };
+  const listed = new Map(entries.map((entry) => [entry.path, entry]));
   const { textureFrames } = await loadRenderModule();
   const sources = [...current.sources];
   const pngs = [...current.pngs];
@@ -68,7 +69,7 @@ export async function reloadChanged(current: LoadedTextures, changes: FileChange
       drop(path);
       continue;
     }
-    const entry = entries.find((candidate) => candidate.path === path);
+    const entry = listed.get(path);
     if (!entry || typeof entry.kind !== "object" || !("Texture" in entry.kind)) {
       drop(path);
       continue;
