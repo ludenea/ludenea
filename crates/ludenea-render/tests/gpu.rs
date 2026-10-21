@@ -1239,16 +1239,40 @@ fn draw_between_ticks_creates_no_buffer() {
     for item in &mut current.sprites {
         item.position.y = 1.0;
     }
+    // The camera zooms out between the ticks, so the blended visible area changes with alpha
+    // while the current one does not; 50 circles of debug draw (96 vertices of 24 bytes
+    // each, 115,200 bytes) would show past the byte budget if a draw rebuilt them.
+    if let Some(camera) = &mut current.camera {
+        camera.view = Vec2::new(8.0, 8.0);
+    }
+    for index in 0..50 {
+        let center = Vec2::new(index as f32 * 0.1, 0.0);
+        dot(&mut current, "physics", None, center, Color(0x0000FFFF));
+    }
+    let overlay = Overlay {
+        debug_layers: BTreeSet::from(["physics".to_string()]),
+        ..Overlay::default()
+    };
     renderer
-        .set_frames(Some(&previous), &current, &Overlay::default())
+        .set_frames(Some(&previous), &current, &overlay)
         .unwrap();
     renderer.render_rgba(SIZE, 0.25, None).unwrap();
     let before = renderer.stats();
-    renderer.render_rgba(SIZE, 0.75, None).unwrap();
+    let pixels = renderer.render_rgba(SIZE, 0.75, None).unwrap();
     let after = renderer.stats();
     assert_eq!(after.buffers_created, before.buffers_created);
     let written = after.bytes_written - before.bytes_written;
     assert!(written < 4096, "{written} bytes written between two draws");
+    // The debug draw still shows: the first circle at the origin.
+    assert_eq!(pixel(&pixels, SIZE, 32, 32), BLUE);
+    // Another target size changes the outlines' width in world units: they are rebuilt.
+    let wide = Size {
+        width: 128,
+        height: 64,
+    };
+    renderer.render_rgba(wide, 0.75, None).unwrap();
+    let rebuilt = renderer.stats().bytes_written - after.bytes_written;
+    assert!(rebuilt >= 115_200, "{rebuilt} bytes written for a new size");
 }
 
 #[test]
