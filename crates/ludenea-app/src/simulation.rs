@@ -171,6 +171,13 @@ impl Simulation {
 
     /// Maps one raw input per player to the postcard bytes `step_encoded` takes.
     pub fn map_raw_input(&self, players: &[RawInput]) -> Result<Vec<u8>, SimError> {
+        let players: Vec<Option<RawInput>> = players.iter().cloned().map(Some).collect();
+        self.map_players(&players)
+    }
+
+    /// Like `map_raw_input`, with `None` for a player without a connected device: it
+    /// encodes `I::default()`, not the mapping of an idle raw input.
+    pub fn map_players(&self, players: &[Option<RawInput>]) -> Result<Vec<u8>, SimError> {
         let mapping = self
             .hooks
             .mapping

@@ -40,6 +40,14 @@ hash, those of the golden trace and replays included.
 
 ### Rust API
 
+- `ludenea_app::players` assigns local players their devices without a window or a GPU:
+  `Claim` (at most one `KeyboardPart` of `Whole`, `Left` or `Right`, and one gamepad slot),
+  `LiveDevices`, `automatic_claims`, `check_claims` (refusing a gamepad or a keyboard part
+  held twice with `ClaimError`) and `split`, which gives each player its keys and its
+  gamepad, or `None` when its only device is disconnected. `MAX_LOCAL_PLAYERS` is 4.
+  `Simulation::map_players` takes an `Option<RawInput>` per player and encodes
+  `I::default()` for `None`; `map_raw_input` delegates to it. The prelude exports `Claim`,
+  `KeyboardPart` and `LiveDevices`.
 - Breaking: the `ludenea-debug-draw` crate is renamed `ludenea-draw`, and the facade's
   `ludenea::debug_draw` is now `ludenea::draw`, with no alias. Its types keep their names.
 - `ludenea_draw::frame::RenderFrame` is what a renderer draws for one tick: the camera

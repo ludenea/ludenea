@@ -27,6 +27,7 @@ macro_rules! worker_entry {
 }
 
 pub mod prelude {
+    pub use crate::app::players::{Claim, KeyboardPart, LiveDevices};
     pub use crate::app::pose::Pose;
     pub use crate::app::{
         App, Edit, EditLog, Input, InputLog, Inputs, Plugin, RawInput, Rng, Sim, Simulation, Time,
