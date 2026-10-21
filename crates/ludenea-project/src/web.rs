@@ -94,7 +94,7 @@ fn build(
     let _ = fs::remove_dir_all(&staging);
     fs::create_dir(&staging).map_err(at(&staging))?;
     let written = write_page(root, name, &root.join(scene), &staging, output)
-        .and_then(|()| replace(&staging, &out).map_err(at(&out)));
+        .and_then(|()| replace(&staging, &out));
     if written.is_err() {
         let _ = fs::remove_dir_all(&staging);
     }
@@ -109,6 +109,16 @@ fn build(
 fn at(path: &Path) -> impl FnOnce(io::Error) -> BuildError {
     let path = path.to_path_buf();
     move |source| BuildError::File { path, source }
+}
+
+/// The metadata of `path` without following a link, or `None` when nothing is there; any
+/// other failure to look names the path.
+fn existing(path: &Path) -> Result<Option<fs::Metadata>, BuildError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(at(path)(error)),
+    }
 }
 
 /// Refuses a game whose `Cargo.toml` has no `web` feature holding `ludenea/web`.
@@ -136,7 +146,7 @@ fn check_web_feature(root: &Path) -> Result<(), BuildError> {
 /// Refuses to replace an `out` that is a file or a folder holding something other than a
 /// web build, which replacing would delete.
 fn check_replaceable(out: &Path) -> Result<(), BuildError> {
-    let Ok(metadata) = fs::symlink_metadata(out) else {
+    let Some(metadata) = existing(out)? else {
         return Ok(());
     };
     let refuse = || BuildError::NotAWebBuild(out.to_path_buf());
@@ -271,16 +281,25 @@ fn write_game(name: &str, scene: &Path, root: &Path, dir: &Path) -> Result<(), B
 
 /// Puts `staging` in place of `out`: the old `out` is moved aside first and removed once
 /// `staging` took its place, or moved back if it could not.
-fn replace(staging: &Path, out: &Path) -> io::Result<()> {
-    if fs::symlink_metadata(out).is_err() {
-        return fs::rename(staging, out);
+fn replace(staging: &Path, out: &Path) -> Result<(), BuildError> {
+    if existing(out)?.is_none() {
+        return fs::rename(staging, out).map_err(at(out));
     }
     let old = sibling(out, "old");
     let _ = fs::remove_dir_all(&old);
-    fs::rename(out, &old)?;
+    fs::rename(out, &old).map_err(at(out))?;
     if let Err(error) = fs::rename(staging, out) {
-        let _ = fs::rename(&old, out);
-        return Err(error);
+        if let Err(restore) = fs::rename(&old, out) {
+            return Err(at(out)(io::Error::new(
+                error.kind(),
+                format!(
+                    "cannot put the new build in place ({error}) nor the previous one back \
+                     ({restore}): the previous build is at {}",
+                    old.display()
+                ),
+            )));
+        }
+        return Err(at(out)(error));
     }
     // Best effort: the old build left behind only takes space.
     let _ = fs::remove_dir_all(&old);
@@ -343,5 +362,15 @@ mod tests {
             check_replaceable(&file),
             Err(BuildError::NotAWebBuild(_))
         ));
+        // Looking under a file fails otherwise than "not found": the build stops, naming it.
+        #[cfg(unix)]
+        {
+            let under = file.join("site");
+            let error = check_replaceable(&under).unwrap_err();
+            assert!(
+                matches!(&error, BuildError::File { path, .. } if *path == under),
+                "{error:?}"
+            );
+        }
     }
 }
