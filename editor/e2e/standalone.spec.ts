@@ -240,6 +240,23 @@ test("releasing_meta_releases_the_keys_pressed_with_it", async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test("keys_stay_held_until_the_last_meta_key_goes_up", async ({ page }) => {
+  await recordPosts(page);
+  const errors = await open(page, "?players=1");
+  await reach(page, 1);
+  await dispatchKey(page, "keydown", "MetaLeft", { metaKey: true });
+  await dispatchKey(page, "keydown", "MetaRight", { metaKey: true });
+  await dispatchKey(page, "keydown", "KeyD", { metaKey: true });
+  await expect.poll(() => lastKeys(page)).toEqual(["KeyD", "MetaLeft", "MetaRight"]);
+  // The other Meta key is still down: D is still held.
+  await dispatchKey(page, "keyup", "MetaLeft", { metaKey: true });
+  await expect.poll(() => lastKeys(page)).toEqual(["KeyD", "MetaRight"]);
+  // The last one goes up: D is released with it.
+  await dispatchKey(page, "keyup", "MetaRight");
+  await expect.poll(() => lastKeys(page)).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
 test("a_draw_that_cannot_happen_stops_the_page_and_the_match", async ({ page }) => {
   await recordPosts(page);
   await open(page, "?players=1");
