@@ -1,4 +1,5 @@
 *.ron text eol=lf
+*.meta text eol=lf
 *.inputs binary
 *.trace binary
 *.snap binary
