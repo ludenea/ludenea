@@ -7,7 +7,7 @@ import { errorText, reportedOnce, shared, useGame } from "../shared";
 import { ResimulatingNotice } from "../timeline/editing";
 import { fromCameraItem, panBy, screenToWorld, toCameraView, zoomAt, type Camera, type Size } from "./camera";
 import { FrameFeed } from "./frames";
-import { moveBy, visibleLayers, type ViewportState } from "./state";
+import { moveBy, moveCamera, visibleLayers, type ShownCamera, type ViewportState } from "./state";
 import { drawOverlay } from "./overlay";
 import { loadTextures } from "./textures";
 
@@ -54,17 +54,20 @@ const same = (a: Entity, b: Entity) => a.index === b.index && a.generation === b
 /**
  * `failedOverlays`: the plugin overlays whose failure is reported already, kept across mounts: once
  * per registration. `textureWarnings`: the texture warnings logged already, kept across mounts.
+ * `shown`: where the panel tells the viewport's commands what the game camera shows.
  */
 export function ViewportPanel({
   editor,
   state,
   failedOverlays,
   textureWarnings,
+  shown,
 }: {
   editor: Editor;
   state: ViewportState;
   failedOverlays: Set<ViewportOverlay>;
   textureWarnings: Set<string>;
+  shown: ShownCamera;
 }) {
   const game = useGame(editor);
   const root = useRef<HTMLDivElement>(null);
@@ -142,6 +145,7 @@ export function ViewportPanel({
       const { camera, size, gameCamera } = state.get();
       return gameCamera && renderer ? shownCamera(renderer, size) : camera;
     };
+    shown.get = viewCamera;
 
     const paint = () => {
       repaint = false;
@@ -243,8 +247,8 @@ export function ViewportPanel({
       const at = local(event);
       if (Math.hypot(at.x - press.start.x, at.y - press.start.y) > DRAG_THRESHOLD) press.moved = true;
       if (press.mode === "pan") {
-        const { camera } = state.get();
-        state.set({ camera: panBy(camera, at.x - press.last.x, at.y - press.last.y) });
+        const [dx, dy] = [at.x - press.last.x, at.y - press.last.y];
+        moveCamera(state, shown, (camera) => panBy(camera, dx, dy));
       }
       press.last = at;
       repaint = true;
@@ -285,8 +289,8 @@ export function ViewportPanel({
 
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
-      const { camera, size } = state.get();
-      state.set({ camera: zoomAt(camera, size, local(event), Math.exp(-event.deltaY * WHEEL_ZOOM)) });
+      const at = local(event);
+      moveCamera(state, shown, (camera, size) => zoomAt(camera, size, at, Math.exp(-event.deltaY * WHEEL_ZOOM)));
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
@@ -334,11 +338,12 @@ export function ViewportPanel({
       resizes?.disconnect();
       stops.forEach((stop) => stop());
       feed.dispose();
+      if (shown.get === viewCamera) shown.get = null;
       for (const [type, listener] of listeners) element.removeEventListener(type, listener);
       element.removeEventListener("wheel", onWheel);
       renderer?.free();
     };
-  }, [editor, state, failedOverlays, textureWarnings]);
+  }, [editor, state, failedOverlays, textureWarnings, shown]);
 
   const fill = { position: "absolute", inset: 0, width: "100%", height: "100%" } as const;
   return (

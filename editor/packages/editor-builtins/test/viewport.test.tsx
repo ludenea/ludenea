@@ -64,6 +64,9 @@ const animationFrames = (count: number) =>
   act(async () => {
     for (let frame = 0; frame < count; frame++) await new Promise((resolve) => requestAnimationFrame(resolve));
   });
+const circleAt = (index: number, x: number, y: number): DebugDrawFrame => ({
+  layers: { colliders: [{ entity: { index, generation: 0 }, primitive: { type: "circle", center: { x, y }, radius: 0.5, color: 0xffffffff, fill: false } }] },
+});
 const ticked = (tick: number, rate: number) => ({ type: "ticked", tick, hash: `000000000000${String(tick).padStart(4, "0")}`, pending: false, playing: true, effective_rate: rate });
 
 /** Shows tick `current` of `hash` on the timeline, as a refresh after a step, seek, edit, or pause does. */
@@ -936,6 +939,37 @@ describe("viewport frames", () => {
     now = 1020;
     await animationFrames(2);
     expect(drawsOf(renderer).at(-1)![0]).toBeCloseTo(0.5, 5);
+  });
+
+  it("moving_the_view_leaves_the_game_camera_from_what_it_shows", async () => {
+    const camera: CameraItem = { entity: entity(1), center: { x: 10, y: 5 }, view: { x: 8, y: 6 } };
+    const { host, view } = await viewport((command) => (command.type === "get_render_frame" ? { type: "render_frame", frame: frameAt(7, { camera, debug: circleAt(1, 12, 5) }) } : undefined));
+    const renderer = renderers.at(-1)!;
+    const drawnCamera = () => JSON.parse(drawsOf(renderer).at(-1)![1] ?? "null") as { center: { x: number; y: number }; view: { x: number; y: number } } | null;
+    const throughGame = async () => {
+      await act(() => host.editor.commands.run("viewport.toggle-game-camera"));
+      await animationFrames(2);
+      expect(drawnCamera()).toBeNull();
+    };
+    // The game camera shows (10, 5) at 50 pixels per meter in the 400 by 300 view.
+    await throughGame();
+    await act(() => host.editor.commands.run("viewport.pan-right"));
+    await waitFor(() => expect(drawnCamera()).toEqual({ center: { x: 10 + 64 / 50, y: 5 }, view: { x: 8, y: 6 } }));
+    await throughGame();
+    await act(() => host.editor.commands.run("viewport.zoom-in"));
+    await waitFor(() => expect(drawnCamera()).toEqual({ center: { x: 10, y: 5 }, view: { x: 400 / 62.5, y: 300 / 62.5 } }));
+    await throughGame();
+    fireEvent.pointerDown(view, { button: 1, clientX: 200, clientY: 150, pointerId: 1 });
+    fireEvent.pointerMove(view, { clientX: 150, clientY: 150, pointerId: 1 });
+    fireEvent.pointerUp(view, { button: 1, clientX: 150, clientY: 150, pointerId: 1 });
+    await waitFor(() => expect(drawnCamera()).toEqual({ center: { x: 11, y: 5 }, view: { x: 8, y: 6 } }));
+    await throughGame();
+    fireEvent.wheel(view, { deltaY: 0, clientX: 200, clientY: 150 });
+    await waitFor(() => expect(drawnCamera()).toEqual({ center: { x: 10, y: 5 }, view: { x: 8, y: 6 } }));
+    await throughGame();
+    act(() => host.editor.selection.getState().select([entity(1)]));
+    await act(() => host.editor.commands.run("viewport.frame-selection"));
+    await waitFor(() => expect(drawnCamera()?.center).toEqual({ x: 12, y: 5 }));
   });
 
   it("a_new_game_subscribes_again", async () => {

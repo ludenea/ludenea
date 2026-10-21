@@ -3,7 +3,7 @@ import { definePlugin, type Disposable, type ViewportOverlay } from "@ludenea/ed
 import { registerPlayerCommands } from "../input/capture";
 import { createStore, shared } from "../shared";
 import { bounds, panBy, zoomAt, MAX_PIXELS_PER_METER, MIN_PIXELS_PER_METER, type Camera, type Size } from "./camera";
-import { moveBy, visibleLayers, type ViewportState } from "./state";
+import { moveBy, moveCamera, visibleLayers, type ShownCamera, type ViewportState } from "./state";
 import { ViewportPanel } from "./ViewportPanel";
 
 const PAN_PIXELS = 64;
@@ -26,10 +26,8 @@ export const viewportPlugin = definePlugin({
       gameCamera: false,
       revision: 0,
     });
-    const camera = (change: (camera: Camera, size: Size) => Camera) => {
-      const { camera, size } = state.get();
-      state.set({ camera: change(camera, size) });
-    };
+    const shown: ShownCamera = { get: null };
+    const camera = (change: (camera: Camera, size: Size) => Camera) => moveCamera(state, shown, change);
     const center = (size: Size) => ({ x: size.width / 2, y: size.height / 2 });
 
     for (const [direction, { x, y }] of Object.entries(DIRECTIONS) as [keyof typeof DIRECTIONS, Vec2][]) {
@@ -72,12 +70,10 @@ export const viewportPlugin = definePlugin({
         if (!box) return;
         // A fifth of the view as margin on each side.
         const fit = Math.min(size.width / Math.max(box.max.x - box.min.x, 0.5), size.height / Math.max(box.max.y - box.min.y, 0.5)) * 0.6;
-        state.set({
-          camera: {
-            center: { x: (box.min.x + box.max.x) / 2, y: (box.min.y + box.max.y) / 2 },
-            pixelsPerMeter: Math.min(MAX_PIXELS_PER_METER, Math.max(MIN_PIXELS_PER_METER, fit)),
-          },
-        });
+        camera(() => ({
+          center: { x: (box.min.x + box.max.x) / 2, y: (box.min.y + box.max.y) / 2 },
+          pixelsPerMeter: Math.min(MAX_PIXELS_PER_METER, Math.max(MIN_PIXELS_PER_METER, fit)),
+        }));
       },
     });
     editor.commands.register({
@@ -116,7 +112,7 @@ export const viewportPlugin = definePlugin({
       id: "ludenea.viewport",
       title: "Viewport",
       defaultPosition: "center",
-      component: ({ editor }) => <ViewportPanel editor={editor} state={state} failedOverlays={failedOverlays} textureWarnings={textureWarnings} />,
+      component: ({ editor }) => <ViewportPanel editor={editor} state={state} failedOverlays={failedOverlays} textureWarnings={textureWarnings} shown={shown} />,
     });
     return () => {
       stopLayers();

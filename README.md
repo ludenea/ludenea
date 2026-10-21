@@ -306,8 +306,10 @@ on screen, fetched again after a step, a seek, an undo, an edit, a reload, or a 
 layers. The project's textures are loaded when the viewport opens; one that cannot be read or
 packed is logged once in the console and drawn as a magenta placeholder. "View through the game
 camera" (`C`) shows what the game's camera sees instead of the editor's free camera; picking
-and dragging follow it. The desktop editor on Linux (WebKitGTK) has no WebGPU: its viewport
-draws with WebGL2, or, without WebGL2 either, says it cannot render and why.
+and dragging follow it, and panning, zooming, or framing the selection leaves it for the
+editor's camera, starting from the same view. The desktop editor on Linux (WebKitGTK) has no
+WebGPU: its viewport draws with WebGL2, or, without WebGL2 either, says it cannot render and
+why.
 
 ### Prefabs
 

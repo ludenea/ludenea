@@ -22,6 +22,17 @@ export type ViewportState = Store<{
 
 const POSE = "ludenea::Pose";
 
+/** What the open panel says the game camera shows, as an editor camera; `get` is null while no panel draws. */
+export type ShownCamera = { get: (() => Camera) | null };
+
+/** The camera on screen: the game camera's equivalent while the view goes through it, else the editor's. */
+export const cameraOnScreen = (state: ViewportState, shown: ShownCamera): Camera => (state.get().gameCamera && shown.get ? shown.get() : state.get().camera);
+
+/** Moves the view by `change`: it leaves the game camera, starting from what it showed, so the move shows at once. */
+export function moveCamera(state: ViewportState, shown: ShownCamera, change: (camera: Camera, size: Size) => Camera): void {
+  state.set({ camera: change(cameraOnScreen(state, shown), state.get().size), gameCamera: false });
+}
+
 export const visibleLayers = (control: ControlClient | null, state: ViewportState): string[] =>
   (control?.game.debug_layers ?? []).filter((layer) => !state.get().hidden.includes(layer));
 
