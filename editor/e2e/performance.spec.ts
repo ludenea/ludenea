@@ -278,9 +278,10 @@ test("the UI stays at 60 fps while the inspector follows the contact cache", asy
 
 // On the reference machine the swarm draws with the machine's GPU, as the editor does for its
 // users; elsewhere with SwiftShader, without a GPU, which only reports the numbers: drawing
-// 10,000 sprites in software is far over the budget.
+// 10,000 sprites in software is far over the budget. That browser takes the file's settings but
+// not `launchArgs`, whose `--use-angle=swiftshader` is the very software rendering it avoids.
 test("playing_the_swarm_keeps_p95_under_20_ms", async ({ page: configured, playwright }) => {
-  const gpu = strict ? await playwright.chromium.launch({ args: ["--enable-gpu"] }) : null;
+  const gpu = strict ? await playwright.chromium.launch({ args: ["--enable-gpu"], ignoreDefaultArgs: ["--hide-scrollbars"] }) : null;
   try {
     await playTheSwarm(gpu ? await gpu.newPage(devices["Desktop Chrome"]) : configured);
   } finally {
