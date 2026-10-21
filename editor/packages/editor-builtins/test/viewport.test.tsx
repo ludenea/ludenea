@@ -10,7 +10,7 @@ import { shared } from "../src/shared";
 import { tickOf } from "../src/viewport/frames";
 import { mergeHits } from "../src/viewport/state";
 import { bounds, fromCameraItem, screenToWorld, toCameraView, worldToScreen, zoomAt } from "../src/viewport/camera";
-import { named, panic, renderers, script, type WebRenderer } from "./fake-render-wasm";
+import { inits, named, panic, renderers, script, type WebRenderer } from "./fake-render-wasm";
 import { renderFrame, renderPanel, settle, testEditor, testGame } from "./support";
 
 const entity = (index: number): Entity => ({ index, generation: 0 });
@@ -138,16 +138,47 @@ describe("camera", () => {
 });
 
 describe("loadRenderModule", () => {
-  it("a_failed_load_is_tried_again_on_the_next_call", async () => {
+  /** The loader and the fake module as a page first loads them. */
+  const freshLoader = async () => {
     vi.resetModules();
     const fake = await import("./fake-render-wasm");
-    const { loadRenderModule } = await import("../src/shared");
+    // Reset modules no longer see the mock of test/setup.ts: the same one, on the new fake.
+    vi.doMock("../src/shared/render-module", () => ({
+      async instantiate() {
+        await fake.default();
+        return fake;
+      },
+    }));
+    return { fake, ...(await import("../src/shared")) };
+  };
+
+  it("a_failed_load_is_tried_again_on_the_next_call", async () => {
+    const { fake, loadRenderModule } = await freshLoader();
     fake.script.initError = new Error("the module cannot be fetched");
     await expect(loadRenderModule()).rejects.toThrow("the module cannot be fetched");
-    await expect(loadRenderModule()).resolves.toBeUndefined();
+    await expect(loadRenderModule()).resolves.toBe(fake);
     // Loaded once it worked: not again.
     await loadRenderModule();
     expect(fake.inits).toHaveLength(2);
+  });
+
+  it("a_panic_drops_the_module_and_the_next_load_instantiates_a_new_one", async () => {
+    const { fake, loadRenderModule, onRenderPanic } = await freshLoader();
+    const heard: string[] = [];
+    const stop = onRenderPanic((message) => heard.push(message));
+    const first = await loadRenderModule();
+    expect(await loadRenderModule()).toBe(first);
+    expect(fake.inits).toHaveLength(1);
+    fake.panic("panicked at src/web.rs:1:1:\nbroken");
+    expect(heard).toEqual(["panicked at src/web.rs:1:1:\nbroken"]);
+    // The aborted instance is not used again: the next load instantiates the module anew.
+    await loadRenderModule();
+    expect(fake.inits).toHaveLength(2);
+    await loadRenderModule();
+    expect(fake.inits).toHaveLength(2);
+    stop();
+    fake.panic("again");
+    expect(heard).toHaveLength(1);
   });
 });
 
@@ -851,16 +882,23 @@ describe("viewport failures", () => {
 
   it("a_panic_shows_the_alert", async () => {
     const { host, renderer } = await drawing();
+    const loads = inits.length;
+    const message = "panicked at crates/ludenea-render/src/gpu/mod.rs:10:5:\nthe atlas overflowed";
+    renderer.panicOnDraw(message);
     play(host);
-    act(() => panic("panicked at crates/ludenea-render/src/gpu/mod.rs:10:5:\nthe atlas overflowed"));
-    await waitFor(() => expect(alert()?.textContent).toContain(`${STOPPED}panicked at crates/ludenea-render/src/gpu/mod.rs:10:5:\nthe atlas overflowed`));
+    await waitFor(() => expect(alert()?.textContent).toContain(`${STOPPED}${message}`));
     const draws = drawsOf(renderer).length;
     await animationFrames(3);
     expect(drawsOf(renderer).length).toBe(draws);
     // The module stopped in the middle of a call: the renderer is dropped, not freed.
     expect(freed(renderer)).toBe(false);
+    // The trap that ends the panicking draw is the panic the alert shows, not another failure.
+    expect(host.editor.console.list()).toEqual([]);
+    // Retried, the renderer is created in a new instance of the module.
     await retry();
     await waitFor(() => expect(renderers).toHaveLength(2));
+    expect(inits.length).toBe(loads + 1);
+    await waitFor(() => expect(drawsOf(renderers[1]!).length).toBeGreaterThan(0));
     expect(alert()).toBeNull();
   });
 

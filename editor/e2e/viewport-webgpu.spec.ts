@@ -1,5 +1,5 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
-import { collectErrors, expectNoErrors, serveProject, waitForGame, type ServedProject } from "./project";
+import { expect, test } from "@playwright/test";
+import { collectErrors, expectNoErrors, serveProject, viewportDrew, waitForGame, type ServedProject } from "./project";
 
 declare global {
   interface Window {
@@ -8,9 +8,6 @@ declare global {
   }
 }
 
-/** The color the renderer clears to (`BACKGROUND` in crates/ludenea-render/src/gpu/mod.rs). */
-const BACKGROUND = [0x12, 0x12, 0x14] as const;
-
 let served: ServedProject;
 
 test.beforeAll(async () => {
@@ -18,27 +15,6 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(() => served?.stop());
-
-/** How many pixels of `viewport` show the background, and how many show something else. */
-async function pixels(page: Page, viewport: Locator): Promise<{ background: number; drawn: number }> {
-  const screenshot = (await viewport.screenshot()).toString("base64");
-  // Decoded in the page.
-  return page.evaluate(
-    async ([png, [red, green, blue]]) => {
-      const bytes = Uint8Array.from(atob(png as string), (char) => char.charCodeAt(0));
-      const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
-      const context = new OffscreenCanvas(bitmap.width, bitmap.height).getContext("2d")!;
-      context.drawImage(bitmap, 0, 0);
-      const data = context.getImageData(0, 0, bitmap.width, bitmap.height).data;
-      let background = 0;
-      for (let at = 0; at < data.length; at += 4) {
-        if (data[at] === red && data[at + 1] === green && data[at + 2] === blue) background += 1;
-      }
-      return { background, drawn: data.length / 4 - background };
-    },
-    [screenshot, BACKGROUND] as const,
-  );
-}
 
 // Only in the `webgpu` project (playwright.config.ts): a WebGL2 context is not lost on demand.
 test("editor_viewport_recovers_from_a_destroyed_device", async ({ page }) => {
@@ -55,11 +31,7 @@ test("editor_viewport_recovers_from_a_destroyed_device", async ({ page }) => {
   await waitForGame(page);
   await page.getByRole("tab", { name: "Viewport" }).click();
   const viewport = page.getByRole("application", { name: "Viewport" });
-  // The renderer cleared to its background and drew the scene's colliders over it.
-  const drew = async () => {
-    const { background, drawn } = await pixels(page, viewport);
-    return background > drawn && drawn > 0;
-  };
+  const drew = () => viewportDrew(page, viewport);
   await expect.poll(drew).toBe(true);
   expect(await page.evaluate(() => window.__ludeneaDevice !== undefined)).toBe(true);
   const lost = await viewport.locator("canvas").first().elementHandle();

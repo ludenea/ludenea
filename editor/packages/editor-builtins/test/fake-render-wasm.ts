@@ -66,6 +66,8 @@ export class WebRenderer implements Shape {
   readonly pushed: RenderFrame[] = [];
   /** The error the next draws throw, by name, and how many of them do. */
   private failing = { name: "", count: 0 };
+  /** The message the next draw panics with, while set. */
+  private panicking: string | null = null;
   /** What `pick` answers, topmost first, wherever it is asked. */
   hits: Entity[] = [];
   /** What `bounds` answers for any entities: the box of the sprites and tilemaps drawn. */
@@ -104,9 +106,19 @@ export class WebRenderer implements Shape {
 
   draw(alpha: number, camera?: string | null) {
     this.calls.push({ method: "draw", args: [alpha, camera ?? null] });
+    if (this.panicking !== null) {
+      // As the real module: the panic hook runs, then the call traps.
+      panic(this.panicking);
+      throw new WebAssembly.RuntimeError("unreachable");
+    }
     if (this.failing.count === 0) return;
     this.failing.count--;
     throw named(this.failing.name, MESSAGES[this.failing.name] ?? `${this.failing.name} on purpose`);
+  }
+
+  /** The next draws panic with `message`. */
+  panicOnDraw(message: string) {
+    this.panicking = message;
   }
 
   /** The next `count` draws throw the error the real renderer names `name`; `NoSurfaceTexture` is a hidden canvas. */

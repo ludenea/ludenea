@@ -313,7 +313,8 @@ removed), the viewport creates its renderer again on a new canvas, with the proj
 and the frame on screen, and logs a warning. When it cannot render (no GPU adapter, a second lost
 device within a minute, three failing draws in a row, or a panic in the renderer), it stops and
 shows "The viewport stopped rendering" with the reason and a Retry button; the session keeps
-playing meanwhile.
+playing meanwhile. A panic aborts the renderer's WebAssembly module: the next renderer, and the
+divergence ghost, use a new instance of it.
 
 ### Prefabs
 

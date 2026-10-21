@@ -1,9 +1,9 @@
-import { setPanicHandler, WebRenderer } from "@ludenea/render-wasm";
+import type { WebRenderer } from "@ludenea/render-wasm";
 import type { Entity, Vec2 } from "@ludenea/control-client";
 import { runReported, type Editor, type ViewportOverlay } from "@ludenea/editor-shell";
 import { useEffect, useRef, useState } from "react";
 import { captureInput } from "../input/capture";
-import { errorText, loadRenderModule, reportedOnce, shared, useGame } from "../shared";
+import { errorText, loadRenderModule, onRenderPanic, reportedOnce, shared, useGame } from "../shared";
 import { ResimulatingNotice } from "../timeline/editing";
 import { fromCameraItem, panBy, same, screenToWorld, toCameraView, zoomAt, type Box, type Camera, type Size } from "./camera";
 import { FrameFeed } from "./frames";
@@ -21,10 +21,8 @@ const FAILED_DRAWS_TO_STOP = 3;
 const RECREATION_INTERVAL_MS = 60_000;
 const FILL = { position: "absolute", inset: 0, width: "100%", height: "100%" } as const;
 
-/** Creates a renderer on `canvas`; `panicked` hears the message of any panic in the renderer's module. */
-async function createRenderer(canvas: HTMLCanvasElement, panicked: (message: string) => void): Promise<WebRenderer> {
-  await loadRenderModule();
-  setPanicHandler(panicked);
+async function createRenderer(canvas: HTMLCanvasElement): Promise<WebRenderer> {
+  const { WebRenderer } = await loadRenderModule();
   return WebRenderer.create(canvas);
 }
 
@@ -163,8 +161,9 @@ export function ViewportPanel({
       release(free);
       setFailure(message);
     };
-    // A panic aborts the module in the middle of a call: the renderer it was using is dropped, not freed.
-    const panicked = (message: string) => stop(message, false);
+    // A panic aborts the module in the middle of a call: the renderer it was using is dropped, not
+    // freed, and the next one is created in a new instance of the module.
+    const stopPanics = onRenderPanic((message) => stop(message, false));
 
     const start = () => {
       const creation = ++creations;
@@ -175,7 +174,7 @@ export function ViewportPanel({
       if (gpu) gpu.replaceWith(fresh);
       else overlay.current!.before(fresh);
       gpu = fresh;
-      createRenderer(fresh, panicked).then(
+      createRenderer(fresh).then(
         (created) => {
           if (disposed || creation !== creations) return created.free();
           renderer = created;
@@ -237,6 +236,8 @@ export function ViewportPanel({
           failedDraws = 0;
         } catch (error) {
           const named = error instanceof Error ? error : null;
+          // A panic stopped the viewport during the draw: the trap ending the call is that panic, shown already.
+          if (stopped) return;
           // The canvas has no texture this frame (hidden or occluded): draw again on the next one.
           if (named?.name === "NoSurfaceTexture") repaint = true;
           else if (named?.name === "DeviceLost") deviceLost(named);
@@ -443,6 +444,7 @@ export function ViewportPanel({
       element.removeEventListener("wheel", onWheel);
       renderer?.free();
       gpu?.remove();
+      stopPanics();
       retry.current = () => {};
     };
   }, [editor, state, failedOverlays, textureWarnings, shown]);

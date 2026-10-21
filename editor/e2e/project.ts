@@ -2,7 +2,7 @@ import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 export const repository = resolve(import.meta.dirname, "../..");
 const ludenea = join(repository, "target/debug/ludenea");
@@ -190,3 +190,32 @@ export function serveSwarm(port: number): Promise<ServedProject> {
 
 /** The fixtures of the `boxes` app, written by `cargo run -p boxes --bin divergence-fixtures editor/e2e/fixtures/divergence`. */
 export const DIVERGENCE_FIXTURES = join(import.meta.dirname, "fixtures/divergence");
+
+/** The color the renderer clears to (`BACKGROUND` in crates/ludenea-render/src/gpu/mod.rs). */
+const BACKGROUND = [0x12, 0x12, 0x14] as const;
+
+/**
+ * Whether the renderer drew in `viewport`: most of its pixels are the background it clears to,
+ * and some are drawn over it (the template scene's colliders). A canvas it never drew on shows
+ * neither.
+ */
+export async function viewportDrew(page: Page, viewport: Locator): Promise<boolean> {
+  const screenshot = (await viewport.screenshot()).toString("base64");
+  // Decoded in the page.
+  const { background, drawn } = await page.evaluate(
+    async ([png, [red, green, blue]]) => {
+      const bytes = Uint8Array.from(atob(png as string), (char) => char.charCodeAt(0));
+      const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+      const context = new OffscreenCanvas(bitmap.width, bitmap.height).getContext("2d")!;
+      context.drawImage(bitmap, 0, 0);
+      const data = context.getImageData(0, 0, bitmap.width, bitmap.height).data;
+      let background = 0;
+      for (let at = 0; at < data.length; at += 4) {
+        if (data[at] === red && data[at + 1] === green && data[at + 2] === blue) background += 1;
+      }
+      return { background, drawn: data.length / 4 - background };
+    },
+    [screenshot, BACKGROUND] as const,
+  );
+  return background > drawn && drawn > 0;
+}

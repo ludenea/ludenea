@@ -1,19 +1,39 @@
 import type { AssetId, ControlClient, ProjectInfo } from "@ludenea/control-client";
-import init from "@ludenea/render-wasm";
 import { runReported, type Editor } from "@ludenea/editor-shell";
 import { useLayoutEffect, useRef, useSyncExternalStore, type UIEvent } from "react";
+import { instantiate, type RenderModule } from "./render-module";
 
-let renderModule: Promise<unknown> | undefined;
+let renderModule: Promise<RenderModule> | undefined;
+const panicListeners = new Set<(message: string) => void>();
+
 /**
  * Loads the renderer's WebAssembly module once for every built-in: loaded twice, it would be two
- * instances. A load that fails is tried again on the next call.
+ * instances. A load that fails is tried again on the next call. A panic aborts the module: the
+ * listeners of `onRenderPanic` hear its message, and the next call loads a new instance.
  */
-export function loadRenderModule(): Promise<unknown> {
-  renderModule ??= init().catch((error: unknown) => {
-    renderModule = undefined;
-    throw error;
-  });
-  return renderModule;
+export function loadRenderModule(): Promise<RenderModule> {
+  if (renderModule) return renderModule;
+  const loading: Promise<RenderModule> = instantiate().then(
+    (module) => {
+      module.setPanicHandler((message: string) => {
+        if (renderModule === loading) renderModule = undefined;
+        for (const listener of [...panicListeners]) listener(message);
+      });
+      return module;
+    },
+    (error: unknown) => {
+      if (renderModule === loading) renderModule = undefined;
+      throw error;
+    },
+  );
+  renderModule = loading;
+  return loading;
+}
+
+/** Calls `listener` with the message of each panic of the renderer's module; returns how to stop. */
+export function onRenderPanic(listener: (message: string) => void): () => void {
+  panicListeners.add(listener);
+  return () => void panicListeners.delete(listener);
 }
 
 /** The project folders the asset browser lists. */

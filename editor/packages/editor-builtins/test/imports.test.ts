@@ -13,6 +13,9 @@ const ALLOWED = new Set([
   "@ludenea/control-client",
   "@tanstack/react-virtual",
   "@ludenea/render-wasm",
+  // The renderer's files, loaded as a new instance of its module after a panic.
+  "@ludenea/render-wasm/ludenea_render.js?url",
+  "@ludenea/render-wasm/ludenea_render_bg.wasm?url",
 ]);
 const SPECIFIER = /\b(?:import|export)\b[^"'`;]*?\bfrom\s*["']([^"']+)["']|\bimport\s*\(?\s*["']([^"']+)["']/g;
 

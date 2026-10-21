@@ -1,4 +1,3 @@
-import { ghostFrame } from "@ludenea/render-wasm";
 import type { ControlClient, DebugDrawFrame, Difference, DivergenceReport, Entity, Event, FileEntry, Topic, TraceComparison } from "@ludenea/control-client";
 import { definePlugin, type Disposable, type Editor } from "@ludenea/editor-shell";
 import { useEffect, useState } from "react";
@@ -233,7 +232,7 @@ export const divergencePlugin = definePlugin({
         // A host that answers something else (a test double) leaves the ghost as it is.
         if (reply.type !== "ghost_draw" || editor.control !== control) return;
         // The renderer's module styles the ghost.
-        await loadRenderModule();
+        const { ghostFrame } = await loadRenderModule();
         ghost.set({ frame: JSON.parse(ghostFrame(JSON.stringify(reply.frame))) as DebugDrawFrame, tick: reply.tick, lagging: reply.lagging });
         fetching.worked();
       } catch (error) {
