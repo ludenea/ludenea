@@ -304,12 +304,13 @@ the game pushes the frame of each tick it runs (as bytes, from the browser's wor
 viewport draws between the last two, as the game's own window does; paused, it shows the tick
 on screen, fetched again after a step, a seek, an undo, an edit, a reload, or a change of debug
 layers. The project's textures are loaded when the viewport opens; one that cannot be read or
-packed is logged once in the console and drawn as a magenta placeholder. A texture changed on disk (its PNG or its `.meta`), created, or removed while the editor runs is
-read again and drawn at once, with no command to the game; a new version that cannot be read or
-packed is logged once and the previous version stays on screen. "View through the game
-camera" (`C`) shows what the game's camera sees instead of the editor's free camera; picking
-and dragging follow it, and panning, zooming, or framing the selection leaves it for the
-editor's camera, starting from the same view. The desktop editor on Linux (WebKitGTK) has no
+packed is logged once in the console and drawn as a magenta placeholder. A texture changed on
+disk (its PNG or its `.meta`), created, or removed while the editor runs is read again and drawn
+at once, with no command to the game; a new version that cannot be read or packed is logged once
+and the previous version stays on screen. "View through the game camera" (`C`) shows what the
+game's camera sees instead of the editor's free camera; picking and dragging follow it, and
+panning, zooming, or framing the selection leaves it for the editor's camera, starting from the
+same view. The desktop editor on Linux (WebKitGTK) has no
 WebGPU: its viewport draws with WebGL2. When the GPU device is lost (a driver reset, a GPU
 removed), the viewport creates its renderer again on a new canvas, with the project's textures
 and the frame on screen, and logs a warning. When it cannot render (no GPU adapter, a second lost

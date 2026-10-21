@@ -15,8 +15,9 @@ const DEFAULT_CAMERA: CameraView = { center: { x: 0, y: 0 }, view: { x: 20, y: 1
 export const renderers: WebRenderer[] = [];
 
 /**
- * What the next renderers do: the textures `set_textures` refuses; the PNGs (by their text, which the tests use as their bytes) `textureFrames` rejects, with the message; what the next `init` and the
- * next `create` throw; and what the next `create` waits for before it finishes.
+ * What the next renderers do: the textures `set_textures` refuses; the PNGs (by their text,
+ * which the tests use as their bytes) `textureFrames` rejects, with the message; what the next
+ * `init` and the next `create` throw; and what the next `create` waits for before it finishes.
  */
 export const script: { refused: Refused[]; invalidTextures: { [pngText: string]: string }; initError: Error | null; createError: Error | null; createWaits: Promise<void> | null } = {
   refused: [],
