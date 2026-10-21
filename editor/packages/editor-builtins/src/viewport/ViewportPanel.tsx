@@ -97,6 +97,8 @@ export function ViewportPanel({
     let recreated = -Infinity;
     // Counts the creations started: one finishing after a newer one or a stop is dropped.
     let creations = 0;
+    // Counts the panics of the renderer's module: a renderer created across one belongs to an aborted instance.
+    let panics = 0;
     // The current frame must be drawn again (paused; playing draws every animation frame).
     let repaint = true;
     let press: Press | null = null;
@@ -163,10 +165,14 @@ export function ViewportPanel({
     };
     // A panic aborts the module in the middle of a call: the renderer it was using is dropped, not
     // freed, and the next one is created in a new instance of the module.
-    const stopPanics = onRenderPanic((message) => stop(message, false));
+    const stopPanics = onRenderPanic((message) => {
+      panics++;
+      stop(message, false);
+    });
 
     const start = () => {
       const creation = ++creations;
+      const panicsBefore = panics;
       stopped = false;
       failedDraws = 0;
       setFailure(null);
@@ -176,7 +182,11 @@ export function ViewportPanel({
       gpu = fresh;
       createRenderer(fresh).then(
         (created) => {
-          if (disposed || creation !== creations) return created.free();
+          if (disposed || creation !== creations) {
+            // Nothing is called on an aborted instance, not even `free`.
+            if (panics === panicsBefore) created.free();
+            return;
+          }
           renderer = created;
           feed.setTarget(created);
           repaint = true;

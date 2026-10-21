@@ -9,7 +9,8 @@ const panicListeners = new Set<(message: string) => void>();
 /**
  * Loads the renderer's WebAssembly module once for every built-in: loaded twice, it would be two
  * instances. A load that fails is tried again on the next call. A panic aborts the module: the
- * listeners of `onRenderPanic` hear its message, and the next call loads a new instance.
+ * listeners of `onRenderPanic` hear its message, and the next call loads a new instance (the
+ * aborted one stays in memory until the page reloads: see `instantiate`).
  */
 export function loadRenderModule(): Promise<RenderModule> {
   if (renderModule) return renderModule;

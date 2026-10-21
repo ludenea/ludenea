@@ -14,8 +14,16 @@ const DEFAULT_CAMERA: CameraView = { center: { x: 0, y: 0 }, view: { x: 20, y: 1
 /** Every renderer created, most recent last. */
 export const renderers: WebRenderer[] = [];
 
-/** What the next renderers do: the textures `set_textures` refuses; what the next `init` and the next `create` throw. */
-export const script: { refused: Refused[]; initError: Error | null; createError: Error | null } = { refused: [], initError: null, createError: null };
+/**
+ * What the next renderers do: the textures `set_textures` refuses; what the next `init` and the
+ * next `create` throw; and what the next `create` waits for before it finishes.
+ */
+export const script: { refused: Refused[]; initError: Error | null; createError: Error | null; createWaits: Promise<void> | null } = {
+  refused: [],
+  initError: null,
+  createError: null,
+  createWaits: null,
+};
 
 /** Every call of `init`. */
 export const inits: unknown[] = [];
@@ -78,11 +86,14 @@ export class WebRenderer implements Shape {
 
   static async create(canvas: HTMLCanvasElement): Promise<WebRenderer> {
     const error = script.createError;
+    const waits = script.createWaits;
     script.createError = null;
+    script.createWaits = null;
     if (error) throw error;
     const renderer = new WebRenderer();
     renderer.calls.push({ method: "create", args: [canvas] });
     renderers.push(renderer);
+    if (waits) await waits;
     return renderer;
   }
 

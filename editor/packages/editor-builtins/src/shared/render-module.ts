@@ -14,6 +14,9 @@ let instances = 0;
  * query names the instance, which servers ignore), so a module record of its own with a new
  * WebAssembly instance. The glue keeps its WebAssembly instance in module scope and loads it
  * only once, so a module aborted by a panic can only be replaced this way.
+ *
+ * Its limit: an ES module record cannot be evicted, so each aborted instance and its WebAssembly
+ * memory stay alive until the page reloads, one per panic the user retries after.
  */
 export async function instantiate(): Promise<RenderModule> {
   const url = new URL(glue, document.baseURI);

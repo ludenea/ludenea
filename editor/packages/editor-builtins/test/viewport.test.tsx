@@ -754,6 +754,7 @@ describe("viewport failures", () => {
     vi.restoreAllMocks();
     script.refused = [];
     script.createError = null;
+    script.createWaits = null;
   });
   // The renderers of earlier tests are not counted.
   beforeEach(() => void renderers.splice(0));
@@ -917,6 +918,21 @@ describe("viewport failures", () => {
     expect(inits.length).toBe(loads + 1);
     await waitFor(() => expect(drawsOf(renderers[1]!).length).toBeGreaterThan(0));
     expect(alert()).toBeNull();
+  });
+
+  it("a_renderer_created_by_a_module_that_panicked_meanwhile_is_dropped_unused", async () => {
+    let finish = () => {};
+    script.createWaits = new Promise((resolve) => (finish = resolve));
+    await viewport();
+    expect(renderers).toHaveLength(1);
+    const pending = renderers[0]!;
+    // Another built-in's call panics while the renderer is being created.
+    act(() => panic("panicked at src/web.rs:1:1:\nelsewhere"));
+    await waitFor(() => expect(alert()?.textContent).toContain(`${STOPPED}panicked at src/web.rs:1:1:\nelsewhere`));
+    finish();
+    await settle();
+    // Created by the aborted instance: nothing is called on it, not even `free`.
+    expect(pending.calls.map((call) => call.method)).toEqual(["create"]);
   });
 
   it("missing_surface_textures_never_show_the_alert", async () => {
