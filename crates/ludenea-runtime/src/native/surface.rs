@@ -448,14 +448,17 @@ impl Display {
             Err(error) => match renderer.check_device() {
                 Err(RenderError::DeviceLost(cause)) => Err(Failure::Lost(cause)),
                 Ok(()) => Err(Failure::Failed(error)),
-                // The GPU's own errors, often why the texture was refused.
-                Err(pending) => Err(Failure::Failed(RuntimeError::Gpu(format!(
-                    "{}; {pending}",
-                    match error {
-                        RuntimeError::Gpu(message) | RuntimeError::Window(message) => message,
-                        other => other.to_string(),
+                // The GPU's own errors, often why the texture was refused, added to the
+                // failure's message; the failure keeps its kind.
+                Err(pending) => Err(Failure::Failed(match error {
+                    RuntimeError::Gpu(message) => {
+                        RuntimeError::Gpu(format!("{message}; {pending}"))
                     }
-                )))),
+                    RuntimeError::Window(message) => {
+                        RuntimeError::Window(format!("{message}; {pending}"))
+                    }
+                    other => other,
+                })),
             },
         }
     }
@@ -522,6 +525,8 @@ mod tests {
         DeviceLost,
         /// The device raises an error while the texture is asked for, which it then refuses.
         GpuError,
+        /// The device raises an error while the texture is asked for, and the surface is lost.
+        LostAfterGpuError,
     }
 
     /// An offscreen stand-in for a window's surface.
@@ -557,14 +562,12 @@ mod tests {
                     Acquired::Validation
                 }
                 Outcome::GpuError => {
-                    // A buffer both read and written by the host is invalid.
-                    let _invalid = self.device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("invalid"),
-                        size: 4,
-                        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::MAP_WRITE,
-                        mapped_at_creation: false,
-                    });
+                    raise_error(&self.device);
                     Acquired::Validation
+                }
+                Outcome::LostAfterGpuError => {
+                    raise_error(&self.device);
+                    Acquired::Lost
                 }
             }
         }
@@ -572,6 +575,17 @@ mod tests {
         fn present(&mut self, _frame: Frame) {
             self.log.borrow_mut().presented += 1;
         }
+    }
+
+    /// Makes `device` raise a validation error: a buffer both read and written by the host
+    /// is invalid.
+    fn raise_error(device: &wgpu::Device) {
+        let _invalid = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("invalid"),
+            size: 4,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::MAP_WRITE,
+            mapped_at_creation: false,
+        });
     }
 
     const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -836,6 +850,30 @@ mod tests {
             panic!("{error}");
         };
         assert!(message.contains("refused"), "{message}");
+        assert!(message.contains("earlier GPU work"), "{message}");
+    }
+
+    #[test]
+    fn a_surface_lost_for_too_long_stays_a_window_failure_beside_gpu_errors() {
+        let log = Rc::new(RefCell::new(Log::default()));
+        let opened = Rc::new(RefCell::new(Vec::new()));
+        let mut display = display(&log, &opened, &Rc::new(RefCell::new(false)));
+        let runner = empty_game();
+        let (previous, current) = runner.frames();
+        let show = |display: &mut Display| {
+            display.show(previous, current.unwrap(), &Overlay::default(), true, 1.0)
+        };
+        log.borrow_mut().outcomes.push_back(Outcome::Lost);
+        assert!(!show(&mut display).unwrap());
+        log.borrow_mut().now += MAX_TIME_WITHOUT_SURFACE + Duration::from_millis(1);
+        log.borrow_mut()
+            .outcomes
+            .push_back(Outcome::LostAfterGpuError);
+        let error = show(&mut display).unwrap_err();
+        let RuntimeError::Window(message) = &error else {
+            panic!("a window failure, not {error:?}");
+        };
+        assert!(message.contains("stayed lost"), "{message}");
         assert!(message.contains("earlier GPU work"), "{message}");
     }
 
