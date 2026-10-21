@@ -67,6 +67,21 @@ fn handle_encodes_and_hashes_like_its_asset_id() {
 }
 
 #[test]
+fn asset_id_serializes_as_its_display_text() {
+    for id in [0, 7, 0xfedc_ba98_7654_3210, u128::MAX, 1 << 127] {
+        let id = AssetId(id);
+        let text = format!("{id}");
+        assert_eq!(text.len(), 32);
+        assert_eq!(ron::to_string(&id).unwrap(), format!("\"{text}\""));
+        assert_eq!(hash_value(&id), hash_value(&text));
+        assert_eq!(
+            postcard::to_allocvec(&id).unwrap(),
+            postcard::to_allocvec(&text).unwrap()
+        );
+    }
+}
+
+#[test]
 fn world_hash_is_the_root_of_its_tree() {
     let mut world = with_assets();
     let other = world.spawn();

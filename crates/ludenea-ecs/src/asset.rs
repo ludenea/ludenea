@@ -109,8 +109,15 @@ impl fmt::Display for AssetId {
 }
 
 impl Serialize for AssetId {
+    /// The text `Display` writes, encoded by hand: formatting it digit by digit cost a fifth
+    /// of a tick's world hash in a scene of 10,000 sprites.
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
+        const DIGITS: &[u8; 16] = b"0123456789abcdef";
+        let mut text = [0u8; 32];
+        for (index, digit) in text.iter_mut().enumerate() {
+            *digit = DIGITS[((self.0 >> (124 - 4 * index)) & 0xf) as usize];
+        }
+        serializer.serialize_str(std::str::from_utf8(&text).expect("ASCII digits"))
     }
 }
 
