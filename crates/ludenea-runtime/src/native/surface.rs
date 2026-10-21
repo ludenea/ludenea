@@ -952,4 +952,53 @@ mod tests {
             "{error}"
         );
     }
+
+    /// A camera showing 4 by 4 units around the origin and one sprite circling it, a radius
+    /// of 1, a quarter turn per tick from the second tick on.
+    const CIRCLING: &str = r#"Scene(version: 2, next_id: 2, resources: {}, entities: [
+        (id: 0, components: {"ludenea::Pose": (position: (x: 0.0, y: 0.0), rotation: (cos: 1.0, sin: 0.0)), "ludenea::Camera2d": (view: (x: 4.0, y: 4.0))}),
+        (id: 1, components: {"ludenea::Pose": (position: (x: 1.0, y: 0.0), rotation: (cos: 1.0, sin: 0.0)), "ludenea::Sprite": (texture: "00000000000000000000000000000001", frame: 0, layer: "world", order: 0, flip_x: false, flip_y: false, tint: (4294967295)), "swarm::Wanderer": (center: (x: 0.0, y: 0.0), radius: 1.0, phase: 0.0, speed: 1.5707964)}),
+    ])"#;
+
+    #[test]
+    fn a_frame_that_runs_two_ticks_draws_the_newest_tick_unblended() {
+        let files = GameFiles {
+            scene: CIRCLING.to_string(),
+            assets: Vec::new(),
+            edits: None,
+        };
+        let mut runner = Runner::load(swarm::app, &files, None, Vec::new()).unwrap();
+        runner.start(automatic_claims(1)).unwrap();
+        let (device, queue) = device();
+        let mut renderer = Renderer::new(device, queue, FORMAT);
+        let size = Size {
+            width: 64,
+            height: 64,
+        };
+        let mut halfway = |runner: &Runner, previous: bool| {
+            let (before, current) = runner.frames();
+            let before = before.filter(|_| previous);
+            renderer
+                .set_frames(before, current.unwrap(), &Overlay::default())
+                .unwrap();
+            renderer.render_rgba(size, 0.5, None).unwrap()
+        };
+        // The first tick puts the sprite where the scene has it; from then on it moves.
+        let one_tick = 1.0 / 60.0 + 1e-9;
+        runner.frame(one_tick, &LiveDevices::default()).unwrap();
+        // One tick: blended halfway between the two ticks.
+        let update = runner.frame(one_tick, &LiveDevices::default()).unwrap();
+        assert_eq!(update.tick, 2);
+        assert!(halfway(&runner, true) != halfway(&runner, false), "blended");
+        // Two ticks in one frame: the frame kept from before is two ticks old, so the newest
+        // tick is drawn as is rather than blended across two ticks with a one-tick alpha.
+        let update = runner
+            .frame(2.0 / 60.0 + 1e-9, &LiveDevices::default())
+            .unwrap();
+        assert_eq!(update.tick, 4);
+        assert!(
+            halfway(&runner, true) == halfway(&runner, false),
+            "not blended"
+        );
+    }
 }

@@ -223,7 +223,9 @@ impl Runner {
         events
     }
 
-    /// The frames of the previous and the current tick, to interpolate between.
+    /// The frame fetched before the current one, and the current one. After a displayed frame
+    /// that ran several ticks the first is more than a tick older: the renderer then draws
+    /// the current frame as is (`Renderer::set_frames` blends only consecutive ticks).
     pub fn frames(&self) -> (Option<&RenderFrame>, Option<&RenderFrame>) {
         (self.previous.as_ref(), self.current.as_ref())
     }

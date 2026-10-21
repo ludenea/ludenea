@@ -405,10 +405,12 @@ impl Renderer {
         Ok(())
     }
 
-    /// Prepares `current` for drawing, blended from `previous` when it is given: builds and
-    /// uploads every sprite instance with both ticks' transforms (equal for an entity new in
-    /// `current` or teleported on its tick), the tilemap chunks (a tilemap whose tiles did not
-    /// change keeps its chunks), and the views' layout, reusing the buffers that fit. The
+    /// Prepares `current` for drawing, blended from `previous` when it is of the tick right
+    /// before (`RenderFrame::follows`; after a gap, such as a displayed frame that ran several
+    /// ticks or a seek, `current` is drawn as is): builds and uploads every sprite instance
+    /// with both ticks' transforms (equal for an entity new in `current` or teleported on its
+    /// tick), the tilemap chunks (a tilemap whose tiles did not change keeps its chunks), and
+    /// the views' layout, reusing the buffers that fit. The
     /// debug draw of `overlay`'s layers, its selected entities highlighted, is built at the
     /// next draw. Of tilemaps sharing an entity, which only a malformed frame holds, the first
     /// well-formed one listed is drawn and the others are skipped. Returns what is drawn as a
@@ -419,6 +421,7 @@ impl Renderer {
         current: &RenderFrame,
         overlay: &Overlay,
     ) -> Result<DrawReport, RenderError> {
+        let previous = previous.filter(|previous| current.follows(previous));
         self.guarded("set_frames", |renderer| {
             renderer.prepare(previous, current, overlay)
         })

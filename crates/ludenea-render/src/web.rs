@@ -226,13 +226,9 @@ impl WebRenderer {
     ) -> Result<String, JsValue> {
         let current: RenderFrame = serde_json::from_str(current_json).map_err(failure)?;
         let overlay: Overlay = serde_json::from_str(overlay_json).map_err(failure)?;
-        let previous = self
-            .pushed
-            .take()
-            .filter(|previous| current.follows(previous));
         let report = self
             .renderer
-            .set_frames(previous.as_ref(), &current, &overlay)
+            .set_frames(self.pushed.as_ref(), &current, &overlay)
             .map_err(failure)?;
         self.pushed = Some(current);
         serde_json::to_string(&report).map_err(failure)

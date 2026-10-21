@@ -1194,10 +1194,13 @@ fn previous_frame_and_alpha_draw_in_between() {
         vec![sprite(moving, Vec2::new(-1.0, 1.0))],
         vec![tilemap(map, Vec2::new(-2.0, -2.0), 1, 1, vec![Some(1)])],
     );
-    let current = with_tilemaps(
-        vec![sprite(moving, Vec2::new(1.0, 1.0))],
-        vec![tilemap(map, Vec2::new(0.0, -2.0), 1, 1, vec![Some(1)])],
-    );
+    let current = RenderFrame {
+        tick: 1,
+        ..with_tilemaps(
+            vec![sprite(moving, Vec2::new(1.0, 1.0))],
+            vec![tilemap(map, Vec2::new(0.0, -2.0), 1, 1, vec![Some(1)])],
+        )
+    };
     renderer
         .set_frames(Some(&previous), &current, &Overlay::default())
         .unwrap();
@@ -1226,6 +1229,39 @@ fn previous_frame_and_alpha_draw_in_between() {
 }
 
 #[test]
+fn a_previous_frame_not_of_the_tick_before_is_not_blended() {
+    let mut renderer = renderer();
+    upload(&mut renderer, &solid(RED), &TextureMeta::default());
+    let moving = entity();
+    let at = |tick: u64, x: f32| RenderFrame {
+        tick,
+        ..frame(vec![sprite(moving, Vec2::new(x, 1.0))])
+    };
+    // Ticks 40 and 42, as when one displayed frame ran two ticks: halfway, the sprite is
+    // where tick 42 puts it, centred on (1, 1), not blended from tick 40's (-1, 1).
+    for previous in [at(40, -1.0), at(42, -1.0), at(43, -1.0)] {
+        renderer
+            .set_frames(Some(&previous), &at(42, 1.0), &Overlay::default())
+            .unwrap();
+        let pixels = renderer.render_rgba(SIZE, 0.5, None).unwrap();
+        let tick = previous.tick;
+        assert_eq!(pixel(&pixels, SIZE, 48, 16), RED, "previous at tick {tick}");
+        assert_eq!(
+            pixel(&pixels, SIZE, 32, 16),
+            background(),
+            "previous at tick {tick}"
+        );
+    }
+    // Tick 41 is the one right before: blended, centred on (0, 1).
+    renderer
+        .set_frames(Some(&at(41, -1.0)), &at(42, 1.0), &Overlay::default())
+        .unwrap();
+    let pixels = renderer.render_rgba(SIZE, 0.5, None).unwrap();
+    assert_eq!(pixel(&pixels, SIZE, 32, 16), RED);
+    assert_eq!(pixel(&pixels, SIZE, 52, 16), background());
+}
+
+#[test]
 fn draw_between_ticks_creates_no_buffer() {
     let mut renderer = renderer();
     upload(&mut renderer, &solid(RED), &TextureMeta::default());
@@ -1235,7 +1271,10 @@ fn draw_between_ticks_creates_no_buffer() {
             .map(|index| sprite(world.spawn(), Vec2::new(index as f32 / 1_000.0, 0.0)))
             .collect(),
     );
-    let mut current = previous.clone();
+    let mut current = RenderFrame {
+        tick: 1,
+        ..previous.clone()
+    };
     for item in &mut current.sprites {
         item.position.y = 1.0;
     }
@@ -1319,7 +1358,14 @@ fn halfway_rotation_matches_the_shorter_arc() {
     // From 170 to -170 degrees: the shorter arc crosses 180, where red is on the right; the
     // longer one would cross 0, where red is on the left.
     renderer
-        .set_frames(Some(&at(170.0)), &at(-170.0), &Overlay::default())
+        .set_frames(
+            Some(&at(170.0)),
+            &RenderFrame {
+                tick: 1,
+                ..at(-170.0)
+            },
+            &Overlay::default(),
+        )
         .unwrap();
     let pixels = renderer.render_rgba(SIZE, 0.5, None).unwrap();
     assert_eq!(pixel(&pixels, SIZE, 18, 32), BLUE);
@@ -1336,10 +1382,13 @@ fn teleported_sprite_is_not_blended() {
     let mut world = World::new();
     let (jumping, appearing) = (world.spawn(), world.spawn());
     let previous = frame(vec![sprite(jumping, Vec2::new(-1.0, 1.0))]);
-    let mut current = frame(vec![
-        sprite(jumping, Vec2::new(1.0, 1.0)),
-        sprite(appearing, Vec2::new(-1.0, -1.0)),
-    ]);
+    let mut current = RenderFrame {
+        tick: 1,
+        ..frame(vec![
+            sprite(jumping, Vec2::new(1.0, 1.0)),
+            sprite(appearing, Vec2::new(-1.0, -1.0)),
+        ])
+    };
     current.teleported = vec![jumping];
     renderer
         .set_frames(Some(&previous), &current, &Overlay::default())
@@ -1356,8 +1405,10 @@ fn camera_is_blended_unless_it_switched_or_teleported() {
     let mut renderer = renderer();
     upload(&mut renderer, &solid(RED), &TextureMeta::default());
     let (camera, still) = (entity(), entity());
+    // The frame of tick 0 with the camera at `x`, or of tick 1 from `x` = 2 on.
     let at = |x: f32, entity: Entity| {
         let mut scene = frame(vec![sprite(still, Vec2::ZERO)]);
+        scene.tick = u64::from(x >= 2.0);
         scene.camera = Some(CameraItem {
             entity,
             center: Vec2::new(x, 0.0),
