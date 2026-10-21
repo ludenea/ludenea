@@ -23,6 +23,9 @@ pub struct Color(pub u32);
 /// A debug draw primitive. JSON tags it with a `type` field; the formats that are not human
 /// readable, such as postcard, which cannot decode an internally tagged enum, tag it by
 /// variant index.
+// Its variants are declared three times: here, in `TaggedPrimitive` and in
+// `IndexedPrimitive`. A change to one is a change to all three; the compiler names any that
+// differs.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts", ts(tag = "type", rename_all = "snake_case"))]
