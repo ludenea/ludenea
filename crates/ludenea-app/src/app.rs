@@ -33,7 +33,8 @@ pub(crate) struct EditorHooks {
     pub(crate) mapping: Option<RawMapping>,
 }
 
-/// Encodes one raw input per player (`None`: the default input) as the postcard bytes of a `Vec` of the mapped input type.
+/// Encodes one raw input per player (`None`: the default input) as the postcard bytes of a
+/// `Vec` of the mapped input type.
 pub(crate) type MapRawFn = Box<dyn Fn(&[Option<RawInput>]) -> Vec<u8> + Send + Sync>;
 
 /// A registered raw input mapping, erased like `InputType`.

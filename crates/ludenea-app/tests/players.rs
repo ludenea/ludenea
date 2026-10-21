@@ -231,3 +231,29 @@ fn map_players_encodes_default_for_none() {
     assert_eq!(pads, vec![Pad { jump: true }, Pad { jump: false }]);
     assert!(sim.map_players(&[None]).is_err());
 }
+
+#[test]
+fn check_claims_reports_the_first_clashing_pair_gamepad_before_keyboard() {
+    let claim = |keyboard, gamepad| Claim { keyboard, gamepad };
+    // One pair clashes on both: the gamepad is reported.
+    assert_eq!(
+        check_claims(&[
+            claim(Some(KeyboardPart::Left), Some(0)),
+            claim(Some(KeyboardPart::Left), Some(0)),
+        ]),
+        Err(ClaimError::GamepadTwice {
+            gamepad: 0,
+            players: (0, 1)
+        })
+    );
+    // Pairs are scanned by the later player, then the earlier one: the keyboard overlap of
+    // players 0 and 1 comes before the gamepad clash of players 0 and 2.
+    assert_eq!(
+        check_claims(&[
+            claim(Some(KeyboardPart::Whole), Some(0)),
+            claim(Some(KeyboardPart::Left), None),
+            claim(None, Some(0)),
+        ]),
+        Err(ClaimError::KeyboardOverlap { players: (0, 1) })
+    );
+}

@@ -112,7 +112,7 @@ pub fn automatic_claims(players: usize) -> Vec<Claim> {
                 (_, 1) => Some(KeyboardPart::Right),
                 _ => None,
             },
-            gamepad: Some(u32::try_from(index).unwrap_or(u32::MAX)),
+            gamepad: u32::try_from(index).ok(),
         })
         .collect()
 }
