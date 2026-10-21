@@ -147,8 +147,9 @@ pub struct Renderer {
     /// The target size and visible area the debug vertices were built for (their outlines'
     /// width depends on both), or `None` when `set_frames` changed the debug draw since.
     debug_built_for: Option<(Size, Vec2)>,
-    /// The views' uniform buffer and its bind group, replaced when the views outgrow it.
-    views: Option<(wgpu::Buffer, wgpu::BindGroup)>,
+    /// The views' uniform buffer and its bind group, made with the renderer for one view
+    /// and replaced when the views outgrow it.
+    views: Views,
     /// The target and read-back buffer of `render_rgba`, kept while the size stays.
     #[cfg(not(target_arch = "wasm32"))]
     offscreen: Option<Offscreen>,
@@ -197,6 +198,38 @@ struct Scene {
 struct Slot {
     parallax: f32,
     origin: (Vec2, Vec2),
+}
+
+/// The views' uniform buffer and the bind group that reads one view of it at a dynamic
+/// offset.
+struct Views {
+    buffer: wgpu::Buffer,
+    group: wgpu::BindGroup,
+}
+
+impl Views {
+    /// A buffer of `size` bytes (at least `VIEW_BYTES`) and its bind group.
+    fn new(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, size: u64) -> Self {
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("views"),
+            size,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("views"),
+            layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &buffer,
+                    offset: 0,
+                    size: wgpu::BufferSize::new(VIEW_BYTES),
+                }),
+            }],
+        });
+        Views { buffer, group }
+    }
 }
 
 /// The offscreen target of `render_rgba` and the buffer its pixels are read back through.
@@ -255,6 +288,7 @@ impl Renderer {
         ];
         let white = upload(&device, &queue, 1, 1, &[255; 4]);
         let blank = bind_group(&device, &layout, &white, &samplers[0]);
+        let views = Views::new(&device, &view_layout, VIEW_BYTES);
         Renderer {
             device,
             faults,
@@ -273,10 +307,13 @@ impl Renderer {
             debug: Vec::new(),
             debug_counts: Vec::new(),
             debug_built_for: None,
-            views: None,
+            views,
             #[cfg(not(target_arch = "wasm32"))]
             offscreen: None,
-            stats: RenderStats::default(),
+            stats: RenderStats {
+                buffers_created: 1,
+                bytes_written: 0,
+            },
         }
     }
 
@@ -800,10 +837,7 @@ impl Renderer {
         }
         self.write_views(&view_bytes)?;
         let pipelines = self.pipelines(format).clone();
-        let Some((_, view_group)) = &self.views else {
-            // `write_views` made it.
-            return Ok(());
-        };
+        let view_group = &self.views.group;
 
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
@@ -900,36 +934,11 @@ impl Renderer {
                 allowed,
             });
         }
-        if self
-            .views
-            .as_ref()
-            .is_none_or(|(buffer, _)| buffer.size() < needed)
-        {
-            let size = grown(needed, allowed);
+        if self.views.buffer.size() < needed {
             self.stats.buffers_created += 1;
-            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("views"),
-                size,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("views"),
-                layout: &self.view_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &buffer,
-                        offset: 0,
-                        size: wgpu::BufferSize::new(VIEW_BYTES),
-                    }),
-                }],
-            });
-            self.views = Some((buffer, group));
+            self.views = Views::new(&self.device, &self.view_layout, grown(needed, allowed));
         }
-        if let Some((buffer, _)) = &self.views {
-            write(&self.queue, &mut self.stats, buffer, bytes);
-        }
+        write(&self.queue, &mut self.stats, &self.views.buffer, bytes);
         Ok(())
     }
 
