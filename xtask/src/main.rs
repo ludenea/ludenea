@@ -10,11 +10,11 @@
 //! `wasm-renderer <out-dir>` builds the viewport renderer (`ludenea-draw` with its
 //! `render` feature) and writes `debug_draw.js`, `debug_draw.d.ts`, and `debug_draw_bg.wasm`.
 //!
-//! `wasm-render <out-dir>` builds the renderer for the browser (`ludenea-render` with its
-//! `web` feature) and writes `ludenea_render.js`, `ludenea_render.d.ts`, and
+//! `wasm-render [--test-hooks] <out-dir>` builds the renderer for the browser (`ludenea-render`
+//! with its `web` feature) and writes `ludenea_render.js`, `ludenea_render.d.ts`, and
 //! `ludenea_render_bg.wasm`: the editor's into `editor/packages/render-wasm`
-//! (`pnpm -C editor build:render`), the renderer page's tests' into
-//! `editor/e2e/fixtures/renderer/pkg`.
+//! (`pnpm -C editor build:render`). `--test-hooks` adds the `test-hooks` feature, the exports
+//! only the renderer page's tests use, for their build in `editor/e2e/fixtures/renderer/pkg`.
 
 use std::error::Error;
 use std::path::PathBuf;
@@ -24,7 +24,8 @@ use cargo_metadata::MetadataCommand;
 use wasm_bindgen_cli_support::Bindgen;
 
 const USAGE: &str = "usage: cargo xtask check | cargo xtask wasm-game <package> <out-dir> \
-                     | cargo xtask wasm-renderer <out-dir> | cargo xtask wasm-render <out-dir>";
+                     | cargo xtask wasm-renderer <out-dir> \
+                     | cargo xtask wasm-render [--test-hooks] <out-dir>";
 const TARGET: &str = "wasm32-unknown-unknown";
 
 /// The cargo commands of `check`, in order, run from the workspace root.
@@ -61,9 +62,18 @@ fn main() -> ExitCode {
         [task, out_dir] if task == "wasm-renderer" => {
             browser_module("ludenea-draw", "render", "debug_draw", out_dir)
         }
-        [task, out_dir] if task == "wasm-render" => {
-            browser_module("ludenea-render", "web", "ludenea_render", out_dir)
-        }
+        [task, out_dir] if task == "wasm-render" => browser_module(
+            "ludenea-render",
+            render_features(false),
+            "ludenea_render",
+            out_dir,
+        ),
+        [task, flag, out_dir] if task == "wasm-render" && flag == "--test-hooks" => browser_module(
+            "ludenea-render",
+            render_features(true),
+            "ludenea_render",
+            out_dir,
+        ),
         _ => Err(USAGE.into()),
     };
     match result {
@@ -73,6 +83,12 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// The features of `ludenea-render` that `wasm-render` builds with: `web`, and `test-hooks`
+/// only when asked, so the module the editor ships never exports a test hook.
+fn render_features(test_hooks: bool) -> &'static str {
+    if test_hooks { "web,test-hooks" } else { "web" }
 }
 
 fn check() -> Result<(), Box<dyn Error>> {
@@ -218,6 +234,34 @@ mod tests {
             missing_checks(&flags_in_a_comment),
             ["the lint job does not set `RUSTDOCFLAGS: -D warnings`"]
         );
+    }
+
+    /// The renderer the editor ships is built without the test hooks, and no manifest turns
+    /// them on: only `ludenea-render` declares the feature, and nothing else names it.
+    #[test]
+    fn only_the_explicit_flag_builds_the_test_hooks() {
+        assert_eq!(super::render_features(false), "web");
+        assert_eq!(super::render_features(true), "web,test-hooks");
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/..");
+        for folder in ["crates", "examples"] {
+            for entry in std::fs::read_dir(format!("{root}/{folder}")).unwrap() {
+                let manifest = entry.unwrap().path().join("Cargo.toml");
+                let Ok(text) = std::fs::read_to_string(&manifest) else {
+                    continue;
+                };
+                let naming: Vec<&str> = text
+                    .lines()
+                    .filter(|line| !line.trim_start().starts_with('#'))
+                    .filter(|line| line.contains("test-hooks"))
+                    .collect();
+                let expected: &[&str] = if manifest.ends_with("ludenea-render/Cargo.toml") {
+                    &["test-hooks = []"]
+                } else {
+                    &[]
+                };
+                assert_eq!(naming, expected, "{}", manifest.display());
+            }
+        }
     }
 
     /// What `workflow` misses of `super::CHECKS`: a step of each, uncommented, in the job

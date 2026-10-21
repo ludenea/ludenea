@@ -7,6 +7,9 @@ edition.workspace = true
 # The wgpu renderer (`gpu`). Off by default: the simulation never pulls a GPU crate.
 gpu = ["dep:wgpu"]
 # The renderer in a browser canvas (`web`), built by `cargo xtask wasm-render`.
+# Exports only the renderer page's tests use (`panicForTesting`), built by
+# `cargo xtask wasm-render --test-hooks`; never in the module the editor ships.
+test-hooks = []
 web = ["gpu", "dep:postcard", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys"]
 
 [dependencies]

@@ -504,8 +504,9 @@ pub fn set_panic_handler(handler: Function) {
 }
 
 /// Panics with `message`. It exists so a page's test can check that `setPanicHandler`
-/// receives a panic end to end, as no input makes the renderer panic.
-#[doc(hidden)]
+/// receives a panic end to end, as no input makes the renderer panic; only the `test-hooks`
+/// feature (`cargo xtask wasm-render --test-hooks`) exports it.
+#[cfg(feature = "test-hooks")]
 #[wasm_bindgen(js_name = panicForTesting)]
 pub fn panic_for_testing(message: &str) {
     panic!("{message}");

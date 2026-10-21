@@ -410,7 +410,7 @@ time report into assertions, on the reference machine (an Apple M-series):
 
 ```sh
 cargo xtask wasm-game boxes editor/e2e/golden/pkg
-cargo xtask wasm-render editor/e2e/fixtures/renderer/pkg
+cargo xtask wasm-render --test-hooks editor/e2e/fixtures/renderer/pkg
 cargo run --locked -p boxes --bin editor-bench
 cargo build --locked -p ludenea-serve -p swarm
 cargo run --locked -p ludenea-serve -- build examples/swarm --web --out editor/e2e/fixtures/standalone

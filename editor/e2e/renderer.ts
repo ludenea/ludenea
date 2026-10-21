@@ -74,7 +74,7 @@ declare global {
  * on (a Rust panic among them); it is empty once started.
  */
 export async function start(page: Page): Promise<{ backend: string; refused: Refused[]; pageErrors: string[] }> {
-  expect(existsSync(RENDERER), `${RENDERER} is missing: run cargo xtask wasm-render editor/e2e/fixtures/renderer/pkg`).toBe(true);
+  expect(existsSync(RENDERER), `${RENDERER} is missing: run cargo xtask wasm-render --test-hooks editor/e2e/fixtures/renderer/pkg`).toBe(true);
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   page.on("console", (message) => {

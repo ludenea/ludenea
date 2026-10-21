@@ -1,4 +1,4 @@
-// The browser renderer (`ludenea_render::web`, built by `cargo xtask wasm-render
+// The browser renderer (`ludenea_render::web`, built by `cargo xtask wasm-render --test-hooks
 // editor/e2e/fixtures/renderer/pkg`) drawing into a 128 by 128 canvas, for renderer.spec.ts.
 // The camera shows 8 by 8 world units around (2, 0): 16 pixels per unit, world (x, y) at pixel
 // (32 + 16 x, 64 - 16 y).

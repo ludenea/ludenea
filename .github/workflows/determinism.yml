@@ -245,7 +245,7 @@ jobs:
       - run: cargo test --locked -p ludenea-serve --test play -- --ignored
       - run: cargo xtask wasm-game boxes editor/e2e/golden/pkg
       # The renderer's pixel tests (renderer.spec.ts) load it, on WebGL2 and on WebGPU.
-      - run: cargo xtask wasm-render editor/e2e/fixtures/renderer/pkg
+      - run: cargo xtask wasm-render --test-hooks editor/e2e/fixtures/renderer/pkg
       - run: cargo run --locked -p boxes --bin editor-bench
       - run: pnpm -C editor build
       - run: cargo build --locked -p ludenea-serve --features embed-editor
