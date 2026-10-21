@@ -70,6 +70,14 @@ test("draws_the_reference_frame", async ({ page }) => {
   expect(panned).toEqual([LEFT, RIGHT, BACKGROUND]);
 });
 
+test("a_frame_after_a_gap_in_ticks_is_drawn_without_blending", async ({ page }) => {
+  await start(page);
+  // Drawn halfway, but tick 2 does not follow tick 0: the sprite is where it is now (pixels 40
+  // to 56 across), not halfway (32 to 48).
+  const drawn = await page.evaluate((points) => window.fixture.drawAfterGap(points), [[44, 8], [52, 8], [35, 8]] as Point[]);
+  expect(drawn).toEqual([LEFT, RIGHT, BACKGROUND]);
+});
+
 test("sixty_thousand_sprites_then_one_both_draw", async ({ page }) => {
   await start(page);
   // Sprite frame 0 is LEFT on its left half: each sprite is sampled there.

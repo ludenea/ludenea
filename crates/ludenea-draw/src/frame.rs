@@ -106,12 +106,29 @@ impl RenderFrame {
             .position(|layer| layer.name == name)
             .and_then(|index| u16::try_from(index).ok())
     }
+
+    /// Whether this frame is of the tick right after `previous`'s, so a renderer blends
+    /// between them; after a gap (a step of several ticks, a seek, frames left undrawn) it
+    /// shows this frame as is.
+    pub fn follows(&self, previous: &RenderFrame) -> bool {
+        previous.tick.checked_add(1) == Some(self.tick)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::Primitive;
+
+    #[test]
+    fn only_the_very_next_tick_follows() {
+        let at = |tick| RenderFrame { tick, ..frame() };
+        assert!(at(43).follows(&at(42)));
+        assert!(!at(44).follows(&at(42)), "a gap of a tick");
+        assert!(!at(42).follows(&at(42)), "the same tick again");
+        assert!(!at(0).follows(&at(42)), "a seek back");
+        assert!(!at(0).follows(&at(u64::MAX)), "no wrap around");
+    }
 
     fn entity(index: u32, generation: u32) -> Entity {
         serde_json::from_value(serde_json::json!({ "index": index, "generation": generation }))

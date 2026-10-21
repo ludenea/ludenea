@@ -24,6 +24,7 @@ declare global {
     fixture: {
       start(): Promise<{ backend: string; errors: Refused[] }>;
       drawReference(points: Point[]): Drawn;
+      drawAfterGap(points: Point[]): Rgba[];
       redraw(alpha: number, points: Point[], camera?: { center: { x: number; y: number }; view: { x: number; y: number } }): Rgba[];
       drawSprites(count: number, placed: Record<number, Point>, points: Point[]): Drawn;
       drawError(): string | null;

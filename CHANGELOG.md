@@ -49,9 +49,11 @@ hash, those of the golden trace and replays included.
   `get_render_frame`: refused before the hello as a request is (`not_connected`), it returns
   the current tick's `RenderFrame` as JSON, so a page forwards the frame text without parsing
   it, and the events it causes come first in the next `handle` or `advance`.
-- `WebRenderer::push_frame(current, overlay, follows)` sets the next frame, blended from the
-  frame pushed before it only when `follows` says it is the very next tick, so a page parses
-  each frame once.
+- Breaking: `WebRenderer::push_frame(current, overlay)` replaces `WebRenderer::set_frames`,
+  with no alias: it sets the next frame, blended from the frame pushed before it only when
+  that is the tick before (`RenderFrame::follows`), so a page reads each frame once and a
+  frame after a gap in ticks (a step of several ticks, a seek, frames left undrawn) draws as
+  is.
 - `ludenea build <project> --web --out <folder>` builds a game as a standalone static web page,
   which any web server serves without the editor or `ludenea serve`: the simulation runs in
   a Web Worker driving the control `WorkerHost`, the page draws with `WebRenderer` between
@@ -93,7 +95,7 @@ hash, those of the golden trace and replays included.
   another size, a page file not named `page-<index>.png`, a region outside its page and an
   undecodable PNG with `AtlasFileError`. Textures left out of the atlas are not written.
   `WebRenderer::set_atlas(manifest, pages)` uploads such an atlas in the browser and, like
-  `set_textures`, blanks the sprites until the next `set_frames`.
+  `set_textures`, blanks the sprites until the next `push_frame`.
 - `ludenea play <project> [--scene PATH] [-- args...]` builds a project natively and runs its
   binary's `play` with `--project` and the forwarded arguments, returning the game's exit
   code (2 when the build or the launch fails, or without a scene: pass `--scene` or set
@@ -226,8 +228,8 @@ hash, those of the golden trace and replays included.
   opens a device without a window, on the fallback adapter when there is no hardware
   adapter or its device cannot be opened, and `gpu::headless_with_limits` does the same
   with adjusted device limits. Behind feature `web`, the same renderer draws into a
-  browser canvas with WebGPU or WebGL2: `WebRenderer::set_frames(previous, current,
-  overlay)` returns the report as JSON, and `draw(alpha, camera)` draws.
+  browser canvas with WebGPU or WebGL2: `WebRenderer::push_frame(current, overlay)`
+  returns the report as JSON, and `draw(alpha, camera)` draws.
 - The command line tool's new `render` draws a tick of a scene (with its `--inputs` and
   `--edits`) or of a `.replay` offscreen and writes it to a PNG: `--tick`, `--out`,
   `--width` and `--height` (1280 by 720 by default), and `--debug-layer` for each debug

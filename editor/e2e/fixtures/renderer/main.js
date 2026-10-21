@@ -79,15 +79,35 @@ function pixels(points) {
   return points.map(([x, y]) => Array.from(copy.getImageData(x, y, 1, 1).data));
 }
 
+/** The tick of the frame pushed last; every `draw` starts two ticks later. */
+let tick = 0;
+
+/** Pushes `frame` at `at`; returns the report of `push_frame`. */
+function push(frame, overlay, at) {
+  return JSON.parse(renderer.push_frame(JSON.stringify({ ...frame, tick: at }), JSON.stringify(overlay)));
+}
+
 /**
- * Sets the frames, `current` and the `previous` one when given, then draws `alpha` of the way
- * from `previous` to `current`. Returns the report of `set_frames`.
+ * Pushes `previous` when given, then `current` at the next tick, and draws `alpha` of the way
+ * from `previous` to `current`; without `previous`, `current` comes after a gap of a tick and
+ * draws as is. Returns the report of the push of `current`.
  */
 function draw(current, overlay = {}, previous = undefined, alpha = 1) {
-  const before = previous === undefined ? undefined : JSON.stringify(previous);
-  const report = JSON.parse(renderer.set_frames(before, JSON.stringify(current), JSON.stringify(overlay)));
+  tick += 2;
+  if (previous !== undefined) push(previous, overlay, tick - 1);
+  const report = push(current, overlay, tick);
   renderer.draw(alpha, undefined);
   return report;
+}
+
+/** A sprite at (0, 3.5) then, two ticks later, at (1, 3.5), drawn halfway: the gap means no blend. */
+function drawAfterGap(points) {
+  tick += 2;
+  push(frame([sprite(1, [0, 3.5])]), {}, tick);
+  tick += 2;
+  push(frame([sprite(1, [1, 3.5])]), {}, tick);
+  renderer.draw(0.5, undefined);
+  return pixels(points);
 }
 
 /** Draws the frames already set at `alpha`, through the free `camera` when given, and reads `points`. */
@@ -195,4 +215,4 @@ function resize(width, height) {
   renderer.resize(width, height, 1);
 }
 
-window.fixture = { start, drawReference, redraw, drawSprites, drawError, failOnTheDevice, loseTheDevice, createOn, resize };
+window.fixture = { start, drawReference, drawAfterGap, redraw, drawSprites, drawError, failOnTheDevice, loseTheDevice, createOn, resize };

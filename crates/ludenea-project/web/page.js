@@ -31,11 +31,9 @@ let tickRate = 60;
 let renderer;
 let lobby;
 let worker;
-/** The JSON of the newest frame and its tick, until the renderer has it; the tick of the
- * frame pushed last, which the next one blends from when it is the very next tick. */
+/** The JSON of the newest frame until the renderer has it, and whether it has any. */
 let pendingFrame;
-let pendingTick = 0;
-let pushedTick;
+let pushed = false;
 let transientDraws = 0;
 let draws = 0;
 /** The host's progress into the next tick when the current frame arrived, and when it did. */
@@ -142,14 +140,14 @@ function animate() {
     if (pendingFrame !== undefined) {
       const frame = pendingFrame;
       pendingFrame = undefined;
-      // Blended from the frame pushed last only when it is the tick before: after a step of
-      // several ticks, a seek, or frames this page had no time to draw, it shows as is.
-      const follows = pushedTick !== undefined && pendingTick === pushedTick + 1;
-      pushedTick = pendingTick;
-      const report = JSON.parse(renderer.push_frame(frame, "{}", follows));
+      pushed = true;
+      // The renderer blends it from the frame pushed last only when that is the tick before:
+      // after a step of several ticks, a seek, or frames this page had no time to draw, it
+      // shows as is.
+      const report = JSON.parse(renderer.push_frame(frame, "{}"));
       if (report.missing.length > 0) console.warn(`${report.missing.length} sprites or tiles have no texture`, report.missing);
     }
-    if (pushedTick !== undefined) {
+    if (pushed) {
       const alpha = Math.min(Math.max(progress + ((performance.now() - arrival) * tickRate) / 1000, 0), 1);
       renderer.draw(alpha, undefined);
       transientDraws = 0;
@@ -178,7 +176,6 @@ function onWorkerMessage({ data }) {
       break;
     case "frame":
       pendingFrame = data.frame;
-      pendingTick = data.tick;
       progress = data.progress;
       arrival = performance.now();
       document.body.dataset.tick = String(data.tick);

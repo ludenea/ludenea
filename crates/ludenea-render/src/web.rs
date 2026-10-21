@@ -50,7 +50,7 @@ pub struct WebRenderer {
     backend: &'static str,
     /// The size asked by the last `resize`, which the surface may be clamped below.
     size: Size,
-    /// The current frame of the last `push_frame`, the previous one of the next.
+    /// The frame of the last `push_frame`, which the next one blends from.
     pushed: Option<RenderFrame>,
 }
 
@@ -187,7 +187,7 @@ impl WebRenderer {
 
     /// Uploads a packed atlas from its files (`manifest` is `atlas.json`, `pages` the PNGs of
     /// `page-<n>.png` in order), replacing the previous textures. Like `set_textures`, it
-    /// blanks the sprites until the next `set_frames`. A refused file is the error message.
+    /// blanks the sprites until the next `push_frame`. A refused file is the error message.
     pub fn set_atlas(&mut self, manifest: &str, pages: Vec<Uint8Array>) -> Result<(), JsValue> {
         let pages: Vec<Vec<u8>> = pages.iter().map(Uint8Array::to_vec).collect();
         let pages: Vec<&[u8]> = pages.iter().map(Vec::as_slice).collect();
@@ -213,44 +213,23 @@ impl WebRenderer {
         self.surface.configure(&self.device, &self.config);
     }
 
-    /// Sets the frames to draw, once per tick: `current_json` (a `RenderFrame`), blended
-    /// from `previous_json` when it is given, under `overlay_json` (`{ debug_layers,
-    /// selected }`, each optional). Returns the `DrawReport` as JSON. An error is the
-    /// renderer's message, and an error the GPU raised since the last call is returned by
-    /// this one.
-    pub fn set_frames(
-        &mut self,
-        previous_json: Option<String>,
-        current_json: &str,
-        overlay_json: &str,
-    ) -> Result<String, JsValue> {
-        let previous: Option<RenderFrame> = previous_json
-            .map(|json| serde_json::from_str(&json))
-            .transpose()
-            .map_err(failure)?;
-        let current: RenderFrame = serde_json::from_str(current_json).map_err(failure)?;
-        let overlay: Overlay = serde_json::from_str(overlay_json).map_err(failure)?;
-        let report = self
-            .renderer
-            .set_frames(previous.as_ref(), &current, &overlay)
-            .map_err(failure)?;
-        serde_json::to_string(&report).map_err(failure)
-    }
-
-    /// Sets the frame of the next tick, `current_json` (a `RenderFrame`), under
-    /// `overlay_json` as `set_frames` takes it, blended from the frame pushed last when
-    /// `follows` says the new one is the very next tick, else drawn as is. Each frame is read
-    /// once: a page pushing one frame per tick parses no frame twice. Returns the
-    /// `DrawReport` as JSON; errors as `set_frames`.
+    /// Sets the frame to draw, once per tick: `current_json` (a `RenderFrame`) under
+    /// `overlay_json` (`{ debug_layers, selected }`, each optional), blended from the frame
+    /// set before it when it is of the very next tick (`RenderFrame::follows`), else drawn as
+    /// is. Each frame is read once: the renderer keeps the last one to blend the next from.
+    /// Returns the `DrawReport` as JSON. An error is the renderer's message, and an error the
+    /// GPU raised since the last call is returned by this one.
     pub fn push_frame(
         &mut self,
         current_json: &str,
         overlay_json: &str,
-        follows: bool,
     ) -> Result<String, JsValue> {
         let current: RenderFrame = serde_json::from_str(current_json).map_err(failure)?;
         let overlay: Overlay = serde_json::from_str(overlay_json).map_err(failure)?;
-        let previous = self.pushed.take().filter(|_| follows);
+        let previous = self
+            .pushed
+            .take()
+            .filter(|previous| current.follows(previous));
         let report = self
             .renderer
             .set_frames(previous.as_ref(), &current, &overlay)
