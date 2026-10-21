@@ -41,6 +41,9 @@ hash, those of the golden trace and replays included.
 
 ### Rust API
 
+- `WorkerHost::tickProgress()` returns the fraction of the next tick that play owes, from 0
+  to below 1, so a page drawing a game that runs in a Web Worker interpolates its last two
+  ticks.
 - `ludenea_render::atlas::Atlas::to_files` writes a packed atlas as an `AtlasFiles`: a JSON
   manifest (`atlas.json`, `ATLAS_VERSION` 1: `version`, `pages` of `{ file, width, height }`
   and `regions` of `{ id, frame, region }`) and one PNG per page (`page-<n>.png`), byte for

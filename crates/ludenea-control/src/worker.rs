@@ -92,6 +92,13 @@ impl WorkerHost {
             .collect();
         to_json(&events)
     }
+
+    /// The fraction of the next tick that play owes, from 0 to below 1: what the page
+    /// interpolates the last two ticks with.
+    #[wasm_bindgen(js_name = tickProgress)]
+    pub fn tick_progress(&self) -> f64 {
+        self.host.tick_progress()
+    }
 }
 
 fn to_json(messages: &[ServerMessage]) -> String {
