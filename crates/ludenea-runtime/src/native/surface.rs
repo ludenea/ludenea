@@ -211,6 +211,8 @@ impl Presenter {
     /// Follows the window to `width` by `height` physical pixels, kept within the device's
     /// texture limit. At a side of zero, frames are skipped until the next resize.
     pub fn resize(&mut self, width: u32, height: u32) {
+        // A new configuration starts a new run of lost frames.
+        self.lost_since = None;
         self.size = Size {
             width: width.min(self.max_side),
             height: height.min(self.max_side),
@@ -222,15 +224,17 @@ impl Presenter {
 
     /// Draws a frame with `draw` into the surface's next texture and presents it. The frame is
     /// skipped when the window has no pixels, is hidden, or the texture timed out; a lost or
-    /// outdated surface is configured again and the frame skipped, until it stays so for
-    /// `MAX_TIME_WITHOUT_SURFACE`, which fails. A texture the GPU refuses, or an
-    /// error of `draw`, fails with its cause; `draw`'s `RenderError::DeviceLost` tells the
-    /// caller to open a new device.
+    /// outdated surface is configured again and the frame skipped, until an unbroken run of
+    /// such frames lasts `MAX_TIME_WITHOUT_SURFACE`, which fails (a drawn, hidden, timed out
+    /// or zero-size frame, or a resize, ends the run). A texture the GPU refuses, or an error
+    /// of `draw`, fails with its cause; `draw`'s `RenderError::DeviceLost` tells the caller to
+    /// open a new device.
     pub fn present(
         &mut self,
         draw: impl FnOnce(&wgpu::TextureView, Size) -> Result<(), RenderError>,
     ) -> Result<(), RuntimeError> {
         if !self.can_draw() {
+            self.lost_since = None;
             return Ok(());
         }
         let acquired = self.target.acquire();
@@ -249,7 +253,10 @@ impl Presenter {
                 }
                 return Ok(());
             }
-            Acquired::Timeout | Acquired::Occluded => return Ok(()),
+            Acquired::Timeout | Acquired::Occluded => {
+                self.lost_since = None;
+                return Ok(());
+            }
             Acquired::Validation => {
                 return Err(RuntimeError::Gpu(
                     "the window's surface has no texture to draw into: the GPU refused it"
@@ -761,6 +768,37 @@ mod tests {
         assert!(drawn(&mut presenter).unwrap());
         log.borrow_mut().now += MAX_TIME_WITHOUT_SURFACE;
         assert!(!drawn(&mut presenter).unwrap(), "a new run of lost frames");
+    }
+
+    /// Something that happens to the window between two lost frames.
+    type Interrupt = fn(&mut Presenter, &Rc<RefCell<Log>>);
+
+    #[test]
+    fn only_an_unbroken_run_of_lost_frames_counts() {
+        let interruptions: [(&str, Interrupt); 4] = [
+            ("occluded", |presenter, log| {
+                log.borrow_mut().outcomes.push_back(Outcome::Occluded);
+                assert!(!drawn(presenter).unwrap());
+            }),
+            ("timed out", |presenter, log| {
+                log.borrow_mut().outcomes.push_back(Outcome::Timeout);
+                assert!(!drawn(presenter).unwrap());
+            }),
+            ("resized", |presenter, _| presenter.resize(64, 64)),
+            ("minimized", |presenter, _| {
+                presenter.resize(0, 0);
+                assert!(!drawn(presenter).unwrap());
+                presenter.resize(64, 64);
+            }),
+        ];
+        for (name, interrupt) in interruptions {
+            let (mut presenter, log) = presenter(&[Outcome::Lost]);
+            assert!(!drawn(&mut presenter).unwrap());
+            interrupt(&mut presenter, &log);
+            log.borrow_mut().now += MAX_TIME_WITHOUT_SURFACE + Duration::from_secs(1);
+            log.borrow_mut().outcomes.push_back(Outcome::Outdated);
+            assert!(!drawn(&mut presenter).unwrap(), "{name}: a new run starts");
+        }
     }
 
     #[test]
