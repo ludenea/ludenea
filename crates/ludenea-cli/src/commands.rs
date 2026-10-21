@@ -543,7 +543,10 @@ pub struct PlayArgs {
     files: RunFiles,
     /// Skip the lobby with this many local players, from 1 to 4: one holds the keyboard and
     /// the first gamepad; with more, the first two share the keyboard's halves.
-    #[arg(long, value_parser = clap::value_parser!(u8).range(1..=4))]
+    #[arg(
+        long,
+        value_parser = clap::value_parser!(u8).range(1..=ludenea_app::players::MAX_LOCAL_PLAYERS as i64)
+    )]
     players: Option<u8>,
     /// Close the window once the match reaches this tick.
     #[arg(long)]
