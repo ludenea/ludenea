@@ -76,7 +76,12 @@ fn set_players_records_that_many_players() {
     assert_eq!(
         reply,
         Reply::Players {
-            claims: ludenea_app::players::automatic_claims(3)
+            claims: ludenea_app::players::automatic_claims(3),
+            devices: vec![
+                "left keyboard half and gamepad 1".to_string(),
+                "right keyboard half and gamepad 2".to_string(),
+                "gamepad 3".to_string(),
+            ],
         }
     );
     let Reply::Session { inputs, .. } = host.handle(Command::ExportSession).unwrap() else {
@@ -308,7 +313,16 @@ fn set_players_replies_the_claims_it_applied() {
             claims: Some(claims.clone()),
         })
         .unwrap();
-    assert_eq!(reply, Reply::Players { claims });
+    assert_eq!(
+        reply,
+        Reply::Players {
+            claims,
+            devices: vec![
+                "right keyboard half and gamepad 3".to_string(),
+                "no device".to_string()
+            ],
+        }
+    );
 }
 
 #[test]

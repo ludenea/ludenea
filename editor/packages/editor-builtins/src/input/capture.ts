@@ -1,4 +1,4 @@
-import type { Claim, LiveDevices, RawGamepad } from "@ludenea/control-client";
+import type { LiveDevices, RawGamepad } from "@ludenea/control-client";
 import { isEditorKey, type Disposable, type Editor } from "@ludenea/editor-shell";
 
 const IDLE: LiveDevices = { keys: [], gamepads: [] };
@@ -12,16 +12,6 @@ function gamepads(): (RawGamepad | null)[] {
 /** The players the "Set the player count" command offers. */
 const PLAYER_COUNTS = [1, 2, 3, 4];
 
-const KEYBOARD_PARTS = { Whole: "the whole keyboard", Left: "the left half of the keyboard", Right: "the right half of the keyboard" };
-
-/** One line per player of what the host assigned: `player 1: the left half of the keyboard and gamepad 1`. */
-export function describeClaims(claims: Claim[]): string[] {
-  return claims.map(({ keyboard, gamepad }, index) => {
-    const devices = [keyboard && KEYBOARD_PARTS[keyboard], gamepad !== null && `gamepad ${gamepad + 1}`].filter(Boolean);
-    return `player ${index + 1}: ${devices.length > 0 ? devices.join(" and ") : "no device"}`;
-  });
-}
-
 /** Registers one palette command per player count; each replaces the recorded inputs, so its title says so. */
 export function registerPlayerCommands(editor: Editor): Disposable[] {
   return PLAYER_COUNTS.map((players) =>
@@ -31,8 +21,9 @@ export function registerPlayerCommands(editor: Editor): Disposable[] {
       async run() {
         const control = editor.control;
         if (!control) throw new Error("no game is running");
-        const { claims } = await control.request({ type: "set_players", players, claims: null });
-        editor.console.log("info", `${players} ${players === 1 ? "player" : "players"}, ${describeClaims(claims).join("; ")}`);
+        const { devices } = await control.request({ type: "set_players", players, claims: null });
+        const assigned = devices.map((held, index) => `player ${index + 1}: ${held}`).join("; ");
+        editor.console.log("info", `${players} ${players === 1 ? "player" : "players"}, ${assigned}`);
       },
     }),
   );

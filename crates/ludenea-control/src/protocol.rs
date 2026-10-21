@@ -29,7 +29,7 @@ pub const PROTOCOL_VERSION: u32 = 5;
 /// instead of misreading fields. A change the declarations do not show, such as a new serde
 /// default or another encoding of a type declared as a string, leaves it as it is.
 /// `tests/typescript.rs` pins it.
-pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0xa7bc_534c_5844_b843);
+pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0x7f1d_70d4_fb63_45ab);
 
 /// Binary data, serialized as a standard base64 string.
 #[derive(Clone, Debug, PartialEq)]
@@ -622,8 +622,11 @@ pub enum Topic {
 pub enum Reply {
     Done,
     /// The claims `SetPlayers` applied, one per player: the automatic ones when it gave none.
+    /// `devices` holds each claim's devices in words, as every runtime shows them
+    /// (`Claim::describe`): "left keyboard half and gamepad 1", or "no device".
     Players {
         claims: Vec<Claim>,
+        devices: Vec<String>,
     },
     Stepped {
         tick: u64,

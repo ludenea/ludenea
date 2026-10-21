@@ -1008,6 +1008,7 @@ type Reply = {
 } | {
     "type": "players";
     claims: Array<Claim>;
+    devices: Array<string>;
 } | {
     "type": "stepped";
     tick: number;
@@ -1151,7 +1152,7 @@ type ServerMessage = {
 /** The control protocol version this build speaks: a client and a host connect only when theirs are equal. */
 const PROTOCOL_VERSION = 5;
 /** The wire shape of `PROTOCOL_VERSION`, a hash of the protocol's types: a client and a host connect only when theirs are equal too. */
-const PROTOCOL_FINGERPRINT = "a7bc534c5844b843";
+const PROTOCOL_FINGERPRINT = "7f1d70d4fb6345ab";
 /** The `type` of the reply each command type gets when it succeeds. */
 type ReplyTypes = {
     apply_override: "done";

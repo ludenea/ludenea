@@ -651,7 +651,8 @@ impl Host {
                 self.reset_claims();
                 loaded.map_err(|e| self.fail(e))?;
                 self.claims = claims.clone();
-                Ok(Reply::Players { claims })
+                let devices = claims.iter().map(Claim::describe).collect();
+                Ok(Reply::Players { claims, devices })
             }
             Command::Undo => {
                 self.session.undo(sim).map_err(|e| self.fail(e))?;
