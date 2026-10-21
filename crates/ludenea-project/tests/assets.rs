@@ -517,8 +517,16 @@ fn template_project_loads_with_prefab_and_data_asset() {
     game.stop();
 }
 
+/// The next reply of the game; the events it pushes beside replies (a load announces the new
+/// state with `ticked`) are not replies.
 fn receive(messages: &Receiver<String>) -> String {
-    messages
-        .recv_timeout(Duration::from_secs(60))
-        .expect("the game answers")
+    loop {
+        let line = messages
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the game answers");
+        let message: serde_json::Value = serde_json::from_str(&line).expect("the game speaks JSON");
+        if message["type"] != "event" {
+            return line;
+        }
+    }
 }
