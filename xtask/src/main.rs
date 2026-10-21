@@ -54,18 +54,10 @@ fn main() -> ExitCode {
     let result = match args.as_slice() {
         [task] if task == "check" => check(),
         [task, package, out_dir] if task == "wasm-game" => wasm_game(package, out_dir),
-        [task, out_dir] if task == "wasm-render" => browser_module(
-            "ludenea-render",
-            render_features(false),
-            "ludenea_render",
-            out_dir,
-        ),
-        [task, flag, out_dir] if task == "wasm-render" && flag == "--test-hooks" => browser_module(
-            "ludenea-render",
-            render_features(true),
-            "ludenea_render",
-            out_dir,
-        ),
+        [task, out_dir] if task == "wasm-render" => wasm_render(false, out_dir),
+        [task, flag, out_dir] if task == "wasm-render" && flag == "--test-hooks" => {
+            wasm_render(true, out_dir)
+        }
         _ => Err(USAGE.into()),
     };
     match result {
@@ -109,19 +101,16 @@ fn wasm_game(package: &str, out_dir: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Builds `package` with `feature` for the browser, sized down, and writes its JavaScript glue,
-/// its TypeScript declarations, and its module to `out_dir` as `<out_name>.*`.
-fn browser_module(
-    package: &str,
-    feature: &str,
-    out_name: &str,
-    out_dir: &str,
-) -> Result<(), Box<dyn Error>> {
+/// Builds the renderer (`ludenea-render` with `render_features(test_hooks)`) for the browser,
+/// sized down, and writes its JavaScript glue, its TypeScript declarations, and its module to
+/// `out_dir` as `ludenea_render.*`.
+fn wasm_render(test_hooks: bool, out_dir: &str) -> Result<(), Box<dyn Error>> {
     // `cargo rustc` makes the module without declaring a `cdylib` in the crate, which would
     // otherwise link a native library on every workspace build.
+    let features = render_features(test_hooks);
     let module = build(
-        package,
-        &["rustc", "--features", feature, "--crate-type", "cdylib"],
+        "ludenea-render",
+        &["rustc", "--features", features, "--crate-type", "cdylib"],
         "wasm-render",
     )?;
     Bindgen::new()
@@ -129,7 +118,7 @@ fn browser_module(
         .web(true)?
         .typescript(true)
         .omit_default_module_path(false)
-        .out_name(out_name)
+        .out_name("ludenea_render")
         .generate(out_dir)?;
     Ok(())
 }
