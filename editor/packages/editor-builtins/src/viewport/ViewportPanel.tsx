@@ -31,7 +31,7 @@ async function createRenderer(canvas: HTMLCanvasElement, panicked: (message: str
 /** A canvas for one renderer: a lost WebGPU context cannot be configured again, so a new renderer gets a new canvas. */
 function gpuCanvas(): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
-  canvas.style.cssText = "position: absolute; inset: 0; width: 100%; height: 100%";
+  Object.assign(canvas.style, FILL);
   return canvas;
 }
 
@@ -91,7 +91,7 @@ export function ViewportPanel({
     let ratio = window.devicePixelRatio || 1;
     let disposed = false;
     // The GPU canvas is the panel's own, not React's: it is replaced with each renderer.
-    let canvas: HTMLCanvasElement | null = null;
+    let gpu: HTMLCanvasElement | null = null;
     // Stopped after a failure the viewport does not recover from alone, until a retry.
     let stopped = false;
     let failedDraws = 0;
@@ -172,9 +172,9 @@ export function ViewportPanel({
       failedDraws = 0;
       setFailure(null);
       const fresh = gpuCanvas();
-      if (canvas) canvas.replaceWith(fresh);
+      if (gpu) gpu.replaceWith(fresh);
       else overlay.current!.before(fresh);
-      canvas = fresh;
+      gpu = fresh;
       createRenderer(fresh, panicked).then(
         (created) => {
           if (disposed || creation !== creations) return created.free();
@@ -236,10 +236,10 @@ export function ViewportPanel({
           drawing.worked();
           failedDraws = 0;
         } catch (error) {
-          const name = error instanceof Error ? error.name : null;
+          const named = error instanceof Error ? error : null;
           // The canvas has no texture this frame (hidden or occluded): draw again on the next one.
-          if (name === "NoSurfaceTexture") repaint = true;
-          else if (name === "DeviceLost") deviceLost(error as Error);
+          if (named?.name === "NoSurfaceTexture") repaint = true;
+          else if (named?.name === "DeviceLost") deviceLost(named);
           else {
             drawing.failed(error);
             // Drawn again on the next frame, until it works or fails too often.
@@ -438,7 +438,7 @@ export function ViewportPanel({
       for (const [type, listener] of listeners) element.removeEventListener(type, listener);
       element.removeEventListener("wheel", onWheel);
       renderer?.free();
-      canvas?.remove();
+      gpu?.remove();
       retry.current = () => {};
     };
   }, [editor, state, failedOverlays, textureWarnings, shown]);

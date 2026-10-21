@@ -723,8 +723,9 @@ describe("viewport failures", () => {
     return { ...opened, renderer };
   };
   /** Asks the paused viewport to draw again. */
+  let selected = 0;
   const repaint = (host: { editor: { selection: { getState(): { select(entities: Entity[]): void } } } }) =>
-    act(() => host.editor.selection.getState().select([entity(Math.floor(Math.random() * 1000))]));
+    act(() => host.editor.selection.getState().select([entity(++selected)]));
   /** Loses `renderer`'s device and waits for the viewport to replace it or to stop. */
   const loseTheDevice = async (host: Parameters<typeof repaint>[0], renderer: WebRenderer) => {
     const count = renderers.length;
