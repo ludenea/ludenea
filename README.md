@@ -249,6 +249,18 @@ verifies one:
 cargo run --locked --release -p boxes -- verify golden/spawner.replay
 ```
 
+### Local players
+
+While the game plays and the viewport has focus, the editor sends every key and every
+gamepad slot, and the control host splits them between the players. With one player, the
+whole keyboard and gamepad 1 are that player's. With two or more, player 1 holds the left
+half of the keyboard (the keys under the left hand, up to `Space`) and gamepad 1, player 2
+the right half and gamepad 2, and every later player the gamepad of their number. A player
+whose gamepad is unplugged gets the game's default input, and takes it back when a gamepad
+connects. "Set the player count to N" (1 to 4) in the command palette replaces the recorded
+inputs with an empty log of N players, goes to tick 0, and logs who holds what; a game that
+reads its own `RawInput` per player sees the same split on every runtime.
+
 ### Branches
 
 Editing at a past tick no longer discards the recorded future: it forks a branch from that

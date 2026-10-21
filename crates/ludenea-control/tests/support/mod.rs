@@ -2,7 +2,8 @@
 
 use std::collections::BTreeMap;
 
-use ludenea_app::{RawGamepad, RawInput};
+use ludenea_app::RawGamepad;
+use ludenea_app::players::{Claim, KeyboardPart, LiveDevices};
 use ludenea_control::{
     BranchId, Bytes, Command, ComponentValue, Document, FieldTarget, Hash64, PathSegment, Topic,
 };
@@ -101,13 +102,29 @@ pub fn every_command() -> Vec<Command> {
         Command::Seek { tick: 9 },
         Command::SetSpeed { speed: 1.5 },
         Command::SetLiveInput {
-            players: vec![RawInput {
+            devices: LiveDevices {
                 keys: ["KeyA".to_string()].into(),
-                gamepads: vec![RawGamepad {
-                    buttons: vec![0.25],
-                    axes: vec![-0.5],
-                }],
-            }],
+                gamepads: vec![
+                    Some(RawGamepad {
+                        buttons: vec![0.25],
+                        axes: vec![-0.5],
+                    }),
+                    None,
+                ],
+            },
+        },
+        Command::SetPlayers {
+            players: 2,
+            claims: Some(vec![
+                Claim {
+                    keyboard: Some(KeyboardPart::Left),
+                    gamepad: Some(0),
+                },
+                Claim {
+                    keyboard: Some(KeyboardPart::Right),
+                    gamepad: None,
+                },
+            ]),
         },
         Command::Undo,
         Command::Redo,

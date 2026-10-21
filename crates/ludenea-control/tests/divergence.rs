@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::Path;
 
+use ludenea::app::players::LiveDevices;
 use ludenea::cli::assets::project_assets;
 use ludenea::control::divergence::{
     Cause, DivergenceKind, DivergenceReport, EntityDivergence, RootCauseKind,
@@ -9,7 +10,6 @@ use ludenea::control::{
     Bytes, Command, Document, Event, FieldTarget, Hash64, Host, PathSegment, Reply, Topic,
 };
 use ludenea::ecs::Entity;
-use ludenea::prelude::RawInput;
 use serde_json::json;
 
 const BOXES_SCENE: &str = concat!(
@@ -190,23 +190,18 @@ fn edited_entity_diverges_first_with_the_edit_as_root_cause() {
 fn take_over_is_root_cause() {
     let mut host = small_host();
     seek(&mut host, FORK);
-    let spawn = RawInput {
+    let spawn = LiveDevices {
         keys: ["KeyS".to_string()].into(),
-        ..RawInput::default()
+        ..Default::default()
     };
-    ok(
-        &mut host,
-        Command::SetLiveInput {
-            players: vec![spawn],
-        },
-    );
+    ok(&mut host, Command::SetLiveInput { devices: spawn });
     ok(&mut host, Command::Play);
     host.advance(1.0 / 60.0);
     ok(&mut host, Command::Pause);
     ok(
         &mut host,
         Command::SetLiveInput {
-            players: vec![RawInput::default()],
+            devices: Default::default(),
         },
     );
     step(&mut host, 59);

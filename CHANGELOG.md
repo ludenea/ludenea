@@ -358,12 +358,21 @@ hash, those of the golden trace and replays included.
 
 ### Control protocol
 
-- Control protocol 5, fingerprint `962a4b252c15a970`. Breaking: `get_render_frame`
+- Control protocol 5, fingerprint `bf53b00b708b97b0`. Breaking: `get_render_frame`
   (`debug_layers`) replaces `get_debug_draw` (`layers`), and its reply `render_frame`
   (`frame`) replaces `debug_draw` (`tick`, `frame`). The frame is the `RenderFrame` of the
   current tick: its tick, camera, render layers, sprites, tilemaps, the entities teleported
   this tick, and warnings, with the debug drawing of `debug_layers` in `frame.debug`.
   `get_ghost_draw` is unchanged.
+  `set_live_input` takes `devices` (the keys held and a slot per gamepad, `null` for an empty
+  one) in place of `players`, and the host splits them between the players by their claims.
+  New `set_players` (`players`, `claims`) replaces the recorded inputs with an empty log of
+  that many players and sets who holds which keyboard part and gamepad (the automatic
+  claims when `claims` is `null`); it is refused with `invalid_inputs` for no players, a
+  number of claims other than the players, a gamepad claimed twice, and overlapping parts
+  of the keyboard. `load_inputs`, `load_session`, and `load_replay` reset the claims to the
+  automatic ones. A player whose gamepad is disconnected gets the game's default input.
+  New in the Rust API: `Host::tick_progress`, the fraction of the next tick that play owes.
 - Over `host --stdio` and in a browser worker, the events a request causes come before its
   response, not after the response to a later request: a `load_session` sent right after
   `load_scene` answered could be followed by the scene's `timeline_changed` (head 0), which

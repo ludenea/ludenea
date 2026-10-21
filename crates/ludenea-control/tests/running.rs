@@ -1,6 +1,7 @@
 use std::fs;
 
 use boxes::BoxesInput;
+use ludenea::app::players::LiveDevices;
 use ludenea::cli::Trace;
 use ludenea::control::Event;
 use ludenea::control::*;
@@ -246,13 +247,8 @@ fn speed_changes_ticks_per_second_and_rejects_non_finite() {
 #[test]
 fn live_input_takes_over_the_recorded_future() {
     let mut host = loaded(100);
-    let idle = RawInput::default();
-    ok(
-        &mut host,
-        Command::SetLiveInput {
-            players: vec![idle],
-        },
-    );
+    let idle = LiveDevices::default();
+    ok(&mut host, Command::SetLiveInput { devices: idle });
     ok(&mut host, Command::Play);
     host.advance(1.0 / 60.0);
     assert_eq!(
@@ -261,16 +257,11 @@ fn live_input_takes_over_the_recorded_future() {
         "idle input replays the recording"
     );
 
-    let spawn = RawInput {
+    let spawn = LiveDevices {
         keys: ["KeyS".to_string()].into(),
-        ..RawInput::default()
+        ..Default::default()
     };
-    ok(
-        &mut host,
-        Command::SetLiveInput {
-            players: vec![spawn],
-        },
-    );
+    ok(&mut host, Command::SetLiveInput { devices: spawn });
     host.advance(1.0 / 60.0);
     assert_eq!(timeline(&mut host).head, 1);
 }
@@ -716,15 +707,13 @@ fn gamepad_app() -> App {
 #[test]
 fn a_panicking_input_mapping_fails_set_live_input_and_keeps_the_host() {
     let mut host = loaded_with(gamepad_app, scene_a(), recorded(100));
-    let keyboard = RawInput {
+    let keyboard = LiveDevices {
         keys: ["KeyS".to_string()].into(),
-        ..RawInput::default()
+        ..Default::default()
     };
 
     let error = host
-        .handle(Command::SetLiveInput {
-            players: vec![keyboard],
-        })
+        .handle(Command::SetLiveInput { devices: keyboard })
         .unwrap_err();
 
     assert_eq!(error.code, ErrorCode::SystemPanicked);

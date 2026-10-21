@@ -1,5 +1,6 @@
 import type { ControlClient, DebugDrawFrame, Vec2 } from "@ludenea/control-client";
 import { definePlugin, type Disposable, type ViewportOverlay } from "@ludenea/editor-shell";
+import { registerPlayerCommands } from "../input/capture";
 import { createStore, shared } from "../shared";
 import { bounds, panBy, zoomAt, MAX_PIXELS_PER_METER, MIN_PIXELS_PER_METER, type Camera, type Size } from "./camera";
 import { moveBy, visibleLayers, type ViewportState } from "./state";
@@ -78,6 +79,7 @@ export const viewportPlugin = definePlugin({
         });
       },
     });
+    registerPlayerCommands(editor);
     editor.shortcuts.register({ key: "+", command: "viewport.zoom-in" });
     editor.shortcuts.register({ key: "-", command: "viewport.zoom-out" });
     editor.shortcuts.register({ key: "F", command: "viewport.frame-selection" });

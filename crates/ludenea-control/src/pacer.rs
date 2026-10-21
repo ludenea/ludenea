@@ -73,6 +73,18 @@ impl Pacer {
         }
     }
 
+    /// The fraction of the next tick owed, from 0 to below 1.
+    pub fn progress(&self) -> f64 {
+        // The tolerance of `advance` can leave a hair below 0 or reach 1.
+        if self.owed <= 0.0 {
+            0.0
+        } else if self.owed < 1.0 {
+            self.owed
+        } else {
+            1.0 - f64::EPSILON
+        }
+    }
+
     /// Forgets the debt and the rate history, when play stops.
     pub fn stop(&mut self) {
         self.owed = 0.0;
@@ -105,6 +117,21 @@ impl Pacer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn progress_is_the_owed_fraction_of_the_next_tick() {
+        let mut pacer = Pacer::new(60);
+        assert_eq!(pacer.progress(), 0.0);
+        assert_eq!(pacer.advance(0.5 / 60.0), 0);
+        assert!((pacer.progress() - 0.5).abs() < 1e-9);
+        assert_eq!(pacer.advance(0.75 / 60.0), 1);
+        assert!((pacer.progress() - 0.25).abs() < 1e-9);
+        // A stall drops the debt beyond the cap: the progress stays below 1.
+        pacer.advance(60.0);
+        assert!((0.0..1.0).contains(&pacer.progress()));
+        pacer.stop();
+        assert_eq!(pacer.progress(), 0.0);
+    }
 
     #[test]
     fn negative_or_not_a_number_elapsed_time_counts_as_none() {

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use ludenea_app::RawInput;
+use ludenea_app::players::{Claim, LiveDevices};
 use ludenea_app::prefab::InstanceInfo;
 use ludenea_app::trace::TraceComparison;
 use ludenea_draw::DebugDrawFrame;
@@ -29,7 +29,7 @@ pub const PROTOCOL_VERSION: u32 = 5;
 /// instead of misreading fields. A change the declarations do not show, such as a new serde
 /// default or another encoding of a type declared as a string, leaves it as it is.
 /// `tests/typescript.rs` pins it.
-pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0x962a_4b25_2c15_a970);
+pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0xbf53_b00b_708b_97b0);
 
 /// Binary data, serialized as a standard base64 string.
 #[derive(Clone, Debug, PartialEq)]
@@ -335,9 +335,18 @@ pub enum Command {
     SetSpeed {
         speed: f32,
     },
-    /// The raw input of each player, used while playing until the next one.
+    /// What is held on every device right now, used while playing until the next one. The
+    /// host splits it between the players by their claims.
     SetLiveInput {
-        players: Vec<RawInput>,
+        devices: LiveDevices,
+    },
+    /// Replaces the recorded inputs with an empty log of `players` players, seeks to tick 0,
+    /// and sets who holds which device: `claims` has one entry per player, `None` is the
+    /// automatic claims. Refused with `invalid_inputs`: no players, a number of claims other
+    /// than `players`, a gamepad claimed twice, and overlapping parts of the keyboard.
+    SetPlayers {
+        players: u16,
+        claims: Option<Vec<Claim>>,
     },
     Undo,
     Redo,
@@ -571,6 +580,7 @@ impl Command {
             | Command::Seek { .. }
             | Command::SetSpeed { .. }
             | Command::SetLiveInput { .. }
+            | Command::SetPlayers { .. }
             | Command::Undo
             | Command::Redo
             | Command::SetAssetField { .. }

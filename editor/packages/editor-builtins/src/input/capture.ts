@@ -1,34 +1,67 @@
-import type { RawGamepad, RawInput } from "@ludenea/control-client";
+import type { LiveDevices, RawGamepad } from "@ludenea/control-client";
 import { isEditorKey, type Disposable, type Editor } from "@ludenea/editor-shell";
 
-const IDLE: RawInput = { keys: [], gamepads: [] };
+const IDLE: LiveDevices = { keys: [], gamepads: [] };
 
-/** The first connected gamepad, in the Gamepad API's standard mapping. */
-function firstGamepad(): RawGamepad[] {
-  const pad = (typeof navigator.getGamepads === "function" ? navigator.getGamepads() : []).find((pad) => pad !== null);
-  return pad ? [{ buttons: pad.buttons.map((button) => button.value), axes: [...pad.axes] }] : [];
+/** Every gamepad slot, in the Gamepad API's standard mapping; `null` for an empty slot. */
+function gamepads(): (RawGamepad | null)[] {
+  const slots = typeof navigator.getGamepads === "function" ? navigator.getGamepads() : [];
+  return Array.from(slots, (pad) => (pad ? { buttons: pad.buttons.map((button) => button.value), axes: [...pad.axes] } : null));
+}
+
+/** The players the "Set the player count" command offers. */
+const PLAYER_COUNTS = [1, 2, 3, 4];
+
+/**
+ * Who holds what when the host assigns devices itself, as `automatic_claims` in `ludenea-app`
+ * does: a single player holds the whole keyboard and gamepad 1; otherwise player 1 holds the
+ * left half of the keyboard and gamepad 1, player 2 the right half and gamepad 2, and every
+ * later player the gamepad of their number.
+ */
+export function describeAutomaticClaims(players: number): string[] {
+  return Array.from({ length: players }, (_, index) => {
+    const keyboard = players === 1 ? "the whole keyboard" : index === 0 ? "the left half of the keyboard" : index === 1 ? "the right half of the keyboard" : null;
+    return `player ${index + 1}: ${[keyboard, `gamepad ${index + 1}`].filter(Boolean).join(" and ")}`;
+  });
+}
+
+/** Registers one palette command per player count; each replaces the recorded inputs, so its title says so. */
+export function registerPlayerCommands(editor: Editor): Disposable[] {
+  return PLAYER_COUNTS.map((players) =>
+    editor.commands.register({
+      id: `input.set-players-${players}`,
+      title: `Set the player count to ${players} (replaces the recorded inputs)`,
+      async run() {
+        const control = editor.control;
+        if (!control) throw new Error("no game is running");
+        await control.request({ type: "set_players", players, claims: null });
+        editor.console.log("info", `${players} ${players === 1 ? "player" : "players"}, ${describeAutomaticClaims(players).join("; ")}`);
+      },
+    }),
+  );
 }
 
 /**
- * While a game with an input type plays and `element` has focus, sends what player 0 holds
- * down (`KeyboardEvent.code` values and the first gamepad) with `SetLiveInput`, at most once
+ * While a game with an input type plays and `element` has focus, sends every key held
+ * down (`KeyboardEvent.code` values) and every gamepad slot with `SetLiveInput`; the host splits them
+ * between the players, at most once
  * per animation frame and only when it changed, and captures shortcuts. Keys the editor keeps
  * (`F5`, `Mod` combinations) are not sent. Losing focus, pausing, or the returned stop
- * function sends an idle state. One player for now.
+ * function sends an idle state.
  */
 export function captureInput(editor: Editor, element: HTMLElement): () => void {
   const pressed = new Set<string>();
   let sent: string | null = null;
   let capture: Disposable | null = null;
 
-  const send = (input: RawInput) => {
+  const send = (devices: LiveDevices) => {
     const control = editor.control;
     // A game without an input type has nothing to map the keys to.
     if (!control?.game.input) return;
-    const text = JSON.stringify(input);
+    const text = JSON.stringify(devices);
     if (text === sent) return;
     sent = text;
-    control.request({ type: "set_live_input", players: [input] }).catch((error) => editor.console.report(error, "Sending the live input to the game"));
+    control.request({ type: "set_live_input", devices }).catch((error) => editor.console.report(error, "Sending the live input to the game"));
   };
   const release = () => {
     capture?.dispose();
@@ -40,7 +73,7 @@ export function captureInput(editor: Editor, element: HTMLElement): () => void {
   let frame = requestAnimationFrame(function loop() {
     if (editor.timeline.getState().playing && document.activeElement === element && editor.control?.game.input) {
       capture ??= editor.shortcuts.capture();
-      send({ keys: [...pressed], gamepads: firstGamepad() });
+      send({ keys: [...pressed], gamepads: gamepads() });
     } else if (capture) release();
     frame = requestAnimationFrame(loop);
   });

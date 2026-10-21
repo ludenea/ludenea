@@ -79,6 +79,19 @@ type Cause = {
     kind: string;
 };
 
+/**
+ * The part of the keyboard a player holds.
+ */
+type KeyboardPart = "Whole" | "Left" | "Right";
+
+/**
+ * The devices one player holds: at most one keyboard part and one gamepad slot.
+ */
+type Claim = {
+    keyboard: KeyboardPart | null;
+    gamepad: number | null;
+};
+
 type JsonValue = number | string | boolean | Array<JsonValue> | {
     [key in string]: JsonValue;
 } | null;
@@ -123,6 +136,28 @@ type FieldTarget = {
 type Hash64 = string;
 
 /**
+ * One gamepad in the Gamepad API standard mapping.
+ */
+type RawGamepad = {
+    buttons: Array<number>;
+    axes: Array<number>;
+};
+
+/**
+ * What is held down right now, before it is split between players.
+ */
+type LiveDevices = {
+    /**
+     * `KeyboardEvent.code` values of the keys held down.
+     */
+    keys: Array<string>;
+    /**
+     * Indexed by gamepad slot; `None` is a disconnected slot.
+     */
+    gamepads: Array<RawGamepad | null>;
+};
+
+/**
  * One step into a value: a struct field, or a list, array, or tuple index. An enum
  * variant's content is the field named after the variant; a newtype variant's content
  * is that field's value directly, so `Collider.shape` as `{"Circle": {"radius": ..}}`
@@ -134,25 +169,6 @@ type PathSegment = {
 } | {
     "type": "index";
     index: number;
-};
-
-/**
- * One gamepad in the Gamepad API standard mapping.
- */
-type RawGamepad = {
-    buttons: Array<number>;
-    axes: Array<number>;
-};
-
-/**
- * What one player holds down at a moment.
- */
-type RawInput = {
-    /**
-     * `KeyboardEvent.code` values of the keys held down.
-     */
-    keys: Array<string>;
-    gamepads: Array<RawGamepad>;
 };
 
 /**
@@ -266,7 +282,11 @@ type Command = {
     speed: number;
 } | {
     "type": "set_live_input";
-    players: Array<RawInput>;
+    devices: LiveDevices;
+} | {
+    "type": "set_players";
+    players: number;
+    claims: Array<Claim> | null;
 } | {
     "type": "undo";
 } | {
@@ -1107,6 +1127,17 @@ type Outcome = {
     "error": ProtocolError;
 };
 
+/**
+ * What one player holds down at a moment.
+ */
+type RawInput = {
+    /**
+     * `KeyboardEvent.code` values of the keys held down.
+     */
+    keys: Array<string>;
+    gamepads: Array<RawGamepad>;
+};
+
 type ServerMessage = {
     "type": "welcome";
     protocol_version: number;
@@ -1128,7 +1159,7 @@ type ServerMessage = {
 /** The control protocol version this build speaks: a client and a host connect only when theirs are equal. */
 const PROTOCOL_VERSION = 5;
 /** The wire shape of `PROTOCOL_VERSION`, a hash of the protocol's types: a client and a host connect only when theirs are equal too. */
-const PROTOCOL_FINGERPRINT = "962a4b252c15a970";
+const PROTOCOL_FINGERPRINT = "bf53b00b708b97b0";
 /** The `type` of the reply each command type gets when it succeeds. */
 type ReplyTypes = {
     apply_override: "done";
@@ -1184,6 +1215,7 @@ type ReplyTypes = {
     set_compare_branch: "done";
     set_field: "done";
     set_live_input: "done";
+    set_players: "done";
     set_speed: "done";
     set_threads: "done";
     spawn: "spawned";
@@ -1696,5 +1728,5 @@ function startWorkerGame(options: {
 }): WorkerGame;
 
 export { ControlClient, PROJECT_PROTOCOL_FINGERPRINT, PROJECT_PROTOCOL_VERSION, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION, ProjectClient, ProtocolFailure, RequestTracker, fakeTransport, handshake, parseFrame, postMessageTransport, startWorkerGame, tauriTransport, unwrap, webSocketTransport };
-export type { AssetId, AssetKind, AssetTexts, BranchId, BranchInfo, BuildEvent, Bytes, CameraItem, Cause, ClientMessage, Color, Command, ComponentValue, ConsoleLevel, DebugDrawFrame, Diagnostic, Difference, DivergenceKind, DivergenceReport, Document, Entity, EntityDivergence, EntityHash, EntityRow, ErrorCode, Event, FailureCode, FieldSchema, FieldTarget, FileChange, FileEntry, Filter, GameInfo, GameOutput, Grid, Hash64, HashTree, InstanceInfo, Item, JsonValue, LayerInfo, MessageTransport, NamedHash, NamedSchema, Outcome, OutputStream, OverrideInfo, PathSegment, PauseReason, PluginBundle, PluginSource, Primitive, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo, ProjectOutcome, ProjectReply, ProjectReplyFor, ProjectReplyTypes, ProjectRequest, ProjectServerMessage, ProtocolError, ProtocolPeer, RawGamepad, RawInput, RecordedEvent, RenderFrame, Reply, ReplyFor, ReplyTypes, RootCause, RootCauseKind, Rot, ServerMessage, ServiceMode, SpriteItem, SyncPoint, SystemRow, TextureMeta, TilemapItem, Timeline, Topic, TraceComparison, TypeSchema, VariantFields, VariantSchema, Vec2, WorkerCrash, WorkerGame };
+export type { AssetId, AssetKind, AssetTexts, BranchId, BranchInfo, BuildEvent, Bytes, CameraItem, Cause, Claim, ClientMessage, Color, Command, ComponentValue, ConsoleLevel, DebugDrawFrame, Diagnostic, Difference, DivergenceKind, DivergenceReport, Document, Entity, EntityDivergence, EntityHash, EntityRow, ErrorCode, Event, FailureCode, FieldSchema, FieldTarget, FileChange, FileEntry, Filter, GameInfo, GameOutput, Grid, Hash64, HashTree, InstanceInfo, Item, JsonValue, KeyboardPart, LayerInfo, LiveDevices, MessageTransport, NamedHash, NamedSchema, Outcome, OutputStream, OverrideInfo, PathSegment, PauseReason, PluginBundle, PluginSource, Primitive, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo, ProjectOutcome, ProjectReply, ProjectReplyFor, ProjectReplyTypes, ProjectRequest, ProjectServerMessage, ProtocolError, ProtocolPeer, RawGamepad, RawInput, RecordedEvent, RenderFrame, Reply, ReplyFor, ReplyTypes, RootCause, RootCauseKind, Rot, ServerMessage, ServiceMode, SpriteItem, SyncPoint, SystemRow, TextureMeta, TilemapItem, Timeline, Topic, TraceComparison, TypeSchema, VariantFields, VariantSchema, Vec2, WorkerCrash, WorkerGame };
 }

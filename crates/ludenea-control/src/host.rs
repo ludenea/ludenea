@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use ludenea_app::players::{Claim, automatic_claims, check_claims, split};
 use ludenea_app::prefab;
 use ludenea_app::replay::Replay;
 use ludenea_app::trace::{Trace, compare_traces};
@@ -40,6 +41,8 @@ pub struct Host {
     playing: bool,
     /// The mapped live input, or `None` while every player is idle.
     live: Option<Vec<u8>>,
+    /// Who holds which device, one claim per player.
+    claims: Vec<Claim>,
     /// The timeline last reported, to emit `TimelineChanged` only on change.
     timeline: Timeline,
     subscriptions: Subscriptions,
@@ -82,6 +85,7 @@ impl Host {
             // A start fails otherwise only on the text of a prefab document.
             Err(other) => unreachable!("a scene document fails only to load: {other}"),
         };
+        let simulation_players = simulation.players();
         Ok(Host {
             build,
             compare: None,
@@ -97,10 +101,17 @@ impl Host {
             session,
             playing: false,
             live: None,
+            claims: automatic_claims(simulation_players),
             subscriptions: Subscriptions::default(),
             events: Vec::new(),
             inconsistent: None,
         })
+    }
+
+    /// The fraction of the next tick that play owes, from 0 to below 1: what a renderer
+    /// interpolates between the last two ticks with.
+    pub fn tick_progress(&self) -> f64 {
+        self.pacer.progress()
     }
 
     pub fn game_info(&self) -> GameInfo {
@@ -472,6 +483,7 @@ impl Host {
                 self.session
                     .load_inputs(sim, log)
                     .map_err(|e| self.fail(e))?;
+                self.reset_claims();
                 Ok(Reply::Done)
             }
             Command::LoadEdits { log } => {
@@ -605,9 +617,39 @@ impl Host {
                 self.pacer.set_speed(speed);
                 Ok(Reply::Done)
             }
-            Command::SetLiveInput { players } => {
-                let mapped = sim.map_raw_input(&players).map_err(|e| sim_error(&e))?;
-                self.live = (!players.iter().all(RawInput::is_idle)).then_some(mapped);
+            Command::SetLiveInput { devices } => {
+                let players = split(&devices, &self.claims);
+                let mapped = sim.map_players(&players).map_err(|e| sim_error(&e))?;
+                let idle = players
+                    .iter()
+                    .all(|player| player.as_ref().is_none_or(RawInput::is_idle));
+                self.live = (!idle).then_some(mapped);
+                Ok(Reply::Done)
+            }
+            Command::SetPlayers { players, claims } => {
+                if players == 0 {
+                    return Err(ProtocolError::new(
+                        ErrorCode::InvalidInputs,
+                        "a game needs at least 1 player",
+                    ));
+                }
+                let claims = claims.unwrap_or_else(|| automatic_claims(usize::from(players)));
+                if claims.len() != usize::from(players) {
+                    return Err(ProtocolError::new(
+                        ErrorCode::InvalidInputs,
+                        format!(
+                            "{} claims for {players} players: give one claim per player",
+                            claims.len()
+                        ),
+                    ));
+                }
+                check_claims(&claims)
+                    .map_err(|e| ProtocolError::new(ErrorCode::InvalidInputs, e))?;
+                self.session
+                    .load_inputs(sim, InputLog::new(players))
+                    .map_err(|e| self.fail(e))?;
+                self.claims = claims;
+                self.live = None;
                 Ok(Reply::Done)
             }
             Command::Undo => {
@@ -676,7 +718,10 @@ impl Host {
                     keeps_assets,
                 };
                 match Session::resume(sim, export, document) {
-                    Ok(session) => self.load(session),
+                    Ok(session) => {
+                        self.load(session);
+                        self.reset_claims();
+                    }
                     Err(error) => {
                         // The scene may have loaded before the error: the session takes its
                         // world back, as for `LoadReplay`.
@@ -835,7 +880,10 @@ impl Host {
                 let replay = Replay::decode(&replay.0).map_err(|e| session_error(&e.into()))?;
                 let fingerprint_differs = replay.fingerprint != sim.schema_fingerprint();
                 match Session::from_replay(sim, &replay) {
-                    Ok(session) => self.load(session),
+                    Ok(session) => {
+                        self.load(session);
+                        self.reset_claims();
+                    }
                     Err(error) => {
                         // The replay loaded in part: the session takes its world back. The
                         // reply names the replay's error; a failed reload goes to the console.
@@ -1304,6 +1352,13 @@ impl Host {
         if self.playing {
             self.pause(PauseReason::User);
         }
+    }
+
+    /// The automatic claims of the simulation's player count, and no live input: the one
+    /// mapped for the old count would not fit.
+    fn reset_claims(&mut self) {
+        self.claims = automatic_claims(self.simulation.players());
+        self.live = None;
     }
 
     /// What the last scene load of the session reports: `LoadScene`, `ReplaceScene`, and

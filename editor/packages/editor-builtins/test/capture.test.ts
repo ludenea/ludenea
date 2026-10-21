@@ -1,9 +1,9 @@
 import { act, fireEvent, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { captureInput } from "../src/input/capture";
+import { captureInput, registerPlayerCommands } from "../src/input/capture";
 import { settle, testEditor, testGame } from "./support";
 
-const idle = { type: "set_live_input", players: [{ keys: [], gamepads: [] }] };
+const idle = { type: "set_live_input", devices: { keys: [], gamepads: [] } };
 
 describe("live input capture", () => {
   afterEach(() => {
@@ -29,10 +29,10 @@ describe("live input capture", () => {
 
     act(() => host.editor.timeline.setState({ playing: true }));
     fireEvent.keyDown(element, { code: "ArrowLeft", key: "ArrowLeft" });
-    await waitFor(() => expect(live().at(-1)).toEqual({ type: "set_live_input", players: [{ keys: ["KeyA", "ArrowLeft"], gamepads: [] }] }));
+    await waitFor(() => expect(live().at(-1)).toEqual({ type: "set_live_input", devices: { keys: ["KeyA", "ArrowLeft"], gamepads: [] } }));
     expect(host.editor.shortcuts.captured).toBe(true);
     fireEvent.keyUp(element, { code: "KeyA", key: "a" });
-    await waitFor(() => expect(live().at(-1)).toEqual({ type: "set_live_input", players: [{ keys: ["ArrowLeft"], gamepads: [] }] }));
+    await waitFor(() => expect(live().at(-1)).toEqual({ type: "set_live_input", devices: { keys: ["ArrowLeft"], gamepads: [] } }));
     const sent = live().length;
     await settle();
     // Unchanged input is not sent again.
@@ -62,7 +62,7 @@ describe("live input capture", () => {
     fireEvent.keyDown(element, { code: "ControlLeft", key: "Control", ctrlKey: true });
     fireEvent.keyDown(element, { code: "MetaLeft", key: "Meta", metaKey: true });
     await waitFor(() =>
-      expect(live().at(-1)).toEqual({ type: "set_live_input", players: [{ keys: ["KeyD", "ControlLeft", "MetaLeft"], gamepads: [] }] }),
+      expect(live().at(-1)).toEqual({ type: "set_live_input", devices: { keys: ["KeyD", "ControlLeft", "MetaLeft"], gamepads: [] } }),
     );
     stop();
   });
@@ -115,7 +115,7 @@ describe("live input capture", () => {
     element.focus();
     act(() => host.editor.timeline.setState({ playing: true }));
     fireEvent.keyDown(element, { code: "KeyD", key: "d" });
-    await waitFor(() => expect(live().at(-1)).toEqual({ type: "set_live_input", players: [{ keys: ["KeyD"], gamepads: [] }] }));
+    await waitFor(() => expect(live().at(-1)).toEqual({ type: "set_live_input", devices: { keys: ["KeyD"], gamepads: [] } }));
 
     act(() => host.editor.timeline.setState({ playing: false }));
     await waitFor(() => expect(live().at(-1)).toEqual(idle));
@@ -123,9 +123,9 @@ describe("live input capture", () => {
     stop();
   });
 
-  it("the_first_connected_gamepad_is_sent", async () => {
+  it("sends_every_gamepad_slot_with_nulls_for_empty_ones", async () => {
     const pad = { buttons: [{ value: 0 }, { value: 1 }], axes: [0.5, -1] };
-    vi.stubGlobal("navigator", { ...navigator, getGamepads: () => [null, pad] });
+    vi.stubGlobal("navigator", { ...navigator, getGamepads: () => [null, pad, null, null] });
     const host = await testEditor([]);
     const game = await testGame(undefined, { input: { kind: "unit" } });
     act(() => host.setControl(game.client));
@@ -138,9 +138,31 @@ describe("live input capture", () => {
     await waitFor(() =>
       expect(game.sent.filter((command) => command.type === "set_live_input").at(-1)).toEqual({
         type: "set_live_input",
-        players: [{ keys: [], gamepads: [{ buttons: [0, 1], axes: [0.5, -1] }] }],
+        devices: { keys: [], gamepads: [null, { buttons: [0, 1], axes: [0.5, -1] }, null, null] },
       }),
     );
     stop();
+  });
+
+  it("set_player_count_sends_set_players", async () => {
+    const host = await testEditor([]);
+    const game = await testGame(undefined, { input: { kind: "unit" } });
+    act(() => host.setControl(game.client));
+    registerPlayerCommands(host.editor);
+
+    const titles = host.editor.commands.list().filter(({ id }) => id.startsWith("input.set-players-")).map(({ title }) => title);
+    expect(titles).toHaveLength(4);
+    expect(titles.every((title) => title.includes("replaces the recorded inputs"))).toBe(true);
+
+    await host.editor.commands.run("input.set-players-2");
+
+    expect(game.sent.filter((command) => command.type === "set_players")).toEqual([{ type: "set_players", players: 2, claims: null }]);
+    expect(host.editor.console.list().map(({ text }) => text)).toContain("2 players, player 1: the left half of the keyboard and gamepad 1; player 2: the right half of the keyboard and gamepad 2");
+  });
+
+  it("set_player_count_without_a_game_fails_naming_the_cause", async () => {
+    const host = await testEditor([]);
+    registerPlayerCommands(host.editor);
+    await expect(host.editor.commands.run("input.set-players-1")).rejects.toThrow(/no game is running/);
   });
 });

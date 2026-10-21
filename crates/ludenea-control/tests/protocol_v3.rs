@@ -3,10 +3,10 @@ use std::fs;
 use std::path::Path;
 
 use boxes::SpawnerStats;
+use ludenea::app::EntityRef;
 use ludenea::app::prefab::InstanceInfo;
 use ludenea::app::replay::{Replay, ReplayOutcome, play_replay};
 use ludenea::app::trace::{TRACE_VERSION, Trace, TraceComparison};
-use ludenea::app::{EntityRef, RawInput};
 use ludenea::cli::assets::project_assets;
 use ludenea::control::{
     BranchId, Bytes, Command, ComponentValue, Document, ErrorCode, Event, FieldTarget, Hash64,
@@ -360,9 +360,13 @@ fn every_command_names_the_reply_it_gets() {
     checked.run(Command::Play);
     checked.run(Command::SetSpeed { speed: 2.0 });
     checked.run(Command::SetLiveInput {
-        players: vec![RawInput::default()],
+        devices: Default::default(),
     });
     checked.run(Command::Pause);
+    checked.run(Command::SetPlayers {
+        players: 1,
+        claims: None,
+    });
 
     // Whole sessions.
     checked.run(Command::ReplaceScene {

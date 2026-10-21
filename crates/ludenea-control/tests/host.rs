@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use ludenea_app::prefab::InstanceInfo;
 use ludenea_app::trace::TraceComparison;
-use ludenea_app::{App, InputLog, Inputs, RawInput, Rng, Sim};
+use ludenea_app::{App, InputLog, Inputs, Rng, Sim};
 use ludenea_control::*;
 use ludenea_draw::Color;
 use ludenea_draw::frame::{CameraItem, LayerInfo, RenderFrame, SpriteItem, TilemapItem};
@@ -105,7 +105,7 @@ fn welcome_carries_game_schemas() {
 fn live_input_without_mapping_is_refused() {
     let error = client()
         .request(Command::SetLiveInput {
-            players: vec![RawInput::default()],
+            devices: Default::default(),
         })
         .unwrap_err();
     assert_eq!(error.code, ErrorCode::NoInputMapping);
