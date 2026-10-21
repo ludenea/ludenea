@@ -457,3 +457,35 @@ fn claim_after_release_takes_the_freed_index() {
     assert_eq!(lobby.press(button(5, 0)), LobbyEvent::Claimed { player: 2 });
     assert_eq!(lobby.claims(), [pad_claim(1), pad_claim(2), pad_claim(5)]);
 }
+
+#[test]
+fn lobby_events_serialize_tagged_for_the_web_page() {
+    let json = |event: LobbyEvent| serde_json::to_value(event).unwrap();
+    assert_eq!(
+        json(LobbyEvent::Claimed { player: 1 }),
+        serde_json::json!({ "type": "claimed", "player": 1 })
+    );
+    assert_eq!(
+        json(LobbyEvent::Released {
+            players: vec![0, 2]
+        }),
+        serde_json::json!({ "type": "released", "players": [0, 2] })
+    );
+    assert_eq!(
+        json(LobbyEvent::Full),
+        serde_json::json!({ "type": "full" })
+    );
+    assert_eq!(
+        json(LobbyEvent::Ignored),
+        serde_json::json!({ "type": "ignored" })
+    );
+    assert_eq!(
+        json(LobbyEvent::Started {
+            claims: automatic_claims(1)
+        }),
+        serde_json::json!({
+            "type": "started",
+            "claims": [{ "keyboard": "Whole", "gamepad": 0 }],
+        })
+    );
+}

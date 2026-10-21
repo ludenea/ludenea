@@ -8,6 +8,7 @@ pub use ludenea_ecs as ecs;
 pub use ludenea_math as math;
 pub use ludenea_physics as physics;
 pub use ludenea_render as render;
+pub use ludenea_runtime as runtime;
 pub use ludenea_schema as schema;
 pub use serde;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]

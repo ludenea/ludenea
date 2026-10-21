@@ -184,8 +184,9 @@ pub enum LobbyPress<'a> {
     Button { gamepad: u32, button: usize },
 }
 
-/// What a press did to the lobby.
-#[derive(Clone, Debug, PartialEq)]
+/// What a press did to the lobby. Serialized tagged by `type`, in snake case, for the web page.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum LobbyEvent {
     Claimed {
         player: usize,

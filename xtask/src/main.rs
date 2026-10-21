@@ -43,6 +43,8 @@ const CHECKS: &[&str] = &[
     "clippy --locked --target wasm32-unknown-unknown -p ludenea -p ludenea-control -p ludenea-runtime -p boxes -p swarm --lib -- -D warnings",
     "clippy --locked --target wasm32-unknown-unknown -p ludenea-draw --features render --lib -- -D warnings",
     "clippy --locked --target wasm32-unknown-unknown -p ludenea-render --features web --lib -- -D warnings",
+    // The standalone web page's exports: the lobby, beside the renderer it links.
+    "clippy --locked --target wasm32-unknown-unknown -p ludenea-runtime --features web --lib -- -D warnings",
     // WebAssembly outside the browser: the command line tool that verifies the goldens.
     "clippy --locked --target wasm32-wasip1 -p boxes --bins -- -D warnings",
     // The runner without a window, as a headless game build links it.

@@ -41,6 +41,13 @@ hash, those of the golden trace and replays included.
 
 ### Rust API
 
+- `ludenea_runtime::web` (feature `web`, `wasm32-unknown-unknown` only) exports the
+  standalone web page's lobby: `WebLobby` (`new`, `pressKey(code)` and
+  `pressButton(gamepad, button)` returning the `LobbyEvent` as JSON, `claimsJson()`,
+  `started`) and `automaticClaimsJson(players)`, which refuses a count outside 1 to
+  `MAX_LOCAL_PLAYERS`. It links the browser renderer, `WebRenderer`, beside them. The
+  facade's new `web` feature turns it on and the facade re-exports the runtime as
+  `ludenea::runtime`. `LobbyEvent` serializes tagged by `type` in snake case.
 - `WorkerHost::tickProgress()` returns the fraction of the next tick that play owes, from 0
   to below 1, so a page drawing a game that runs in a Web Worker interpolates its last two
   ticks.

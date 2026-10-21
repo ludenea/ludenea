@@ -3,6 +3,11 @@ name = "ludenea"
 version = "0.1.0"
 edition.workspace = true
 
+[features]
+# The standalone web page's exports (`ludenea build --web` builds a game with it), in the
+# browser only.
+web = ["ludenea-runtime/web"]
+
 [dependencies]
 ludenea-app.workspace = true
 ludenea-cli.workspace = true
@@ -12,6 +17,7 @@ ludenea-ecs.workspace = true
 ludenea-math.workspace = true
 ludenea-physics.workspace = true
 ludenea-render.workspace = true
+ludenea-runtime.workspace = true
 ludenea-schema.workspace = true
 serde.workspace = true
 
