@@ -77,6 +77,7 @@ hash, those of the golden trace and replays included.
   `runtime.lobby` and `native::lobby::title` names each claim and how to start.
   `native::gamepads::button_index` and `native::gamepads::state` read a gilrs pad in the
   standard layout. `RuntimeError::Record` reports a replay that cannot be written.
+  `Runner::stop_at(tick)` stops play at a tick, so a replay holds exactly the ticks up to it.
 - `ludenea_render::gpu::for_surface(window)` opens a surface on a window and a device that
   presents to it, made with the window's display handle, with the same fallback adapter and
   `RenderError::NoAdapter` as `headless`; it also returns the adapter, whose capabilities

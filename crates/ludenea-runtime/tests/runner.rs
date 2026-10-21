@@ -395,3 +395,27 @@ fn input_before_a_loaded_edit_forks_and_the_replay_leaves_it_out() {
     assert_eq!(report.outcome, ReplayOutcome::Matched);
     assert_eq!(markers(&simulation), []);
 }
+
+#[test]
+fn play_stops_exactly_at_the_tick_asked() {
+    for frame_seconds in [1.0 / 144.0, 1.0 / 30.0, 0.05, 60.0] {
+        let mut runner = started(swarm::app, &empty_files(), 1);
+        runner.stop_at(10);
+        for _ in 0..20 {
+            let update = runner
+                .frame(frame_seconds, &LiveDevices::default())
+                .unwrap_or_else(|e| panic!("{e}"));
+            assert!(
+                update.tick <= 10,
+                "{frame_seconds} s frames ran past the tick"
+            );
+            assert!((0.0..=1.0).contains(&update.alpha));
+        }
+        assert!(runner.tick() <= 10);
+        if frame_seconds > 0.01 {
+            assert_eq!(runner.tick(), 10, "{frame_seconds} s frames reach the tick");
+        }
+        let replay = Replay::decode(&runner.export_replay().unwrap()).unwrap();
+        assert_eq!(replay.hashes.len() as u64, runner.tick() + 1);
+    }
+}

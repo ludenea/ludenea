@@ -6,6 +6,7 @@
 
 use ludenea_app::App;
 use ludenea_app::players::{Claim, LiveDevices};
+use ludenea_control::pacer::MAX_TICKS_PER_FRAME;
 use ludenea_control::{
     Bytes, Command, ConsoleLevel, Document, Event, Host, PauseReason, ProtocolError, Reply,
 };
@@ -73,6 +74,10 @@ pub struct Runner {
     current: Option<RenderFrame>,
     /// What the host wrote to its console since the last `take_messages`.
     messages: Vec<(ConsoleLevel, String)>,
+    /// The tick play stops at, if any.
+    stop_at: Option<u64>,
+    /// The game's ticks per second.
+    tick_rate: u32,
 }
 
 impl Runner {
@@ -85,6 +90,7 @@ impl Runner {
         debug_layers: Vec<String>,
     ) -> Result<Runner, RuntimeError> {
         let host = Host::new(app).map_err(|error| RuntimeError::Load(error.to_string()))?;
+        let tick_rate = host.game_info().tick_rate;
         let mut runner = Runner {
             host,
             debug_layers,
@@ -92,6 +98,8 @@ impl Runner {
             previous: None,
             current: None,
             messages: Vec::new(),
+            stop_at: None,
+            tick_rate,
         };
         runner.setup(Command::LoadScene {
             scene: files.scene.clone(),
@@ -150,7 +158,7 @@ impl Runner {
                 .handle(command)
                 .map_err(|error| self.game_error(error))?;
         }
-        let events = self.host.advance(elapsed_seconds);
+        let events = self.advance(elapsed_seconds);
         let ticked = events
             .iter()
             .any(|event| matches!(event, Event::Ticked { .. }));
@@ -181,6 +189,38 @@ impl Runner {
             alpha: self.host.tick_progress() as f32,
             tick: self.host.tick(),
         })
+    }
+
+    /// Stops play at `tick`: no frame runs past it, so a replay exported once it is reached
+    /// holds exactly the ticks up to it.
+    pub fn stop_at(&mut self, tick: u64) {
+        self.stop_at = Some(tick);
+    }
+
+    /// Lets the host's pacer run the ticks due after `elapsed_seconds`, never past `stop_at`.
+    fn advance(&mut self, elapsed_seconds: f64) -> Vec<Event> {
+        let cap = u64::from(MAX_TICKS_PER_FRAME);
+        let Some(limit) = self.stop_at else {
+            return self.host.advance(elapsed_seconds);
+        };
+        if self.host.tick() + cap <= limit {
+            return self.host.advance(elapsed_seconds);
+        }
+        // Within a frame's cap of the limit: half a tick of time at a time, so the pacer runs
+        // at most one tick per call and stops exactly at `limit`. Time past the cap's worth
+        // of slices is dropped, as the pacer drops a stall's debt.
+        let half_tick = 0.5 / f64::from(self.tick_rate.max(1));
+        let mut events = Vec::new();
+        let mut left = elapsed_seconds;
+        for _ in 0..2 * cap {
+            if self.host.tick() >= limit || left <= 0.0 {
+                break;
+            }
+            let slice = if left < half_tick { left } else { half_tick };
+            events.extend(self.host.advance(slice));
+            left -= slice;
+        }
+        events
     }
 
     /// The frames of the previous and the current tick, to interpolate between.
