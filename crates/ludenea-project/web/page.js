@@ -47,6 +47,9 @@ let progress = 0;
 let arrival = 0;
 let playing = false;
 const held = new Set();
+/** The keys held when the match started, such as the Enter that started it: they reach the
+ * game only once pressed again, not through the keyboard's repeats. */
+const heldAtStart = new Set();
 let sentDevices = "";
 /** The buttons each gamepad slot held at the last look, for the lobby's presses. */
 let lobbyButtons = [];
@@ -97,6 +100,8 @@ function lobbyPress(event) {
 }
 
 function startMatch(claims) {
+  for (const code of held) heldAtStart.add(code);
+  held.clear();
   playing = true;
   save.disabled = false;
   say(`Playing with ${claims.length} ${claims.length === 1 ? "player" : "players"}`);
@@ -257,10 +262,13 @@ function captureKeys() {
     // The browser keeps its shortcuts; every key, those included, counts as held.
     const shortcut = FUNCTION_KEY.test(event.code) || ((event.ctrlKey || event.metaKey) && SHORTCUTS.has(event.code));
     if (!shortcut) event.preventDefault();
+    if (event.repeat && heldAtStart.has(event.code)) return;
+    heldAtStart.delete(event.code);
     held.add(event.code);
     if (lobby && !lobby.started && !event.repeat) lobbyPress(lobby.pressKey(event.code));
   });
   addEventListener("keyup", (event) => {
+    heldAtStart.delete(event.code);
     held.delete(event.code);
     // macOS sends no keyup for a key released while Meta is down: when Meta goes up, every
     // key but the modifiers counts as released, and the game hears it now.

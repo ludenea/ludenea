@@ -257,6 +257,33 @@ test("keys_stay_held_until_the_last_meta_key_goes_up", async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test("the_keys_that_start_the_match_reach_the_game_only_once_pressed_again", async ({ page }) => {
+  await recordPosts(page);
+  const errors = await open(page, "");
+  await expect(page.locator("#lobby")).toBeVisible();
+  // A claims the left half, Enter starts the match: both are still held.
+  await dispatchKey(page, "keydown", "KeyA");
+  await dispatchKey(page, "keydown", "Enter");
+  await expect(page.locator("#lobby")).toBeHidden();
+  await reach(page, 1);
+  // The keyboard repeats them while they stay down: they stay out of the game.
+  await page.evaluate(async () => {
+    for (const code of ["KeyA", "Enter"]) dispatchEvent(new KeyboardEvent("keydown", { code, repeat: true, cancelable: true }));
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  });
+  const sent = await page.evaluate(() =>
+    (window as unknown as { posted: Posted[] }).posted.filter((message) => message.type === "devices").flatMap((message) => message.devices!.keys),
+  );
+  expect(sent).toEqual([]);
+  // Released and pressed again, a key reaches the game.
+  await dispatchKey(page, "keyup", "Enter");
+  await dispatchKey(page, "keydown", "Enter");
+  await expect.poll(() => lastKeys(page)).toEqual(["Enter"]);
+  for (const code of ["Enter", "KeyA"]) await dispatchKey(page, "keyup", code);
+  await expect.poll(() => lastKeys(page)).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
 test("a_draw_that_cannot_happen_stops_the_page_and_the_match", async ({ page }) => {
   await recordPosts(page);
   await open(page, "?players=1");
