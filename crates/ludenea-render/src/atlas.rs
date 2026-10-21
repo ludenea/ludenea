@@ -544,8 +544,9 @@ impl Atlas {
         }
     }
 
-    /// Reads atlas files: the manifest and the PNG of each page it lists, in order (each page's `file` must be `page-<index>.png`; extra PNGs are ignored). The version is read first, then every
-    /// page and region is checked. The result has no `errors`.
+    /// Reads atlas files: the manifest and the PNG of each page it lists, in order (each
+    /// page's `file` must be `page-<index>.png`; extra PNGs are ignored). The version is read
+    /// first, then every page and region is checked. The result has no `errors`.
     pub fn from_files(manifest: &str, pages: &[&[u8]]) -> Result<Atlas, AtlasFileError> {
         let value: serde_json::Value = serde_json::from_str(manifest)
             .map_err(|error| AtlasFileError::Json(error.to_string()))?;

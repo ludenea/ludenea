@@ -44,9 +44,10 @@ hash, those of the golden trace and replays included.
 - `ludenea_render::atlas::Atlas::to_files` writes a packed atlas as an `AtlasFiles`: a JSON
   manifest (`atlas.json`, `ATLAS_VERSION` 1: `version`, `pages` of `{ file, width, height }`
   and `regions` of `{ id, frame, region }`) and one PNG per page (`page-<n>.png`), byte for
-  byte reproducible (the PNGs use the `fdeflate` encoder, `Compression::Fast`, and a fixed `Sub`
-  filter, which no cargo feature changes, and a test pins their bytes). `Atlas::from_files` reads them back, refusing a
-  newer version, a missing page, a page of another size, a region outside its page and an
+  byte reproducible (the PNGs use the `fdeflate` encoder, `Compression::Fast`, and a fixed
+  `Sub` filter, which no cargo feature changes, and a test pins their bytes).
+  `Atlas::from_files` reads them back, refusing a newer version, a missing page, a page of
+  another size, a page file not named `page-<index>.png`, a region outside its page and an
   undecodable PNG with `AtlasFileError`. Textures left out of the atlas are not written.
   `WebRenderer::set_atlas(manifest, pages)` uploads such an atlas in the browser and, like
   `set_textures`, blanks the sprites until the next `set_frames`.
