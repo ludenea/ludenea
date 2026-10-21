@@ -3,7 +3,7 @@
 //! the lowest orphaned slot, so a pad that comes back under another identifier reclaims its
 //! player.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use gilrs::{Axis, Button};
 use ludenea_app::RawGamepad;
@@ -121,6 +121,38 @@ pub fn state(gamepad: gilrs::Gamepad<'_>) -> RawGamepad {
 fn press(pad: &mut RawGamepad, index: usize, value: f32) {
     if value > pad.buttons[index] {
         pad.buttons[index] = value;
+    }
+}
+
+/// Per slot, the buttons pressed on `devices`, such as the Start that started the match.
+pub fn held(devices: &[Option<RawGamepad>]) -> Vec<BTreeSet<usize>> {
+    devices
+        .iter()
+        .map(|pad| {
+            pad.iter()
+                .flat_map(|pad| pad.buttons.iter().enumerate())
+                .filter(|&(_, &value)| value > 0.0)
+                .map(|(index, _)| index)
+                .collect()
+        })
+        .collect()
+}
+
+/// Releases on `devices` the buttons still held since `held` was taken: a button reaches the
+/// game only once released and pressed again. A button released, or a pad unplugged, leaves
+/// `held`.
+pub fn mask_held(devices: &mut [Option<RawGamepad>], held: &mut [BTreeSet<usize>]) {
+    for (slot, buttons) in held.iter_mut().enumerate() {
+        match devices.get_mut(slot) {
+            Some(Some(pad)) => buttons.retain(|&index| match pad.buttons.get_mut(index) {
+                Some(value) if *value > 0.0 => {
+                    *value = 0.0;
+                    true
+                }
+                _ => false,
+            }),
+            _ => buttons.clear(),
+        }
     }
 }
 
@@ -282,5 +314,33 @@ mod tests {
         );
         assert_eq!(slots.connect(10), 2, "its slot went to another pad");
         assert_eq!(slots.connect(30), 3);
+    }
+
+    #[test]
+    fn buttons_held_at_start_reach_the_game_only_once_pressed_again() {
+        let mut start = pad(0.5);
+        start.buttons[9] = 1.0;
+        start.buttons[6] = 0.25;
+        let mut held = held(&[Some(start.clone()), None]);
+        assert_eq!(held, [BTreeSet::from([6, 9]), BTreeSet::new()]);
+        // Still down: masked, the stick passes.
+        let mut devices = [Some(start.clone()), None];
+        mask_held(&mut devices, &mut held);
+        assert_eq!(devices, [Some(pad(0.5)), None]);
+        // Start released, the trigger still down.
+        let mut trigger = pad(0.5);
+        trigger.buttons[6] = 0.25;
+        let mut devices = [Some(trigger), None];
+        mask_held(&mut devices, &mut held);
+        assert_eq!(devices, [Some(pad(0.5)), None]);
+        assert_eq!(held[0], BTreeSet::from([6]));
+        // Start pressed again reaches the game.
+        let mut devices = [Some(start.clone()), None];
+        mask_held(&mut devices, &mut held);
+        assert_eq!(devices[0].as_ref().unwrap().buttons[9], 1.0);
+        assert_eq!(devices[0].as_ref().unwrap().buttons[6], 0.0);
+        // An unplugged pad forgets its held buttons.
+        mask_held(&mut [None, None], &mut held);
+        assert_eq!(held, [BTreeSet::new(), BTreeSet::new()]);
     }
 }

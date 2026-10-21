@@ -133,6 +133,9 @@ struct Session<'out> {
     /// The keys held when the match started, such as the Enter that started it: they reach
     /// the game only once pressed again, not through the keyboard's repeats.
     held_at_start: BTreeSet<String>,
+    /// Per gamepad slot, the buttons held when the match started, such as the Start that
+    /// started it: they reach the game only once released and pressed again.
+    buttons_held_at_start: Vec<BTreeSet<usize>>,
     overlay: Overlay,
     lobby_overlay: Overlay,
     /// The display holds no frame of the match yet.
@@ -181,6 +184,7 @@ impl<'out> Session<'out> {
             slots,
             keys: BTreeSet::new(),
             held_at_start: BTreeSet::new(),
+            buttons_held_at_start: Vec::new(),
             overlay,
             lobby_overlay,
             fresh: true,
@@ -298,6 +302,7 @@ impl<'out> Session<'out> {
         started?;
         self.started = true;
         self.held_at_start = std::mem::take(&mut self.keys);
+        self.buttons_held_at_start = gamepads::held(&self.gamepads());
         self.fresh = true;
         self.last = None;
         if let Some(window) = &self.window {
@@ -378,9 +383,11 @@ impl<'out> Session<'out> {
         if !self.started {
             return self.show_lobby().map(|()| false);
         }
+        let mut pads = self.gamepads();
+        gamepads::mask_held(&mut pads, &mut self.buttons_held_at_start);
         let devices = LiveDevices {
             keys: self.keys.clone(),
-            gamepads: self.gamepads(),
+            gamepads: pads,
         };
         let update = self.runner.frame(elapsed, &devices);
         self.print_messages();
