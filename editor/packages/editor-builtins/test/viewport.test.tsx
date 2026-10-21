@@ -1166,6 +1166,23 @@ describe("viewport frames", () => {
       expect(host.editor.console.list().map(({ level, text }) => [level, text])).toEqual([["warning", "assets/bug.png: its meta cannot be read"]]);
     });
 
+    it("a_failed_reload_is_reported_and_the_next_one_still_redraws", async () => {
+      const project = mutable([bug]);
+      let failing = true;
+      const uploadsSeen = () => renderers.at(-1)!.calls.some((call) => call.method === "set_textures");
+      const { host } = await viewport(undefined, {}, (request) =>
+        failing && request.type === "list_files" && uploadsSeen() ? { error: { code: "io", message: "the project folder is busy" } } : project.answer(request),
+      );
+      const renderer = renderers.at(-1)!;
+      await uploaded(renderer, 1);
+      project.entries = [{ ...bug, id: NEWER }];
+      pushed(host, files("assets/bug.png", { Texture: META }));
+      await waitFor(() => expect(host.editor.console.list().map(({ text }) => text)).toEqual(["Reloading the textures for the viewport failed: the project folder is busy"]));
+      failing = false;
+      pushed(host, files("assets/bug.png", { Texture: META }));
+      expect(await uploaded(renderer, 2)).toEqual([{ id: NEWER, path: "assets/bug.png", meta: META }]);
+    });
+
     it("a_texture_changed_before_a_lost_device_is_uploaded_to_the_new_renderer", async () => {
       const project = mutable([bug]);
       const { host } = await viewport(undefined, {}, project.answer);

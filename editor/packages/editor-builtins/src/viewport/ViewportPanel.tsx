@@ -134,10 +134,6 @@ export function ViewportPanel({
     // The project's textures as the viewport last knew them: a renderer created again starts from
     // them, not from the disk. Reloads queue behind the initial load; one that fails is dropped.
     let known: Promise<LoadedTextures> | null = null;
-    const forget = (error: unknown, what: string) => {
-      known = null;
-      if (!disposed) editor.console.report(error, what);
-    };
     const upload = (target: WebRenderer, { sources, pngs }: LoadedTextures) => {
       if (disposed || renderer !== target) return;
       const refused = JSON.parse(target.set_textures(JSON.stringify(sources), pngs)) as Refused[];
@@ -148,7 +144,11 @@ export function ViewportPanel({
     };
     const uploadTextures = (target: WebRenderer) => {
       known ??= loadTextures(editor.project, warnOnce);
-      return known.then((textures) => upload(target, textures)).catch((error) => forget(error, "Loading the textures for the viewport"));
+      return known.then((textures) => upload(target, textures)).catch((error) => {
+        // Only the initial load starts over: a reload that fails leaves the set as it was.
+        known = null;
+        if (!disposed) editor.console.report(error, "Loading the textures for the viewport");
+      });
     };
     // A changed texture is drawn at once, with no command to the game: the session does not change.
     const reload = (changes: FileChange[]) => {
@@ -156,10 +156,13 @@ export function ViewportPanel({
       let before: LoadedTextures | null = null;
       const next = known.then((current) => {
         before = current;
-        return reloadChanged(current, changes, editor.project, warnOnce);
+        return reloadChanged(current, changes, editor.project, warnOnce).catch((error) => {
+          if (!disposed) editor.console.report(error, "Reloading the textures for the viewport");
+          return current;
+        });
       });
       known = next;
-      next.then((textures) => renderer && textures !== before && upload(renderer, textures)).catch((error) => forget(error, "Reloading the textures for the viewport"));
+      next.then((textures) => renderer && textures !== before && upload(renderer, textures)).catch((error) => editor.console.report(error, "Drawing the reloaded textures in the viewport"));
     };
 
     // Drops the renderer, freed unless `free` is false: the frames wait for the next one, which starts with them.
