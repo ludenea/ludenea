@@ -825,6 +825,19 @@ describe("viewport failures", () => {
     expect(alert()).toBeNull();
   });
 
+  it("pressing_the_alert_is_not_pressing_the_viewport", async () => {
+    script.createError = named("NoAdapter", "the browser offers no GPU adapter");
+    const { game } = await viewport();
+    await waitFor(() => expect(alert()).not.toBeNull());
+    const button = screen.getByRole("button", { name: "Retry" });
+    // A press on the alert neither picks nor captures the pointer, which would take the click.
+    fireEvent.pointerDown(button, { button: 0, pointerId: 1 });
+    await settle();
+    expect(sentOf(game.sent, "pick")).toEqual([]);
+    // Space and Enter reach the button.
+    expect(fireEvent.keyDown(button, { key: " " })).toBe(true);
+  });
+
   it("a_failed_creation_shows_the_alert_with_retry", async () => {
     script.createError = named("NoAdapter", "the browser offers no GPU adapter: WebGPU and WebGL2 are both unavailable");
     await viewport();

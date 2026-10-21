@@ -313,6 +313,8 @@ export function ViewportPanel({
     };
 
     const onPointerDown = (event: PointerEvent) => {
+      // A press on the viewport's controls (the alert's Retry) is theirs: capturing the pointer would take their click.
+      if (event.target !== element && event.target !== gpu) return;
       element.focus();
       const at = local(event);
       const control = editor.control;
@@ -389,6 +391,8 @@ export function ViewportPanel({
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
+      // Keys typed on the viewport's controls are theirs.
+      if (event.target !== element) return;
       if (event.key === " ") {
         space = true;
         event.preventDefault();
