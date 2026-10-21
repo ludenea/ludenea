@@ -6,7 +6,9 @@
 
 use ludenea_app::App;
 use ludenea_app::players::{Claim, LiveDevices};
-use ludenea_control::{Bytes, Command, Document, Event, Host, PauseReason, ProtocolError, Reply};
+use ludenea_control::{
+    Bytes, Command, ConsoleLevel, Document, Event, Host, PauseReason, ProtocolError, Reply,
+};
 use ludenea_draw::frame::RenderFrame;
 use ludenea_ecs::AssetId;
 
@@ -54,6 +56,8 @@ pub struct Runner {
     sent: Option<LiveDevices>,
     previous: Option<RenderFrame>,
     current: Option<RenderFrame>,
+    /// What the host wrote to its console since the last `take_messages`.
+    messages: Vec<(ConsoleLevel, String)>,
 }
 
 impl Runner {
@@ -72,6 +76,7 @@ impl Runner {
             sent: None,
             previous: None,
             current: None,
+            messages: Vec::new(),
         };
         runner.setup(Command::LoadScene {
             scene: files.scene.clone(),
@@ -89,6 +94,8 @@ impl Runner {
             })?;
             runner.setup(Command::SetThreads { threads })?;
         }
+        let events = runner.host.drain_events();
+        runner.keep_messages(events);
         Ok(runner)
     }
 
@@ -107,6 +114,8 @@ impl Runner {
         self.setup(Command::Play)?;
         self.current = Some(self.render_frame()?);
         self.previous = None;
+        let events = self.host.drain_events();
+        self.keep_messages(events);
         Ok(())
     }
 
@@ -123,20 +132,25 @@ impl Runner {
                 .handle(command)
                 .map_err(|error| self.game_error(error))?;
         }
-        let mut ticked = false;
-        for event in self.host.advance(elapsed_seconds) {
-            match event {
-                Event::Ticked { .. } => ticked = true,
-                Event::Paused { reason } => match reason {
-                    PauseReason::Failed { tick, message }
-                    | PauseReason::Panicked { tick, message } => {
-                        return Err(RuntimeError::Game { tick, message });
-                    }
-                    // The runner never pauses: nothing else does while it runs.
-                    PauseReason::User => {}
-                },
-                _ => {}
-            }
+        let events = self.host.advance(elapsed_seconds);
+        let ticked = events
+            .iter()
+            .any(|event| matches!(event, Event::Ticked { .. }));
+        let failure = events.iter().find_map(|event| match event {
+            Event::Paused {
+                reason:
+                    PauseReason::Failed { tick, message } | PauseReason::Panicked { tick, message },
+            } => Some(RuntimeError::Game {
+                tick: *tick,
+                message: message.clone(),
+            }),
+            _ => None,
+        });
+        self.keep_messages(events);
+        if let Some(failure) = failure {
+            // The frames are not fetched for the ticks that ran before the failure: they are
+            // stale by those ticks, which is harmless as the match ends here.
+            return Err(failure);
         }
         if ticked {
             let frame = self.render_frame()?;
@@ -156,7 +170,10 @@ impl Runner {
 
     /// The encoded replay of the match up to the current tick, after a failure too.
     pub fn export_replay(&mut self) -> Result<Vec<u8>, RuntimeError> {
-        match self.host.handle(Command::ExportReplay { branch: None }) {
+        let exported = self.host.handle(Command::ExportReplay { branch: None });
+        let events = self.host.drain_events();
+        self.keep_messages(events);
+        match exported {
             Ok(Reply::Replay { replay }) => Ok(replay.0),
             Ok(other) => unreachable!("ExportReplay answers Replay, not {other:?}"),
             Err(error) => Err(self.game_error(error)),
@@ -166,6 +183,24 @@ impl Runner {
     /// The tick of the current state.
     pub fn tick(&self) -> u64 {
         self.host.tick()
+    }
+
+    /// What the host wrote to its console since the last call, oldest first: warnings such as
+    /// an edit of the loaded log that no longer applies or a tick that diverged from the
+    /// recorded session (the host writes one for each), and errors such as a game panic.
+    pub fn take_messages(&mut self) -> Vec<(ConsoleLevel, String)> {
+        std::mem::take(&mut self.messages)
+    }
+
+    /// Keeps the console messages of `events`. The host writes every warning it reports
+    /// with an event of its own (`EditDropped`, `Diverged`) to the console too, so those
+    /// events add nothing.
+    fn keep_messages(&mut self, events: Vec<Event>) {
+        self.messages
+            .extend(events.into_iter().filter_map(|event| match event {
+                Event::Console { level, text } => Some((level, text)),
+                _ => None,
+            }));
     }
 
     /// The `SetLiveInput` command for `devices`, or `None` when they are the ones last sent.

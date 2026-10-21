@@ -4,6 +4,7 @@ use ludenea::app::assets::asset_file;
 use ludenea::app::players::{LiveDevices, automatic_claims};
 use ludenea::app::replay::{Replay, ReplayOutcome, play_replay, record_replay};
 use ludenea::app::{AssetTexts, EditLog, InputLog, RawGamepad};
+use ludenea::control::ConsoleLevel;
 use ludenea::control::pacer::MAX_TICKS_PER_FRAME;
 use ludenea::ecs::AssetId;
 use ludenea::prelude::*;
@@ -259,4 +260,57 @@ fn a_bad_scene_is_a_load_error() {
         Err(other) => panic!("expected a load error, got {other:?}"),
         Ok(_) => panic!("a bad scene loads"),
     }
+}
+
+/// What the loaded edit log spawns.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+struct Marker {
+    value: u32,
+}
+
+/// A game with a component an edit can spawn, and nothing else.
+fn marked_app() -> App {
+    let mut app = App::new();
+    app.input::<Pressed>()
+        .input_mapping(|raw, _| Pressed {
+            any: !raw.keys.is_empty(),
+        })
+        .component::<Marker>();
+    app
+}
+
+/// The tick the loaded edit is recorded at.
+const EDIT_TICK: u64 = 10;
+
+fn files_with_edit(edit: Edit) -> GameFiles {
+    let mut log = EditLog::new();
+    log.edits.push(TimedEdit {
+        tick: EDIT_TICK,
+        edit,
+    });
+    GameFiles {
+        edits: Some(log.encode()),
+        ..empty_files()
+    }
+}
+
+#[test]
+fn an_edit_that_no_longer_applies_is_a_warning_naming_its_tick() {
+    let unknown = Edit::Spawn {
+        components: vec![("runner::Missing".to_string(), Vec::new())],
+    };
+    let mut runner = started(marked_app, &files_with_edit(unknown), 1);
+    let mut messages = runner.take_messages();
+    while runner.tick() < 2 * EDIT_TICK {
+        runner.frame(1.0 / 60.0, &LiveDevices::default()).unwrap();
+        messages.extend(runner.take_messages());
+    }
+    let warning = format!("the edit recorded at tick {EDIT_TICK} was dropped");
+    assert!(
+        messages
+            .iter()
+            .any(|(level, text)| *level == ConsoleLevel::Warning && text.contains(&warning)),
+        "{messages:?}"
+    );
+    assert!(runner.take_messages().is_empty(), "messages are taken once");
 }
