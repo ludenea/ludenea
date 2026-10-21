@@ -1,17 +1,33 @@
 //! The renderer in a browser canvas (feature `web`): `gpu::Renderer` on WebGPU, or on WebGL2
-//! where the browser offers no WebGPU adapter, driven from JavaScript with JSON. Built by
-//! `cargo xtask wasm-render`. Display only: nothing here feeds back into the simulation.
+//! where the browser offers no WebGPU adapter, driven from JavaScript with JSON (and frames
+//! in the control protocol's postcard encoding). Built by `cargo xtask wasm-render`. Display
+//! only: nothing here feeds back into the simulation.
+//!
+//! Every error is a JavaScript `Error` whose `name` says what failed, so a page recovers by
+//! name, and whose `message` is the cause: `NoAdapter`, `Gpu`, `Limit`, `DeviceLost` and
+//! `InvalidAtlas` (the `RenderError` variants), `InvalidInput` (JSON, postcard, a PNG or a
+//! meta that cannot be read, or arguments that do not match), `Surface` (the canvas cannot
+//! be drawn into), and `NoSurfaceTexture` (the canvas has no texture this frame, as when it
+//! is hidden or occluded: draw again on the next one).
+
+use std::cell::RefCell;
+use std::collections::BTreeSet;
+use std::sync::Once;
 
 use ludenea_app::meta::TextureMeta;
+use ludenea_draw::DebugDrawFrame;
 use ludenea_draw::frame::{CameraView, RenderFrame};
-use ludenea_ecs::AssetId;
+use ludenea_ecs::{AssetId, Entity};
+use ludenea_math::Vec2;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 use web_sys::HtmlCanvasElement;
-use web_sys::js_sys::Uint8Array;
+use web_sys::js_sys::{Error, Function, Uint8Array};
 
 use crate::atlas::{self, TextureError, TextureSource};
-use crate::gpu::{Overlay, RenderError, Renderer, Size};
+use crate::camera::{DEFAULT_CAMERA, screen_to_world};
+use crate::gpu::{DrawReport, Overlay, RenderError, Renderer, Size};
+use crate::pick;
 
 /// One texture of `set_textures`, whose PNG comes in a separate array.
 #[derive(Deserialize)]
@@ -39,6 +55,23 @@ impl From<&TextureError> for Refused {
     }
 }
 
+/// What `push_frame` and `push_frame_bytes` return: the frame's tick, what is drawn as a
+/// placeholder, and the frame's debug draw, which the page's labels and outlines read.
+#[derive(Serialize)]
+struct Pushed<'a> {
+    tick: u64,
+    #[serde(flatten)]
+    report: DrawReport,
+    debug: &'a DebugDrawFrame,
+}
+
+/// The world box `bounds` returns.
+#[derive(Serialize)]
+struct Bounds {
+    min: Vec2,
+    max: Vec2,
+}
+
 #[wasm_bindgen]
 pub struct WebRenderer {
     surface: wgpu::Surface<'static>,
@@ -50,12 +83,47 @@ pub struct WebRenderer {
     backend: &'static str,
     /// The size asked by the last `resize`, which the surface may be clamped below.
     size: Size,
+    /// The size of the last `resize` in CSS pixels, which `pick` and `screen_to_world` read.
+    css_size: Size,
     /// The frame of the last `push_frame`, which the next one blends from.
     pushed: Option<RenderFrame>,
 }
 
-fn failure(error: impl std::fmt::Display) -> JsValue {
-    JsValue::from_str(&error.to_string())
+/// A JavaScript `Error` of `name` whose message is `error`.
+fn named(name: &str, error: impl std::fmt::Display) -> JsValue {
+    let error = Error::new(&error.to_string());
+    error.set_name(name);
+    error.into()
+}
+
+/// Input that cannot be read: bad JSON or postcard, or arguments that do not match.
+fn invalid(error: impl std::fmt::Display) -> JsValue {
+    named("InvalidInput", error)
+}
+
+/// A renderer error, named by its variant.
+fn render_failure(error: RenderError) -> JsValue {
+    let name = match &error {
+        RenderError::NoAdapter(_) => "NoAdapter",
+        RenderError::Gpu { .. } => "Gpu",
+        RenderError::Limit { .. } => "Limit",
+        RenderError::DeviceLost(_) => "DeviceLost",
+        RenderError::InvalidAtlas { .. } => "InvalidAtlas",
+    };
+    named(name, error)
+}
+
+/// `json`, a `CameraView`, or `None` when it is not given.
+fn camera_from(json: Option<String>) -> Result<Option<CameraView>, JsValue> {
+    json.map(|json| serde_json::from_str(&json))
+        .transpose()
+        .map_err(invalid)
+}
+
+/// As JSON. The values serialized here are plain data, whose serialization does not fail; were
+/// it to, the page would get the reason rather than a panic.
+fn to_json(value: &impl Serialize) -> Result<String, JsValue> {
+    serde_json::to_string(value).map_err(invalid)
 }
 
 #[wasm_bindgen]
@@ -70,14 +138,14 @@ impl WebRenderer {
         // The surface comes first: on WebGL2 the adapter is made from the canvas's context.
         let surface = instance
             .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
-            .map_err(failure)?;
+            .map_err(|error| named("Surface", error))?;
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 compatible_surface: Some(&surface),
                 ..Default::default()
             })
             .await
-            .map_err(failure)?;
+            .map_err(|error| render_failure(RenderError::NoAdapter(error.to_string())))?;
         let backend = match adapter.get_info().backend {
             wgpu::Backend::BrowserWebGpu => "webgpu",
             _ => "webgl2",
@@ -90,7 +158,12 @@ impl WebRenderer {
                 ..Default::default()
             })
             .await
-            .map_err(failure)?;
+            .map_err(|error| {
+                render_failure(RenderError::Gpu {
+                    operation: "create",
+                    message: error.to_string(),
+                })
+            })?;
         let capabilities = surface.get_capabilities(&adapter);
         // Pages hold their texels as stored, so the canvas must not encode them to sRGB again.
         let format = capabilities
@@ -99,10 +172,13 @@ impl WebRenderer {
             .copied()
             .find(|format| !format.is_srgb())
             .ok_or_else(|| {
-                failure(format!(
-                    "the canvas offers no surface format that stores colours as given: it offers {:?}",
-                    capabilities.formats
-                ))
+                named(
+                    "Surface",
+                    format!(
+                        "the canvas offers no surface format that stores colours as given: it offers {:?}",
+                        capabilities.formats
+                    ),
+                )
             })?;
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -124,7 +200,7 @@ impl WebRenderer {
         let renderer = Renderer::new(device.clone(), queue.clone(), format);
         let allowed = device.limits().max_texture_dimension_2d;
         if width.max(height) > allowed {
-            return Err(failure(RenderError::Limit {
+            return Err(render_failure(RenderError::Limit {
                 operation: "create",
                 limit: "max_texture_dimension_2d",
                 requested: u64::from(width.max(height)),
@@ -141,6 +217,7 @@ impl WebRenderer {
             renderer,
             backend,
             size: Size { width, height },
+            css_size: Size { width, height },
             pushed: None,
         })
     }
@@ -160,9 +237,9 @@ impl WebRenderer {
         sources_json: &str,
         pngs: Vec<Uint8Array>,
     ) -> Result<String, JsValue> {
-        let sources: Vec<Source> = serde_json::from_str(sources_json).map_err(failure)?;
+        let sources: Vec<Source> = serde_json::from_str(sources_json).map_err(invalid)?;
         if sources.len() != pngs.len() {
-            return Err(failure(format!(
+            return Err(invalid(format!(
                 "{} texture sources need as many PNGs, but {} were given",
                 sources.len(),
                 pngs.len()
@@ -180,9 +257,9 @@ impl WebRenderer {
             })
             .collect();
         let atlas = atlas::pack(&sources, self.renderer.max_page_side());
-        self.renderer.set_atlas(&atlas).map_err(failure)?;
+        self.renderer.set_atlas(&atlas).map_err(render_failure)?;
         let refused: Vec<Refused> = atlas.errors.iter().map(Refused::from).collect();
-        serde_json::to_string(&refused).map_err(failure)
+        to_json(&refused)
     }
 
     /// Uploads a packed atlas from its files (`manifest` is `atlas.json`, `pages` the PNGs of
@@ -191,8 +268,8 @@ impl WebRenderer {
     pub fn set_atlas(&mut self, manifest: &str, pages: Vec<Uint8Array>) -> Result<(), JsValue> {
         let pages: Vec<Vec<u8>> = pages.iter().map(Uint8Array::to_vec).collect();
         let pages: Vec<&[u8]> = pages.iter().map(Vec::as_slice).collect();
-        let atlas = atlas::Atlas::from_files(manifest, &pages).map_err(failure)?;
-        self.renderer.set_atlas(&atlas).map_err(failure)
+        let atlas = atlas::Atlas::from_files(manifest, &pages).map_err(invalid)?;
+        self.renderer.set_atlas(&atlas).map_err(render_failure)
     }
 
     /// `width` and `height` in CSS pixels; the canvas gets `pixel_ratio` times more, at least
@@ -201,6 +278,10 @@ impl WebRenderer {
     /// limit, and every `draw` until a resize within it returns the `max_texture_dimension_2d`
     /// limit error.
     pub fn resize(&mut self, width: u32, height: u32, pixel_ratio: f32) {
+        self.css_size = Size {
+            width: width.max(1),
+            height: height.max(1),
+        };
         self.size = Size {
             width: ((width as f32 * pixel_ratio) as u32).max(1),
             height: ((height as f32 * pixel_ratio) as u32).max(1),
@@ -216,62 +297,216 @@ impl WebRenderer {
     /// Sets the frame to draw, once per tick: `current_json` (a `RenderFrame`) under
     /// `overlay_json` (`{ debug_layers, selected }`, each optional), blended from the frame
     /// set before it when it is of the very next tick (`RenderFrame::follows`), else drawn as
-    /// is. Each frame is read once: the renderer keeps the last one to blend the next from.
-    /// Returns the `DrawReport` as JSON. An error is the renderer's message, and an error the
-    /// GPU raised since the last call is returned by this one.
+    /// is. Each frame is read once: the renderer keeps the last one to blend the next from,
+    /// and to pick in. Returns `{ tick, missing, debug }` as JSON: the frame's tick, what is
+    /// drawn as a placeholder, and the frame's debug draw. An error the GPU raised since the
+    /// last call is returned by this one.
     pub fn push_frame(
         &mut self,
         current_json: &str,
         overlay_json: &str,
     ) -> Result<String, JsValue> {
-        let current: RenderFrame = serde_json::from_str(current_json).map_err(failure)?;
-        let overlay: Overlay = serde_json::from_str(overlay_json).map_err(failure)?;
-        let report = self
-            .renderer
-            .set_frames(self.pushed.as_ref(), &current, &overlay)
-            .map_err(failure)?;
-        self.pushed = Some(current);
-        serde_json::to_string(&report).map_err(failure)
+        let current: RenderFrame = serde_json::from_str(current_json).map_err(invalid)?;
+        self.push(current, overlay_json)
+    }
+
+    /// `push_frame` for a frame in the control protocol's postcard encoding, as the session's
+    /// worker sends it (`ludenea_control::protocol::encode_frame`), so the page never parses
+    /// it.
+    pub fn push_frame_bytes(
+        &mut self,
+        bytes: &[u8],
+        overlay_json: &str,
+    ) -> Result<String, JsValue> {
+        let current: RenderFrame = postcard::from_bytes(bytes).map_err(|error| {
+            invalid(format!(
+                "the {} bytes are not a render frame in postcard: {error}",
+                bytes.len()
+            ))
+        })?;
+        self.push(current, overlay_json)
     }
 
     /// Draws the frames set last into the canvas, `alpha` of the way from the previous tick
     /// to the current one, through `camera_json` (a `CameraView`, `{ center, view }`, the
-    /// editor's free camera) when it is given. An error is the renderer's message, and an
-    /// error the GPU raised since the last call is returned by this one.
+    /// editor's free camera) when it is given. An error the GPU raised since the last call is
+    /// returned by this one; a lost device is `DeviceLost` before the canvas is asked for a
+    /// texture.
     pub fn draw(&mut self, alpha: f32, camera_json: Option<String>) -> Result<(), JsValue> {
-        let camera: Option<CameraView> = camera_json
-            .map(|json| serde_json::from_str(&json))
-            .transpose()
-            .map_err(failure)?;
+        let camera = camera_from(camera_json)?;
+        self.renderer.check_device().map_err(render_failure)?;
         let texture = self.texture()?;
         let view = texture.texture.create_view(&Default::default());
         // The size asked, so the renderer refuses one past the limit.
         self.renderer
             .draw(&view, self.size, alpha, camera)
-            .map_err(failure)?;
+            .map_err(render_failure)?;
         self.queue.present(texture);
         Ok(())
     }
+
+    /// The entities drawn under `(x, y)`, in CSS pixels from the canvas's top-left, in the
+    /// frame pushed last, topmost first, as a JSON `Entity[]` (`pick::pick`): seen through
+    /// `camera_json` (a `CameraView`) when given, else through the frame's camera, as `draw`
+    /// shows it at the current tick. Empty before the first frame.
+    pub fn pick(&self, x: f32, y: f32, camera_json: Option<String>) -> Result<String, JsValue> {
+        let camera = camera_from(camera_json)?;
+        let hits: Vec<Entity> = match &self.pushed {
+            Some(frame) => {
+                let camera = camera.unwrap_or_else(|| shown(frame));
+                pick::pick(
+                    frame,
+                    self.renderer.regions(),
+                    Vec2::new(x, y),
+                    self.css_size,
+                    camera,
+                )
+            }
+            None => Vec::new(),
+        };
+        to_json(&hits)
+    }
+
+    /// The world box `{ min, max }` of the drawn sprites and tilemaps of `entities_json` (an
+    /// `Entity[]`) on layers of parallax 1 in the frame pushed last, as JSON (`pick::bounds`);
+    /// `undefined` when none is drawn there, or before the first frame.
+    pub fn bounds(&self, entities_json: &str) -> Result<Option<String>, JsValue> {
+        let entities: BTreeSet<Entity> = serde_json::from_str(entities_json).map_err(invalid)?;
+        let Some(frame) = &self.pushed else {
+            return Ok(None);
+        };
+        pick::bounds(frame, self.renderer.regions(), &entities)
+            .map(|(min, max)| to_json(&Bounds { min, max }))
+            .transpose()
+    }
+
+    /// The world point a layer of `parallax` shows at `(x, y)`, in CSS pixels from the
+    /// canvas's top-left, as a JSON `Vec2`: through `camera_json` (a `CameraView`) when given,
+    /// else through the camera of the frame pushed last (or the default camera before one).
+    pub fn screen_to_world(
+        &self,
+        x: f32,
+        y: f32,
+        parallax: f32,
+        camera_json: Option<String>,
+    ) -> Result<String, JsValue> {
+        let camera = camera_from(camera_json)?
+            .unwrap_or_else(|| self.pushed.as_ref().map_or(DEFAULT_CAMERA, shown));
+        to_json(&screen_to_world(
+            Vec2::new(x, y),
+            self.css_size,
+            camera,
+            parallax,
+        ))
+    }
+}
+
+/// The camera `draw` shows `frame` through at its tick without a free camera.
+fn shown(frame: &RenderFrame) -> CameraView {
+    frame
+        .camera
+        .as_ref()
+        .map_or(DEFAULT_CAMERA, CameraView::from)
 }
 
 impl WebRenderer {
-    /// The canvas's next texture, configuring the canvas again once if it has none.
+    /// Sets `current` as the frame to draw under `overlay_json`, and keeps it.
+    fn push(&mut self, current: RenderFrame, overlay_json: &str) -> Result<String, JsValue> {
+        let overlay: Overlay = serde_json::from_str(overlay_json).map_err(invalid)?;
+        let report = self
+            .renderer
+            .set_frames(self.pushed.as_ref(), &current, &overlay)
+            .map_err(render_failure)?;
+        let pushed = self.pushed.insert(current);
+        to_json(&Pushed {
+            tick: pushed.tick,
+            report,
+            debug: &pushed.debug,
+        })
+    }
+
+    /// The canvas's next texture, configuring the canvas again once if it has none. A canvas
+    /// without a texture this frame is `NoSurfaceTexture`; one the GPU refuses is `Gpu`.
     fn texture(&mut self) -> Result<wgpu::SurfaceTexture, JsValue> {
-        let mut state = "";
+        let mut state = ("", "NoSurfaceTexture");
         for _ in 0..2 {
             state = match self.surface.get_current_texture() {
                 wgpu::CurrentSurfaceTexture::Success(texture)
                 | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => return Ok(texture),
-                wgpu::CurrentSurfaceTexture::Timeout => "timed out",
-                wgpu::CurrentSurfaceTexture::Occluded => "is occluded",
-                wgpu::CurrentSurfaceTexture::Outdated => "is outdated",
-                wgpu::CurrentSurfaceTexture::Lost => "was lost",
-                wgpu::CurrentSurfaceTexture::Validation => "was refused by the GPU",
+                wgpu::CurrentSurfaceTexture::Timeout => ("timed out", "NoSurfaceTexture"),
+                wgpu::CurrentSurfaceTexture::Occluded => ("is occluded", "NoSurfaceTexture"),
+                wgpu::CurrentSurfaceTexture::Outdated => ("is outdated", "NoSurfaceTexture"),
+                wgpu::CurrentSurfaceTexture::Lost => ("was lost", "NoSurfaceTexture"),
+                wgpu::CurrentSurfaceTexture::Validation => ("was refused by the GPU", "Gpu"),
             };
             self.surface.configure(&self.device, &self.config);
         }
-        Err(failure(format!(
-            "the canvas has no texture to draw into: it {state}; draw again on the next frame"
-        )))
+        let (state, name) = state;
+        Err(named(
+            name,
+            format!(
+                "the canvas has no texture to draw into: it {state}; draw again on the next frame"
+            ),
+        ))
     }
+}
+
+/// The frames `meta_json` (a `TextureMeta`) cuts `png` into, as JSON
+/// `{ width, height, frames: [{ x, y, width, height, pivot }] }` (`atlas::frames_of`): what a
+/// texture inspector or a tile palette shows. A meta that cannot be read or is invalid, and
+/// a PNG that cannot be decoded or cut, are `InvalidInput` naming the cause.
+#[wasm_bindgen(js_name = textureFrames)]
+pub fn texture_frames(png: &[u8], meta_json: &str) -> Result<String, JsValue> {
+    let meta: TextureMeta = serde_json::from_str(meta_json).map_err(invalid)?;
+    meta.validate()
+        .map_err(|reason| invalid(format!("invalid texture meta: {reason}")))?;
+    let frames = atlas::frames_of(png, &meta).map_err(invalid)?;
+    to_json(&frames)
+}
+
+/// `frame_json` (a `DebugDrawFrame`) in the ghost style, as JSON: what the editor draws for
+/// another branch.
+#[wasm_bindgen(js_name = ghostFrame)]
+pub fn ghost_frame(frame_json: &str) -> Result<String, JsValue> {
+    let frame: DebugDrawFrame = serde_json::from_str(frame_json).map_err(invalid)?;
+    to_json(&frame.ghost())
+}
+
+thread_local! {
+    /// The function `setPanicHandler` set last.
+    static PANIC_HANDLER: RefCell<Option<Function>> = const { RefCell::new(None) };
+}
+
+/// Calls `handler` with the message of any panic in this module (its text and where it
+/// happened), before the module stops: a page shows it instead of a renderer that stopped
+/// silently. A later call replaces the handler. A panic aborts the module, so the page drops
+/// every renderer and loads the module again before drawing.
+#[wasm_bindgen(js_name = setPanicHandler)]
+pub fn set_panic_handler(handler: Function) {
+    static HOOK: Once = Once::new();
+    PANIC_HANDLER.with(|slot| *slot.borrow_mut() = Some(handler));
+    HOOK.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let message = info.to_string();
+            PANIC_HANDLER.with(|slot| {
+                // Borrowed while the handler is being replaced: there is no handler to call.
+                if let Ok(slot) = slot.try_borrow()
+                    && let Some(handler) = slot.as_ref()
+                {
+                    // A handler that throws cannot be reported anywhere else while panicking.
+                    let _ = handler.call1(&JsValue::NULL, &JsValue::from_str(&message));
+                }
+            });
+            previous(info);
+        }));
+    });
+}
+
+/// Panics with `message`. It exists so a page's test can check that `setPanicHandler`
+/// receives a panic end to end, as no input makes the renderer panic.
+#[doc(hidden)]
+#[wasm_bindgen(js_name = panicForTesting)]
+pub fn panic_for_testing(message: &str) {
+    panic!("{message}");
 }

@@ -12,7 +12,9 @@
 //!
 //! `wasm-render <out-dir>` builds the renderer for the browser (`ludenea-render` with its
 //! `web` feature) and writes `ludenea_render.js`, `ludenea_render.d.ts`, and
-//! `ludenea_render_bg.wasm`.
+//! `ludenea_render_bg.wasm`: the editor's into `editor/packages/render-wasm`
+//! (`pnpm -C editor build:render`), the renderer page's tests' into
+//! `editor/e2e/fixtures/renderer/pkg`.
 
 use std::error::Error;
 use std::path::PathBuf;

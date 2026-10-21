@@ -14,6 +14,9 @@ editor/test-results/
 editor/playwright-report/
 *.tsbuildinfo
 editor/packages/debug-draw-wasm/
+# The browser renderer, built by `pnpm -C editor build:render`.
+editor/packages/render-wasm/*
+!editor/packages/render-wasm/.gitkeep
 editor/apps/desktop/src-tauri/target/
 editor/apps/desktop/src-tauri/gen/
 /mutants.out*/

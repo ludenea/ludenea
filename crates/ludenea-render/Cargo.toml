@@ -7,7 +7,7 @@ edition.workspace = true
 # The wgpu renderer (`gpu`). Off by default: the simulation never pulls a GPU crate.
 gpu = ["dep:wgpu"]
 # The renderer in a browser canvas (`web`), built by `cargo xtask wasm-render`.
-web = ["gpu", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys"]
+web = ["gpu", "dep:postcard", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys"]
 
 [dependencies]
 ludenea-app.workspace = true
@@ -25,6 +25,7 @@ wgpu = { workspace = true, optional = true, features = ["std", "wgsl", "metal", 
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 wgpu = { workspace = true, optional = true, features = ["std", "wgsl", "webgpu", "webgl"] }
+postcard = { workspace = true, optional = true }
 wasm-bindgen = { workspace = true, optional = true }
 wasm-bindgen-futures = { workspace = true, optional = true }
 web-sys = { workspace = true, optional = true, features = ["HtmlCanvasElement"] }
@@ -33,4 +34,5 @@ web-sys = { workspace = true, optional = true, features = ["HtmlCanvasElement"] 
 boxes = { path = "../../examples/boxes" }
 ludenea-physics.workspace = true
 pollster.workspace = true
+postcard.workspace = true
 ron.workspace = true

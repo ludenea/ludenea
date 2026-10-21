@@ -23,8 +23,11 @@ use serde::{Deserialize, Serialize};
 use wgpu::util::DeviceExt;
 
 use crate::atlas::{Atlas, Region};
+/// A target's size in physical pixels.
+pub use crate::camera::Size;
 use crate::camera::{DEFAULT_CAMERA, fit, world_to_clip};
 use crate::interpolate::{Pairing, camera_at, clamp_alpha};
+use crate::pick::{drawn_tilemaps, layer_parallax};
 use sprites::{BLANK, INSTANCE_FLOATS, Sample};
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -43,13 +46,6 @@ const EARLIER: &str = "earlier GPU work";
 
 /// The format of pages and of `render_rgba`'s target: 8-bit RGBA, stored as given.
 const RGBA: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-
-/// A target's size in physical pixels.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Size {
-    pub width: u32,
-    pub height: u32,
-}
 
 /// What the viewer adds over the frame: the debug draw layers to show and the selected
 /// entities. Each field may be left out of its JSON, which `web` reads.
@@ -317,6 +313,12 @@ impl Renderer {
                 bytes_written: 0,
             },
         }
+    }
+
+    /// Where each frame `(texture, frame)` of the atlas set last lies: what `pick::pick` and
+    /// `pick::bounds` read to hit and frame what is drawn.
+    pub fn regions(&self) -> &BTreeMap<(AssetId, u32), Region> {
+        &self.regions
     }
 
     /// The largest page side to pack atlases for: `min(4096, max_texture_dimension_2d)`.
@@ -663,12 +665,7 @@ impl Renderer {
         let pages: Vec<(u32, u32)> = self.pages.iter().map(|page| page.size).collect();
         // A well-formed frame has one tilemap per entity; of a malformed frame's duplicates,
         // only the first well-formed one listed is built and drawn.
-        let mut seen = BTreeSet::new();
-        let tilemaps: Vec<&TilemapItem> = current
-            .tilemaps
-            .iter()
-            .filter(|item| tilemaps::well_formed(item) && seen.insert(item.entity))
-            .collect();
+        let tilemaps = drawn_tilemaps(current);
         self.tilemaps.update(
             &self.device,
             &self.queue,
@@ -694,12 +691,7 @@ impl Renderer {
         // One view per layer of sprites drawn and one per tilemap (its layer's, moved to the
         // tilemap's position, so its chunks do not depend on it).
         let pairing = Pairing::new(previous, current);
-        let parallax = |layer: u16| {
-            current
-                .layers
-                .get(usize::from(layer))
-                .map_or(1.0, |info| info.parallax)
-        };
+        let parallax = |layer: u16| layer_parallax(current, layer);
         let mut slots: Vec<Slot> = Vec::new();
         let mut layer_slots: BTreeMap<u16, u32> = BTreeMap::new();
         let mut draws: Vec<Draw> = Vec::new();

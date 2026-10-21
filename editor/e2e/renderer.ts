@@ -7,9 +7,28 @@ const RENDERER = join(import.meta.dirname, "fixtures/renderer/pkg/ludenea_render
 
 export type Rgba = [number, number, number, number];
 export type Point = [number, number];
+/** What `push_frame` and `push_frame_bytes` return. */
+export interface Pushed {
+  tick: number;
+  missing: unknown[];
+  debug: { layers: Record<string, unknown[]> };
+}
 export interface Drawn {
-  report: { missing: unknown[] };
+  report: Pushed;
   pixels: Rgba[];
+}
+/** A JavaScript `Error` the renderer threw. */
+export interface Thrown {
+  name: string;
+  message: string;
+}
+export interface Entity {
+  index: number;
+  generation: number;
+}
+export interface Vec2 {
+  x: number;
+  y: number;
 }
 /** A texture the renderer refused. */
 export interface Refused {
@@ -27,11 +46,25 @@ declare global {
       drawAfterGap(points: Point[]): Rgba[];
       redraw(alpha: number, points: Point[], camera?: { center: { x: number; y: number }; view: { x: number; y: number } }): Rgba[];
       drawSprites(count: number, placed: Record<number, Point>, points: Point[]): Drawn;
-      drawError(): string | null;
+      drawError(): Thrown | null;
       failOnTheDevice(): void;
       loseTheDevice(): void;
-      createOn(width: number, height: number): Promise<string | null>;
+      createOn(width: number, height: number): Promise<Thrown | null>;
       resize(width: number, height: number): void;
+      pushBothWays(points: Point[]): Promise<{ fromJson: Drawn; fromBytes: Drawn }>;
+      answers(
+        point: Point,
+        entities: Entity[],
+      ): {
+        picked: Entity[];
+        pickedThroughAFreeCamera: Entity[];
+        bounds: { min: Vec2; max: Vec2 } | null;
+        world: Vec2;
+        background: Vec2;
+      };
+      framesOf(meta: unknown): Promise<{ frames?: unknown; error?: Thrown }>;
+      badInputs(): Record<"json" | "overlay" | "bytes" | "camera" | "pngCount", Thrown | null>;
+      panicked(): { received: string[]; thrown: boolean };
     };
   }
 }

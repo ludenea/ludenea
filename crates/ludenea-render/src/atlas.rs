@@ -1,6 +1,6 @@
-//! PNG decoding and atlas packing: textures are decoded, cut into frames, and packed into
-//! pages the renderer uploads. GPU-free and byte-for-byte reproducible: the same sources, in
-//! any order, give the same pages.
+//! PNG decoding, cutting, and atlas packing: textures are decoded, cut into frames by their
+//! meta, and packed into pages the renderer uploads; `frames_of` gives the frames alone. GPU-free
+//! and byte-for-byte reproducible: the same sources, in any order, give the same pages.
 
 use std::collections::BTreeMap;
 use std::io::Cursor;
@@ -64,21 +64,13 @@ pub enum TextureError {
         path: Option<String>,
         reason: String,
     },
-    #[error(
-        "{}: a grid of {}x{} frames with margin {} and spacing {} does not cut the {}x{} image into whole frames",
-        named(*id, path),
-        grid.frame_width,
-        grid.frame_height,
-        grid.margin,
-        grid.spacing,
-        image.0,
-        image.1
-    )]
+    /// The meta's grid does not cut the image into whole frames; `reason` is
+    /// `FramesError::Grid`'s, naming the grid and the image sizes.
+    #[error("{}: {reason}", named(*id, path))]
     Grid {
         id: AssetId,
         path: Option<String>,
-        image: (u32, u32),
-        grid: Grid,
+        reason: String,
     },
     #[error(
         "{}: a {}x{} frame with its 1-pixel extrusion does not fit a {max}x{max} atlas page",
@@ -143,12 +135,12 @@ struct Image {
     rgba: Vec<u8>,
 }
 
-/// A decoded texture cut into frames: each frame's top-left corner in the image, row-major,
-/// and the region every frame shares until it is placed.
+/// A decoded texture cut into frames, row-major, and how they are drawn.
 struct Texture {
     image: Image,
-    corners: Vec<(u32, u32)>,
-    region: Region,
+    frames: Vec<FrameRect>,
+    pixels_per_unit: u32,
+    filter: Filter,
 }
 
 /// A frame to place: its texture, index, and rectangle in the decoded image.
@@ -195,18 +187,23 @@ pub fn pack(sources: &[TextureSource<'_>], max_page: u32) -> Atlas {
     let mut frames: Vec<Frame<'_>> = textures
         .iter()
         .flat_map(|(id, texture)| {
-            texture
-                .corners
-                .iter()
-                .zip(0..)
-                .map(|(&(left, top), index)| Frame {
-                    id: *id,
-                    index,
-                    image: &texture.image,
-                    left,
-                    top,
-                    region: texture.region,
-                })
+            texture.frames.iter().zip(0..).map(|(rect, index)| Frame {
+                id: *id,
+                index,
+                image: &texture.image,
+                left: rect.x,
+                top: rect.y,
+                region: Region {
+                    page: 0,
+                    x: 0,
+                    y: 0,
+                    width: rect.width,
+                    height: rect.height,
+                    pivot: rect.pivot,
+                    pixels_per_unit: texture.pixels_per_unit,
+                    filter: texture.filter,
+                },
+            })
         })
         .collect();
     frames.sort_by_key(|frame| {
@@ -261,66 +258,127 @@ fn prepare(source: &TextureSource<'_>, max_page: u32) -> Result<Texture, Texture
         path: path(),
         reason,
     })?;
+    let frames = cut(&image, meta).map_err(|error| match error {
+        FramesError::Decode { reason } => TextureError::Decode {
+            id,
+            path: path(),
+            reason,
+        },
+        FramesError::Grid { reason } => TextureError::Grid {
+            id,
+            path: path(),
+            reason,
+        },
+    })?;
+    // Every frame of a texture has the same size.
+    if let Some(frame) = frames.iter().find(|frame| {
+        frame.width.saturating_add(2) > max_page || frame.height.saturating_add(2) > max_page
+    }) {
+        return Err(TextureError::TooLarge {
+            id,
+            path: path(),
+            size: (frame.width, frame.height),
+            max: max_page,
+        });
+    }
+    Ok(Texture {
+        image,
+        frames,
+        pixels_per_unit: meta.pixels_per_unit,
+        filter: meta.filter,
+    })
+}
 
+/// A texture's frames, as its meta cuts it: the image's size and each frame, row-major from
+/// the top-left, which is the frame index a sprite or a tile names.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TextureFrames {
+    pub width: u32,
+    pub height: u32,
+    pub frames: Vec<FrameRect>,
+}
+
+/// One frame's rectangle in the image, in pixels from its top-left corner, and its pivot in
+/// pixels from the frame's top-left corner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct FrameRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub pivot: (u32, u32),
+}
+
+/// Why a PNG could not be cut into frames.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum FramesError {
+    #[error("cannot decode the PNG: {reason}")]
+    Decode { reason: String },
+    /// The meta's grid does not cut the image into whole frames, naming both.
+    #[error("{reason}")]
+    Grid { reason: String },
+}
+
+/// Decodes `png` and cuts it into frames as `meta` says, as `pack` cuts it, without packing:
+/// a grid's frames row-major, or the whole image as one frame. The pivot is the meta's, or
+/// each frame's centre. `meta`'s `pixels_per_unit` and `filter` play no part.
+pub fn frames_of(png: &[u8], meta: &TextureMeta) -> Result<TextureFrames, FramesError> {
+    let image = decode(png).map_err(|reason| FramesError::Decode { reason })?;
+    Ok(TextureFrames {
+        width: image.width,
+        height: image.height,
+        frames: cut(&image, meta)?,
+    })
+}
+
+/// The frames `meta`'s grid cuts `image` into, row-major, at least one; the whole image when
+/// it has no grid.
+fn cut(image: &Image, meta: &TextureMeta) -> Result<Vec<FrameRect>, FramesError> {
     let grid = meta.grid.unwrap_or(Grid {
         frame_width: image.width,
         frame_height: image.height,
         margin: 0,
         spacing: 0,
     });
-    let grid_error = || TextureError::Grid {
-        id,
-        path: path(),
-        image: (image.width, image.height),
-        grid,
+    let refused = || FramesError::Grid {
+        reason: format!(
+            "a grid of {}x{} frames with margin {} and spacing {} does not cut the {}x{} image into whole frames",
+            grid.frame_width,
+            grid.frame_height,
+            grid.margin,
+            grid.spacing,
+            image.width,
+            image.height
+        ),
     };
     let columns = whole_frames(image.width, grid.frame_width, grid.margin, grid.spacing)
-        .ok_or_else(grid_error)?;
+        .ok_or_else(refused)?;
     let rows = whole_frames(image.height, grid.frame_height, grid.margin, grid.spacing)
-        .ok_or_else(grid_error)?;
-    if grid.frame_width.saturating_add(2) > max_page
-        || grid.frame_height.saturating_add(2) > max_page
-    {
-        return Err(TextureError::TooLarge {
-            id,
-            path: path(),
-            size: (grid.frame_width, grid.frame_height),
-            max: max_page,
-        });
-    }
-
-    let region = Region {
-        page: 0,
-        x: 0,
-        y: 0,
-        width: grid.frame_width,
-        height: grid.frame_height,
-        pivot: meta
-            .pivot
-            .unwrap_or((grid.frame_width / 2, grid.frame_height / 2)),
-        pixels_per_unit: meta.pixels_per_unit,
-        filter: meta.filter,
-    };
+        .ok_or_else(refused)?;
+    let pivot = meta
+        .pivot
+        .unwrap_or((grid.frame_width / 2, grid.frame_height / 2));
     // Each term is at most the offset of a whole frame inside the image, so no sum exceeds the
     // image side. `frame + spacing` alone could overflow, so it is never computed.
-    let corners = (0..rows)
+    Ok((0..rows)
         .flat_map(|row| (0..columns).map(move |column| (column, row)))
-        .map(|(column, row)| {
-            let left = grid.margin + column * grid.frame_width + column * grid.spacing;
-            let top = grid.margin + row * grid.frame_height + row * grid.spacing;
-            (left, top)
+        .map(|(column, row)| FrameRect {
+            x: grid.margin + column * grid.frame_width + column * grid.spacing,
+            y: grid.margin + row * grid.frame_height + row * grid.spacing,
+            width: grid.frame_width,
+            height: grid.frame_height,
+            pivot,
         })
-        .collect();
-    Ok(Texture {
-        image,
-        corners,
-        region,
-    })
+        .collect())
 }
 
 /// How many frames of `frame` pixels, `spacing` apart and `margin` in from both edges, cut
-/// `side` exactly; `None` when there is not one whole frame or a partial frame is left over.
+/// `side` exactly; `None` when there is not one whole frame, a partial frame is left over, or
+/// `frame` is 0.
 fn whole_frames(side: u32, frame: u32, margin: u32, spacing: u32) -> Option<u32> {
+    if frame == 0 {
+        return None;
+    }
     let inner = u64::from(side).checked_sub(2 * u64::from(margin))?;
     let step = u64::from(frame) + u64::from(spacing);
     let padded = inner + u64::from(spacing);

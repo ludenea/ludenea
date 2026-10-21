@@ -1,8 +1,16 @@
-//! The 2D camera's math, GPU-free: how much of the world a target shows, and where a world
-//! point lands in clip space. Display only: nothing here feeds back into the simulation.
+//! The 2D camera's math, GPU-free: how much of the world a target shows, where a world point
+//! lands in clip space, and which world point a screen pixel shows. Display only: nothing here
+//! feeds back into the simulation.
 
 use ludenea_draw::frame::CameraView;
 use ludenea_math::Vec2;
+
+/// A target's size in pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Size {
+    pub width: u32,
+    pub height: u32,
+}
 
 /// What a frame without a camera shows: 20 by 11.25 world units (16:9) around the origin.
 pub const DEFAULT_CAMERA: CameraView = CameraView {
@@ -35,6 +43,20 @@ pub fn world_to_clip(point: Vec2, camera: CameraView, visible: Vec2, parallax: f
         2.0 * (point.x - camera.center.x * parallax) / visible.x,
         2.0 * (point.y - camera.center.y * parallax) / visible.y,
     ]
+}
+
+/// The world point a layer of `parallax` shows at `screen`, in pixels from the top-left of a
+/// target of `size` (+y down) through `camera`: the inverse of `world_to_clip` for that layer,
+/// with the visible area `fit` gives the target. A side of 0 pixels counts as 1, as the
+/// renderer draws it.
+pub fn screen_to_world(screen: Vec2, size: Size, camera: CameraView, parallax: f32) -> Vec2 {
+    let (width, height) = (size.width.max(1) as f32, size.height.max(1) as f32);
+    let visible = fit(camera.view, width / height);
+    let clip = Vec2::new(2.0 * screen.x / width - 1.0, 1.0 - 2.0 * screen.y / height);
+    Vec2::new(
+        clip.x * visible.x / 2.0 + camera.center.x * parallax,
+        clip.y * visible.y / 2.0 + camera.center.y * parallax,
+    )
 }
 
 #[cfg(test)]

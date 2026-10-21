@@ -51,7 +51,7 @@ test("draws_the_reference_frame", async ({ page }) => {
     ["half turn, right half", [77, 32], LEFT],
   ];
   const { report, pixels } = await page.evaluate((points) => window.fixture.drawReference(points), samples.map(([, point]) => point));
-  expect(report).toEqual({ missing: [] });
+  expect(report.missing).toEqual([]);
   for (const [index, [name, , expected]] of samples.entries()) expect(pixels[index], name).toEqual(expected);
 
   // Drawn again at alpha 1 without new frames, the sprite is where it moved to (pixels 40 to
@@ -85,7 +85,7 @@ test("sixty_thousand_sprites_then_one_both_draw", async ({ page }) => {
     (points) => window.fixture.drawSprites(60_000, { 0: [0, 2], 30_000: [4, 2], 59_999: [4, -2] }, points),
     [[27, 32], [91, 32], [91, 96], [27, 96]] as Point[],
   );
-  expect(many.report).toEqual({ missing: [] });
+  expect(many.report.missing).toEqual([]);
   expect(many.pixels).toEqual([LEFT, LEFT, LEFT, BACKGROUND]);
   const one = await page.evaluate((points) => window.fixture.drawSprites(1, { 0: [0, -2] }, points), [[27, 96], [27, 32]] as Point[]);
   expect(one.pixels).toEqual([LEFT, BACKGROUND]);
@@ -113,13 +113,93 @@ test("a_canvas_past_the_texture_limit_is_refused_and_a_resize_past_it_fails_the_
   // Past any device's `max_texture_dimension_2d`.
   const wide = 40_000;
   const refused = await page.evaluate((width) => window.fixture.createOn(width, 1), wide);
-  expect(refused).toMatch(new RegExp(`^create needs ${wide} for \`max_texture_dimension_2d\`, but at most \\d+ is allowed$`));
+  expect(refused?.name).toBe("Limit");
+  expect(refused?.message).toMatch(new RegExp(`^create needs ${wide} for \`max_texture_dimension_2d\`, but at most \\d+ is allowed$`));
   await page.evaluate((width) => window.fixture.resize(width, 1), wide);
-  expect(await page.evaluate(() => window.fixture.drawError())).toMatch(
-    new RegExp(`^draw needs ${wide} for \`max_texture_dimension_2d\`, but at most \\d+ is allowed$`),
-  );
+  const failed = await page.evaluate(() => window.fixture.drawError());
+  expect(failed?.name).toBe("Limit");
+  expect(failed?.message).toMatch(new RegExp(`^draw needs ${wide} for \`max_texture_dimension_2d\`, but at most \\d+ is allowed$`));
   // Back within the limit, it draws again.
   await page.evaluate(() => window.fixture.resize(128, 128));
   expect(await page.evaluate(() => window.fixture.drawError())).toBeNull();
   expect(pageErrors).toEqual([]);
+});
+
+/** Every eighth pixel of the 128 by 128 canvas, across and down. */
+const GRID: Point[] = Array.from({ length: 256 }, (_, index) => [(index % 16) * 8 + 4, Math.floor(index / 16) * 8 + 4]);
+const HERO = { index: 1, generation: 0 };
+
+test("push_frame_bytes_draws_like_push_frame", async ({ page }) => {
+  const { pageErrors } = await start(page);
+  // The sprite at (0, 2) and the flipped one at (4, 2), first, then the grid.
+  const points: Point[] = [[27, 32], [36, 32], [91, 32], [100, 32], ...GRID];
+  const { fromJson, fromBytes } = await page.evaluate((points) => window.fixture.pushBothWays(points), points);
+  expect(fromJson.pixels.slice(0, 4)).toEqual([LEFT, RIGHT, RIGHT, LEFT]);
+  expect(fromBytes.pixels).toEqual(fromJson.pixels);
+  // The report names the frame's tick and carries its debug draw, which the page labels.
+  expect(fromJson.report.tick).toBe(7);
+  expect(fromJson.report.missing).toEqual([]);
+  expect(Object.keys(fromJson.report.debug.layers)).toEqual(["physics"]);
+  expect(fromBytes.report).toEqual(fromJson.report);
+  expect(pageErrors).toEqual([]);
+});
+
+test("pick_bounds_and_screen_to_world_answer_for_the_pushed_frame", async ({ page }) => {
+  await start(page);
+  await page.evaluate((points) => window.fixture.pushBothWays(points), []);
+  // Pixel (32, 32) shows world (0, 2) through the frame's camera, where the sprite of entity 1
+  // is drawn, 1 by 1 around it.
+  const answers = await page.evaluate(() => window.fixture.answers([32, 32], [{ index: 1, generation: 0 }]));
+  expect(answers.picked).toEqual([HERO]);
+  // A free camera 1 unit right shows world (1, 2) there: nothing.
+  expect(answers.pickedThroughAFreeCamera).toEqual([]);
+  expect(answers.bounds).toEqual({ min: { x: -0.5, y: 1.5 }, max: { x: 0.5, y: 2.5 } });
+  expect(answers.world).toEqual({ x: 0, y: 2 });
+  // A layer fixed to the screen sees the camera at the origin.
+  expect(answers.background).toEqual({ x: -2, y: 2 });
+});
+
+test("texture_frames_from_the_page", async ({ page }) => {
+  await start(page);
+  const grid = { frame_width: 16, frame_height: 16, margin: 0, spacing: 0 };
+  const meta = (grid: unknown) => ({ pixels_per_unit: 16, grid, pivot: null, filter: "Nearest" });
+  expect(await page.evaluate((meta) => window.fixture.framesOf(meta), meta(grid))).toEqual({
+    frames: {
+      width: 32,
+      height: 16,
+      frames: [
+        { x: 0, y: 0, width: 16, height: 16, pivot: [8, 8] },
+        { x: 16, y: 0, width: 16, height: 16, pivot: [8, 8] },
+      ],
+    },
+  });
+  const uneven = await page.evaluate((meta) => window.fixture.framesOf(meta), meta({ ...grid, frame_width: 20 }));
+  expect(uneven.error?.name).toBe("InvalidInput");
+  expect(uneven.error?.message).toBe(
+    "a grid of 20x16 frames with margin 0 and spacing 0 does not cut the 32x16 image into whole frames",
+  );
+  const invalid = await page.evaluate((meta) => window.fixture.framesOf(meta), meta({ ...grid, frame_width: 0 }));
+  expect(invalid.error).toEqual({ name: "InvalidInput", message: "invalid texture meta: grid.frame_width must be at least 1" });
+});
+
+test("bad_json_is_named_InvalidInput", async ({ page }) => {
+  const { pageErrors } = await start(page);
+  const errors = await page.evaluate(() => window.fixture.badInputs());
+  for (const [input, error] of Object.entries(errors)) {
+    expect(error?.name, input).toBe("InvalidInput");
+    expect(error?.message, input).not.toBe("");
+  }
+  expect(errors.bytes?.message).toMatch(/^the 3 bytes are not a render frame in postcard: /);
+  expect(errors.pngCount?.message).toBe("0 texture sources need as many PNGs, but 1 were given");
+  // The renderer still draws.
+  expect(await page.evaluate(() => window.fixture.drawError())).toBeNull();
+  expect(pageErrors).toEqual([]);
+});
+
+test("a_panic_reaches_the_handler", async ({ page }) => {
+  await start(page);
+  const { received, thrown } = await page.evaluate(() => window.fixture.panicked());
+  expect(thrown).toBe(true);
+  expect(received).toHaveLength(1);
+  expect(received[0]).toContain("a panic on purpose");
 });

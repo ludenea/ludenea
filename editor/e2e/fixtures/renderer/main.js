@@ -2,7 +2,7 @@
 // editor/e2e/fixtures/renderer/pkg`) drawing into a 128 by 128 canvas, for renderer.spec.ts.
 // The camera shows 8 by 8 world units around (2, 0): 16 pixels per unit, world (x, y) at pixel
 // (32 + 16 x, 64 - 16 y).
-import init, { WebRenderer } from "./pkg/ludenea_render.js";
+import init, { WebRenderer, panicForTesting, setPanicHandler, textureFrames } from "./pkg/ludenea_render.js";
 
 const SIZE = 128;
 const SPRITES = "00000000000000000000000000000001";
@@ -176,14 +176,81 @@ function drawSprites(count, placed, points) {
   return { report: draw(frame(sprites)), pixels: pixels(points) };
 }
 
-/** Draws an empty frame: the renderer's error, or null when it drew. */
-function drawError() {
+/** The `name` and `message` of what `run` throws, or null when it returns. */
+function errorOf(run) {
   try {
-    draw(frame([]));
+    run();
     return null;
   } catch (error) {
-    return String(error);
+    return { name: error.name, message: error.message };
   }
+}
+
+/** Draws an empty frame: the renderer's error, or null when it drew. */
+function drawError() {
+  return errorOf(() => draw(frame([])));
+}
+
+/**
+ * Pushes `frame.json` as JSON and draws it, then the same frame in postcard (`frame.postcard`)
+ * and draws it: each push's report and the pixels at `points`.
+ */
+async function pushBothWays(points) {
+  const [json, bytes] = await Promise.all([
+    fetch("frame.json").then((response) => response.text()),
+    fetch("frame.postcard").then(async (response) => new Uint8Array(await response.arrayBuffer())),
+  ]);
+  const drawn = (push) => {
+    const report = JSON.parse(push());
+    renderer.draw(1, undefined);
+    return { report, pixels: pixels(points) };
+  };
+  const overlay = JSON.stringify({ debug_layers: ["physics"] });
+  const fromJson = drawn(() => renderer.push_frame(json, overlay));
+  // A blank frame between, so the second draw cannot show the first one's pixels.
+  draw(frame([]));
+  const fromBytes = drawn(() => renderer.push_frame_bytes(bytes, overlay));
+  return { fromJson, fromBytes };
+}
+
+/** What the renderer answers about the frame pushed last, at CSS pixel `[x, y]`. */
+function answers([x, y], entities) {
+  return {
+    picked: JSON.parse(renderer.pick(x, y, undefined)),
+    pickedThroughAFreeCamera: JSON.parse(renderer.pick(x, y, JSON.stringify({ center: { x: 3, y: 0 }, view: { x: 8, y: 8 } }))),
+    bounds: JSON.parse(renderer.bounds(JSON.stringify(entities)) ?? "null"),
+    world: JSON.parse(renderer.screen_to_world(x, y, 1, undefined)),
+    background: JSON.parse(renderer.screen_to_world(x, y, 0, undefined)),
+  };
+}
+
+/** The frames `textureFrames` cuts sprites.png into, with `meta`, or the error it throws. */
+async function framesOf(meta) {
+  const png = new Uint8Array(await (await fetch("sprites.png")).arrayBuffer());
+  try {
+    return { frames: JSON.parse(textureFrames(png, JSON.stringify(meta))) };
+  } catch (error) {
+    return { error: { name: error.name, message: error.message } };
+  }
+}
+
+/** Each kind of input the renderer cannot read: the error each throws. */
+function badInputs() {
+  return {
+    json: errorOf(() => renderer.push_frame("{", "{}")),
+    overlay: errorOf(() => renderer.push_frame(JSON.stringify(frame([])), "[")),
+    bytes: errorOf(() => renderer.push_frame_bytes(new Uint8Array([255, 255, 255]), "{}")),
+    camera: errorOf(() => renderer.draw(1, "{")),
+    pngCount: errorOf(() => renderer.set_textures("[]", [new Uint8Array([1])])),
+  };
+}
+
+/** Sets a panic handler, then panics in the module: what the handler received. */
+function panicked() {
+  const received = [];
+  setPanicHandler((message) => received.push(message));
+  const thrown = errorOf(() => panicForTesting("a panic on purpose"));
+  return { received, thrown: thrown !== null };
 }
 
 /** The renderer's WebGPU device, which the canvas is configured with. */
@@ -207,7 +274,7 @@ async function createOn(width, height) {
     (await WebRenderer.create(other)).free();
     return null;
   } catch (error) {
-    return String(error);
+    return { name: error.name, message: error.message };
   }
 }
 
@@ -215,4 +282,20 @@ function resize(width, height) {
   renderer.resize(width, height, 1);
 }
 
-window.fixture = { start, drawReference, drawAfterGap, redraw, drawSprites, drawError, failOnTheDevice, loseTheDevice, createOn, resize };
+window.fixture = {
+  start,
+  drawReference,
+  drawAfterGap,
+  redraw,
+  drawSprites,
+  drawError,
+  failOnTheDevice,
+  loseTheDevice,
+  createOn,
+  resize,
+  pushBothWays,
+  answers,
+  framesOf,
+  badInputs,
+  panicked,
+};

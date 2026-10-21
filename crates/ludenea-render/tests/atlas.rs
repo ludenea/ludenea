@@ -266,8 +266,8 @@ fn grid_larger_than_image_is_refused_naming_sizes() {
         [TextureError::Grid {
             id: AssetId(1),
             path: Some("art/hero.png".to_string()),
-            image: (4, 4),
-            grid: meta.grid.unwrap(),
+            reason: "a grid of 8x8 frames with margin 0 and spacing 0 does not cut the 4x4 image into whole frames"
+                .to_string(),
         }]
     );
     let message = atlas.errors[0].to_string();
@@ -289,8 +289,8 @@ fn partial_last_frame_is_refused() {
         [TextureError::Grid {
             id: AssetId(1),
             path: Some("art/hero.png".to_string()),
-            image: (6, 2),
-            grid: meta.grid.unwrap(),
+            reason: "a grid of 2x2 frames with margin 0 and spacing 1 does not cut the 6x2 image into whole frames"
+                .to_string(),
         }]
     );
     let message = error[0].to_string();
@@ -317,8 +317,8 @@ fn margin_leaving_a_partial_frame_is_refused() {
         [TextureError::Grid {
             id: AssetId(1),
             path: Some("art/hero.png".to_string()),
-            image: (7, 2),
-            grid: meta.grid.unwrap(),
+            reason: "a grid of 2x2 frames with margin 1 and spacing 0 does not cut the 7x2 image into whole frames"
+                .to_string(),
         }]
     );
 }

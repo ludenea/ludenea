@@ -1,9 +1,10 @@
 //! Rendering: the simulated render components (sprites, their animation, the camera and
 //! tilemaps), the `animate` system, the extraction of a world into a render frame, atlas
-//! packing, and the camera's math. All of it depends on no GPU crate, so the simulation never
-//! pulls one; the wgpu renderer is `gpu`, behind the feature of the same name, which
-//! interpolates between two frames on the GPU, and `web` (feature `web`, browser only) draws
-//! with it into a canvas.
+//! packing and the frames a texture's meta cuts, the camera's math, and picking (what a point
+//! on screen hits, what a selection spans). All of it depends on no GPU crate, so the
+//! simulation never pulls one; the wgpu renderer is `gpu`, behind the feature of the same
+//! name, which interpolates between two frames on the GPU, and `web` (feature `web`, browser
+//! only) draws with it into a canvas.
 
 pub mod animate;
 pub mod atlas;
@@ -14,6 +15,7 @@ pub mod extract;
 pub mod gpu;
 #[cfg(feature = "gpu")]
 mod interpolate;
+pub mod pick;
 pub mod sheet;
 #[cfg(all(feature = "web", target_arch = "wasm32", target_os = "unknown"))]
 pub mod web;

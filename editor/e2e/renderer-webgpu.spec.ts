@@ -9,11 +9,21 @@ test("a_gpu_error_raised_between_draws_is_returned_by_the_next_draw", async ({ p
   await start(page);
   expect(await page.evaluate(() => window.fixture.drawError())).toBeNull();
   await page.evaluate(() => window.fixture.failOnTheDevice());
-  await expect.poll(() => page.evaluate(() => window.fixture.drawError())).toMatch(/^earlier GPU work failed on the GPU: .*invalid on purpose/s);
+  await expect
+    .poll(() => page.evaluate(() => window.fixture.drawError()))
+    .toEqual({ name: "Gpu", message: expect.stringMatching(/^earlier GPU work failed on the GPU: .*invalid on purpose/s) });
   // Reported once.
   expect(await page.evaluate(() => window.fixture.drawError())).toBeNull();
   await page.evaluate(() => window.fixture.loseTheDevice());
-  await expect.poll(() => page.evaluate(() => window.fixture.drawError())).toMatch(/^the GPU device was lost: /);
+  await expect.poll(() => page.evaluate(() => window.fixture.drawError())).toMatchObject({ message: expect.stringMatching(/^the GPU device was lost: /) });
   // Every draw after the loss.
-  expect(await page.evaluate(() => window.fixture.drawError())).toMatch(/^the GPU device was lost: /);
+  expect(await page.evaluate(() => window.fixture.drawError())).toMatchObject({ message: expect.stringMatching(/^the GPU device was lost: /) });
+});
+
+test("device_lost_error_is_named_DeviceLost", async ({ page }) => {
+  await start(page);
+  await page.evaluate(() => window.fixture.loseTheDevice());
+  // Named so the page recreates the renderer, whatever the canvas does with a lost device.
+  await expect.poll(() => page.evaluate(() => window.fixture.drawError())).toMatchObject({ name: "DeviceLost" });
+  expect(await page.evaluate(() => window.fixture.drawError())).toMatchObject({ name: "DeviceLost" });
 });

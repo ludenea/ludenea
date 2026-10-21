@@ -42,6 +42,30 @@ hash, those of the golden trace and replays included.
 
 ### Rust API
 
+- `ludenea_render` answers without a GPU what the renderer draws: `atlas::frames_of(png,
+  meta)` gives the `TextureFrames` (the image size and each `FrameRect`, row-major, with its
+  pivot) a meta cuts a PNG into, the same cut `pack` makes, or a `FramesError` (`Decode`,
+  `Grid`) naming the cause; `camera::screen_to_world` is the inverse of `world_to_clip` for a
+  layer; `pick::pick` lists the entities whose drawn sprite quad (a missing texture's 1 by 1
+  placeholder included) or painted tilemap cell lies under a screen point, topmost first; and
+  `pick::bounds` gives the world box of entities drawn on layers of parallax 1.
+  `gpu::Size` moves to `camera::Size` (still reachable as `gpu::Size`), and
+  `Renderer::regions` gives the regions of the atlas set last.
+- Breaking: `TextureError::Grid` holds the `reason` (`FramesError::Grid`'s message) instead
+  of the `image` size and the `grid`; its message is unchanged.
+- `WebRenderer::push_frame_bytes(bytes, overlay)` pushes a frame in the control protocol's
+  postcard encoding (`ludenea_control::protocol::encode_frame`), as the session's worker sends
+  it. `push_frame` and `push_frame_bytes` return `{ tick, missing, debug }`: the frame's tick
+  and debug draw beside what is drawn as a placeholder. `pick(x, y, camera)`,
+  `bounds(entities)` and `screen_to_world(x, y, parallax, camera)` answer for the frame pushed
+  last, in CSS pixels. The free functions `textureFrames(png, meta)`, `ghostFrame(frame)` (the
+  ghost style of a debug draw, as `ludenea_draw`'s viewport renderer has it) and
+  `setPanicHandler(handler)` (called with the message of any panic in the module) join it.
+- Breaking: every `WebRenderer` error is a JavaScript `Error` whose `name` says what failed
+  (`NoAdapter`, `Gpu`, `Limit`, `DeviceLost`, `InvalidAtlas`, `InvalidInput`, `Surface`,
+  `NoSurfaceTexture`) and whose `message` is the cause, instead of a string. A lost device is
+  reported by `draw` as `DeviceLost` before the canvas is asked for a texture. The standalone
+  web page tells a canvas without a texture this frame by the name `NoSurfaceTexture`.
 - `Claim::describe` names a claim's devices in words ("left keyboard half and gamepad 1");
   the native window's title and the web page's lobby (`WebLobby::describeClaims`, a JSON
   array of those texts in slot order) both show it.

@@ -1,0 +1,81 @@
+{
+  "tick": 7,
+  "camera": { "entity": { "index": 1000, "generation": 0 }, "center": { "x": 2, "y": 0 }, "view": { "x": 8, "y": 8 } },
+  "layers": [
+    { "name": "background", "parallax": 0 },
+    { "name": "world", "parallax": 1 }
+  ],
+  "sprites": [
+    {
+      "entity": { "index": 1, "generation": 0 },
+      "layer": 1,
+      "order": 0,
+      "texture": "00000000000000000000000000000001",
+      "frame": 0,
+      "position": { "x": 0, "y": 2 },
+      "rotation": { "cos": 1, "sin": 0 },
+      "flip_x": false,
+      "flip_y": false,
+      "tint": 4294967295
+    },
+    {
+      "entity": { "index": 2, "generation": 0 },
+      "layer": 1,
+      "order": 0,
+      "texture": "00000000000000000000000000000001",
+      "frame": 0,
+      "position": { "x": 4, "y": 2 },
+      "rotation": { "cos": 1, "sin": 0 },
+      "flip_x": true,
+      "flip_y": false,
+      "tint": 4294967295
+    },
+    {
+      "entity": { "index": 3, "generation": 0 },
+      "layer": 0,
+      "order": 0,
+      "texture": "00000000000000000000000000000001",
+      "frame": 1,
+      "position": { "x": 0, "y": -1 },
+      "rotation": { "cos": 1, "sin": 0 },
+      "flip_x": false,
+      "flip_y": false,
+      "tint": 4294967295
+    }
+  ],
+  "tilemaps": [
+    {
+      "entity": { "index": 4, "generation": 0 },
+      "layer": 1,
+      "order": 0,
+      "tileset": "00000000000000000000000000000002",
+      "position": { "x": 0, "y": -3 },
+      "cell_size": { "x": 1, "y": 1 },
+      "width": 2,
+      "height": 1,
+      "tiles": [0, null]
+    }
+  ],
+  "teleported": [],
+  "debug": {
+    "layers": {
+      "physics": [
+        {
+          "entity": { "index": 5, "generation": 0 },
+          "primitive": {
+            "type": "polygon",
+            "points": [
+              { "x": 3, "y": -3 },
+              { "x": 5, "y": -3 },
+              { "x": 5, "y": -1 },
+              { "x": 3, "y": -1 }
+            ],
+            "color": 811659519,
+            "fill": false
+          }
+        }
+      ]
+    }
+  },
+  "warnings": []
+}

@@ -23,8 +23,8 @@ const SHORTCUTS = new Set(["KeyR", "KeyW", "KeyL", "KeyT", "KeyQ"]);
 const META = new Set(["MetaLeft", "MetaRight"]);
 /** The modifier keys, which report their own keyup. */
 const MODIFIER_KEYS = new Set([...META, "ShiftLeft", "ShiftRight", "ControlLeft", "ControlRight", "AltLeft", "AltRight"]);
-/** The renderer's message for a canvas without a texture this frame, which passes. */
-const TRANSIENT_DRAW = "draw again on the next frame";
+/** The name of the renderer's error for a canvas without a texture this frame, which passes. */
+const TRANSIENT_DRAW = "NoSurfaceTexture";
 /** Consecutive transient draw failures, about two seconds of frames, after which the page
  * gives up and says why. */
 const MAX_TRANSIENT_DRAWS = 120;
@@ -170,10 +170,10 @@ function animate() {
       document.body.dataset.draws = String(++draws);
     }
   } catch (error) {
-    const message = String(error);
-    // A canvas without a texture this frame draws again on the next one; it says so. Any
-    // other error, or one that never passes, stops the page with its cause.
-    if (!message.includes(TRANSIENT_DRAW) || ++transientDraws > MAX_TRANSIENT_DRAWS) {
+    const message = error instanceof Error ? error.message : String(error);
+    // A canvas without a texture this frame draws again on the next one; the renderer names
+    // that error. Any other error, or one that never passes, stops the page with its cause.
+    if (error?.name !== TRANSIENT_DRAW || ++transientDraws > MAX_TRANSIENT_DRAWS) {
       return fail(`the game cannot be drawn: ${message}`, { keepWorker: true });
     }
     console.warn(message);

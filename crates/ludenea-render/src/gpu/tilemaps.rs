@@ -42,7 +42,7 @@ impl Cache {
     }
 
     /// Builds the chunks of each item whose tiles changed, and forgets the tilemaps not in
-    /// `items`, which are `well_formed` and hold at most one item per entity (two would
+    /// `items`, which are `pick::well_formed` and hold at most one item per entity (two would
     /// rebuild each other's chunks on every call).
     pub fn update(
         &mut self,
@@ -74,12 +74,6 @@ impl Cache {
     }
 }
 
-/// Whether `item` has one tile per cell. Extraction refuses other tilemaps, but a frame from
-/// the control protocol may hold one: it is not drawn, and its cells are never walked.
-pub(super) fn well_formed(item: &TilemapItem) -> bool {
-    item.tiles.len() as u64 == u64::from(item.width) * u64::from(item.height)
-}
-
 /// Whether `a` and `b` have the same chunks: everything but where they are and draw.
 fn same_tiles(a: &TilemapItem, b: &TilemapItem) -> bool {
     a.tileset == b.tileset
@@ -107,7 +101,7 @@ fn build(
     };
     let (cell_width, cell_height) = (item.cell_size.x, item.cell_size.y);
     let size = [cell_width, cell_height];
-    // `well_formed` already holds; this keeps the walk bounded by the tiles regardless.
+    // `pick::well_formed` already holds; this keeps the walk bounded by the tiles regardless.
     let rows = match u64::from(item.width) {
         0 => 0,
         width => (item.tiles.len() as u64)

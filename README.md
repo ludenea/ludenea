@@ -396,6 +396,7 @@ The front end lives in `editor/` (pnpm workspace; Node.js 24 and the pnpm versio
 ```sh
 pnpm -C editor install --frozen-lockfile
 pnpm -C editor build:wasm              # viewport renderer, before typecheck and build
+pnpm -C editor build:render            # browser renderer, into editor/packages/render-wasm
 pnpm -C editor typecheck
 pnpm -C editor test
 pnpm -C editor build
@@ -426,7 +427,11 @@ browser renderer (`ludenea-render` with its `web` feature) and run twice, once p
 with no GPU: the `webgl2` project on WebGL2 (SwiftShader through ANGLE), and the `webgpu`
 project on WebGPU, where headless Chromium offers SwiftShader's adapter with
 `--enable-unsafe-webgpu`, on macOS and Linux alike. The `webgpu` project fails, never skips,
-when the browser offers no WebGPU adapter. Run them alone with:
+when the browser offers no WebGPU adapter. They also check what the page asks the renderer
+without drawing (picking, bounds, a texture's frames) and that its errors are named. The page
+pushes `fixtures/renderer/frame.json` both as JSON and in postcard (`frame.postcard`, which a
+Rust test checks against it); after a change to either, write it again with
+`LUDENEA_WRITE_FIXTURES=1 cargo test -p ludenea-render --test web_fixture`. Run them alone with:
 
 ```sh
 pnpm -C editor e2e renderer.spec.ts

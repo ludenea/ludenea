@@ -9,6 +9,7 @@ use ludenea_math::{Rot, Vec2};
 
 use crate::atlas::Region;
 use crate::interpolate::SpriteMotion;
+use crate::pick::sprite_extent;
 
 /// The floats of one instance, in the shader's `Instance` order: the centre at the previous
 /// tick and at the current one, the rotation at the previous tick (two each), the arc to the
@@ -64,71 +65,40 @@ pub(super) fn uv(region: &Region, page: (u32, u32)) -> (Sample, [f32; 4]) {
 
 /// The sprite's instance in world space, moving by `motion` between the two ticks, and what
 /// it samples, or `None` for the sample when its region is missing and it is drawn as a
-/// placeholder.
+/// placeholder. Its quad is `pick::sprite_extent`'s, so a click hits what is drawn.
 pub(super) fn instance(
     item: &SpriteItem,
     motion: &SpriteMotion,
     regions: &BTreeMap<(AssetId, u32), Region>,
     pages: &[(u32, u32)],
 ) -> (Option<Sample>, Instance) {
-    match find(regions, pages, item.texture, item.frame) {
+    let found = find(regions, pages, item.texture, item.frame);
+    let extent = sprite_extent(item, found.map(|(region, _)| region));
+    let (sample, uv, tint) = match found {
         Some((region, page)) => {
             let (sample, uv) = uv(region, page);
-            (
-                Some(sample),
-                place(item, motion, textured(item, region, uv)),
-            )
+            (Some(sample), uv, tint(item))
         }
-        None => (None, place(item, motion, placeholder())),
-    }
+        None => (None, [0.0, 0.0, 1.0, 1.0], PLACEHOLDER),
+    };
+    let quad = Quad {
+        offset: [extent.offset.x, extent.offset.y],
+        size: [extent.size.x, extent.size.y],
+        uv,
+        tint,
+    };
+    (sample, instance_of(motion, &quad))
 }
 
 /// A quad before it is placed: its bottom-left corner and size in world units from the
-/// pivot, its uv rectangle (min then size), and its tint.
+/// pivot (a flip negates both on its axis, mirroring the quad around the pivot), its uv
+/// rectangle (min then size), and its tint. The shader moves and turns it between the two
+/// ticks, and the layer's view puts it in clip space.
 struct Quad {
     offset: [f32; 2],
     size: [f32; 2],
     uv: [f32; 4],
     tint: [f32; 4],
-}
-
-/// The region's quad: `region size / pixels_per_unit` world units, its pivot on the position.
-fn textured(item: &SpriteItem, region: &Region, uv: [f32; 4]) -> Quad {
-    let unit = region.pixels_per_unit as f32;
-    let (width, height) = (region.width as f32, region.height as f32);
-    let (pivot_x, pivot_y) = (region.pivot.0 as f32, region.pivot.1 as f32);
-    Quad {
-        // The pivot counts from the top-left, the quad's local +y is up.
-        offset: [-pivot_x / unit, -(height - pivot_y) / unit],
-        size: [width / unit, height / unit],
-        uv,
-        tint: tint(item),
-    }
-}
-
-/// One magenta world unit centred on the position, sampling the blank texture.
-fn placeholder() -> Quad {
-    Quad {
-        offset: [-0.5, -0.5],
-        size: [1.0, 1.0],
-        uv: [0.0, 0.0, 1.0, 1.0],
-        tint: PLACEHOLDER,
-    }
-}
-
-/// Places a quad on the sprite's motion in world space: flips mirror it around the pivot, and
-/// the shader moves and turns it between the two ticks. The layer's view puts it in clip
-/// space on the GPU.
-fn place(item: &SpriteItem, motion: &SpriteMotion, mut quad: Quad) -> Instance {
-    if item.flip_x {
-        quad.offset[0] = -quad.offset[0];
-        quad.size[0] = -quad.size[0];
-    }
-    if item.flip_y {
-        quad.offset[1] = -quad.offset[1];
-        quad.size[1] = -quad.size[1];
-    }
-    instance_of(motion, &quad)
 }
 
 /// An unrotated quad at `center`, in world space, still between the ticks: a tile of a
