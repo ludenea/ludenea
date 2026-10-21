@@ -139,14 +139,13 @@ pub(crate) mod text {
 
     /// A host behind a text transport that also hands out the raw frame text: the messages
     /// `answer` gives, plus `render_frame_json`, the encoding of `get_render_frame` reduced to
-    /// its frame. The events that call causes wait in `pending` and come first in the next
-    /// `handle` or `advance`, so none is lost and their order is kept. The Web Worker's
+    /// its frame. The events that call causes stay in the host's queue, so the next `handle`
+    /// or `advance` delivers them first, in order, as for any command. The Web Worker's
     /// transport; the standard streams answer with `answer` alone.
     #[cfg(any(test, all(target_arch = "wasm32", target_os = "unknown")))]
     pub(crate) struct TextHost {
         pub(crate) host: Host,
         connected: bool,
-        pending: Vec<ServerMessage>,
     }
 
     #[cfg(any(test, all(target_arch = "wasm32", target_os = "unknown")))]
@@ -155,35 +154,29 @@ pub(crate) mod text {
             TextHost {
                 host,
                 connected: false,
-                pending: Vec::new(),
             }
         }
 
-        /// The messages `answer` gives for `line`, after the events still pending.
+        /// The messages `answer` gives for `line`; nothing for a blank line.
         pub(crate) fn handle(&mut self, line: &str) -> Vec<ServerMessage> {
-            let mut messages = std::mem::take(&mut self.pending);
-            if !line.trim().is_empty() {
-                messages.extend(answer(&mut self.host, &mut self.connected, line));
+            if line.trim().is_empty() {
+                return Vec::new();
             }
-            messages
+            answer(&mut self.host, &mut self.connected, line)
         }
 
-        /// The events of `elapsed_seconds` of play and resimulation, after the events still
-        /// pending.
+        /// The events of `elapsed_seconds` of play and resimulation, after those queued
+        /// before.
         pub(crate) fn advance(&mut self, elapsed_seconds: f64) -> Vec<ServerMessage> {
-            let mut messages = std::mem::take(&mut self.pending);
-            messages.extend(
-                self.host
-                    .advance(elapsed_seconds)
-                    .into_iter()
-                    .map(|event| ServerMessage::Event { event }),
-            );
-            messages
+            self.host
+                .advance(elapsed_seconds)
+                .into_iter()
+                .map(|event| ServerMessage::Event { event })
+                .collect()
         }
 
         /// Runs `get_render_frame` as a request would, refused before the hello as `answer`
-        /// refuses a request (`NotConnected`), and returns the frame as JSON; the events it
-        /// causes become pending.
+        /// refuses a request (`NotConnected`), and returns the frame as JSON.
         pub(crate) fn render_frame_json(
             &mut self,
             debug_layers: Vec<String>,
@@ -194,14 +187,7 @@ pub(crate) mod text {
                     "send Hello before any request",
                 ));
             }
-            let result = self.host.handle(Command::GetRenderFrame { debug_layers });
-            self.pending.extend(
-                self.host
-                    .drain_events()
-                    .into_iter()
-                    .map(|event| ServerMessage::Event { event }),
-            );
-            match result? {
+            match self.host.handle(Command::GetRenderFrame { debug_layers })? {
                 Reply::RenderFrame { frame } => {
                     Ok(serde_json::to_string(&frame).expect("a render frame serializes"))
                 }
@@ -423,27 +409,37 @@ mod tests {
     fn events_around_the_raw_frame_come_with_the_next_call_in_order() {
         let mut text = TextHost::new(Host::new(boxes::app).unwrap());
         text.handle(&hello());
+        let load = || Command::LoadScene {
+            scene: boxes::generate_scene(5, 7),
+            assets: Vec::new(),
+            document: Document::Scene,
+        };
+        // The events a load queues, from a twin host.
+        let mut twin = Host::new(boxes::app).unwrap();
+        twin.handle(load()).unwrap();
+        let queued = twin.drain_events();
         // A command run on the host directly leaves its events queued, as a command the raw
         // frame runs would.
-        text.host
-            .handle(Command::LoadScene {
-                scene: boxes::generate_scene(5, 7),
-                assets: Vec::new(),
-                document: Document::Scene,
-            })
-            .unwrap();
+        text.host.handle(load()).unwrap();
         text.render_frame_json(Vec::new()).unwrap();
-        let next = text.advance(0.0);
-        assert!(
-            next.iter().any(|message| matches!(
-                message,
-                ServerMessage::Event {
-                    event: Event::Ticked { tick: 0, .. }
-                }
-            )),
-            "{next:?}"
-        );
-        // Delivered once.
+        // The next request's reply holds them, in the order they were queued, before its
+        // response; nothing comes twice.
+        let request =
+            serde_json::json!({ "type": "request", "id": 9, "command": Command::GetHash });
+        let replied = text.handle(&request.to_string());
+        let events: Vec<ServerMessage> = queued
+            .into_iter()
+            .map(|event| ServerMessage::Event { event })
+            .collect();
+        assert!(!events.is_empty());
+        assert_eq!(replied[..replied.len() - 1], events[..]);
+        assert!(matches!(
+            replied.last(),
+            Some(ServerMessage::Response {
+                id: 9,
+                result: Ok(Reply::Hash { .. })
+            })
+        ));
         assert!(text.advance(0.0).is_empty());
     }
 }
