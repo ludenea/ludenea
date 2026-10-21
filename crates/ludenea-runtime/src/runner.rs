@@ -19,7 +19,13 @@ pub struct GameFiles {
     pub scene: String,
     /// The prefab and data asset texts the scene may reach.
     pub assets: Vec<(AssetId, String)>,
-    /// An encoded edit log to apply as the match plays, if any.
+    /// An encoded edit log, if any: the game starts from the edited state. Edits at tick 0
+    /// are part of the starting state. An edit recorded at a later tick applies only while
+    /// the match follows the recorded future: live input that differs from it (any held
+    /// device, while no inputs are recorded) at a tick before the edit takes over and forks a
+    /// branch there, as in the editor, and the new branch holds none of the edits after that
+    /// tick. `Runner::export_replay` exports the branch that was played, so its replay then
+    /// leaves those edits out.
     pub edits: Option<Vec<u8>>,
 }
 
