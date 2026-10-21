@@ -1,0 +1,27 @@
+[package]
+name = "ludenea-runtime"
+version = "0.1.0"
+edition.workspace = true
+
+[features]
+# The native window: winit, gilrs, and the wgpu renderer, on native targets only. Without it the
+# runtime depends on no window, gamepad, or GPU crate.
+native = ["dep:winit", "dep:gilrs", "dep:ludenea-render"]
+
+[dependencies]
+ludenea-app.workspace = true
+ludenea-control.workspace = true
+ludenea-draw.workspace = true
+ludenea-ecs.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+gilrs = { workspace = true, optional = true }
+ludenea-render = { workspace = true, optional = true, features = ["gpu"] }
+winit = { workspace = true, optional = true }
+
+[dev-dependencies]
+ludenea.workspace = true
+postcard.workspace = true
+serde.workspace = true
+swarm = { path = "../../examples/swarm" }

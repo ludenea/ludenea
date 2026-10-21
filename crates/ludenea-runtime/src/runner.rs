@@ -1,0 +1,242 @@
+//! The runner: drives the in-process control host for a game that plays on its own (a native
+//! window, a web page). It loads the game, starts the match with its players' claims, and per
+//! displayed frame sends the live devices, lets the host's pacer run the ticks due, and fetches
+//! the render frame of the newest tick. Every step goes through host commands, so a played
+//! match records the same session as the editor.
+
+use ludenea_app::App;
+use ludenea_app::players::{Claim, LiveDevices};
+use ludenea_control::{Bytes, Command, Document, Event, Host, PauseReason, ProtocolError, Reply};
+use ludenea_draw::frame::RenderFrame;
+use ludenea_ecs::AssetId;
+
+/// The files a game runs from, in file form.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GameFiles {
+    /// The scene text.
+    pub scene: String,
+    /// The prefab and data asset texts the scene may reach.
+    pub assets: Vec<(AssetId, String)>,
+    /// An encoded edit log to apply as the match plays, if any.
+    pub edits: Option<Vec<u8>>,
+}
+
+/// What one displayed frame did.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FrameUpdate {
+    /// Whether ticks ran: `Runner::frames` holds new frames to upload.
+    pub new_frames: bool,
+    /// The fraction of the next tick that passed, from 0 to below 1: what the renderer
+    /// interpolates the last two ticks with.
+    pub alpha: f32,
+    /// The tick of the current state.
+    pub tick: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, thiserror::Error)]
+pub enum RuntimeError {
+    #[error("cannot load the game: {0}")]
+    Load(String),
+    /// The game failed or panicked while it ran `tick`.
+    #[error("the game failed at tick {tick}: {message}")]
+    Game { tick: u64, message: String },
+    #[error("the GPU failed: {0}")]
+    Gpu(String),
+    #[error("the window failed: {0}")]
+    Window(String),
+}
+
+/// A game played through its control host.
+pub struct Runner {
+    host: Host,
+    debug_layers: Vec<String>,
+    /// The devices last sent with `SetLiveInput`, `None` before the first frame.
+    sent: Option<LiveDevices>,
+    previous: Option<RenderFrame>,
+    current: Option<RenderFrame>,
+}
+
+impl Runner {
+    /// Builds the game, loads its scene and edits, and sets its thread count (the host's
+    /// default when `None`). `debug_layers` are drawn in every render frame.
+    pub fn load(
+        app: fn() -> App,
+        files: &GameFiles,
+        threads: Option<usize>,
+        debug_layers: Vec<String>,
+    ) -> Result<Runner, RuntimeError> {
+        let host = Host::new(app).map_err(|error| RuntimeError::Load(error.to_string()))?;
+        let mut runner = Runner {
+            host,
+            debug_layers,
+            sent: None,
+            previous: None,
+            current: None,
+        };
+        runner.setup(Command::LoadScene {
+            scene: files.scene.clone(),
+            assets: files.assets.clone(),
+            document: Document::Scene,
+        })?;
+        if let Some(edits) = &files.edits {
+            runner.setup(Command::LoadEdits {
+                log: Bytes(edits.clone()),
+            })?;
+        }
+        if let Some(threads) = threads {
+            let threads = u32::try_from(threads).map_err(|_| {
+                RuntimeError::Load(format!("{threads} threads is more than the game can run"))
+            })?;
+            runner.setup(Command::SetThreads { threads })?;
+        }
+        Ok(runner)
+    }
+
+    /// Starts the match with one player per claim, and fetches the frame of its first tick.
+    pub fn start(&mut self, claims: Vec<Claim>) -> Result<(), RuntimeError> {
+        let players = u16::try_from(claims.len()).map_err(|_| {
+            RuntimeError::Load(format!(
+                "{} players is more than a game holds",
+                claims.len()
+            ))
+        })?;
+        self.setup(Command::SetPlayers {
+            players,
+            claims: Some(claims),
+        })?;
+        self.setup(Command::Play)?;
+        self.current = Some(self.render_frame()?);
+        self.previous = None;
+        Ok(())
+    }
+
+    /// Lets `elapsed_seconds` of play pass with `devices` held: the host's pacer runs the
+    /// ticks due, at most its cap per frame however long the frame took. A game that fails
+    /// or panics is a `Game` error naming the tick.
+    pub fn frame(
+        &mut self,
+        elapsed_seconds: f64,
+        devices: &LiveDevices,
+    ) -> Result<FrameUpdate, RuntimeError> {
+        if let Some(command) = self.live_input(devices) {
+            self.host
+                .handle(command)
+                .map_err(|error| self.game_error(error))?;
+        }
+        let mut ticked = false;
+        for event in self.host.advance(elapsed_seconds) {
+            match event {
+                Event::Ticked { .. } => ticked = true,
+                Event::Paused { reason } => match reason {
+                    PauseReason::Failed { tick, message }
+                    | PauseReason::Panicked { tick, message } => {
+                        return Err(RuntimeError::Game { tick, message });
+                    }
+                    // The runner never pauses: nothing else does while it runs.
+                    PauseReason::User => {}
+                },
+                _ => {}
+            }
+        }
+        if ticked {
+            let frame = self.render_frame()?;
+            self.previous = self.current.replace(frame);
+        }
+        Ok(FrameUpdate {
+            new_frames: ticked,
+            alpha: self.host.tick_progress() as f32,
+            tick: self.host.tick(),
+        })
+    }
+
+    /// The frames of the previous and the current tick, to interpolate between.
+    pub fn frames(&self) -> (Option<&RenderFrame>, Option<&RenderFrame>) {
+        (self.previous.as_ref(), self.current.as_ref())
+    }
+
+    /// The encoded replay of the match up to the current tick, after a failure too.
+    pub fn export_replay(&mut self) -> Result<Vec<u8>, RuntimeError> {
+        match self.host.handle(Command::ExportReplay { branch: None }) {
+            Ok(Reply::Replay { replay }) => Ok(replay.0),
+            Ok(other) => unreachable!("ExportReplay answers Replay, not {other:?}"),
+            Err(error) => Err(self.game_error(error)),
+        }
+    }
+
+    /// The tick of the current state.
+    pub fn tick(&self) -> u64 {
+        self.host.tick()
+    }
+
+    /// The `SetLiveInput` command for `devices`, or `None` when they are the ones last sent.
+    fn live_input(&mut self, devices: &LiveDevices) -> Option<Command> {
+        if self.sent.as_ref() == Some(devices) {
+            return None;
+        }
+        self.sent = Some(devices.clone());
+        Some(Command::SetLiveInput {
+            devices: devices.clone(),
+        })
+    }
+
+    fn render_frame(&mut self) -> Result<RenderFrame, RuntimeError> {
+        let command = Command::GetRenderFrame {
+            debug_layers: self.debug_layers.clone(),
+        };
+        match self.host.handle(command) {
+            Ok(Reply::RenderFrame { frame }) => Ok(frame),
+            Ok(other) => unreachable!("GetRenderFrame answers RenderFrame, not {other:?}"),
+            Err(error) => Err(self.game_error(error)),
+        }
+    }
+
+    /// Sends a command that loads or starts the game; a refusal is a `Load` error.
+    fn setup(&mut self, command: Command) -> Result<(), RuntimeError> {
+        self.host
+            .handle(command)
+            .map(|_| ())
+            .map_err(|error| RuntimeError::Load(error.message))
+    }
+
+    /// A refused command while the game runs, at the current tick.
+    fn game_error(&self, error: ProtocolError) -> RuntimeError {
+        RuntimeError::Game {
+            tick: self.host.tick(),
+            message: error.message,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ludenea_app::players::{LiveDevices, automatic_claims};
+
+    use super::*;
+
+    #[test]
+    fn devices_unchanged_send_no_command() {
+        let files = GameFiles {
+            scene: "Scene(version: 2, next_id: 0, resources: {}, entities: [])".to_string(),
+            assets: Vec::new(),
+            edits: None,
+        };
+        let mut runner = Runner::load(swarm::app, &files, None, Vec::new()).unwrap();
+        runner.start(automatic_claims(1)).unwrap();
+        let held = LiveDevices {
+            keys: ["KeyA".to_string()].into(),
+            gamepads: Vec::new(),
+        };
+        assert!(
+            runner.live_input(&LiveDevices::default()).is_some(),
+            "the first frame sends"
+        );
+        assert!(runner.live_input(&LiveDevices::default()).is_none());
+        assert!(runner.live_input(&held).is_some());
+        assert!(runner.live_input(&held).is_none());
+        runner.frame(1.0 / 60.0, &held).unwrap();
+        assert!(
+            runner.live_input(&held).is_none(),
+            "a frame remembers what it sent"
+        );
+    }
+}

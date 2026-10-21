@@ -48,6 +48,18 @@ hash, those of the golden trace and replays included.
   `Simulation::map_players` takes an `Option<RawInput>` per player and encodes
   `I::default()` for `None`; `map_raw_input` delegates to it. The prelude exports `Claim`,
   `KeyboardPart` and `LiveDevices`.
+- New crate `ludenea-runtime` runs a game on its own through the control host. `Runner`
+  loads `GameFiles` (scene, assets, optional edit log), `start`s the match with one `Claim`
+  per player, and per displayed `frame` sends the live devices when they changed, lets the
+  host's pacer run the ticks due (at most its cap, however long the frame took) and fetches
+  the render frame of the newest tick; `FrameUpdate` carries the interpolation `alpha`.
+  `export_replay` records the match, after a failure too. A game that fails or panics is
+  `RuntimeError::Game`, naming the tick. `stats::FrameStats` summarizes frame times as
+  percentiles. With the `native` feature, on native targets only, `native::keys::code_name`
+  names winit keys as `KeyboardEvent.code` does, and `native::gamepads` turns gilrs gamepads
+  into the Gamepad API standard layout (`standard`) and keeps each pad's slot while it is
+  unplugged (`Slots`). Without the feature the crate depends on no window, gamepad or GPU
+  crate. On Linux, the feature needs libudev's development files to build.
 - Breaking: the `ludenea-debug-draw` crate is renamed `ludenea-draw`, and the facade's
   `ludenea::debug_draw` is now `ludenea::draw`, with no alias. Its types keep their names.
 - `ludenea_draw::frame::RenderFrame` is what a renderer draws for one tick: the camera

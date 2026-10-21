@@ -20,6 +20,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install the pinned toolchain
         run: rustup toolchain install
+      # gilrs, the native window's gamepad library, builds against libudev on Linux.
+      - name: Install libudev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libudev-dev
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       # The desktop backend, outside the workspace with a lockfile of its own.
@@ -27,11 +32,13 @@ jobs:
       - run: cargo doc --locked --no-deps --workspace
       # The browser: the facade's entry, the Web Worker transport, the viewport renderer, and
       # the renderer on WebGPU and WebGL2.
-      - run: cargo clippy --locked --target wasm32-unknown-unknown -p ludenea -p ludenea-control -p boxes -p swarm --lib -- -D warnings
+      - run: cargo clippy --locked --target wasm32-unknown-unknown -p ludenea -p ludenea-control -p ludenea-runtime -p boxes -p swarm --lib -- -D warnings
       - run: cargo clippy --locked --target wasm32-unknown-unknown -p ludenea-draw --features render --lib -- -D warnings
       - run: cargo clippy --locked --target wasm32-unknown-unknown -p ludenea-render --features web --lib -- -D warnings
       # WebAssembly outside the browser: the command line tool that verifies the goldens.
       - run: cargo clippy --locked --target wasm32-wasip1 -p boxes --bins -- -D warnings
+      # The runner without a window, as a headless game build links it.
+      - run: cargo clippy --locked --target wasm32-wasip1 -p ludenea-runtime --lib -- -D warnings
 
   native:
     strategy:
@@ -51,15 +58,18 @@ jobs:
       - name: Install the pinned toolchain
         run: rustup toolchain install
       # The command line tool's render tests (crates/ludenea-cli/tests/render.rs) draw
-      # offscreen: see the render job for the adapter each runner uses.
-      - name: Install lavapipe
+      # offscreen: see the render job for the adapter each runner uses. gilrs, the native
+      # window's gamepad library, builds against libudev.
+      - name: Install lavapipe and libudev
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y mesa-vulkan-drivers
+          sudo apt-get install -y mesa-vulkan-drivers libudev-dev
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo clippy --locked -p ludenea-runtime --features native --all-targets -- -D warnings
       - id: tests
         run: cargo test --locked --workspace
+      - run: cargo test --locked -p ludenea-runtime --features native
       # A divergence fails the golden tests first, so the verify steps run once the tests ran,
       # passed or not, but not after a clippy failure. Every thread count runs, even after one
       # fails, and dumps into a folder of its own.
@@ -186,6 +196,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install the pinned toolchain
         run: rustup toolchain install
+      # gilrs, the native window's gamepad library, builds against libudev on Linux.
+      - name: Install libudev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libudev-dev
       # `target` holds the end-to-end projects' shared target directory, `target/e2e`, as well:
       # the action caches `target` whole and cleans the profiles it finds at any depth, so the
       # nested one is kept like the others.

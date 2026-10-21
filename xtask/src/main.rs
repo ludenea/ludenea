@@ -1,8 +1,8 @@
 //! Workspace tasks, run with `cargo xtask <task>`.
 //!
 //! `check` runs the lint checks CI runs: formatting (the engine and the desktop backend),
-//! clippy on the host (with and without the wgpu renderer) and on WebAssembly, and the API
-//! documentation, with warnings denied. It stops at the first that fails.
+//! clippy on the host (with and without the wgpu renderer and the native window) and on
+//! WebAssembly, and the API documentation, with warnings denied. It stops at the first that fails.
 //!
 //! `wasm-game <package> <out-dir>` builds a game library for the browser and writes its
 //! JavaScript glue (`game.js`) and module (`game_bg.wasm`) to `<out-dir>`.
@@ -33,15 +33,19 @@ const CHECKS: &[&str] = &[
     "clippy --locked --workspace --all-targets -- -D warnings",
     // The wgpu renderer, off in the workspace build.
     "clippy --locked -p ludenea-render --features gpu --all-targets -- -D warnings",
+    // The native window's keys and gamepads, off in the workspace build.
+    "clippy --locked -p ludenea-runtime --features native --all-targets -- -D warnings",
     // Warnings are denied through `RUSTDOCFLAGS`, which `check` sets.
     "doc --locked --no-deps --workspace",
     // The browser: the facade's entry, the Web Worker transport, the viewport renderer, and
     // the renderer on WebGPU and WebGL2.
-    "clippy --locked --target wasm32-unknown-unknown -p ludenea -p ludenea-control -p boxes -p swarm --lib -- -D warnings",
+    "clippy --locked --target wasm32-unknown-unknown -p ludenea -p ludenea-control -p ludenea-runtime -p boxes -p swarm --lib -- -D warnings",
     "clippy --locked --target wasm32-unknown-unknown -p ludenea-draw --features render --lib -- -D warnings",
     "clippy --locked --target wasm32-unknown-unknown -p ludenea-render --features web --lib -- -D warnings",
     // WebAssembly outside the browser: the command line tool that verifies the goldens.
     "clippy --locked --target wasm32-wasip1 -p boxes --bins -- -D warnings",
+    // The runner without a window, as a headless game build links it.
+    "clippy --locked --target wasm32-wasip1 -p ludenea-runtime --lib -- -D warnings",
 ];
 
 fn main() -> ExitCode {
@@ -217,7 +221,10 @@ mod tests {
         let mut missing = Vec::new();
         for command in super::CHECKS {
             let job = match *command {
-                "clippy --locked --workspace --all-targets -- -D warnings" => "native",
+                "clippy --locked --workspace --all-targets -- -D warnings"
+                | "clippy --locked -p ludenea-runtime --features native --all-targets -- -D warnings" => {
+                    "native"
+                }
                 "clippy --locked -p ludenea-render --features gpu --all-targets -- -D warnings" => {
                     "render"
                 }

@@ -37,6 +37,7 @@ for any thread count. The guarantee rests on:
 | `crates/ludenea-render`  | Render components, extraction, wgpu renderer    |
 | `crates/ludenea-control` | Versioned control protocol and host             |
 | `crates/ludenea-cli`     | `run`, `verify`, `diff`, and `render` commands  |
+| `crates/ludenea-runtime` | Game runner, native keys and gamepads           |
 | `crates/ludenea`         | Facade crate re-exporting the engine            |
 | `crates/ludenea-project` | Projects, builds, and plugin bundling           |
 | `crates/ludenea-serve`   | The `ludenea` tool: `new` and `serve`           |
@@ -60,9 +61,17 @@ absolute path: cargo runs the tests from `examples/boxes`, so a relative one res
 CI sets it to `dump/` in the checkout and uploads the dumps of a failing run as artifacts,
 one per operating system, target, and thread count.
 
+On Linux, the native window's gamepad library (gilrs) builds against libudev: install its
+development files first (`sudo apt-get install libudev-dev` on Debian and Ubuntu). The
+native window's own tests run with its feature on:
+
+```sh
+cargo test --locked -p ludenea-runtime --features native
+```
+
 Run the lint checks CI runs: formatting (the engine and the desktop backend), clippy on the
-host (with and without the wgpu renderer) and on WebAssembly, and the API documentation, with
-warnings denied:
+host (with and without the wgpu renderer and the native window) and on WebAssembly, and the
+API documentation, with warnings denied:
 
 ```sh
 cargo xtask check
