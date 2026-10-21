@@ -34,7 +34,13 @@ async function start() {
   return { backend: renderer.backend, errors };
 }
 
-function sprite(index, position, { layer = 1, order = 0, frame = 0, flip_x = false } = {}) {
+/** The rotation of `degrees`, counterclockwise. */
+function turn(degrees) {
+  const radians = (degrees * Math.PI) / 180;
+  return { cos: Math.cos(radians), sin: Math.sin(radians) };
+}
+
+function sprite(index, position, { layer = 1, order = 0, frame = 0, flip_x = false, degrees = 0 } = {}) {
   return {
     entity: entity(index),
     layer,
@@ -42,7 +48,7 @@ function sprite(index, position, { layer = 1, order = 0, frame = 0, flip_x = fal
     texture: SPRITES,
     frame,
     position: { x: position[0], y: position[1] },
-    rotation: { cos: 1, sin: 0 },
+    rotation: turn(degrees),
     flip_x,
     flip_y: false,
     tint: 0xffffffff,
@@ -92,10 +98,11 @@ function redraw(alpha, points, camera = undefined) {
 
 /**
  * The reference frame: a sprite at (0, 2), the same sprite flipped at (4, 2), a tilemap of two
- * cells (one empty) at (0, -3), a sprite at (0, -1) on a layer fixed to the screen, a square
- * outline from (3, -3) to (5, -1), a selected entity's filled circle at (0, 0), a sprite on
- * the world layer over one at the same pixels on the layer fixed to the screen (listed after it,
- * with a higher order), and a sprite moved from (0, 3.5) to (1, 3.5), drawn halfway.
+ * cells (one empty) moved from (-1, -3) to (0, -3), a sprite at (0, -1) on a layer fixed to the
+ * screen, a square outline from (3, -3) to (5, -1), a selected entity's filled circle at (0, 0),
+ * a sprite on the world layer over one at the same pixels on the layer fixed to the screen
+ * (listed after it, with a higher order), a sprite moved from (0, 3.5) to (1, 3.5), and a sprite
+ * at (2.5, 2) turned from 170 to -170 degrees, all drawn halfway.
  */
 function drawReference(points) {
   const square = [[3, -3], [5, -3], [5, -1], [3, -1]].map(([x, y]) => ({ x, y }));
@@ -109,6 +116,7 @@ function drawReference(points) {
       sprite(7, [5, 0.5]),
       sprite(8, [3, 0.5], { layer: 0, order: 10, frame: 1 }),
       sprite(9, [1, 3.5]),
+      sprite(10, [2.5, 2], { degrees: -170 }),
     ],
     {
       tilemaps: [
@@ -136,6 +144,8 @@ function drawReference(points) {
   );
   const previous = structuredClone(reference);
   previous.sprites[5].position = { x: 0, y: 3.5 };
+  previous.sprites[6].rotation = turn(170);
+  previous.tilemaps[0].position = { x: -1, y: -3 };
   const report = draw(reference, { debug_layers: ["physics"], selected: [entity(6)] }, previous, 0.5);
   return { report, pixels: pixels(points) };
 }

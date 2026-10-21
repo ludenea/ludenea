@@ -29,8 +29,10 @@ test("draws_the_reference_frame", async ({ page }) => {
     ["sprite, right texel", [36, 32], RIGHT],
     ["flipped sprite, left", [91, 32], RIGHT],
     ["flipped sprite, right", [100, 32], LEFT],
-    ["tile", [40, 104], TILE],
-    ["empty cell", [56, 104], BACKGROUND],
+    // Halfway from (-1, -3) to (0, -3): the tile at pixels 24 to 40 across, the empty cell
+    // at 40 to 56, where the tile is at the current tick.
+    ["tile, halfway", [28, 104], TILE],
+    ["empty cell, halfway", [44, 104], BACKGROUND],
     ["sprite on the layer fixed to the screen", [64, 80], FIXED],
     ["where it would be if it moved with the camera", [32, 80], BACKGROUND],
     ["debug outline", [96, 80], OUTLINE],
@@ -43,18 +45,22 @@ test("draws_the_reference_frame", async ({ page }) => {
     ["halfway sprite, right texel", [44, 8], RIGHT],
     ["where the sprite was", [26, 8], BACKGROUND],
     ["where the sprite is", [54, 8], BACKGROUND],
+    // Halfway from 170 to -170 degrees along the shorter arc is 180, which swaps the halves
+    // (pixels 64 to 80 across); the longer arc would pass 0 and keep them.
+    ["half turn, left half", [66, 32], RIGHT],
+    ["half turn, right half", [77, 32], LEFT],
   ];
   const { report, pixels } = await page.evaluate((points) => window.fixture.drawReference(points), samples.map(([, point]) => point));
   expect(report).toEqual({ missing: [] });
   for (const [index, [name, , expected]] of samples.entries()) expect(pixels[index], name).toEqual(expected);
 
-  // Drawn again at alpha 1 without new frames, the sprite is where it moved to: pixels 40 to
-  // 56 across.
+  // Drawn again at alpha 1 without new frames, the sprite is where it moved to (pixels 40 to
+  // 56 across) and the tilemap too (its tile at 32 to 48, its empty cell at 48 to 64).
   const moved = await page.evaluate(
     (points) => window.fixture.redraw(1, points),
-    [[44, 8], [52, 8], [35, 8]] as Point[],
+    [[44, 8], [52, 8], [35, 8], [40, 104], [56, 104], [28, 104]] as Point[],
   );
-  expect(moved).toEqual([LEFT, RIGHT, BACKGROUND]);
+  expect(moved).toEqual([LEFT, RIGHT, BACKGROUND, TILE, BACKGROUND, BACKGROUND]);
   // The free camera, 1 unit right of the frame's, moves the view without new frames: the
   // sprite 16 pixels left.
   const panned = await page.evaluate(
