@@ -6,7 +6,7 @@
 mod assets;
 
 use ludenea::draw::Color;
-use ludenea::math::{clamp, sin_cos};
+use ludenea::math::clamp;
 use ludenea::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -73,7 +73,7 @@ pub fn app() -> App {
 }
 
 /// The color of player `index`, `0xRRGGBBAA`.
-pub(crate) fn player_color(index: u8) -> Color {
+fn player_color(index: u8) -> Color {
     Color(match index % 4 {
         0 => 0xFF6060FF,
         1 => 0x60A0FFFF,
@@ -118,9 +118,9 @@ fn wander(time: Res<Time>, mut wanderers: Query<(&Wanderer, &mut Pose)>) {
     let tick = time.tick as f32;
     for (wanderer, pose) in wanderers.iter_mut() {
         let angle = wanderer.phase + wanderer.speed * tick;
-        let (sin, cos) = sin_cos(angle);
-        pose.position = wanderer.center + Vec2::new(cos, sin) * wanderer.radius;
-        pose.rotation = Rot::from_angle(angle);
+        let rotation = Rot::from_angle(angle);
+        pose.position = wanderer.center + Vec2::new(rotation.cos, rotation.sin) * wanderer.radius;
+        pose.rotation = rotation;
     }
 }
 

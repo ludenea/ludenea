@@ -7,14 +7,14 @@ use ludenea::app::players::{LiveDevices, automatic_claims, split};
 use ludenea::ecs::AssetId;
 use ludenea::prelude::*;
 use ludenea::render::SpriteAnimation;
-use swarm::{Player, SwarmInput, Wanderer};
+use swarm::{BUG_SHEET, Player, SwarmInput, Wanderer};
 
 const SCENE: &str = include_str!("../assets/swarm.scene.ron");
 const SHEET: &str = include_str!("../assets/bug.sheet.ron");
 
 fn loaded(players: usize) -> Simulation {
     let mut simulation = swarm::app().build().expect("the swarm app builds");
-    let sheet = AssetId(0x5b02);
+    let sheet = AssetId(u128::from_str_radix(BUG_SHEET, 16).expect("a hexadecimal identifier"));
     let assets = AssetTexts::from([(sheet, asset_file("ludenea::SpriteSheet", SHEET))]);
     simulation
         .load_scene_with(SCENE, &assets)
@@ -129,6 +129,8 @@ fn mapping_reads_keys_and_gamepad_and_normalizes() {
 }
 
 #[test]
+// Swarm's systems are sequential: this proves the thread setting does not change the hashes,
+// not parallel system scheduling.
 fn same_hashes_at_one_and_eight_threads() {
     let run = |threads: usize| {
         let mut simulation = loaded(4);
@@ -143,7 +145,13 @@ fn same_hashes_at_one_and_eight_threads() {
             })
             .collect::<Vec<_>>()
     };
-    assert_eq!(run(1), run(8));
+    let (one, eight) = (run(1), run(8));
+    assert_ne!(one[0], one[599], "the simulation advances");
+    assert!(
+        one.windows(2).all(|pair| pair[0] != pair[1]),
+        "every tick changes the state"
+    );
+    assert_eq!(one, eight);
 }
 
 #[test]

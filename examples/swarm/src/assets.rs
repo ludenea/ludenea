@@ -89,23 +89,16 @@ fn generate_scene() -> String {
         entities.len()
     );
     for (id, components) in entities.iter().enumerate() {
-        writeln!(
-            text,
-            "        (id: {id}, components: {{\n{components}        }}),"
-        )
-        .expect("writing to a string cannot fail");
+        writeln!(text, "        (id: {id}, components: {{{components}}}),")
+            .expect("writing to a string cannot fail");
     }
     text.push_str("    ],\n)\n");
     text
 }
 
+/// One line: the components, comma separated.
 fn entity(components: &[String]) -> String {
-    components
-        .iter()
-        .fold(String::new(), |mut text, component| {
-            writeln!(text, "            {component},").expect("writing to a string cannot fail");
-            text
-        })
+    components.join(", ")
 }
 
 fn pose(position: Vec2, angle: f32) -> String {
