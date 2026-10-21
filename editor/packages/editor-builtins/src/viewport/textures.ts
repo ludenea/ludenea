@@ -45,7 +45,7 @@ const changeOf = (change: FileChange): { path: string; removed: boolean; texture
  * `current` after `changes`: the changed and created textures read again, the removed ones (and
  * those that stopped being textures) dropped. A new version that cannot be used (unreadable
  * meta or PNG, or refused by `textureFrames`) leaves the previous one in the set, and `warn`
- * hears `<path>: <cause>`, and `loaded` hears
+ * hears `<path>: <cause>` (an unreadable meta is the project's own warning), and `loaded` hears
  * the path of each version that works. Returns `current` itself when no texture is concerned.
  */
 export async function reloadChanged(current: LoadedTextures, changes: FileChange[], project: ProjectClient, warn: (text: string) => void = () => {}, loaded: (path: string) => void = () => {}): Promise<LoadedTextures> {
@@ -73,10 +73,8 @@ export async function reloadChanged(current: LoadedTextures, changes: FileChange
       drop(path);
       continue;
     }
-    if (UNREADABLE.test(entry.id)) {
-      warn(`${path}: its meta cannot be read`);
-      continue;
-    }
+    // The project warns about an unreadable meta itself, naming the file and the cause: the previous version stays.
+    if (UNREADABLE.test(entry.id)) continue;
     try {
       const png = decode((await project.request({ type: "read_binary", path })).bytes);
       textureFrames(png, JSON.stringify(entry.kind.Texture));

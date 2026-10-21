@@ -1153,17 +1153,25 @@ describe("viewport frames", () => {
       expect(host.editor.console.list().map(({ level, text }) => [level, text])).toEqual([["warning", "assets/bug.png: the image is not a PNG"]]);
     });
 
-    it("an_invalid_meta_keeps_the_previous_texture_and_warns_once", async () => {
+    it("an_invalid_meta_keeps_the_previous_texture_and_leaves_the_warning_to_the_project", async () => {
       const project = mutable([bug]);
-      const { host } = await viewport(undefined, {}, project.answer);
+      const host = await testEditor([viewportPlugin, consolePlugin], project.answer);
+      const game = await testGame((command) => (command.type === "get_render_frame" ? renderFrame(7) : { type: "done" }));
+      act(() => host.setControl(game.client));
+      renderPanel(host, "ludenea.viewport");
+      renderPanel(host, "ludenea.console");
+      await settle();
       const renderer = renderers.at(-1)!;
       await uploaded(renderer, 1);
-      // The project could not read the new meta: the file lists under the null identifier.
+      // The project could not read the new meta: it warns once, and lists the file under the null identifier.
       project.entries = [{ ...bug, id: UNREADABLE }];
+      pushed(host, { type: "warning", message: "assets/bug.png.meta cannot be read: expected `Meta`" });
       pushed(host, files("assets/bug.png", { Texture: META }));
       pushed(host, files("assets/bug.png", { Texture: META }));
       expect(await uploaded(renderer, 3)).toEqual([{ id: BUG, path: "assets/bug.png", meta: META }]);
-      expect(host.editor.console.list().map(({ level, text }) => [level, text])).toEqual([["warning", "assets/bug.png: its meta cannot be read"]]);
+      await settle();
+      expect(screen.getAllByText(/bug\.png/)).toHaveLength(1);
+      expect(screen.getByText(/bug\.png\.meta cannot be read/)).toBeTruthy();
     });
 
     it("a_failed_reload_is_reported_and_the_next_one_still_redraws", async () => {
