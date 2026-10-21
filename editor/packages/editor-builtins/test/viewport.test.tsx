@@ -1064,6 +1064,152 @@ describe("viewport frames", () => {
     expect(screen.getAllByText(/broken\.png/)).toHaveLength(1);
   });
 
+  describe("hot reload of textures", () => {
+    afterEach(() => {
+      script.invalidTextures = {};
+    });
+
+    const OTHER = "000000000000000000000000000b0002";
+    const NEWER = "000000000000000000000000000b0003";
+    const bug = { path: "assets/bug.png", id: BUG };
+    const files = (path: string, kind: object | string) => ({ type: "files_changed", changes: [{ Changed: { path, kind } }] });
+    /** A project whose listing is `entries` now, which a test changes. */
+    const mutable = (entries: { path: string; id: string }[]) => {
+      const project = {
+        entries,
+        meta: META,
+        answer: ((request) => {
+          const answered = textures(project.entries)(request) as { entries?: { kind: object | string }[] } | undefined;
+          answered?.entries?.forEach((entry) => typeof entry.kind === "object" && (entry.kind = { Texture: project.meta }));
+          return answered;
+        }) as Answer,
+      };
+      return project;
+    };
+    const uploads = (renderer: WebRenderer) => renderer.calls.filter((call) => call.method === "set_textures");
+    const uploaded = async (renderer: WebRenderer, count: number) => {
+      await waitFor(() => expect(uploads(renderer)).toHaveLength(count));
+      return (uploads(renderer).at(-1)!.args as [{ id: string; path: string }[], Uint8Array[]])[0];
+    };
+    const pushed = (host: Awaited<ReturnType<typeof viewport>>["host"], event: object) => act(() => host.project.push(event));
+
+    it("a_changed_png_is_uploaded_again_and_redrawn", async () => {
+      const project = mutable([bug, { path: "assets/other.png", id: OTHER }]);
+      const { host } = await viewport(undefined, {}, project.answer);
+      const renderer = renderers.at(-1)!;
+      await uploaded(renderer, 1);
+      project.entries = [{ ...bug, id: NEWER }, { path: "assets/other.png", id: OTHER }];
+      const pushes = renderer.pushed.length;
+      pushed(host, files("assets/bug.png", { Texture: META }));
+      const sources = await uploaded(renderer, 2);
+      expect(sources).toEqual([{ id: NEWER, path: "assets/bug.png", meta: META }, { id: OTHER, path: "assets/other.png", meta: META }]);
+      await waitFor(() => expect(renderer.pushed.length).toBeGreaterThan(pushes));
+    });
+
+    it("a_changed_meta_reloads_its_texture", async () => {
+      const project = mutable([bug]);
+      const { host } = await viewport(undefined, {}, project.answer);
+      const renderer = renderers.at(-1)!;
+      await uploaded(renderer, 1);
+      const grid: TextureMeta = { ...META, pixels_per_unit: 32 };
+      project.meta = grid;
+      project.entries = [{ ...bug, id: NEWER }];
+      pushed(host, files("assets/bug.png", { Texture: grid }));
+      await uploaded(renderer, 2);
+      expect((uploads(renderer).at(-1)!.args as [{ meta: TextureMeta }[]])[0][0]!.meta).toEqual(grid);
+    });
+
+    it("a_created_png_joins_the_textures", async () => {
+      const project = mutable([bug]);
+      const { host } = await viewport(undefined, {}, project.answer);
+      const renderer = renderers.at(-1)!;
+      await uploaded(renderer, 1);
+      project.entries = [bug, { path: "assets/other.png", id: OTHER }];
+      pushed(host, { type: "files_changed", changes: [{ Created: { path: "assets/other.png", kind: { Texture: META } } }] });
+      expect((await uploaded(renderer, 2)).map(({ path }) => path)).toEqual(["assets/bug.png", "assets/other.png"]);
+    });
+
+    it("a_removed_png_drops_its_texture", async () => {
+      const project = mutable([bug, { path: "assets/other.png", id: OTHER }]);
+      const { host } = await viewport(undefined, {}, project.answer);
+      const renderer = renderers.at(-1)!;
+      await uploaded(renderer, 1);
+      project.entries = [{ path: "assets/other.png", id: OTHER }];
+      pushed(host, { type: "files_changed", changes: [{ Removed: { path: "assets/bug.png", kind: { Texture: META } } }] });
+      const sources = await uploaded(renderer, 2);
+      expect(sources.map(({ path }) => path)).toEqual(["assets/other.png"]);
+    });
+
+    it("a_broken_png_keeps_the_previous_texture_and_warns_once", async () => {
+      const project = mutable([bug]);
+      const { host } = await viewport(undefined, {}, project.answer);
+      const renderer = renderers.at(-1)!;
+      await uploaded(renderer, 1);
+      script.invalidTextures = { "assets/bug.png": "the image is not a PNG" };
+      project.entries = [{ ...bug, id: NEWER }];
+      pushed(host, files("assets/bug.png", { Texture: META }));
+      pushed(host, files("assets/bug.png", { Texture: META }));
+      expect(await uploaded(renderer, 3)).toEqual([{ id: BUG, path: "assets/bug.png", meta: META }]);
+      expect(host.editor.console.list().map(({ level, text }) => [level, text])).toEqual([["warning", "assets/bug.png: the image is not a PNG"]]);
+    });
+
+    it("an_invalid_meta_keeps_the_previous_texture_and_warns_once", async () => {
+      const project = mutable([bug]);
+      const { host } = await viewport(undefined, {}, project.answer);
+      const renderer = renderers.at(-1)!;
+      await uploaded(renderer, 1);
+      // The project could not read the new meta: the file lists under the null identifier.
+      project.entries = [{ ...bug, id: UNREADABLE }];
+      pushed(host, files("assets/bug.png", { Texture: META }));
+      pushed(host, files("assets/bug.png", { Texture: META }));
+      expect(await uploaded(renderer, 3)).toEqual([{ id: BUG, path: "assets/bug.png", meta: META }]);
+      expect(host.editor.console.list().map(({ level, text }) => [level, text])).toEqual([["warning", "assets/bug.png: its meta cannot be read"]]);
+    });
+
+    it("a_texture_changed_before_a_lost_device_is_uploaded_to_the_new_renderer", async () => {
+      const project = mutable([bug]);
+      const { host } = await viewport(undefined, {}, project.answer);
+      const first = renderers.at(-1)!;
+      await uploaded(first, 1);
+      project.entries = [{ ...bug, id: NEWER }];
+      pushed(host, files("assets/bug.png", { Texture: META }));
+      await waitFor(() => expect((uploads(first).at(-1)!.args as [{ id: string }[]])[0][0]!.id).toBe(NEWER));
+      first.fail("DeviceLost", 1);
+      play(host);
+      await waitFor(() => expect(renderers.at(-1)).not.toBe(first));
+      expect(await uploaded(renderers.at(-1)!, 1)).toEqual([{ id: NEWER, path: "assets/bug.png", meta: META }]);
+    });
+
+    it("texture_reload_sends_no_control_command", async () => {
+      const project = mutable([bug]);
+      const { host, game } = await viewport(undefined, {}, project.answer);
+      const renderer = renderers.at(-1)!;
+      await uploaded(renderer, 1);
+      const before = game.sent.length;
+      project.entries = [{ ...bug, id: NEWER }];
+      pushed(host, files("assets/bug.png", { Texture: META }));
+      await uploaded(renderer, 2);
+      await settle();
+      // The frame on screen is fetched from the host's cache or not at all: only `get_render_frame` may follow.
+      expect(game.sent.slice(before).filter((command) => command.type !== "get_render_frame")).toEqual([]);
+    });
+
+    it("data_asset_changes_still_reload_the_session", async () => {
+      const project = mutable([bug]);
+      const { host } = await viewport(undefined, {}, project.answer);
+      const renderer = renderers.at(-1)!;
+      await uploaded(renderer, 1);
+      const reads = () => host.project.sent.filter((request) => request.type === "read_binary").length;
+      const before = reads();
+      pushed(host, files("assets/settings.ron", { Data: { type: "Settings" } }));
+      pushed(host, files("scenes/main.scene.ron", "Scene"));
+      await settle();
+      // Not textures: nothing read again, nothing uploaded. The shell's own reload of data assets is covered by the assets tests.
+      expect(reads()).toBe(before);
+      expect(uploads(renderer)).toHaveLength(1);
+    });
+  });
+
   it("playing_subscribes_and_pushes_each_frame_in_order", async () => {
     const { host, game } = await viewport();
     const renderer = renderers.at(-1)!;

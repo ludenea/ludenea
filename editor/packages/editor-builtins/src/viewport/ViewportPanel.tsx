@@ -1,5 +1,5 @@
 import type { WebRenderer } from "@ludenea/render-wasm";
-import type { Entity, Vec2 } from "@ludenea/control-client";
+import type { Entity, FileChange, Vec2 } from "@ludenea/control-client";
 import { runReported, type Editor, type ViewportOverlay } from "@ludenea/editor-shell";
 import { useEffect, useRef, useState } from "react";
 import { captureInput } from "../input/capture";
@@ -9,7 +9,7 @@ import { fromCameraItem, panBy, same, screenToWorld, toCameraView, zoomAt, type 
 import { FrameFeed } from "./frames";
 import { mergeHits, moveBy, moveCamera, visibleLayers, type Shown, type ViewportState } from "./state";
 import { drawOverlay } from "./overlay";
-import { loadTextures } from "./textures";
+import { loadTextures, reloadChanged, type LoadedTextures } from "./textures";
 
 /** Pointer travel, in CSS pixels, past which a press is a drag rather than a click. */
 const DRAG_THRESHOLD = 3;
@@ -131,20 +131,36 @@ export function ViewportPanel({
     const resizes = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
     resizes?.observe(element);
 
-    // Textures belong to the project: loaded for each renderer, which starts blank without them.
-    const uploadTextures = (target: WebRenderer) =>
-      loadTextures(editor.project, warnOnce)
-        .then(({ sources, pngs }) => {
-          if (disposed || renderer !== target) return;
-          const refused = JSON.parse(target.set_textures(JSON.stringify(sources), pngs)) as Refused[];
-          for (const { id, path, message } of refused) warnOnce(`${path ?? id}: ${message}`);
-          // New textures blank the canvas until the next push.
-          feed.again();
-          repaint = true;
-        })
-        .catch((error) => {
-          if (!disposed) editor.console.report(error, "Loading the textures for the viewport");
-        });
+    // The project's textures as the viewport last knew them: a renderer created again starts from
+    // them, not from the disk. Reloads queue behind the initial load; one that fails is dropped.
+    let known: Promise<LoadedTextures> | null = null;
+    const forget = (error: unknown, what: string) => {
+      known = null;
+      if (!disposed) editor.console.report(error, what);
+    };
+    const upload = (target: WebRenderer, { sources, pngs }: LoadedTextures) => {
+      if (disposed || renderer !== target) return;
+      const refused = JSON.parse(target.set_textures(JSON.stringify(sources), pngs)) as Refused[];
+      for (const { id, path, message } of refused) warnOnce(`${path ?? id}: ${message}`);
+      // New textures blank the canvas until the next push.
+      feed.again();
+      repaint = true;
+    };
+    const uploadTextures = (target: WebRenderer) => {
+      known ??= loadTextures(editor.project, warnOnce);
+      return known.then((textures) => upload(target, textures)).catch((error) => forget(error, "Loading the textures for the viewport"));
+    };
+    // A changed texture is drawn at once, with no command to the game: the session does not change.
+    const reload = (changes: FileChange[]) => {
+      if (!known) return;
+      let before: LoadedTextures | null = null;
+      const next = known.then((current) => {
+        before = current;
+        return reloadChanged(current, changes, editor.project, warnOnce);
+      });
+      known = next;
+      next.then((textures) => renderer && textures !== before && upload(renderer, textures)).catch((error) => forget(error, "Reloading the textures for the viewport"));
+    };
 
     // Drops the renderer, freed unless `free` is false: the frames wait for the next one, which starts with them.
     const release = (free = true) => {
@@ -295,6 +311,7 @@ export function ViewportPanel({
       }),
       shared(editor).overlays.subscribe(() => (repaint = true)),
       subscribeGame(editor, () => (repaint = true)),
+      editor.project.on("files_changed", ({ changes }) => reload(changes)),
     ];
 
     const local = (event: MouseEvent): Point => {
