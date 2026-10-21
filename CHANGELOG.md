@@ -50,7 +50,8 @@ hash, those of the golden trace and replays included.
   placeholder included) or painted tilemap cell lies under a screen point, topmost first; and
   `pick::bounds` gives the world box of entities drawn on layers of parallax 1.
   `gpu::Size` moves to `camera::Size` (still reachable as `gpu::Size`), and
-  `Renderer::regions` gives the regions of the atlas set last.
+  `Renderer::regions` gives the regions of the atlas set last. `Renderer::set_atlas` refuses
+  an atlas with a region on a page it does not have (`RenderError::InvalidAtlas`).
 - Breaking: `TextureError::Grid` holds the `reason` (`FramesError::Grid`'s message) instead
   of the `image` size and the `grid`; its message is unchanged.
 - `WebRenderer::push_frame_bytes(bytes, overlay)` pushes a frame in the control protocol's

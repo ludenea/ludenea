@@ -51,6 +51,16 @@ pub(crate) fn sprite_extent(item: &SpriteItem, region: Option<&Region>) -> Exten
     extent
 }
 
+/// The region a sprite or tile of `(texture, frame)` is drawn with: the lookup the renderer
+/// and `pick` share, so a click hits what is drawn. `None` draws the placeholder.
+pub(crate) fn region_of(
+    regions: &BTreeMap<(AssetId, u32), Region>,
+    texture: AssetId,
+    frame: u32,
+) -> Option<&Region> {
+    regions.get(&(texture, frame))
+}
+
 /// The parallax of `layer`: 1 for a layer the frame does not declare, as it is drawn.
 pub(crate) fn layer_parallax(frame: &RenderFrame, layer: u16) -> f32 {
     frame
@@ -99,7 +109,7 @@ pub fn pick(
         }
     }
     for (index, item) in frame.sprites.iter().enumerate() {
-        let region = regions.get(&(item.texture, item.frame));
+        let region = region_of(regions, item.texture, item.frame);
         if in_sprite(item, sprite_extent(item, region), seen_at(item.layer)) {
             hits.push((item.layer, item.order, item.entity, index + 1));
         }
@@ -130,7 +140,7 @@ pub fn bounds(
         .iter()
         .filter(|item| in_world(item.entity, item.layer))
         .flat_map(|item| {
-            let extent = sprite_extent(item, regions.get(&(item.texture, item.frame)));
+            let extent = sprite_extent(item, region_of(regions, item.texture, item.frame));
             let (low, high) = (extent.offset, extent.offset + extent.size);
             [
                 Vec2::new(low.x, low.y),

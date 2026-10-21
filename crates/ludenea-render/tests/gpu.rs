@@ -631,6 +631,28 @@ fn set_atlas_refuses_a_malformed_page_as_invalid_data() {
 }
 
 #[test]
+fn set_atlas_refuses_a_region_on_a_page_it_does_not_have() {
+    let mut renderer = renderer();
+    let valid = upload(&mut renderer, &solid(RED), &TextureMeta::default());
+    let mut stray = valid.clone();
+    let region = stray.regions.get_mut(&(AssetId(1), 0)).unwrap();
+    region.page = 3;
+    // A sprite would draw as a placeholder while a click on its region's size hits it: the
+    // atlas is refused instead, so the regions the renderer keeps are the ones it draws.
+    assert_eq!(
+        renderer.set_atlas(&stray),
+        Err(RenderError::InvalidAtlas {
+            page: 3,
+            reason: format!(
+                "frame 0 of texture {} lies on page 3, but the atlas has 1 page",
+                AssetId(1)
+            ),
+        })
+    );
+    assert_eq!(renderer.regions(), &valid.regions);
+}
+
+#[test]
 fn render_rgba_of_an_empty_target_is_empty() {
     let mut renderer = renderer();
     let empty = Size {

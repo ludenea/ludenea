@@ -93,8 +93,9 @@ pub enum RenderError {
     },
     #[error("the GPU device was lost: {0}")]
     DeviceLost(String),
-    /// An atlas page whose data cannot be uploaded: a side of 0, or pixels that do not match
-    /// its size. `page` is its index in `Atlas::pages`.
+    /// An atlas page whose data cannot be uploaded (a side of 0, or pixels that do not match
+    /// its size), or a region on a page the atlas does not have. `page` is the page's index in
+    /// `Atlas::pages`.
     #[error("set_atlas refuses atlas page {page}: {reason}")]
     InvalidAtlas { page: usize, reason: String },
 }
@@ -378,6 +379,23 @@ impl Renderer {
                     page.rgba.len()
                 )));
             }
+        }
+        // A region on a missing page would draw as a placeholder while `pick` hit its size:
+        // every region the renderer keeps is drawn as it is.
+        let count = atlas.pages.len();
+        if let Some((&(id, frame), region)) = atlas
+            .regions
+            .iter()
+            .find(|(_, region)| region.page as usize >= count)
+        {
+            let pages = if count == 1 { "page" } else { "pages" };
+            return Err(RenderError::InvalidAtlas {
+                page: region.page as usize,
+                reason: format!(
+                    "frame {frame} of texture {id} lies on page {}, but the atlas has {count} {pages}",
+                    region.page
+                ),
+            });
         }
         self.pages = atlas
             .pages

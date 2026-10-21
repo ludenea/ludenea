@@ -9,7 +9,7 @@ use ludenea_math::{Rot, Vec2};
 
 use crate::atlas::Region;
 use crate::interpolate::SpriteMotion;
-use crate::pick::sprite_extent;
+use crate::pick::{region_of, sprite_extent};
 
 /// The floats of one instance, in the shader's `Instance` order: the centre at the previous
 /// tick and at the current one, the rotation at the previous tick (two each), the arc to the
@@ -36,14 +36,15 @@ pub(super) const BLANK: Sample = Sample {
 };
 
 /// The region of `(texture, frame)` and its page's size, if both are uploaded. `pages`
-/// holds each uploaded page's width and height.
+/// holds each uploaded page's width and height; `set_atlas` refuses a region on a page it
+/// does not have, so a region is found exactly when `pick::region_of` finds it.
 pub(super) fn find<'a>(
     regions: &'a BTreeMap<(AssetId, u32), Region>,
     pages: &[(u32, u32)],
     texture: AssetId,
     frame: u32,
 ) -> Option<(&'a Region, (u32, u32))> {
-    let region = regions.get(&(texture, frame))?;
+    let region = region_of(regions, texture, frame)?;
     Some((region, *pages.get(region.page as usize)?))
 }
 
