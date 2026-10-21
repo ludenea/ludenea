@@ -258,17 +258,10 @@ fn prepare(source: &TextureSource<'_>, max_page: u32) -> Result<Texture, Texture
         path: path(),
         reason,
     })?;
-    let frames = cut(&image, meta).map_err(|error| match error {
-        FramesError::Decode { reason } => TextureError::Decode {
-            id,
-            path: path(),
-            reason,
-        },
-        FramesError::Grid { reason } => TextureError::Grid {
-            id,
-            path: path(),
-            reason,
-        },
+    let frames = cut(&image, meta).map_err(|reason| TextureError::Grid {
+        id,
+        path: path(),
+        reason,
     })?;
     // Every frame of a texture has the same size.
     if let Some(frame) = frames.iter().find(|frame| {
@@ -327,21 +320,21 @@ pub fn frames_of(png: &[u8], meta: &TextureMeta) -> Result<TextureFrames, Frames
     Ok(TextureFrames {
         width: image.width,
         height: image.height,
-        frames: cut(&image, meta)?,
+        frames: cut(&image, meta).map_err(|reason| FramesError::Grid { reason })?,
     })
 }
 
 /// The frames `meta`'s grid cuts `image` into, row-major, at least one; the whole image when
-/// it has no grid.
-fn cut(image: &Image, meta: &TextureMeta) -> Result<Vec<FrameRect>, FramesError> {
+/// it has no grid. The error names the grid and the image sizes.
+fn cut(image: &Image, meta: &TextureMeta) -> Result<Vec<FrameRect>, String> {
     let grid = meta.grid.unwrap_or(Grid {
         frame_width: image.width,
         frame_height: image.height,
         margin: 0,
         spacing: 0,
     });
-    let refused = || FramesError::Grid {
-        reason: format!(
+    let refused = || {
+        format!(
             "a grid of {}x{} frames with margin {} and spacing {} does not cut the {}x{} image into whole frames",
             grid.frame_width,
             grid.frame_height,
@@ -349,7 +342,7 @@ fn cut(image: &Image, meta: &TextureMeta) -> Result<Vec<FrameRect>, FramesError>
             grid.spacing,
             image.width,
             image.height
-        ),
+        )
     };
     let columns = whole_frames(image.width, grid.frame_width, grid.margin, grid.spacing)
         .ok_or_else(refused)?;
