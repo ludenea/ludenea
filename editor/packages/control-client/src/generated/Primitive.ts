@@ -2,4 +2,9 @@
 import type { Color } from "./Color";
 import type { Vec2 } from "./Vec2";
 
+/**
+ * A debug draw primitive. JSON tags it with a `type` field; the formats that are not human
+ * readable, such as postcard, which cannot decode an internally tagged enum, tag it by
+ * variant index.
+ */
 export type Primitive = { "type": "line", a: Vec2, b: Vec2, color: Color, } | { "type": "circle", center: Vec2, radius: number, color: Color, fill: boolean, } | { "type": "polygon", points: Array<Vec2>, color: Color, fill: boolean, } | { "type": "capsule", a: Vec2, b: Vec2, radius: number, color: Color, } | { "type": "label", at: Vec2, text: string, color: Color, };

@@ -23,4 +23,5 @@ wasm-bindgen-futures = { workspace = true, optional = true }
 web-sys = { workspace = true, optional = true, features = ["HtmlCanvasElement"] }
 
 [dev-dependencies]
+postcard.workspace = true
 serde_json.workspace = true

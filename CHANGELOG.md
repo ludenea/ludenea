@@ -499,6 +499,8 @@ hash, those of the golden trace and replays included.
   `load_session`, and `load_replay` reset the claims to the automatic ones. A player whose
   gamepad is disconnected gets the game's default input.
   New in the Rust API: `Host::tick_progress`, the fraction of the next tick that play owes.
+  A debug draw `Primitive`, and so a `RenderFrame`, now decodes from postcard: the formats
+  that are not human readable tag it by variant index, JSON still with its `type` field.
 - Over `host --stdio` and in a browser worker, the events a request causes come before its
   response, not after the response to a later request: a `load_session` sent right after
   `load_scene` answered could be followed by the scene's `timeline_changed` (head 0), which

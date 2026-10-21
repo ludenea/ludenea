@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use ludenea_ecs::Entity;
 use ludenea_ecs::schema::Schema;
 use ludenea_math::Vec2;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub mod frame;
 pub mod mesh;
@@ -20,9 +20,12 @@ pub mod render;
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Color(pub u32);
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// A debug draw primitive. JSON tags it with a `type` field; the formats that are not human
+/// readable, such as postcard, which cannot decode an internally tagged enum, tag it by
+/// variant index.
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", ts(tag = "type", rename_all = "snake_case"))]
 pub enum Primitive {
     Line {
         a: Vec2,
@@ -51,6 +54,93 @@ pub enum Primitive {
         text: String,
         color: Color,
     },
+}
+
+/// How `Primitive` is written in the human readable formats. The compiler checks that its
+/// variants and `IndexedPrimitive`'s are `Primitive`'s.
+#[derive(Serialize, Deserialize)]
+#[serde(remote = "Primitive", tag = "type", rename_all = "snake_case")]
+enum TaggedPrimitive {
+    Line {
+        a: Vec2,
+        b: Vec2,
+        color: Color,
+    },
+    Circle {
+        center: Vec2,
+        radius: f32,
+        color: Color,
+        fill: bool,
+    },
+    Polygon {
+        points: Vec<Vec2>,
+        color: Color,
+        fill: bool,
+    },
+    Capsule {
+        a: Vec2,
+        b: Vec2,
+        radius: f32,
+        color: Color,
+    },
+    Label {
+        at: Vec2,
+        text: String,
+        color: Color,
+    },
+}
+
+/// How `Primitive` is written in the formats that are not human readable.
+#[derive(Serialize, Deserialize)]
+#[serde(remote = "Primitive")]
+enum IndexedPrimitive {
+    Line {
+        a: Vec2,
+        b: Vec2,
+        color: Color,
+    },
+    Circle {
+        center: Vec2,
+        radius: f32,
+        color: Color,
+        fill: bool,
+    },
+    Polygon {
+        points: Vec<Vec2>,
+        color: Color,
+        fill: bool,
+    },
+    Capsule {
+        a: Vec2,
+        b: Vec2,
+        radius: f32,
+        color: Color,
+    },
+    Label {
+        at: Vec2,
+        text: String,
+        color: Color,
+    },
+}
+
+impl Serialize for Primitive {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if serializer.is_human_readable() {
+            TaggedPrimitive::serialize(self, serializer)
+        } else {
+            IndexedPrimitive::serialize(self, serializer)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Primitive {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        if deserializer.is_human_readable() {
+            TaggedPrimitive::deserialize(deserializer)
+        } else {
+            IndexedPrimitive::deserialize(deserializer)
+        }
+    }
 }
 
 /// A primitive and the entity it stands for, so selected entities can be highlighted.

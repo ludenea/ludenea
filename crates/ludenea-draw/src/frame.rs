@@ -202,6 +202,28 @@ mod tests {
     }
 
     #[test]
+    fn render_frame_round_trips_through_postcard() {
+        let frame = frame();
+        let bytes = postcard::to_allocvec(&frame).unwrap();
+        let back: RenderFrame = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back, frame);
+    }
+
+    #[test]
+    fn primitives_in_json_stay_tagged_with_their_type() {
+        let json = serde_json::to_value(&frame().debug).unwrap();
+        assert_eq!(
+            json["layers"]["physics.colliders"][0]["primitive"],
+            serde_json::json!({
+                "type": "line",
+                "a": { "x": 0.0, "y": 0.0 },
+                "b": { "x": 1.0, "y": 2.0 },
+                "color": 0x112233FF_u32,
+            })
+        );
+    }
+
+    #[test]
     fn layer_index_finds_declared_layers() {
         let frame = frame();
         assert_eq!(frame.layer_index("background"), Some(0));

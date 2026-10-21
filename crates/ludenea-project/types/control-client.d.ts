@@ -442,6 +442,11 @@ type Color = number;
 
 type ConsoleLevel = "info" | "warning" | "error";
 
+/**
+ * A debug draw primitive. JSON tags it with a `type` field; the formats that are not human
+ * readable, such as postcard, which cannot decode an internally tagged enum, tag it by
+ * variant index.
+ */
 type Primitive = {
     "type": "line";
     a: Vec2;
