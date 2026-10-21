@@ -29,7 +29,7 @@ pub const PROTOCOL_VERSION: u32 = 5;
 /// instead of misreading fields. A change the declarations do not show, such as a new serde
 /// default or another encoding of a type declared as a string, leaves it as it is.
 /// `tests/typescript.rs` pins it.
-pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0xbf53_b00b_708b_97b0);
+pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0xa7bc_534c_5844_b843);
 
 /// Binary data, serialized as a standard base64 string.
 #[derive(Clone, Debug, PartialEq)]
@@ -533,6 +533,7 @@ impl Command {
             Command::LoadScene { .. }
             | Command::ReplaceScene { .. }
             | Command::LoadSession { .. } => "loaded",
+            Command::SetPlayers { .. } => "players",
             Command::Step { .. } => "stepped",
             Command::GetHash => "hash",
             Command::GetHashTree => "hash_tree",
@@ -580,7 +581,6 @@ impl Command {
             | Command::Seek { .. }
             | Command::SetSpeed { .. }
             | Command::SetLiveInput { .. }
-            | Command::SetPlayers { .. }
             | Command::Undo
             | Command::Redo
             | Command::SetAssetField { .. }
@@ -621,6 +621,10 @@ pub enum Topic {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Reply {
     Done,
+    /// The claims `SetPlayers` applied, one per player: the automatic ones when it gave none.
+    Players {
+        claims: Vec<Claim>,
+    },
     Stepped {
         tick: u64,
         hashes: Vec<Hash64>,

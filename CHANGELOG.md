@@ -358,7 +358,7 @@ hash, those of the golden trace and replays included.
 
 ### Control protocol
 
-- Control protocol 5, fingerprint `bf53b00b708b97b0`. Breaking: `get_render_frame`
+- Control protocol 5, fingerprint `a7bc534c5844b843`. Breaking: `get_render_frame`
   (`debug_layers`) replaces `get_debug_draw` (`layers`), and its reply `render_frame`
   (`frame`) replaces `debug_draw` (`tick`, `frame`). The frame is the `RenderFrame` of the
   current tick: its tick, camera, render layers, sprites, tilemaps, the entities teleported
@@ -368,7 +368,7 @@ hash, those of the golden trace and replays included.
   one) in place of `players`, and the host splits them between the players by their claims.
   New `set_players` (`players`, `claims`) replaces the recorded inputs with an empty log of
   that many players and sets who holds which keyboard part and gamepad (the automatic
-  claims when `claims` is `null`); it is refused with `invalid_inputs` for no players, a
+  claims when `claims` is `null`) and replies `players` with the claims it applied; it is refused with `invalid_inputs` for no players, a
   number of claims other than the players, a gamepad claimed twice, and overlapping parts
   of the keyboard. `load_inputs`, `load_session`, and `load_replay` reset the claims to the
   automatic ones. A player whose gamepad is disconnected gets the game's default input.

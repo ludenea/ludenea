@@ -1,4 +1,4 @@
-import type { LiveDevices, RawGamepad } from "@ludenea/control-client";
+import type { Claim, LiveDevices, RawGamepad } from "@ludenea/control-client";
 import { isEditorKey, type Disposable, type Editor } from "@ludenea/editor-shell";
 
 const IDLE: LiveDevices = { keys: [], gamepads: [] };
@@ -12,16 +12,13 @@ function gamepads(): (RawGamepad | null)[] {
 /** The players the "Set the player count" command offers. */
 const PLAYER_COUNTS = [1, 2, 3, 4];
 
-/**
- * Who holds what when the host assigns devices itself, as `automatic_claims` in `ludenea-app`
- * does: a single player holds the whole keyboard and gamepad 1; otherwise player 1 holds the
- * left half of the keyboard and gamepad 1, player 2 the right half and gamepad 2, and every
- * later player the gamepad of their number.
- */
-export function describeAutomaticClaims(players: number): string[] {
-  return Array.from({ length: players }, (_, index) => {
-    const keyboard = players === 1 ? "the whole keyboard" : index === 0 ? "the left half of the keyboard" : index === 1 ? "the right half of the keyboard" : null;
-    return `player ${index + 1}: ${[keyboard, `gamepad ${index + 1}`].filter(Boolean).join(" and ")}`;
+const KEYBOARD_PARTS = { Whole: "the whole keyboard", Left: "the left half of the keyboard", Right: "the right half of the keyboard" };
+
+/** One line per player of what the host assigned: `player 1: the left half of the keyboard and gamepad 1`. */
+export function describeClaims(claims: Claim[]): string[] {
+  return claims.map(({ keyboard, gamepad }, index) => {
+    const devices = [keyboard && KEYBOARD_PARTS[keyboard], gamepad !== null && `gamepad ${gamepad + 1}`].filter(Boolean);
+    return `player ${index + 1}: ${devices.length > 0 ? devices.join(" and ") : "no device"}`;
   });
 }
 
@@ -34,8 +31,8 @@ export function registerPlayerCommands(editor: Editor): Disposable[] {
       async run() {
         const control = editor.control;
         if (!control) throw new Error("no game is running");
-        await control.request({ type: "set_players", players, claims: null });
-        editor.console.log("info", `${players} ${players === 1 ? "player" : "players"}, ${describeAutomaticClaims(players).join("; ")}`);
+        const { claims } = await control.request({ type: "set_players", players, claims: null });
+        editor.console.log("info", `${players} ${players === 1 ? "player" : "players"}, ${describeClaims(claims).join("; ")}`);
       },
     }),
   );

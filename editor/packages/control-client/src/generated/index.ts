@@ -40,7 +40,6 @@ export * from "./PauseReason";
 export * from "./Primitive";
 export * from "./ProtocolError";
 export * from "./RawGamepad";
-export * from "./RawInput";
 export * from "./RecordedEvent";
 export * from "./RenderFrame";
 export * from "./Reply";

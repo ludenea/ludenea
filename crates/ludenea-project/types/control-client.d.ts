@@ -1006,6 +1006,9 @@ type TraceComparison = {
 type Reply = {
     "type": "done";
 } | {
+    "type": "players";
+    claims: Array<Claim>;
+} | {
     "type": "stepped";
     tick: number;
     hashes: Array<Hash64>;
@@ -1127,17 +1130,6 @@ type Outcome = {
     "error": ProtocolError;
 };
 
-/**
- * What one player holds down at a moment.
- */
-type RawInput = {
-    /**
-     * `KeyboardEvent.code` values of the keys held down.
-     */
-    keys: Array<string>;
-    gamepads: Array<RawGamepad>;
-};
-
 type ServerMessage = {
     "type": "welcome";
     protocol_version: number;
@@ -1159,7 +1151,7 @@ type ServerMessage = {
 /** The control protocol version this build speaks: a client and a host connect only when theirs are equal. */
 const PROTOCOL_VERSION = 5;
 /** The wire shape of `PROTOCOL_VERSION`, a hash of the protocol's types: a client and a host connect only when theirs are equal too. */
-const PROTOCOL_FINGERPRINT = "bf53b00b708b97b0";
+const PROTOCOL_FINGERPRINT = "a7bc534c5844b843";
 /** The `type` of the reply each command type gets when it succeeds. */
 type ReplyTypes = {
     apply_override: "done";
@@ -1215,7 +1207,7 @@ type ReplyTypes = {
     set_compare_branch: "done";
     set_field: "done";
     set_live_input: "done";
-    set_players: "done";
+    set_players: "players";
     set_speed: "done";
     set_threads: "done";
     spawn: "spawned";
@@ -1728,5 +1720,5 @@ function startWorkerGame(options: {
 }): WorkerGame;
 
 export { ControlClient, PROJECT_PROTOCOL_FINGERPRINT, PROJECT_PROTOCOL_VERSION, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION, ProjectClient, ProtocolFailure, RequestTracker, fakeTransport, handshake, parseFrame, postMessageTransport, startWorkerGame, tauriTransport, unwrap, webSocketTransport };
-export type { AssetId, AssetKind, AssetTexts, BranchId, BranchInfo, BuildEvent, Bytes, CameraItem, Cause, Claim, ClientMessage, Color, Command, ComponentValue, ConsoleLevel, DebugDrawFrame, Diagnostic, Difference, DivergenceKind, DivergenceReport, Document, Entity, EntityDivergence, EntityHash, EntityRow, ErrorCode, Event, FailureCode, FieldSchema, FieldTarget, FileChange, FileEntry, Filter, GameInfo, GameOutput, Grid, Hash64, HashTree, InstanceInfo, Item, JsonValue, KeyboardPart, LayerInfo, LiveDevices, MessageTransport, NamedHash, NamedSchema, Outcome, OutputStream, OverrideInfo, PathSegment, PauseReason, PluginBundle, PluginSource, Primitive, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo, ProjectOutcome, ProjectReply, ProjectReplyFor, ProjectReplyTypes, ProjectRequest, ProjectServerMessage, ProtocolError, ProtocolPeer, RawGamepad, RawInput, RecordedEvent, RenderFrame, Reply, ReplyFor, ReplyTypes, RootCause, RootCauseKind, Rot, ServerMessage, ServiceMode, SpriteItem, SyncPoint, SystemRow, TextureMeta, TilemapItem, Timeline, Topic, TraceComparison, TypeSchema, VariantFields, VariantSchema, Vec2, WorkerCrash, WorkerGame };
+export type { AssetId, AssetKind, AssetTexts, BranchId, BranchInfo, BuildEvent, Bytes, CameraItem, Cause, Claim, ClientMessage, Color, Command, ComponentValue, ConsoleLevel, DebugDrawFrame, Diagnostic, Difference, DivergenceKind, DivergenceReport, Document, Entity, EntityDivergence, EntityHash, EntityRow, ErrorCode, Event, FailureCode, FieldSchema, FieldTarget, FileChange, FileEntry, Filter, GameInfo, GameOutput, Grid, Hash64, HashTree, InstanceInfo, Item, JsonValue, KeyboardPart, LayerInfo, LiveDevices, MessageTransport, NamedHash, NamedSchema, Outcome, OutputStream, OverrideInfo, PathSegment, PauseReason, PluginBundle, PluginSource, Primitive, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo, ProjectOutcome, ProjectReply, ProjectReplyFor, ProjectReplyTypes, ProjectRequest, ProjectServerMessage, ProtocolError, ProtocolPeer, RawGamepad, RecordedEvent, RenderFrame, Reply, ReplyFor, ReplyTypes, RootCause, RootCauseKind, Rot, ServerMessage, ServiceMode, SpriteItem, SyncPoint, SystemRow, TextureMeta, TilemapItem, Timeline, Topic, TraceComparison, TypeSchema, VariantFields, VariantSchema, Vec2, WorkerCrash, WorkerGame };
 }

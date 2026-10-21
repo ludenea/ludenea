@@ -2,6 +2,7 @@
 import type { AssetId } from "./AssetId";
 import type { BranchId } from "./BranchId";
 import type { Bytes } from "./Bytes";
+import type { Claim } from "./Claim";
 import type { ComponentValue } from "./ComponentValue";
 import type { DebugDrawFrame } from "./DebugDrawFrame";
 import type { Difference } from "./Difference";
@@ -19,7 +20,7 @@ import type { SystemRow } from "./SystemRow";
 import type { Timeline } from "./Timeline";
 import type { TraceComparison } from "./TraceComparison";
 
-export type Reply = { "type": "done" } | { "type": "stepped", tick: number, hashes: Array<Hash64>, } | { "type": "hash", tick: number, hash: Hash64, pending: boolean, } | { "type": "hash_tree", tick: number, tree: HashTree, } | { "type": "snapshot", tick: number, snapshot: Bytes, } | { "type": "differences", differences: Array<Difference>, } | { "type": "trace_comparison" } & TraceComparison | { "type": "entities", total: number, rows: Array<EntityRow>, } | { "type": "entity", entity: Entity, components: { [key in string]: ComponentValue }, } | { "type": "resources", resources: { [key in string]: ComponentValue }, } | { "type": "spawned", entity: Entity, } | { "type": "scene", ron: string, } | { "type": "timeline" } & Timeline | { "type": "session", scene: string, 
+export type Reply = { "type": "done" } | { "type": "players", claims: Array<Claim>, } | { "type": "stepped", tick: number, hashes: Array<Hash64>, } | { "type": "hash", tick: number, hash: Hash64, pending: boolean, } | { "type": "hash_tree", tick: number, tree: HashTree, } | { "type": "snapshot", tick: number, snapshot: Bytes, } | { "type": "differences", differences: Array<Difference>, } | { "type": "trace_comparison" } & TraceComparison | { "type": "entities", total: number, rows: Array<EntityRow>, } | { "type": "entity", entity: Entity, components: { [key in string]: ComponentValue }, } | { "type": "resources", resources: { [key in string]: ComponentValue }, } | { "type": "spawned", entity: Entity, } | { "type": "scene", ron: string, } | { "type": "timeline" } & Timeline | { "type": "session", scene: string, 
 /**
  * The scene as last saved, when `scene` holds unsaved edits.
  */

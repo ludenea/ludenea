@@ -67,11 +67,18 @@ fn first_recorded_tick(host: &mut Host, devices: LiveDevices) -> Vec<u8> {
 #[test]
 fn set_players_records_that_many_players() {
     let mut host = host();
-    host.handle(Command::SetPlayers {
-        players: 3,
-        claims: None,
-    })
-    .unwrap();
+    let reply = host
+        .handle(Command::SetPlayers {
+            players: 3,
+            claims: None,
+        })
+        .unwrap();
+    assert_eq!(
+        reply,
+        Reply::Players {
+            claims: ludenea_app::players::automatic_claims(3)
+        }
+    );
     let Reply::Session { inputs, .. } = host.handle(Command::ExportSession).unwrap() else {
         panic!("a session");
     };
@@ -166,7 +173,7 @@ fn disconnected_gamepad_records_the_default_input() {
 }
 
 #[test]
-fn a_connected_idle_gamepad_records_the_mapping_of_an_idle_input() {
+fn a_connected_idle_gamepad_leaves_live_input_off() {
     let mut host = host();
     let claims = vec![Claim {
         keyboard: None,
@@ -279,5 +286,60 @@ fn tick_progress_grows_between_ticks() {
     assert!(
         0.0 < quarter && quarter < half && half < 1.0,
         "{quarter} {half}"
+    );
+}
+
+#[test]
+fn set_players_replies_the_claims_it_applied() {
+    let mut host = host();
+    let claims = vec![
+        Claim {
+            keyboard: Some(KeyboardPart::Right),
+            gamepad: Some(2),
+        },
+        Claim {
+            keyboard: None,
+            gamepad: None,
+        },
+    ];
+    let reply = host
+        .handle(Command::SetPlayers {
+            players: 2,
+            claims: Some(claims.clone()),
+        })
+        .unwrap();
+    assert_eq!(reply, Reply::Players { claims });
+}
+
+#[test]
+fn loading_a_replay_resets_automatic_claims() {
+    let mut host = host();
+    let swap = |host: &mut Host| {
+        let swapped = vec![
+            Claim {
+                keyboard: Some(KeyboardPart::Right),
+                gamepad: None,
+            },
+            Claim {
+                keyboard: Some(KeyboardPart::Left),
+                gamepad: None,
+            },
+        ];
+        host.handle(Command::SetPlayers {
+            players: 2,
+            claims: Some(swapped),
+        })
+        .unwrap();
+    };
+    swap(&mut host);
+    let Reply::Replay { replay } = host.handle(Command::ExportReplay { branch: None }).unwrap()
+    else {
+        panic!("a replay");
+    };
+    swap(&mut host);
+    host.handle(Command::LoadReplay { replay }).unwrap();
+    assert_eq!(
+        first_recorded_tick(&mut host, keys(&["KeyA", "KeyL"])),
+        vec![101, 102]
     );
 }

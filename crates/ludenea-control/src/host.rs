@@ -480,10 +480,10 @@ impl Host {
             Command::LoadInputs { log } => {
                 let log = InputLog::decode(&log.0)
                     .map_err(|e| ProtocolError::new(ErrorCode::InvalidInputs, e))?;
-                self.session
-                    .load_inputs(sim, log)
-                    .map_err(|e| self.fail(e))?;
+                let loaded = self.session.load_inputs(sim, log);
+                // The session took the log's player count even when seeking to tick 0 failed.
                 self.reset_claims();
+                loaded.map_err(|e| self.fail(e))?;
                 Ok(Reply::Done)
             }
             Command::LoadEdits { log } => {
@@ -645,12 +645,13 @@ impl Host {
                 }
                 check_claims(&claims)
                     .map_err(|e| ProtocolError::new(ErrorCode::InvalidInputs, e))?;
-                self.session
-                    .load_inputs(sim, InputLog::new(players))
-                    .map_err(|e| self.fail(e))?;
-                self.claims = claims;
-                self.live = None;
-                Ok(Reply::Done)
+                let loaded = self.session.load_inputs(sim, InputLog::new(players));
+                // The session took the player count even when seeking to tick 0 failed: the
+                // claims follow it, the requested ones only when they fit.
+                self.reset_claims();
+                loaded.map_err(|e| self.fail(e))?;
+                self.claims = claims.clone();
+                Ok(Reply::Players { claims })
             }
             Command::Undo => {
                 self.session.undo(sim).map_err(|e| self.fail(e))?;

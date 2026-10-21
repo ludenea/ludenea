@@ -145,8 +145,12 @@ describe("live input capture", () => {
   });
 
   it("set_player_count_sends_set_players", async () => {
+    const claims = [
+      { keyboard: "Left", gamepad: 0 },
+      { keyboard: "Right", gamepad: null },
+    ];
     const host = await testEditor([]);
-    const game = await testGame(undefined, { input: { kind: "unit" } });
+    const game = await testGame((command) => (command.type === "set_players" ? { type: "players", claims } : { type: "done" }), { input: { kind: "unit" } });
     act(() => host.setControl(game.client));
     registerPlayerCommands(host.editor);
 
@@ -157,7 +161,7 @@ describe("live input capture", () => {
     await host.editor.commands.run("input.set-players-2");
 
     expect(game.sent.filter((command) => command.type === "set_players")).toEqual([{ type: "set_players", players: 2, claims: null }]);
-    expect(host.editor.console.list().map(({ text }) => text)).toContain("2 players, player 1: the left half of the keyboard and gamepad 1; player 2: the right half of the keyboard and gamepad 2");
+    expect(host.editor.console.list().map(({ text }) => text)).toContain("2 players, player 1: the left half of the keyboard and gamepad 1; player 2: the right half of the keyboard");
   });
 
   it("set_player_count_without_a_game_fails_naming_the_cause", async () => {
