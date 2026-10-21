@@ -223,7 +223,17 @@ impl Host {
                     .session
                     .step(&mut self.simulation, self.live.as_deref())
                 {
-                    Ok(_) => self.ticked(),
+                    Ok(_) => {
+                        // The session just hashed the tick: without edits applied at it,
+                        // that is the world's hash, and hashing 10,000 entities twice a
+                        // tick doubled its cost.
+                        let tick = self.simulation.tick();
+                        let hash = self
+                            .session
+                            .recorded_hash(tick)
+                            .filter(|_| !self.session.is_pending());
+                        self.ticked_with(hash);
+                    }
                     Err(error) => {
                         // Ticks that did not run stay owed: play waits for resimulation to
                         // catch up, or stops on a failure.
@@ -1522,9 +1532,14 @@ impl Host {
 
     /// Announces the current state with `Ticked`.
     fn ticked(&mut self) {
+        self.ticked_with(None);
+    }
+
+    /// Announces the current tick, whose world hashes to `hash` when it is known already.
+    fn ticked_with(&mut self, hash: Option<u64>) {
         self.events.push(Event::Ticked {
             tick: self.simulation.tick(),
-            hash: Hash64(self.simulation.hash()),
+            hash: Hash64(hash.unwrap_or_else(|| self.simulation.hash())),
             pending: self.session.is_pending(),
             playing: self.playing,
             effective_rate: self.pacer.effective_rate(),

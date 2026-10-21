@@ -642,6 +642,43 @@ fn ticked_after_an_edit_says_the_edit_is_pending() {
 }
 
 #[test]
+fn played_ticks_announce_the_hash_of_the_world_edits_included() {
+    let mut host = loaded(20);
+    step(&mut host, 3);
+    let entity = first_crate(&mut host);
+    ok(&mut host, set_pose(entity, &["position", "x"], json!(0.1)));
+    ok(&mut host, Command::Seek { tick: 0 });
+    host.advance(0.0);
+    ok(&mut host, Command::Play);
+    let mut announced = Vec::new();
+    for _ in 0..6 {
+        for event in host.advance(1.0 / 60.0) {
+            if let Event::Ticked {
+                tick,
+                hash: ticked,
+                pending,
+                ..
+            } = event
+            {
+                assert_eq!(ticked, hash(&mut host), "tick {tick}");
+                announced.push((tick, pending));
+            }
+        }
+    }
+    assert_eq!(
+        announced,
+        [
+            (1, false),
+            (2, false),
+            (3, true),
+            (4, false),
+            (5, false),
+            (6, false)
+        ]
+    );
+}
+
+#[test]
 fn a_spawn_that_needs_more_local_identifiers_than_remain_is_an_invalid_edit() {
     // The new entity alone would take the last `next_id`. In the second scene it fits, but
     // the cached contact names two stale entities, which need a local identifier each.
