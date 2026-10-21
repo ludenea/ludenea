@@ -5,22 +5,12 @@ edition.workspace = true
 
 [features]
 ts = ["dep:ts-rs", "ludenea-ecs/ts", "ludenea-math/ts"]
-# The browser viewport renderer (`render`), built by `cargo xtask wasm-renderer`. Off by default:
-# the simulation never pulls wgpu.
-render = ["dep:serde_json", "dep:wgpu", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys"]
 
 [dependencies]
 ts-rs = { workspace = true, optional = true }
 ludenea-math.workspace = true
 ludenea-ecs.workspace = true
 serde.workspace = true
-serde_json = { workspace = true, optional = true }
-
-[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
-wgpu = { workspace = true, optional = true, features = ["std", "wgsl", "webgpu", "webgl"] }
-wasm-bindgen = { workspace = true, optional = true }
-wasm-bindgen-futures = { workspace = true, optional = true }
-web-sys = { workspace = true, optional = true, features = ["HtmlCanvasElement"] }
 
 [dev-dependencies]
 postcard.workspace = true

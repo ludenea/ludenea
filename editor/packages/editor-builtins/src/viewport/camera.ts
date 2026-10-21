@@ -4,6 +4,8 @@ import type { CameraItem, DebugDrawFrame, Entity, Vec2 } from "@ludenea/control-
 export type Camera = { center: Vec2; pixelsPerMeter: number };
 /** The viewport's size in CSS pixels. */
 export type Size = { width: number; height: number };
+/** A world box, in meters. */
+export type Box = { min: Vec2; max: Vec2 };
 /** A camera as the renderer takes it: `view` is the minimum visible width and height, in meters. */
 export type CameraView = { center: Vec2; view: Vec2 };
 type Point = { x: number; y: number };
@@ -58,15 +60,17 @@ export const panBy = (camera: Camera, dx: number, dy: number): Camera => ({
 
 const sameEntity = (a: Entity | null, b: Entity) => a !== null && a.index === b.index && a.generation === b.generation;
 
+/** The smallest box holding both, either of which may be missing. */
+export function union(a: Box | null, b: Box | null): Box | null {
+  if (!a || !b) return a ?? b;
+  return { min: { x: Math.min(a.min.x, b.min.x), y: Math.min(a.min.y, b.min.y) }, max: { x: Math.max(a.max.x, b.max.x), y: Math.max(a.max.y, b.max.y) } };
+}
+
 /** The bounds of what `entities` draw in `layers`, or null when they draw nothing there. */
-export function bounds(frame: DebugDrawFrame, layers: readonly string[], entities: readonly Entity[]): { min: Vec2; max: Vec2 } | null {
-  let box: { min: Vec2; max: Vec2 } | null = null;
+export function bounds(frame: DebugDrawFrame, layers: readonly string[], entities: readonly Entity[]): Box | null {
+  let box: Box | null = null;
   const grow = (point: Vec2, margin = 0) => {
-    const min = { x: point.x - margin, y: point.y - margin };
-    const max = { x: point.x + margin, y: point.y + margin };
-    box = box
-      ? { min: { x: Math.min(box.min.x, min.x), y: Math.min(box.min.y, min.y) }, max: { x: Math.max(box.max.x, max.x), y: Math.max(box.max.y, max.y) } }
-      : { min, max };
+    box = union(box, { min: { x: point.x - margin, y: point.y - margin }, max: { x: point.x + margin, y: point.y + margin } });
   };
   for (const layer of layers) {
     for (const { entity, primitive } of frame.layers[layer] ?? []) {

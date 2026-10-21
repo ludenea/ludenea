@@ -64,13 +64,18 @@ hash, those of the golden trace and replays included.
   textures to the next push. `panicForTesting` exists only in a build with the `test-hooks`
   feature (`cargo xtask wasm-render --test-hooks`), for the renderer page's tests. The free
   functions `textureFrames(png, meta)`, `ghostFrame(frame)` (the ghost style of a debug
-  draw, as `ludenea_draw`'s viewport renderer has it) and `setPanicHandler(handler)` (called
+  draw, `DebugDrawFrame::ghost`) and `setPanicHandler(handler)` (called
   with the message of any panic in the module) join it.
 - Breaking: every `WebRenderer` error is a JavaScript `Error` whose `name` says what failed
   (`NoAdapter`, `Gpu`, `Limit`, `DeviceLost`, `InvalidAtlas`, `InvalidInput`, `Surface`,
   `NoSurfaceTexture`) and whose `message` is the cause, instead of a string. A lost device is
   reported by `draw` as `DeviceLost` before the canvas is asked for a texture. The standalone
   web page tells a canvas without a texture this frame by the name `NoSurfaceTexture`.
+- Breaking: `ludenea_draw::render` and its `render` feature are removed, with
+  `cargo xtask wasm-renderer` and the editor's `pnpm build:wasm` and `@ludenea/debug-draw-wasm`:
+  the editor's viewport draws, picks and frames with `WebRenderer`, and the divergence ghost
+  is styled by `ghostFrame`. The size-optimized browser build profile is renamed
+  `wasm-render`.
 - `Claim::describe` names a claim's devices in words ("left keyboard half and gamepad 1");
   the native window's title and the web page's lobby (`WebLobby::describeClaims`, a JSON
   array of those texts in slot order) both show it.

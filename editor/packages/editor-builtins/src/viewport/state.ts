@@ -3,7 +3,7 @@ import type { Editor } from "@ludenea/editor-shell";
 import { onEntity } from "../inspector";
 import type { Store } from "../shared";
 import { assertEditable, batched, edit } from "../timeline/editing";
-import type { Camera, Size } from "./camera";
+import type { Box, Camera, Size } from "./camera";
 
 /** What the viewport's commands and panel share; kept while the panel is hidden. */
 export type ViewportState = Store<{
@@ -22,16 +22,24 @@ export type ViewportState = Store<{
 
 const POSE = "ludenea::Pose";
 
-/** What the open panel says the game camera shows, as an editor camera; `get` is null while no panel draws. */
-export type ShownCamera = { get: (() => Camera) | null };
+/**
+ * What the open panel says it draws; each is null while no panel draws. `camera`: what the game
+ * camera shows, as an editor camera. `bounds`: the box of the sprites and tilemaps `entities` draw.
+ */
+export type Shown = { camera: (() => Camera) | null; bounds: ((entities: readonly Entity[]) => Box | null) | null };
 
 /** The camera on screen: the game camera's equivalent while the view goes through it, else the editor's. */
-export const cameraOnScreen = (state: ViewportState, shown: ShownCamera): Camera => (state.get().gameCamera && shown.get ? shown.get() : state.get().camera);
+export const cameraOnScreen = (state: ViewportState, shown: Shown): Camera => (state.get().gameCamera && shown.camera ? shown.camera() : state.get().camera);
 
 /** Moves the view by `change`: it leaves the game camera, starting from what it showed, so the move shows at once. */
-export function moveCamera(state: ViewportState, shown: ShownCamera, change: (camera: Camera, size: Size) => Camera): void {
+export function moveCamera(state: ViewportState, shown: Shown, change: (camera: Camera, size: Size) => Camera): void {
   state.set({ camera: change(cameraOnScreen(state, shown), state.get().size), gameCamera: false });
 }
+
+export const same = (a: Entity, b: Entity) => a.index === b.index && a.generation === b.generation;
+
+/** What a click hits: the host's hits (colliders) first, then the renderer's (sprites and tilemaps) not among them. */
+export const mergeHits = (host: readonly Entity[], drawn: readonly Entity[]): Entity[] => [...host, ...drawn.filter((entity) => !host.some((hit) => same(hit, entity)))];
 
 export const visibleLayers = (control: ControlClient | null, state: ViewportState): string[] =>
   (control?.game.debug_layers ?? []).filter((layer) => !state.get().hidden.includes(layer));

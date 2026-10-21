@@ -412,8 +412,7 @@ The front end lives in `editor/` (pnpm workspace; Node.js 24 and the pnpm versio
 
 ```sh
 pnpm -C editor install --frozen-lockfile
-pnpm -C editor build:wasm              # the divergence ghost's style, before typecheck and build
-pnpm -C editor build:render            # the viewport's renderer, into editor/packages/render-wasm
+pnpm -C editor build:render            # the renderer, into editor/packages/render-wasm, before typecheck and build
 pnpm -C editor typecheck
 pnpm -C editor test
 pnpm -C editor build

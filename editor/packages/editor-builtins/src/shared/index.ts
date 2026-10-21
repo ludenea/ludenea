@@ -1,6 +1,11 @@
 import type { AssetId, ControlClient, ProjectInfo } from "@ludenea/control-client";
+import init from "@ludenea/render-wasm";
 import { runReported, type Editor } from "@ludenea/editor-shell";
 import { useLayoutEffect, useRef, useSyncExternalStore, type UIEvent } from "react";
+
+let renderModule: Promise<unknown> | undefined;
+/** Loads the renderer's WebAssembly module once for every built-in: loaded twice, it would be two instances. */
+export const loadRenderModule = () => (renderModule ??= init());
 
 /** The project folders the asset browser lists. */
 export const ASSET_FOLDERS = ["assets", "scenes"];

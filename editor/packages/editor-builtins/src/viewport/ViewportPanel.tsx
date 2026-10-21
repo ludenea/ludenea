@@ -1,13 +1,13 @@
-import init, { WebRenderer } from "@ludenea/render-wasm";
+import { WebRenderer } from "@ludenea/render-wasm";
 import type { Entity, Vec2 } from "@ludenea/control-client";
 import { runReported, type Editor, type ViewportOverlay } from "@ludenea/editor-shell";
 import { useEffect, useRef, useState } from "react";
 import { captureInput } from "../input/capture";
-import { errorText, reportedOnce, shared, useGame } from "../shared";
+import { errorText, loadRenderModule, reportedOnce, shared, useGame } from "../shared";
 import { ResimulatingNotice } from "../timeline/editing";
-import { fromCameraItem, panBy, screenToWorld, toCameraView, zoomAt, type Camera, type Size } from "./camera";
+import { fromCameraItem, panBy, screenToWorld, toCameraView, zoomAt, type Box, type Camera, type Size } from "./camera";
 import { FrameFeed } from "./frames";
-import { moveBy, moveCamera, visibleLayers, type ShownCamera, type ViewportState } from "./state";
+import { mergeHits, moveBy, moveCamera, same, visibleLayers, type Shown, type ViewportState } from "./state";
 import { drawOverlay } from "./overlay";
 import { loadTextures } from "./textures";
 
@@ -16,12 +16,8 @@ const DRAG_THRESHOLD = 3;
 const WHEEL_ZOOM = 0.0015;
 const ARROWS: { [key: string]: string } = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" };
 
-let loaded: Promise<unknown> | undefined;
-/** Loads the renderer's WebAssembly module once, for every use of it. */
-const loadRenderer = () => (loaded ??= init());
-
 async function createRenderer(canvas: HTMLCanvasElement): Promise<WebRenderer> {
-  await loadRenderer();
+  await loadRenderModule();
   return WebRenderer.create(canvas);
 }
 
@@ -49,8 +45,6 @@ type Press = {
   target?: Entity | null;
 };
 
-const same = (a: Entity, b: Entity) => a.index === b.index && a.generation === b.generation;
-
 /**
  * `failedOverlays`: the plugin overlays whose failure is reported already, kept across mounts: once
  * per registration. `textureWarnings`: the texture warnings logged already, kept across mounts.
@@ -67,7 +61,7 @@ export function ViewportPanel({
   state: ViewportState;
   failedOverlays: Set<ViewportOverlay>;
   textureWarnings: Set<string>;
-  shown: ShownCamera;
+  shown: Shown;
 }) {
   const game = useGame(editor);
   const root = useRef<HTMLDivElement>(null);
@@ -145,7 +139,13 @@ export function ViewportPanel({
       const { camera, size, gameCamera } = state.get();
       return gameCamera && renderer ? shownCamera(renderer, size) : camera;
     };
-    shown.get = viewCamera;
+    shown.camera = viewCamera;
+    // What the last draw showed of `entities`' sprites and tilemaps.
+    const drawnBounds = (entities: readonly Entity[]): Box | null => {
+      const box = renderer?.bounds(JSON.stringify(entities));
+      return box ? (JSON.parse(box) as Box) : null;
+    };
+    shown.bounds = drawnBounds;
 
     const paint = () => {
       repaint = false;
@@ -226,7 +226,12 @@ export function ViewportPanel({
       if (event.button === 1 || (event.button === 0 && space)) {
         press = { mode: "pan", start: at, last: at, moved: false, shift: false };
       } else if (event.button === 0 && control) {
-        const picked = control.request({ type: "pick", point: world(at) }).then(({ entities }) => entities);
+        // The renderer answers for what it drew last, so it is asked now, through the camera on screen.
+        const drawn = new Promise<Entity[]>((resolve) =>
+          resolve(renderer ? (JSON.parse(renderer.pick(at.x, at.y, JSON.stringify(toCameraView(viewCamera(), state.get().size)))) as Entity[]) : []),
+        );
+        const hosted = control.request({ type: "pick", point: world(at) }).then(({ entities }) => entities);
+        const picked = Promise.all([hosted, drawn]).then(([host, sprites]) => mergeHits(host, sprites));
         const current: Press = { mode: "select", start: at, last: at, moved: false, shift: event.shiftKey, picked };
         picked.then((entities) => {
           const selection = editor.selection.getState();
@@ -338,7 +343,8 @@ export function ViewportPanel({
       resizes?.disconnect();
       stops.forEach((stop) => stop());
       feed.dispose();
-      if (shown.get === viewCamera) shown.get = null;
+      if (shown.camera === viewCamera) shown.camera = null;
+      if (shown.bounds === drawnBounds) shown.bounds = null;
       for (const [type, listener] of listeners) element.removeEventListener(type, listener);
       element.removeEventListener("wheel", onWheel);
       renderer?.free();

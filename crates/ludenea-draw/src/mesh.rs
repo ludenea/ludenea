@@ -1,4 +1,4 @@
-//! Triangle lists for the viewport renderer, built from a frame without a GPU.
+//! Triangle lists for the renderer's debug draw, built from a frame without a GPU.
 
 use std::collections::BTreeSet;
 

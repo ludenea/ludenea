@@ -511,7 +511,7 @@ pub fn texture_frames(png: &[u8], meta_json: &str) -> Result<String, JsValue> {
 /// `frame_json` (a `DebugDrawFrame`) in the ghost style, as JSON: what the editor draws for
 /// another branch.
 #[wasm_bindgen(js_name = ghostFrame)]
-pub fn ghost_frame(frame_json: &str) -> Result<String, JsValue> {
+pub fn ghost(frame_json: &str) -> Result<String, JsValue> {
     let frame: DebugDrawFrame = serde_json::from_str(frame_json).map_err(invalid)?;
     to_json(&frame.ghost())
 }

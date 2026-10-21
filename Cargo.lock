@@ -2005,10 +2005,6 @@ dependencies = [
  "serde",
  "serde_json",
  "ts-rs",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
- "wgpu",
 ]
 
 [[package]]

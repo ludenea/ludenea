@@ -1,7 +1,6 @@
 //! What a renderer draws, as plain data: the render frame (`frame`) a simulation extracts
 //! each tick, and the debug draw primitives simulation code asks to be drawn over the world,
-//! grouped in named layers. `mesh` turns a debug draw frame into triangles; `render` (feature
-//! `render`, browser only) draws them for the editor's viewport.
+//! grouped in named layers. `mesh` turns a debug draw frame into triangles.
 
 use std::collections::BTreeMap;
 
@@ -12,8 +11,6 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub mod frame;
 pub mod mesh;
-#[cfg(all(feature = "render", target_arch = "wasm32", target_os = "unknown"))]
-pub mod render;
 
 /// `0xRRGGBBAA`.
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize, Schema)]

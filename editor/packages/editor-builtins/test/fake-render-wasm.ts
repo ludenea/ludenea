@@ -1,7 +1,7 @@
 // Stands in for the generated `@ludenea/render-wasm` package in tests (see vitest.config.ts),
 // so they run without the WebAssembly build. Frames pushed as bytes are their JSON in UTF-8.
 import type * as Real from "@ludenea/render-wasm";
-import type { RenderFrame, Vec2 } from "@ludenea/control-client";
+import type { Entity, RenderFrame, Vec2 } from "@ludenea/control-client";
 
 type Shape = Omit<Real.WebRenderer, "backend" | "set_atlas" | typeof Symbol.dispose>;
 type CameraView = { center: Vec2; view: Vec2 };
@@ -42,6 +42,10 @@ export class WebRenderer implements Shape {
   readonly pushed: RenderFrame[] = [];
   /** How many of the next draws find no surface texture. */
   skips = 0;
+  /** What `pick` answers, topmost first, wherever it is asked. */
+  hits: Entity[] = [];
+  /** What `bounds` answers for any entities: the box of the sprites and tilemaps drawn. */
+  box: { min: Vec2; max: Vec2 } | undefined = undefined;
   private css = { width: 1, height: 1 };
 
   static async create(canvas: HTMLCanvasElement): Promise<WebRenderer> {
@@ -76,12 +80,14 @@ export class WebRenderer implements Shape {
     throw named("NoSurfaceTexture", "the canvas has no texture this frame");
   }
 
-  pick(): string {
-    return "[]";
+  pick(x: number, y: number, camera?: string | null): string {
+    this.calls.push({ method: "pick", args: [x, y, camera ?? null] });
+    return JSON.stringify(this.hits);
   }
 
-  bounds(): string | undefined {
-    return undefined;
+  bounds(entities: string): string | undefined {
+    this.calls.push({ method: "bounds", args: [JSON.parse(entities)] });
+    return this.box && JSON.stringify(this.box);
   }
 
   /** As the real one: through `camera`, else the last frame's camera, fitted to the canvas. */

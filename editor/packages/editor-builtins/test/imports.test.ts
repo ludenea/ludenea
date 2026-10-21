@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 // Built-ins get no more than project plugins: the shared runtime modules, plus the list library
-// and the renderers.
+// and the renderer.
 const ALLOWED = new Set([
   "react",
   "react/jsx-runtime",
@@ -12,7 +12,6 @@ const ALLOWED = new Set([
   "@ludenea/editor-shell",
   "@ludenea/control-client",
   "@tanstack/react-virtual",
-  "@ludenea/debug-draw-wasm",
   "@ludenea/render-wasm",
 ]);
 const SPECIFIER = /\b(?:import|export)\b[^"'`;]*?\bfrom\s*["']([^"']+)["']|\bimport\s*\(?\s*["']([^"']+)["']/g;

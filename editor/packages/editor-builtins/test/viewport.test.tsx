@@ -8,6 +8,7 @@ import { consolePlugin } from "../src/console";
 import { viewportPlugin } from "../src/viewport";
 import { shared } from "../src/shared";
 import { tickOf } from "../src/viewport/frames";
+import { mergeHits } from "../src/viewport/state";
 import { bounds, fromCameraItem, screenToWorld, toCameraView, worldToScreen, zoomAt } from "../src/viewport/camera";
 import { renderers, script, type WebRenderer } from "./fake-render-wasm";
 import { renderFrame, renderPanel, settle, testEditor, testGame } from "./support";
@@ -360,6 +361,84 @@ describe("viewport", () => {
     await act(() => host.editor.commands.run("viewport.frame-selection"));
     // A one-meter box in a 400 by 300 view, with a fifth of margin each side: 300 * 0.6.
     await waitFor(() => expect(camera()).toEqual([4, -2, 180]));
+  });
+
+  it("click_on_a_sprite_without_a_collider_selects_it", async () => {
+    const { host, game, view } = await viewport((command) => (command.type === "pick" ? { type: "picked", entities: [] } : undefined));
+    const renderer = renderers.at(-1)!;
+    renderer.hits = [entity(5)];
+    fireEvent.pointerDown(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    fireEvent.pointerUp(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    await settle();
+    expect(host.editor.selection.getState().entities).toEqual([entity(5)]);
+    // The renderer picks in canvas pixels through the camera on screen, as the host does at its world point.
+    expect(renderer.calls.filter((call) => call.method === "pick").at(-1)!.args).toEqual([250, 100, JSON.stringify({ center: { x: 0, y: 0 }, view: { x: 8, y: 6 } })]);
+    expect(sentOf(game.sent, "pick").at(-1)).toEqual({ type: "pick", point: { x: 1, y: 1 } });
+  });
+
+  it("click_merges_collider_and_sprite_hits_without_duplicates", async () => {
+    expect(mergeHits([entity(1), entity(2)], [entity(2), entity(3)])).toEqual([entity(1), entity(2), entity(3)]);
+    const { host, view } = await viewport((command) => (command.type === "pick" ? { type: "picked", entities: [entity(1), entity(2)] } : undefined));
+    renderers.at(-1)!.hits = [entity(2), entity(3)];
+    const click = (shiftKey: boolean) => {
+      fireEvent.pointerDown(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1, shiftKey });
+      fireEvent.pointerUp(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1, shiftKey });
+    };
+    // The host's hits come first: its topmost is the one a click selects.
+    click(false);
+    await settle();
+    expect(host.editor.selection.getState().entities).toEqual([entity(1)]);
+    // Shift adds the topmost hit, the host's, to the selection.
+    act(() => host.editor.selection.getState().select([entity(3)]));
+    click(true);
+    await settle();
+    expect(host.editor.selection.getState().entities).toEqual([entity(3), entity(1)]);
+  });
+
+  it("frame_selection_fits_a_sprite_only_entity", async () => {
+    const { host } = await viewport();
+    const renderer = renderers.at(-1)!;
+    renderer.box = { min: { x: 2, y: -1 }, max: { x: 4, y: 1 } };
+    act(() => host.editor.selection.getState().select([entity(5)]));
+    await act(() => host.editor.commands.run("viewport.frame-selection"));
+    // A 2 by 2 meter box in a 400 by 300 view, with a fifth of margin each side: 150 * 0.6.
+    await waitFor(() => expect(camera()).toEqual([3, 0, 90]));
+    expect(renderer.calls.filter((call) => call.method === "bounds").at(-1)!.args).toEqual([[entity(5)]]);
+  });
+
+  it("frame_selection_fits_the_union_of_sprites_and_debug_shapes", async () => {
+    const { host } = await viewport((command) => (command.type === "get_render_frame" ? renderFrame(7, circleOf(1, 4, -2)) : undefined));
+    renderers.at(-1)!.box = { min: { x: 2, y: -1 }, max: { x: 4, y: 1 } };
+    act(() => host.editor.selection.getState().select([entity(1)]));
+    await act(() => host.editor.commands.run("viewport.frame-selection"));
+    // From (2, -2.5) to (4.5, 1): 2.5 by 3.5 meters, the height decides: 300 / 3.5 * 0.6.
+    await waitFor(() => expect(camera()?.slice(0, 2)).toEqual([3.25, -0.75]));
+    expect(camera()![2]).toBeCloseTo((300 / 3.5) * 0.6, 6);
+  });
+
+  it("missing_texture_entity_is_still_selectable", async () => {
+    script.refused = [{ id: "00000000000000000000000000000a01", path: "assets/gone.png", message: "the PNG cannot be decoded" }];
+    const sprite = { entity: entity(6), layer: 0, order: 0, texture: "00000000000000000000000000000a01", frame: 0, position: { x: 1, y: 1 }, rotation: { cos: 1, sin: 0 }, flip_x: false, flip_y: false, tint: 0xffffffff };
+    const { host, view } = await viewport(
+      (command) => {
+        if (command.type === "get_render_frame") return { type: "render_frame", frame: frameAt(7, { sprites: [sprite] }) };
+        if (command.type === "pick") return { type: "picked", entities: [] };
+        return undefined;
+      },
+      {},
+      textures([{ path: "assets/gone.png", id: "00000000000000000000000000000a01" }]),
+    );
+    await waitFor(() => expect(host.editor.console.list().map(({ text }) => text)).toContain("assets/gone.png: the PNG cannot be decoded"));
+    // The renderer draws it as its placeholder, and picks and bounds what it draws.
+    const renderer = renderers.at(-1)!;
+    renderer.hits = [entity(6)];
+    renderer.box = { min: { x: 0.5, y: 0.5 }, max: { x: 1.5, y: 1.5 } };
+    fireEvent.pointerDown(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    fireEvent.pointerUp(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    await settle();
+    expect(host.editor.selection.getState().entities).toEqual([entity(6)]);
+    await act(() => host.editor.commands.run("viewport.frame-selection"));
+    await waitFor(() => expect(camera()).toEqual([1, 1, 180]));
   });
 
   it("drag_outline_is_drawn_while_dragging", async () => {
@@ -865,6 +944,7 @@ describe("viewport frames", () => {
     fireEvent.pointerUp(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
     await settle();
     expect(sentOf(game.sent, "pick").at(-1)).toEqual({ type: "pick", point: { x: 11, y: 6 } });
+    expect(renderer.calls.filter((call) => call.method === "pick").at(-1)!.args).toEqual([250, 100, JSON.stringify({ center: { x: 10, y: 5 }, view: { x: 8, y: 6 } })]);
 
     await act(() => host.editor.commands.run("viewport.toggle-game-camera"));
     await animationFrames(2);

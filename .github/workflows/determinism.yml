@@ -30,10 +30,9 @@ jobs:
       # The desktop backend, outside the workspace with a lockfile of its own.
       - run: cargo fmt --manifest-path editor/apps/desktop/src-tauri/Cargo.toml --all --check
       - run: cargo doc --locked --no-deps --workspace
-      # The browser: the facade's entry, the Web Worker transport, the viewport renderer, and
-      # the renderer on WebGPU and WebGL2.
+      # The browser: the facade's entry, the Web Worker transport, and the renderer on WebGPU and
+      # WebGL2.
       - run: cargo clippy --locked --target wasm32-unknown-unknown -p ludenea -p ludenea-control -p ludenea-runtime -p boxes -p swarm --lib -- -D warnings
-      - run: cargo clippy --locked --target wasm32-unknown-unknown -p ludenea-draw --features render --lib -- -D warnings
       - run: cargo clippy --locked --target wasm32-unknown-unknown -p ludenea-render --features web --lib -- -D warnings
       - run: cargo clippy --locked --target wasm32-unknown-unknown -p ludenea-runtime --features web --lib -- -D warnings
       # WebAssembly outside the browser: the command line tool that verifies the goldens.
@@ -225,7 +224,6 @@ jobs:
           cache-dependency-path: editor/pnpm-lock.yaml
       - run: pnpm -C editor install --frozen-lockfile
       - run: pnpm -C editor exec playwright install --with-deps chromium
-      - run: pnpm -C editor build:wasm
       - run: pnpm -C editor build:render
       - run: pnpm -C editor typecheck
       - run: pnpm -C editor test
@@ -311,8 +309,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: editor/pnpm-lock.yaml
       - run: pnpm -C editor install --frozen-lockfile
-      # The desktop front end bundles the renderers and the shared modules.
-      - run: pnpm -C editor build:wasm
+      # The desktop front end bundles the renderer and the shared modules.
       - run: pnpm -C editor build:render
       - run: pnpm -C editor/shared build
       - run: pnpm -C editor/apps/desktop build

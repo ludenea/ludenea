@@ -2,8 +2,8 @@ import type { ControlClient, DebugDrawFrame, Vec2 } from "@ludenea/control-clien
 import { definePlugin, type Disposable, type ViewportOverlay } from "@ludenea/editor-shell";
 import { registerPlayerCommands } from "../input/capture";
 import { createStore, shared } from "../shared";
-import { bounds, panBy, zoomAt, MAX_PIXELS_PER_METER, MIN_PIXELS_PER_METER, type Camera, type Size } from "./camera";
-import { moveBy, moveCamera, visibleLayers, type ShownCamera, type ViewportState } from "./state";
+import { bounds, panBy, union, zoomAt, MAX_PIXELS_PER_METER, MIN_PIXELS_PER_METER, type Camera, type Size } from "./camera";
+import { moveBy, moveCamera, visibleLayers, type Shown, type ViewportState } from "./state";
 import { ViewportPanel } from "./ViewportPanel";
 
 const PAN_PIXELS = 64;
@@ -26,7 +26,7 @@ export const viewportPlugin = definePlugin({
       gameCamera: false,
       revision: 0,
     });
-    const shown: ShownCamera = { get: null };
+    const shown: Shown = { camera: null, bounds: null };
     const camera = (change: (camera: Camera, size: Size) => Camera) => moveCamera(state, shown, change);
     const center = (size: Size) => ({ x: size.width / 2, y: size.height / 2 });
 
@@ -65,7 +65,9 @@ export const viewportPlugin = definePlugin({
       title: "Frame the selection in the viewport",
       run() {
         const { frame, size } = state.get();
-        const box = frame && bounds(frame, visibleLayers(editor.control, state), editor.selection.getState().entities);
+        const { entities } = editor.selection.getState();
+        // What the renderer draws of them (sprites and tilemaps) and what they draw for debugging.
+        const box = union(shown.bounds?.(entities) ?? null, frame && bounds(frame, visibleLayers(editor.control, state), entities));
         // Nothing drawn to frame (no selection, or not in a shown layer): the view stays.
         if (!box) return;
         // A fifth of the view as margin on each side.
