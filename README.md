@@ -253,6 +253,11 @@ cargo run --locked -p ludenea-serve -- build ~/games/my_game --web --out ~/games
 python3 -m http.server --directory ~/games/my_game-web
 ```
 
+A known limit of the page: the worker sends the render frame of every tick to the page as
+JSON text, about 2 MB per tick for 10,000 sprites, which the page then parses. A binary
+transfer of the frame is the planned follow-up. Until then the native window (`play`) is
+the reference for the performance target of 144 frames per second.
+
 Serve it with the editor and open `http://127.0.0.1:7878` in a browser; the editor is
 usable at once, and the game appears when its first build finishes:
 

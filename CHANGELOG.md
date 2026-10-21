@@ -75,7 +75,10 @@ hash, those of the golden trace and replays included.
   (`BuildError::File`). `game.json` (`WEB_GAME_VERSION` 1) holds `version`, `name`, the
   scene text (`scene`) and the asset texts (`assets`, `[identifier, text]` pairs); the page
   refuses another version. The project template declares `[features] web = ["ludenea/web"]`;
-  a project made before needs that line.
+  a project made before needs that line. Known limit: the worker sends each tick's render
+  frame to the page as JSON text (about 2 MB per tick for 10,000 sprites); a binary
+  transfer is the follow-up, and the native window is the reference for the performance
+  target.
 - `ludenea_runtime::web` (feature `web`, `wasm32-unknown-unknown` only) exports the
   standalone web page's lobby: `WebLobby` (`new`, `pressKey(code)` and
   `pressButton(gamepad, button)` returning the `LobbyEvent` as JSON, `claimsJson()`,
