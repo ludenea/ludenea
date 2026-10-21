@@ -84,7 +84,8 @@ pub struct WebRenderer {
     backend: &'static str,
     /// The size asked by the last `resize`, which the surface may be clamped below.
     size: Size,
-    /// The size of the last `resize` in CSS pixels, which `pick` and `screen_to_world` read.
+    /// The canvas's size in CSS pixels, which `pick` and `screen_to_world` read: its layout
+    /// size when the renderer is made, then the size of each `resize`.
     css_size: Size,
     /// The frame of the last push, which the next one blends from.
     pushed: Option<RenderFrame>,
@@ -137,9 +138,12 @@ fn to_json(value: &impl Serialize) -> Result<String, JsValue> {
 #[wasm_bindgen]
 impl WebRenderer {
     /// A renderer drawing into `canvas`, at the canvas's current size. A canvas wider or taller
-    /// than the device's `max_texture_dimension_2d` is refused.
+    /// than the device's `max_texture_dimension_2d` is refused. Until the first `resize`,
+    /// `pick` and `screen_to_world` read CSS pixels of the canvas's layout size (its pixel size
+    /// when it has no layout, as when it is not in the document).
     pub async fn create(canvas: HtmlCanvasElement) -> Result<WebRenderer, JsValue> {
         let (width, height) = (canvas.width().max(1), canvas.height().max(1));
+        let css_size = layout_size(&canvas).unwrap_or(Size { width, height });
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         descriptor.backends = wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL;
         let instance = wgpu::util::new_instance_with_webgpu_detection(descriptor).await;
@@ -225,7 +229,7 @@ impl WebRenderer {
             renderer,
             backend,
             size: Size { width, height },
-            css_size: Size { width, height },
+            css_size,
             pushed: None,
             before: None,
             drawn_alpha: 1.0,
@@ -428,6 +432,15 @@ fn frame_camera(frame: &RenderFrame) -> CameraView {
         .camera
         .as_ref()
         .map_or(DEFAULT_CAMERA, CameraView::from)
+}
+
+/// The canvas's layout size in CSS pixels, or `None` when it has no layout.
+fn layout_size(canvas: &HtmlCanvasElement) -> Option<Size> {
+    let (width, height) = (canvas.client_width(), canvas.client_height());
+    (width > 0 && height > 0).then_some(Size {
+        width: width as u32,
+        height: height as u32,
+    })
 }
 
 impl WebRenderer {

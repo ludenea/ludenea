@@ -70,6 +70,7 @@ declare global {
       badInputs(): Record<"json" | "overlay" | "bytes" | "camera" | "pngCount", Thrown | null>;
       panicked(): { received: string[]; thrown: boolean };
       pickHalfway(): Record<"beforeDraw" | "afterDraw", { halfway: Entity[]; current: Entity[]; bounds: Bounds | null }>;
+      pickOnAScaledCanvas(): Promise<{ picked: Entity[]; world: Vec2 }>;
       pickAcrossNewTextures(): Promise<Record<"drawn" | "blank" | "pushedAgain", { picked: Entity[]; bounds: Bounds | null }>>;
     };
   }

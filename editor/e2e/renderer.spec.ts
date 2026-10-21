@@ -168,6 +168,12 @@ test("pick_and_bounds_answer_for_what_the_last_draw_showed", async ({ page }) =>
   expect(afterDraw).toEqual({ halfway: [HERO], current: [], bounds: { min: { x: 0, y: 3 }, max: { x: 1, y: 4 } } });
 });
 
+test("pick_reads_css_pixels_before_the_first_resize", async ({ page }) => {
+  await start(page);
+  // At twice as many pixels as CSS pixels, reading the canvas's pixels would see world (-1, 3).
+  expect(await page.evaluate(() => window.fixture.pickOnAScaledCanvas())).toEqual({ picked: [HERO], world: { x: 0, y: 2 } });
+});
+
 test("new_textures_leave_nothing_to_pick_until_the_next_push", async ({ page }) => {
   await start(page);
   const answers = await page.evaluate(() => window.fixture.pickAcrossNewTextures());

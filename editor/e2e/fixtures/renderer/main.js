@@ -271,6 +271,30 @@ function pickHalfway() {
 }
 
 /**
+ * A renderer on a canvas of 256 by 256 pixels shown at 128 by 128 CSS pixels, never resized:
+ * what it picks and sees at CSS pixel (32, 32), where world (0, 2) is shown.
+ */
+async function pickOnAScaledCanvas() {
+  const other = document.createElement("canvas");
+  other.width = 256;
+  other.height = 256;
+  other.style.width = "128px";
+  other.style.height = "128px";
+  document.body.append(other);
+  const scaled = await WebRenderer.create(other);
+  try {
+    scaled.push_frame(JSON.stringify({ ...frame([sprite(1, [0, 2])]), tick: 1 }), "{}");
+    return {
+      picked: JSON.parse(scaled.pick(32, 32, undefined)),
+      world: JSON.parse(scaled.screen_to_world(32, 32, 1, undefined)),
+    };
+  } finally {
+    scaled.free();
+    other.remove();
+  }
+}
+
+/**
  * Draws a sprite at (0, 2), loads the textures again (which blanks the canvas until the next
  * push), then pushes it again: what a click at pixel (32, 32) hits at each step.
  */
@@ -342,5 +366,6 @@ window.fixture = {
   badInputs,
   panicked,
   pickHalfway,
+  pickOnAScaledCanvas,
   pickAcrossNewTextures,
 };
