@@ -189,6 +189,8 @@ type Topic = {
     "type": "ghost";
 } | {
     "type": "divergence";
+} | {
+    "type": "render_frames";
 };
 
 type Command = {
@@ -405,6 +407,9 @@ type Command = {
     "type": "get_render_frame";
     debug_layers: Array<string>;
 } | {
+    "type": "set_pushed_layers";
+    debug_layers: Array<string>;
+} | {
     "type": "pick";
     point: Vec2;
 } | {
@@ -607,6 +612,92 @@ type PauseReason = {
 };
 
 /**
+ * A render layer. Its draw order is its index in `RenderFrame::layers`.
+ */
+type LayerInfo = {
+    name: string;
+    /**
+     * How much the layer moves with the camera: 1.0 moves with the world, 0.0 is fixed to
+     * the screen.
+     */
+    parallax: number;
+};
+
+/**
+ * Rotation stored as cosine and sine of the angle, unit length (`cos² + sin² = 1`).
+ * `from_angle`, `integrate`, and `normalize` give `IDENTITY` for an input they cannot turn
+ * into a unit rotation; code that writes the fields directly keeps them unit length.
+ */
+type Rot = {
+    cos: number;
+    sin: number;
+};
+
+/**
+ * One sprite to draw.
+ */
+type SpriteItem = {
+    entity: Entity;
+    layer: number;
+    /**
+     * The draw order within the layer, lowest first.
+     */
+    order: number;
+    texture: AssetId;
+    frame: number;
+    position: Vec2;
+    rotation: Rot;
+    flip_x: boolean;
+    flip_y: boolean;
+    tint: Color;
+};
+
+/**
+ * One tilemap to draw.
+ */
+type TilemapItem = {
+    entity: Entity;
+    layer: number;
+    /**
+     * The draw order within the layer, lowest first.
+     */
+    order: number;
+    tileset: AssetId;
+    /**
+     * The bottom-left corner of the bottom-left cell.
+     */
+    position: Vec2;
+    cell_size: Vec2;
+    width: number;
+    height: number;
+    /**
+     * The tileset frame of each cell, `None` for an empty cell, row-major from the
+     * bottom-left cell.
+     */
+    tiles: Array<number | null>;
+};
+
+/**
+ * What a renderer draws for one tick.
+ */
+type RenderFrame = {
+    tick: number;
+    camera: CameraItem | null;
+    /**
+     * The app's render layers, in draw order: `SpriteItem::layer` indexes this list.
+     */
+    layers: Array<LayerInfo>;
+    sprites: Array<SpriteItem>;
+    tilemaps: Array<TilemapItem>;
+    /**
+     * The entities that moved without travelling this tick, so they are not interpolated.
+     */
+    teleported: Array<Entity>;
+    debug: DebugDrawFrame;
+    warnings: Array<string>;
+};
+
+/**
  * What the timeline shows.
  */
 type Timeline = {
@@ -698,6 +789,10 @@ type Event = {
 } | {
     "type": "divergence_progress";
     up_to: number;
+} | {
+    "type": "render_frames";
+    frames: Array<RenderFrame>;
+    progress: number;
 };
 
 type VariantFields = {
@@ -866,18 +961,6 @@ type InstanceInfo = {
     overrides: Array<OverrideInfo>;
 };
 
-/**
- * A render layer. Its draw order is its index in `RenderFrame::layers`.
- */
-type LayerInfo = {
-    name: string;
-    /**
-     * How much the layer moves with the camera: 1.0 moves with the world, 0.0 is fixed to
-     * the screen.
-     */
-    parallax: number;
-};
-
 type ProtocolError = {
     code: ErrorCode;
     message: string;
@@ -889,80 +972,6 @@ type ProtocolError = {
 type RecordedEvent = {
     event_type: string;
     value: JsonValue;
-};
-
-/**
- * Rotation stored as cosine and sine of the angle, unit length (`cos² + sin² = 1`).
- * `from_angle`, `integrate`, and `normalize` give `IDENTITY` for an input they cannot turn
- * into a unit rotation; code that writes the fields directly keeps them unit length.
- */
-type Rot = {
-    cos: number;
-    sin: number;
-};
-
-/**
- * One sprite to draw.
- */
-type SpriteItem = {
-    entity: Entity;
-    layer: number;
-    /**
-     * The draw order within the layer, lowest first.
-     */
-    order: number;
-    texture: AssetId;
-    frame: number;
-    position: Vec2;
-    rotation: Rot;
-    flip_x: boolean;
-    flip_y: boolean;
-    tint: Color;
-};
-
-/**
- * One tilemap to draw.
- */
-type TilemapItem = {
-    entity: Entity;
-    layer: number;
-    /**
-     * The draw order within the layer, lowest first.
-     */
-    order: number;
-    tileset: AssetId;
-    /**
-     * The bottom-left corner of the bottom-left cell.
-     */
-    position: Vec2;
-    cell_size: Vec2;
-    width: number;
-    height: number;
-    /**
-     * The tileset frame of each cell, `None` for an empty cell, row-major from the
-     * bottom-left cell.
-     */
-    tiles: Array<number | null>;
-};
-
-/**
- * What a renderer draws for one tick.
- */
-type RenderFrame = {
-    tick: number;
-    camera: CameraItem | null;
-    /**
-     * The app's render layers, in draw order: `SpriteItem::layer` indexes this list.
-     */
-    layers: Array<LayerInfo>;
-    sprites: Array<SpriteItem>;
-    tilemaps: Array<TilemapItem>;
-    /**
-     * The entities that moved without travelling this tick, so they are not interpolated.
-     */
-    teleported: Array<Entity>;
-    debug: DebugDrawFrame;
-    warnings: Array<string>;
 };
 
 /**
@@ -1157,7 +1166,7 @@ type ServerMessage = {
 /** The control protocol version this build speaks: a client and a host connect only when theirs are equal. */
 const PROTOCOL_VERSION = 5;
 /** The wire shape of `PROTOCOL_VERSION`, a hash of the protocol's types: a client and a host connect only when theirs are equal too. */
-const PROTOCOL_FINGERPRINT = "7f1d70d4fb6345ab";
+const PROTOCOL_FINGERPRINT = "2a9e16a873959465";
 /** The `type` of the reply each command type gets when it succeeds. */
 type ReplyTypes = {
     apply_override: "done";
@@ -1214,6 +1223,7 @@ type ReplyTypes = {
     set_field: "done";
     set_live_input: "done";
     set_players: "players";
+    set_pushed_layers: "done";
     set_speed: "done";
     set_threads: "done";
     spawn: "spawned";
@@ -1575,10 +1585,18 @@ type ProjectReplyTypes = {
     write_text: "done";
 };
 
+/** The render frames a worker posts as bytes: each a postcard-encoded `RenderFrame` in a buffer of its own. */
+interface PushedFrames {
+    type: "render_frames";
+    progress: number;
+    frames: ArrayBuffer[];
+}
 /** A bidirectional channel of text messages (one JSON document each). */
 interface MessageTransport {
     send(message: string): void;
     onMessage(listener: (message: string) => void): () => void;
+    /** The frames posted as bytes, in order with the text messages; only the transports that carry bytes have it. */
+    onFrames?(listener: (frames: PushedFrames) => void): () => void;
     onClose(listener: (reason: string) => void): () => void;
     close(): void;
 }
@@ -1638,6 +1656,18 @@ function handshake<M extends {
 }, speaker: ProtocolPeer, accept: (welcome: Extract<M, {
     type: "welcome";
 }>) => T): Promise<T>;
+/** Render frames pushed during play: postcard bytes over a worker, JSON frames over the other transports. */
+type RenderFramesEvent = {
+    type: "render_frames";
+    progress: number;
+    frames: Uint8Array[];
+} | Extract<Event, {
+    type: "render_frames";
+}>;
+/** What `ControlClient.on` delivers: the protocol's events, with the frames as their transport carries them. */
+type ClientEvent = Exclude<Event, {
+    type: "render_frames";
+}> | RenderFramesEvent;
 /**
  * A client of the control protocol.
  *
@@ -1664,7 +1694,7 @@ class ControlClient {
     request<C extends Command>(command: C): Promise<ReplyFor<C>>;
     private counted;
     private send;
-    on<T extends Event["type"]>(type: T, listener: (event: Extract<Event, {
+    on<T extends ClientEvent["type"]>(type: T, listener: (event: Extract<ClientEvent, {
         type: T;
     }>) => void): () => void;
     /** Calls `listener` when the connection to the game ends (it exited, crashed, or was closed). */
@@ -1695,7 +1725,8 @@ class ProjectClient {
 
 function webSocketTransport(url: string): Promise<MessageTransport>;
 
-/** Over a worker or a message port. An uncaught worker error or an unreadable message closes it. */
+/** Over a worker or a message port: text, and the render frames posted as bytes. An uncaught
+ * worker error or an unreadable message closes it. */
 function postMessageTransport(port: MessagePort | Worker): MessageTransport;
 
 /** The desktop backend's channels. It streams batches: protocol messages one per line. */
@@ -1717,8 +1748,8 @@ interface WorkerGame {
     onCrashed(listener: (crash: WorkerCrash) => void): () => void;
     terminate(): void;
 }
-/** Starts a game's WebAssembly build in `host-worker.ts`. Protocol text travels as strings;
- * a crash (posted as an object, or an uncaught worker error) is reported once and closes
+/** Starts a game's WebAssembly build in `host-worker.ts`. Protocol text travels as strings,
+ * pushed render frames as transferred buffers; a crash (posted as an object, or an uncaught worker error) is reported once and closes
  * the transport. Recovering is up to the caller. */
 function startWorkerGame(options: {
     workerUrl: URL;
@@ -1726,5 +1757,5 @@ function startWorkerGame(options: {
 }): WorkerGame;
 
 export { ControlClient, PROJECT_PROTOCOL_FINGERPRINT, PROJECT_PROTOCOL_VERSION, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION, ProjectClient, ProtocolFailure, RequestTracker, fakeTransport, handshake, parseFrame, postMessageTransport, startWorkerGame, tauriTransport, unwrap, webSocketTransport };
-export type { AssetId, AssetKind, AssetTexts, BranchId, BranchInfo, BuildEvent, Bytes, CameraItem, Cause, Claim, ClientMessage, Color, Command, ComponentValue, ConsoleLevel, DebugDrawFrame, Diagnostic, Difference, DivergenceKind, DivergenceReport, Document, Entity, EntityDivergence, EntityHash, EntityRow, ErrorCode, Event, FailureCode, FieldSchema, FieldTarget, FileChange, FileEntry, Filter, GameInfo, GameOutput, Grid, Hash64, HashTree, InstanceInfo, Item, JsonValue, KeyboardPart, LayerInfo, LiveDevices, MessageTransport, NamedHash, NamedSchema, Outcome, OutputStream, OverrideInfo, PathSegment, PauseReason, PluginBundle, PluginSource, Primitive, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo, ProjectOutcome, ProjectReply, ProjectReplyFor, ProjectReplyTypes, ProjectRequest, ProjectServerMessage, ProtocolError, ProtocolPeer, RawGamepad, RecordedEvent, RenderFrame, Reply, ReplyFor, ReplyTypes, RootCause, RootCauseKind, Rot, ServerMessage, ServiceMode, SpriteItem, SyncPoint, SystemRow, TextureMeta, TilemapItem, Timeline, Topic, TraceComparison, TypeSchema, VariantFields, VariantSchema, Vec2, WorkerCrash, WorkerGame };
+export type { AssetId, AssetKind, AssetTexts, BranchId, BranchInfo, BuildEvent, Bytes, CameraItem, Cause, Claim, ClientEvent, ClientMessage, Color, Command, ComponentValue, ConsoleLevel, DebugDrawFrame, Diagnostic, Difference, DivergenceKind, DivergenceReport, Document, Entity, EntityDivergence, EntityHash, EntityRow, ErrorCode, Event, FailureCode, FieldSchema, FieldTarget, FileChange, FileEntry, Filter, GameInfo, GameOutput, Grid, Hash64, HashTree, InstanceInfo, Item, JsonValue, KeyboardPart, LayerInfo, LiveDevices, MessageTransport, NamedHash, NamedSchema, Outcome, OutputStream, OverrideInfo, PathSegment, PauseReason, PluginBundle, PluginSource, Primitive, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo, ProjectOutcome, ProjectReply, ProjectReplyFor, ProjectReplyTypes, ProjectRequest, ProjectServerMessage, ProtocolError, ProtocolPeer, PushedFrames, RawGamepad, RecordedEvent, RenderFrame, RenderFramesEvent, Reply, ReplyFor, ReplyTypes, RootCause, RootCauseKind, Rot, ServerMessage, ServiceMode, SpriteItem, SyncPoint, SystemRow, TextureMeta, TilemapItem, Timeline, Topic, TraceComparison, TypeSchema, VariantFields, VariantSchema, Vec2, WorkerCrash, WorkerGame };
 }

@@ -4,4 +4,4 @@ import type { Entity } from "./Entity";
 /**
  * What a client can subscribe to. Changes are pushed as events from `Host::advance`.
  */
-export type Topic = { "type": "entities", filter: string, } | { "type": "entity", entity: Entity, } | { "type": "resource", name: string, } | { "type": "introspection" } | { "type": "ghost" } | { "type": "divergence" };
+export type Topic = { "type": "entities", filter: string, } | { "type": "entity", entity: Entity, } | { "type": "resource", name: string, } | { "type": "introspection" } | { "type": "ghost" } | { "type": "divergence" } | { "type": "render_frames" };

@@ -14,10 +14,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use ludenea_app::App;
 use wasm_bindgen::prelude::*;
+use web_sys::js_sys::{Array, Object, Reflect, Uint8Array};
 
 use crate::host::Host;
 use crate::in_process::text::TextHost;
-use crate::protocol::ServerMessage;
+use crate::protocol::{Event, ServerMessage, encode_frame};
 
 /// The tick the host was at when the current call began, for the panic hook.
 // ponytail: a panic in the middle of a multi-tick call reports the tick the call started
@@ -36,6 +37,8 @@ extern "C" {
 #[wasm_bindgen]
 pub struct WorkerHost {
     text: TextHost,
+    /// The `render_frames` message of the last `advance`, until taken.
+    frames: Option<Object>,
 }
 
 impl WorkerHost {
@@ -57,6 +60,7 @@ impl WorkerHost {
         let host = Host::new(app).unwrap_or_else(|error| panic!("cannot build the game: {error}"));
         WorkerHost {
             text: TextHost::new(host),
+            frames: None,
         }
     }
 
@@ -76,9 +80,35 @@ impl WorkerHost {
 
     /// Lets `elapsed_ms` milliseconds of play and resimulation pass; returns a JSON array of
     /// `Event` messages, after the events a `renderFrameJson` caused since the last call.
+    /// The `render_frames` event is not among them: `takeRenderFrames` hands it out next.
     pub fn advance(&mut self, elapsed_ms: f64) -> String {
         self.record_tick();
-        to_json(&self.text.advance(elapsed_ms / 1000.0))
+        let mut messages = self.text.advance(elapsed_ms / 1000.0);
+        let mut frames = None;
+        messages.retain(|message| match message {
+            ServerMessage::Event {
+                event:
+                    Event::RenderFrames {
+                        frames: pushed,
+                        progress,
+                    },
+            } => {
+                frames = Some(frames_message(pushed, *progress));
+                false
+            }
+            _ => true,
+        });
+        self.frames = frames;
+        to_json(&messages)
+    }
+
+    /// The frames the last `advance` pushed, once, as
+    /// `{ type: "render_frames", progress, frames }` where each of `frames` is the
+    /// `ArrayBuffer` of a postcard-encoded `RenderFrame`, for the page to transfer; `undefined`
+    /// when it pushed none.
+    #[wasm_bindgen(js_name = takeRenderFrames)]
+    pub fn take_render_frames(&mut self) -> Option<Object> {
+        self.frames.take()
     }
 
     /// The transport's raw encoding of `get_render_frame`: the same command, refused before
@@ -104,6 +134,24 @@ impl WorkerHost {
     pub fn tick_progress(&self) -> f64 {
         self.text.host.tick_progress()
     }
+}
+
+/// The `render_frames` message of `frames`, each in a buffer of its own.
+fn frames_message(frames: &[ludenea_draw::frame::RenderFrame], progress: f64) -> Object {
+    let buffers: Array = frames
+        .iter()
+        .map(|frame| Uint8Array::from(encode_frame(frame).as_slice()).buffer())
+        .collect();
+    let message = Object::new();
+    for (key, value) in [
+        ("type", JsValue::from_str("render_frames")),
+        ("progress", JsValue::from_f64(progress)),
+        ("frames", buffers.into()),
+    ] {
+        Reflect::set(&message, &JsValue::from_str(key), &value)
+            .expect("a new plain object takes any property");
+    }
+    message
 }
 
 fn to_json(messages: &[ServerMessage]) -> String {

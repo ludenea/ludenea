@@ -1991,6 +1991,7 @@ dependencies = [
  "thiserror 2.0.21",
  "ts-rs",
  "wasm-bindgen",
+ "web-sys",
  "xxhash-rust",
 ]
 

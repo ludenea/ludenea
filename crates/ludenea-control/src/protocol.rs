@@ -29,7 +29,7 @@ pub const PROTOCOL_VERSION: u32 = 5;
 /// instead of misreading fields. A change the declarations do not show, such as a new serde
 /// default or another encoding of a type declared as a string, leaves it as it is.
 /// `tests/typescript.rs` pins it.
-pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0x7f1d_70d4_fb63_45ab);
+pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0x2a9e_16a8_7395_9465);
 
 /// Binary data, serialized as a standard base64 string.
 #[derive(Clone, Debug, PartialEq)]
@@ -497,6 +497,10 @@ pub enum Command {
     GetRenderFrame {
         debug_layers: Vec<String>,
     },
+    /// The debug layers drawn in the frames `RenderFrames` pushes: none until set.
+    SetPushedLayers {
+        debug_layers: Vec<String>,
+    },
     /// The entities under a world point.
     Pick {
         point: Vec2,
@@ -590,6 +594,7 @@ impl Command {
             | Command::ApplyOverride { .. }
             | Command::RevertOverride { .. }
             | Command::SetCompareBranch { .. }
+            | Command::SetPushedLayers { .. }
             | Command::Subscribe { .. }
             | Command::Unsubscribe { .. } => "done",
         }
@@ -614,6 +619,9 @@ pub enum Topic {
     Ghost,
     /// Computes the divergence report; `DivergenceProgress` when it moves.
     Divergence,
+    /// `RenderFrames` with the frames of the ticks each `Host::advance` plays, drawn with
+    /// the debug layers `SetPushedLayers` sets.
+    RenderFrames,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -870,6 +878,19 @@ pub enum Event {
     DivergenceProgress {
         up_to: u64,
     },
+    /// The frames of the last two ticks an advance played (one when it played one), oldest
+    /// first, after its `Ticked` events, while `RenderFrames` is subscribed. `progress` is
+    /// `Host::tick_progress` after them: how far play is into the next tick.
+    RenderFrames {
+        frames: Vec<RenderFrame>,
+        progress: f64,
+    },
+}
+
+/// A render frame as the transports that carry bytes send it (postcard): a fraction of its
+/// JSON, which costs about 2 MB a tick at 10,000 sprites.
+pub fn encode_frame(frame: &RenderFrame) -> Vec<u8> {
+    postcard::to_allocvec(frame).expect("a render frame encodes")
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

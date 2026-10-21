@@ -5,6 +5,8 @@
 interface WorkerHost {
   handle(message: string): string;
   advance(elapsedMs: number): string;
+  /** The frames the last `advance` pushed, once. */
+  takeRenderFrames(): { type: "render_frames"; progress: number; frames: ArrayBuffer[] } | undefined;
 }
 
 interface Glue {
@@ -14,7 +16,7 @@ interface Glue {
 
 /** The part of the dedicated worker scope used here (the DOM library types `self` as a window). */
 declare const self: {
-  postMessage(message: unknown): void;
+  postMessage(message: unknown, transfer?: Transferable[]): void;
   addEventListener(type: "message", listener: (event: MessageEvent<unknown>) => void): void;
 };
 
@@ -44,6 +46,17 @@ function run(call: () => string): void {
   }
 }
 
+/** Posts the frames the last advance pushed, after its events, their buffers transferred. */
+function postFrames(host: WorkerHost): void {
+  if (crashed) return;
+  try {
+    const pushed = host.takeRenderFrames();
+    if (pushed) self.postMessage(pushed, pushed.frames);
+  } catch (error) {
+    crash(error);
+  }
+}
+
 async function start(glueUrl: string): Promise<WorkerHost | undefined> {
   try {
     const glue = (await import(/* @vite-ignore */ glueUrl)) as Glue;
@@ -53,6 +66,7 @@ async function start(glueUrl: string): Promise<WorkerHost | undefined> {
     timer = setInterval(() => {
       const now = performance.now();
       run(() => created.advance(now - last));
+      postFrames(created);
       last = now;
     }, FRAME_MS);
     return created;

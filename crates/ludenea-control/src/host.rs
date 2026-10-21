@@ -10,6 +10,7 @@ use ludenea_app::{
 };
 
 use ludenea_draw::DebugDrawFrame;
+use ludenea_draw::frame::RenderFrame;
 use ludenea_ecs::{AssetId, Entity, EntityFilter, FilterError, Snapshot};
 use serde_json::Value as JsonValue;
 
@@ -218,6 +219,10 @@ impl Host {
             {
                 divergence.played();
             }
+            // The frames of the last two ticks played, extracted as each is played; `None`
+            // once one fails.
+            let mut frames = Some(Vec::new());
+            let mut played = false;
             for ran in 0..due {
                 match self
                     .session
@@ -233,6 +238,10 @@ impl Host {
                             .recorded_hash(tick)
                             .filter(|_| !self.session.is_pending());
                         self.ticked_with(hash);
+                        played = true;
+                        if due >= 2 && ran == due - 2 {
+                            self.extract_frame(&mut frames);
+                        }
                     }
                     Err(error) => {
                         // Ticks that did not run stay owed: play waits for resimulation to
@@ -249,6 +258,9 @@ impl Host {
                     }
                 }
             }
+            if played && self.subscriptions.pushes_frames() {
+                self.push_frames(frames);
+            }
         }
         // Play never changes the compare branch's run: it is never the current branch.
         if resimulating && let Some(compare) = &mut self.compare {
@@ -264,6 +276,40 @@ impl Host {
         self.follow_divergence();
         self.report_changes();
         self.report_timeline();
+    }
+
+    /// Adds the frame of the current tick to `frames` while `RenderFrames` is subscribed,
+    /// unless the last one is of this tick already; a failure reports itself once and
+    /// leaves `None`.
+    fn extract_frame(&mut self, frames: &mut Option<Vec<RenderFrame>>) {
+        let Some(extracted) = frames else { return };
+        let tick = self.simulation.tick();
+        if !self.subscriptions.pushes_frames()
+            || extracted.last().is_some_and(|frame| frame.tick == tick)
+        {
+            return;
+        }
+        match self.subscriptions.extract_frame(&self.simulation) {
+            Ok(frame) => extracted.push(frame),
+            Err(report) => {
+                *frames = None;
+                if let Some(message) = report {
+                    self.console(ConsoleLevel::Error, message);
+                }
+            }
+        }
+    }
+
+    /// Pushes `RenderFrames` with the frames of the ticks played and the last one, unless
+    /// an extraction failed.
+    fn push_frames(&mut self, mut frames: Option<Vec<RenderFrame>>) {
+        self.extract_frame(&mut frames);
+        if let Some(frames) = frames {
+            self.events.push(Event::RenderFrames {
+                frames,
+                progress: self.pacer.progress(),
+            });
+        }
     }
 
     /// Brings the session back after game code panicked outside the places that report a
@@ -954,6 +1000,10 @@ impl Host {
                     .render_frame(&debug_layers.into_iter().collect())
                     .map_err(|e| sim_error(&e))?,
             }),
+            Command::SetPushedLayers { debug_layers } => {
+                self.subscriptions.set_pushed_layers(debug_layers);
+                Ok(Reply::Done)
+            }
             Command::Pick { point } => Ok(Reply::Picked {
                 entities: sim.pick(point).map_err(|e| sim_error(&e))?,
             }),
@@ -1584,6 +1634,7 @@ fn changes_state(command: &Command) -> bool {
             | Command::GetTickEvents { .. }
             | Command::GetTickCommands { .. }
             | Command::GetRenderFrame { .. }
+            | Command::SetPushedLayers { .. }
             | Command::Pick { .. }
             | Command::SetCompareBranch { .. }
             | Command::GetGhostDraw { .. }

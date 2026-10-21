@@ -214,6 +214,9 @@ pub fn every_command() -> Vec<Command> {
         Command::GetRenderFrame {
             debug_layers: vec!["physics.colliders".into()],
         },
+        Command::SetPushedLayers {
+            debug_layers: vec!["physics.colliders".into()],
+        },
         Command::Pick {
             point: serde_json::from_str(r#"{"x":1.5,"y":-2.0}"#).unwrap(),
         },
@@ -243,6 +246,9 @@ pub fn every_command() -> Vec<Command> {
         },
         Command::Subscribe {
             topic: Topic::Ghost,
+        },
+        Command::Subscribe {
+            topic: Topic::RenderFrames,
         },
         Command::GetDivergence { up_to: Some(30) },
         Command::GetDivergence { up_to: None },

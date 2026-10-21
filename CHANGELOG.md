@@ -481,7 +481,7 @@ hash, those of the golden trace and replays included.
 
 ### Control protocol
 
-- Control protocol 5, fingerprint `7f1d70d4fb6345ab`. Breaking: `get_render_frame`
+- Control protocol 5, fingerprint `2a9e16a873959465`. Breaking: `get_render_frame`
   (`debug_layers`) replaces `get_debug_draw` (`layers`), and its reply `render_frame`
   (`frame`) replaces `debug_draw` (`tick`, `frame`). The frame is the `RenderFrame` of the
   current tick: its tick, camera, render layers, sprites, tilemaps, the entities teleported
@@ -498,7 +498,16 @@ hash, those of the golden trace and replays included.
   of the keyboard. `load_inputs`,
   `load_session`, and `load_replay` reset the claims to the automatic ones. A player whose
   gamepad is disconnected gets the game's default input.
-  New in the Rust API: `Host::tick_progress`, the fraction of the next tick that play owes.
+  New topic `render_frames`: while it is subscribed, each advance that plays ticks pushes
+  `render_frames` (`frames`, `progress`) after its `ticked` events, with the frames of the
+  last two ticks it played (one when it played one), oldest first, and `progress`, the
+  fraction of the next tick that play owes. New `set_pushed_layers` (`debug_layers`) sets
+  the debug layers those frames draw, none until set. A frame that fails to extract pushes
+  nothing for that advance and writes `render frame of tick N: <cause>` to the console once;
+  play goes on. The browser worker posts these frames postcard-encoded in transferred
+  buffers, which the control client hands to listeners as `Uint8Array`s.
+  New in the Rust API: `Host::tick_progress`, the fraction of the next tick that play owes,
+  and `protocol::encode_frame`, a render frame's postcard encoding.
   A debug draw `Primitive`, and so a `RenderFrame`, now decodes from postcard: the formats
   that are not human readable tag it by variant index, JSON still with its `type` field.
 - Over `host --stdio` and in a browser worker, the events a request causes come before its

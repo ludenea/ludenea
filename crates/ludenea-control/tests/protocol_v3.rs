@@ -352,6 +352,9 @@ fn every_command_names_the_reply_it_gets() {
     checked.run(Command::GetRenderFrame {
         debug_layers: Vec::new(),
     });
+    checked.run(Command::SetPushedLayers {
+        debug_layers: vec!["physics.colliders".to_string()],
+    });
     checked.run(Command::Pick {
         point: serde_json::from_value(json!({"x": 0.0, "y": 0.0})).unwrap(),
     });

@@ -1,4 +1,4 @@
-import { Listeners, type MessageTransport } from "../transports/transport";
+import { Listeners, isPushedFrames, type MessageTransport, type PushedFrames } from "../transports/transport";
 
 export interface WorkerCrash {
   /** The tick the host was at when the failing call began, when the panic hook reported it. */
@@ -12,12 +12,13 @@ export interface WorkerGame {
   terminate(): void;
 }
 
-/** Starts a game's WebAssembly build in `host-worker.ts`. Protocol text travels as strings;
- * a crash (posted as an object, or an uncaught worker error) is reported once and closes
+/** Starts a game's WebAssembly build in `host-worker.ts`. Protocol text travels as strings,
+ * pushed render frames as transferred buffers; a crash (posted as an object, or an uncaught worker error) is reported once and closes
  * the transport. Recovering is up to the caller. */
 export function startWorkerGame(options: { workerUrl: URL; glueUrl: string }): WorkerGame {
   const worker = new Worker(options.workerUrl, { type: "module" });
   const messages = new Listeners<string>();
+  const frames = new Listeners<PushedFrames>();
   const closes = new Listeners<string>();
   const crashes = new Listeners<WorkerCrash>();
   // A crash or a termination ends the game: whichever comes first closes the transport, once.
@@ -31,6 +32,7 @@ export function startWorkerGame(options: { workerUrl: URL; glueUrl: string }): W
   worker.addEventListener("message", (event) => {
     const data: unknown = event.data;
     if (typeof data === "string") messages.emit(data);
+    else if (isPushedFrames(data)) frames.emit(data);
     else if ((data as { type?: unknown } | null)?.type === "crashed") {
       const { tick, message } = data as Partial<WorkerCrash>;
       crash({ ...(tick === undefined ? {} : { tick }), message: message ?? "the game crashed" });
@@ -48,6 +50,7 @@ export function startWorkerGame(options: { workerUrl: URL; glueUrl: string }): W
     transport: {
       send: (message) => worker.postMessage(message),
       onMessage: (listener) => messages.add(listener),
+      onFrames: (listener) => frames.add(listener),
       onClose: (listener) => closes.add(listener),
       close: terminate,
     },

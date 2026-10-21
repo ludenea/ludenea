@@ -1,10 +1,12 @@
 //! What the host reports without being asked: the changes of subscribed entities and
-//! resources, computed from per-component and per-resource hashes, and the introspection
-//! record of the ticks run while `Introspection` is subscribed.
+//! resources, computed from per-component and per-resource hashes, the render frames of
+//! the ticks played while `RenderFrames` is subscribed, and the introspection record of the
+//! ticks run while `Introspection` is subscribed.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use ludenea_app::{SimError, Simulation};
+use ludenea_draw::frame::RenderFrame;
 use ludenea_ecs::{
     CommandKind, CommandRecord, Entity, EntityFilter, FilterError, ScheduleObserver, World,
     hash_value,
@@ -36,6 +38,13 @@ pub(crate) struct Subscriptions {
     resources: Vec<ResourceWatch>,
     /// Seconds played since resources were last checked for changes.
     since_resources: f64,
+    /// Whether `RenderFrames` is subscribed.
+    render_frames: bool,
+    /// The debug layers of the pushed frames.
+    pushed_layers: BTreeSet<String>,
+    /// The extraction failures already reported, each reported once. They grow with the
+    /// console lines reported, one per failing tick at most.
+    failed_frames: BTreeSet<String>,
 }
 
 struct ResourceWatch {
@@ -92,6 +101,7 @@ impl Subscriptions {
                     }),
                 }
             }
+            Topic::RenderFrames => self.render_frames = true,
             Topic::Introspection | Topic::Ghost | Topic::Divergence => {}
         }
         Ok(())
@@ -102,8 +112,32 @@ impl Subscriptions {
             Topic::Entities { filter } => self.entities.retain(|watch| watch.text != *filter),
             Topic::Entity { entity } => self.entity.retain(|watch| watch.entity != *entity),
             Topic::Resource { name } => self.resources.retain(|watch| watch.name != *name),
+            Topic::RenderFrames => self.render_frames = false,
             Topic::Introspection | Topic::Ghost | Topic::Divergence => {}
         }
+    }
+
+    /// Whether the frames of the ticks played are pushed.
+    pub(crate) fn pushes_frames(&self) -> bool {
+        self.render_frames
+    }
+
+    pub(crate) fn set_pushed_layers(&mut self, debug_layers: Vec<String>) {
+        self.pushed_layers = debug_layers.into_iter().collect();
+    }
+
+    /// The frame of the current tick with the pushed debug layers. On failure, the console
+    /// error that reports it, `None` when the same failure was reported already.
+    pub(crate) fn extract_frame(
+        &mut self,
+        sim: &Simulation,
+    ) -> Result<RenderFrame, Option<String>> {
+        sim.render_frame(&self.pushed_layers).map_err(|error| {
+            let message = format!("render frame of tick {}: {error}", sim.tick());
+            self.failed_frames
+                .insert(message.clone())
+                .then_some(message)
+        })
     }
 
     /// Counts `seconds` of play toward the next check of the subscribed resources.

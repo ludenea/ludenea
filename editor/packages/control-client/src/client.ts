@@ -154,6 +154,12 @@ export function handshake<M extends { type: string }, T>(
   });
 }
 
+/** Render frames pushed during play: postcard bytes over a worker, JSON frames over the other transports. */
+export type RenderFramesEvent = { type: "render_frames"; progress: number; frames: Uint8Array[] } | Extract<Event, { type: "render_frames" }>;
+
+/** What `ControlClient.on` delivers: the protocol's events, with the frames as their transport carries them. */
+export type ClientEvent = Exclude<Event, { type: "render_frames" }> | RenderFramesEvent;
+
 type Listener = (event: never) => void;
 
 /** A topic's identity whatever its key order. */
@@ -186,6 +192,7 @@ export class ControlClient {
       if (message?.type === "response") requests.resolve(message.id, message.result);
       else if (message?.type === "event") this.dispatch(message.event);
     });
+    transport.onFrames?.(({ progress, frames }) => this.dispatch({ type: "render_frames", progress, frames: frames.map((buffer) => new Uint8Array(buffer)) }));
     transport.onClose((reason) => {
       this.closed = true;
       requests.rejectAll(`connection closed: ${reason}`);
@@ -240,7 +247,7 @@ export class ControlClient {
     return unwrap(result) as ReplyFor<C>;
   }
 
-  on<T extends Event["type"]>(type: T, listener: (event: Extract<Event, { type: T }>) => void): () => void {
+  on<T extends ClientEvent["type"]>(type: T, listener: (event: Extract<ClientEvent, { type: T }>) => void): () => void {
     const set = this.listeners.get(type) ?? new Set<Listener>();
     this.listeners.set(type, set);
     set.add(listener as Listener);
@@ -258,7 +265,7 @@ export class ControlClient {
     this.transport.close();
   }
 
-  private dispatch(event: Event): void {
+  private dispatch(event: ClientEvent): void {
     for (const listener of [...(this.listeners.get(event.type) ?? [])]) listener(event as never);
   }
 }

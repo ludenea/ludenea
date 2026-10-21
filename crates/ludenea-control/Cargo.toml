@@ -21,6 +21,8 @@ thiserror.workspace = true
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 wasm-bindgen.workspace = true
+# Only for `js_sys`, which it re-exports: the worker posts frames in JavaScript buffers.
+web-sys.workspace = true
 
 [dev-dependencies]
 boxes = { path = "../../examples/boxes" }
