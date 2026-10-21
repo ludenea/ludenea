@@ -506,10 +506,17 @@ impl Atlas {
     /// The atlas as files. Textures that were not packed (`errors`) are not written.
     ///
     /// Reproducible byte for byte: the manifest is pretty-printed with fields in declaration
-    /// order and regions in `(id, frame)` order, and the pages are PNGs written with no
-    /// compression and no filter. The `png` crate picks its deflate and filter strategies from
-    /// the compressor features that cargo unifies across the workspace, so any other setting
-    /// would change the bytes between a `-p` and a `--workspace` build.
+    /// order and regions in `(id, frame)` order, and the pages are PNGs written with
+    /// `Compression::Fast` and a fixed `Sub` filter. `Fast` is the `fdeflate` encoder, a
+    /// single implementation pinned by `Cargo.lock` with no cargo feature to change its output,
+    /// while `Balanced` and `High` go through `flate2`, whose backend features cargo unifies
+    /// across the workspace. The adaptive filter is avoided so the bytes do not depend on a
+    /// heuristic. A test pins the exact bytes, so a `png` or `fdeflate` upgrade is noticed.
+    ///
+    /// # Panics
+    ///
+    /// When a page breaks the invariant `pack` and `from_files` keep: a non-zero size and
+    /// `width * height * 4` bytes of pixels (the fields are public, so a hand-built atlas can).
     pub fn to_files(&self) -> AtlasFiles {
         let manifest = Manifest {
             version: ATLAS_VERSION,
@@ -537,8 +544,7 @@ impl Atlas {
         }
     }
 
-    /// Reads atlas files: the manifest and the PNG of each page it lists, in order (the file
-    /// names are informative; extra PNGs are ignored). The version is read first, then every
+    /// Reads atlas files: the manifest and the PNG of each page it lists, in order (each page's `file` must be `page-<index>.png`; extra PNGs are ignored). The version is read first, then every
     /// page and region is checked. The result has no `errors`.
     pub fn from_files(manifest: &str, pages: &[&[u8]]) -> Result<Atlas, AtlasFileError> {
         let value: serde_json::Value = serde_json::from_str(manifest)
@@ -562,6 +568,13 @@ impl Atlas {
 
         let mut decoded = Vec::with_capacity(manifest.pages.len());
         for (index, listed) in manifest.pages.iter().enumerate() {
+            let expected = format!("page-{index}.png");
+            if listed.file != expected {
+                return Err(AtlasFileError::Json(format!(
+                    "page {index} must be the file `{expected}`, but the manifest names `{}`",
+                    listed.file
+                )));
+            }
             let png = pages
                 .get(index)
                 .ok_or(AtlasFileError::MissingPage { index })?;
@@ -582,18 +595,18 @@ impl Atlas {
 
         let mut regions = BTreeMap::new();
         for ManifestRegion { id, frame, region } in manifest.regions {
-            let outside = AtlasFileError::RegionOutside {
-                id,
-                frame,
-                page: region.page,
-            };
-            let page = decoded.get(region.page as usize).ok_or(outside.clone())?;
-            let fits = region.width > 0
-                && region.height > 0
-                && u64::from(region.x) + u64::from(region.width) <= u64::from(page.width)
-                && u64::from(region.y) + u64::from(region.height) <= u64::from(page.height);
+            let fits = decoded.get(region.page as usize).is_some_and(|page| {
+                region.width > 0
+                    && region.height > 0
+                    && u64::from(region.x) + u64::from(region.width) <= u64::from(page.width)
+                    && u64::from(region.y) + u64::from(region.height) <= u64::from(page.height)
+            });
             if !fits {
-                return Err(outside);
+                return Err(AtlasFileError::RegionOutside {
+                    id,
+                    frame,
+                    page: region.page,
+                });
             }
             if region.pixels_per_unit == 0 {
                 return Err(AtlasFileError::Json(format!(
@@ -614,14 +627,14 @@ impl Atlas {
     }
 }
 
-/// A page as an 8-bit RGBA PNG with no compression and no filter (see `Atlas::to_files`).
+/// A page as an 8-bit RGBA PNG with a fixed encoder and filter (see `Atlas::to_files`).
 fn encode_page(page: &AtlasPage) -> Vec<u8> {
     let mut bytes = Vec::new();
     let mut encoder = png::Encoder::new(&mut bytes, page.width, page.height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
-    encoder.set_compression(png::Compression::NoCompression);
-    encoder.set_filter(png::Filter::NoFilter);
+    encoder.set_compression(png::Compression::Fast);
+    encoder.set_filter(png::Filter::Sub);
     // Pages come from `pack` or `from_files`: a non-zero size and `width * height * 4` bytes,
     // which are the only reasons encoding to memory fails.
     let mut writer = encoder.write_header().expect("a page has a PNG header");

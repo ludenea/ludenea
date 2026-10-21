@@ -660,3 +660,107 @@ fn malformed_files_are_refused_without_panicking() {
         Err(AtlasFileError::Json(_))
     ));
 }
+
+/// FNV-1a over the manifest and every page, to pin the exact bytes without a hash dependency.
+fn digest(files: &ludenea_render::atlas::AtlasFiles) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in files
+        .manifest
+        .bytes()
+        .chain(files.pages.iter().flatten().copied())
+    {
+        hash = (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+#[test]
+fn files_bytes_are_pinned() {
+    // A change here means the PNG encoder or the manifest layout changed: the files of every
+    // shipped build change with it, so decide deliberately and update the pinned value.
+    let files = sheet().to_files();
+    assert_eq!(
+        digest(&files),
+        16_329_721_634_297_886_507,
+        "{} manifest bytes, page lengths {:?}",
+        files.manifest.len(),
+        files.pages.iter().map(Vec::len).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn region_with_no_pixels_per_unit_is_refused() {
+    let files = sheet().to_files();
+    let manifest = manifest_with(|m| m["regions"][0]["region"]["pixels_per_unit"] = 0.into());
+    assert!(matches!(
+        Atlas::from_files(&manifest, &page_refs(&files.pages)),
+        Err(AtlasFileError::Json(message)) if message.contains("pixels_per_unit")
+    ));
+}
+
+#[test]
+fn region_overflowing_by_one_pixel_is_refused_and_a_fitting_one_is_read() {
+    let files = sheet().to_files();
+    let page = &sheet().pages[0];
+    let (width, height) = (page.width, page.height);
+    let region = sheet().regions[&(AssetId(1), 0)];
+    for (field, value) in [
+        ("x", width - region.width + 1),
+        ("y", height - region.height + 1),
+    ] {
+        let manifest = manifest_with(|m| m["regions"][0]["region"][field] = value.into());
+        assert!(
+            matches!(
+                Atlas::from_files(&manifest, &page_refs(&files.pages)),
+                Err(AtlasFileError::RegionOutside { .. })
+            ),
+            "{field}"
+        );
+        let fitting = manifest_with(|m| m["regions"][0]["region"][field] = (value - 1).into());
+        assert!(
+            Atlas::from_files(&fitting, &page_refs(&files.pages)).is_ok(),
+            "{field}"
+        );
+    }
+}
+
+#[test]
+fn second_page_missing_is_refused_naming_it() {
+    let big = png(40, 40, 1);
+    let atlas = pack(&[source(1, &big, &TextureMeta::default())], 64);
+    let mut two = atlas.clone();
+    two.pages.push(two.pages[0].clone());
+    let files = two.to_files();
+    assert_eq!(
+        Atlas::from_files(&files.manifest, &page_refs(&files.pages[..1])),
+        Err(AtlasFileError::MissingPage { index: 1 })
+    );
+}
+
+#[test]
+fn page_file_name_must_match_its_position() {
+    let files = sheet().to_files();
+    let manifest = manifest_with(|m| m["pages"][0]["file"] = "other.png".into());
+    assert!(matches!(
+        Atlas::from_files(&manifest, &page_refs(&files.pages)),
+        Err(AtlasFileError::Json(message)) if message.contains("page-0.png")
+    ));
+}
+
+#[test]
+fn refused_textures_are_not_written() {
+    let good = png(4, 4, 1);
+    let bad = png(3, 3, 2);
+    let atlas = pack(
+        &[
+            source(1, &good, &TextureMeta::default()),
+            source(2, &bad, &grid(2, 2, 0, 0)),
+        ],
+        PAGE,
+    );
+    assert_eq!(atlas.errors.len(), 1);
+    let files = atlas.to_files();
+    let read = Atlas::from_files(&files.manifest, &page_refs(&files.pages)).unwrap();
+    assert_eq!(read.regions.keys().collect::<Vec<_>>(), [&(AssetId(1), 0)]);
+    assert!(read.errors.is_empty());
+}
