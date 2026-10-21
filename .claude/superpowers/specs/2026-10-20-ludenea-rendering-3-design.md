@@ -305,7 +305,10 @@ fighter project's concern, not the renderer's.
 
 An example scene with one LuizMelo fighter, animated (idle, run, jump, fall),
 flipped by direction, moved with a gamepad or the keyboard, on a Gothicvania
-tilemap painted in the editor, with parallax background layers and a camera
+tilemap painted through the control surface (the same recorded edits the
+editor's tile palette sends, so an agent builds the level without a human;
+the editor's painting is proven by its own end-to-end test) **(author)**,
+with parallax background layers and a camera
 that follows the fighter. The ground and platforms are ordinary static
 colliders placed by hand under the tiles; generating colliders from a
 tilemap is left to the fighter project if it needs it (builder's call). It

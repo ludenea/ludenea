@@ -331,19 +331,19 @@
 
 ---
 
-### Task 14: The arena level, built in the editor, and the same hashes everywhere
+### Task 14: The arena level, built through the control surface, and the same hashes everywhere
 
 **Files:**
-- Modify: `examples/arena/assets/arena.scene.ron` (saved by the editor), `examples/arena/README.md` (how the level was made), README (golden files, the command recording `golden/arena.replay`), `xtask/src/main.rs` and `.github/workflows/determinism.yml` (wasm32 clippy gains `-p arena`)
-- Create: `golden/arena.replay`, `examples/arena/tests/{golden.rs, level.rs, runtime.rs}`, `editor/e2e/arena.spec.ts`
+- Modify: `examples/arena/assets/arena.scene.ron` (saved by `save_scene` through the control surface), `examples/arena/README.md` (how the level was made, with the command that rebuilds it), README (golden files, the command recording `golden/arena.replay`), `xtask/src/main.rs` and `.github/workflows/determinism.yml` (wasm32 clippy gains `-p arena`)
+- Create: `golden/arena.replay`, `examples/arena/tests/{golden.rs, level.rs, runtime.rs}`, `editor/e2e/arena.spec.ts`, `examples/arena/src/bin/build-level.rs`
 - Modify: `.github/workflows/determinism.yml`: the native matrix (macOS, Ubuntu, Windows) verifies `golden/arena.replay` at each thread count with its own divergence upload step, as for the boxes goldens; the wasm32-wasip1 job verifies it under wasmtime; Linux runs `xvfb-run cargo run --locked --release -p arena -- play examples/arena/assets/arena.scene.ron --players 2 --ticks 600 --record arena-native.replay` then `verify` of it, and `render golden/arena.replay --tick 300 --out arena.png` uploaded as an artifact; the editor job builds `cargo run --locked -p ludenea-serve -- build examples/arena --web --out editor/e2e/fixtures/arena`
 - Test: `examples/arena/tests/{golden.rs, level.rs, runtime.rs}`, `editor/e2e/arena.spec.ts`, `editor/e2e/standalone.spec.ts`
 
 **Interfaces:**
 - Consumes: every task above; `ludenea_runtime::Runner` and `Lobby` (3b).
-- Produces: a level painted in the editor with the tilemap tools (ground and two platforms), fixed box colliders placed by hand under them, saved by the editor; `golden/arena.replay` recorded with `cargo run --locked --release -p arena --bin record-replay -- golden/arena.replay`.
+- Produces: `build-level` (a binary of the example) starts `arena run --stdio` on the scene and drives it with control commands only, exactly as the editor would: `paint_tiles` for the ground and two platforms, spawning and setting fixed box colliders under each run of tiles, then `save_scene`; it fails if a command is refused. The level it saves is committed; `golden/arena.replay` recorded with `cargo run --locked --release -p arena --bin record-replay -- golden/arena.replay`.
 
-- [ ] **Step 1: Author step, in the editor** (`cargo run --locked -p ludenea-serve -- serve examples/arena`): paint the ground and two platforms with the tile palette, place a fixed box collider under each, check both fighters land, save. The executor starts the editor and waits for the author.
+- [ ] **Step 1: Build the level through the control surface**: write `build-level`, run `cargo run --locked -p arena --bin build-level`, check both fighters land (the `level.rs` tests below), and open the saved scene in the editor once to check it draws (optional, by an agent through the e2e below). No human step.
 - [ ] **Step 2: Write the failing tests**:
   - `level.rs`: `both_fighters_stand_on_the_ground_after_60_ticks`; `every_tile_run_has_a_collider_under_it` (for each maximal horizontal run of non-empty cells, a fixed collider's top edge equals the run's bottom edge within 0.01 and spans its width); `render_of_tick_300_draws_a_fighter_over_the_tiles` (offscreen `render`, a fighter pixel and a tile pixel differ from `BACKGROUND`).
   - `golden.rs`: `arena_replay_verifies_at_one_two_and_eight_threads`.
@@ -352,8 +352,8 @@
   - `standalone.spec.ts`: `arena_page_matches_headless_hashes` (`?players=1&ticks=300` against `arena run --hash`), `arena_page_two_player_replay_verifies` (`?players=2`, scripted keys, "Save replay", `arena verify`).
 - [ ] **Step 3: Run** `cargo test -p arena --test level --test runtime`. Expected: FAIL until the level is saved.
 - [ ] **Step 4: Record** `golden/arena.replay`; wire CI.
-- [ ] **Step 5: Run** `cargo test --locked --workspace && cargo run --locked --release -p arena -- verify golden/arena.replay && cargo xtask check && pnpm -C editor e2e arena.spec.ts standalone.spec.ts`. Expected: PASS. Then by hand, as a supplement to the tests: `cargo run --locked --release -p ludenea-serve -- play examples/arena` with a gamepad and the keyboard. Every item of spec section 12 is named in the commit message with the test that proves it.
-- [ ] **Step 6: Commit** `✨ feat(examples): build the arena level in the editor and verify it on every runtime`.
+- [ ] **Step 5: Run** `cargo test --locked --workspace && cargo run --locked --release -p arena -- verify golden/arena.replay && cargo xtask check && pnpm -C editor e2e arena.spec.ts standalone.spec.ts`. Expected: PASS. Then by hand, as a supplement to the tests: `cargo run --locked --release -p ludenea-serve -- play examples/arena` with a gamepad and the keyboard, if the author wants to. Every item of spec section 12 is named in the commit message with the test that proves it.
+- [ ] **Step 6: Commit** `✨ feat(examples): build the arena level through the control surface and verify it on every runtime`.
 
 ---
 
@@ -363,7 +363,7 @@ Runs any time after Task 3.
 
 **Files:**
 - Modify: `crates/ludenea-control/src/{stdio.rs, protocol.rs}` (the event's wire form on standard output), `editor/packages/control-client/src/{client.ts, transports/tauri.ts}`, `editor/packages/editor-builtins/src/viewport/frames.ts`, the generated TypeScript, `CHANGELOG.md` (the protocol 5 entry), README (Editor: desktop)
-- Test: `crates/ludenea-control/tests/stdio.rs`, `editor/packages/control-client/test/transports.test.ts`, `editor/packages/control-client/test/render-frames.test.ts`
+- Test: `crates/ludenea-control/tests/stdio.rs`, `editor/packages/control-client/test/transports.test.ts`, `editor/packages/control-client/test/render-frames.test.ts`, an unattended desktop frame-time measurement (below)
 
 **Interfaces:**
 - Consumes: Task 1 (`Event::RenderFrames`, the worker's postcard encoding), Task 3 (`FrameFeed`), the workspace's `base64` (already a dependency of `ludenea-control`).
@@ -374,5 +374,5 @@ Runs any time after Task 3.
 - [ ] **Step 1: Write the failing tests**: `stdio.rs`: `render_frames_are_base64_postcard_on_one_line` (decodes to the frames `Host::advance` pushed), `a_line_of_ten_thousand_sprites_is_under_a_quarter_of_its_json` (size of the line against `serde_json::to_string` of the same frames); `transports.test.ts`: `tauri_render_frames_arrive_as_bytes`; `render-frames.test.ts`: `every_transport_delivers_bytes`.
 - [ ] **Step 2: Run** `cargo test -p ludenea-control --test stdio`. Expected: FAIL.
 - [ ] **Step 3: Implement**; regenerate the TypeScript and the fingerprint.
-- [ ] **Step 4: Run** `cargo test --locked --workspace && cargo test --locked -p ludenea-control --test typescript && pnpm -C editor test && pnpm -C editor typecheck`, then by hand on the reference machine: `LUDENEA_ENGINE_PATH=$PWD pnpm -C editor/apps/desktop tauri dev -- -- examples/swarm`, play with the viewport visible, and record 10 seconds with the webview's Web Inspector timeline. Expected: PASS, and a 95th percentile frame time under 20 ms, quoted in the commit message.
+- [ ] **Step 4: Run** `cargo test --locked --workspace && cargo test --locked -p ludenea-control --test typescript && pnpm -C editor test && pnpm -C editor typecheck`, then the unattended desktop measurement: one command, runnable on macOS (the reference machine) without a human, launches the desktop editor on `examples/swarm` (real Tauri webview, real standard output relay), plays with the viewport visible for 10 seconds, records the frame times, prints their 95th percentile and fails above 20 ms. The mechanism is the implementer's call after checking what Tauri 2 supports on macOS (`tauri-driver`, or an explicit opt-in launch flag of the desktop app that records `requestAnimationFrame` deltas and exits); any hook is inert unless requested at launch. Documented in the README. Expected: PASS, and the measured 95th percentile quoted in the commit message.
 - [ ] **Step 5: Commit** `⚡️ perf(control): send pushed render frames to the desktop editor as bytes`.
