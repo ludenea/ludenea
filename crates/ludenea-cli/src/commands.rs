@@ -563,7 +563,8 @@ pub struct PlayArgs {
     /// Draw as fast as possible instead of in step with the display.
     #[arg(long)]
     no_vsync: bool,
-    /// Print the frame time percentiles when the window closes.
+    /// Print the frame time percentiles when the window closes: the time each frame takes to
+    /// make, without its wait for the screen.
     #[arg(long)]
     stats: bool,
     #[arg(long, value_parser = thread_count, help = threads_help())]

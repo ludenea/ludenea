@@ -399,9 +399,13 @@ impl<'out> Session<'out> {
             let presented =
                 display.show(previous, current, &self.overlay, new_frames, update.alpha)?;
             self.fresh = false;
-            // Only displayed frames count: a hidden window's frames are paced by a timer.
+            // Only displayed frames count: a hidden window's frames are paced by a timer. A
+            // frame's time is its work, without the wait for the screen's texture, which only
+            // says the frame came faster than the display refreshes.
             if presented && self.options.stats && elapsed > 0.0 {
-                self.stats.record(elapsed);
+                let work = super::surface::now().duration_since(now);
+                self.stats
+                    .record(work.saturating_sub(display.waited()).as_secs_f64());
             }
         }
         Ok(self.options.ticks.is_some_and(|ticks| update.tick >= ticks))

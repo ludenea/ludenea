@@ -107,6 +107,8 @@ pub struct Presenter {
     /// The last texture asked for was refused: the window is hidden, or its surface is being
     /// configured again.
     hidden: bool,
+    /// How long the last frame waited for the surface's texture.
+    waited: Duration,
     clock: Box<dyn Fn() -> Instant>,
 }
 
@@ -186,6 +188,7 @@ impl Presenter {
             max_side,
             lost_since: None,
             hidden: false,
+            waited: Duration::ZERO,
             clock,
         }
     }
@@ -206,6 +209,13 @@ impl Presenter {
     /// caller paces it; `present` keeps asking, and draws once a texture comes.
     pub fn hidden(&self) -> bool {
         self.hidden
+    }
+
+    /// How long the last frame waited for the surface's texture: the display hands one over
+    /// once it has shown an earlier one, so a frame drawn faster than the display refreshes
+    /// waits there.
+    pub fn waited(&self) -> Duration {
+        self.waited
     }
 
     /// Follows the window to `width` by `height` physical pixels, kept within the device's
@@ -233,11 +243,14 @@ impl Presenter {
         &mut self,
         draw: impl FnOnce(&wgpu::TextureView, Size) -> Result<(), RenderError>,
     ) -> Result<(), RuntimeError> {
+        self.waited = Duration::ZERO;
         if !self.can_draw() {
             self.lost_since = None;
             return Ok(());
         }
+        let asked = (self.clock)();
         let acquired = self.target.acquire();
+        self.waited = (self.clock)().duration_since(asked);
         self.hidden = matches!(
             acquired,
             Acquired::Occluded | Acquired::Outdated | Acquired::Lost
@@ -362,6 +375,13 @@ impl Display {
         if let Some((presenter, _)) = &mut self.screen {
             presenter.resize(width, height);
         }
+    }
+
+    /// How long the last frame waited for the screen's texture (`Presenter::waited`).
+    pub(crate) fn waited(&self) -> Duration {
+        self.screen
+            .as_ref()
+            .map_or(Duration::ZERO, |(presenter, _)| presenter.waited())
     }
 
     /// Whether frames are drawn: not while the window has no pixels or is hidden.
@@ -499,6 +519,8 @@ mod tests {
         presented: u32,
         /// The presenter's clock.
         now: Instant,
+        /// How far the clock moves while a texture is asked for.
+        acquire_wait: Duration,
     }
 
     impl Default for Log {
@@ -509,6 +531,7 @@ mod tests {
                 configured: Vec::new(),
                 presented: 0,
                 now: now(),
+                acquire_wait: Duration::ZERO,
             }
         }
     }
@@ -544,6 +567,8 @@ mod tests {
         fn acquire(&mut self) -> Acquired {
             let mut log = self.log.borrow_mut();
             log.acquired += 1;
+            let wait = log.acquire_wait;
+            log.now += wait;
             match log.outcomes.pop_front().unwrap_or(Outcome::Frame) {
                 Outcome::Frame => Acquired::Frame(
                     Frame {
@@ -722,6 +747,19 @@ mod tests {
             .unwrap();
         let [warning] = display.take_warnings().try_into().unwrap();
         assert!(warning.starts_with("the GPU device was lost"), "{warning}");
+    }
+
+    #[test]
+    fn the_wait_for_a_texture_is_measured_per_frame() {
+        let (mut presenter, log) = presenter(&[Outcome::Frame, Outcome::Timeout]);
+        log.borrow_mut().acquire_wait = Duration::from_millis(5);
+        assert!(drawn(&mut presenter).unwrap());
+        assert_eq!(presenter.waited(), Duration::from_millis(5));
+        assert!(!drawn(&mut presenter).unwrap(), "timed out");
+        assert_eq!(presenter.waited(), Duration::from_millis(5));
+        presenter.resize(0, 0);
+        assert!(!drawn(&mut presenter).unwrap());
+        assert_eq!(presenter.waited(), Duration::ZERO, "nothing is asked for");
     }
 
     #[test]

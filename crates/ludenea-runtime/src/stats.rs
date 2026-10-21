@@ -1,6 +1,6 @@
 //! Frame time statistics of a played session, for `play --stats`.
 
-/// The duration of every displayed frame.
+/// The time every displayed frame took to make.
 // ponytail: keeps every frame (8 bytes each, about 4 MB per hour at 144 frames per second);
 // switch to a histogram if sessions of many hours need statistics.
 #[derive(Clone, Debug, Default)]
@@ -9,7 +9,7 @@ pub struct FrameStats {
 }
 
 impl FrameStats {
-    /// Adds a displayed frame that took `frame_seconds`.
+    /// Adds a displayed frame that took `frame_seconds` to make.
     pub fn record(&mut self, frame_seconds: f64) {
         self.seconds.push(frame_seconds);
     }
