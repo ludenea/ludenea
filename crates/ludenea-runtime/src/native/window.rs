@@ -4,6 +4,7 @@
 //! ticks due, and draws the newest two ticks blended at the display's rate.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -24,7 +25,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Fullscreen, Window, WindowId};
 
-use super::surface::{Display, OpenScreen, Presenter};
+use super::surface::{Display, OpenScreen, Presenter, now};
 use super::{gamepads, keys, lobby};
 use crate::stats::FrameStats;
 use crate::{GameFiles, Runner, RuntimeError};
@@ -73,8 +74,15 @@ pub struct PlayOutcome {
 /// reaches `options.ticks`. A game that cannot load fails before any window opens; a game that
 /// fails while it runs closes the window and fails naming the tick. The replay is written to
 /// `options.record` in every case; failing to write it fails the session, unless it failed
-/// already (the replay's error is then printed).
-pub fn play(app: fn() -> App, options: PlayOptions) -> Result<PlayOutcome, RuntimeError> {
+/// already (the replay's error is then printed). The window's warnings (textures left out of
+/// the atlas, a lost GPU device, gamepads that cannot be read) are written to `out`, as the
+/// command line tool's `render` writes its own; the game's console goes to the standard
+/// error.
+pub fn play(
+    app: fn() -> App,
+    options: PlayOptions,
+    out: &mut dyn Write,
+) -> Result<PlayOutcome, RuntimeError> {
     if let Some(players) = options.players
         && !(1..=MAX_LOCAL_PLAYERS).contains(&usize::from(players))
     {
@@ -82,13 +90,16 @@ pub fn play(app: fn() -> App, options: PlayOptions) -> Result<PlayOutcome, Runti
             "{players} players: a window holds 1 to {MAX_LOCAL_PLAYERS} local players"
         )));
     }
-    let runner = Runner::load(
+    let mut runner = Runner::load(
         app,
         &options.files,
         options.threads,
         options.debug_layers.clone(),
     )?;
-    let mut session = Session::new(runner, options);
+    if let Some(ticks) = options.ticks {
+        runner.stop_at(ticks);
+    }
+    let mut session = Session::new(runner, options, out);
     session.print_messages();
     let ran = EventLoop::new()
         .map_err(|error| RuntimeError::Window(format!("cannot open a window: {error}")))
@@ -101,7 +112,9 @@ pub fn play(app: fn() -> App, options: PlayOptions) -> Result<PlayOutcome, Runti
 }
 
 /// The state of a window being played.
-struct Session {
+struct Session<'out> {
+    /// Where the window's warnings go.
+    out: &'out mut dyn Write,
     runner: Runner,
     options: PlayOptions,
     /// The lobby, until the match starts; `None` when the player count was given.
@@ -127,18 +140,15 @@ struct Session {
     failure: Option<RuntimeError>,
 }
 
-impl Session {
-    fn new(runner: Runner, options: PlayOptions) -> Session {
-        let gilrs = match Gilrs::new() {
-            Ok(gilrs) => Some(gilrs),
-            Err(gilrs::Error::NotImplemented(dummy)) => {
-                eprintln!("warning: gamepads are not supported on this platform");
-                Some(dummy)
-            }
-            Err(error) => {
-                eprintln!("warning: gamepads cannot be read: {error}");
-                None
-            }
+impl<'out> Session<'out> {
+    fn new(runner: Runner, options: PlayOptions, out: &'out mut dyn Write) -> Session<'out> {
+        let (gilrs, warning) = match Gilrs::new() {
+            Ok(gilrs) => (Some(gilrs), None),
+            Err(gilrs::Error::NotImplemented(dummy)) => (
+                Some(dummy),
+                Some("gamepads are not supported on this platform".to_string()),
+            ),
+            Err(error) => (None, Some(format!("gamepads cannot be read: {error}"))),
         };
         let mut slots = gamepads::Slots::default();
         if let Some(gilrs) = &gilrs {
@@ -154,7 +164,8 @@ impl Session {
             debug_layers: BTreeSet::from([lobby::LAYER.to_string()]),
             ..Overlay::default()
         };
-        Session {
+        let mut session = Session {
+            out,
             runner,
             lobby: options.players.is_none().then(Lobby::new),
             options,
@@ -172,6 +183,28 @@ impl Session {
             last: None,
             stats: FrameStats::default(),
             failure: None,
+        };
+        if let Some(warning) = warning {
+            session.warn(&warning);
+        }
+        session
+    }
+
+    /// Writes a warning to `out`. Best effort: a session does not end because its output
+    /// cannot be written to, and nothing else would report it.
+    fn warn(&mut self, warning: &str) {
+        let _ = writeln!(self.out, "warning: {warning}");
+    }
+
+    /// Writes the display's warnings.
+    fn print_warnings(&mut self) {
+        let warnings = self
+            .display
+            .as_mut()
+            .map(Display::take_warnings)
+            .unwrap_or_default();
+        for warning in warnings {
+            self.warn(&warning);
         }
     }
 
@@ -190,7 +223,9 @@ impl Session {
             self.print_messages();
             match (recorded, &result) {
                 (Err(error), Ok(())) => result = Err(error),
-                (Err(error), Err(_)) => eprintln!("error: {error}"),
+                (Err(error), Err(_)) => {
+                    let _ = writeln!(self.out, "error: {error}");
+                }
                 (Ok(()), _) => {}
             }
         }
@@ -241,6 +276,7 @@ impl Session {
         )?;
         self.window = Some(Arc::clone(&window));
         self.display = Some(display);
+        self.print_warnings();
         match &self.lobby {
             Some(lobby) => window.set_title(&lobby::title(&self.options.title, lobby)),
             None => {
@@ -377,7 +413,9 @@ impl Session {
     }
 
     fn run_frame(&mut self, event_loop: &ActiveEventLoop) {
-        match self.frame() {
+        let ran = self.frame();
+        self.print_warnings();
+        match ran {
             Ok(true) => event_loop.exit(),
             Ok(false) => {}
             Err(error) => self.fail(event_loop, error),
@@ -418,13 +456,35 @@ impl Session {
         Ok(())
     }
 
-    /// Whether the window draws, so the display paces the loop.
-    fn visible(&self) -> bool {
-        !self.occluded && self.display.as_ref().is_some_and(Display::can_draw)
+    fn pace(&self) -> Pace {
+        pace(
+            self.occluded,
+            self.display.as_ref().is_some_and(Display::can_draw),
+        )
     }
 }
 
-impl ApplicationHandler for Session {
+/// How the loop gets its next frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Pace {
+    /// A redraw request, which the display paces.
+    Redraw,
+    /// A frame run by the loop itself after `HIDDEN_FRAME`: the display paces nothing.
+    Timer,
+}
+
+/// Redraw requests while the window draws; the timer while it is occluded, has no pixels or
+/// no display, or its surface gives no texture (hidden, lost or outdated), so the simulation
+/// keeps its pace without spinning.
+fn pace(occluded: bool, can_draw: bool) -> Pace {
+    if !occluded && can_draw {
+        Pace::Redraw
+    } else {
+        Pace::Timer
+    }
+}
+
+impl ApplicationHandler for Session<'_> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
@@ -463,14 +523,17 @@ impl ApplicationHandler for Session {
         }
         // Drawn frames come from redraw requests, paced by the display; while nothing draws
         // the loop runs the frames itself, so the simulation keeps its pace.
-        if self.visible() {
-            if let Some(window) = &self.window {
-                window.request_redraw();
+        match self.pace() {
+            Pace::Redraw => {
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+                event_loop.set_control_flow(ControlFlow::Wait);
             }
-            event_loop.set_control_flow(ControlFlow::Wait);
-        } else {
-            self.run_frame(event_loop);
-            event_loop.set_control_flow(ControlFlow::WaitUntil(now() + HIDDEN_FRAME));
+            Pace::Timer => {
+                self.run_frame(event_loop);
+                event_loop.set_control_flow(ControlFlow::WaitUntil(now() + HIDDEN_FRAME));
+            }
         }
     }
 }
@@ -485,14 +548,6 @@ fn open_screen(window: Arc<Window>, vsync: bool) -> OpenScreen {
         let renderer = Renderer::new(device, queue, presenter.format());
         Ok((presenter, renderer))
     })
-}
-
-#[expect(
-    clippy::disallowed_methods,
-    reason = "runtime only: the time between displayed frames paces the host, and never feeds the simulation except through recorded inputs"
-)]
-fn now() -> Instant {
-    Instant::now()
 }
 
 /// Writes `bytes` to `path`, creating its folder.
@@ -516,12 +571,8 @@ mod tests {
 
     #[test]
     fn a_failed_match_still_writes_its_replay() {
-        let folder = std::env::temp_dir().join(format!(
-            "ludenea-runtime-failed-match-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&folder);
-        let record = folder.join("nested/match.replay");
+        let folder = tempfile::tempdir().unwrap();
+        let record = folder.path().join("nested/match.replay");
         let options = PlayOptions {
             files: GameFiles {
                 scene: "Scene(version: 2, next_id: 0, resources: {}, entities: [])".to_string(),
@@ -541,7 +592,8 @@ mod tests {
             title: "test".to_string(),
         };
         let runner = Runner::load(swarm::app, &options.files, None, Vec::new()).unwrap();
-        let mut session = Session::new(runner, options);
+        let mut out = Vec::new();
+        let mut session = Session::new(runner, options, &mut out);
         session.start(automatic_claims(1)).unwrap();
         for _ in 0..5 {
             session
@@ -557,6 +609,13 @@ mod tests {
         assert_eq!(session.finish(Ok(())), Err(failure));
         let replay = Replay::decode(&std::fs::read(&record).unwrap()).unwrap();
         assert_eq!(replay.hashes.len(), 6, "ticks 0 to 5");
-        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn the_display_paces_frames_only_while_the_window_draws() {
+        assert_eq!(pace(false, true), Pace::Redraw);
+        assert_eq!(pace(true, true), Pace::Timer, "occluded");
+        assert_eq!(pace(false, false), Pace::Timer, "no pixels or no texture");
+        assert_eq!(pace(true, false), Pace::Timer);
     }
 }

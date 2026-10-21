@@ -4,6 +4,8 @@
 //! or a failure with its cause. `Display` draws the match through the presenter with a
 //! renderer, and replaces both on a new device once when the device is lost.
 
+use std::time::{Duration, Instant};
+
 use ludenea_app::project::ProjectTexture;
 use ludenea_draw::frame::RenderFrame;
 use ludenea_render::atlas::{Atlas, TextureSource, pack};
@@ -11,9 +13,20 @@ use ludenea_render::gpu::{Overlay, RenderError, Renderer, Size};
 
 use crate::RuntimeError;
 
-/// Frames in a row the surface may be lost or outdated, each time configured again, before
-/// the window gives up on it: about a second at 60 frames per second.
-const MAX_FRAMES_WITHOUT_SURFACE: u32 = 60;
+/// How long the surface may stay lost or outdated, configured again at every frame, before
+/// the window gives up on it. A resize or a change of display makes it outdated for a few
+/// frames; one that no configuration brings back within seconds will not come back, and
+/// ending the session then writes the replay rather than leaving a frozen window.
+const MAX_TIME_WITHOUT_SURFACE: Duration = Duration::from_secs(5);
+
+/// The time now, for pacing the window's frames.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "runtime only: the time between displayed frames paces the host, and never feeds the simulation except through recorded inputs"
+)]
+pub(crate) fn now() -> Instant {
+    Instant::now()
+}
 
 /// A texture to draw a frame into, and what presents it (none for a fake surface).
 struct Frame {
@@ -89,10 +102,12 @@ pub struct Presenter {
     size: Size,
     /// The device's `max_texture_dimension_2d`, which the surface is kept within.
     max_side: u32,
-    /// Frames in a row the surface was lost or outdated.
-    without_surface: u32,
-    /// The last texture asked for was refused because the window is hidden.
+    /// When the surface was first found lost or outdated, in the current run of such frames.
+    lost_since: Option<Instant>,
+    /// The last texture asked for was refused: the window is hidden, or its surface is being
+    /// configured again.
     hidden: bool,
+    clock: Box<dyn Fn() -> Instant>,
 }
 
 impl Presenter {
@@ -146,14 +161,20 @@ impl Presenter {
             queue,
             config,
         };
-        Ok(Presenter::with_target(Box::new(target), format, max_side))
+        Ok(Presenter::with_target(
+            Box::new(target),
+            format,
+            max_side,
+            Box::new(now),
+        ))
     }
 
-    /// A presenter of zero size on `target`.
+    /// A presenter of zero size on `target`, timing a lost surface with `clock`.
     fn with_target(
         target: Box<dyn Target>,
         format: wgpu::TextureFormat,
         max_side: u32,
+        clock: Box<dyn Fn() -> Instant>,
     ) -> Presenter {
         Presenter {
             target,
@@ -163,8 +184,9 @@ impl Presenter {
                 height: 0,
             },
             max_side,
-            without_surface: 0,
+            lost_since: None,
             hidden: false,
+            clock,
         }
     }
 
@@ -178,9 +200,10 @@ impl Presenter {
         self.size.width > 0 && self.size.height > 0
     }
 
-    /// Whether the window was hidden (behind another window, on another desktop, or the
-    /// screen locked) when a frame was last presented: the display no longer paces the loop,
-    /// though `present` keeps asking, and draws once the window shows.
+    /// Whether the last frame found no texture to draw into: the window is hidden (behind
+    /// another window, on another desktop, or the screen locked), or its surface was lost or
+    /// outdated and is configured again. The display no longer paces the loop then, so the
+    /// caller paces it; `present` keeps asking, and draws once a texture comes.
     pub fn hidden(&self) -> bool {
         self.hidden
     }
@@ -200,7 +223,7 @@ impl Presenter {
     /// Draws a frame with `draw` into the surface's next texture and presents it. The frame is
     /// skipped when the window has no pixels, is hidden, or the texture timed out; a lost or
     /// outdated surface is configured again and the frame skipped, until it stays so for
-    /// `MAX_FRAMES_WITHOUT_SURFACE` frames, which fails. A texture the GPU refuses, or an
+    /// `MAX_TIME_WITHOUT_SURFACE`, which fails. A texture the GPU refuses, or an
     /// error of `draw`, fails with its cause; `draw`'s `RenderError::DeviceLost` tells the
     /// caller to open a new device.
     pub fn present(
@@ -211,10 +234,13 @@ impl Presenter {
             return Ok(());
         }
         let acquired = self.target.acquire();
-        self.hidden = matches!(acquired, Acquired::Occluded);
+        self.hidden = matches!(
+            acquired,
+            Acquired::Occluded | Acquired::Outdated | Acquired::Lost
+        );
         let lost = match acquired {
             Acquired::Frame(frame, suboptimal) => {
-                self.without_surface = 0;
+                self.lost_since = None;
                 draw(&frame.view, self.size)
                     .map_err(|error| RuntimeError::Gpu(error.to_string()))?;
                 self.target.present(frame);
@@ -233,10 +259,12 @@ impl Presenter {
             Acquired::Outdated => "outdated",
             Acquired::Lost => "lost",
         };
-        self.without_surface += 1;
-        if self.without_surface > MAX_FRAMES_WITHOUT_SURFACE {
+        let now = (self.clock)();
+        let since = *self.lost_since.get_or_insert(now);
+        if now.duration_since(since) > MAX_TIME_WITHOUT_SURFACE {
             return Err(RuntimeError::Window(format!(
-                "the window's surface stayed {lost} for {MAX_FRAMES_WITHOUT_SURFACE} frames, though it was configured again each time"
+                "the window's surface stayed {lost} for {} seconds, though it was configured again at every frame",
+                MAX_TIME_WITHOUT_SURFACE.as_secs()
             )));
         }
         self.target.configure(self.size.width, self.size.height);
@@ -278,11 +306,13 @@ pub(crate) struct Display {
     /// The renderer's frames are out of date: the screen is new, or frames came while
     /// nothing was drawn.
     stale: bool,
+    /// What the caller has to tell the player, oldest first.
+    warnings: Vec<String>,
 }
 
 impl Display {
-    /// Opens a screen with `open` at `size`, and packs `textures` into its atlas, printing a
-    /// warning for each texture left out (it draws as a placeholder).
+    /// Opens a screen with `open` at `size`, and packs `textures` into its atlas, with a
+    /// warning (see `take_warnings`) for each texture left out: it draws as a placeholder.
     pub(crate) fn new(
         mut open: OpenScreen,
         textures: &[ProjectTexture],
@@ -300,9 +330,7 @@ impl Display {
             })
             .collect();
         let atlas = pack(&sources, renderer.max_page_side());
-        for error in &atlas.errors {
-            eprintln!("warning: {error}");
-        }
+        let warnings = atlas.errors.iter().map(ToString::to_string).collect();
         renderer
             .set_atlas(&atlas)
             .map_err(|error| RuntimeError::Gpu(error.to_string()))?;
@@ -312,7 +340,13 @@ impl Display {
             atlas,
             size,
             stale: true,
+            warnings,
         })
+    }
+
+    /// The warnings since the last call: textures left out of the atlas, a lost device.
+    pub(crate) fn take_warnings(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.warnings)
     }
 
     /// Follows the window to `width` by `height` physical pixels.
@@ -351,7 +385,9 @@ impl Display {
             Err(Failure::Failed(error)) => return Err(error),
             Ok(presented) => return Ok(presented),
         };
-        eprintln!("warning: the GPU device was lost ({cause}); opening a new one");
+        self.warnings.push(format!(
+            "the GPU device was lost ({cause}); opening a new one"
+        ));
         self.reopen().map_err(|error| {
             RuntimeError::Gpu(format!(
                 "the GPU device was lost ({cause}), and a new one could not be opened: {error}"
@@ -381,6 +417,8 @@ impl Display {
         if !presenter.can_draw() {
             return Ok(false);
         }
+        // Asking the surface for a texture touches the device: a loss is caught first.
+        renderer.check_device()?;
         if self.stale {
             renderer.set_frames(previous, current, overlay)?;
             self.stale = false;
@@ -394,9 +432,16 @@ impl Display {
             }
             result
         });
-        match lost {
-            Some(cause) => Err(Failure::Lost(cause)),
-            None => presented.map(|()| drawn).map_err(Failure::Failed),
+        if let Some(cause) = lost {
+            return Err(Failure::Lost(cause));
+        }
+        match presented {
+            Ok(()) => Ok(drawn),
+            // A texture refused because the device was lost while it was asked for.
+            Err(error) => match renderer.check_device() {
+                Err(RenderError::DeviceLost(cause)) => Err(Failure::Lost(cause)),
+                _ => Err(Failure::Failed(error)),
+            },
         }
     }
 
@@ -429,12 +474,25 @@ mod tests {
 
     /// What the fake surface was asked, and the outcomes it gives, in order (a frame once
     /// they run out).
-    #[derive(Default)]
     struct Log {
         outcomes: VecDeque<Outcome>,
         acquired: u32,
         configured: Vec<(u32, u32)>,
         presented: u32,
+        /// The presenter's clock.
+        now: Instant,
+    }
+
+    impl Default for Log {
+        fn default() -> Log {
+            Log {
+                outcomes: VecDeque::new(),
+                acquired: 0,
+                configured: Vec::new(),
+                presented: 0,
+                now: now(),
+            }
+        }
     }
 
     #[derive(Clone, Copy, Debug)]
@@ -445,11 +503,14 @@ mod tests {
         Outdated,
         Lost,
         Validation,
+        /// The device is lost while the texture is asked for, which the GPU then refuses.
+        DeviceLost,
     }
 
     /// An offscreen stand-in for a window's surface.
     struct Fake {
         log: Rc<RefCell<Log>>,
+        device: wgpu::Device,
         texture: wgpu::Texture,
     }
 
@@ -474,6 +535,10 @@ mod tests {
                 Outcome::Outdated => Acquired::Outdated,
                 Outcome::Lost => Acquired::Lost,
                 Outcome::Validation => Acquired::Validation,
+                Outcome::DeviceLost => {
+                    lose(&self.device);
+                    Acquired::Validation
+                }
             }
         }
 
@@ -505,9 +570,16 @@ mod tests {
         });
         let target = Fake {
             log: Rc::clone(log),
+            device: device.clone(),
             texture,
         };
-        let mut presenter = Presenter::with_target(Box::new(target), FORMAT, 4096);
+        let clock = Rc::clone(log);
+        let mut presenter = Presenter::with_target(
+            Box::new(target),
+            FORMAT,
+            4096,
+            Box::new(move || clock.borrow().now),
+        );
         presenter.resize(64, 64);
         presenter
     }
@@ -580,6 +652,38 @@ mod tests {
     }
 
     #[test]
+    fn textures_left_out_of_the_atlas_and_a_lost_device_are_warnings() {
+        let log = Rc::new(RefCell::new(Log::default()));
+        let opened = Rc::new(RefCell::new(Vec::new()));
+        let (log2, opened2) = (Rc::clone(&log), Rc::clone(&opened));
+        let open = move || {
+            let (device, queue) = device();
+            let presenter = fake(&device, &log2);
+            let renderer = Renderer::new(device.clone(), queue, FORMAT);
+            opened2.borrow_mut().push(device);
+            Ok((presenter, renderer))
+        };
+        let broken: ProjectTexture = (
+            ludenea_ecs::AssetId(7),
+            "broken.png".to_string(),
+            b"not a png".to_vec(),
+            Default::default(),
+        );
+        let mut display = Display::new(Box::new(open), &[broken], (64, 64)).unwrap();
+        let [warning] = display.take_warnings().try_into().unwrap();
+        assert!(warning.contains("broken.png"), "{warning}");
+        assert!(display.take_warnings().is_empty(), "taken once");
+        let runner = empty_game();
+        let (previous, current) = runner.frames();
+        lose(&opened.borrow()[0]);
+        display
+            .show(previous, current.unwrap(), &Overlay::default(), true, 1.0)
+            .unwrap();
+        let [warning] = display.take_warnings().try_into().unwrap();
+        assert!(warning.starts_with("the GPU device was lost"), "{warning}");
+    }
+
+    #[test]
     fn zero_size_skips_drawing_and_keeps_ticking() {
         let (mut presenter, log) = presenter(&[]);
         presenter.resize(0, 0);
@@ -590,7 +694,9 @@ mod tests {
         let opened = Rc::new(RefCell::new(Vec::new()));
         let mut display = display(&log, &opened, &Rc::new(RefCell::new(false)));
         let mut runner = empty_game();
+        assert!(display.can_draw());
         display.resize(0, 0);
+        assert!(!display.can_draw(), "the loop paces itself at zero size");
         for _ in 0..10 {
             let update = runner
                 .frame(1.0 / 60.0 + 1e-9, &LiveDevices::default())
@@ -633,17 +739,28 @@ mod tests {
     }
 
     #[test]
-    fn a_surface_that_stays_lost_fails_naming_it() {
-        let (mut presenter, _log) =
-            presenter(&[Outcome::Lost; MAX_FRAMES_WITHOUT_SURFACE as usize + 1]);
-        for _ in 0..MAX_FRAMES_WITHOUT_SURFACE {
-            assert!(!drawn(&mut presenter).unwrap());
+    fn a_surface_outdated_for_many_frames_fails_only_after_five_seconds() {
+        let (mut presenter, log) = presenter(&[Outcome::Outdated; 1001]);
+        for _ in 0..1000 {
+            assert!(!drawn(&mut presenter).unwrap(), "an interactive resize");
+            assert!(presenter.hidden(), "the caller paces the frames meanwhile");
         }
+        log.borrow_mut().now += MAX_TIME_WITHOUT_SURFACE + Duration::from_millis(1);
         let error = drawn(&mut presenter).unwrap_err();
         assert!(
-            matches!(&error, RuntimeError::Window(message) if message.contains("lost")),
+            matches!(&error, RuntimeError::Window(message) if message.contains("outdated")),
             "{error}"
         );
+    }
+
+    #[test]
+    fn a_frame_drawn_restarts_the_time_without_surface() {
+        let (mut presenter, log) = presenter(&[Outcome::Lost, Outcome::Frame, Outcome::Lost]);
+        assert!(!drawn(&mut presenter).unwrap());
+        log.borrow_mut().now += MAX_TIME_WITHOUT_SURFACE;
+        assert!(drawn(&mut presenter).unwrap());
+        log.borrow_mut().now += MAX_TIME_WITHOUT_SURFACE;
+        assert!(!drawn(&mut presenter).unwrap(), "a new run of lost frames");
     }
 
     #[test]
@@ -680,6 +797,53 @@ mod tests {
         let (mut presenter, _log) = presenter(&[Outcome::Validation]);
         let error = drawn(&mut presenter).unwrap_err();
         assert!(matches!(error, RuntimeError::Gpu(_)), "{error}");
+    }
+
+    #[test]
+    fn a_device_lost_between_ticks_rebuilds() {
+        let log = Rc::new(RefCell::new(Log::default()));
+        let opened = Rc::new(RefCell::new(Vec::new()));
+        let mut display = display(&log, &opened, &Rc::new(RefCell::new(false)));
+        let runner = empty_game();
+        let (previous, current) = runner.frames();
+        let current = current.unwrap();
+        display
+            .show(previous, current, &Overlay::default(), true, 1.0)
+            .unwrap();
+        lose(&opened.borrow()[0]);
+        // No new tick, so no upload, and the lost device's surface answers `Lost`: the loss
+        // must be found before the texture is asked for.
+        log.borrow_mut().outcomes.push_back(Outcome::Lost);
+        display
+            .show(previous, current, &Overlay::default(), false, 0.5)
+            .unwrap();
+        assert_eq!(opened.borrow().len(), 2, "a new device opened");
+        assert!(
+            display
+                .show(previous, current, &Overlay::default(), false, 0.5)
+                .unwrap()
+        );
+        assert_eq!(log.borrow().presented, 2);
+    }
+
+    #[test]
+    fn a_device_lost_while_asking_for_a_texture_rebuilds() {
+        let log = Rc::new(RefCell::new(Log::default()));
+        let opened = Rc::new(RefCell::new(Vec::new()));
+        let mut display = display(&log, &opened, &Rc::new(RefCell::new(false)));
+        let runner = empty_game();
+        let (previous, current) = runner.frames();
+        let current = current.unwrap();
+        display
+            .show(previous, current, &Overlay::default(), true, 1.0)
+            .unwrap();
+        log.borrow_mut().outcomes.push_back(Outcome::DeviceLost);
+        assert!(
+            display
+                .show(previous, current, &Overlay::default(), false, 0.5)
+                .unwrap()
+        );
+        assert_eq!((opened.borrow().len(), log.borrow().presented), (2, 2));
     }
 
     #[test]

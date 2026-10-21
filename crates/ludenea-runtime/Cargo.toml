@@ -28,3 +28,4 @@ ludenea.workspace = true
 postcard.workspace = true
 serde.workspace = true
 swarm = { path = "../../examples/swarm" }
+tempfile.workspace = true

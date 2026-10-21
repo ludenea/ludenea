@@ -620,7 +620,8 @@ pub fn play(app: fn() -> App, args: &PlayArgs, out: &mut dyn Write) -> Outcome {
         size: (args.width, args.height),
         title,
     };
-    let outcome = ludenea_runtime::native::play(app, options).map_err(|error| error.to_string())?;
+    let outcome =
+        ludenea_runtime::native::play(app, options, out).map_err(|error| error.to_string())?;
     if let Some(stats) = outcome.stats {
         say(out, format_args!("ticks {}, {stats}", outcome.ticks))?;
     }
