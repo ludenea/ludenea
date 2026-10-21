@@ -1609,6 +1609,18 @@ fn a_lost_device_is_reported_as_device_lost() {
     ));
 }
 
+#[test]
+fn check_device_reports_a_loss_without_drawing() {
+    let (device, queue) = device();
+    let renderer = renderer_on(&device, queue);
+    assert_eq!(renderer.check_device(), Ok(()));
+    device.destroy();
+    assert!(matches!(
+        renderer.check_device(),
+        Err(RenderError::DeviceLost(_))
+    ));
+}
+
 fn renderer_on(device: &wgpu::Device, queue: wgpu::Queue) -> Renderer {
     Renderer::new(device.clone(), queue, wgpu::TextureFormat::Rgba8Unorm)
 }

@@ -23,8 +23,9 @@ pub async fn headless_with_limits(
 
 /// Opens a surface on `window` and a device that can present to it, on a hardware adapter or
 /// on the fallback adapter as `headless` does, failing with the same `RenderError::NoAdapter`
-/// (or `RenderError::Gpu` when the window has no surface). The instance is made with the window's display handle. The adapter is returned too: the
-/// surface's formats and present modes depend on it.
+/// (or `RenderError::Gpu` when the window has no surface). The instance is made with the
+/// window's display handle. The adapter is returned too: the surface's formats and present
+/// modes depend on it.
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn for_surface<W>(
     window: W,

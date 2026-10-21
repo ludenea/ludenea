@@ -496,6 +496,14 @@ impl Renderer {
         })
     }
 
+    /// Checks the device without drawing: `RenderError::DeviceLost` once it is lost, and the
+    /// errors it raised since the last call as `RenderError::Gpu` of `"earlier GPU work"`, as
+    /// the next call would return them. For a caller that touches the device before drawing,
+    /// such as a window asking its surface for a texture.
+    pub fn check_device(&self) -> Result<(), RenderError> {
+        self.faults(EARLIER)
+    }
+
     /// Refuses a target of `size` wider or taller than `max_texture_dimension_2d`, as
     /// `render_rgba` would, so a caller can fail before it does any work.
     pub fn check_size(&self, size: Size) -> Result<(), RenderError> {

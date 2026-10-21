@@ -81,7 +81,8 @@ hash, those of the golden trace and replays included.
 - `ludenea_render::gpu::for_surface(window)` opens a surface on a window and a device that
   presents to it, made with the window's display handle, with the same fallback adapter and
   `RenderError::NoAdapter` as `headless`; it also returns the adapter, whose capabilities
-  the surface is configured from. Not on WebAssembly.
+  the surface is configured from. Not on WebAssembly. `Renderer::check_device` returns the
+  device's loss or pending errors without drawing.
 - The command line tool's new `play` plays a scene in a native window: `--players` (1 to 4,
   skipping the lobby), `--ticks`, `--record`, `--fullscreen`, `--no-vsync`, `--stats` (the
   frame time percentiles, printed when the window closes), `--threads`, `--debug-layer`,
