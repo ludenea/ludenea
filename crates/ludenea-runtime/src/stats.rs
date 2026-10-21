@@ -9,6 +9,7 @@ pub struct FrameStats {
 }
 
 impl FrameStats {
+    /// Adds a displayed frame that took `frame_seconds`.
     pub fn record(&mut self, frame_seconds: f64) {
         self.seconds.push(frame_seconds);
     }

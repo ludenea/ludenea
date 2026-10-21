@@ -83,10 +83,7 @@ fn runner_matches_headless_hashes() {
     let mut headless = swarm::app().build().unwrap();
     let recorded =
         record_replay(&mut headless, &files.scene, &assets, &inputs, &edits, 600).unwrap();
-    assert!(
-        recorded == replay,
-        "the headless run records the same replay"
-    );
+    assert_eq!(recorded, replay, "the headless run records the same replay");
     let directions: BTreeSet<_> = (0..600)
         .map(|tick| {
             let bytes = inputs.tick(tick).expect("every tick is recorded");
@@ -135,7 +132,7 @@ fn stall_of_a_minute_runs_at_most_the_pacer_cap() {
     let update = runner.frame(60.0, &idle).unwrap();
     assert!(update.tick > before, "the stall runs ticks");
     assert!(update.tick - before <= u64::from(MAX_TICKS_PER_FRAME));
-    assert!((0.0..1.0).contains(&update.alpha), "{}", update.alpha);
+    assert!((0.0..=1.0).contains(&update.alpha), "{}", update.alpha);
     assert!(update.new_frames);
     // The debt beyond the cap is dropped: play goes on at its pace.
     let next = runner.frame(1.0 / 60.0, &idle).unwrap();
@@ -164,7 +161,7 @@ fn alpha_stays_between_zero_and_one() {
     for seconds in elapsed {
         let update = runner.frame(seconds, &idle).unwrap();
         assert!(
-            update.alpha.is_finite() && (0.0..1.0).contains(&update.alpha),
+            (0.0..=1.0).contains(&update.alpha),
             "alpha {} after {seconds} s",
             update.alpha
         );
@@ -360,4 +357,20 @@ fn an_edit_that_no_longer_applies_is_a_warning_naming_its_tick() {
         "{messages:?}"
     );
     assert!(runner.take_messages().is_empty(), "messages are taken once");
+}
+
+/// A game whose render frame cannot be extracted.
+fn undrawable_app() -> App {
+    let mut app = marked_app();
+    app.extractor(|_, _| panic!("no frame"));
+    app
+}
+
+#[test]
+fn a_first_frame_that_cannot_draw_is_a_load_error() {
+    let mut runner = Runner::load(undrawable_app, &empty_files(), None, Vec::new()).unwrap();
+    match runner.start(automatic_claims(1)) {
+        Err(RuntimeError::Load(message)) => assert!(message.contains("no frame"), "{message}"),
+        other => panic!("expected a load error, got {other:?}"),
+    }
 }

@@ -28,22 +28,28 @@ pub struct GameFiles {
 pub struct FrameUpdate {
     /// Whether ticks ran: `Runner::frames` holds new frames to upload.
     pub new_frames: bool,
-    /// The fraction of the next tick that passed, from 0 to below 1: what the renderer
-    /// interpolates the last two ticks with.
+    /// The fraction of the next tick that passed, from 0 to 1 (the host's progress is below
+    /// 1, but it can round up to exactly 1 as an `f32`): what the renderer interpolates the
+    /// last two ticks with.
     pub alpha: f32,
     /// The tick of the current state.
     pub tick: u64,
 }
 
+/// Why a game cannot go on running.
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]
 pub enum RuntimeError {
+    /// The game cannot be built, its files do not load, or its match cannot start (such as
+    /// claims that hold a device twice).
     #[error("cannot load the game: {0}")]
     Load(String),
     /// The game failed or panicked while it ran `tick`.
     #[error("the game failed at tick {tick}: {message}")]
     Game { tick: u64, message: String },
+    /// The GPU cannot draw, with its cause.
     #[error("the GPU failed: {0}")]
     Gpu(String),
+    /// The window cannot open or keep running, with its cause.
     #[error("the window failed: {0}")]
     Window(String),
 }
@@ -112,7 +118,10 @@ impl Runner {
             claims: Some(claims),
         })?;
         self.setup(Command::Play)?;
-        self.current = Some(self.render_frame()?);
+        let frame = self.render_frame().map_err(|error| {
+            RuntimeError::Load(format!("cannot draw the first tick: {}", error.message))
+        })?;
+        self.current = Some(frame);
         self.previous = None;
         let events = self.host.drain_events();
         self.keep_messages(events);
@@ -153,7 +162,9 @@ impl Runner {
             return Err(failure);
         }
         if ticked {
-            let frame = self.render_frame()?;
+            let frame = self
+                .render_frame()
+                .map_err(|error| self.game_error(error))?;
             self.previous = self.current.replace(frame);
         }
         Ok(FrameUpdate {
@@ -214,14 +225,13 @@ impl Runner {
         })
     }
 
-    fn render_frame(&mut self) -> Result<RenderFrame, RuntimeError> {
+    fn render_frame(&mut self) -> Result<RenderFrame, ProtocolError> {
         let command = Command::GetRenderFrame {
             debug_layers: self.debug_layers.clone(),
         };
-        match self.host.handle(command) {
-            Ok(Reply::RenderFrame { frame }) => Ok(frame),
-            Ok(other) => unreachable!("GetRenderFrame answers RenderFrame, not {other:?}"),
-            Err(error) => Err(self.game_error(error)),
+        match self.host.handle(command)? {
+            Reply::RenderFrame { frame } => Ok(frame),
+            other => unreachable!("GetRenderFrame answers RenderFrame, not {other:?}"),
         }
     }
 
