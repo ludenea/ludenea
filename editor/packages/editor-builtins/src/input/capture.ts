@@ -3,10 +3,10 @@ import { isEditorKey, type Disposable, type Editor } from "@ludenea/editor-shell
 
 const IDLE: LiveDevices = { keys: [], gamepads: [] };
 
-/** Every gamepad slot, in the Gamepad API's standard mapping; `null` for an empty slot. */
+/** Every gamepad slot, in the Gamepad API's standard mapping; `null` for an empty slot or a pad the browser still lists after it was unplugged. */
 function gamepads(): (RawGamepad | null)[] {
   const slots = typeof navigator.getGamepads === "function" ? navigator.getGamepads() : [];
-  return Array.from(slots, (pad) => (pad ? { buttons: pad.buttons.map((button) => button.value), axes: [...pad.axes] } : null));
+  return Array.from(slots, (pad) => (pad?.connected ? { buttons: pad.buttons.map((button) => button.value), axes: [...pad.axes] } : null));
 }
 
 /** The players the "Set the player count" command offers. */

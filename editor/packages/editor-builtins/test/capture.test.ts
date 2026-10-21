@@ -124,8 +124,10 @@ describe("live input capture", () => {
   });
 
   it("sends_every_gamepad_slot_with_nulls_for_empty_ones", async () => {
-    const pad = { buttons: [{ value: 0 }, { value: 1 }], axes: [0.5, -1] };
-    vi.stubGlobal("navigator", { ...navigator, getGamepads: () => [null, pad, null, null] });
+    const pad = { connected: true, buttons: [{ value: 0 }, { value: 1 }], axes: [0.5, -1] };
+    // A pad the browser still lists after it was unplugged is an empty slot too.
+    const unplugged = { connected: false, buttons: [{ value: 1 }], axes: [0, 0] };
+    vi.stubGlobal("navigator", { ...navigator, getGamepads: () => [null, pad, unplugged, null] });
     const host = await testEditor([]);
     const game = await testGame(undefined, { input: { kind: "unit" } });
     act(() => host.setControl(game.client));
