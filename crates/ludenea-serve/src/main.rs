@@ -4,6 +4,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use ludenea_project::Project;
 
+mod play;
 mod serve;
 
 #[derive(Parser)]
@@ -48,10 +49,34 @@ enum Command {
         #[arg(long = "allow-origin", value_name = "ORIGIN")]
         allow_origin: Vec<String>,
     },
+    /// Build the project natively and play it in a window.
+    Play {
+        project: PathBuf,
+        /// The scene to play; defaults to `default_scene` in `ludenea.toml`.
+        #[arg(long)]
+        scene: Option<PathBuf>,
+        /// Options of the game's own `play` (`--players`, `--record`, `--fullscreen`, ...).
+        #[arg(last = true)]
+        args: Vec<String>,
+    },
 }
 
 fn main() -> ExitCode {
     let result = match Cli::parse().command {
+        // The game's exit code is the tool's; every failure of the tool itself is 2.
+        Command::Play {
+            project,
+            scene,
+            args,
+        } => {
+            return match play::run(&project, scene.as_deref(), &args) {
+                Ok(code) => ExitCode::from(code),
+                Err(message) => {
+                    eprintln!("error: {message}");
+                    ExitCode::from(2)
+                }
+            };
+        }
         Command::New { dir, engine_path } => create(&dir, &engine_path),
         Command::Serve {
             project,

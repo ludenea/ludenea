@@ -40,6 +40,11 @@ hash, those of the golden trace and replays included.
 
 ### Rust API
 
+- `ludenea play <project> [--scene PATH] [-- args...]` builds a project natively and runs its
+  binary's `play` with `--project` and the forwarded arguments, returning the game's exit
+  code (2 when the build or the launch fails, or without a scene: pass `--scene` or set
+  `default_scene`). The project template's input mapping reads the arrows, WASD, and
+  gamepad 0.
 - `ludenea_app::players` assigns local players their devices without a window or a GPU:
   `Claim` (at most one `KeyboardPart` of `Whole`, `Left` or `Right`, and one gamepad slot),
   `LiveDevices`, `automatic_claims`, `check_claims` (refusing a gamepad or a keyboard part

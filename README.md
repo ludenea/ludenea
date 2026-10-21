@@ -40,7 +40,7 @@ for any thread count. The guarantee rests on:
 | `crates/ludenea-runtime` | Game runner and native window                   |
 | `crates/ludenea`         | Facade crate re-exporting the engine            |
 | `crates/ludenea-project` | Projects, builds, and plugin bundling           |
-| `crates/ludenea-serve`   | The `ludenea` tool: `new` and `serve`           |
+| `crates/ludenea-serve`   | The `ludenea` tool: `new`, `serve`, and `play`  |
 | `editor`                 | The editor: web and desktop applications        |
 | `examples/boxes`         | Reference scenario, golden trace, and benchmark |
 | `examples/swarm`         | Runtime test game: 10,000 sprites, 4 players    |
@@ -227,6 +227,15 @@ Create a project from the template (the game depends on the engine at `--engine-
 
 ```sh
 cargo run --locked -p ludenea-serve -- new ~/games/my_game --engine-path .
+```
+
+Play it in a window: `ludenea play` builds the game natively and runs its `play` command; the
+scene defaults to the `default_scene` of `ludenea.toml`, and everything after `--` goes to the
+game (`--players`, `--record`, `--fullscreen`, ...). It exits with the game's code, or 2 when
+the build or the launch fails:
+
+```sh
+cargo run --locked -p ludenea-serve -- play ~/games/my_game -- --players 2
 ```
 
 Serve it with the editor and open `http://127.0.0.1:7878` in a browser; the editor is

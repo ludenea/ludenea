@@ -241,6 +241,7 @@ jobs:
           git diff --exit-code
           test -z "$(git status --porcelain)" || { git status --porcelain; exit 1; }
       - run: cargo test --locked -p ludenea-project -- --ignored
+      - run: cargo test --locked -p ludenea-serve --test play -- --ignored
       - run: cargo xtask wasm-game boxes editor/e2e/golden/pkg
       # The renderer's pixel tests (renderer.spec.ts) load it, on WebGL2 and on WebGPU.
       - run: cargo xtask wasm-render editor/e2e/fixtures/renderer/pkg
