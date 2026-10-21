@@ -13,6 +13,7 @@ pub mod path;
 pub mod players;
 pub mod pose;
 pub mod prefab;
+pub mod project;
 pub mod raw_input;
 pub mod replay;
 pub mod rng;

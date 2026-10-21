@@ -5,9 +5,9 @@ use std::path::Path;
 use boxes::SpawnerStats;
 use ludenea::app::EntityRef;
 use ludenea::app::prefab::InstanceInfo;
+use ludenea::app::project::project_assets;
 use ludenea::app::replay::{Replay, ReplayOutcome, play_replay};
 use ludenea::app::trace::{TRACE_VERSION, Trace, TraceComparison};
-use ludenea::cli::assets::project_assets;
 use ludenea::control::{
     BranchId, Bytes, Command, ComponentValue, Document, ErrorCode, Event, FieldTarget, Hash64,
     Host, InProcess, PROTOCOL_VERSION, PathSegment, ProtocolError, Reply, Timeline, Topic,

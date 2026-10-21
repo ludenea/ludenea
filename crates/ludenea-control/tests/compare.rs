@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use ludenea::cli::assets::project_assets;
+use ludenea::app::project::project_assets;
 use ludenea::control::{
     BranchId, Bytes, Command, ConsoleLevel, Document, Event, FieldTarget, Hash64, Host,
     PathSegment, Reply, Timeline, Topic,

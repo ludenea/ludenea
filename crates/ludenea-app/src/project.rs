@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use ludenea_app::meta::{Meta, TextureMeta, is_png, read_assets};
-use ludenea_app::{AssetTexts, NamedAssetTexts};
+use crate::meta::{Meta, TextureMeta, is_png, read_assets};
+use crate::{AssetTexts, NamedAssetTexts};
 use ludenea_ecs::AssetId;
 
 const MANIFEST: &str = "ludenea.toml";
@@ -142,7 +142,7 @@ fn collect(directory: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use ludenea_app::AssetSource;
+    use crate::AssetSource;
 
     use super::*;
 
@@ -269,7 +269,7 @@ mod tests {
         let textures = project_textures(&scene, None).unwrap().textures;
         let meta = TextureMeta {
             pixels_per_unit: 8,
-            filter: ludenea_app::meta::Filter::Linear,
+            filter: crate::meta::Filter::Linear,
             ..TextureMeta::default()
         };
         assert_eq!(

@@ -62,6 +62,9 @@ hash, those of the golden trace and replays included.
   and keeps each pad's slot while it is unplugged (`Slots`). Without the feature the crate
   depends on no window, gamepad or GPU crate. On Linux, the feature needs libudev's
   development files to build.
+- Breaking: `ludenea_cli::assets` moves to `ludenea_app::project` (`project_assets`,
+  `project_textures`, `ProjectTextures`, `ProjectTexture`), with no alias, so the runtime
+  and the project tools read a project's files without depending on the command line tool.
 - Breaking: the `ludenea-debug-draw` crate is renamed `ludenea-draw`, and the facade's
   `ludenea::debug_draw` is now `ludenea::draw`, with no alias. Its types keep their names.
 - `ludenea_draw::frame::RenderFrame` is what a renderer draws for one tick: the camera
@@ -140,7 +143,7 @@ hash, those of the golden trace and replays included.
   draw layer to show. It prints the tick's state hash, which rendering never changes, and
   for a replay a warning when that hash differs from the one the replay recorded. The
   project's textures (each `.png` whose meta makes it a texture, found by the new
-  `ludenea_cli::assets::project_textures`, which returns them with a warning for each
+  `ludenea_app::project::project_textures`, which returns them with a warning for each
   texture whose meta cannot be read or is invalid) are packed into the atlas; a texture
   whose meta cannot be read or is invalid, or that does not pack, is a warning, is left out
   and draws as placeholders, and each sprite or tile drawn as a placeholder is a warning

@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use ludenea::app::players::LiveDevices;
-use ludenea::cli::assets::project_assets;
+use ludenea::app::project::project_assets;
 use ludenea::control::divergence::{
     Cause, DivergenceKind, DivergenceReport, EntityDivergence, RootCauseKind,
 };

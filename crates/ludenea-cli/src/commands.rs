@@ -9,7 +9,7 @@ use ludenea_app::trace::{TRACE_VERSION, Trace, compare_traces, inputs_hash, scen
 use ludenea_app::{App, EditLog, InputLog, NamedAssetTexts, Parallel, SimError, Simulation};
 use ludenea_control::{Bytes, Command, Host, InProcess, PROTOCOL_VERSION, Reply, Transport};
 
-use crate::assets::project_assets;
+use ludenea_app::project::project_assets;
 
 pub type Outcome = Result<i32, String>;
 
@@ -441,7 +441,7 @@ pub fn render(app: fn() -> App, args: &RenderArgs, out: &mut dyn Write) -> Outco
     if is_replay && (inputs.is_some() || files.edits.is_some()) {
         return Err("a replay holds its own inputs and edits; drop --inputs and --edits".into());
     }
-    let textures = crate::assets::project_textures(&files.scene, files.project.as_deref())?;
+    let textures = ludenea_app::project::project_textures(&files.scene, files.project.as_deref())?;
     for warning in &textures.warnings {
         say(out, format_args!("warning: {warning}"))?;
     }
@@ -539,7 +539,7 @@ fn known_debug_layers(
 /// each texture left out.
 #[cfg(not(target_family = "wasm"))]
 fn renderer(
-    textures: &[crate::assets::ProjectTexture],
+    textures: &[ludenea_app::project::ProjectTexture],
     out: &mut dyn Write,
 ) -> Result<ludenea_render::gpu::Renderer, String> {
     use ludenea_render::atlas::{TextureSource, pack};

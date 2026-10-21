@@ -6,8 +6,8 @@ use std::path::Path;
 
 use boxes::SpawnerStats;
 use ludenea::app::edit::{Edit, EditLog, EntityRef, TimedEdit};
+use ludenea::app::project::project_assets;
 use ludenea::app::replay::record_replay;
-use ludenea::cli::assets::project_assets;
 use ludenea::ecs::{Asset, AssetId, Component};
 use ludenea::prelude::{Body, InputLog, Vec2};
 

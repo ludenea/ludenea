@@ -3,7 +3,7 @@ use std::path::Path;
 
 use boxes::SpawnerStats;
 use ludenea::app::prefab::{create_prefab, place_instance, save_prefab_checked};
-use ludenea::cli::assets::project_assets;
+use ludenea::app::project::project_assets;
 use ludenea::control::session::Document;
 use ludenea::control::{Resimulation, SceneChange, Session, SessionError};
 use ludenea::ecs::{Asset, AssetId, Component};

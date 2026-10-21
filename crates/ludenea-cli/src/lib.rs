@@ -1,7 +1,6 @@
 //! The `ludenea` command line: `run`, `verify`, `diff`, `render`, and `host`. A game
 //! provides its own `main` and passes its app constructor to [`main`].
 
-pub mod assets;
 mod commands;
 mod trace;
 

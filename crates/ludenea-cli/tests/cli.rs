@@ -504,7 +504,7 @@ fn project_assets_resolve_from_a_bare_scene_file_name() {
     if let Ok(folder) = std::env::var(CHILD) {
         assert_eq!(std::env::current_dir().unwrap(), PathBuf::from(folder));
         let scene = Path::new("main.scene.ron");
-        let assets = ludenea_cli::assets::project_assets(scene, None).unwrap();
+        let assets = ludenea_app::project::project_assets(scene, None).unwrap();
         assert_eq!(
             assets.texts.keys().copied().collect::<Vec<_>>(),
             [ludenea_ecs::AssetId(11)]
