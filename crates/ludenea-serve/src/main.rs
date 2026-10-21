@@ -52,7 +52,8 @@ enum Command {
     /// Build the project natively and play it in a window.
     Play {
         project: PathBuf,
-        /// The scene to play; defaults to `default_scene` in `ludenea.toml`.
+        /// The scene to play, relative to the working directory; defaults to `default_scene` in
+        /// `ludenea.toml`, which is relative to the project root.
         #[arg(long)]
         scene: Option<PathBuf>,
         /// Options of the game's own `play` (`--players`, `--record`, `--fullscreen`, ...).

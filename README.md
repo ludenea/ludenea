@@ -230,7 +230,8 @@ cargo run --locked -p ludenea-serve -- new ~/games/my_game --engine-path .
 ```
 
 Play it in a window: `ludenea play` builds the game natively and runs its `play` command; the
-scene defaults to the `default_scene` of `ludenea.toml`, and everything after `--` goes to the
+scene defaults to the `default_scene` of `ludenea.toml` (relative to the project root; a
+`--scene` path is relative to the working directory), and everything after `--` goes to the
 game (`--players`, `--record`, `--fullscreen`, ...). It exits with the game's code, or 2 when
 the build or the launch fails:
 

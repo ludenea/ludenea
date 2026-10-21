@@ -1,5 +1,5 @@
-//! These tests run real `cargo build`s of a generated project, so they are `#[ignore]`d; run
-//! them with `cargo test -p ludenea-serve --test play -- --ignored`.
+//! Most of these tests run real `cargo build`s of a generated project, so they are `#[ignore]`d;
+//! run them with `cargo test -p ludenea-serve --test play -- --ignored`.
 
 use std::fs;
 use std::path::Path;
@@ -33,7 +33,6 @@ fn play_builds_the_template_and_forwards_arguments() {
 }
 
 #[test]
-#[ignore]
 fn play_without_a_scene_names_both_fixes() {
     let dir = TempDir::new().unwrap();
     let project = new_project(&dir);
@@ -64,6 +63,9 @@ fn play_of_a_broken_build_exits_2_with_its_diagnostic() {
     let output = ludenea(&["play", project.root().to_str().unwrap()]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(2), "{stderr}");
-    assert!(stderr.contains("error"), "{stderr}");
     assert!(stderr.contains("src/lib.rs"), "{stderr}");
+    assert!(
+        stderr.contains("this file contains an unclosed delimiter"),
+        "{stderr}"
+    );
 }

@@ -47,11 +47,48 @@ pub fn run(root: &Path, scene: Option<&Path>, args: &[String]) -> Result<u8, Str
         .args(args)
         .status()
         .map_err(|error| format!("cannot run {}: {error}", binary.display()))?;
-    match status.code() {
-        Some(code) => Ok(u8::try_from(code).unwrap_or(2)),
+    exit_code(&binary, status.code())
+}
+
+/// The exit code of the tool for the game's `code`, or why there is none.
+fn exit_code(binary: &Path, code: Option<i32>) -> Result<u8, String> {
+    match code {
+        Some(code) => u8::try_from(code).map_err(|_| {
+            format!(
+                "{} exited with the status {code}, which is not an exit code",
+                binary.display()
+            )
+        }),
         None => Err(format!(
             "{} ended without an exit code (killed by a signal)",
             binary.display()
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_code_passes_through_as_is() {
+        assert_eq!(exit_code(Path::new("game"), Some(3)), Ok(3));
+        assert_eq!(exit_code(Path::new("game"), Some(0)), Ok(0));
+    }
+
+    #[test]
+    fn an_out_of_range_code_is_an_error_naming_it() {
+        let error = exit_code(Path::new("game"), Some(-1073741819)).unwrap_err();
+        assert!(
+            error.contains("game") && error.contains("-1073741819"),
+            "{error}"
+        );
+        assert!(exit_code(Path::new("game"), Some(256)).is_err());
+    }
+
+    #[test]
+    fn no_code_is_an_error() {
+        let error = exit_code(Path::new("game"), None).unwrap_err();
+        assert!(error.contains("signal"), "{error}");
     }
 }
