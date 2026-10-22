@@ -41,6 +41,17 @@ pub trait Component: Schema + Serialize + DeserializeOwned + Clone + Send + 'sta
 /// Saved states clone resources instead of encoding them, so a resource must be `Clone`. A
 /// hand-written `Clone` must give the same value a postcard round trip gives: the saved
 /// state relies on it.
+///
+/// ```compile_fail,E0277
+/// use ludenea_ecs::Resource;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Resource, Serialize, Deserialize)]
+/// struct Score(u32);
+///
+/// fn assert_resource<T: Resource>() {}
+/// assert_resource::<Score>();
+/// ```
 pub trait Resource: Schema + Serialize + DeserializeOwned + Clone + Send + 'static {
     const NAME: &'static str;
 }

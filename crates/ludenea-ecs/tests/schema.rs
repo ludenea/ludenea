@@ -106,12 +106,12 @@ fn events_sharing_a_stable_name_are_refused() {
 }
 
 /// A dialogue line, whose replies lead to further lines.
-#[derive(ludenea_ecs::schema::Schema, Serialize, Deserialize, Default, Clone)]
+#[derive(Clone, ludenea_ecs::schema::Schema, Serialize, Deserialize, Default)]
 struct Line {
     replies: Vec<Reply>,
 }
 
-#[derive(ludenea_ecs::schema::Schema, Serialize, Deserialize, Default, Clone)]
+#[derive(Clone, ludenea_ecs::schema::Schema, Serialize, Deserialize, Default)]
 struct Reply {
     next: Vec<Line>,
 }
