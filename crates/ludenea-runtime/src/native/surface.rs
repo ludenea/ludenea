@@ -365,11 +365,12 @@ impl Display {
 
     /// Repacks the textures after they changed on disk: `update`'s textures replace those
     /// at the same path; a failed path (`update.failures`, or a new version the atlas
-    /// refuses) keeps its previous version; a path in neither list is dropped. The new atlas is uploaded, kept for a new screen, and drawn from the next
-    /// frame. Returns a warning per failure (`<path>: <cause>, keeping the previous
-    /// version`, or `; the texture is left out` without a previous version), and one per
-    /// texture the atlas leaves out. The reading applied last changes nothing and warns of
-    /// nothing; one the GPU refused is tried again. Never touches the simulation.
+    /// refuses) keeps its previous version; a path in neither list is dropped. The new
+    /// atlas is uploaded, kept for a new screen, and drawn from the next frame. Returns a
+    /// warning per failure (`<path>: <cause>, keeping the previous version`, or `; the
+    /// texture is left out` without a previous version), and one per texture the atlas
+    /// leaves out. The reading applied last changes nothing and warns of nothing; one the
+    /// GPU refused is tried again. Never touches the simulation.
     pub(crate) fn replace_textures(&mut self, update: &ProjectTextures) -> Vec<String> {
         if self.applied.as_ref() == Some(update) {
             return Vec::new();
