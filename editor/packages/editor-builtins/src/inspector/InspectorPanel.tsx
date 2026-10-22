@@ -24,7 +24,11 @@ export function InspectorPanel({ editor, state }: { editor: Editor; state: Inspe
   const asset = editor.selection((selection) => selection.asset);
   // A texture is the project's, not the game's: its inspector shows alone, game or none.
   if (asset?.kind === "Texture") {
-    if (!editor.inspectors.getAsset("Texture")) return <p className="ludenea-muted">No inspector is registered for textures.</p>;
+    const registered = editor.inspectors.getAsset("Texture");
+    if (!registered) return <p className="ludenea-muted">No inspector is registered for textures.</p>;
+    // A texture has no value: its PNG and its meta are files of the project.
+    const changeTexture = () =>
+      editor.console.report(new Error("a texture has no value to change: write its PNG or its meta through `editor.project`"), `The "Texture" asset inspector of plugin "${editor.pluginOf(registered)}"`);
     return (
       <div className="ludenea-inspector">
         <AssetInspectorSlot editor={editor} name="Texture" id={asset.id} value={null} onChange={changeTexture} />
@@ -34,11 +38,6 @@ export function InspectorPanel({ editor, state }: { editor: Editor; state: Inspe
   if (!control) return <p className="ludenea-muted">No game is running.</p>;
   return <Inspector editor={editor} control={control} state={state} />;
 }
-
-/** A texture has no value: its PNG and its meta are files of the project. */
-const changeTexture = () => {
-  throw new Error("a texture has no value to change: write its PNG or its meta through `editor.project`");
-};
 
 /**
  * The asset inspector registered as `name`, if any, isolated from the panel: one that throws

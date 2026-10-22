@@ -314,6 +314,29 @@ describe("inspector", () => {
     });
   });
 
+  describe("texture inspectors", () => {
+    const HERO = "0000000000000000000000000000000d";
+    const withoutTextures = builtinPlugins.filter((plugin) => plugin.name !== "ludenea.textures");
+
+    async function texture(plugins = withoutTextures) {
+      const host = await testEditor(plugins);
+      act(() => host.editor.selection.getState().selectAsset(HERO, "Texture"));
+      renderPanel(host, "ludenea.inspector");
+      await settle();
+      return host;
+    }
+
+    it("a_texture_inspector_changing_a_value_is_reported_naming_its_plugin", async () => {
+      const Changing = ({ onChange }: { onChange(path: unknown[], value: unknown): void }) => <button onClick={() => onChange([], 1)}>Change</button>;
+      const host = await texture([...withoutTextures, definePlugin({ name: "my_game", activate: (editor) => void editor.inspectors.registerAsset("Texture", Changing) })]);
+
+      fireEvent.click(screen.getByRole("button", { name: "Change" }));
+      expect(host.editor.console.list().map(({ level, text }) => [level, text])).toEqual([
+        ["error", 'The "Texture" asset inspector of plugin "my_game" failed: a texture has no value to change: write its PNG or its meta through `editor.project`'],
+      ]);
+    });
+  });
+
   it("add_component_choice_follows_the_components_present", async () => {
     let components: Record<string, unknown> = {};
     const { game } = await inspector((command) => (command.type === "get_entity" ? { type: "entity", entity, components } : undefined));
