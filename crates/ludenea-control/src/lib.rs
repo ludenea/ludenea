@@ -30,7 +30,8 @@ pub use path::{PathSegment, set_at_path};
 pub use protocol::{
     Bytes, ClientMessage, Command, ComponentValue, ConsoleLevel, EntityRow, ErrorCode, Event,
     FieldTarget, GameInfo, Hash64, NamedSchema, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION,
-    PauseReason, ProtocolError, RecordedEvent, Reply, ServerMessage, SyncPoint, SystemRow, Topic,
+    PauseReason, ProtocolError, RecordedEvent, Reply, ServerMessage, SyncPoint, SystemRow,
+    TileArea, Topic,
 };
 pub use session::{
     Document, Resimulation, SceneChange, Session, SessionError, SessionExport, Timeline,

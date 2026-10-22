@@ -50,6 +50,7 @@ export * from "./ServerMessage";
 export * from "./SpriteItem";
 export * from "./SyncPoint";
 export * from "./SystemRow";
+export * from "./TileArea";
 export * from "./TilemapItem";
 export * from "./Timeline";
 export * from "./Topic";

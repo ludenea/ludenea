@@ -172,6 +172,17 @@ type PathSegment = {
 };
 
 /**
+ * A rectangle of tilemap cells: `width` by `height` cells from the cell at column `x`, row
+ * `y`, where `(0, 0)` is the bottom-left cell, as `Tilemap::tiles` orders them.
+ */
+type TileArea = {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+};
+
+/**
  * What a client can subscribe to. Changes are pushed as events from `Host::advance`.
  */
 type Topic = {
@@ -260,6 +271,11 @@ type Command = {
     target: FieldTarget;
     path: Array<PathSegment>;
     value: JsonValue;
+} | {
+    "type": "paint_tiles";
+    entity: Entity;
+    area: TileArea;
+    tile: number | null;
 } | {
     "type": "batch";
     commands: Array<Command>;
@@ -1166,7 +1182,7 @@ type ServerMessage = {
 /** The control protocol version this build speaks: a client and a host connect only when theirs are equal. */
 const PROTOCOL_VERSION = 5;
 /** The wire shape of `PROTOCOL_VERSION`, a hash of the protocol's types: a client and a host connect only when theirs are equal too. */
-const PROTOCOL_FINGERPRINT = "2a9e16a873959465";
+const PROTOCOL_FINGERPRINT = "c2a0b9a003eec8f7";
 /** The `type` of the reply each command type gets when it succeeds. */
 type ReplyTypes = {
     apply_override: "done";
@@ -1203,6 +1219,7 @@ type ReplyTypes = {
     mark_asset_saved: "done";
     mark_scene_saved: "done";
     new_asset_value: "text";
+    paint_tiles: "done";
     pause: "done";
     pick: "picked";
     place_instance: "placed";
@@ -1761,5 +1778,5 @@ function startWorkerGame(options: {
 }): WorkerGame;
 
 export { ControlClient, PROJECT_PROTOCOL_FINGERPRINT, PROJECT_PROTOCOL_VERSION, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION, ProjectClient, ProtocolFailure, RequestTracker, fakeTransport, handshake, parseFrame, postMessageTransport, startWorkerGame, tauriTransport, unwrap, webSocketTransport };
-export type { AssetId, AssetKind, AssetTexts, BranchId, BranchInfo, BuildEvent, Bytes, CameraItem, Cause, Claim, ClientEvent, ClientMessage, Color, Command, ComponentValue, ConsoleLevel, DebugDrawFrame, Diagnostic, Difference, DivergenceKind, DivergenceReport, Document, Entity, EntityDivergence, EntityHash, EntityRow, ErrorCode, Event, FailureCode, FieldSchema, FieldTarget, FileChange, FileEntry, Filter, GameInfo, GameOutput, Grid, Hash64, HashTree, InstanceInfo, Item, JsonValue, KeyboardPart, LayerInfo, LiveDevices, MessageTransport, NamedHash, NamedSchema, Outcome, OutputStream, OverrideInfo, PathSegment, PauseReason, PluginBundle, PluginSource, Primitive, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo, ProjectOutcome, ProjectReply, ProjectReplyFor, ProjectReplyTypes, ProjectRequest, ProjectServerMessage, ProtocolError, ProtocolPeer, PushedFrames, RawGamepad, RecordedEvent, RenderFrame, RenderFramesEvent, Reply, ReplyFor, ReplyTypes, RootCause, RootCauseKind, Rot, ServerMessage, ServiceMode, SpriteItem, SyncPoint, SystemRow, TextureMeta, TilemapItem, Timeline, Topic, TraceComparison, TypeSchema, VariantFields, VariantSchema, Vec2, WorkerCrash, WorkerGame };
+export type { AssetId, AssetKind, AssetTexts, BranchId, BranchInfo, BuildEvent, Bytes, CameraItem, Cause, Claim, ClientEvent, ClientMessage, Color, Command, ComponentValue, ConsoleLevel, DebugDrawFrame, Diagnostic, Difference, DivergenceKind, DivergenceReport, Document, Entity, EntityDivergence, EntityHash, EntityRow, ErrorCode, Event, FailureCode, FieldSchema, FieldTarget, FileChange, FileEntry, Filter, GameInfo, GameOutput, Grid, Hash64, HashTree, InstanceInfo, Item, JsonValue, KeyboardPart, LayerInfo, LiveDevices, MessageTransport, NamedHash, NamedSchema, Outcome, OutputStream, OverrideInfo, PathSegment, PauseReason, PluginBundle, PluginSource, Primitive, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo, ProjectOutcome, ProjectReply, ProjectReplyFor, ProjectReplyTypes, ProjectRequest, ProjectServerMessage, ProtocolError, ProtocolPeer, PushedFrames, RawGamepad, RecordedEvent, RenderFrame, RenderFramesEvent, Reply, ReplyFor, ReplyTypes, RootCause, RootCauseKind, Rot, ServerMessage, ServiceMode, SpriteItem, SyncPoint, SystemRow, TextureMeta, TileArea, TilemapItem, Timeline, Topic, TraceComparison, TypeSchema, VariantFields, VariantSchema, Vec2, WorkerCrash, WorkerGame };
 }

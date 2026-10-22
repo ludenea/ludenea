@@ -5,7 +5,8 @@ use std::collections::BTreeMap;
 use ludenea_app::RawGamepad;
 use ludenea_app::players::{Claim, KeyboardPart, LiveDevices};
 use ludenea_control::{
-    BranchId, Bytes, Command, ComponentValue, Document, FieldTarget, Hash64, PathSegment, Topic,
+    BranchId, Bytes, Command, ComponentValue, Document, FieldTarget, Hash64, PathSegment, TileArea,
+    Topic,
 };
 use ludenea_ecs::{AssetId, Entity};
 
@@ -80,6 +81,16 @@ pub fn every_command() -> Vec<Command> {
             },
             path: vec![],
             value: serde_json::json!("1"),
+        },
+        Command::PaintTiles {
+            entity,
+            area: TileArea {
+                x: 1,
+                y: 2,
+                width: 3,
+                height: 4,
+            },
+            tile: Some(5),
         },
         Command::Batch {
             commands: vec![

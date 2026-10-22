@@ -29,7 +29,7 @@ pub const PROTOCOL_VERSION: u32 = 5;
 /// instead of misreading fields. A change the declarations do not show, such as a new serde
 /// default or another encoding of a type declared as a string, leaves it as it is.
 /// `tests/typescript.rs` pins it.
-pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0x2a9e_16a8_7395_9465);
+pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0xc2a0_b9a0_03ee_c8f7);
 
 /// Binary data, serialized as a standard base64 string.
 #[derive(Clone, Debug, PartialEq)]
@@ -298,13 +298,25 @@ pub enum Command {
         path: Vec<PathSegment>,
         value: JsonValue,
     },
-    /// Applies edit commands (`spawn`, `despawn`, `insert_component`, `remove_component`, and
-    /// `set_field`) as one edit, all or none. Each is read against the state before the batch,
-    /// so a batch changes each component and resource once. At tick 0 they change the scene
-    /// in turn as one scene edit: one undo step, and the recorded future resimulates once.
-    /// Later they are recorded as one edit, an `Edit::Group`, unless the batch holds one
-    /// command, which records its own edit. Any other command, a batch included, and a value
-    /// changed twice are an `InvalidCommand`, and nothing applies.
+    /// Sets every cell of `area` of the entity's `ludenea::Tilemap` to `tile`, `None`
+    /// erasing them. It applies and records exactly as the `SetField` of the tilemap's
+    /// `tiles` with the same result: one undo step, and at tick 0 a scene edit, or an
+    /// override on a prefab instance's entity. A tile past the tileset's frames is accepted
+    /// and drawn as the missing frame placeholder. A dead entity is a `NoSuchEntity`; an
+    /// entity without a tilemap, a tilemap whose `tiles` does not hold one entry per cell,
+    /// and an empty area or one outside the grid are an `InvalidCommand`.
+    PaintTiles {
+        entity: Entity,
+        area: TileArea,
+        tile: Option<u32>,
+    },
+    /// Applies edit commands (`spawn`, `despawn`, `insert_component`, `remove_component`,
+    /// `set_field`, and `paint_tiles`) as one edit, all or none. Each is read against the
+    /// state before the batch, so a batch changes each component and resource once. At tick 0
+    /// they change the scene in turn as one scene edit: one undo step, and the recorded future
+    /// resimulates once. Later they are recorded as one edit, an `Edit::Group`, unless the
+    /// batch holds one command, which records its own edit. Any other command, a batch
+    /// included, and a value changed twice are an `InvalidCommand`, and nothing applies.
     Batch {
         commands: Vec<Command>,
     },
@@ -576,6 +588,7 @@ impl Command {
             | Command::InsertComponent { .. }
             | Command::RemoveComponent { .. }
             | Command::SetField { .. }
+            | Command::PaintTiles { .. }
             | Command::Batch { .. }
             | Command::ApplyToScene { .. }
             | Command::MarkSceneSaved { .. }
@@ -795,6 +808,17 @@ pub struct RecordedEvent {
 pub struct SyncPoint {
     pub after_system: String,
     pub commands: Vec<String>,
+}
+
+/// A rectangle of tilemap cells: `width` by `height` cells from the cell at column `x`, row
+/// `y`, where `(0, 0)` is the bottom-left cell, as `Tilemap::tiles` orders them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct TileArea {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
 }
 
 /// What `SetField` changes.

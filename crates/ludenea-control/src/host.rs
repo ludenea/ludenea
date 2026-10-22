@@ -21,13 +21,18 @@ use crate::pacer::Pacer;
 use crate::path::{Path, PathSegment, set_at_path};
 use crate::protocol::{
     Bytes, Command, ComponentValue, ConsoleLevel, EntityRow, ErrorCode, Event, FieldTarget,
-    GameInfo, Hash64, NamedSchema, PauseReason, ProtocolError, Reply, SyncPoint, SystemRow, Topic,
+    GameInfo, Hash64, NamedSchema, PauseReason, ProtocolError, Reply, SyncPoint, SystemRow,
+    TileArea, Topic,
 };
 use crate::session::{
     Document, Resimulation, SceneChange, Session, SessionError, SessionExport, Timeline,
 };
 use crate::subscriptions::{INTROSPECTION_TICKS, Subscriptions, TickRecord};
 use crate::values::{asset_json, asset_value, entity_values, resource_values, value_schema};
+
+/// The stable name of the renderer's tilemap component, which `PaintTiles` reads as JSON:
+/// the host does not depend on the renderer.
+const TILEMAP: &str = "ludenea::Tilemap";
 
 /// Most ticks one `advance` resimulates while the recorded future is stale.
 pub const RESIMULATION_BUDGET: u32 = 240;
@@ -630,7 +635,8 @@ impl Host {
             | Command::Despawn { .. }
             | Command::InsertComponent { .. }
             | Command::RemoveComponent { .. }
-            | Command::SetField { .. }) => self.edit_command(command),
+            | Command::SetField { .. }
+            | Command::PaintTiles { .. }) => self.edit_command(command),
             Command::Batch { commands } => self.batch(commands),
             Command::SaveScene => {
                 let ron = self.session.scene().to_string();
@@ -1151,6 +1157,7 @@ impl Host {
 
     /// Applies one edit command: at tick 0 to the scene, later as a recorded edit.
     fn edit_command(&mut self, command: Command) -> Result<Reply, ProtocolError> {
+        let command = self.painted_as_set_field(command)?;
         let spawn = matches!(command, Command::Spawn { .. });
         let spawned = if self.session.timeline().current == 0 {
             let (change, context) = self.scene_change_of(command)?;
@@ -1193,6 +1200,7 @@ impl Host {
                 ));
             }
             let in_batch = |error| in_context(error, &format!("command {index} of the batch"));
+            let command = self.painted_as_set_field(command).map_err(in_batch)?;
             if at_scene {
                 changes.push(self.scene_change_of(command).map_err(in_batch)?.0);
             } else {
@@ -1299,11 +1307,114 @@ impl Host {
                 return Err(ProtocolError::new(
                     ErrorCode::InvalidCommand,
                     "not an edit command; a batch holds spawn, despawn, insert_component, \
-                     remove_component, and set_field commands only",
+                     remove_component, set_field, and paint_tiles commands only",
                 ));
             }
         };
         Ok((edit, context))
+    }
+
+    /// `command` with a `PaintTiles` turned into the `SetField` of the tilemap's `tiles` that
+    /// has the same result, so it applies and records exactly as that `SetField`; any other
+    /// command as it is.
+    fn painted_as_set_field(&self, command: Command) -> Result<Command, ProtocolError> {
+        let context = edit_context(&command);
+        let Command::PaintTiles { entity, area, tile } = command else {
+            return Ok(command);
+        };
+        let tiles = self
+            .painted_tiles(entity, area, tile)
+            .map_err(|error| in_context(error, &context))?;
+        Ok(Command::SetField {
+            target: FieldTarget::Component {
+                entity,
+                component: TILEMAP.to_string(),
+            },
+            path: vec![PathSegment::Field {
+                name: "tiles".to_string(),
+            }],
+            value: JsonValue::Array(tiles),
+        })
+    }
+
+    /// The `tiles` of the tilemap of `entity` with every cell of `area` set to `tile`.
+    fn painted_tiles(
+        &self,
+        entity: Entity,
+        area: TileArea,
+        tile: Option<u32>,
+    ) -> Result<Vec<JsonValue>, ProtocolError> {
+        let invalid = |message: String| ProtocolError::new(ErrorCode::InvalidCommand, message);
+        let world = self.simulation.world();
+        if !world.is_alive(entity) {
+            return Err(edit_error(&EditError::NoSuchEntity(entity)));
+        }
+        let mut tilemap = world
+            .component_json(entity, TILEMAP)
+            .ok_or_else(|| {
+                invalid(format!(
+                    "entity {entity} has no {TILEMAP}; is RenderPlugin added?"
+                ))
+            })?
+            // Reading checks the tilemap as loading does: one the game broke fails here.
+            .map_err(|reason| invalid(format!("the tilemap cannot be read: {reason}")))?;
+        let size = |name: &str| {
+            tilemap[name]
+                .as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+        };
+        let (Some(width), Some(height)) = (size("width"), size("height")) else {
+            return Err(invalid(format!(
+                "`{TILEMAP}` has no `width` and `height` of 32 bits; this host does not \
+                 match the game's renderer"
+            )));
+        };
+        let Some(JsonValue::Array(mut tiles)) = tilemap.get_mut("tiles").map(JsonValue::take)
+        else {
+            return Err(invalid(format!(
+                "`{TILEMAP}` has no `tiles` list; this host does not match the game's renderer"
+            )));
+        };
+        let cells = u64::from(width) * u64::from(height);
+        if u64::try_from(tiles.len()) != Ok(cells) {
+            return Err(invalid(format!(
+                "its `tiles` has {} entries, but width {width} by height {height} needs \
+                 {cells}; the game changed the tilemap without keeping one entry per cell",
+                tiles.len()
+            )));
+        }
+        let TileArea {
+            x,
+            y,
+            width: columns,
+            height: rows,
+        } = area;
+        if columns == 0 || rows == 0 {
+            return Err(invalid(format!(
+                "area of {columns} by {rows} cells is empty; paint at least one cell"
+            )));
+        }
+        let (right, top) = match (x.checked_add(columns), y.checked_add(rows)) {
+            (Some(right), Some(top)) if right <= width && top <= height => (right, top),
+            (Some(right), Some(top)) => {
+                return Err(invalid(format!(
+                    "area x {x}..{right}, y {y}..{top} is outside the {width} by {height} grid"
+                )));
+            }
+            _ => {
+                return Err(invalid(format!(
+                    "area of {columns} by {rows} cells from x {x}, y {y} ends past the largest \
+                     cell index, so it is outside the {width} by {height} grid"
+                )));
+            }
+        };
+        let value = tile.map_or(JsonValue::Null, JsonValue::from);
+        // Within the grid, so every index is below `tiles.len()`.
+        let index = |column: u32, row: u32| row as usize * width as usize + column as usize;
+        for row in y..top {
+            tiles[index(x, row)..index(right, row)].fill(value.clone());
+        }
+        Ok(tiles)
     }
 
     /// The edit that sets the value at `path` of `target` to `value`: the exact current
@@ -1666,6 +1777,9 @@ fn edit_context(command: &Command) -> String {
             };
             format!("{target}, path `{}`", Path(path))
         }
+        Command::PaintTiles { entity, .. } => {
+            format!("entity {entity}, component `{TILEMAP}`, paint_tiles")
+        }
         _ => String::new(),
     }
 }
@@ -1685,6 +1799,8 @@ fn changed_value(command: &Command) -> Option<String> {
             target: FieldTarget::Resource { resource },
             ..
         } => Some(format!("resource `{resource}`")),
+        // The same value as the `SetField` of the tilemap it turns into.
+        Command::PaintTiles { entity, .. } => Some(format!("`{TILEMAP}` of entity {entity}")),
         _ => None,
     }
 }

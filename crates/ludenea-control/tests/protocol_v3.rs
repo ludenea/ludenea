@@ -10,12 +10,14 @@ use ludenea::app::replay::{Replay, ReplayOutcome, play_replay};
 use ludenea::app::trace::{TRACE_VERSION, Trace, TraceComparison};
 use ludenea::control::{
     BranchId, Bytes, Command, ComponentValue, Document, ErrorCode, Event, FieldTarget, Hash64,
-    Host, InProcess, PROTOCOL_VERSION, PathSegment, ProtocolError, Reply, Timeline, Topic,
+    Host, InProcess, PROTOCOL_VERSION, PathSegment, ProtocolError, Reply, TileArea, Timeline,
+    Topic,
 };
 use ludenea::ecs::diff::Difference;
 use ludenea::ecs::{Asset, AssetId, Entity, Snapshot};
 use ludenea::prelude::{
-    App, Component, Edit, EditLog, InputLog, Query, Res, ResMut, Rng, Sim, Time, TimedEdit,
+    App, Component, Edit, EditLog, InputLog, Query, RenderPlugin, Res, ResMut, Rng, Sim, Time,
+    TimedEdit,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -400,6 +402,40 @@ fn every_command_names_the_reply_it_gets() {
     checked.host = Host::new(tuning_app).unwrap();
     checked.run(Command::NewAssetValue {
         asset: Tuning::NAME.to_string(),
+    });
+
+    fn tilemap_app() -> App {
+        let mut app = App::new();
+        app.plugin(RenderPlugin);
+        app
+    }
+    checked.host = Host::new(tilemap_app).unwrap();
+    let Reply::Spawned { entity: tilemap } = checked.run(Command::Spawn {
+        components: [(
+            "ludenea::Tilemap".to_string(),
+            json!({
+                "tileset": "00000000000000000000000000000009",
+                "cell_size": { "x": 1.0, "y": 1.0 },
+                "width": 2,
+                "height": 1,
+                "tiles": [null, null],
+                "layer": "",
+                "order": 0,
+            }),
+        )]
+        .into(),
+    }) else {
+        unreachable!("checked by run");
+    };
+    checked.run(Command::PaintTiles {
+        entity: tilemap,
+        area: TileArea {
+            x: 1,
+            y: 0,
+            width: 1,
+            height: 1,
+        },
+        tile: Some(3),
     });
 
     let every_type: BTreeSet<String> = support::every_command().iter().map(type_of).collect();
