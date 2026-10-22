@@ -127,40 +127,41 @@ hash, those of the golden trace and replays included.
   pending local inputs and counts in the new `SessionStats::skips`.
 - A running `ludenea_net::Session` compares state hashes with the other peers. The `Save` of
   every positive multiple of `hash_interval` has `hash: true`: the caller answers with
-  `Session::report_hash(tick, hash)` before the next `outgoing` (`SessionError::HashNotAsked`
-  for a tick no `Save` waits on) and keeps that state until the new
-  `Request::Release { tick }`. The hash of a tick is sent once every input below it is
-  confirmed, the rollback those inputs call for has run and its `Save` is answered, so it is
-  always the hash of a state built only from confirmed inputs; every packet carries every
+  `Session::report_hash(tick, hash)` before the next `outgoing`
+  (`SessionError::HashNotAsked` for a tick no `Save` waits on) and keeps that state until
+  the new `Request::Release { tick }`. The hash of a tick is sent once every input below it
+  is confirmed, the rollback those inputs call for has run and its `Save` is answered, so it
+  is always the hash of a state built only from confirmed inputs; every packet carries every
   report `Ack.hashes_through` does not cover yet (acknowledging a report never sent stays
   `ViolationRule::AckNeverSent`). When every peer's hash matches, the session emits
   `SessionEvent::HashMatched { tick }` and releases the states kept for earlier reports. A
   difference ends it with `EndReason::Desync { tick, peer, local, remote }`, naming the peer
   and both hashes. A received hash past the local horizon plus one is
   `ViolationRule::HashBeyondHorizon`; one of tick 0 or off the interval
-  (`DropReason::HashOffInterval`), received already with another hash (`HashAlreadyReceived`;
-  the same hash resent until acknowledged is ignored), or beyond the
-  `(rollback_window + input_delay) / hash_interval + 2` reports kept waiting for a local hash
-  answered late (`HashBacklog`), or after a report of that peer still missing (`HashGap`,
-  as reports arrive in tick order) is dropped alone, and reports match in tick order. `ViolationRule::HashLagging` disconnects a
-  peer whose newest report trails the newest final local hash by more than
-  `rollback_window + input_delay + hash_interval - 1` ticks, or whose acknowledgment of the
-  local reports trails it by more than `2 * (rollback_window + input_delay) + hash_interval -
-  1`, which no honest peer does: this bounds the reports a session keeps and the states its
-  caller keeps for them. The worst-case packet of `SessionSettings::validate` counts a
-  `Welcome` and the `MatchRules::unacknowledged_hash_reports()` reports a peer may leave
-  unacknowledged, `(2 * (rollback_window + input_delay) + hash_interval - 1) / hash_interval`
-  (1 with the defaults); a worst packet of more than 16 messages is refused with
+  (`DropReason::HashOffInterval`), received already with another hash
+  (`HashAlreadyReceived`; the same hash resent until acknowledged is ignored), or beyond the
+  `(rollback_window + input_delay) / hash_interval + 2` reports kept waiting for a local
+  hash answered late (`HashBacklog`), or after a report of that peer still missing
+  (`HashGap`, as reports arrive in tick order) is dropped alone, and reports match in tick
+  order. `ViolationRule::HashLagging` disconnects a peer whose newest report trails the
+  newest final local hash by more than `rollback_window + input_delay + hash_interval - 1`
+  ticks, or whose acknowledgment of the local reports trails it by more than `2 *
+  (rollback_window + input_delay) + hash_interval - 1`, which no honest peer does: this
+  bounds the reports a session keeps and the states its caller keeps for them. The
+  worst-case packet of `SessionSettings::validate` counts a `Welcome` and the
+  `MatchRules::unacknowledged_hash_reports()` reports a peer may leave unacknowledged, `(2 *
+  (rollback_window + input_delay) + hash_interval - 1) / hash_interval` (1 with the
+  defaults); a worst packet of more than 16 messages is refused with
   `SettingsError::PacketTooManyMessages`, naming the peer and both counts (with the default
-  window and delay and one player per peer, a `hash_interval` of 1). An ending a session decides alone that an end
-  notice tells of sends that `End` notice, and nothing else, to every peer at most once a
-  tick for `END_LINGER_MICROS` (500 ms); a received `End` ends the receiver with the same
-  reason, the new `EndReason::Lost { peer }` and `EndReason::LocalFailure { tick }` included,
-  a desync with the view of the peer that found it (its hash as `local`, the differing peer
-  and that peer's hash). A notice no honest peer can send is `ViolationRule::ImplausibleEnd`:
-  one naming a peer outside the match, a desync of a tick past the local horizon plus one, or
-  a game failure past that plus `rollback_window - 1`. A mismatch found once running has no
-  end notice and is not relayed.
+  window and delay and one player per peer, a `hash_interval` of 1). An ending a session
+  decides alone that an end notice tells of sends that `End` notice, and nothing else, to
+  every peer at most once a tick for `END_LINGER_MICROS` (500 ms); a received `End` ends the
+  receiver with the same reason, the new `EndReason::Lost { peer }` and
+  `EndReason::LocalFailure { tick }` included, a desync with the view of the peer that found
+  it (its hash as `local`, the differing peer and that peer's hash). A notice no honest peer
+  can send is `ViolationRule::ImplausibleEnd`: one naming a peer outside the match, a desync
+  of a tick past the local horizon plus one, or a game failure past that plus
+  `rollback_window - 1`. A mismatch found once running has no end notice and is not relayed.
 - `ludenea_render` answers without a GPU what the renderer draws: `atlas::frames_of(png,
   meta)` gives the `TextureFrames` (the image size and each `FrameRect`, row-major, with its
   pivot) a meta cuts a PNG into, the same cut `pack` makes, or a `FramesError` (`Decode`,
@@ -1028,15 +1029,16 @@ hash, those of the golden trace and replays included.
   and its reply (`Quality`, `QualityReply`), a state hash report (`Hash`), a peer leaving
   (`Goodbye`), or an ending relayed to every peer (`End` with an `EndNotice`: `Desync` with
   the tick, the differing peer, the sender's hash and that peer's, `Lost` with the peer, or
-  `LocalFailure` with the tick).
-  `Packet::decode` refuses with a `WireError` naming the value: another version (whatever
-  the packet's length), a packet over 1200 bytes, bytes that are not one packet (trailing
-  bytes included), more than 16 messages, an input message with no tick or more than 32, or
-  an input over 24 bytes (each naming the player), more than 4 players in an `Ack` or a
-  `Hello` (naming which), or an engine string over 64 bytes. `SessionSettings::validate` refuses an engine
-  string over 64 bytes (`SettingsError::EngineTooLong`) and a layout where the largest
-  packet of any peer does not fit in 1200 bytes (`SettingsError::PacketTooLarge`, naming
-  the peer and both sizes), so every peer refuses the same settings.
+  `LocalFailure` with the tick). `Packet::decode` refuses with a `WireError` naming the
+  value: another version (whatever the packet's length), a packet over 1200 bytes, bytes
+  that are not one packet (trailing bytes included), more than 16 messages, an input message
+  with no tick or more than 32, or an input over 24 bytes (each naming the player), more
+  than 4 players in an `Ack` or a `Hello` (naming which), or an engine string over 64 bytes.
+  `SessionSettings::validate` refuses an engine string over 64 bytes
+  (`SettingsError::EngineTooLong`) and a layout where the largest packet of any peer does
+  not fit in 1200 bytes (`SettingsError::PacketTooLarge`, naming the peer and both sizes) or
+  holds more than 16 messages (`SettingsError::PacketTooManyMessages`, naming the peer and
+  both counts), so every peer refuses the same settings.
 - Meta 2: `Texture(TextureMeta)` describes how a PNG is cut into frames (pixels per unit,
   an optional frame grid, a pivot, and a filter); version 1 metas still read. A `.png`
   without a meta gets one with the defaults (16 pixels per unit, no grid, centred pivot,

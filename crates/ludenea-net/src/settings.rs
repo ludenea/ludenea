@@ -130,7 +130,8 @@ pub enum SettingsError {
     PlayerCount { count: usize },
     /// A player is owned by a peer beyond the last allowed one.
     #[error(
-        "player owner {highest_owner} is out of range: a match has at most {MAX_PEERS} peers (0 to {})",
+        "player owner {highest_owner} is out of range: a match has at most {MAX_PEERS} peers \
+         (0 to {})",
         MAX_PEERS - 1
     )]
     PeerCount { highest_owner: PeerId },

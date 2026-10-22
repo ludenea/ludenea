@@ -857,10 +857,10 @@ impl Session {
     /// do not all fit in [`MAX_PACKET_BYTES`], the newest ticks wait for a later packet. A
     /// running session also sends each peer a `Quality` request every
     /// [`QUALITY_INTERVAL_MICROS`], and answers the peer's latest request once. Every packet of
-    /// a running session carries the local hash reports the peer has not acknowledged, oldest
-    /// first, as many as fit. A session that ended for a reason an end notice tells of, decided
-    /// alone, sends every peer that notice and nothing else, at most once a tick, for
-    /// [`END_LINGER_MICROS`].
+    /// a running session carries every local hash report the peer has not acknowledged,
+    /// oldest first, which the settings leave room for. A session that ended for a reason an
+    /// end notice tells of, decided alone, sends every peer that notice and nothing else, at
+    /// most once a tick, for [`END_LINGER_MICROS`].
     pub fn outgoing(&mut self, now_micros: u64) -> Vec<(PeerId, Vec<u8>)> {
         let now = self.observe(now_micros);
         let lingering = self
