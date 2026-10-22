@@ -391,6 +391,8 @@ struct Remote {
     report: Option<Report>,
     /// A [`SessionEvent::PeerSilent`] told of the peer's current silence.
     silent: bool,
+    /// A goodbye of the peer arrived.
+    said_goodbye: bool,
     /// The hash reports of the peer that wait for the local hash of their tick, at most
     /// [`Session::hash_backlog`].
     hashes: BTreeMap<u64, u64>,
@@ -418,7 +420,6 @@ struct Remote {
 struct Closing {
     last_tick: u64,
     /// The lowest peer heard naming `last_tick`.
-
     peer: PeerId,
 }
 
@@ -520,6 +521,7 @@ impl Session {
                 reply_due: false,
                 report: None,
                 silent: false,
+                said_goodbye: false,
                 corrections: VecDeque::new(),
                 hashes: BTreeMap::new(),
                 hashes_received: 0,
@@ -1969,9 +1971,20 @@ impl Session {
     /// [`EndReason::Left`] when the match ends on purpose and every player's input through its
     /// last tick is confirmed, as only acknowledgments were missing, and with
     /// [`EndReason::Lost`] naming the first such peer otherwise.
+    ///
+    /// A peer that said goodbye and whose inputs through the agreed last tick are all
+    /// confirmed raises no notice and is never lost: it has nothing more to send, and ends
+    /// once it holds what it needs, so its silence says nothing. Its silence still ends the
+    /// session with `Left` once every input through that tick is confirmed.
     fn check_silence(&mut self, now: u64) {
         let timeouts = self.settings.timeouts;
-        for remote in &mut self.remotes {
+        let heard_out: Vec<bool> = self
+            .remotes
+            .iter()
+            .map(|remote| self.heard_out(remote.id))
+            .collect();
+        let watched = self.remotes.iter_mut().zip(&heard_out);
+        for remote in watched.filter_map(|(remote, out)| (!out).then_some(remote)) {
             let silence = now.saturating_sub(remote.last_heard_micros);
             if silence >= timeouts.notice_after_micros && !remote.silent {
                 remote.silent = true;
@@ -1994,22 +2007,36 @@ impl Session {
             }
             return;
         }
-        let Some(lost) = self
-            .remotes
-            .iter()
-            .find(|remote| {
-                now.saturating_sub(remote.last_heard_micros) >= timeouts.disconnect_after_micros
-            })
-            .map(|remote| remote.id)
-        else {
-            return;
-        };
+        let mut silent = self.remotes.iter().zip(&heard_out).filter(|(remote, _)| {
+            now.saturating_sub(remote.last_heard_micros) >= timeouts.disconnect_after_micros
+        });
         let confirmed = self.confirmed_tick();
         let reason = match self.closing {
-            Some(closing) if confirmed > closing.last_tick => left(closing),
-            _ => EndReason::Lost { peer: lost },
+            Some(closing) if confirmed > closing.last_tick => silent.next().map(|_| left(closing)),
+            _ => silent
+                .find(|(_, out)| !**out)
+                .map(|(remote, _)| EndReason::Lost { peer: remote.id }),
         };
-        self.end(now, reason);
+        if let Some(reason) = reason {
+            self.end(now, reason);
+        }
+    }
+
+    /// Whether `peer` said goodbye and every input of its players through the agreed last
+    /// tick is confirmed.
+    fn heard_out(&self, peer: PeerId) -> bool {
+        let Some(closing) = self.closing else {
+            return false;
+        };
+        let said = self
+            .remotes
+            .iter()
+            .any(|remote| remote.id == peer && remote.said_goodbye);
+        said && owned_by(&self.settings, peer).all(|player| {
+            self.queues[usize::from(player)]
+                .next_confirmed()
+                .is_none_or(|next| next > closing.last_tick)
+        })
     }
 
     /// Reads the goodbye of `from`, which leaves after `last_tick`. A last tick past the
@@ -2030,6 +2057,9 @@ impl Session {
             return Err(violation(ViolationRule::GoodbyeBehind));
         }
         self.close(last_tick, from);
+        if let Some(remote) = self.remotes.iter_mut().find(|remote| remote.id == from) {
+            remote.said_goodbye = true;
+        }
         Ok(())
     }
 

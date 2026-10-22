@@ -392,6 +392,58 @@ fn remaining_peer_missing_only_acknowledgments_ends_left_on_silence() {
 }
 
 #[test]
+fn leaver_heard_out_is_not_silent() {
+    // Three peers: peer 2 left at tick 5 and peer 0 holds its inputs through it, so peer 2
+    // has nothing more to say once it ended. Peer 0 still waits for peer 1's inputs, which
+    // keeps talking: the silence of peer 2 raises no notice and ends nothing.
+    let timeouts = Timeouts::default();
+    let mut session = handshake(sessions(3)).remove(0);
+    for _ in 0..5 {
+        step(&mut session, 0);
+    }
+    deliver(
+        &mut session,
+        2,
+        vec![inputs(2, 0, &[0; 6]), Message::Goodbye { last_tick: 5 }],
+    );
+    session.events();
+    let peer_one = Packet {
+        match_id: 1,
+        messages: vec![inputs(1, 0, &[0; 3])],
+    };
+    let mut now = NOW;
+    while now <= NOW + 2 * timeouts.disconnect_after_micros {
+        session.receive(PeerId(1), &peer_one.encode(), now);
+        session.outgoing(now);
+        assert_eq!(session.state(), SessionState::Running, "at {now}");
+        now += 100_000;
+    }
+    assert!(
+        !session
+            .events()
+            .iter()
+            .any(|event| matches!(event, SessionEvent::PeerSilent { .. })),
+    );
+    // A leaver whose inputs through its last tick are still missing stays watched.
+    let mut session = handshake(sessions(3)).remove(0);
+    for _ in 0..5 {
+        step(&mut session, 0);
+    }
+    deliver(
+        &mut session,
+        2,
+        vec![inputs(2, 0, &[0; 5]), Message::Goodbye { last_tick: 5 }],
+    );
+    let mut now = NOW;
+    while session.state() == SessionState::Running {
+        session.receive(PeerId(1), &peer_one.encode(), now);
+        session.outgoing(now);
+        now += 100_000;
+    }
+    assert_eq!(session.state(), ended(EndReason::Lost { peer: PeerId(2) }));
+}
+
+#[test]
 fn goodbye_behind_is_a_violation() {
     // Peer 0 at tick 5 holds its inputs through 6; peer 1's through 5: confirmed tick 6.
     let setup = || {
