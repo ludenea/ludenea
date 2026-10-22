@@ -17,8 +17,8 @@ for any thread count. The guarantee rests on:
 - a golden replay (`golden/spawner.replay`) of a scene with prefabs, a data
   asset, and edits to both, verified the same way;
 - a golden replay (`golden/arena.replay`) of two fighters running and jumping
-  through the arena's level, which an agent built through the control
-  protocol, verified the same way;
+  through the arena's level, which the arena's `build-level` tool built
+  through the control protocol, verified the same way;
 - a pinned hash of a value that holds every serde shape, and mutation testing
   that checks the tests catch every mutant that `cargo-mutants` generates, and
   that compiles, in the serializer the state hash is computed with
