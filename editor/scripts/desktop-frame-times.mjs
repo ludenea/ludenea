@@ -114,11 +114,12 @@ function measure() {
 
 try {
   if (screenLocked()) throw new Error("the screen is locked: unlock it, since the editor window must be on screen to draw frames");
-  execFileSync("cargo", ["build", "--locked", "-p", "ludenea-serve"], { cwd: repository, stdio: "inherit" });
+  execFileSync("cargo", ["build", "--locked", "-p", "ludenea-serve"], { cwd: repository, env: { ...process.env, CARGO_TARGET_DIR: join(repository, "target") }, stdio: "inherit" });
   // A renderer older than the frame encoding would draw nothing.
   execFileSync("pnpm", ["build:render"], { cwd: join(repository, "editor"), stdio: "inherit" });
   // `tauri build` builds the front end, then the backend in release with the front end inside.
-  execFileSync("pnpm", ["exec", "tauri", "build", "--no-bundle", "--", "--locked"], { cwd: desktop, stdio: "inherit" });
+  // Into the directory `binary` names, whatever the caller's CARGO_TARGET_DIR.
+  execFileSync("pnpm", ["exec", "tauri", "build", "--no-bundle", "--", "--locked"], { cwd: desktop, env: { ...process.env, CARGO_TARGET_DIR: join(desktop, "src-tauri/target") }, stdio: "inherit" });
   const { line, failed } = frameTimesVerdict(await measure(), "desktop editor, swarm");
   console.log(line);
   process.exitCode = failed ? 1 : 0;
