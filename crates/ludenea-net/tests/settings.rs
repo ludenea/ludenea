@@ -132,19 +132,23 @@ fn validate_refuses_an_empty_rollback_window() {
 #[test]
 fn validate_refuses_a_window_and_delay_beyond_one_message() {
     let mut s = settings(&[0, 1]);
-    s.identity.rules.rollback_window = 31;
+    s.identity.rules.rollback_window = 30;
+    s.identity.rules.input_delay = 1;
+    s.validate()
+        .expect("window + delay + 1 is exactly the limit");
     s.identity.rules.input_delay = 2;
     let error = refusal(&s);
     assert!(matches!(
         error,
         SettingsError::WindowAndDelay {
-            rollback_window: 31,
+            rollback_window: 30,
             input_delay: 2
         }
     ));
-    assert!(error.to_string().contains("31") && error.to_string().contains("input_delay"));
-    s.identity.rules.rollback_window = 30;
-    s.validate().expect("exactly at the limit");
+    assert_eq!(
+        error.to_string(),
+        "rollback_window 30 plus input_delay 2 plus 1 exceeds 32 ticks"
+    );
 }
 
 #[test]

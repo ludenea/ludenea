@@ -101,7 +101,7 @@ pub enum SettingsError {
     #[error("rollback_window is {value}, expected at least 1")]
     RollbackWindow { value: u32 },
     #[error(
-        "rollback_window {rollback_window} plus input_delay {input_delay} exceeds \
+        "rollback_window {rollback_window} plus input_delay {input_delay} plus 1 exceeds \
          {MAX_TICKS_PER_MESSAGE} ticks"
     )]
     WindowAndDelay {
@@ -167,9 +167,12 @@ impl SessionSettings {
                 value: rules.rollback_window,
             });
         }
+        // A sender's worst-case input message carries the window, the delay and the current
+        // tick (the +1), which a decoder bounds by MAX_TICKS_PER_MESSAGE. Added, never subtracted.
         let fits = rules
             .rollback_window
             .checked_add(rules.input_delay)
+            .and_then(|ticks| ticks.checked_add(1))
             .is_some_and(|ticks| ticks <= MAX_TICKS_PER_MESSAGE);
         if !fits {
             return Err(SettingsError::WindowAndDelay {
