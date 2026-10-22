@@ -332,11 +332,10 @@ impl Game {
                 }
                 None => return Err("the game exited before it answered".into()),
             };
-            if !line.starts_with(r#"{"type":"#) || line.starts_with(r#"{"type":"event""#) {
-                continue;
-            }
-            let message: ServerMessage = serde_json::from_str(&line)
-                .map_err(|error| format!("cannot read the game's message: {error}: {line}"))?;
+            let message = match protocol_message(&line)? {
+                Some(ServerMessage::Event { .. }) | None => continue,
+                Some(message) => message,
+            };
             if wanted(&message) || matches!(message, ServerMessage::Refused { .. }) {
                 return Ok(message);
             }
@@ -356,6 +355,23 @@ impl Game {
             Err(format!("the game exited with {status}"))
         }
     }
+}
+
+/// The protocol message a line of the game's output holds, as the editor reads it: a line
+/// starting with `{"type":` is one, and one that does not read is an error; text the game
+/// printed without a trailing newline lands in front of the next message, which is then the
+/// rest of the line from a `{"type":` on, when that rest is a whole message. Other lines are
+/// what the game printed.
+fn protocol_message(line: &str) -> Result<Option<ServerMessage>, String> {
+    const START: &str = r#"{"type":"#;
+    if line.starts_with(START) {
+        return serde_json::from_str(line)
+            .map(Some)
+            .map_err(|error| format!("cannot read the game's message: {error}: {line}"));
+    }
+    Ok(line
+        .match_indices(START)
+        .find_map(|(at, _)| serde_json::from_str(&line[at..]).ok()))
 }
 
 /// Each maximal horizontal run of painted cells of `map`, as its first column, its row, and
@@ -395,4 +411,32 @@ fn area(x: u32, y: u32, width: u32, height: u32) -> TileArea {
 
 fn json(value: &impl serde::Serialize) -> Result<serde_json::Value, String> {
     serde_json::to_value(value).map_err(|error| format!("cannot write a component: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DONE: &str = r#"{"type":"response","id":3,"result":{"ok":{"type":"done"}}}"#;
+
+    fn done() -> ServerMessage {
+        serde_json::from_str(DONE).expect("the test's message reads")
+    }
+
+    #[test]
+    fn a_message_after_printed_text_is_read() {
+        assert_eq!(protocol_message(DONE).unwrap(), Some(done()));
+        // Printed with `print!`, then the host's reply on the same line.
+        let glued = format!("score: 3{DONE}");
+        assert_eq!(protocol_message(&glued).unwrap(), Some(done()));
+        // A game printing `{"type":` itself keeps its line.
+        assert_eq!(protocol_message(r#"I said {"type": 1}"#).unwrap(), None);
+        assert_eq!(protocol_message("just text").unwrap(), None);
+    }
+
+    #[test]
+    fn a_line_that_starts_as_a_message_but_does_not_read_is_an_error() {
+        let error = protocol_message(r#"{"type":"response","id":"#).unwrap_err();
+        assert!(error.contains("cannot read the game's message"), "{error}");
+    }
 }
