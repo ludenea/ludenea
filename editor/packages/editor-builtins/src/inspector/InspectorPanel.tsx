@@ -16,6 +16,13 @@ type Loaded = { entity: Entity; components: Values };
 // The timeline drives the time; editing it would fight the timeline.
 const READ_ONLY_RESOURCES = new Set(["ludenea::Time"]);
 
+/** Shows the failure of `work` through `setError`, or clears the error shown once it succeeds. */
+const showOutcome = (work: Promise<unknown>, setError: (error: string | null) => void) =>
+  void work.then(
+    () => setError(null),
+    (failure) => setError(errorText(failure)),
+  );
+
 const shortName = (name: string) => name.split("::").at(-1)!;
 const schemaMap = (named: { name: string; schema: TypeSchema }[]) => new Map(named.map(({ name, schema }) => [name, schema]));
 
@@ -183,17 +190,9 @@ function DataAsset({ editor, control, id }: { editor: Editor; control: ControlCl
     await edit(editor, control, { type: "set_asset_field", id, path, value });
     setVersion((version) => version + 1);
   };
-  const run = (command: string) => () =>
-    void editor.commands.run(command).then(
-      () => setError(null),
-      (failure) => setError(errorText(failure)),
-    );
+  const run = (command: string) => () => showOutcome(editor.commands.run(command), setError);
   const schema = asset && control.game.assets.find(({ name }) => name === asset.asset)?.schema;
-  const onChange = (path: PathSegment[], value: unknown) =>
-    void setField(path, value as JsonValue).then(
-      () => setError(null),
-      (failure) => setError(errorText(failure)),
-    );
+  const onChange = (path: PathSegment[], value: unknown) => showOutcome(setField(path, value as JsonValue), setError);
   // A value without a JSON form is shown as RON, which an asset inspector cannot read.
   const below = asset && asset.value.type === "json" && <AssetInspectorSlot editor={editor} name={asset.asset} id={id} value={asset.value.value} onChange={onChange} />;
 
@@ -337,10 +336,7 @@ function Section({ editor, name, title, value, schema, edit, entity, state, focu
   const differs = useContext(MixedPaths).has("") && (value.type === "ron" || !schema);
   const run = (command: string) => {
     state?.set({ focused: name });
-    editor.commands.run(command).then(
-      () => setError(null),
-      (failure) => setError(errorText(failure)),
-    );
+    showOutcome(editor.commands.run(command), setError);
   };
 
   let body;
@@ -352,11 +348,7 @@ function Section({ editor, name, title, value, schema, edit, entity, state, focu
       <pre>{JSON.stringify(value.value, null, 2)}</pre>
     );
     if (Custom && entity) {
-      const onChange = (path: PathSegment[], next: unknown) =>
-        void edit(path, next as JsonValue).then(
-          () => setError(null),
-          (failure) => setError(errorText(failure)),
-        );
+      const onChange = (path: PathSegment[], next: unknown) => showOutcome(edit(path, next as JsonValue), setError);
       const fallback = ({ text, retry }: PluginFailure) => (
         <>
           <p role="alert" className="ludenea-error">
