@@ -1,7 +1,7 @@
 # Ludenea milestone 4: rollback netcode
 
 Date: 2026-10-22
-Status: draft, awaiting the author's review
+Status: approved
 Parent design: `2026-10-17-ludenea-engine-design.md` (section 4, item 4, the
 networking outline)
 
