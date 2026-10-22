@@ -542,6 +542,39 @@ fn tied_goodbyes_name_the_lowest_peer() {
 }
 
 #[test]
+fn landing_asks_no_hash() {
+    // Peer 0 at tick 33 with peer 1's default inputs through 27, then inputs of 28 to 34
+    // that differ, in a packet that breaks a rule. The landing runs tick 30 again, a reported
+    // tick, without asking its hash: an ended session compares nothing and releases nothing.
+    let mut session = handshake(sessions(2)).remove(0);
+    for tick in 0..33 {
+        step(&mut session, 0);
+        if tick < 28 {
+            deliver(&mut session, 1, vec![inputs(1, tick, &[0]), ack(0, tick + 1)]);
+        }
+    }
+    deliver(
+        &mut session,
+        1,
+        vec![inputs(1, 28, &[1; 7]), inputs(0, 0, &[0])],
+    );
+    assert!(matches!(
+        session.state(),
+        SessionState::Ended(EndReason::Violation { .. })
+    ));
+    let mut expected = vec![Request::Load { tick: 28 }];
+    for tick in 28..35 {
+        expected.push(Request::Save { tick, hash: false });
+        expected.push(Request::Advance {
+            tick,
+            inputs: vec![vec![0], vec![1]],
+        });
+    }
+    assert_eq!(session.advance(NOW), Ok(expected));
+    assert_eq!(session.report_hash(30, 7), Ok(()));
+}
+
+#[test]
 fn ended_session_lands_on_the_confirmed_state() {
     // Exactly: peer 0 ran ticks 0 to 4 predicting peer 1's default input; peer 1's inputs of
     // 0 to 6 differ, and the packet breaks a rule. The landing loads tick 0, the latest state

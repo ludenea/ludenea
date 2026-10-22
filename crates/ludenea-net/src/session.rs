@@ -234,10 +234,12 @@ pub enum SessionEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
     /// Save the state of `tick`, before its inputs. It comes right before the first
-    /// `Advance { tick }` after it, and a `Load { tick }` loads the latest one. `hash` is
-    /// `true` for every tick that is a positive multiple of `hash_interval`: the caller answers
-    /// with [`Session::report_hash`], and keeps the state it saved last for that tick until
-    /// `Release { tick }`.
+    /// `Advance { tick }` after it, and a `Load { tick }` loads the latest one. While the
+    /// session runs or leaves, `hash` is `true` for every tick that is a positive multiple of
+    /// `hash_interval`: the caller answers with [`Session::report_hash`], and keeps the state
+    /// it saved last for that tick until `Release { tick }`. The saves landing an ended
+    /// session ask no hash, and an ended session sends no `Release` and no `Load` after its
+    /// landing: its caller may drop every state it keeps once it applied the landing.
     Save { tick: u64, hash: bool },
     /// Load the state of `tick` saved last. Always a tick at most `rollback_window` before the
     /// current one, so a caller keeping the states of the last `rollback_window + 1` ticks it
@@ -2125,7 +2127,8 @@ impl Session {
         for tick in built..end {
             let inputs = self.inputs_at(tick);
             self.record(tick, &inputs);
-            requests.push(self.save(tick));
+            // An ended session compares no hash.
+            requests.push(Request::Save { tick, hash: false });
             requests.push(Request::Advance { tick, inputs });
         }
         self.tick = end;
