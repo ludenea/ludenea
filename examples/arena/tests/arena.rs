@@ -2,9 +2,9 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use arena::{
-    ArenaInput, FIGHTER_RADIUS, Fighter, HERO_IDLE_SHEET, JUMP_SPEED, KILL_Y, RUN_SPEED,
-    SpawnPoint, WARRIOR_FALL_SHEET, WARRIOR_IDLE_SHEET, WARRIOR_IDLE_TEXTURE, WARRIOR_JUMP_SHEET,
-    WARRIOR_RUN_SHEET, asset_id,
+    ArenaInput, FIGHTER_RADIUS, Fighter, FighterSheets, HERO_IDLE_SHEET, JUMP_SPEED, KILL_Y,
+    RUN_SPEED, SpawnPoint, WARRIOR_FALL_SHEET, WARRIOR_IDLE_SHEET, WARRIOR_IDLE_TEXTURE,
+    WARRIOR_JUMP_SHEET, WARRIOR_RUN_SHEET, asset_id,
 };
 use ludenea::app::RawGamepad;
 use ludenea::app::project::project_assets;
@@ -148,6 +148,29 @@ fn one_player_spawns_one_fighter() {
         "the scene's `FighterSheets` loads the sheets, so the animation plays"
     );
     assert!(seen.fighter.grounded);
+}
+
+#[test]
+fn the_scene_loads_every_fighter_sheet() {
+    let simulation = arena(2, &[]);
+    let world = simulation.world();
+    let sheets = world
+        .resource::<FighterSheets>()
+        .expect("the arena registers FighterSheets")
+        .clone();
+    let loaded = world.asset_ids();
+    let mut expected = Vec::new();
+    for look in [&sheets.warrior, &sheets.hero] {
+        for sheet in [&look.idle, &look.run, &look.jump, &look.fall] {
+            expected.push(sheet.id);
+        }
+    }
+    expected.sort();
+    expected.dedup();
+    assert_eq!(expected.len(), 8, "eight distinct sheets");
+    for id in expected {
+        assert!(loaded.contains(&id), "the scene does not load sheet {id}");
+    }
 }
 
 #[test]

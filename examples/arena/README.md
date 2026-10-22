@@ -13,7 +13,8 @@ physics step, a downward raycast from a fighter's capsule finds the ground and w
 lands, and a sideways one stops a run at a wall. A fighter whose feet fall below `KILL_Y`
 (y = -19, 10 units under the bottom of the scene's tilemap, which spans y -9 to 9) returns
 to its spawn point at rest. The scene's `arena::FighterSheets` resource
-names the fighters' sprite sheets, so loading the scene loads them.
+names the fighters' sprite sheets, so loading the scene loads them: any arena scene must
+list it, or the fighters spawn without art.
 
 The scene (`assets/arena.scene.ron`) has four layers: `sky` (parallax 0.1) and `town` (0.4)
 hold the town backgrounds, `tiles` holds a 32 by 18 tilemap on the town tileset, and
