@@ -80,7 +80,10 @@ fn validate_refuses_owners_that_are_not_contiguous_peers() {
         error,
         SettingsError::PeerWithoutPlayer { peer: PeerId(1) }
     ));
-    assert!(error.to_string().contains("peer 1"));
+    assert_eq!(
+        error.to_string(),
+        "peer 1 owns no player: the owners of players must be exactly the peers 0 to n"
+    );
 }
 
 #[test]
@@ -93,7 +96,10 @@ fn validate_refuses_too_many_peers() {
             highest_owner: PeerId(9)
         }
     ));
-    assert!(error.to_string().contains('9'));
+    assert_eq!(
+        error.to_string(),
+        "player owner peer 9 is out of range: a match has at most 4 peers (0 to 3)"
+    );
 }
 
 #[test]
@@ -108,7 +114,10 @@ fn validate_refuses_a_local_peer_outside_the_match() {
             peers: 2
         }
     ));
-    assert!(error.to_string().contains("local") && error.to_string().contains('2'));
+    assert_eq!(
+        error.to_string(),
+        "local peer 2 is not among the 2 peers of the match"
+    );
 }
 
 #[test]
@@ -149,6 +158,60 @@ fn validate_refuses_a_window_and_delay_beyond_one_message() {
         error.to_string(),
         "rollback_window 30 plus input_delay 2 plus 1 exceeds 32 ticks"
     );
+}
+
+#[test]
+fn validate_accepts_the_smallest_values() {
+    let mut s = settings(&[0, 1]);
+    s.identity.rules = MatchRules {
+        input_delay: 0,
+        rollback_window: 1,
+        hash_interval: 1,
+    };
+    s.timeouts = Timeouts {
+        notice_after_micros: 1,
+        disconnect_after_micros: 2,
+    };
+    s.validate().expect("every field at its boundary");
+}
+
+#[test]
+fn validate_reports_the_first_fault_in_order() {
+    // Every rule is broken at once; fixing the reported one reveals the next in order.
+    let mut s = settings(&[]);
+    s.local = PeerId(9);
+    s.identity.tick_rate = 0;
+    s.identity.rules = MatchRules {
+        input_delay: 40,
+        rollback_window: 0,
+        hash_interval: 0,
+    };
+    s.timeouts = Timeouts {
+        notice_after_micros: 0,
+        disconnect_after_micros: 0,
+    };
+    assert!(matches!(refusal(&s), SettingsError::PlayerCount { .. }));
+    s.identity.players = vec![PeerId(0), PeerId(9)];
+    assert!(matches!(refusal(&s), SettingsError::PeerCount { .. }));
+    s.identity.players = vec![PeerId(0), PeerId(2)];
+    assert!(matches!(
+        refusal(&s),
+        SettingsError::PeerWithoutPlayer { .. }
+    ));
+    s.identity.players = vec![PeerId(0), PeerId(1)];
+    assert!(matches!(refusal(&s), SettingsError::LocalOutOfRange { .. }));
+    s.local = PeerId(0);
+    assert!(matches!(refusal(&s), SettingsError::TickRate));
+    s.identity.tick_rate = 60;
+    assert!(matches!(refusal(&s), SettingsError::RollbackWindow { .. }));
+    s.identity.rules.rollback_window = 8;
+    assert!(matches!(refusal(&s), SettingsError::WindowAndDelay { .. }));
+    s.identity.rules.input_delay = 2;
+    assert!(matches!(refusal(&s), SettingsError::HashInterval { .. }));
+    s.identity.rules.hash_interval = 30;
+    assert!(matches!(refusal(&s), SettingsError::Timeouts { .. }));
+    s.timeouts = Timeouts::default();
+    s.validate().expect("every fault fixed");
 }
 
 #[test]

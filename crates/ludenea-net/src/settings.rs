@@ -1,5 +1,7 @@
 //! The settings of a session, validated before any peer talks to another.
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
 /// The most peers in one match.
@@ -18,6 +20,12 @@ pub const MAX_MESSAGES_PER_PACKET: usize = 16;
 /// A participant of a match: a machine that runs the simulation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PeerId(pub u8);
+
+impl fmt::Display for PeerId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "peer {}", self.0)
+    }
+}
 
 /// The rules of a match, equal on every peer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,13 +61,16 @@ pub struct MatchIdentity {
     pub tick_rate: u32,
     /// The owner of each global player index, in order.
     pub players: Vec<PeerId>,
+    /// The rules of the match.
     pub rules: MatchRules,
 }
 
 /// How long silence lasts before a peer is noticed, then disconnected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Timeouts {
+    /// Silence from a peer, in microseconds, after which the host is told the peer is quiet.
     pub notice_after_micros: u64,
+    /// Silence from a peer, in microseconds, after which the peer is disconnected.
     pub disconnect_after_micros: u64,
 }
 
@@ -72,34 +83,45 @@ impl Default for Timeouts {
     }
 }
 
-/// The settings of one peer's session.
+/// The settings of one peer's session. `Session::new` validates them with
+/// [`SessionSettings::validate`] and refuses invalid ones.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionSettings {
+    /// The peer this session runs for.
     pub local: PeerId,
+    /// Tells this match's packets from any other's.
     pub match_id: u64,
+    /// What every peer of the match agrees on.
     pub identity: MatchIdentity,
+    /// The silence limits for the other peers.
     pub timeouts: Timeouts,
 }
 
 /// Why settings were refused. Each message names the field and its value.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SettingsError {
+    /// `players` is empty or longer than [`MAX_PLAYERS`].
     #[error("players has {count} entries, expected 1 to {MAX_PLAYERS}")]
     PlayerCount { count: usize },
+    /// A player is owned by a peer beyond the last allowed one.
     #[error(
-        "players is owned by peer {} at most, but a match has at most {MAX_PEERS} peers (0 to {})",
-        highest_owner.0,
+        "player owner {highest_owner} is out of range: a match has at most {MAX_PEERS} peers (0 to {})",
         MAX_PEERS - 1
     )]
     PeerCount { highest_owner: PeerId },
-    #[error("peer {} owns no player: the owners of players must be exactly the peers 0 to n", peer.0)]
+    /// The owners of the players leave a gap: they must be exactly the peers 0 to n.
+    #[error("{peer} owns no player: the owners of players must be exactly the peers 0 to n")]
     PeerWithoutPlayer { peer: PeerId },
-    #[error("local peer {} is not among the {peers} peers of the match", local.0)]
+    /// `local` is not one of the `peers` peers of the match.
+    #[error("local {local} is not among the {peers} peers of the match")]
     LocalOutOfRange { local: PeerId, peers: usize },
+    /// `tick_rate` is zero.
     #[error("tick_rate is 0, expected at least 1")]
     TickRate,
+    /// `rollback_window` is zero.
     #[error("rollback_window is {value}, expected at least 1")]
     RollbackWindow { value: u32 },
+    /// A sender's worst-case message would carry more ticks than a decoder accepts.
     #[error(
         "rollback_window {rollback_window} plus input_delay {input_delay} plus 1 exceeds \
          {MAX_TICKS_PER_MESSAGE} ticks"
@@ -108,8 +130,10 @@ pub enum SettingsError {
         rollback_window: u32,
         input_delay: u32,
     },
+    /// `hash_interval` is zero.
     #[error("hash_interval is {value}, expected at least 1")]
     HashInterval { value: u32 },
+    /// The timeouts do not satisfy `0 < notice < disconnect`.
     #[error(
         "timeouts notice_after_micros {notice_after_micros} and disconnect_after_micros \
          {disconnect_after_micros} must satisfy 0 < notice < disconnect"
@@ -145,10 +169,7 @@ impl SessionSettings {
         if peers > MAX_PEERS {
             return Err(SettingsError::PeerCount { highest_owner });
         }
-        for peer in (0..peers)
-            .filter_map(|peer| u8::try_from(peer).ok())
-            .map(PeerId)
-        {
+        for peer in (0..=highest_owner.0).map(PeerId) {
             if !players.contains(&peer) {
                 return Err(SettingsError::PeerWithoutPlayer { peer });
             }
