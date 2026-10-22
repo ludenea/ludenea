@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use arena::{
-    ArenaInput, FIGHTER_RADIUS, Fighter, HERO_IDLE_SHEET, JUMP_SPEED, RUN_SPEED, SpawnPoint,
-    WARRIOR_FALL_SHEET, WARRIOR_IDLE_SHEET, WARRIOR_IDLE_TEXTURE, WARRIOR_JUMP_SHEET,
+    ArenaInput, FIGHTER_RADIUS, Fighter, HERO_IDLE_SHEET, JUMP_SPEED, KILL_Y, RUN_SPEED,
+    SpawnPoint, WARRIOR_FALL_SHEET, WARRIOR_IDLE_SHEET, WARRIOR_IDLE_TEXTURE, WARRIOR_JUMP_SHEET,
     WARRIOR_RUN_SHEET, asset_id,
 };
 use ludenea::app::RawGamepad;
@@ -366,6 +366,47 @@ fn fighter_stops_at_a_low_step() {
 fn fighter_stops_at_a_low_ceiling() {
     // Above the capsule's centre, below its top.
     run_into_a_box(1.5, 3.0);
+}
+
+#[test]
+fn fighter_below_the_level_respawns_at_its_spawn_point() {
+    // No floor: the fighter falls out of the level.
+    let mut simulation = arena(1, &[]);
+    let spawn = spawn_point(&simulation, 0);
+    step(&mut simulation, &[ArenaInput::default()], 1);
+    let mut respawned = false;
+    for _ in 0..200 {
+        step(&mut simulation, &[input(1.0, false)], 1);
+        let seen = fighter(&simulation, 0);
+        assert!(
+            seen.position.y >= KILL_Y,
+            "ends no tick below the kill line"
+        );
+        if seen.position == spawn {
+            assert_eq!(seen.fighter.velocity, Vec2::ZERO);
+            assert!(!seen.fighter.grounded);
+            let world = simulation.world();
+            let entity = world
+                .entities()
+                .find(|&entity| world.get::<Fighter>(entity).is_some())
+                .unwrap();
+            assert_eq!(
+                world
+                    .get::<Teleported>(entity)
+                    .map(|teleported| teleported.tick),
+                Some(simulation.tick()),
+                "the frame after the respawn is not interpolated"
+            );
+            respawned = true;
+            break;
+        }
+    }
+    assert!(respawned, "the fighter came back to its spawn point");
+    // It falls again from there, as at the start.
+    step(&mut simulation, &[ArenaInput::default()], 1);
+    let falling = fighter(&simulation, 0);
+    assert!(falling.position.y < spawn.y);
+    assert_eq!(falling.animation.clip, "fall");
 }
 
 #[test]

@@ -13,7 +13,9 @@ use ludenea::prelude::*;
 use ludenea::render::Animate;
 use serde::{Deserialize, Serialize};
 
-pub use fighter::{FIGHTER_HEIGHT, FIGHTER_RADIUS, GRAVITY, JUMP_SPEED, MAX_FALL, RUN_SPEED};
+pub use fighter::{
+    FIGHTER_HEIGHT, FIGHTER_RADIUS, GRAVITY, JUMP_SPEED, KILL_Y, MAX_FALL, RUN_SPEED,
+};
 
 ludenea::worker_entry!(app);
 

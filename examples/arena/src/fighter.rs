@@ -15,6 +15,9 @@ pub const JUMP_SPEED: f32 = 0.35;
 pub const GRAVITY: f32 = 0.02;
 /// The fastest fall, in units per tick.
 pub const MAX_FALL: f32 = 0.5;
+/// A fighter whose feet end a tick below this height left the level: it returns to its
+/// spawn point. The scene's tilemap spans y -9 to 9; this is 10 units under its bottom.
+pub const KILL_Y: f32 = -19.0;
 /// The fighter's capsule: its height from the feet (the `Pose`) and its radius.
 pub const FIGHTER_HEIGHT: f32 = 2.0;
 pub const FIGHTER_RADIUS: f32 = 0.4;
@@ -170,10 +173,40 @@ fn free(gap: f32) -> f32 {
     if gap > LINEAR_SLOP { gap } else { 0.0 }
 }
 
-/// Moves each fighter by the velocity `sense_fighters` allowed.
-pub(crate) fn move_fighters(mut fighters: Query<(&Fighter, &mut Pose)>) {
-    for (fighter, pose) in fighters.iter_mut() {
+/// Moves each fighter by the velocity `sense_fighters` allowed. One that ends below `KILL_Y`
+/// returns to the first spawn point of its player, at rest and not interpolated; without a
+/// spawn point it stays where it fell.
+///
+/// One query holds both, since the spawn points' and the fighters' `Pose` are the same
+/// storage.
+pub(crate) fn move_fighters(
+    time: Res<Time>,
+    mut entities: Query<(Entity, &mut Pose, Option<&mut Fighter>, Option<&SpawnPoint>)>,
+    mut commands: Commands,
+) {
+    let mut spawns: Vec<(u8, Vec2)> = Vec::new();
+    for (_, pose, _, point) in entities.iter_mut() {
+        if let Some(point) = point
+            && spawns.iter().all(|(player, _)| *player != point.player)
+        {
+            spawns.push((point.player, pose.position));
+        }
+    }
+    for (entity, pose, fighter, _) in entities.iter_mut() {
+        let Some(fighter) = fighter else {
+            continue;
+        };
         pose.position += fighter.velocity;
+        if pose.position.y >= KILL_Y {
+            continue;
+        }
+        let Some(&(_, spawn)) = spawns.iter().find(|(player, _)| *player == fighter.player) else {
+            continue;
+        };
+        pose.position = spawn;
+        fighter.velocity = Vec2::ZERO;
+        fighter.grounded = false;
+        commands.insert(entity, Teleported::this_step(&time));
     }
 }
 
