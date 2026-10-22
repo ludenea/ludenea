@@ -2,7 +2,8 @@ import "dockview-react/dist/styles/dockview.css";
 import "../../../packages/editor-shell/src/theme.css";
 import "../../../packages/editor-builtins/src/panels.css";
 import type { ConsoleLevel, ControlClient, PluginBundle, ProjectClient } from "@ludenea/control-client";
-import { builtinPlugins, textureFrames } from "@ludenea/editor-builtins";
+import { builtinPlugins } from "@ludenea/editor-builtins";
+import { textureFrames } from "@ludenea/editor-builtins/app";
 import { createEditor, mountShell, type DocumentSessions, type EditorHost } from "@ludenea/editor-shell/app";
 
 /** What the web and desktop applications share: the shell, its plugins, and the game switch. */

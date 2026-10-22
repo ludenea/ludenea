@@ -834,9 +834,10 @@ hash, those of the golden trace and replays included.
   whose meta can be read (`TextureInfo`, one object per texture until its file or meta
   changes), `find(id)` looks one up, `bytes(path)` reads a texture's PNG, and `frames(path)`
   gives the `TextureFrames` its meta cuts it into with the PNG read for them (`TextureCut`),
-  rejected with the renderer's reason. `createEditor` takes the cutting function as `textureFrames` (the applications pass
-  the renderer's, exported by `@ludenea/editor-builtins`); without it, `frames` rejects
-  saying so. `textureOf(entry)` tells what a listed file is as a texture.
+  rejected with the renderer's reason. `createEditor` takes the cutting function as
+  `textureFrames` (the applications pass the renderer's, exported by
+  `@ludenea/editor-builtins/app`); without it, `frames` rejects saying so. `textureOf(entry)`
+  tells what a listed file is as a texture.
 - Breaking: `SelectionState.asset` is `{ id, kind }` (an `AssetKindName`) instead of the
   identifier alone, and `selectAsset(id, kind)` takes the kind: the inspector shows a
   selected texture as well as a data asset. Opening a texture in the asset browser shows its

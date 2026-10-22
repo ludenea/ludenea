@@ -15,7 +15,7 @@ import {
 import type { PluginDefinition } from "@ludenea/editor-shell";
 import { createEditor, reportCaughtErrors, type EditorHost } from "@ludenea/editor-shell/app";
 import { act, render } from "@testing-library/react";
-import { textureFrames } from "../src";
+import { textureFrames } from "../src/app";
 
 type Message = { type: string; [key: string]: unknown };
 /** A reply, `{ error }` to fail, a promise of either to answer later (out of order), or nothing when undefined. */

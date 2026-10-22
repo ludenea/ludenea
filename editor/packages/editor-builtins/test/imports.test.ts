@@ -49,4 +49,10 @@ describe("imports", () => {
       "./local",
     ]);
   });
+
+  it("only_the_application_entry_exports_the_texture_cutter", async () => {
+    // Plugins cut frames through `editor.textures.frames`; the applications hand the renderer's cutter to `createEditor`.
+    expect(Object.keys(await import("../src"))).not.toContain("textureFrames");
+    expect(Object.keys(await import("../src/app"))).toContain("textureFrames");
+  });
 });
