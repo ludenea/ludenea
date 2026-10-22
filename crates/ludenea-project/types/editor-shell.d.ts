@@ -106,6 +106,10 @@ interface TextureFrames {
         pivot: [number, number];
     }[];
 }
+/** A texture as `editor.textures.frames` reads it: the frames its meta cuts it into, and the PNG they were cut from. */
+interface TextureCut extends TextureFrames {
+    png: Uint8Array;
+}
 /** A value persisted per installation (`localStorage`), falling back to `default`. */
 interface SettingDefinition<T> {
     id: string;
@@ -288,15 +292,24 @@ type SelectionStore = UseBoundStore<StoreApi<SelectionState>>;
 
 /**
  * The project's textures: `list` gives those whose meta can be read, listed once a first
- * listener subscribes (empty until then), then again when the project opens or a texture
- * changes on disk. Each listing gives new objects: one held from before is out of date once
- * its listing is replaced.
+ * listener subscribes or `frames` is called (empty until then), then again when the project
+ * opens or a texture changes on disk. A texture keeps its object across listings until its
+ * file or meta changes, so a reader comparing objects sees which textures changed.
  */
 interface TextureAccess extends Observed<TextureInfo> {
+    /**
+     * The texture whose identifier is `id` in the latest listing, `"unreadable"` when it names
+     * textures whose meta cannot be read, `"missing"` when it names none, or `"listing"` before
+     * the first listing answers. Pure, like `list`.
+     */
+    find(id: AssetId): TextureInfo | "unreadable" | "missing" | "listing";
     /** The PNG at `path`, as the project holds it now. */
     bytes(path: string): Promise<Uint8Array>;
-    /** How the meta of the texture at `path` cuts its PNG now; rejects with the renderer's message when it cannot. */
-    frames(path: string): Promise<TextureFrames>;
+    /**
+     * The texture at `path` of the latest listing, its PNG read once and cut as its meta says;
+     * rejects with the renderer's message when it cannot be cut.
+     */
+    frames(path: string): Promise<TextureCut>;
 }
 /**
  * What the listed file `entry` is as a texture: its `TextureInfo`, `"unreadable"` for a texture
@@ -451,5 +464,5 @@ function isEditorKey(event: KeyboardEvent): boolean;
 function isTextField(target: EventTarget | null): boolean;
 
 export { AssetFailure, DuplicateRegistration, PluginBoundary, definePlugin, isEditorKey, isTextField, normalizeShortcut, runReported, textureOf };
-export type { AssetAccess, AssetInspector, AssetKindName, AssetTypes, BranchState, BranchStore, CommandDefinition, ComponentTypes, ConsoleEntry, ConsoleLocation, Disposable, DocumentState, DocumentStore, Editor, EditorConsole, EntityAccess, ExplorerColumn, FieldDecoration, InspectorComponent, Loaded, Observed, OpenDocument, OverlayContext, PanelDefinition, PluginBoundaryProps, PluginDefinition, PluginFailure, SelectionState, SelectionStore, SettingDefinition, TextureAccess, TextureFrames, TextureInfo, TimelineState, TimelineStore, ViewportOverlay };
+export type { AssetAccess, AssetInspector, AssetKindName, AssetTypes, BranchState, BranchStore, CommandDefinition, ComponentTypes, ConsoleEntry, ConsoleLocation, Disposable, DocumentState, DocumentStore, Editor, EditorConsole, EntityAccess, ExplorerColumn, FieldDecoration, InspectorComponent, Loaded, Observed, OpenDocument, OverlayContext, PanelDefinition, PluginBoundaryProps, PluginDefinition, PluginFailure, SelectionState, SelectionStore, SettingDefinition, TextureAccess, TextureCut, TextureFrames, TextureInfo, TimelineState, TimelineStore, ViewportOverlay };
 }

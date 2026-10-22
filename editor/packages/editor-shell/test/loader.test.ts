@@ -265,7 +265,9 @@ describe("loader", () => {
 
     expect(host.editor.inspectors.getAsset("Texture")).toBe(HeroInspector);
     expect(host.editor.pluginOf(HeroInspector)).toBe("my_game");
-    await expect(read).resolves.toEqual(frames);
+    // The frames come with the PNG they were cut from, read once.
+    const { png, ...cutFrames } = (await read) as { png: Uint8Array };
+    expect([cutFrames, new TextDecoder().decode(png)]).toEqual([frames, "png of assets/hero.png"]);
     expect(cut).toEqual([{ png: "png of assets/hero.png", meta }]);
     expect(new TextDecoder().decode(await host.editor.textures.bytes("assets/hero.png"))).toBe("png of assets/hero.png");
     // A refusal is the renderer's own message; a file that is no readable texture says why.
@@ -274,19 +276,22 @@ describe("loader", () => {
     await expect(host.editor.textures.frames("assets/broken.png")).rejects.toThrow("assets/broken.png: its meta cannot be read; the project's warning names the cause");
     await expect(host.editor.textures.frames("assets/gone.png")).rejects.toThrow("no project file is at assets/gone.png");
 
-    // The textures whose meta can be read, listed once someone looks, and followed.
+    // The textures whose meta can be read, from the listing `frames` started, and followed.
     const changes: number[] = [];
     const stop = host.editor.textures.subscribe(() => changes.push(host.editor.textures.list().length));
     await settle();
     expect(host.editor.textures.list()).toEqual([{ id: "0000000000000000000000000000000d", path: "assets/hero.png", meta }]);
+    expect(host.editor.textures.find("0000000000000000000000000000000d")).toBe(host.editor.textures.list()[0]);
+    expect(host.editor.textures.find("00000000000000000000000000000000")).toBe("unreadable");
+    expect(host.editor.textures.find("0000000000000000000000000000000a")).toBe("missing");
     entries.splice(0, 1);
     host.pushProject({ type: "files_changed", changes: [{ Removed: { path: "assets/hero.png", kind: { Texture: meta } } }] });
     await settle();
-    expect(changes).toEqual([1, 0]);
+    expect(changes).toEqual([0]);
     // A change to no texture lists nothing again.
     host.pushProject({ type: "files_changed", changes: [{ Changed: { path: "scenes/main.scene.ron", kind: "Scene" } }] });
     await settle();
-    expect(changes).toEqual([1, 0]);
+    expect(changes).toEqual([0]);
     stop();
 
     host.loader.deactivate("my_game");
@@ -309,8 +314,9 @@ describe("loader", () => {
       return request.type === "list_files" ? { type: "files", entries: [] } : undefined;
     });
 
-    // A snapshot getter, as `useSyncExternalStore` calls it while rendering: no side effect.
+    // Snapshot getters, as `useSyncExternalStore` calls them while rendering: no side effect.
     expect(host.editor.textures.list()).toEqual([]);
+    expect(host.editor.textures.find("0000000000000000000000000000000d")).toBe("listing");
     await settle();
     expect(requests).toEqual([]);
 

@@ -17,6 +17,7 @@ export {
   type PanelDefinition,
   type PluginDefinition,
   type SettingDefinition,
+  type TextureCut,
   type TextureFrames,
   type TextureInfo,
   type ViewportOverlay,

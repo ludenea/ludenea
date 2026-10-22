@@ -418,8 +418,9 @@ export default definePlugin({
 `editor.inspectors.registerAsset` adds an inspector for one type of asset: a data type name
 (shown below the asset's generic fields, with its value and an `onChange` that edits a field)
 or `"Texture"` (shown alone, with no game needed). `editor.textures` lists the project's
-textures (`list` and `subscribe`, following changes on disk) and reads a texture's PNG
-(`bytes`) and the frames its meta cuts it into (`frames`, rejected with the renderer's reason).
+textures (`list`, `find`, and `subscribe`, following changes on disk) and reads a texture's
+PNG (`bytes`), or the frames its meta cuts it into with that PNG (`frames`, rejected with the
+renderer's reason).
 The built-in texture previews and clip players are a plugin on this API.
 
 `editor.console` writes to the Console panel: `log` shows a message, `report` a failure.

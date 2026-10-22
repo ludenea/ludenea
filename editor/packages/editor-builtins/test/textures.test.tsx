@@ -2,6 +2,8 @@ import type { FileEntry, TextureMeta, TypeSchema } from "@ludenea/control-client
 import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { builtinPlugins } from "../src";
+import { inspectorPlugin } from "../src/inspector";
+import { texturesPlugin } from "../src/textures";
 import { script } from "./fake-render-wasm";
 import { renderPanel, settle, testEditor, testGame } from "./support";
 
@@ -146,6 +148,30 @@ describe("textures", () => {
 
     expect(within(preview()).queryByLabelText("Frame 1")).toBeNull();
     expect(screen.getByText("16 × 8 pixels, 1 frame, 16 pixels per unit")).toBeTruthy();
+  });
+
+  it("a_preview_lists_the_project_once_reads_its_png_once_and_ignores_other_textures", async () => {
+    const OTHER = "0000000000000000000000000000000f";
+    const listed = [...files, { path: "assets/other.png", id: OTHER, kind: { Texture: META } }];
+    const host = await testEditor([inspectorPlugin, texturesPlugin], (request) => {
+      if (request.type === "list_files") return { type: "files", entries: listed };
+      if (request.type === "read_binary") return { type: "bytes", bytes: btoa(request.path as string) };
+      return undefined;
+    });
+    const sent = (type: string) => host.project.sent.filter((request) => request.type === type);
+    renderPanel(host, "ludenea.inspector");
+    act(() => host.editor.selection.getState().selectAsset(HERO, "Texture"));
+    await settle();
+    await settle();
+
+    expect(preview()).toBeTruthy();
+    expect([sent("list_files").length, sent("read_binary")]).toEqual([1, [{ type: "read_binary", path: "assets/hero.png" }]]);
+
+    // Another texture changed: the list follows, this preview stays as it is.
+    act(() => host.project.push({ type: "files_changed", changes: [{ Changed: { path: "assets/other.png", kind: { Texture: META } } }] }));
+    await settle();
+    await settle();
+    expect([sent("list_files").length, sent("read_binary").length]).toEqual([2, 1]);
   });
 
   it("clip_player_advances_one_frame_every_ticks_per_frame", async () => {

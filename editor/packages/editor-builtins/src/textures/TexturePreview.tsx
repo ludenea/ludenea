@@ -1,5 +1,5 @@
 import type { AssetId, TextureMeta } from "@ludenea/control-client";
-import { textureOf, type Editor, type TextureFrames } from "@ludenea/editor-shell";
+import type { Editor, TextureFrames } from "@ludenea/editor-shell";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { errorText } from "../shared";
 
@@ -24,37 +24,31 @@ function dataUrl(png: Uint8Array): string {
 }
 
 /**
- * The texture `id`, read again whenever the project's textures change (`editor.textures`);
- * the error says why it cannot be shown, naming its file.
+ * The texture `id`, read again whenever its own file or meta changes (`editor.textures`); the
+ * error says why it cannot be shown, naming its file.
  */
 export function useTexture(editor: Editor, id: AssetId): TextureState {
-  const textures = useSyncExternalStore(editor.textures.subscribe, editor.textures.list);
-  const [shown, setShown] = useState<{ id: AssetId; state: TextureState } | null>(null);
+  const found = useSyncExternalStore(editor.textures.subscribe, () => editor.textures.find(id));
+  const [shown, setShown] = useState<{ found: typeof found; state: TextureState } | null>(null);
 
   useEffect(() => {
+    if (typeof found === "string") return;
     let current = true;
-    const show = (state: TextureState) => current && setShown({ id, state });
-    const load = async (): Promise<TextureState> => {
-      const { entries } = await editor.project.request({ type: "list_files" });
-      const entry = entries.find((file) => file.id === id && textureOf(file) !== null);
-      const texture = entry && textureOf(entry);
-      if (!texture) return { error: `No texture of the project has the identifier ${id}.` };
-      if (texture === "unreadable") return { error: "The texture's meta cannot be read: the console shows the project's warning, which names the file and the cause." };
-      try {
-        const [frames, png] = await Promise.all([editor.textures.frames(texture.path), editor.textures.bytes(texture.path)]);
-        return { texture: { path: texture.path, meta: texture.meta, frames, url: dataUrl(png) } };
-      } catch (error) {
-        return { error: `${texture.path}: ${errorText(error)}` };
-      }
-    };
-    load().then(show, (error: unknown) => show({ error: errorText(error) }));
+    editor.textures.frames(found.path).then(
+      ({ png, ...frames }) => current && setShown({ found, state: { texture: { path: found.path, meta: found.meta, frames, url: dataUrl(png) } } }),
+      (error: unknown) => current && setShown({ found, state: { error: `${found.path}: ${errorText(error)}` } }),
+    );
     return () => {
       current = false;
     };
-  }, [editor, id, textures]);
+  }, [editor, found]);
 
-  // Another texture's state is not this one's: until it loads, this one is loading.
-  return shown?.id === id ? shown.state : { loading: true };
+  if (found === "listing") return { loading: true };
+  if (found === "missing") return { error: `No texture of the project has the identifier ${id}.` };
+  if (found === "unreadable") return { error: "The texture's meta cannot be read: the console shows the project's warning, which names the file and the cause." };
+  // Until this version loads, the one shown before stays (the same texture changed on disk).
+  if (shown?.found === found) return shown.state;
+  return shown && typeof shown.found !== "string" && shown.found.id === id ? shown.state : { loading: true };
 }
 
 /** The texture `id`: its image zoomed by a whole factor with nearest filtering, each frame outlined and numbered, and each pivot marked. */

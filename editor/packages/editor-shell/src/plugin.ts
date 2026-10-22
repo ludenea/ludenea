@@ -78,6 +78,11 @@ export interface TextureFrames {
   frames: { x: number; y: number; width: number; height: number; pivot: [number, number] }[];
 }
 
+/** A texture as `editor.textures.frames` reads it: the frames its meta cuts it into, and the PNG they were cut from. */
+export interface TextureCut extends TextureFrames {
+  png: Uint8Array;
+}
+
 /** A value persisted per installation (`localStorage`), falling back to `default`. */
 export interface SettingDefinition<T> {
   id: string;

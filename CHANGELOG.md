@@ -831,9 +831,10 @@ hash, those of the golden trace and replays included.
   `onChange` editing a field, or for textures as `"Texture"`, shown alone without a game;
   `getAsset(name)` finds it, and `pluginOf` names its plugin.
 - `Editor.textures` (`TextureAccess`): `list` and `subscribe` follow the project's textures
-  whose meta can be read (`TextureInfo`), `bytes(path)` reads a texture's PNG, and
-  `frames(path)` the `TextureFrames` its meta cuts it into, rejected with the renderer's
-  reason. `createEditor` takes the cutting function as `textureFrames` (the applications pass
+  whose meta can be read (`TextureInfo`, one object per texture until its file or meta
+  changes), `find(id)` looks one up, `bytes(path)` reads a texture's PNG, and `frames(path)`
+  gives the `TextureFrames` its meta cuts it into with the PNG read for them (`TextureCut`),
+  rejected with the renderer's reason. `createEditor` takes the cutting function as `textureFrames` (the applications pass
   the renderer's, exported by `@ludenea/editor-builtins`); without it, `frames` rejects
   saying so. `textureOf(entry)` tells what a listed file is as a texture.
 - Breaking: `SelectionState.asset` is `{ id, kind }` (an `AssetKindName`) instead of the

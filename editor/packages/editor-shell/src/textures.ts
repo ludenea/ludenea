@@ -1,19 +1,28 @@
-import type { FileChange, FileEntry, ProjectClient, TextureMeta } from "@ludenea/control-client";
+import type { AssetId, FileChange, FileEntry, ProjectClient, TextureMeta } from "@ludenea/control-client";
 import type { EditorConsole } from "./console";
 import type { Observed } from "./editor";
-import type { TextureFrames, TextureInfo } from "./plugin";
+import type { TextureCut, TextureFrames, TextureInfo } from "./plugin";
 
 /**
  * The project's textures: `list` gives those whose meta can be read, listed once a first
- * listener subscribes (empty until then), then again when the project opens or a texture
- * changes on disk. Each listing gives new objects: one held from before is out of date once
- * its listing is replaced.
+ * listener subscribes or `frames` is called (empty until then), then again when the project
+ * opens or a texture changes on disk. A texture keeps its object across listings until its
+ * file or meta changes, so a reader comparing objects sees which textures changed.
  */
 export interface TextureAccess extends Observed<TextureInfo> {
+  /**
+   * The texture whose identifier is `id` in the latest listing, `"unreadable"` when it names
+   * textures whose meta cannot be read, `"missing"` when it names none, or `"listing"` before
+   * the first listing answers. Pure, like `list`.
+   */
+  find(id: AssetId): TextureInfo | "unreadable" | "missing" | "listing";
   /** The PNG at `path`, as the project holds it now. */
   bytes(path: string): Promise<Uint8Array>;
-  /** How the meta of the texture at `path` cuts its PNG now; rejects with the renderer's message when it cannot. */
-  frames(path: string): Promise<TextureFrames>;
+  /**
+   * The texture at `path` of the latest listing, its PNG read once and cut as its meta says;
+   * rejects with the renderer's message when it cannot be cut.
+   */
+  frames(path: string): Promise<TextureCut>;
 }
 
 /** Cuts `png` into frames as `meta` says, rejecting with the reason it cannot: the renderer's `textureFrames`. */
@@ -43,63 +52,96 @@ const changedPath = (change: FileChange) => Object.values(change)[0] as { path: 
 
 const refuseToCut: TextureFrameCutter = () => Promise.reject(new Error("this editor cannot cut textures into frames: it was created without `textureFrames`"));
 
+const sameTexture = (a: TextureInfo, b: TextureInfo) => a.id === b.id && a.path === b.path && JSON.stringify(a.meta) === JSON.stringify(b.meta);
+
 export function createTextureAccess(project: ProjectClient, report: EditorConsole["report"], cut: TextureFrameCutter = refuseToCut): TextureAccess {
   let snapshot: TextureInfo[] = [];
-  let started = false;
+  // The latest listing's files, null before the first answer; and the listing awaited by `frames`.
+  let entries: FileEntry[] | null = null;
+  let listing: Promise<FileEntry[]> | null = null;
+  // The paths changed on disk since the last listing answered; null after the project opened (all of them).
+  let changed: Set<string> | null = new Set();
   // Counts the listings started: only the latest one's answer is kept.
   let listings = 0;
   const listeners = new Set<() => void>();
+  const notify = () => {
+    for (const listener of [...listeners]) listener();
+  };
   const refresh = () => {
-    const listing = ++listings;
-    project.request({ type: "list_files" }).then(
-      ({ entries }) => {
-        if (listing !== listings) return;
-        snapshot = entries.flatMap((entry) => {
+    const number = ++listings;
+    const request = project.request({ type: "list_files" }).then(({ entries }) => entries);
+    listing = request;
+    request.then(
+      (listed) => {
+        if (number !== listings) return;
+        const previous = new Map(snapshot.map((texture) => [texture.path, texture]));
+        const kept = (texture: TextureInfo) => {
+          const before = previous.get(texture.path);
+          return before && changed && !changed.has(texture.path) && sameTexture(before, texture) ? before : texture;
+        };
+        entries = listed;
+        snapshot = listed.flatMap((entry) => {
           const texture = textureOf(entry);
-          return texture && texture !== "unreadable" ? [texture] : [];
+          return texture && texture !== "unreadable" ? [kept(texture)] : [];
         });
-        for (const listener of [...listeners]) listener();
+        changed = new Set();
+        notify();
       },
       (error: unknown) => {
-        if (listing !== listings) return;
+        if (number !== listings) return;
         // Not the previous project's textures, nor the previous version as if it were current.
+        entries = [];
         snapshot = [];
-        for (const listener of [...listeners]) listener();
+        changed = new Set();
+        notify();
         report(error, "Listing the project's textures");
       },
     );
   };
   const start = () => {
-    if (started) return;
-    started = true;
-    refresh();
+    if (!listing) refresh();
+    return listing!;
   };
-  project.on("project_opened", () => started && refresh());
+  project.on("project_opened", () => {
+    if (!listing) return;
+    changed = null;
+    refresh();
+  });
   project.on("files_changed", ({ changes }) => {
-    if (!started) return;
+    if (!listing) return;
     // A file that is a texture now, or was one: a texture whose PNG became something else goes.
     const known = new Set(snapshot.map((texture) => texture.path));
-    if (changes.map(changedPath).some(({ path, kind }) => known.has(path) || (typeof kind === "object" && "Texture" in kind))) refresh();
+    const concerned = changes.map(changedPath).filter(({ path, kind }) => known.has(path) || (typeof kind === "object" && "Texture" in kind));
+    if (concerned.length === 0) return;
+    for (const { path } of concerned) changed?.add(path);
+    refresh();
   });
 
   const bytes = async (path: string) => decode((await project.request({ type: "read_binary", path })).bytes);
   return {
     // Pure: a snapshot getter that `useSyncExternalStore` calls while rendering.
     list: () => snapshot,
+    find(id) {
+      if (entries === null) return "listing";
+      const found = snapshot.find((texture) => texture.id === id);
+      if (found) return found;
+      return entries.some((entry) => entry.id === id && textureOf(entry) === "unreadable") ? "unreadable" : "missing";
+    },
     subscribe(listener) {
-      start();
+      void start().catch(() => {});
       listeners.add(listener);
       return () => void listeners.delete(listener);
     },
     bytes,
     async frames(path) {
-      const { entries } = await project.request({ type: "list_files" });
-      const entry = entries.find((file) => file.path === path);
+      const listed = await start();
+      const entry = listed.find((file) => file.path === path);
       if (!entry) throw new Error(`no project file is at ${path}`);
       const texture = textureOf(entry);
       if (texture === null) throw new Error(`${path} is not a texture`);
       if (texture === "unreadable") throw new Error(`${path}: its meta cannot be read; the project's warning names the cause`);
-      return cut(await bytes(path), texture.meta);
+      const png = await bytes(path);
+      return { ...(await cut(png, texture.meta)), png };
     },
   };
 }
