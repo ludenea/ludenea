@@ -383,6 +383,11 @@ describe("loader", () => {
     expect(() => host.editor.viewport.setTool("my_game.paint")).toThrow('the viewport tool "my_game.paint" is not available now');
     expect(() => host.editor.viewport.setTool("my_game.erase")).toThrow('no viewport tool "my_game.erase" is registered');
     await expect(host.editor.edit({ type: "undo" })).rejects.toThrow("no game is running");
+    // Only edits type-check: a query or the document's own scene reload is no edit.
+    // @ts-expect-error `get_hash` edits nothing
+    await expect(host.editor.edit({ type: "get_hash" })).rejects.toThrow("no game is running");
+    // @ts-expect-error `replace_scene` loads saved files, which the document store sends
+    await expect(host.editor.edit({ type: "replace_scene", scene: "", assets: [] })).rejects.toThrow("no game is running");
 
     const game = await testGame((command) => {
       if (command.type === "get_timeline") return timeline();

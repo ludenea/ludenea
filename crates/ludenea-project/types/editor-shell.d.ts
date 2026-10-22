@@ -378,11 +378,16 @@ interface TextureAccess extends Observed<TextureInfo> {
 function textureOf(entry: FileEntry): TextureInfo | "unreadable" | null;
 
 /**
- * A command that edits the game's session: one undo step, which the timeline records. A
- * `batch` applies its commands as one edit, or none of them when one fails.
+ * The commands the session records in its undo history as an edit made to it, and undo and
+ * redo themselves: each is one undo step, which the timeline records. A `batch` applies its
+ * commands as one edit, or none of them when one fails. `replace_scene` is recorded too but
+ * is no edit: it loads a new version of the saved files, which the document store sends.
+ * Checked against the protocol's command types, so a misspelled or removed one fails to compile.
  */
+const EDIT_COMMAND_TYPES: readonly ["spawn", "despawn", "insert_component", "remove_component", "set_field", "paint_tiles", "batch", "apply_to_scene", "set_asset_field", "apply_to_asset", "place_instance", "replace_with_instance", "apply_override", "revert_override", "apply_to_prefab", "undo", "redo"];
+/** A command that edits the game's session as one undo step (see `EDIT_COMMAND_TYPES`). */
 type EditCommand = Extract<Command, {
-    type: "spawn" | "despawn" | "insert_component" | "remove_component" | "set_field" | "paint_tiles" | "batch" | "apply_to_scene" | "set_asset_field" | "apply_to_asset" | "place_instance" | "replace_with_instance" | "apply_override" | "revert_override" | "apply_to_prefab" | "undo" | "redo";
+    type: (typeof EDIT_COMMAND_TYPES)[number];
 }>;
 type BatchCommand = Extract<Command, {
     type: "batch";
