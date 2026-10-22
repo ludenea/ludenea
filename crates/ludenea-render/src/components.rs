@@ -345,11 +345,42 @@ mod tests {
         assert_eq!(target, round_trip(&source));
     }
 
+    /// A sprite whose every field differs from `sprite("world")`.
+    fn other_sprite() -> Sprite {
+        Sprite {
+            texture: AssetId(8),
+            frame: 1,
+            layer: "background".to_owned(),
+            order: 5,
+            flip_x: false,
+            flip_y: true,
+            tint: Color(0xAABBCCDD),
+        }
+    }
+
     #[test]
     fn sprite_clone_from_overwrites_every_field() {
-        let mut target = Sprite::default();
-        target.clone_from(&sprite("world"));
-        assert_eq!(target, sprite("world"));
+        let source = sprite("world");
+        let mut target = other_sprite();
+        assert_ne!(target.texture, source.texture);
+        assert_ne!(target.frame, source.frame);
+        assert_ne!(target.layer, source.layer);
+        assert_ne!(target.order, source.order);
+        assert_ne!(target.flip_x, source.flip_x);
+        assert_ne!(target.flip_y, source.flip_y);
+        assert_ne!(target.tint, source.tint);
+        target.clone_from(&source);
+        assert_eq!(target, source);
+    }
+
+    #[test]
+    fn sprite_clone_from_a_longer_layer_still_equals_clone_and_round_trip() {
+        let source = sprite("a layer name longer than the capacity of the target");
+        let mut target = sprite("w");
+        target.clone_from(&source);
+        assert_eq!(target, source);
+        assert_eq!(target, source.clone());
+        assert_eq!(target, round_trip(&source));
     }
 
     #[test]
@@ -366,13 +397,28 @@ mod tests {
 
     #[test]
     fn animation_clone_from_overwrites_every_field() {
+        let source = animation("fly");
         let mut target = SpriteAnimation {
-            sheet: Handle::new(AssetId(0)),
-            clip: String::new(),
-            started: 0,
+            sheet: Handle::new(AssetId(1)),
+            clip: "walk".to_owned(),
+            started: 2,
             looping: false,
         };
-        target.clone_from(&animation("fly"));
-        assert_eq!(target, animation("fly"));
+        assert_ne!(target.sheet, source.sheet);
+        assert_ne!(target.clip, source.clip);
+        assert_ne!(target.started, source.started);
+        assert_ne!(target.looping, source.looping);
+        target.clone_from(&source);
+        assert_eq!(target, source);
+    }
+
+    #[test]
+    fn animation_clone_from_a_longer_clip_still_equals_clone_and_round_trip() {
+        let source = animation("a clip name longer than the capacity of the target");
+        let mut target = animation("f");
+        target.clone_from(&source);
+        assert_eq!(target, source);
+        assert_eq!(target, source.clone());
+        assert_eq!(target, round_trip(&source));
     }
 }
