@@ -180,9 +180,23 @@ fn version_1_bytes_are_pinned() {
 
 #[test]
 fn decode_refuses_a_packet_too_large() {
-    let bytes = vec![0; MAX_PACKET_BYTES + 1];
+    let mut bytes = vec![0; MAX_PACKET_BYTES + 1];
+    bytes[..2].copy_from_slice(&NET_PROTOCOL_VERSION.to_le_bytes());
     assert_eq!(refusal(&bytes), WireError::TooLarge { len: 1201 });
     assert!(refusal(&bytes).to_string().contains("1201"));
+}
+
+#[test]
+fn an_oversized_packet_of_another_version_names_its_version() {
+    let mut bytes = vec![0; MAX_PACKET_BYTES + 1];
+    bytes[..2].copy_from_slice(&7u16.to_le_bytes());
+    assert_eq!(
+        refusal(&bytes),
+        WireError::Version {
+            found: 7,
+            expected: 1
+        }
+    );
 }
 
 #[test]
@@ -248,7 +262,7 @@ fn decode_refuses_too_many_messages() {
 
 fn inputs(ticks: usize, bytes: usize) -> Vec<u8> {
     packet(vec![Message::Inputs {
-        player: 0,
+        player: 2,
         first_tick: 1,
         inputs: vec![vec![1; bytes]; ticks],
     }])
@@ -261,13 +275,22 @@ fn decode_refuses_too_many_ticks() {
     Packet::decode(&inputs(limit, 0)).expect("exactly the limit");
     assert_eq!(
         refusal(&inputs(limit + 1, 0)),
-        WireError::TooManyTicks { count: 33 }
+        WireError::TooManyTicks {
+            player: 2,
+            count: 33
+        }
+    );
+    assert_eq!(
+        refusal(&inputs(limit + 1, 0)).to_string(),
+        "input message of player 2 holds 33 ticks, at most 32 allowed"
     );
 }
 
 #[test]
 fn decode_refuses_inputs_without_ticks() {
-    assert_eq!(refusal(&inputs(0, 0)), WireError::NoTicks);
+    let error = refusal(&inputs(0, 0));
+    assert_eq!(error, WireError::NoTicks { player: 2 });
+    assert_eq!(error.to_string(), "input message of player 2 holds no tick");
 }
 
 #[test]
@@ -275,7 +298,11 @@ fn decode_refuses_an_input_too_large() {
     Packet::decode(&inputs(1, MAX_INPUT_BYTES)).expect("exactly the limit");
     assert_eq!(
         refusal(&inputs(1, MAX_INPUT_BYTES + 1)),
-        WireError::InputTooLarge { len: 25 }
+        WireError::InputTooLarge { player: 2, len: 25 }
+    );
+    assert_eq!(
+        refusal(&inputs(1, MAX_INPUT_BYTES + 1)).to_string(),
+        "input of player 2 takes 25 bytes, at most 24 allowed"
     );
 }
 
@@ -285,16 +312,27 @@ fn decode_refuses_too_many_players() {
         players: vec![(0, 1); MAX_PLAYERS + 1],
         hashes_through: 0,
     }]);
+    let error = refusal(&ack.encode());
     assert_eq!(
-        refusal(&ack.encode()),
-        WireError::TooManyPlayers { count: 5 }
+        error,
+        WireError::TooManyPlayers {
+            message: "Ack",
+            count: 5
+        }
+    );
+    assert_eq!(
+        error.to_string(),
+        "Ack message lists 5 players, at most 4 allowed"
     );
     let hello = packet(vec![Message::Hello {
         identity: identity(&[0, 1, 0, 1, 0]),
     }]);
     assert_eq!(
         refusal(&hello.encode()),
-        WireError::TooManyPlayers { count: 5 }
+        WireError::TooManyPlayers {
+            message: "Hello",
+            count: 5
+        }
     );
 }
 

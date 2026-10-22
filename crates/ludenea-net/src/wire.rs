@@ -88,18 +88,22 @@ pub enum WireError {
     /// More messages than [`MAX_MESSAGES_PER_PACKET`].
     #[error("packet holds {count} messages, at most {MAX_MESSAGES_PER_PACKET} allowed")]
     TooManyMessages { count: usize },
-    /// An input message with more ticks than [`MAX_TICKS_PER_MESSAGE`].
-    #[error("input message holds {count} ticks, at most {MAX_TICKS_PER_MESSAGE} allowed")]
-    TooManyTicks { count: usize },
-    /// An input message without any tick.
-    #[error("input message holds no tick")]
-    NoTicks,
-    /// One tick's input is longer than [`MAX_INPUT_BYTES`].
-    #[error("input of {len} bytes exceeds {MAX_INPUT_BYTES} bytes")]
-    InputTooLarge { len: usize },
-    /// A list of players longer than [`MAX_PLAYERS`].
-    #[error("message lists {count} players, at most {MAX_PLAYERS} allowed")]
-    TooManyPlayers { count: usize },
+    /// The input message of `player` holds more ticks than [`MAX_TICKS_PER_MESSAGE`].
+    #[error(
+        "input message of player {player} holds {count} ticks, at most \
+         {MAX_TICKS_PER_MESSAGE} allowed"
+    )]
+    TooManyTicks { player: u8, count: usize },
+    /// The input message of `player` holds no tick.
+    #[error("input message of player {player} holds no tick")]
+    NoTicks { player: u8 },
+    /// One tick's input of `player` is longer than [`MAX_INPUT_BYTES`].
+    #[error("input of player {player} takes {len} bytes, at most {MAX_INPUT_BYTES} allowed")]
+    InputTooLarge { player: u8, len: usize },
+    /// The list of players of a `message` (`"Ack"` or `"Hello"`) is longer than
+    /// [`MAX_PLAYERS`].
+    #[error("{message} message lists {count} players, at most {MAX_PLAYERS} allowed")]
+    TooManyPlayers { message: &'static str, count: usize },
     /// A `Hello` whose engine string is longer than [`MAX_ENGINE_BYTES`].
     #[error("engine string of {len} bytes exceeds {MAX_ENGINE_BYTES} bytes")]
     EngineTooLong { len: usize },
@@ -127,9 +131,7 @@ impl Packet {
     ///
     /// The first limit the bytes break, as a [`WireError`].
     pub fn decode(bytes: &[u8]) -> Result<Packet, WireError> {
-        if bytes.len() > MAX_PACKET_BYTES {
-            return Err(WireError::TooLarge { len: bytes.len() });
-        }
+        // The version first, so a packet of another version names it whatever its length.
         let found = Self::version_of(bytes).ok_or_else(|| {
             WireError::Malformed(format!(
                 "{} bytes, shorter than the {PREFIX_BYTES}-byte version prefix",
@@ -142,8 +144,14 @@ impl Packet {
                 expected: NET_PROTOCOL_VERSION,
             });
         }
-        // The length check above bounds what postcard reads: every element takes at least
-        // one byte, so no vector holds more than MAX_PACKET_BYTES elements.
+        if bytes.len() > MAX_PACKET_BYTES {
+            return Err(WireError::TooLarge { len: bytes.len() });
+        }
+        // What postcard allocates is bounded by the bytes: it gives a sequence's declared
+        // length as the size hint only when at least that many bytes remain, none otherwise
+        // (`SeqAccess::size_hint` of postcard 1.1.3, pinned by Cargo.lock), and every element
+        // takes at least one byte. With the length check above, no vector holds or reserves
+        // more than MAX_PACKET_BYTES elements, whatever length a hostile peer declares.
         let packet: Packet =
             ludenea_ecs::decode_exact(&bytes[PREFIX_BYTES..]).map_err(WireError::Malformed)?;
         packet.check()?;
@@ -170,24 +178,29 @@ impl Message {
                         len: identity.engine.len(),
                     });
                 }
-                check_players(identity.players.len())
+                check_players("Hello", identity.players.len())
             }
-            Message::Inputs { inputs, .. } => {
+            Message::Inputs { player, inputs, .. } => {
+                let player = *player;
                 if inputs.is_empty() {
-                    return Err(WireError::NoTicks);
+                    return Err(WireError::NoTicks { player });
                 }
                 // A usize holds every u32 on the targets Ludenea builds for (64-bit and wasm32).
                 if inputs.len() > MAX_TICKS_PER_MESSAGE as usize {
                     return Err(WireError::TooManyTicks {
+                        player,
                         count: inputs.len(),
                     });
                 }
                 match inputs.iter().find(|input| input.len() > MAX_INPUT_BYTES) {
-                    Some(input) => Err(WireError::InputTooLarge { len: input.len() }),
+                    Some(input) => Err(WireError::InputTooLarge {
+                        player,
+                        len: input.len(),
+                    }),
                     None => Ok(()),
                 }
             }
-            Message::Ack { players, .. } => check_players(players.len()),
+            Message::Ack { players, .. } => check_players("Ack", players.len()),
             Message::Welcome
             | Message::Quality { .. }
             | Message::QualityReply { .. }
@@ -198,9 +211,9 @@ impl Message {
     }
 }
 
-fn check_players(count: usize) -> Result<(), WireError> {
+fn check_players(message: &'static str, count: usize) -> Result<(), WireError> {
     if count > MAX_PLAYERS {
-        Err(WireError::TooManyPlayers { count })
+        Err(WireError::TooManyPlayers { message, count })
     } else {
         Ok(())
     }

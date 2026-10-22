@@ -929,10 +929,11 @@ hash, those of the golden trace and replays included.
   consecutive ticks (`Inputs`), an acknowledgment (`Ack`), a time synchronization request
   and its reply (`Quality`, `QualityReply`), a state hash report (`Hash`), a peer leaving
   (`Goodbye`), or an ending relayed to every peer (`End` with an `EndNotice`).
-  `Packet::decode` refuses with a `WireError` naming the value: a packet over 1200 bytes, another
-  version, bytes that are not one packet (trailing bytes included), more than 16 messages,
-  an input message with no tick or more than 32, an input over 24 bytes, more than 4
-  players, or an engine string over 64 bytes. `SessionSettings::validate` refuses an engine
+  `Packet::decode` refuses with a `WireError` naming the value: another version (whatever
+  the packet's length), a packet over 1200 bytes, bytes that are not one packet (trailing
+  bytes included), more than 16 messages, an input message with no tick or more than 32, or
+  an input over 24 bytes (each naming the player), more than 4 players in an `Ack` or a
+  `Hello` (naming which), or an engine string over 64 bytes. `SessionSettings::validate` refuses an engine
   string over 64 bytes (`SettingsError::EngineTooLong`) and a layout whose largest packet
   does not fit in 1200 bytes (`SettingsError::PacketTooLarge`, naming both sizes).
 - Meta 2: `Texture(TextureMeta)` describes how a PNG is cut into frames (pixels per unit,
