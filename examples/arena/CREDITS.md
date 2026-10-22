@@ -1,12 +1,12 @@
 # Credits
 
-All the art is CC0 (public domain dedication). The files are copied unchanged from the
-packs below; only their names are lowercased. The SHA-256 is the one of the archive
+Each pack states its license below, as the pack declares it. The files are copied unchanged
+from the packs; only their names are lowercased. The SHA-256 is the one of the archive
 downloaded.
 
 ## Fantasy Warrior
 
-- Artist: Luiz Melo
+- Artist: Luiz Melo (the name comes from the author's itch.io page, not from the pack)
 - Pack: Fantasy Warrior
 - License: CC0 (stated in the pack's `License.txt`)
 - URL: https://luizmelo.itch.io/fantasy-warrior
@@ -18,7 +18,7 @@ downloaded.
 
 ## Martial Hero
 
-- Artist: Luiz Melo
+- Artist: Luiz Melo (the name comes from the author's itch.io page, not from the pack)
 - Pack: Martial Hero
 - License: CC0 (stated in the pack's `License.txt`)
 - URL: https://luizmelo.itch.io/martial-hero
@@ -32,8 +32,9 @@ downloaded.
 
 - Artist: Luis Zuno (ansimuz)
 - Pack: Gothicvania Town
-- License: CC0 (the pack's `public-license.txt` dedicates the art to the public domain; the
-  pack's music is under a different license and is not included)
+- License: public domain, "free to use on whatever you want, personal or commercial" by the
+  pack's `public-license.txt` (credit is not required but appreciated); CC0 on its
+  OpenGameArt page. The pack's music has a different license and is not included.
 - URL: https://opengameart.org/content/gothicvania-town
 - Files taken: `PNG/environment/layers/tileset.png`, `PNG/environment/layers/background.png`,
   `PNG/environment/layers/middleground.png`, committed as `assets/art/town/tileset.png`,
