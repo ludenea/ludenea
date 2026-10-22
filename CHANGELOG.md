@@ -51,11 +51,11 @@ hash, those of the golden trace and replays included.
 - `World::save_into(&mut SavedWorld)` saves the simulation state in memory (the entity
   allocator, every component storage and resource, and the loaded assets, shared rather than
   copied), reusing the allocations of the `SavedWorld` it saves into and copying the asset
-  map only when it changed since the last save. `World::load(&SavedWorld)` loads it back as
-  `World::restore` restores a snapshot (queued commands and events dropped, runtime
-  resources kept), all or nothing: it refuses with a `SavedError` (`Empty`,
-  `MissingStorage`, `UnexpectedStorage`, `TypeMismatch`, each naming the stable name of the
-  component, resource, or asset type that differs) before changing anything.
+  map only when it changed since the last save. `World::load(&SavedWorld)` loads it back,
+  dropping queued commands and events and keeping runtime resources as `World::restore`
+  does, all or nothing: it refuses with a `SavedError` (`Empty`, `MissingStorage`,
+  `UnexpectedStorage`, `TypeMismatch`, each naming the stable name of the component,
+  resource, or asset type that differs) before changing anything.
   `Simulation::save_state(&mut SavedState)` and `Simulation::load_state(&SavedState)` wrap
   them for a rollback that saves every tick; `load_state` refuses a state never saved into
   (`StateError::Empty`), one saved by another game build (`StateError::OtherWorld`, naming
