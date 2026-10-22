@@ -150,6 +150,19 @@ mod tests {
         }
     }
 
+    /// The first reading holding a texture: two writes may settle in two batches, the first
+    /// read before both files exist.
+    fn until_texture(watch: &mut TextureWatch) -> ProjectTextures {
+        let start = now();
+        loop {
+            assert!(start.elapsed() < PATIENCE, "the texture is never reported");
+            let reading = next(watch).expect("the change is reported").unwrap();
+            if !reading.textures.is_empty() {
+                return reading;
+            }
+        }
+    }
+
     /// Takes the readings still on their way, until none comes for a second.
     fn quiet_after(watch: &mut TextureWatch) {
         let mut last = now();
@@ -184,17 +197,7 @@ mod tests {
         )
         .unwrap();
         fs::write(folder.join("hero.png"), b"png bytes").unwrap();
-        // The two writes may settle in two batches, the first read before the PNG exists:
-        // the readings are taken until one holds the texture.
-        let start = now();
-        let textures = loop {
-            assert!(start.elapsed() < PATIENCE, "the texture is never reported");
-            let update = next(&mut watch).expect("the change is reported");
-            let textures = update.unwrap().textures;
-            if !textures.is_empty() {
-                break textures;
-            }
-        };
+        let textures = until_texture(&mut watch).textures;
         let [(_, path, bytes, _)] = textures.as_slice() else {
             panic!("{textures:?}");
         };
@@ -212,7 +215,7 @@ mod tests {
             "Meta(version: 2, id: \"00000000000000000000000000000001\", kind: Texture((pixels_per_unit: 8, grid: None, pivot: None, filter: Linear)))",
         )
         .unwrap();
-        let first = next(&mut watch).expect("the change is reported");
+        let first = Ok(until_texture(&mut watch));
         quiet_after(&mut watch);
         // The display may have refused the first reading: the same files are read again.
         fs::write(folder.join("hero.png"), b"png bytes").unwrap();
