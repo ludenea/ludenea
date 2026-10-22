@@ -18,6 +18,10 @@ path = "src/main.rs"
 name = "record-replay"
 doc = false
 
+# Builds the level through the control surface and saves the scene.
+[[bin]]
+name = "build-level"
+
 [features]
 # The standalone web page (`ludenea build --web`).
 web = ["ludenea/web"]
@@ -25,6 +29,7 @@ web = ["ludenea/web"]
 [dependencies]
 ludenea.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 png.workspace = true

@@ -163,6 +163,7 @@ dependencies = [
  "postcard",
  "ron",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
