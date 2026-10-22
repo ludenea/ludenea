@@ -318,6 +318,8 @@ struct Peer {
     sent_packets: u64,
     /// The packets carrying a hash report of this tick are lost.
     lose_hash_of: Option<u64>,
+    /// The packets to this peer lose their inputs, the rest of them delivered.
+    strip_inputs_to: Option<PeerId>,
     /// Every frame uses the default input, so every prediction is right.
     default_inputs: bool,
     /// The session ended and its simulation landed on the confirmed state.
@@ -417,6 +419,7 @@ impl Harness {
                 frames: 0,
                 sent_packets: 0,
                 lose_hash_of: None,
+                strip_inputs_to: None,
                 default_inputs: false,
                 landed: false,
             })
@@ -443,6 +446,12 @@ impl Harness {
     /// Loses every packet `peer` sends that carries its hash report of `tick`.
     pub fn lose_hash_reports(&mut self, peer: PeerId, tick: u64) {
         self.peers[usize::from(peer.0)].lose_hash_of = Some(tick);
+    }
+
+    /// Strips the inputs from every packet `from` sends to `to`, or stops it with `None`: a
+    /// link that loses what matters one way, while `to` still hears `from`.
+    pub fn strip_inputs(&mut self, from: PeerId, to: Option<PeerId>) {
+        self.peers[usize::from(from.0)].strip_inputs_to = to;
     }
 
     /// Has every peer add the default input every frame, so every prediction is right.
@@ -519,8 +528,16 @@ impl Harness {
                     peer.next_frame_micros = Some(due + peer.frame_micros);
                 }
             }
-            for (to, packet) in peer.session.outgoing(now) {
+            for (to, mut packet) in peer.session.outgoing(now) {
                 let reports = check_limits(&packet);
+                let mut decoded =
+                    Packet::decode(&packet).expect("a session sends packets that decode");
+                if peer.strip_inputs_to == Some(to) {
+                    decoded
+                        .messages
+                        .retain(|message| !matches!(message, Message::Inputs { .. }));
+                    packet = decoded.encode();
+                }
                 self.most_hash_reports = self.most_hash_reports.max(reports);
                 self.sent_packets += 1;
                 peer.sent_packets += 1;

@@ -1972,15 +1972,17 @@ impl Session {
     /// Raises [`SessionEvent::PeerSilent`] for every peer newly silent for
     /// `notice_after_micros`, then ends the session on a silence of `disconnect_after_micros`:
     /// a leaving session `disconnect_after_micros` after [`Session::leave`], with
-    /// [`EndReason::Left`]; a running one when some peer has been silent that long, with
-    /// [`EndReason::Left`] when the match ends on purpose and every player's input through its
-    /// last tick is confirmed, as only acknowledgments were missing, and with
-    /// [`EndReason::Lost`] naming the first such peer otherwise.
+    /// [`EndReason::Left`]; a running one when some peer has been silent that long. When the
+    /// match ends on purpose and every player's input through its last tick is confirmed, only
+    /// acknowledgments can be missing: the silent peers' are waived, and the session ends with
+    /// [`EndReason::Left`] once every peer still talking acknowledged the local inputs through
+    /// that tick, so none of them is left without them. Otherwise it ends with
+    /// [`EndReason::Lost`] naming the first such peer.
     ///
     /// A peer that said goodbye and whose inputs through the agreed last tick are all
     /// confirmed raises no notice and is never lost: it has nothing more to send, and ends
-    /// once it holds what it needs, so its silence says nothing. Its silence still ends the
-    /// session with `Left` once every input through that tick is confirmed.
+    /// once it holds what it needs, so its silence says nothing. Its silence still waives its
+    /// acknowledgments once every input through that tick is confirmed.
     fn check_silence(&mut self, now: u64) {
         let timeouts = self.settings.timeouts;
         let heard_out: Vec<bool> = self
@@ -2012,14 +2014,25 @@ impl Session {
             }
             return;
         }
-        let mut silent = self.remotes.iter().zip(&heard_out).filter(|(remote, _)| {
+        let is_silent = |remote: &Remote| {
             now.saturating_sub(remote.last_heard_micros) >= timeouts.disconnect_after_micros
-        });
+        };
         let confirmed = self.confirmed_tick();
         let reason = match self.closing {
-            Some(closing) if confirmed > closing.last_tick => silent.next().map(|_| left(closing)),
-            _ => silent
-                .find(|(_, out)| !**out)
+            Some(closing) if confirmed > closing.last_tick => {
+                let through = closing.last_tick.saturating_add(1);
+                let local: Vec<usize> = self.local_players().collect();
+                let talking_acknowledged = self.remotes.iter().all(|remote| {
+                    is_silent(remote) || local.iter().all(|player| remote.acked[*player] >= through)
+                });
+                let any_silent = self.remotes.iter().any(is_silent);
+                (any_silent && talking_acknowledged).then(|| left(closing))
+            }
+            _ => self
+                .remotes
+                .iter()
+                .zip(&heard_out)
+                .find(|(remote, out)| !**out && is_silent(remote))
                 .map(|(remote, _)| EndReason::Lost { peer: remote.id }),
         };
         if let Some(reason) = reason {

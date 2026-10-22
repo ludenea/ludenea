@@ -521,6 +521,37 @@ fn leaver_heard_out_is_not_silent() {
 }
 
 #[test]
+fn silent_leaver_waives_only_its_own_acknowledgments() {
+    // Three peers: peer 2 leaves and ends. Peer 0 then holds every input through the last
+    // tick, but peer 1, which still hears peer 0, gets none of peer 0's inputs, so it cannot
+    // acknowledge them. Peer 2's silence must not end peer 0 while peer 1, still talking,
+    // needs its inputs: once the link heals, every peer ends at the same tick.
+    let timeouts = Timeouts::default();
+    let mut harness = Harness::new(sessions(3));
+    assert!(harness.run_until_running(ONE_SECOND));
+    harness.run_until(ONE_SECOND, |_| false);
+    // A few frames before the leave, so peer 1 lacks peer 0's inputs up to the last tick.
+    harness.strip_inputs(PeerId(0), Some(PeerId(1)));
+    harness.run_until(ONE_SECOND / 10, |_| false);
+    harness.leave(PeerId(2));
+    assert!(harness.run_until(ONE_SECOND, |harness| {
+        matches!(harness.state(PeerId(2)), SessionState::Ended(_))
+    }));
+    harness.run_until(timeouts.disconnect_after_micros + ONE_SECOND, |_| false);
+    for peer in [0, 1] {
+        assert_eq!(
+            harness.state(PeerId(peer)),
+            SessionState::Running,
+            "peer {peer}"
+        );
+    }
+    harness.strip_inputs(PeerId(0), None);
+    assert!(run_until_all_ended(&mut harness, ONE_SECOND));
+    let (peer, _) = assert_same_left(&harness, "one-way loss");
+    assert_eq!(peer, PeerId(2));
+}
+
+#[test]
 fn goodbye_behind_is_a_violation() {
     // Peer 0 at tick 5 holds its inputs through 6; peer 1's through 5: confirmed tick 6.
     let setup = || {
