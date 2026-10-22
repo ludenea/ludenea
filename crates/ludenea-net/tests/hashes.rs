@@ -281,6 +281,38 @@ fn hash_report_uses_the_state_resimulated_after_a_correction() {
 }
 
 #[test]
+fn rollback_from_a_final_tick_keeps_its_hash() {
+    // Every input below 30 is confirmed and 30 has run: its hash is final.
+    let mut driven = Driven::at(INTERVAL);
+    let sent = driven.frame(0);
+    let final_hash = driven.model.hash_at(INTERVAL).unwrap();
+    assert_eq!(hash_reports(&sent), [(INTERVAL, final_hash)]);
+    for _ in 0..3 {
+        driven.frame(0);
+    }
+    // Peer 1's input of 30 differs from the prediction: the rollback loads 30 and saves it
+    // again, asking for its hash, which only confirms the final one.
+    driven.remote(&[1; 4]);
+    let requests = driven.advance(0);
+    assert_eq!(requests[0], Request::Load { tick: INTERVAL });
+    assert_eq!(
+        requests[1],
+        Request::Save {
+            tick: INTERVAL,
+            hash: true
+        }
+    );
+    driven.model.execute_for(&mut driven.session, &requests);
+    assert_eq!(
+        driven.session.report_hash(INTERVAL, final_hash),
+        Err(SessionError::HashNotAsked { tick: INTERVAL })
+    );
+    assert_eq!(driven.model.hash_at(INTERVAL), Some(final_hash));
+    assert_eq!(hash_reports(&driven.sent()), [(INTERVAL, final_hash)]);
+    assert_eq!(driven.session.state(), SessionState::Running);
+}
+
+#[test]
 fn hash_reports_survive_loss() {
     for peers in [2, 3] {
         let conditions = LinkConditions {
