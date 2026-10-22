@@ -556,6 +556,8 @@ export function ViewportPanel({
     const stopCapture = captureInput(editor, element);
 
     return () => {
+      // A tool's press ends with the panel: its tool hears so once.
+      if (press?.mode === "tool") abandonToolPress();
       disposed = true;
       cancelAnimationFrame(animation);
       stopCapture();

@@ -151,7 +151,8 @@ export interface ViewportTool {
   pointerUp?(event: ToolPointer, context: ToolContext): void;
   /**
    * The press `pointerDown` started ends without its `pointerUp`: the browser took the pointer,
-   * or the tool stopped being active (Escape, another tool, unavailable, unregistered). Called
+   * the tool stopped being active (Escape, another tool, unavailable, unregistered), or the
+   * viewport closed. Called
    * once per such press; a stroke in progress is dropped here.
    */
   pointerCancel?(context: ToolContext): void;

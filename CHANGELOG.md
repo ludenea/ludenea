@@ -870,8 +870,8 @@ hash, those of the golden trace and replays included.
   tool (`viewport.setTool(id)`, read from the `viewport.activeTool` store, `null` for the
   built-in select and move), the viewport gives it the pointer's presses, moves, and
   releases (`ToolPointer`, in CSS pixels and world units), or `pointerCancel` when a press
-  ends without a release (the browser took the pointer, or the tool stopped being active
-  in the middle of it). Its `ToolContext` maps screen points onto a layer of any parallax
+  ends without a release (the browser took the pointer, the tool stopped being active in
+  the middle of it, or the viewport closed). Its `ToolContext` maps screen points onto a layer of any parallax
   and back (`screenToWorld`, `worldToScreen`) as the renderer draws it. The viewport shows
   the tool's `cursor` and draws its `overlay`; the right button is the tool's too, without
   the context menu. Its `available(editor)` is asked again on every selection, timeline,

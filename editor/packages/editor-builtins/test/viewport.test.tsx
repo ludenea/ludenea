@@ -1001,6 +1001,18 @@ describe("viewport", () => {
     expect(sentOf(game.sent, "pick")).toEqual([]);
   });
 
+  it("closing_the_viewport_during_a_press_cancels_it_once", async () => {
+    const { host, view } = await viewport();
+    const { tool, heard } = recordingTool();
+    act(() => void host.editor.viewport.tools.register(tool));
+    act(() => host.editor.viewport.setTool("test.paint"));
+    fireEvent.pointerDown(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    cleanup();
+    // The panel is gone: changing the tool afterwards cancels nothing more.
+    act(() => host.editor.viewport.setTool(null));
+    expect(heard.map(([kind]) => kind)).toEqual(["down", "cancel"]);
+  });
+
   it("escape_without_a_press_cancels_nothing", async () => {
     const { host, view } = await viewport();
     const { tool, heard } = recordingTool();
