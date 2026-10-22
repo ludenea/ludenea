@@ -773,6 +773,7 @@ fn play_help_lists_its_flags() {
         "--record",
         "--fullscreen",
         "--no-vsync",
+        "--no-watch",
         "--stats",
         "--threads",
         "--debug-layer",
@@ -783,17 +784,6 @@ fn play_help_lists_its_flags() {
     ] {
         assert!(out.contains(flag), "{flag} missing from:\n{out}");
     }
-}
-
-#[test]
-fn play_help_lists_no_watch() {
-    let dir = dir("play-help-no-watch");
-    let (code, out) = cli(&dir, &["play", "--help"]);
-    assert_eq!(code, 0, "{out}");
-    assert!(
-        out.contains("--no-watch"),
-        "--no-watch missing from:\n{out}"
-    );
 }
 
 #[test]
