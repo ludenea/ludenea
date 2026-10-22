@@ -194,22 +194,30 @@ export const DIVERGENCE_FIXTURES = join(import.meta.dirname, "fixtures/divergenc
 /** The color the renderer clears to (`BACKGROUND` in crates/ludenea-render/src/gpu/mod.rs). */
 const BACKGROUND = [0x12, 0x12, 0x14] as const;
 
-/** How many pixels of the screenshot `png` are the renderer's background, and how many are drawn over it; decoded in the page. */
-export async function pixelCounts(page: Page, png: Buffer): Promise<{ background: number; drawn: number }> {
+/** A color as red, green, and blue from 0 to 255. */
+export type Rgb = readonly [number, number, number];
+
+/**
+ * How many pixels of the screenshot `png` are the renderer's background, how many are drawn
+ * over it, and how many are within 4 of a channel of one of `colors`; decoded in the page.
+ */
+export async function pixelCounts(page: Page, png: Buffer, colors: readonly Rgb[] = []): Promise<{ background: number; drawn: number; matching: number }> {
   return page.evaluate(
-    async ([png, [red, green, blue]]) => {
-      const bytes = Uint8Array.from(atob(png as string), (char) => char.charCodeAt(0));
+    async ([png, [red, green, blue], colors]) => {
+      const bytes = Uint8Array.from(atob(png), (char) => char.charCodeAt(0));
       const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
       const context = new OffscreenCanvas(bitmap.width, bitmap.height).getContext("2d")!;
       context.drawImage(bitmap, 0, 0);
       const data = context.getImageData(0, 0, bitmap.width, bitmap.height).data;
       let background = 0;
+      let matching = 0;
       for (let at = 0; at < data.length; at += 4) {
         if (data[at] === red && data[at + 1] === green && data[at + 2] === blue) background += 1;
+        if (colors.some((color) => color.every((channel, index) => Math.abs(channel - data[at + index]!) <= 4))) matching += 1;
       }
-      return { background, drawn: data.length / 4 - background };
+      return { background, drawn: data.length / 4 - background, matching };
     },
-    [png.toString("base64"), BACKGROUND] as const,
+    [png.toString("base64"), BACKGROUND, colors] as const,
   );
 }
 

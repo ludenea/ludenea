@@ -1,7 +1,7 @@
 import { copyFileSync, cpSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { button, collectErrors, expectNoErrors, pixelCounts, repository, runCommand, serveProject, waitForGame, type ServedProject } from "./project";
+import { button, collectErrors, expectNoErrors, openScene, pixelCounts, repository, runCommand, serveProject, waitForGame, type Rgb, type ServedProject } from "./project";
 
 let served: ServedProject;
 
@@ -34,9 +34,23 @@ async function frameTilemap(page: Page, viewport: Locator) {
   return (await viewport.boundingBox())!;
 }
 
+/** The three colors of the bug's frame 2 (`examples/swarm/assets/bug.png`), which the brush paints. */
+const BUG: Rgb[] = [
+  [46, 125, 50],
+  [245, 245, 220],
+  [27, 58, 30],
+];
+
+type Clip = { x: number; y: number; width: number; height: number };
+
 /** How many pixels of the page's `clip` the renderer drew over its background. */
-async function drawnPixels(page: Page, clip: { x: number; y: number; width: number; height: number }): Promise<number> {
+async function drawnPixels(page: Page, clip: Clip): Promise<number> {
   return (await pixelCounts(page, await page.screenshot({ clip }))).drawn;
+}
+
+/** How many pixels of the page's `clip` show the bug's colors: painted tiles, not the brush's blue preview. */
+async function tilePixels(page: Page, clip: Clip): Promise<number> {
+  return (await pixelCounts(page, await page.screenshot({ clip }), BUG)).matching;
 }
 
 test("paint_a_rectangle_undo_and_save", async ({ page }) => {
@@ -81,8 +95,14 @@ test("paint_a_rectangle_undo_and_save", async ({ page }) => {
     await page.mouse.up();
   };
   expect(await drawnPixels(page, inside)).toBe(0);
-  await drag();
+  // While pressed, the brush's preview covers the cells, in none of the tile's colors.
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(to.x, to.y, { steps: 5 });
   await expect.poll(() => drawnPixels(page, inside)).toBeGreaterThan(0);
+  expect(await tilePixels(page, inside)).toBe(0);
+  await page.mouse.up();
+  await expect.poll(() => tilePixels(page, inside)).toBeGreaterThan(0);
 
   // One undo takes the whole rectangle back.
   await page.getByRole("tab", { name: "Timeline" }).click();
@@ -90,16 +110,19 @@ test("paint_a_rectangle_undo_and_save", async ({ page }) => {
   await expect.poll(() => drawnPixels(page, inside)).toBe(0);
 
   await drag();
-  await expect.poll(() => drawnPixels(page, inside)).toBeGreaterThan(0);
+  await expect.poll(() => tilePixels(page, inside)).toBeGreaterThan(0);
   await runCommand(page, "Save scene");
   const scene = join(served.root, "scenes/main.scene.ron");
   await expect.poll(() => readFileSync(scene, "utf8")).toContain("Some(2)");
 
-  // Opened again, the editor draws the tiles the scene holds.
+  // Opened again from the asset browser in a fresh page, the scene's file is read back and
+  // the editor draws the tiles it holds.
   await page.reload();
+  await waitForGame(page);
+  await openScene(page, "main.scene.ron");
   await waitForGame(page);
   await selectTilemap(page);
   await frameTilemap(page, viewport);
-  await expect.poll(() => drawnPixels(page, inside)).toBeGreaterThan(0);
+  await expect.poll(() => tilePixels(page, inside)).toBeGreaterThan(0);
   await expectNoErrors(page, errors);
 });
