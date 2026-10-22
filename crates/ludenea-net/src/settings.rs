@@ -271,11 +271,11 @@ impl SessionSettings {
         Ok(())
     }
 
-    /// The largest packet `peer` sends while the match runs. One packet holds, each field at its largest encoding
-    /// for the whole life of a match: the inputs of every player `peer` owns at
-    /// [`MAX_INPUT_BYTES`] over `rollback_window + input_delay + 1` ticks, the acknowledgment
-    /// of every other player, a quality request and its reply, one hash report, and a
-    /// goodbye.
+    /// The largest packet `peer` sends while the match runs. One packet holds, each field at
+    /// its largest encoding for the whole life of a match: the inputs of every player `peer`
+    /// owns at [`MAX_INPUT_BYTES`] over `rollback_window + input_delay + 1` ticks, the
+    /// acknowledgment of every other player, a quality request and its reply, one hash report,
+    /// and a goodbye.
     ///
     /// Two rules of the sender keep every packet within this bound: a session that has ended
     /// sends no inputs, so a packet carrying an `End` is small and `End` is not counted; and

@@ -81,9 +81,9 @@ hash, those of the golden trace and replays included.
   `EndReason::Mismatch`, naming the peer, the first differing field (`net_version` while
   connecting, then the identity's fields in order, then `match_id`) and both values; a
   peer whose handshake is unfinished and that stays silent for `disconnect_after_micros`
-  while connecting ends it with `EndReason::Unreachable`. A packet that is not one of this match from another of its
-  peers is dropped, counted per sender and `DropReason` in `Session::stats`, and reported
-  as `SessionEvent::Dropped`.
+  while connecting ends it with `EndReason::Unreachable`. A packet that is not one of this
+  match from another of its peers is dropped, counted per sender and `DropReason` in
+  `Session::stats`, and reported as `SessionEvent::Dropped`.
 - `ludenea_render` answers without a GPU what the renderer draws: `atlas::frames_of(png,
   meta)` gives the `TextureFrames` (the image size and each `FrameRect`, row-major, with its
   pivot) a meta cuts a PNG into, the same cut `pack` makes, or a `FramesError` (`Decode`,
