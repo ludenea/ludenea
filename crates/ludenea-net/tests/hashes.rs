@@ -449,6 +449,64 @@ fn hashes_off_the_interval_or_received_again_are_dropped_alone() {
 }
 
 #[test]
+fn a_report_after_a_missing_one_waits_for_it() {
+    // The model answers no hash yet, so no local hash is final and no peer lags. At tick 58,
+    // a report of 60 is at the horizon plus one.
+    let mut driven = Driven::new();
+    let mut unanswered = Vec::new();
+    for _ in 0..2 * INTERVAL - 2 {
+        driven.remote(&[0]);
+        let requests = driven.advance(0);
+        unanswered.extend(driven.model.execute(&requests));
+        driven.sent();
+    }
+    let acked = |messages: Vec<Message>| {
+        messages.into_iter().find_map(|message| match message {
+            Message::Ack { hashes_through, .. } => Some(hashes_through),
+            _ => None,
+        })
+    };
+    // Peer 1 leaves out its report of 30: the one of 60 is dropped, not acknowledged.
+    driven.receive(vec![Message::Hash {
+        tick: 2 * INTERVAL,
+        hash: 9,
+    }]);
+    assert_eq!(driven.session.state(), SessionState::Running);
+    assert_eq!(dropped(&driven.session, DropReason::HashGap), 1);
+    for (tick, hash) in unanswered {
+        driven.session.report_hash(tick, hash).unwrap();
+    }
+    driven.remote(&[0]);
+    assert_eq!(acked(driven.frame(0)), Some(0));
+    let events = driven.session.events();
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, SessionEvent::HashMatched { .. })),
+        "{events:?}"
+    );
+    // The missing report comes, then the one after it: both are read in order.
+    let thirty = Message::Hash {
+        tick: INTERVAL,
+        hash: driven.model.hash_at(INTERVAL).unwrap(),
+    };
+    driven.receive(vec![thirty]);
+    assert!(
+        driven
+            .session
+            .events()
+            .contains(&SessionEvent::HashMatched { tick: INTERVAL })
+    );
+    driven.receive(vec![Message::Hash {
+        tick: 2 * INTERVAL,
+        hash: 9,
+    }]);
+    assert_eq!(dropped(&driven.session, DropReason::HashGap), 1);
+    driven.remote(&[0]);
+    assert_eq!(acked(driven.frame(0)), Some(2 * INTERVAL));
+}
+
+#[test]
 fn received_hashes_wait_in_bounded_storage() {
     // The model never answers: no local hash is known, and peer 1's reports wait for one.
     let mut driven = Driven::new();

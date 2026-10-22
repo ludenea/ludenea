@@ -140,7 +140,8 @@ hash, those of the golden trace and replays included.
   `ViolationRule::HashBeyondHorizon`; one of tick 0 or off the interval
   (`DropReason::HashOffInterval`), received already (`HashAlreadyReceived`), or beyond the
   `(rollback_window + input_delay) / hash_interval + 2` reports kept waiting for a local hash
-  answered late (`HashBacklog`) is dropped alone. `ViolationRule::HashLagging` disconnects a
+  answered late (`HashBacklog`), or after a report of that peer still missing (`HashGap`,
+  as reports arrive in tick order) is dropped alone, and reports match in tick order. `ViolationRule::HashLagging` disconnects a
   peer whose newest report trails the newest final local hash by more than
   `rollback_window + input_delay + hash_interval - 1` ticks, or whose acknowledgment of the
   local reports trails it by more than `2 * (rollback_window + input_delay) + hash_interval -

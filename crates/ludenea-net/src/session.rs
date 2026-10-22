@@ -179,6 +179,12 @@ pub enum DropReason {
     /// bound, `(rollback_window + input_delay) / hash_interval + 2`. Not acknowledged, so the
     /// peer sends it again. Only that message is dropped.
     HashBacklog,
+    /// A hash report of a tick after one of that peer's reports still missing. A peer sends
+    /// every report not acknowledged, oldest first, so an honest one sends this one only after
+    /// a report dropped as [`DropReason::HashBacklog`] and resends both. Not acknowledged, and
+    /// a peer that never sends the missing one ends up [`ViolationRule::HashLagging`]. Only
+    /// that message is dropped.
+    HashGap,
 }
 
 /// What happened in a session since the caller last asked, for the host to act on or log.
@@ -243,11 +249,12 @@ pub enum SessionError {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PeerStats {
     /// The drops, by reason. A [`DropReason::UnknownEcho`] counts each dropped reply, and each
-    /// of `HashOffInterval`, `HashAlreadyReceived` and `HashBacklog` each dropped hash report:
-    /// the rest of their packet is still read. Every other reason counts a dropped packet once,
-    /// under the reason that stopped reading it: an `Inputs` message with a gap stops the packet
-    /// there and is the reason, even when an earlier message of the same packet came before the
-    /// session ran; otherwise such a message makes the reason [`DropReason::BeforeRunning`].
+    /// of `HashOffInterval`, `HashAlreadyReceived`, `HashBacklog` and `HashGap` each dropped
+    /// hash report: the rest of their packet is still read. Every other reason counts a dropped
+    /// packet once, under the reason that stopped reading it: an `Inputs` message with a gap
+    /// stops the packet there and is the reason, even when an earlier message of the same
+    /// packet came before the session ran; otherwise such a message makes the reason
+    /// [`DropReason::BeforeRunning`].
     pub dropped: BTreeMap<DropReason, u64>,
     /// The rollbacks a misprediction of this peer's inputs caused.
     pub rollbacks: u64,
@@ -1283,7 +1290,8 @@ impl Session {
     /// horizon plus one is [`ViolationRule::HashBeyondHorizon`], checked first, so any tick
     /// past it is a violation; tick 0 or a tick off the interval is dropped as
     /// [`DropReason::HashOffInterval`], a report of a tick at most the latest received from that
-    /// peer as [`DropReason::HashAlreadyReceived`], and one beyond [`Self::hash_backlog`] as
+    /// peer as [`DropReason::HashAlreadyReceived`], one after a missing report as
+    /// [`DropReason::HashGap`], and one beyond [`Self::hash_backlog`] as
     /// [`DropReason::HashBacklog`].
     fn read_hash(&mut self, index: usize, tick: u64, hash: u64) -> Result<(), Refusal> {
         if tick > self.after_horizon() {
@@ -1299,6 +1307,10 @@ impl Session {
         }
         if tick <= self.remotes[index].hashes_received {
             return Err(Refusal::Drop(DropReason::HashAlreadyReceived));
+        }
+        // Received in tick order: `hashes_received` is the newest of an unbroken run.
+        if tick > self.remotes[index].hashes_received.saturating_add(interval) {
+            return Err(Refusal::Drop(DropReason::HashGap));
         }
         if let Some(report) = self.reports.get_mut(&tick) {
             report.received[index] = Some(hash);
@@ -1393,16 +1405,17 @@ impl Session {
     }
 
     /// Compares every final local hash not matched yet with the peers' reports of its tick, in
-    /// tick order: a difference ends the session with [`EndReason::Desync`]; a tick every peer
-    /// matched emits [`SessionEvent::HashMatched`] and releases the states kept for the
-    /// reported ticks before it. Then forgets the reports matched and acknowledged by every
-    /// peer.
+    /// tick order: a difference ends the session with [`EndReason::Desync`]; each tick every
+    /// peer matched, up to the first one a report is missing for, emits
+    /// [`SessionEvent::HashMatched`] and releases the states kept for the reported ticks
+    /// before it. Then forgets the reports matched and acknowledged by every peer.
     fn check_hashes(&mut self, now: u64) {
         if self.state != SessionState::Running {
             return;
         }
         self.finalize_hashes();
         let mut matched = Vec::new();
+        let mut in_order = true;
         let mut desync = None;
         for (&tick, report) in self.reports.range(self.matched_through.saturating_add(1)..) {
             let differing =
@@ -1424,7 +1437,10 @@ impl Session {
                 });
                 break;
             }
-            if report.received.iter().all(Option::is_some) {
+            // Matched in tick order: a tick some peer's report of is missing stops the matching
+            // there, while the reports of later ticks are still compared.
+            in_order &= report.received.iter().all(Option::is_some);
+            if in_order {
                 matched.push(tick);
             }
         }
