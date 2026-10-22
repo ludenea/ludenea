@@ -159,7 +159,7 @@ fn credits_list_every_committed_art_file() {
 
 /// Over the frames of an idle image, `frame` pixels wide: the lowest bottom edge of the opaque
 /// pixels and the tallest figure, in pixels.
-fn idle_extent(png: &[u8], frame: u32) -> (u32, u32) {
+fn idle_extent(path: &str, png: &[u8], frame: u32) -> (u32, u32) {
     let mut reader = png::Decoder::new(std::io::Cursor::new(png))
         .read_info()
         .unwrap();
@@ -175,7 +175,10 @@ fn idle_extent(png: &[u8], frame: u32) -> (u32, u32) {
                     .any(|x| pixels[((y * width + x) * 4 + 3) as usize] > 0)
             })
             .collect();
-        let (top, low) = (opaque_rows[0], opaque_rows[opaque_rows.len() - 1] + 1);
+        let (Some(&top), Some(&last)) = (opaque_rows.first(), opaque_rows.last()) else {
+            panic!("{path} has a frame at column {first_column} with no opaque pixel");
+        };
+        let low = last + 1;
         bottom = bottom.max(low);
         tallest = tallest.max(low - top);
     }
@@ -195,7 +198,7 @@ fn metas_give_the_scale_the_pivot_and_the_sampling_the_game_needs() {
         }
         if path.ends_with("/idle.png") {
             let frame = meta.grid.expect("a fighter has a grid").frame_height;
-            let (bottom, tallest) = idle_extent(png, frame);
+            let (bottom, tallest) = idle_extent(path, png, frame);
             let pivot = meta.pivot.expect("a fighter has a pivot");
             assert_eq!(
                 pivot.1, bottom,
