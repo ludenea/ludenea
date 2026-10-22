@@ -28,6 +28,10 @@ fn every_format_version_is_in_the_changelog() {
         ("SNAPSHOT_VERSION", ludenea::ecs::SNAPSHOT_VERSION),
         ("INPUT_LOG_VERSION", ludenea::app::INPUT_LOG_VERSION),
         ("EDIT_LOG_VERSION", ludenea::app::EDIT_LOG_VERSION),
+        (
+            "NET_PROTOCOL_VERSION",
+            u32::from(ludenea::net::NET_PROTOCOL_VERSION),
+        ),
         ("UNDO_VERSION", ludenea::control::undo::UNDO_VERSION),
         ("STORED_SESSION_VERSION", stored_session_version()),
     ];

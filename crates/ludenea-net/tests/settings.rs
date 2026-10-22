@@ -190,6 +190,12 @@ fn validate_reports_the_first_fault_in_order() {
         notice_after_micros: 0,
         disconnect_after_micros: 0,
     };
+    s.identity.engine = "e".repeat(65);
+    assert!(matches!(
+        refusal(&s),
+        SettingsError::EngineTooLong { len: 65 }
+    ));
+    s.identity.engine = "ludenea-test".to_string();
     assert!(matches!(refusal(&s), SettingsError::PlayerCount { .. }));
     s.identity.players = vec![PeerId(0), PeerId(9)];
     assert!(matches!(refusal(&s), SettingsError::PeerCount { .. }));

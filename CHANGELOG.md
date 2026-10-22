@@ -27,6 +27,7 @@ this table in the same commit.
 | Edit log               | `EDIT_LOG_VERSION`         | 3       | 1                             |
 | Undo history           | `UNDO_VERSION`             | 4       | the unversioned form before 2 |
 | Stored session         | `STORED_SESSION_VERSION`   | 1       | the unversioned form before 1 |
+| Network protocol       | `NET_PROTOCOL_VERSION`     | 1       | 1                             |
 
 The stored session is the editor's copy of each open document's session, in
 `.ludenea/sessions/`; its version is a TypeScript constant of `@ludenea/editor-shell/app`.
@@ -920,6 +921,20 @@ hash, those of the golden trace and replays included.
 
 ### Formats
 
+- Network protocol 1: the packets the peers of a match exchange,
+  `ludenea_net::NET_PROTOCOL_VERSION` as a little-endian `u16`, then the postcard encoding
+  of a `Packet` (`match_id` and `messages`). The two-byte prefix is frozen for every future
+  version, so `Packet::version_of` names the version of a packet from any build. A `Message`
+  is a handshake (`Hello` with the `MatchIdentity`, `Welcome`), a player's inputs for
+  consecutive ticks (`Inputs`), an acknowledgment (`Ack`), a time synchronization request
+  and its reply (`Quality`, `QualityReply`), a state hash report (`Hash`), a peer leaving
+  (`Goodbye`), or an ending relayed to every peer (`End` with an `EndNotice`).
+  `Packet::decode` refuses with a `WireError` naming the value: a packet over 1200 bytes, another
+  version, bytes that are not one packet (trailing bytes included), more than 16 messages,
+  an input message with no tick or more than 32, an input over 24 bytes, more than 4
+  players, or an engine string over 64 bytes. `SessionSettings::validate` refuses an engine
+  string over 64 bytes (`SettingsError::EngineTooLong`) and a layout whose largest packet
+  does not fit in 1200 bytes (`SettingsError::PacketTooLarge`, naming both sizes).
 - Meta 2: `Texture(TextureMeta)` describes how a PNG is cut into frames (pixels per unit,
   an optional frame grid, a pivot, and a filter); version 1 metas still read. A `.png`
   without a meta gets one with the defaults (16 pixels per unit, no grid, centred pivot,

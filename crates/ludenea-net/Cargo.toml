@@ -4,5 +4,10 @@ version = "0.1.0"
 edition.workspace = true
 
 [dependencies]
+ludenea-ecs.workspace = true
+postcard.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+ludenea-app.workspace = true

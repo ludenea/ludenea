@@ -4,18 +4,24 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::wire::{Message, Packet};
+
 /// The most peers in one match.
 pub const MAX_PEERS: usize = 4;
 /// The most players in one match.
 pub const MAX_PLAYERS: usize = 4;
-/// The most bytes of one player's input for one tick.
-pub const MAX_INPUT_BYTES: usize = 32;
+/// The most bytes of one player's input for one tick: the example games' inputs take a few
+/// bytes, and a gamepad's two stick axes and its buttons fit.
+pub const MAX_INPUT_BYTES: usize = 24;
 /// The most bytes of one packet: a safe WebRTC payload.
 pub const MAX_PACKET_BYTES: usize = 1200;
 /// The most ticks a decoder accepts in one input message.
 pub const MAX_TICKS_PER_MESSAGE: u32 = 32;
 /// The most messages in one packet.
 pub const MAX_MESSAGES_PER_PACKET: usize = 16;
+/// The most bytes of [`MatchIdentity::engine`]: a version string such as
+/// `ludenea 1.2.3+abcdef0` takes far fewer, and the bound keeps a `Hello` within one packet.
+pub const MAX_ENGINE_BYTES: usize = 64;
 
 /// A participant of a match: a machine that runs the simulation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -100,6 +106,9 @@ pub struct SessionSettings {
 /// Why settings were refused. Each message names the field and its value.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SettingsError {
+    /// `engine` is longer than [`MAX_ENGINE_BYTES`].
+    #[error("engine has {len} bytes, at most {MAX_ENGINE_BYTES} allowed")]
+    EngineTooLong { len: usize },
     /// `players` is empty or longer than [`MAX_PLAYERS`].
     #[error("players has {count} entries, expected 1 to {MAX_PLAYERS}")]
     PlayerCount { count: usize },
@@ -130,6 +139,12 @@ pub enum SettingsError {
         rollback_window: u32,
         input_delay: u32,
     },
+    /// The largest packet this peer may have to send exceeds [`MAX_PACKET_BYTES`].
+    #[error(
+        "the worst-case packet of this layout takes {worst} bytes, more than the {max} bytes \
+         of one packet: fewer local players, a smaller rollback_window or input_delay fit"
+    )]
+    PacketTooLarge { worst: usize, max: usize },
     /// `hash_interval` is zero.
     #[error("hash_interval is {value}, expected at least 1")]
     HashInterval { value: u32 },
@@ -152,11 +167,15 @@ impl SessionSettings {
     /// The first rule the settings break, as a [`SettingsError`].
     pub fn validate(&self) -> Result<(), SettingsError> {
         let MatchIdentity {
+            engine,
             tick_rate,
             players,
             rules,
             ..
         } = &self.identity;
+        if engine.len() > MAX_ENGINE_BYTES {
+            return Err(SettingsError::EngineTooLong { len: engine.len() });
+        }
         if players.is_empty() || players.len() > MAX_PLAYERS {
             return Err(SettingsError::PlayerCount {
                 count: players.len(),
@@ -201,6 +220,15 @@ impl SessionSettings {
                 input_delay: rules.input_delay,
             });
         }
+        if let Some(packet) = self.worst_case_packet() {
+            let worst = packet.encode().len();
+            if worst > MAX_PACKET_BYTES {
+                return Err(SettingsError::PacketTooLarge {
+                    worst,
+                    max: MAX_PACKET_BYTES,
+                });
+            }
+        }
         if rules.hash_interval == 0 {
             return Err(SettingsError::HashInterval {
                 value: rules.hash_interval,
@@ -217,5 +245,63 @@ impl SessionSettings {
             });
         }
         Ok(())
+    }
+
+    /// The largest packet this peer sends while the match runs, or `None` without a remote
+    /// player, as nothing is ever sent. One packet holds, each field at its largest encoding
+    /// for the whole life of a match: the inputs of every local player at [`MAX_INPUT_BYTES`]
+    /// over `rollback_window + input_delay + 1` ticks, the acknowledgment of every remote
+    /// player, a quality request and its reply, one hash report, and a goodbye.
+    ///
+    /// Two rules of the sender keep every packet within this bound: a session that has ended
+    /// sends no inputs, so a packet carrying an `End` is small and `End` is not counted; and
+    /// further unacknowledged hash reports are packed by size, the ones that do not fit resent
+    /// in a later packet. The handshake's `Hello` travels alone, and fits whatever the
+    /// identity, as the engine string and the players are bounded. Expects the rules to have
+    /// passed the tick count check.
+    fn worst_case_packet(&self) -> Option<Packet> {
+        let players = &self.identity.players;
+        let local = players.iter().filter(|owner| **owner == self.local).count();
+        let remote = players.len() - local;
+        if remote == 0 {
+            return None;
+        }
+        let rules = self.identity.rules;
+        // Checked by the caller to be at most MAX_TICKS_PER_MESSAGE.
+        let ticks = rules.rollback_window as usize + rules.input_delay as usize + 1;
+        let player = u8::MAX;
+        let mut messages: Vec<Message> = (0..local)
+            .map(|_| Message::Inputs {
+                player,
+                first_tick: u64::MAX,
+                inputs: vec![vec![u8::MAX; MAX_INPUT_BYTES]; ticks],
+            })
+            .collect();
+        messages.extend([
+            Message::Ack {
+                players: vec![(player, u64::MAX); remote],
+                hashes_through: u64::MAX,
+            },
+            Message::Quality {
+                tick: u64::MAX,
+                sent_micros: u64::MAX,
+                advantage: i32::MIN,
+            },
+            Message::QualityReply {
+                echo_micros: u64::MAX,
+                tick: u64::MAX,
+            },
+            Message::Hash {
+                tick: u64::MAX,
+                hash: u64::MAX,
+            },
+            Message::Goodbye {
+                last_tick: u64::MAX,
+            },
+        ]);
+        Some(Packet {
+            match_id: u64::MAX,
+            messages,
+        })
     }
 }
