@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use ludenea_app::project::{ProjectTexture, ProjectTextures};
 use ludenea_draw::frame::RenderFrame;
-use ludenea_render::atlas::{Atlas, TextureSource, frames_of, pack};
+use ludenea_render::atlas::{Atlas, TextureSource, pack};
 use ludenea_render::gpu::{Overlay, RenderError, Renderer, Size};
 
 use crate::RuntimeError;
@@ -344,7 +344,7 @@ impl Display {
     ) -> Result<Display, RuntimeError> {
         let (mut presenter, mut renderer) = open()?;
         presenter.resize(size.0, size.1);
-        let (atlas, textures) = pack_textures(textures.to_vec(), renderer.max_page_side());
+        let (atlas, textures) = pack_textures(textures, renderer.max_page_side());
         let warnings = atlas.errors.iter().map(ToString::to_string).collect();
         renderer
             .set_atlas(&atlas)
@@ -361,29 +361,14 @@ impl Display {
     }
 
     /// Repacks the textures after they changed on disk: `update`'s textures replace those
-    /// at the same path; a failed path (`update.failures`, or a new version that cannot be
-    /// decoded or cut into frames) keeps its previous version; a path in neither list is
-    /// dropped. The new atlas is uploaded, kept for a new screen, and drawn from the next
+    /// at the same path; a failed path (`update.failures`, or a new version the atlas
+    /// refuses) keeps its previous version; a path in neither list is dropped. The new atlas is uploaded, kept for a new screen, and drawn from the next
     /// frame. Returns a warning per failure (`<path>: <cause>, keeping the previous
     /// version`, or `; the texture is left out` without a previous version), and one per
     /// texture the atlas leaves out. Never touches the simulation.
     pub(crate) fn replace_textures(&mut self, update: &ProjectTextures) -> Vec<String> {
         let mut warnings = Vec::new();
-        let mut next = Vec::new();
-        for texture in &update.textures {
-            let (_, path, png, meta) = texture;
-            let previous = self
-                .textures
-                .get(path)
-                .filter(|previous| *previous != texture);
-            match previous.map(|previous| (previous, frames_of(png, meta))) {
-                Some((previous, Err(error))) => {
-                    warnings.push(format!("{path}: {error}, keeping the previous version"));
-                    next.push(previous.clone());
-                }
-                _ => next.push(texture.clone()),
-            }
-        }
+        let mut next = update.textures.clone();
         for failure in &update.failures {
             match self.textures.get(&failure.path) {
                 Some(previous) => {
@@ -398,7 +383,30 @@ impl Display {
             warnings.push("no GPU device to draw the changed textures with".to_string());
             return warnings;
         };
-        let (atlas, textures) = pack_textures(next, renderer.max_page_side());
+        let max_page_side = renderer.max_page_side();
+        let (mut atlas, mut textures) = pack_textures(&next, max_page_side);
+        // A new version the atlas refuses: its previous version, which packed, is drawn.
+        let mut kept = false;
+        for error in &atlas.errors {
+            let Some(path) = error.path() else { continue };
+            let (Some(previous), Some(texture)) = (
+                self.textures.get(path),
+                next.iter_mut().find(|texture| texture.1 == path),
+            ) else {
+                continue;
+            };
+            if texture != previous {
+                warnings.push(format!(
+                    "{path}: {}, keeping the previous version",
+                    error.cause()
+                ));
+                *texture = previous.clone();
+                kept = true;
+            }
+        }
+        if kept {
+            (atlas, textures) = pack_textures(&next, max_page_side);
+        }
         warnings.extend(atlas.errors.iter().map(ToString::to_string));
         match renderer.set_atlas(&atlas) {
             // The next frame finds the loss and opens a new screen with this atlas.
@@ -553,7 +561,7 @@ impl Display {
 /// Packs `textures` into pages of at most `max_page_side`, with the textures that packed, by
 /// path.
 fn pack_textures(
-    textures: Vec<ProjectTexture>,
+    textures: &[ProjectTexture],
     max_page_side: u32,
 ) -> (Atlas, BTreeMap<String, ProjectTexture>) {
     let sources: Vec<TextureSource<'_>> = textures
@@ -567,9 +575,9 @@ fn pack_textures(
         .collect();
     let atlas = pack(&sources, max_page_side);
     let packed = textures
-        .into_iter()
+        .iter()
         .filter(|(_, path, ..)| !atlas.errors.iter().any(|error| error.path() == Some(path)))
-        .map(|texture| (texture.1.clone(), texture))
+        .map(|texture| (texture.1.clone(), texture.clone()))
         .collect();
     (atlas, packed)
 }
@@ -1119,12 +1127,19 @@ mod tests {
 
     /// A 4 by 4 PNG of one colour.
     fn solid(color: [u8; 4]) -> Vec<u8> {
+        sized(color, 4, 4)
+    }
+
+    /// A `width` by `height` PNG of one colour.
+    fn sized(color: [u8; 4], width: u32, height: u32) -> Vec<u8> {
         let mut bytes = Vec::new();
-        let mut encoder = png::Encoder::new(&mut bytes, 4, 4);
+        let mut encoder = png::Encoder::new(&mut bytes, width, height);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
         let mut writer = encoder.write_header().unwrap();
-        writer.write_image_data(&color.repeat(16)).unwrap();
+        writer
+            .write_image_data(&color.repeat((width * height) as usize))
+            .unwrap();
         writer.finish().unwrap();
         bytes
     }
@@ -1220,6 +1235,28 @@ mod tests {
         let warnings = display.replace_textures(&update(vec![hero(solid(BLUE))], Vec::new()));
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(centre(&mut display, &runner), BLUE);
+    }
+
+    #[test]
+    fn a_replacement_that_does_not_pack_keeps_the_previous_texture() {
+        let opened = Rc::new(RefCell::new(Vec::new()));
+        let mut display = textured(&[hero(solid(RED))], &opened);
+        let runner = still_game();
+        // Decoded and cut, but wider than any page once extruded.
+        let wide = sized(BLUE, 4096, 1);
+        let warnings = display.replace_textures(&update(vec![hero(wide)], Vec::new()));
+        let [warning] = warnings.as_slice() else {
+            panic!("{warnings:?}")
+        };
+        assert!(
+            warning.starts_with("hero.png: a 4096x1 frame with its 1-pixel extrusion"),
+            "{warning}"
+        );
+        assert!(
+            warning.ends_with(", keeping the previous version"),
+            "{warning}"
+        );
+        assert_eq!(centre(&mut display, &runner), RED);
     }
 
     #[test]

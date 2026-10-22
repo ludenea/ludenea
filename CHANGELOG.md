@@ -55,8 +55,9 @@ hash, those of the golden trace and replays included.
 - `ludenea_runtime::native::play` repacks the textures that change on disk while a game
   plays, at most once per frame: `PlayOptions::watch` names the scene and project folder whose
   textures `native::watch::TextureWatch` watches (debounced, `.png` and `.png.meta` files
-  only). A texture whose new version cannot be read, whose meta is invalid, or whose PNG
-  cannot be decoded or cut into frames keeps its previous version, with a warning
+  only). A texture whose new version cannot be read, whose meta is invalid, or that the
+  atlas refuses (a PNG that cannot be decoded, cut into frames, or fitted on a page) keeps
+  its previous version, with a warning
   (`<path>: <cause>, keeping the previous version`); a texture removed from the project is
   dropped. The simulation, its state hashes and the replay never see a reload.
   `RuntimeError::Watch` reports a watcher that cannot start, which `play` writes as a
