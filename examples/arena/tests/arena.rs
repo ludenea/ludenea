@@ -30,8 +30,8 @@ fn asset_id_refuses_what_is_not_an_identifier() {
     assert_eq!(asset_id(&"f".repeat(33)), None);
 }
 
-/// The arena scene for `players` players, plus a static box of half extents `half` at
-/// `centre`: the scene has no colliders until its level is built.
+/// The arena scene for `players` players, its level's colliders replaced by a static box of
+/// half extents `half` at each `centre`, so each test sets the geometry its fighters meet.
 fn arena(players: usize, boxes: &[(Vec2, Vec2)]) -> Simulation {
     let scene = std::fs::read_to_string(SCENE).expect("the scene is committed");
     let assets = project_assets(Path::new(SCENE), None).expect("the project's assets read");
@@ -41,6 +41,13 @@ fn arena(players: usize, boxes: &[(Vec2, Vec2)]) -> Simulation {
         .unwrap_or_else(|error| panic!("{error}"));
     simulation.set_players(players);
     let world = simulation.world_mut();
+    let level: Vec<Entity> = world
+        .entities()
+        .filter(|&entity| world.get::<Collider>(entity).is_some())
+        .collect();
+    for entity in level {
+        world.despawn(entity).unwrap();
+    }
     for &(centre, half) in boxes {
         let entity = world.spawn();
         world
