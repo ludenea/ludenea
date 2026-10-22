@@ -395,14 +395,40 @@ fn validate_refuses_a_layout_whose_worst_packet_does_not_fit() {
         let error = s
             .validate()
             .expect_err("the worst packet exceeds 1200 bytes");
-        let SettingsError::PacketTooLarge { worst, max } = error else {
+        let SettingsError::PacketTooLarge { peer, worst, max } = error else {
             panic!("unexpected refusal: {error}");
         };
-        assert_eq!((worst, max), (expected, MAX_PACKET_BYTES));
+        assert_eq!((peer, worst, max), (PeerId(0), expected, MAX_PACKET_BYTES));
         let text = error.to_string();
         assert!(
             text.contains(&expected.to_string()) && text.contains("1200"),
             "{text}"
+        );
+    }
+}
+
+#[test]
+fn every_peer_refuses_a_layout_another_peer_cannot_send() {
+    // Peer 1 owns three players and cannot send its worst packet; peer 0 owns one and could.
+    let mut s = settings(&[0, 1, 1, 1]);
+    s.identity.rules.rollback_window = 11;
+    for local in [0, 1] {
+        s.local = PeerId(local);
+        let error = s
+            .validate()
+            .expect_err("peer 1's worst packet exceeds 1200 bytes");
+        assert_eq!(
+            error,
+            SettingsError::PacketTooLarge {
+                peer: PeerId(1),
+                worst: 1204,
+                max: MAX_PACKET_BYTES
+            }
+        );
+        assert_eq!(
+            error.to_string(),
+            "the worst-case packet of peer 1 takes 1204 bytes, more than the 1200 bytes of one \
+             packet: fewer players per peer, a smaller rollback_window or input_delay fit"
         );
     }
 }

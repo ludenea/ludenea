@@ -139,12 +139,17 @@ pub enum SettingsError {
         rollback_window: u32,
         input_delay: u32,
     },
-    /// The largest packet this peer may have to send exceeds [`MAX_PACKET_BYTES`].
+    /// The largest packet `peer` may have to send exceeds [`MAX_PACKET_BYTES`]. Every peer
+    /// checks every peer's layout, so all of them refuse the same settings.
     #[error(
-        "the worst-case packet of this layout takes {worst} bytes, more than the {max} bytes \
-         of one packet: fewer local players, a smaller rollback_window or input_delay fit"
+        "the worst-case packet of {peer} takes {worst} bytes, more than the {max} bytes of one \
+         packet: fewer players per peer, a smaller rollback_window or input_delay fit"
     )]
-    PacketTooLarge { worst: usize, max: usize },
+    PacketTooLarge {
+        peer: PeerId,
+        worst: usize,
+        max: usize,
+    },
     /// `hash_interval` is zero.
     #[error("hash_interval is {value}, expected at least 1")]
     HashInterval { value: u32 },
@@ -220,13 +225,16 @@ impl SessionSettings {
                 input_delay: rules.input_delay,
             });
         }
-        if let Some(packet) = self.worst_case_packet() {
-            let worst = packet.encode().len();
-            if worst > MAX_PACKET_BYTES {
-                return Err(SettingsError::PacketTooLarge {
-                    worst,
-                    max: MAX_PACKET_BYTES,
-                });
+        for peer in (0..=highest_owner.0).map(PeerId) {
+            if let Some(packet) = self.worst_case_packet(peer) {
+                let worst = packet.encode().len();
+                if worst > MAX_PACKET_BYTES {
+                    return Err(SettingsError::PacketTooLarge {
+                        peer,
+                        worst,
+                        max: MAX_PACKET_BYTES,
+                    });
+                }
             }
         }
         if rules.hash_interval == 0 {
@@ -247,11 +255,12 @@ impl SessionSettings {
         Ok(())
     }
 
-    /// The largest packet this peer sends while the match runs, or `None` without a remote
+    /// The largest packet `peer` sends while the match runs, or `None` without a remote
     /// player, as nothing is ever sent. One packet holds, each field at its largest encoding
-    /// for the whole life of a match: the inputs of every local player at [`MAX_INPUT_BYTES`]
-    /// over `rollback_window + input_delay + 1` ticks, the acknowledgment of every remote
-    /// player, a quality request and its reply, one hash report, and a goodbye.
+    /// for the whole life of a match: the inputs of every player `peer` owns at
+    /// [`MAX_INPUT_BYTES`] over `rollback_window + input_delay + 1` ticks, the acknowledgment
+    /// of every other player, a quality request and its reply, one hash report, and a
+    /// goodbye.
     ///
     /// Two rules of the sender keep every packet within this bound: a session that has ended
     /// sends no inputs, so a packet carrying an `End` is small and `End` is not counted; and
@@ -259,10 +268,10 @@ impl SessionSettings {
     /// in a later packet. The handshake's `Hello` travels alone, and fits whatever the
     /// identity, as the engine string and the players are bounded. Expects the rules to have
     /// passed the tick count check.
-    fn worst_case_packet(&self) -> Option<Packet> {
+    fn worst_case_packet(&self, peer: PeerId) -> Option<Packet> {
         let players = &self.identity.players;
-        let local = players.iter().filter(|owner| **owner == self.local).count();
-        let remote = players.len() - local;
+        let owned = players.iter().filter(|owner| **owner == peer).count();
+        let remote = players.len() - owned;
         if remote == 0 {
             return None;
         }
@@ -270,7 +279,7 @@ impl SessionSettings {
         // Checked by the caller to be at most MAX_TICKS_PER_MESSAGE.
         let ticks = rules.rollback_window as usize + rules.input_delay as usize + 1;
         let player = u8::MAX;
-        let mut messages: Vec<Message> = (0..local)
+        let mut messages: Vec<Message> = (0..owned)
             .map(|_| Message::Inputs {
                 player,
                 first_tick: u64::MAX,

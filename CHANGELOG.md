@@ -934,8 +934,9 @@ hash, those of the golden trace and replays included.
   bytes included), more than 16 messages, an input message with no tick or more than 32, or
   an input over 24 bytes (each naming the player), more than 4 players in an `Ack` or a
   `Hello` (naming which), or an engine string over 64 bytes. `SessionSettings::validate` refuses an engine
-  string over 64 bytes (`SettingsError::EngineTooLong`) and a layout whose largest packet
-  does not fit in 1200 bytes (`SettingsError::PacketTooLarge`, naming both sizes).
+  string over 64 bytes (`SettingsError::EngineTooLong`) and a layout where the largest
+  packet of any peer does not fit in 1200 bytes (`SettingsError::PacketTooLarge`, naming
+  the peer and both sizes), so every peer refuses the same settings.
 - Meta 2: `Texture(TextureMeta)` describes how a PNG is cut into frames (pixels per unit,
   an optional frame grid, a pivot, and a filter); version 1 metas still read. A `.png`
   without a meta gets one with the defaults (16 pixels per unit, no grid, centred pivot,
