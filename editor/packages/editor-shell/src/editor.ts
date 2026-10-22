@@ -249,6 +249,7 @@ export function createEditor(options: {
       (listener) => gameListeners.add(listener),
       (dispose) => registry.own(dispose),
       editorConsole.report,
+      edit,
     ),
     panels: { register: (panel) => registry.panels.register(panel.id, panel) },
     inspectors: {
@@ -325,7 +326,7 @@ export function createEditor(options: {
     timeline,
     document: documents.store,
     branches: createBranchStore(() => control, timeline),
-    assets: createAssetAccess(() => control, options.project),
+    assets: createAssetAccess(() => control, options.project, edit),
     textures: createTextureAccess(options.project, editorConsole.report, options.textureFrames),
     console: editorConsole,
     onGameChanged(listener) {

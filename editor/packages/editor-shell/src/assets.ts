@@ -1,4 +1,4 @@
-import { ProtocolFailure, type AssetId, type ControlClient, type FileEntry, type JsonValue, type PathSegment, type ProjectClient, type TypeSchema } from "@ludenea/control-client";
+import { ProtocolFailure, type AssetId, type Command, type ControlClient, type FileEntry, type JsonValue, type PathSegment, type ProjectClient, type TypeSchema } from "@ludenea/control-client";
 
 /**
  * Stable asset type name to value type. Empty here; a project's generated `game.d.ts`
@@ -10,6 +10,7 @@ export interface AssetTypes {}
 export interface AssetAccess {
   /** The asset's value; fails when it has no exact JSON form (read RON through `control`). */
   get<N extends keyof AssetTypes>(id: AssetId): Promise<AssetTypes[N]>;
+  /** Sets the field at `path` of the asset through `editor.edit`: one undo step its edit listeners hear. */
   setField(id: AssetId, path: PathSegment[], value: unknown): Promise<void>;
   /**
    * Creates the data asset file `path` holding the default value of `type`; a type without a
@@ -61,7 +62,11 @@ export function nameAssets(text: string, paths: [AssetId, string][]): string {
   });
 }
 
-export function createAssetAccess(control: () => ControlClient | null, project: ProjectClient): AssetAccess {
+export function createAssetAccess(
+  control: () => ControlClient | null,
+  project: ProjectClient,
+  edit: (command: Extract<Command, { type: "set_asset_field" }>) => Promise<unknown>,
+): AssetAccess {
   const game = () => {
     const current = control();
     if (!current) throw new Error("no game is connected");
@@ -74,7 +79,7 @@ export function createAssetAccess(control: () => ControlClient | null, project: 
       return value.value as never;
     },
     async setField(id, path, value) {
-      await game().request({ type: "set_asset_field", id, path, value: value as JsonValue });
+      await edit({ type: "set_asset_field", id, path, value: value as JsonValue });
     },
     async create(type, path) {
       const current = game();

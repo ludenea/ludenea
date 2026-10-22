@@ -1,4 +1,4 @@
-import type { ComponentValue, ControlClient, Entity, JsonValue, PathSegment } from "@ludenea/control-client";
+import type { Command, ComponentValue, ControlClient, Entity, JsonValue, PathSegment } from "@ludenea/control-client";
 import type { EditorConsole } from "./console";
 import type { Disposable } from "./plugin";
 
@@ -12,6 +12,7 @@ export interface ComponentTypes {}
 export interface EntityAccess {
   /** The component's value, or undefined when absent or without an exact JSON form (read RON through `control`). */
   get<N extends keyof ComponentTypes>(entity: Entity, component: N): Promise<ComponentTypes[N] | undefined>;
+  /** Sets the field at `path` of the component through `editor.edit`: one undo step its edit listeners hear. */
   set<N extends keyof ComponentTypes>(entity: Entity, component: N, path: PathSegment[], value: unknown): Promise<void>;
   /**
    * Changed components (JSON values only) and removed component names, across game restarts;
@@ -37,6 +38,7 @@ export function createEntityAccess(
   onGameChanged: (listener: (control: ControlClient | null) => void) => void,
   own: (dispose: () => void) => Disposable,
   report: EditorConsole["report"],
+  edit: (command: Extract<Command, { type: "set_field" }>) => Promise<unknown>,
 ): EntityAccess {
   const watches = new Set<Watch>();
   let stopEvents: (() => void)[] = [];
@@ -83,7 +85,7 @@ export function createEntityAccess(
     },
     async set(entity, component, path, value) {
       const target = { type: "component" as const, entity, component: component as string };
-      await game().request({ type: "set_field", target, path, value: value as JsonValue });
+      await edit({ type: "set_field", target, path, value: value as JsonValue });
     },
     watch(entity, listener, despawned) {
       subscription("subscribe", entity);

@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
-import { logged, settle, testGame, testHost } from "./support";
+import { logged, settle, testGame, testHost, timeline } from "./support";
 
 type Pose = { position: { x: number; y: number }; rotation: { cos: number; sin: number } };
 
@@ -46,6 +46,30 @@ describe("entities", () => {
         value: 5,
       },
     ]);
+  });
+
+  it("entities_set_is_an_edit_its_listeners_hear", async () => {
+    const { editor, setControl } = await testHost();
+    const { control } = await testGame((command) => (command.type === "get_timeline" ? timeline() : { type: "done" }));
+    setControl(control);
+    const edited = vi.fn();
+    editor.onEdited(edited);
+    const path = [{ type: "field" as const, name: "position" }, { type: "field" as const, name: "x" }];
+
+    await editor.entities.set(entity, "ludenea::Pose", path, 5);
+
+    expect(edited).toHaveBeenCalledExactlyOnceWith({ type: "set_field", target: { type: "component", entity, component: "ludenea::Pose" }, path, value: 5 });
+  });
+
+  it("entities_set_is_refused_while_the_game_resimulates", async () => {
+    const { editor, setControl } = await testHost();
+    const { control, sent } = await testGame((command) => (command.type === "get_timeline" ? timeline() : { type: "done" }));
+    setControl(control);
+    const { type: _, ...shown } = timeline();
+    editor.timeline.setState({ timeline: { ...shown, resimulating: true } });
+
+    await expect(editor.entities.set(entity, "ludenea::Pose", [], pose)).rejects.toThrow("the game is resimulating; edit once it finishes");
+    expect(own(sent)).toEqual([]);
   });
 
   it("entities_watch_follows_one_entity_across_games", async () => {

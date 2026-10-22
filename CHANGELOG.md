@@ -872,7 +872,9 @@ hash, those of the golden trace and replays included.
   `batch` (one alone as itself, with its own reply; none not at all, resolving as an empty
   batch does); it takes only the `BatchableCommand`s a batch holds (spawn, despawn, insert
   or remove a component, set a field, paint tiles). `Editor.onEdited(listener)` hears every
-  edit the game accepted. The built-in panels edit through them.
+  edit the game accepted. The built-in panels edit through them, and so do
+  `Editor.entities.set` and `Editor.assets.setField`: their edits refresh the timeline,
+  reach the `onEdited` listeners, and are refused while the game resimulates.
 - `Editor.viewport.tools.register(tool)` adds a `ViewportTool`: while it is the active
   tool (`viewport.setTool(id)`, read from the `viewport.activeTool` store, `null` for the
   built-in select and move), the viewport gives it the pointer's presses, moves, and

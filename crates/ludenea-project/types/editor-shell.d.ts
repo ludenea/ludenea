@@ -37,6 +37,7 @@ interface AssetTypes {
 interface AssetAccess {
     /** The asset's value; fails when it has no exact JSON form (read RON through `control`). */
     get<N extends keyof AssetTypes>(id: AssetId): Promise<AssetTypes[N]>;
+    /** Sets the field at `path` of the asset through `editor.edit`: one undo step its edit listeners hear. */
     setField(id: AssetId, path: PathSegment[], value: unknown): Promise<void>;
     /**
      * Creates the data asset file `path` holding the default value of `type`; a type without a
@@ -247,6 +248,7 @@ interface ComponentTypes {
 interface EntityAccess {
     /** The component's value, or undefined when absent or without an exact JSON form (read RON through `control`). */
     get<N extends keyof ComponentTypes>(entity: Entity, component: N): Promise<ComponentTypes[N] | undefined>;
+    /** Sets the field at `path` of the component through `editor.edit`: one undo step its edit listeners hear. */
     set<N extends keyof ComponentTypes>(entity: Entity, component: N, path: PathSegment[], value: unknown): Promise<void>;
     /**
      * Changed components (JSON values only) and removed component names, across game restarts;
