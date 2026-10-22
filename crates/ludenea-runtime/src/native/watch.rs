@@ -160,8 +160,17 @@ mod tests {
         )
         .unwrap();
         fs::write(folder.join("hero.png"), b"png bytes").unwrap();
-        let update = next(&mut watch).expect("the change is reported");
-        let textures = update.unwrap().textures;
+        // The two writes may settle in two batches, the first read before the PNG exists:
+        // the readings are taken until one holds the texture.
+        let start = now();
+        let textures = loop {
+            assert!(start.elapsed() < PATIENCE, "the texture is never reported");
+            let update = next(&mut watch).expect("the change is reported");
+            let textures = update.unwrap().textures;
+            if !textures.is_empty() {
+                break textures;
+            }
+        };
         let [(_, path, bytes, _)] = textures.as_slice() else {
             panic!("{textures:?}");
         };
