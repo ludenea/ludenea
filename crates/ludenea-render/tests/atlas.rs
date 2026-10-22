@@ -764,3 +764,57 @@ fn refused_textures_are_not_written() {
     assert_eq!(read.regions.keys().collect::<Vec<_>>(), [&(AssetId(1), 0)]);
     assert!(read.errors.is_empty());
 }
+
+#[test]
+fn an_error_names_the_texture_then_its_cause() {
+    let errors = [
+        TextureError::Decode {
+            id: AssetId(1),
+            path: Some("art/hero.png".to_string()),
+            reason: "truncated".to_string(),
+        },
+        TextureError::Grid {
+            id: AssetId(1),
+            path: Some("art/hero.png".to_string()),
+            reason: "the grid does not fit".to_string(),
+        },
+        TextureError::TooLarge {
+            id: AssetId(1),
+            path: Some("art/hero.png".to_string()),
+            size: (11, 4),
+            max: 12,
+        },
+        TextureError::Meta {
+            id: AssetId(1),
+            path: Some("art/hero.png".to_string()),
+            reason: "pixels_per_unit must be at least 1".to_string(),
+        },
+        TextureError::Duplicate {
+            id: AssetId(1),
+            path: Some("art/hero.png".to_string()),
+        },
+    ];
+    let causes = [
+        "cannot decode the PNG: truncated",
+        "the grid does not fit",
+        "a 11x4 frame with its 1-pixel extrusion does not fit a 12x12 atlas page",
+        "invalid texture meta: pixels_per_unit must be at least 1",
+        "another texture has the same identifier, so none of them is packed; give each its own meta",
+    ];
+    for (error, cause) in errors.iter().zip(causes) {
+        assert_eq!(error.cause(), cause);
+        assert_eq!(
+            error.to_string(),
+            format!("texture {} (`art/hero.png`): {cause}", AssetId(1))
+        );
+    }
+    let unnamed = TextureError::Duplicate {
+        id: AssetId(1),
+        path: None,
+    };
+    assert!(
+        unnamed
+            .to_string()
+            .starts_with(&format!("texture {}: another", AssetId(1)))
+    );
+}

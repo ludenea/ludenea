@@ -55,10 +55,9 @@ pub struct Region {
     pub filter: Filter,
 }
 
-/// Why a texture was not packed.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+/// Why a texture was not packed. Shown as "texture `<id>` (`<path>`): " then `cause`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TextureError {
-    #[error("{}: cannot decode the PNG: {reason}", named(*id, path))]
     Decode {
         id: AssetId,
         path: Option<String>,
@@ -66,25 +65,17 @@ pub enum TextureError {
     },
     /// The meta's grid does not cut the image into whole frames; `reason` is
     /// `FramesError::Grid`'s, naming the grid and the image sizes.
-    #[error("{}: {reason}", named(*id, path))]
     Grid {
         id: AssetId,
         path: Option<String>,
         reason: String,
     },
-    #[error(
-        "{}: a {}x{} frame with its 1-pixel extrusion does not fit a {max}x{max} atlas page",
-        named(*id, path),
-        size.0,
-        size.1
-    )]
     TooLarge {
         id: AssetId,
         path: Option<String>,
         size: (u32, u32),
         max: u32,
     },
-    #[error("{}: invalid texture meta: {reason}", named(*id, path))]
     Meta {
         id: AssetId,
         path: Option<String>,
@@ -92,12 +83,17 @@ pub enum TextureError {
     },
     /// Another source has the same identifier, so a sprite naming it could mean either: none
     /// of them is packed.
-    #[error(
-        "{}: another texture has the same identifier, so none of them is packed; give each its own meta",
-        named(*id, path)
-    )]
     Duplicate { id: AssetId, path: Option<String> },
 }
+
+impl std::fmt::Display for TextureError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (id, path) = self.origin();
+        write!(formatter, "{}: {}", named(id, path), self.cause())
+    }
+}
+
+impl std::error::Error for TextureError {}
 
 impl TextureError {
     /// The identifier of the refused texture.
@@ -108,6 +104,22 @@ impl TextureError {
     /// The project path of the refused texture, when known.
     pub fn path(&self) -> Option<&str> {
         self.origin().1.as_deref()
+    }
+
+    /// Why the texture was refused, without naming it.
+    pub fn cause(&self) -> String {
+        match self {
+            Self::Decode { reason, .. } => format!("cannot decode the PNG: {reason}"),
+            Self::Grid { reason, .. } => reason.clone(),
+            Self::TooLarge { size, max, .. } => format!(
+                "a {}x{} frame with its 1-pixel extrusion does not fit a {max}x{max} atlas page",
+                size.0, size.1
+            ),
+            Self::Meta { reason, .. } => format!("invalid texture meta: {reason}"),
+            Self::Duplicate { .. } => "another texture has the same identifier, so none of them \
+                 is packed; give each its own meta"
+                .to_string(),
+        }
     }
 
     fn origin(&self) -> (AssetId, &Option<String>) {

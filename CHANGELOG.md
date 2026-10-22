@@ -71,6 +71,8 @@ hash, those of the golden trace and replays included.
   `render` and `play` print each failure as a warning, as before, and a web build lists
   them among its texture errors. The new `project_folders(scene, project)` gives the
   folders `project_assets` and `project_textures` scan.
+- `TextureError::cause` gives why a texture was refused without naming it: its message is
+  the texture's name then that cause.
 - Breaking: `TextureError::Grid` holds the `reason` (`FramesError::Grid`'s message) instead
   of the `image` size and the `grid`; its message is unchanged.
 - `WebRenderer::push_frame_bytes(bytes, overlay)` pushes a frame in the control protocol's
