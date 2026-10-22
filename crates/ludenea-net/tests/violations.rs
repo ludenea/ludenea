@@ -8,10 +8,12 @@ use ludenea_net::{
     MatchIdentity, MatchRules, Message, Packet, PeerId, Session, SessionError, SessionState,
     ViolationRule,
 };
-use support::{Harness, handshake, identity, sessions, settings};
+use support::{Harness, Model, handshake, identity, sessions, settings};
 
 const ONE_SECOND: u64 = 1_000_000;
 const NOW: u64 = 1_000;
+/// The default `hash_interval`.
+const HASH_INTERVAL: u64 = 30;
 
 /// Peer 0 of a running two-peer match at tick 0, with the default rules.
 fn peer_zero() -> Session {
@@ -265,7 +267,7 @@ fn ack_never_sent_is_a_violation() {
         session.state(),
         violation(1, Some(0), Some(4), ViolationRule::AckNeverSent)
     );
-    // No hash report was ever sent.
+    // No hash report was sent: tick 30 is not confirmed yet, and 7 is not a reported tick.
     let mut session = sent();
     from_peer_one(
         &mut session,
@@ -423,14 +425,14 @@ fn ticks_near_u64_max_never_panic() {
             },
             SessionState::Running,
         ),
-        // Read by the layers built on the inputs; ignored for now, and never a panic.
         (
             Message::Hash {
                 tick: u64::MAX,
                 hash: u64::MAX,
             },
-            SessionState::Running,
+            violation(1, None, Some(u64::MAX), ViolationRule::HashBeyondHorizon),
         ),
+        // Not read yet, and never a panic.
         (
             Message::Goodbye {
                 last_tick: u64::MAX,
@@ -441,7 +443,21 @@ fn ticks_near_u64_max_never_panic() {
             Message::End {
                 reason: EndNotice::LocalFailure { tick: u64::MAX },
             },
-            SessionState::Running,
+            SessionState::Ended(EndReason::LocalFailure { tick: u64::MAX }),
+        ),
+        (
+            Message::End {
+                reason: EndNotice::Desync {
+                    tick: u64::MAX,
+                    peer: PeerId(u8::MAX),
+                },
+            },
+            SessionState::Ended(EndReason::Desync {
+                tick: u64::MAX,
+                peer: PeerId(1),
+                local: None,
+                remote: None,
+            }),
         ),
     ];
     for (message, state) in cases {
@@ -523,8 +539,13 @@ fn fuzz_message(rng: &mut Rng, tick: u64, identity: &MatchIdentity) -> Message {
             tick: fuzz_tick(rng, tick),
         },
         7 => match rng.range_u32(0, 3) {
+            // Often a reported tick near the receiver's, which a forged hash makes a desync.
             0 => Message::Hash {
-                tick: fuzz_tick(rng, tick),
+                tick: if rng.range_u32(0, 2) == 0 {
+                    (tick / HASH_INTERVAL + u64::from(rng.range_u32(0, 2))) * HASH_INTERVAL
+                } else {
+                    fuzz_tick(rng, tick)
+                },
                 hash: fuzz_u64(rng),
             },
             1 => Message::Goodbye {
@@ -560,19 +581,64 @@ fn fuzz_message(rng: &mut Rng, tick: u64, identity: &MatchIdentity) -> Message {
 /// session stays as it is or ends with a violation of the sender, or, for a `Hello` of another
 /// view of the match in a packet of this match, with a mismatch, which is how this build ends
 /// on a peer that changes its identity. Quality messages end nothing: a reply that answers no
-/// request is dropped, and a report moves at most the skips. Hash, goodbye and end messages
-/// are ignored by this build: the layers that read them extend this list with their own
-/// endings.
+/// request is dropped, and a report moves at most the skips. An `End` of this match ends it
+/// with the reason it tells, a desync naming the sender; and a hash report of the sender, at
+/// its tick or one received earlier, with a desync against the sender, when its state hash of
+/// that tick is known. Goodbye messages are not read yet.
 fn assert_allowed(before: &SessionState, after: &SessionState, from: PeerId, packet: &Packet) {
     if after == before {
         return;
     }
-    let other_hello = packet.match_id == 1
+    let ours = packet.match_id == 1;
+    let other_hello = ours
         && packet.messages.iter().any(|message| match message {
             Message::Hello { identity: other } => *other != identity(&[0, 1]),
             _ => false,
         });
+    let relayed = |reason: &EndReason| {
+        ours && packet
+            .messages
+            .iter()
+            .any(|message| match (message, reason) {
+                (
+                    Message::End {
+                        reason: EndNotice::Desync { tick, .. },
+                    },
+                    EndReason::Desync {
+                        tick: ended, peer, ..
+                    },
+                ) => tick == ended && *peer == from,
+                (
+                    Message::End {
+                        reason: EndNotice::Lost { peer },
+                    },
+                    EndReason::Lost { peer: ended },
+                ) => peer == ended,
+                (
+                    Message::End {
+                        reason: EndNotice::LocalFailure { tick },
+                    },
+                    EndReason::LocalFailure { tick: ended },
+                ) => tick == ended,
+                _ => false,
+            })
+    };
     match (before, after) {
+        (SessionState::Running, SessionState::Ended(reason)) if relayed(reason) => {}
+        // A forged report waits for the local hash, so the desync may come from a hash report
+        // an earlier packet carried: only its sender and a known pair of hashes are checked.
+        (
+            SessionState::Running,
+            SessionState::Ended(EndReason::Desync {
+                peer,
+                local: Some(local),
+                remote: Some(remote),
+                ..
+            }),
+        ) if ours => {
+            assert_eq!(*peer, from, "{packet:?}");
+            assert_ne!(local, remote, "{packet:?}");
+        }
         (SessionState::Running, SessionState::Ended(EndReason::Violation { peer, .. })) => {
             assert_eq!(*peer, from, "{packet:?}");
         }
@@ -593,13 +659,20 @@ fn deliver(session: &mut Session, from: PeerId, packet: &Packet, now: u64) {
     session.events();
 }
 
-/// One frame of `session` at `frame`: an input for its player, an advance, the packet to the
-/// other peer.
-fn honest_frame(session: &mut Session, player: u8, frame: u64, now: u64) -> Vec<Packet> {
+/// One frame of `session` at `frame`: an input for its player, an advance executed by `model`,
+/// which answers the hashes asked, the packet to the other peer.
+fn honest_frame(
+    session: &mut Session,
+    model: &mut Model,
+    player: u8,
+    frame: u64,
+    now: u64,
+) -> Vec<Packet> {
     if session.state() == SessionState::Running {
         let input = vec![u8::try_from(frame % 3).unwrap()];
         session.add_local_input(player, input).unwrap();
-        session.advance(now).unwrap();
+        let requests = session.advance(now).unwrap();
+        model.execute_for(session, &requests);
     } else {
         assert_eq!(session.advance(now), Err(SessionError::NotRunning));
     }
@@ -620,6 +693,7 @@ fn fuzz_receive_never_panics() {
         let mut rng = Rng::new(seed, 0);
         let mut pair = handshake(sessions(2));
         let mut frames = [0u64; 2];
+        let mut models = [Model::default(), Model::default()];
         // In sixteenths, how often a frame also brings a hostile packet: some seeds never do.
         let hostility = [0, 1, 4, 8][usize::try_from(rng.range_u32(0, 4)).unwrap()];
         // Some seeds have peer 1 never acknowledge, its packets otherwise valid.
@@ -629,7 +703,9 @@ fn fuzz_receive_never_panics() {
             // Valid traffic both ways, which the hostile packets interleave with.
             for (local, other) in [(0, 1), (1, 0)] {
                 let player = u8::try_from(local).unwrap();
-                for mut packet in honest_frame(&mut pair[local], player, frames[local], now) {
+                let model = &mut models[local];
+                for mut packet in honest_frame(&mut pair[local], model, player, frames[local], now)
+                {
                     if local == 1 && never_acknowledges {
                         packet
                             .messages
@@ -663,6 +739,14 @@ fn fuzz_receive_never_panics() {
         outcomes.insert(match pair[0].state() {
             SessionState::Ended(EndReason::Violation { rule, .. }) => format!("{rule:?}"),
             SessionState::Ended(EndReason::Mismatch { .. }) => "Mismatch".to_string(),
+            SessionState::Ended(EndReason::Desync {
+                local: Some(local),
+                remote: Some(remote),
+                ..
+            }) if local != remote => "Desync".to_string(),
+            SessionState::Ended(EndReason::Desync { .. }) => "RelayedDesync".to_string(),
+            SessionState::Ended(EndReason::Lost { .. }) => "Lost".to_string(),
+            SessionState::Ended(EndReason::LocalFailure { .. }) => "LocalFailure".to_string(),
             state => format!("{state:?}"),
         });
     }
@@ -671,9 +755,14 @@ fn fuzz_receive_never_panics() {
         "AckNeverSent",
         "BeyondHorizon",
         "ConflictingInput",
+        "Desync",
+        "HashBeyondHorizon",
         "InvalidInput",
+        "LocalFailure",
+        "Lost",
         "Mismatch",
         "NotOwner",
+        "RelayedDesync",
         "Running",
     ];
     assert_eq!(outcomes, expected.map(String::from).into(), "{outcomes:?}");

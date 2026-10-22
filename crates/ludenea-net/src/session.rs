@@ -26,6 +26,15 @@
 //! that peer; the peer answers with a `QualityReply` echoing the request's time, which gives
 //! the ping. A session ahead of the others skips ticks, GGPO style: an advance that runs no
 //! tick, so the others catch up without stalling, a few ticks at a time.
+//!
+//! Peers compare their states every `hash_interval` ticks. The `Save` of each such tick asks
+//! the caller for the state hash, which it answers with [`Session::report_hash`]; once every
+//! input below that tick is confirmed and the state was built from them, the session sends
+//! the hash to every peer until acknowledged. When every peer's hash matches, the session
+//! emits [`SessionEvent::HashMatched`] and releases the states kept for earlier reports. A
+//! difference ends the session with [`EndReason::Desync`], and an ending a session decides
+//! alone is told to the other peers through an end notice for [`END_LINGER_MICROS`], so they
+//! end for the same reason.
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -33,17 +42,19 @@ use ludenea_app::PlayerInputSpec;
 
 use crate::queue::{Confirmed, InputQueue, QueueError};
 use crate::settings::{
-    MAX_INPUT_BYTES, MAX_PACKET_BYTES, MAX_TICKS_PER_MESSAGE, MatchIdentity, PeerId,
-    SessionSettings, SettingsError,
+    MAX_INPUT_BYTES, MAX_MESSAGES_PER_PACKET, MAX_PACKET_BYTES, MAX_TICKS_PER_MESSAGE,
+    MatchIdentity, PeerId, SessionSettings, SettingsError,
 };
-use crate::wire::{Message, Packet, WireError};
+use crate::wire::{EndNotice, Message, Packet, WireError};
 
 /// The least time between two `Hello`s to the same peer while it has not welcomed this one.
 pub const HANDSHAKE_RESEND_MICROS: u64 = 100_000;
 
 /// How long a session that ended keeps telling the other peers why, so a peer that missed the
-/// cause ends for the same reason rather than by a timeout. After a mismatch, it keeps sending
-/// its `Hello`, from which every other peer finds the mismatch itself.
+/// cause ends for the same reason rather than by a timeout. After an ending it decided alone
+/// that an end notice tells of, it sends that notice to every peer, at most once a tick. After
+/// a mismatch while connecting, it keeps sending its `Hello`, from which every other peer
+/// finds the mismatch itself.
 pub const END_LINGER_MICROS: u64 = 500_000;
 
 /// The time between two `Quality` requests to the same peer while the session runs.
@@ -91,6 +102,21 @@ pub enum EndReason {
         tick: Option<u64>,
         rule: ViolationRule,
     },
+    /// The state hashes of `tick` differ: `local` is this peer's, `remote` that of `peer`. A
+    /// peer that found the difference itself holds both. A peer that learned it from the end
+    /// notice of another names the sender of the notice as `peer`, with the hashes it holds:
+    /// its own once its state of `tick` was built from confirmed inputs, and the sender's once
+    /// its report arrived.
+    Desync {
+        tick: u64,
+        peer: PeerId,
+        local: Option<u64>,
+        remote: Option<u64>,
+    },
+    /// `peer` stopped answering, as another peer's end notice told.
+    Lost { peer: PeerId },
+    /// A game failed while stepping `tick`, as the end notice of the peer it ran on told.
+    LocalFailure { tick: u64 },
 }
 
 /// A rule of the protocol no honest peer breaks, whatever the network does to its packets.
@@ -109,6 +135,9 @@ pub enum ViolationRule {
     AckNeverSent,
     /// An acknowledgment trailing this peer's inputs by more than an honest peer can.
     AckLagging,
+    /// A hash report of a tick past the local horizon plus one, which no honest peer can have
+    /// confirmed: its confirmed tick needs the local inputs.
+    HashBeyondHorizon,
 }
 
 /// Why a received packet, or one message of it, was dropped. Ordered, so the counts of
@@ -133,6 +162,16 @@ pub enum DropReason {
     /// duplicate), forgotten, or never sent. Not a violation: the network duplicates packets.
     /// Only that message is dropped: the rest of its packet is read.
     UnknownEcho,
+    /// A hash report of tick 0 or of a tick that is not a multiple of `hash_interval`: no peer
+    /// reports one. Only that message is dropped.
+    HashOffInterval,
+    /// A hash report of a tick whose report from that peer arrived already. Not a violation: a
+    /// peer resends its reports until acknowledged. Only that message is dropped.
+    HashAlreadyReceived,
+    /// A hash report that finds the reports of that peer waiting for a local hash at their
+    /// bound, `(rollback_window + input_delay) / hash_interval + 2`. Not acknowledged, so the
+    /// peer sends it again. Only that message is dropped.
+    HashBacklog,
 }
 
 /// What happened in a session since the caller last asked, for the host to act on or log.
@@ -145,19 +184,26 @@ pub enum SessionEvent {
     /// Every player's input of `tick` is confirmed: `inputs` holds one per player, in player
     /// order. Emitted by [`Session::advance`], once per tick, in tick order.
     Confirmed { tick: u64, inputs: Vec<Vec<u8>> },
+    /// Every peer's hash of the state of `tick` matched the local one. In tick order.
+    HashMatched { tick: u64 },
 }
 
 /// What the caller's simulation does for the session, in the order given.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
     /// Save the state of `tick`, before its inputs. It comes right before the first
-    /// `Advance { tick }` after it, and a `Load { tick }` loads the latest one. `hash` asks
-    /// for the state hash too; it is always `false` for now.
+    /// `Advance { tick }` after it, and a `Load { tick }` loads the latest one. `hash` is
+    /// `true` for every tick that is a positive multiple of `hash_interval`: the caller answers
+    /// with [`Session::report_hash`], and keeps the state it saved last for that tick until
+    /// `Release { tick }`.
     Save { tick: u64, hash: bool },
     /// Load the state of `tick` saved last.
     Load { tick: u64 },
     /// Step the state of `tick` to `tick + 1` with `inputs`, one per player, in player order.
     Advance { tick: u64, inputs: Vec<Vec<u8>> },
+    /// The state kept for `tick`, saved with `hash: true`, is no longer needed: a later report
+    /// matched on every peer. No `Load { tick }` follows.
+    Release { tick: u64 },
 }
 
 /// Why a call on a [`Session`] was refused. Nothing changed.
@@ -181,15 +227,19 @@ pub enum SessionError {
     /// The match reached the last tick a `u64` numbers.
     #[error("tick {tick} is the last tick of a match")]
     LastTick { tick: u64 },
+    /// A hash reported for `tick` answers no `Save { tick, hash: true }` still unanswered.
+    #[error("no Save {{ tick: {tick}, hash: true }} waits for a hash")]
+    HashNotAsked { tick: u64 },
 }
 
 /// What a session counts about one sender.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PeerStats {
-    /// The drops, by reason. A [`DropReason::UnknownEcho`] counts each dropped reply, and the
-    /// rest of its packet is still read. Every other reason counts a dropped packet once, under
-    /// the reason that stopped reading it: an `Inputs` message with a gap stops the packet there
-    /// and is the reason, even when an earlier message of the same packet came before the
+    /// The drops, by reason. A [`DropReason::UnknownEcho`] counts each dropped reply, and each
+    /// of `HashOffInterval`, `HashAlreadyReceived` and `HashBacklog` each dropped hash report:
+    /// the rest of their packet is still read. Every other reason counts a dropped packet once,
+    /// under the reason that stopped reading it: an `Inputs` message with a gap stops the packet
+    /// there and is the reason, even when an earlier message of the same packet came before the
     /// session ran; otherwise such a message makes the reason [`DropReason::BeforeRunning`].
     pub dropped: BTreeMap<DropReason, u64>,
     /// The rollbacks a misprediction of this peer's inputs caused.
@@ -242,6 +292,23 @@ struct Report {
     received_micros: u64,
 }
 
+/// A state hash the caller was asked for.
+#[derive(Debug, Default)]
+struct Asked {
+    /// The `Save { hash: true }` of the tick not answered yet.
+    unanswered: u32,
+    /// The hash of the latest answer.
+    hash: Option<u64>,
+}
+
+/// The local hash of a tick whose state was built from confirmed inputs.
+#[derive(Debug)]
+struct HashReport {
+    hash: u64,
+    /// Per remote, in the order of [`Session::remotes`], the hash it reported for the tick.
+    received: Vec<Option<u64>>,
+}
+
 /// What this session knows of another peer.
 #[derive(Debug)]
 struct Remote {
@@ -276,6 +343,16 @@ struct Remote {
     reply_due: bool,
     /// The latest report counted.
     report: Option<Report>,
+    /// The hash reports of the peer that wait for the local hash of their tick, at most
+    /// [`Session::hash_backlog`].
+    hashes: BTreeMap<u64, u64>,
+    /// The highest tick of a hash report received from the peer, `0` for none: what the `Ack`
+    /// to it acknowledges.
+    hashes_received: u64,
+    /// The highest tick of a local hash report the peer acknowledged, `0` for none.
+    hashes_acked: u64,
+    /// The highest tick of a local hash report sent to the peer, `0` for none.
+    hashes_sent: u64,
     /// Twice the corrections of the latest fresh reports, at most [`SYNC_MIN_REPORTS`]: each
     /// `local_advantage - remote_advantage`, the ticks this session should skip by the report
     /// being half of it. Kept doubled so their mean is rounded once, not each of them. Cleared
@@ -309,6 +386,24 @@ pub struct Session {
     ended_micros: Option<u64>,
     /// Every other peer, in id order.
     remotes: Vec<Remote>,
+    /// The hashes asked of the caller, by tick, until the tick's hash is final and every save
+    /// of it answered.
+    asked: BTreeMap<u64, Asked>,
+    /// The final local hashes, by tick: sent to every peer until acknowledged, compared with
+    /// every peer's, and forgotten once matched and acknowledged by every peer.
+    reports: BTreeMap<u64, HashReport>,
+    /// The highest tick whose local hash is final, `0` for none.
+    final_through: u64,
+    /// The highest tick whose hash matched on every peer, `0` for none.
+    matched_through: u64,
+    /// The lowest tick whose state the caller keeps for a report and that is not released.
+    kept_from: u64,
+    /// The `Release`s the next advance returns.
+    releases: Vec<u64>,
+    /// The notice of an ending this session decided alone, sent while it lingers.
+    end_notice: Option<EndNotice>,
+    /// When the end notice was sent last.
+    last_notice_micros: Option<u64>,
     /// The latest time the caller passed, `None` before the first call.
     now_micros: Option<u64>,
     events: Vec<SessionEvent>,
@@ -360,6 +455,10 @@ impl Session {
                 reply_due: false,
                 report: None,
                 corrections: VecDeque::new(),
+                hashes: BTreeMap::new(),
+                hashes_received: 0,
+                hashes_acked: 0,
+                hashes_sent: 0,
             })
             .collect();
         // Each local player's ticks before the input delay hold the default input, confirmed
@@ -388,6 +487,7 @@ impl Session {
             skips: 0,
         };
         let pending = vec![None; settings.identity.players.len()];
+        let kept_from = u64::from(settings.identity.rules.hash_interval);
         Ok(Self {
             settings,
             input,
@@ -399,6 +499,14 @@ impl Session {
             state: SessionState::Connecting,
             ended_micros: None,
             remotes,
+            asked: BTreeMap::new(),
+            reports: BTreeMap::new(),
+            final_through: 0,
+            matched_through: 0,
+            kept_from,
+            releases: Vec::new(),
+            end_notice: None,
+            last_notice_micros: None,
             now_micros: None,
             events: Vec::new(),
             stats,
@@ -476,9 +584,9 @@ impl Session {
                 Message::Hello { identity } => {
                     // A different identity ends the session in any state. While connecting,
                     // the other peer finds the mismatch from the lingering `Hello`. Once
-                    // running, a peer that changes its identity breaks the protocol: it is to
-                    // be reported through the end notice once end notices exist. Until then
-                    // the other peer ends by its timeout.
+                    // running, the peer that changed its identity is the one breaking the
+                    // protocol, and no end notice tells of a mismatch: the other peers find
+                    // the change from that peer's own `Hello`, or stop hearing from this one.
                     if let Some(reason) = self.compare(from, &identity, packet.match_id) {
                         self.end(now, reason);
                         return;
@@ -499,6 +607,7 @@ impl Session {
                 | Message::Ack { .. }
                 | Message::Quality { .. }
                 | Message::QualityReply { .. }
+                | Message::End { .. }
                     if self.state == SessionState::Connecting && !self.remotes[index].hello =>
                 {
                     before_running = true;
@@ -551,14 +660,60 @@ impl Session {
                         self.drop_packet(from, DropReason::UnknownEcho);
                     }
                 }
+                Message::End { reason } => {
+                    self.end_by_notice(now, index, reason);
+                    return;
+                }
                 _ if self.state == SessionState::Connecting => before_running = true,
-                // Hash, goodbye and end messages are read by the layers built on the inputs.
-                _ => {}
+                // A report dropped alone leaves the rest of the packet to read.
+                Message::Hash { tick, hash } => match self.read_hash(index, tick, hash) {
+                    Ok(()) => {}
+                    Err(Refusal::Drop(reason)) => self.drop_packet(from, reason),
+                    Err(violation) => {
+                        self.refuse(now, from, violation);
+                        return;
+                    }
+                },
+                // A goodbye is not read yet: leaving a match on purpose has rules of its own.
+                Message::Goodbye { .. } => {}
             }
         }
         if before_running {
             self.drop_packet(from, DropReason::BeforeRunning);
         }
+        // Confirmed inputs or a peer's report may complete a comparison.
+        self.check_hashes(now);
+    }
+
+    /// Answers the `Save { tick, hash: true }` executed first among those not answered yet
+    /// with the hash of the state it saved. An ended session ignores the answer.
+    ///
+    /// # Errors
+    ///
+    /// [`SessionError::HashNotAsked`] when no `Save` of `tick` waits for a hash. Nothing
+    /// changed.
+    pub fn report_hash(&mut self, tick: u64, hash: u64) -> Result<(), SessionError> {
+        if matches!(self.state, SessionState::Ended(_)) {
+            return Ok(());
+        }
+        let Some(asked) = self
+            .asked
+            .get_mut(&tick)
+            .filter(|asked| asked.unanswered > 0)
+        else {
+            return Err(SessionError::HashNotAsked { tick });
+        };
+        asked.unanswered -= 1;
+        if tick > self.final_through {
+            asked.hash = Some(hash);
+        } else if asked.unanswered == 0 {
+            // A final hash never changes: a rollback that saves its tick again loads that
+            // tick's own state, built from confirmed inputs.
+            self.asked.remove(&tick);
+        }
+        let now = self.now_micros.unwrap_or(0);
+        self.check_hashes(now);
+        Ok(())
     }
 
     /// Sets the input of local `player` for the next tick the session advances. A second
@@ -664,6 +819,12 @@ impl Session {
         }
         self.emit_confirmed();
         self.release();
+        self.check_hashes(now);
+        requests.extend(
+            self.releases
+                .drain(..)
+                .map(|tick| Request::Release { tick }),
+        );
         Ok(requests)
     }
 
@@ -673,9 +834,26 @@ impl Session {
     /// peer has not acknowledged, oldest first, and an `Ack` of the peer's players; when they
     /// do not all fit in [`MAX_PACKET_BYTES`], the newest ticks wait for a later packet. A
     /// running session also sends each peer a `Quality` request every
-    /// [`QUALITY_INTERVAL_MICROS`], and answers the peer's latest request once.
+    /// [`QUALITY_INTERVAL_MICROS`], and answers the peer's latest request once. Every packet of
+    /// a running session carries the local hash reports the peer has not acknowledged, oldest
+    /// first, as many as fit. A session that ended for a reason an end notice tells of, decided
+    /// alone, sends every peer that notice and nothing else, at most once a tick, for
+    /// [`END_LINGER_MICROS`].
     pub fn outgoing(&mut self, now_micros: u64) -> Vec<(PeerId, Vec<u8>)> {
         let now = self.observe(now_micros);
+        let lingering = self
+            .ended_micros
+            .is_some_and(|ended| now.saturating_sub(ended) < END_LINGER_MICROS);
+        let tick_micros = self.tick_micros();
+        let notice = self.end_notice.filter(|_| {
+            lingering
+                && self
+                    .last_notice_micros
+                    .is_none_or(|sent| now.saturating_sub(sent) >= tick_micros)
+        });
+        if notice.is_some() {
+            self.last_notice_micros = Some(now);
+        }
         let greeting = match &self.state {
             SessionState::Connecting => {
                 if let Some(peer) = self.silent_peer(now) {
@@ -685,9 +863,7 @@ impl Session {
                 true
             }
             SessionState::Running => false,
-            SessionState::Ended(EndReason::Mismatch { .. }) => self
-                .ended_micros
-                .is_some_and(|ended| now.saturating_sub(ended) < END_LINGER_MICROS),
+            SessionState::Ended(EndReason::Mismatch { .. }) => lingering,
             SessionState::Ended(_) => false,
         };
         let running = !matches!(self.state, SessionState::Ended(_));
@@ -721,6 +897,7 @@ impl Session {
                     &self.queues,
                     remote.id,
                     &remote.acked,
+                    remote.hashes_received,
                 ));
             }
             if self.state == SessionState::Running {
@@ -743,6 +920,21 @@ impl Session {
                     });
                     remote.reply_due = false;
                 }
+                // Reports ride on the packets sent anyway, so they never make one of their own.
+                // More than a packet holds wait for a later one.
+                if !messages.is_empty() {
+                    let unacknowledged =
+                        self.reports.range(remote.hashes_acked.saturating_add(1)..);
+                    messages.extend(unacknowledged.take(MAX_MESSAGES_PER_PACKET).map(
+                        |(tick, report)| Message::Hash {
+                            tick: *tick,
+                            hash: report.hash,
+                        },
+                    ));
+                }
+            }
+            if let Some(reason) = notice {
+                messages.push(Message::End { reason });
             }
             if !messages.is_empty() {
                 let packet = Packet {
@@ -751,19 +943,24 @@ impl Session {
                 };
                 let (packet, bytes) = fit(packet);
                 for message in &packet.messages {
-                    if let Message::Inputs {
-                        player,
-                        first_tick,
-                        inputs,
-                    } = message
-                    {
-                        // A local input held is below `u64::MAX`, the next confirmed tick.
-                        let end = u64::try_from(inputs.len())
-                            .ok()
-                            .and_then(|count| first_tick.checked_add(count))
-                            .unwrap_or(u64::MAX);
-                        let sent = &mut remote.sent[usize::from(*player)];
-                        *sent = (*sent).max(end);
+                    match message {
+                        Message::Inputs {
+                            player,
+                            first_tick,
+                            inputs,
+                        } => {
+                            // A local input held is below `u64::MAX`, the next confirmed tick.
+                            let end = u64::try_from(inputs.len())
+                                .ok()
+                                .and_then(|count| first_tick.checked_add(count))
+                                .unwrap_or(u64::MAX);
+                            let sent = &mut remote.sent[usize::from(*player)];
+                            *sent = (*sent).max(end);
+                        }
+                        Message::Hash { tick, .. } => {
+                            remote.hashes_sent = remote.hashes_sent.max(*tick);
+                        }
+                        _ => {}
                     }
                 }
                 packets.push((remote.id, bytes));
@@ -841,9 +1038,21 @@ impl Session {
         for tick in first..self.tick {
             let inputs = self.inputs_at(tick);
             self.record(tick, &inputs);
-            requests.push(Request::Save { tick, hash: false });
+            requests.push(self.save(tick));
             requests.push(Request::Advance { tick, inputs });
         }
+    }
+
+    /// The `Save` of `tick`, asking for the hash of every positive multiple of
+    /// `hash_interval`, which then waits for its answer.
+    fn save(&mut self, tick: u64) -> Request {
+        let interval = u64::from(self.settings.identity.rules.hash_interval);
+        let hash = tick > 0 && tick.is_multiple_of(interval);
+        if hash {
+            let asked = self.asked.entry(tick).or_default();
+            asked.unanswered = asked.unanswered.saturating_add(1);
+        }
+        Request::Save { tick, hash }
     }
 
     /// Runs the current tick with the prediction, and confirms every local player's pending
@@ -863,7 +1072,7 @@ impl Session {
         }
         let inputs = self.inputs_at(tick);
         self.record(tick, &inputs);
-        requests.push(Request::Save { tick, hash: false });
+        requests.push(self.save(tick));
         requests.push(Request::Advance { tick, inputs });
         self.tick = tick + 1;
     }
@@ -999,11 +1208,12 @@ impl Session {
         }
     }
 
-    /// Moves forward what the remote at `index` acknowledged of each local player. Every entry
-    /// is checked before any is used: a player this peer does not own is
-    /// [`ViolationRule::NotOwner`], and a tick after the last input sent to that peer, or a
-    /// hash report, as none is sent yet, is [`ViolationRule::AckNeverSent`]. An older
-    /// acknowledgment, arriving reordered, is ignored.
+    /// Moves forward what the remote at `index` acknowledged of each local player and of the
+    /// local hash reports. Every entry is checked before any is used: a player this peer does
+    /// not own is [`ViolationRule::NotOwner`], and a tick after the last input sent to that
+    /// peer, or the tick of no hash report sent to it, is [`ViolationRule::AckNeverSent`]. The
+    /// reports sent to a peer are every multiple of `hash_interval` up to the highest sent, as
+    /// they are sent oldest first. An older acknowledgment, arriving reordered, is ignored.
     fn read_ack(
         &mut self,
         index: usize,
@@ -1025,7 +1235,8 @@ impl Session {
                 return Err(violation(ViolationRule::AckNeverSent));
             }
         }
-        if hashes_through != 0 {
+        let interval = u64::from(self.settings.identity.rules.hash_interval);
+        if !hashes_through.is_multiple_of(interval) || hashes_through > remote.hashes_sent {
             return Err(Refusal::Violation {
                 player: None,
                 tick: Some(hashes_through),
@@ -1037,7 +1248,148 @@ impl Session {
             let acked = &mut remote.acked[usize::from(*player)];
             *acked = (*acked).max(*next);
         }
+        remote.hashes_acked = remote.hashes_acked.max(hashes_through);
         Ok(())
+    }
+
+    /// The most hash reports of one peer kept waiting for the local hash of their tick:
+    /// `(rollback_window + input_delay) / hash_interval + 2`. A peer reports a tick once its
+    /// confirmed tick reaches it, at most the local horizon plus one, and the local hash is
+    /// final from the advance after the local confirmed tick reaches it, at most
+    /// `rollback_window` behind the current tick: the honest reports waiting span
+    /// `rollback_window + input_delay` ticks, plus one report for the rounding and one for the
+    /// advance still to run.
+    fn hash_backlog(&self) -> usize {
+        let rules = self.settings.identity.rules;
+        let ticks = u64::from(rules.rollback_window) + u64::from(rules.input_delay);
+        let reports = ticks / u64::from(rules.hash_interval) + 2;
+        usize::try_from(reports).unwrap_or(usize::MAX)
+    }
+
+    /// Reads the hash report of `tick` from the remote at `index`. A tick past the local
+    /// horizon plus one is [`ViolationRule::HashBeyondHorizon`], checked first, so any tick
+    /// past it is a violation; tick 0 or a tick off the interval is dropped as
+    /// [`DropReason::HashOffInterval`], a report of a tick at most the latest received from that
+    /// peer as [`DropReason::HashAlreadyReceived`], and one beyond [`Self::hash_backlog`] as
+    /// [`DropReason::HashBacklog`].
+    fn read_hash(&mut self, index: usize, tick: u64, hash: u64) -> Result<(), Refusal> {
+        if tick > self.after_horizon() {
+            return Err(Refusal::Violation {
+                player: None,
+                tick: Some(tick),
+                rule: ViolationRule::HashBeyondHorizon,
+            });
+        }
+        let interval = u64::from(self.settings.identity.rules.hash_interval);
+        if tick == 0 || !tick.is_multiple_of(interval) {
+            return Err(Refusal::Drop(DropReason::HashOffInterval));
+        }
+        if tick <= self.remotes[index].hashes_received {
+            return Err(Refusal::Drop(DropReason::HashAlreadyReceived));
+        }
+        if let Some(report) = self.reports.get_mut(&tick) {
+            report.received[index] = Some(hash);
+        } else {
+            // No local report: the tick is above every final local hash, as a report is
+            // forgotten only once every peer's report of its tick or a later one arrived.
+            if self.remotes[index].hashes.len() >= self.hash_backlog() {
+                return Err(Refusal::Drop(DropReason::HashBacklog));
+            }
+            self.remotes[index].hashes.insert(tick, hash);
+        }
+        self.remotes[index].hashes_received = tick;
+        Ok(())
+    }
+
+    /// Makes final, in tick order, the local hash of each asked tick whose state was built only
+    /// from confirmed inputs: every input below it confirmed, none of them used differently
+    /// than confirmed (the rollback a correction calls for has run), and every save of it
+    /// answered. The reports of that tick waiting from the peers join it.
+    fn finalize_hashes(&mut self) {
+        let confirmed = self.confirmed_tick();
+        let mispredicted = self
+            .queues
+            .iter()
+            .filter_map(|queue| queue.first_misprediction(self.tick))
+            .min();
+        loop {
+            let Some((&tick, asked)) = self
+                .asked
+                .range(self.final_through.saturating_add(1)..)
+                .next()
+            else {
+                return;
+            };
+            let built = tick <= confirmed && mispredicted.is_none_or(|first| first >= tick);
+            let hash = match asked.hash {
+                Some(hash) if built && asked.unanswered == 0 => hash,
+                _ => return,
+            };
+            self.asked.remove(&tick);
+            let received = self
+                .remotes
+                .iter_mut()
+                .map(|remote| remote.hashes.remove(&tick))
+                .collect();
+            self.reports.insert(tick, HashReport { hash, received });
+            self.final_through = tick;
+        }
+    }
+
+    /// Compares every final local hash not matched yet with the peers' reports of its tick, in
+    /// tick order: a difference ends the session with [`EndReason::Desync`]; a tick every peer
+    /// matched emits [`SessionEvent::HashMatched`] and releases the states kept for the
+    /// reported ticks before it. Then forgets the reports matched and acknowledged by every
+    /// peer.
+    fn check_hashes(&mut self, now: u64) {
+        if self.state != SessionState::Running {
+            return;
+        }
+        self.finalize_hashes();
+        let mut matched = Vec::new();
+        let mut desync = None;
+        for (&tick, report) in self.reports.range(self.matched_through.saturating_add(1)..) {
+            let differing =
+                report
+                    .received
+                    .iter()
+                    .zip(&self.remotes)
+                    .find_map(|(received, remote)| {
+                        received
+                            .filter(|hash| *hash != report.hash)
+                            .map(|hash| (remote.id, hash))
+                    });
+            if let Some((peer, remote)) = differing {
+                desync = Some(EndReason::Desync {
+                    tick,
+                    peer,
+                    local: Some(report.hash),
+                    remote: Some(remote),
+                });
+                break;
+            }
+            if report.received.iter().all(Option::is_some) {
+                matched.push(tick);
+            }
+        }
+        let interval = usize::try_from(self.settings.identity.rules.hash_interval)
+            .expect("a u32 fits in a usize on every supported target");
+        for tick in matched {
+            self.events.push(SessionEvent::HashMatched { tick });
+            self.releases
+                .extend((self.kept_from..tick).step_by(interval));
+            self.kept_from = tick;
+            self.matched_through = tick;
+        }
+        if let Some(reason) = desync {
+            self.end(now, reason);
+            return;
+        }
+        let matched_through = self.matched_through;
+        let remotes = &self.remotes;
+        self.reports.retain(|tick, _| {
+            *tick > matched_through || remotes.iter().any(|remote| remote.hashes_acked < *tick)
+        });
     }
 
     /// Checks that the newest acknowledgment of each local player from the remote at `index`
@@ -1335,7 +1687,42 @@ impl Session {
         }
     }
 
+    /// Ends the session for a reason it decided alone: the end notice telling of it, if any,
+    /// lingers.
     fn end(&mut self, now: u64, reason: EndReason) {
+        self.end_notice = match reason {
+            EndReason::Desync { tick, peer, .. } => Some(EndNotice::Desync { tick, peer }),
+            EndReason::Lost { peer } => Some(EndNotice::Lost { peer }),
+            EndReason::LocalFailure { tick } => Some(EndNotice::LocalFailure { tick }),
+            EndReason::Mismatch { .. }
+            | EndReason::Unreachable { .. }
+            | EndReason::Violation { .. } => None,
+        };
+        self.state = SessionState::Ended(reason);
+        self.ended_micros = Some(now);
+    }
+
+    /// Ends the session for the reason the end notice of the remote at `index` tells, which is
+    /// not relayed again. A desync names that remote, the peer this one learned it from: the
+    /// notice's own peer is the one whose hash differed from the sender's, which is this peer
+    /// or another one, and in neither case a peer this one compared with.
+    fn end_by_notice(&mut self, now: u64, index: usize, notice: EndNotice) {
+        let reason = match notice {
+            EndNotice::Desync { tick, .. } => {
+                let report = self.reports.get(&tick);
+                let remote = report
+                    .and_then(|report| report.received[index])
+                    .or_else(|| self.remotes[index].hashes.get(&tick).copied());
+                EndReason::Desync {
+                    tick,
+                    peer: self.remotes[index].id,
+                    local: report.map(|report| report.hash),
+                    remote,
+                }
+            }
+            EndNotice::Lost { peer } => EndReason::Lost { peer },
+            EndNotice::LocalFailure { tick } => EndReason::LocalFailure { tick },
+        };
         self.state = SessionState::Ended(reason);
         self.ended_micros = Some(now);
     }
@@ -1385,13 +1772,15 @@ fn owners(players: &[PeerId]) -> String {
         .join(", ")
 }
 
-/// The `Ack` of `peer`'s players and the inputs of every local player from what `peer`
-/// acknowledged on, at most [`MAX_TICKS_PER_MESSAGE`] ticks each.
+/// The `Ack` of `peer`'s players and of its hash reports through `hashes_through`, and the
+/// inputs of every local player from what `peer` acknowledged on, at most
+/// [`MAX_TICKS_PER_MESSAGE`] ticks each.
 fn inputs_for(
     settings: &SessionSettings,
     queues: &[InputQueue],
     peer: PeerId,
     acked: &[u64],
+    hashes_through: u64,
 ) -> Vec<Message> {
     let players = &settings.identity.players;
     let owned_by = |owner: PeerId| {
@@ -1408,7 +1797,7 @@ fn inputs_for(
                 (player, next.unwrap_or(u64::MAX))
             })
             .collect(),
-        hashes_through: 0,
+        hashes_through,
     }];
     for player in owned_by(settings.local) {
         let queue = &queues[usize::from(player)];
@@ -1439,16 +1828,28 @@ fn inputs_for(
     messages
 }
 
-/// Encodes `packet`, giving it back with its bytes, leaving out the newest tick of its longest
-/// input message until it fits in [`MAX_PACKET_BYTES`]: the oldest unacknowledged ticks go
-/// first, the rest in a later packet. The settings bound the usual packet within the limit;
-/// this only acts for a peer that has fallen behind by more than the rollback window and the
-/// input delay.
+/// Encodes `packet`, giving it back with its bytes, fitting it in [`MAX_PACKET_BYTES`] and
+/// [`MAX_MESSAGES_PER_PACKET`]: first by leaving out its newest hash report but one, then the
+/// newest tick of its longest input message. The oldest unacknowledged reports and ticks go
+/// first, the rest in a later packet. The settings bound a packet with one report and the
+/// usual inputs within the limits; inputs are left out only for a peer that has fallen behind
+/// by more than the rollback window and the input delay.
 fn fit(mut packet: Packet) -> (Packet, Vec<u8>) {
     loop {
         let bytes = packet.encode();
-        if bytes.len() <= MAX_PACKET_BYTES {
+        if bytes.len() <= MAX_PACKET_BYTES && packet.messages.len() <= MAX_MESSAGES_PER_PACKET {
             return (packet, bytes);
+        }
+        let hashes: Vec<usize> = packet
+            .messages
+            .iter()
+            .enumerate()
+            .filter(|(_, message)| matches!(message, Message::Hash { .. }))
+            .map(|(index, _)| index)
+            .collect();
+        if let [_, .., newest] = hashes[..] {
+            packet.messages.remove(newest);
+            continue;
         }
         let longest = packet
             .messages

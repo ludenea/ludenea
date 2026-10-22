@@ -125,6 +125,26 @@ hash, those of the golden trace and replays included.
   most `rollback_window / 2`, counting only peers the session is ahead of by its own
   estimate, and stops once it no longer is: each skip returns no `Advance`, keeps the
   pending local inputs and counts in the new `SessionStats::skips`.
+- A running `ludenea_net::Session` compares state hashes with the other peers. The `Save` of
+  every positive multiple of `hash_interval` has `hash: true`: the caller answers with
+  `Session::report_hash(tick, hash)` (`SessionError::HashNotAsked` for a tick no `Save`
+  waits on) and keeps that state until the new `Request::Release { tick }`. The hash of a
+  tick is sent once every input below it is confirmed, the rollback those inputs call for
+  has run and its `Save` is answered, so it is always the hash of a state built only from
+  confirmed inputs; it is resent in every packet until `Ack.hashes_through` covers it
+  (acknowledging a report never sent stays `ViolationRule::AckNeverSent`). When every peer's
+  hash matches, the session emits `SessionEvent::HashMatched { tick }` and releases the states
+  kept for earlier reports. A difference ends it with `EndReason::Desync { tick, peer, local,
+  remote }`. A received hash past the local horizon plus one is
+  `ViolationRule::HashBeyondHorizon`; one of tick 0 or off the interval
+  (`DropReason::HashOffInterval`), received already (`HashAlreadyReceived`), or beyond the
+  `(rollback_window + input_delay) / hash_interval + 2` reports kept waiting for a local hash
+  (`HashBacklog`) is dropped alone. An ending a session decides alone that an end notice
+  tells of sends that `End` notice, and nothing else, to every peer at most once a tick for
+  `END_LINGER_MICROS` (500 ms); a received `End` ends the receiver with the same reason, the
+  new `EndReason::Lost { peer }` and `EndReason::LocalFailure { tick }` included, a desync
+  naming the sender of the notice. A mismatch found once running has no end notice and is
+  not relayed.
 - `ludenea_render` answers without a GPU what the renderer draws: `atlas::frames_of(png,
   meta)` gives the `TextureFrames` (the image size and each `FrameRect`, row-major, with its
   pivot) a meta cuts a PNG into, the same cut `pack` makes, or a `FramesError` (`Decode`,

@@ -4,20 +4,20 @@
 //! that has arrived, advances its session once per frame while it runs, with [`model_byte`]
 //! for each local player, applies the requests to its [`Model`], then sends what its session
 //! has to send. A frame lasts [`FRAME_MICROS`] unless [`Harness::set_frame_micros`] says
-//! otherwise.
+//! otherwise. The model answers every `Save { hash: true }` through [`Session::report_hash`].
 
 #![allow(
     dead_code,
     reason = "each test binary that includes the harness uses a different part of it"
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ludenea_app::{PlayerInputSpec, SimError};
 use ludenea_net::{
     Conditioned, LinkConditions, MAX_MESSAGES_PER_PACKET, MAX_PACKET_BYTES, MAX_PLAYERS,
-    MatchIdentity, MatchRules, MemoryNetwork, Packet, PeerId, Request, Session, SessionError,
-    SessionEvent, SessionSettings, SessionState, Timeouts, Transport,
+    MatchIdentity, MatchRules, MemoryNetwork, Message, Packet, PeerId, Request, Session,
+    SessionError, SessionEvent, SessionSettings, SessionState, Timeouts, Transport,
 };
 
 /// The time between two steps of the harness.
@@ -71,7 +71,8 @@ pub fn offline_hashes(confirmed: &[(u64, Vec<Vec<u8>>)]) -> Vec<u64> {
 /// It checks the session's promises as it goes: every `Save` and `Advance` is at the model's
 /// tick, and every `Load` restores the latest `Save` of its tick, which must be the state the
 /// inputs the ticks before it last ran with give: no input below a loaded tick changed since
-/// it was saved.
+/// it was saved. A state saved with `hash: true` is kept until its `Release`, which must name
+/// a kept state; a released state is gone, so a later `Load` of it fails.
 #[derive(Debug)]
 pub struct Model {
     tick: u64,
@@ -82,6 +83,12 @@ pub struct Model {
     /// The latest hash of the state of each tick.
     hashes: BTreeMap<u64, u64>,
     loads: u64,
+    /// The ticks whose state was saved with `hash: true` and not released yet.
+    kept: BTreeSet<u64>,
+    /// Every released tick, in order.
+    released: Vec<u64>,
+    /// The tick whose reported hash is flipped, as a broken game would.
+    flip: Option<u64>,
 }
 
 impl Default for Model {
@@ -93,19 +100,36 @@ impl Default for Model {
             used: BTreeMap::new(),
             hashes: BTreeMap::from([(0, MODEL_START)]),
             loads: 0,
+            kept: BTreeSet::new(),
+            released: Vec::new(),
+            flip: None,
         }
     }
 }
 
 impl Model {
-    /// Applies `requests` in order, panicking on any broken promise.
-    pub fn execute(&mut self, requests: &[Request]) {
+    /// Applies `requests` in order, panicking on any broken promise. Returns the hash of every
+    /// state saved with `hash: true`, in order, as `(tick, hash)`.
+    pub fn execute(&mut self, requests: &[Request]) -> Vec<(u64, u64)> {
+        let mut reports = Vec::new();
         for request in requests {
             match request {
                 Request::Save { tick, hash } => {
                     assert_eq!(*tick, self.tick, "Save out of step");
-                    assert!(!hash, "no hash is asked for yet");
                     self.saves.insert(*tick, self.hash);
+                    if *hash {
+                        self.kept.insert(*tick);
+                        let flip = u64::from(self.flip == Some(*tick));
+                        reports.push((*tick, self.hash ^ flip));
+                    }
+                }
+                Request::Release { tick } => {
+                    assert!(
+                        self.kept.remove(tick),
+                        "Release {{ tick: {tick} }} of a state not kept"
+                    );
+                    self.saves.remove(tick);
+                    self.released.push(*tick);
                 }
                 Request::Load { tick } => {
                     let saved = *self
@@ -138,6 +162,31 @@ impl Model {
                 }
             }
         }
+        reports
+    }
+
+    /// Executes `requests`, then answers each hash asked through `session`.
+    pub fn execute_for(&mut self, session: &mut Session, requests: &[Request]) {
+        for (tick, hash) in self.execute(requests) {
+            session
+                .report_hash(tick, hash)
+                .unwrap_or_else(|error| panic!("report_hash of tick {tick}: {error}"));
+        }
+    }
+
+    /// Reports the hash of the state of `tick` flipped, as a broken game would.
+    pub fn flip_hash(&mut self, tick: u64) {
+        self.flip = Some(tick);
+    }
+
+    /// The ticks whose state is kept, saved with `hash: true` and not released yet.
+    pub fn kept(&self) -> &BTreeSet<u64> {
+        &self.kept
+    }
+
+    /// Every released tick, in order.
+    pub fn released(&self) -> &[u64] {
+        &self.released
     }
 
     /// The next tick the model runs.
@@ -243,16 +292,22 @@ struct Peer {
     next_frame_micros: Option<u64>,
     frames: u64,
     sent_packets: u64,
+    /// The packets carrying a hash report of this tick are lost.
+    lose_hash_of: Option<u64>,
+    /// Every frame uses the default input, so every prediction is right.
+    default_inputs: bool,
 }
 
 impl Peer {
     /// One frame: an input for every local player, then one advance, executed by the model.
     fn frame(&mut self, now: u64) {
         for player in 0..u8::try_from(MAX_PLAYERS).unwrap() {
-            match self
-                .session
-                .add_local_input(player, vec![model_byte(player, self.frames)])
-            {
+            let byte = if self.default_inputs {
+                0
+            } else {
+                model_byte(player, self.frames)
+            };
+            match self.session.add_local_input(player, vec![byte]) {
                 Ok(()) | Err(SessionError::NotLocal { .. }) => {}
                 Err(error) => panic!("add_local_input of player {player}: {error}"),
             }
@@ -261,7 +316,7 @@ impl Peer {
             .session
             .advance(now)
             .expect("a running session advances");
-        self.model.execute(&requests);
+        self.model.execute_for(&mut self.session, &requests);
         self.frames += 1;
     }
 }
@@ -316,6 +371,8 @@ impl Harness {
                 next_frame_micros: None,
                 frames: 0,
                 sent_packets: 0,
+                lose_hash_of: None,
+                default_inputs: false,
             })
             .collect();
         Self {
@@ -329,6 +386,23 @@ impl Harness {
     /// Loses every other packet each peer sends from now on, before the transport sees it.
     pub fn drop_every_other_packet(&mut self) {
         self.drop_every_other = true;
+    }
+
+    /// Has the model of `peer` report the hash of `tick` flipped, as a broken game would.
+    pub fn flip_hash(&mut self, peer: PeerId, tick: u64) {
+        self.peers[usize::from(peer.0)].model.flip_hash(tick);
+    }
+
+    /// Loses every packet `peer` sends that carries its hash report of `tick`.
+    pub fn lose_hash_reports(&mut self, peer: PeerId, tick: u64) {
+        self.peers[usize::from(peer.0)].lose_hash_of = Some(tick);
+    }
+
+    /// Has every peer add the default input every frame, so every prediction is right.
+    pub fn default_inputs(&mut self) {
+        for peer in &mut self.peers {
+            peer.default_inputs = true;
+        }
     }
 
     /// The time of the next step.
@@ -388,6 +462,12 @@ impl Harness {
                 self.sent_packets += 1;
                 peer.sent_packets += 1;
                 if self.drop_every_other && peer.sent_packets % 2 == 0 {
+                    continue;
+                }
+                if peer
+                    .lose_hash_of
+                    .is_some_and(|lost| carries_hash_of(&packet, lost))
+                {
                     continue;
                 }
                 peer.transport
@@ -470,6 +550,15 @@ fn check_limits(packet: &[u8]) {
         "{} messages",
         decoded.messages.len()
     );
+}
+
+/// Whether `packet` carries a hash report of `tick`.
+fn carries_hash_of(packet: &[u8], tick: u64) -> bool {
+    let decoded = Packet::decode(packet).expect("a session sends packets that decode");
+    decoded
+        .messages
+        .iter()
+        .any(|message| matches!(message, Message::Hash { tick: reported, .. } if *reported == tick))
 }
 
 fn network(peers: usize) -> Vec<ludenea_net::MemoryTransport> {

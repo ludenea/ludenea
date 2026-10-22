@@ -279,9 +279,10 @@ impl SessionSettings {
     ///
     /// Two rules of the sender keep every packet within this bound: a session that has ended
     /// sends no inputs, so a packet carrying an `End` is small and `End` is not counted; and
-    /// further unacknowledged hash reports are packed by size, the ones that do not fit resent
-    /// in a later packet. The handshake's `Hello` and `Welcome` travel without inputs, and fit
-    /// whatever the identity, as the engine string and the players are bounded. Expects the
+    /// further unacknowledged hash reports are packed by size and by
+    /// [`MAX_MESSAGES_PER_PACKET`], the ones that do not fit resent in a later packet. The
+    /// handshake's `Hello` and `Welcome` travel without inputs, and fit whatever the identity,
+    /// as the engine string and the players are bounded. Expects the
     /// settings to have passed the peer and tick count checks, so another peer owns a player.
     fn worst_case_packet(&self, peer: PeerId) -> Packet {
         let players = &self.identity.players;
