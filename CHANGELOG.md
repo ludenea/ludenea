@@ -860,10 +860,12 @@ hash, those of the golden trace and replays included.
   selected texture as well as a data asset. Opening a texture in the asset browser shows its
   preview in the inspector, and the built-in sprite sheet inspector plays its clips.
 - `Editor.edit(command)` sends an `EditCommand` (a command that edits the session as one
-  undo step) to the running game and refreshes the timeline and hash; it rejects without a
+  undo step) to the running game, refreshes the timeline and hash, and resolves with the
+  game's reply (`ReplyFor<C>`: a `spawn` gives the entity it made); it rejects without a
   game and while the game resimulates. `Editor.batched(commands)` sends several as one
-  `batch` (one alone as itself, none not at all), and `Editor.onEdited(listener)` hears
-  every edit the game accepted. The built-in panels edit through them.
+  `batch` (one alone as itself, with its own reply; none not at all, resolving as an empty
+  batch does), and `Editor.onEdited(listener)` hears every edit the game accepted. The
+  built-in panels edit through them.
 - `Editor.viewport.tools.register(tool)` adds a `ViewportTool`: while it is the active
   tool (`viewport.setTool(id)`, read from the `viewport.activeTool` store, `null` for the
   built-in select and move), the viewport gives it the pointer's presses, moves, and

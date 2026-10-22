@@ -384,30 +384,40 @@ describe("loader", () => {
     expect(() => host.editor.viewport.setTool("my_game.erase")).toThrow('no viewport tool "my_game.erase" is registered');
     await expect(host.editor.edit({ type: "undo" })).rejects.toThrow("no game is running");
 
-    const game = await testGame((command) => (command.type === "get_timeline" ? timeline() : command.type === "redo" ? { error: { code: "invalid_command", message: "nothing to redo" } } : { type: "done" }));
+    const game = await testGame((command) => {
+      if (command.type === "get_timeline") return timeline();
+      if (command.type === "spawn") return { type: "spawned", entity };
+      if (command.type === "redo") return { error: { code: "invalid_command", message: "nothing to redo" } };
+      return { type: "done" };
+    });
     act(() => host.setControl(game.control));
     act(() => host.editor.viewport.setTool("my_game.paint"));
     expect(host.editor.viewport.activeTool.getState()).toBe("my_game.paint");
 
     const score = (value: number): EditCommand => ({ type: "set_field", target: { type: "resource", resource: "demo::Score" }, path: [], value });
     const lives: EditCommand = { type: "set_field", target: { type: "resource", resource: "demo::Lives" }, path: [], value: 3 };
-    await host.editor.edit(score(1));
-    await host.editor.batched([score(2)]);
-    await host.editor.batched([score(3), lives]);
-    await host.editor.batched([]);
+    // Each edit resolves with the game's reply: a spawn gives the entity it made.
+    const spawned = await host.editor.edit({ type: "spawn", components: {} });
+    expect(spawned.entity).toEqual(entity);
+    expect(await host.editor.edit(score(1))).toEqual({ type: "done" });
+    expect(await host.editor.batched([{ type: "spawn", components: {} }])).toEqual({ type: "spawned", entity });
+    expect(await host.editor.batched([score(3), lives])).toEqual({ type: "done" });
+    // Nothing to send: the reply an empty batch gets.
+    expect(await host.editor.batched([])).toEqual({ type: "done" });
     await expect(host.editor.edit({ type: "redo" })).rejects.toThrow("nothing to redo");
     await settle();
     const edits = game.sent.filter((command) => !["get_timeline", "get_hash"].includes(command.type));
     // One command is sent alone, several as one batch, none not at all.
-    expect(edits).toEqual([score(1), score(2), { type: "batch", commands: [score(3), lives] }, { type: "redo" }]);
+    expect(edits).toEqual([{ type: "spawn", components: {} }, score(1), { type: "spawn", components: {} }, { type: "batch", commands: [score(3), lives] }, { type: "redo" }]);
     // Listeners hear the accepted edits only; every edit sent, refused or not, refreshes the timeline.
-    expect(edited).toEqual(["set_field", "set_field", "batch"]);
+    expect(edited).toEqual(["spawn", "set_field", "spawn", "batch"]);
     expect(logged(host).filter(([level]) => level === "error").map(([, text]) => text)).toEqual([
+      'Reacting to the edit "spawn" failed: no score panel',
       'Reacting to the edit "set_field" failed: no score panel',
-      'Reacting to the edit "set_field" failed: no score panel',
+      'Reacting to the edit "spawn" failed: no score panel',
       'Reacting to the edit "batch" failed: no score panel',
     ]);
-    expect(game.sent.filter((command) => command.type === "get_timeline")).toHaveLength(5);
+    expect(game.sent.filter((command) => command.type === "get_timeline")).toHaveLength(6);
 
     act(() => host.editor.timeline.setState({ timeline: { ...timeline(), resimulating: true } }));
     await expect(host.editor.edit({ type: "undo" })).rejects.toThrow("the game is resimulating; edit once it finishes");
@@ -418,6 +428,6 @@ describe("loader", () => {
     expect(host.editor.viewport.tools.list()).toEqual([]);
     expect(host.editor.viewport.activeTool.getState()).toBeNull();
     await host.editor.edit({ type: "undo" });
-    expect(edited).toHaveLength(3);
+    expect(edited).toHaveLength(4);
   });
 });

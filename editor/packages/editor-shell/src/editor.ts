@@ -1,4 +1,4 @@
-import type { Command, ControlClient, ProjectClient } from "@ludenea/control-client";
+import type { Command, ControlClient, ProjectClient, ReplyFor } from "@ludenea/control-client";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import { createAssetAccess, type AssetAccess } from "./assets";
 import { createConsole, type EditorConsole } from "./console";
@@ -52,6 +52,8 @@ export type EditCommand = Extract<
   }
 >;
 
+type BatchCommand = Extract<Command, { type: "batch" }>;
+
 /** The active viewport tool's id, null for the built-in select and move: a Zustand store read as a hook or with `getState`/`subscribe`; `editor.viewport.setTool` changes it. */
 export type ActiveToolStore = UseBoundStore<Pick<StoreApi<string | null>, "getState" | "getInitialState" | "subscribe">>;
 
@@ -94,11 +96,16 @@ export interface Editor {
   };
   /**
    * Sends an editing command to the running game, then refreshes the timeline and hash it
-   * changed. Throws without a game and while the game resimulates; the game's refusal rejects.
+   * changed; resolves with the game's reply (a `spawn` gives the entity it made). Throws
+   * without a game and while the game resimulates; the game's refusal rejects.
    */
-  edit(command: EditCommand): Promise<void>;
-  /** Sends `commands` as one edit (one undo step, all of them or none); nothing when empty. */
-  batched(commands: EditCommand[]): Promise<void>;
+  edit<C extends EditCommand>(command: C): Promise<ReplyFor<C>>;
+  /**
+   * Sends `commands` as one edit (one undo step, all of them or none): one alone as itself,
+   * with its own reply, several as a `batch`. Empty, it sends nothing and resolves with the
+   * reply an empty batch gets.
+   */
+  batched<C extends EditCommand>(commands: C[]): Promise<ReplyFor<C> | ReplyFor<BatchCommand>>;
   /** Calls `listener` with each command `edit` and `batched` send, once the game accepted it. */
   onEdited(listener: (command: EditCommand) => void): Disposable;
   settings: {
@@ -192,12 +199,12 @@ export function createEditor(options: {
     log: editorConsole.log,
     playing: () => timeline.getState().playing,
   });
-  const edit = async (command: EditCommand) => {
+  const edit = async <C extends EditCommand>(command: C): Promise<ReplyFor<C>> => {
     const game = control;
     if (!game) throw new Error("no game is running");
     if (timeline.getState().timeline?.resimulating) throw new Error("the game is resimulating; edit once it finishes");
     try {
-      await game.request(command);
+      const reply = await game.request(command);
       // The game took the edit: a listener that throws costs only its own reaction.
       for (const listener of [...editListeners]) {
         try {
@@ -206,6 +213,7 @@ export function createEditor(options: {
           editorConsole.report(error, `Reacting to the edit "${command.type}"`);
         }
       }
+      return reply;
     } finally {
       void timeline.getState().refresh();
     }
@@ -273,10 +281,10 @@ export function createEditor(options: {
       },
     },
     edit,
-    async batched(commands) {
+    batched(commands) {
       const [only] = commands;
-      if (!only) return;
-      await edit(commands.length === 1 ? only : { type: "batch", commands });
+      if (!only) return Promise.resolve({ type: "done" });
+      return commands.length === 1 ? edit(only) : edit({ type: "batch", commands });
     },
     onEdited(listener) {
       // A fresh entry per call, as `onGameChanged`.

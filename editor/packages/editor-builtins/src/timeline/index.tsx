@@ -105,14 +105,18 @@ export const timelinePlugin = definePlugin({
       get title() {
         return editor.timeline.getState().timeline?.undo_label ?? "Undo";
       },
-      run: () => editor.edit({ type: "undo" }),
+      async run() {
+        await editor.edit({ type: "undo" });
+      },
     });
     editor.commands.register({
       id: "edit.redo",
       get title() {
         return editor.timeline.getState().timeline?.redo_label ?? "Redo";
       },
-      run: () => editor.edit({ type: "redo" }),
+      async run() {
+        await editor.edit({ type: "redo" });
+      },
     });
 
     const forms: BranchForms = {
