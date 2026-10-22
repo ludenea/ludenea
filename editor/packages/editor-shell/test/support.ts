@@ -9,7 +9,7 @@ import {
   type GameInfo,
   type Reply,
 } from "@ludenea/control-client";
-import { createEditor, type EditorHost } from "../src/app";
+import { createEditor, type EditorHost, type TextureFrameCutter } from "../src/app";
 
 const game: GameInfo = { components: [], resources: [], assets: [], events: [], fingerprint: "0000000000000000", input: null, tick_rate: 60, debug_layers: [] };
 
@@ -20,18 +20,21 @@ type Answer = (message: Message) => object | undefined;
 const respond = (id: number, reply: object | undefined) =>
   reply ? [JSON.stringify({ type: "response", id, result: "error" in reply ? reply : { ok: reply } })] : [];
 
-/** An editor on a project service that welcomes it and answers with `answer` (nothing by default). */
-export async function testHost(importModule?: (url: string) => Promise<unknown>, answer: Answer = () => undefined) {
-  const project = await ProjectClient.connect(
-    fakeTransport((raw) => {
-      const message = JSON.parse(raw);
-      if (message.type === "hello") {
-        return [JSON.stringify({ type: "welcome", protocol_version: PROJECT_PROTOCOL_VERSION, protocol_fingerprint: PROJECT_PROTOCOL_FINGERPRINT })];
-      }
-      return respond(message.id, answer(message.request));
-    }),
-  );
-  return createEditor({ project, importModule });
+/**
+ * An editor on a project service that welcomes it and answers with `answer` (nothing by
+ * default), cutting textures with `textureFrames`; `pushProject` sends it a project event.
+ */
+export async function testHost(importModule?: (url: string) => Promise<unknown>, answer: Answer = () => undefined, textureFrames?: TextureFrameCutter) {
+  const transport = fakeTransport((raw) => {
+    const message = JSON.parse(raw);
+    if (message.type === "hello") {
+      return [JSON.stringify({ type: "welcome", protocol_version: PROJECT_PROTOCOL_VERSION, protocol_fingerprint: PROJECT_PROTOCOL_FINGERPRINT })];
+    }
+    return respond(message.id, answer(message.request));
+  });
+  const project = await ProjectClient.connect(transport);
+  const host = createEditor({ project, importModule, textureFrames });
+  return Object.assign(host, { pushProject: (event: object) => transport.push(JSON.stringify({ type: "event", event })) });
 }
 
 /** What the editor console of `host` holds, as `[level, text, location]`. */

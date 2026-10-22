@@ -1,13 +1,14 @@
 import type { AssetId, Entity } from "@ludenea/control-client";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
+import type { AssetKindName } from "../plugin";
 
 export interface SelectionState {
   entities: Entity[];
-  /** The data asset the inspector edits; selecting entities clears it, and selecting it clears them. */
-  asset: AssetId | null;
+  /** The asset the inspector shows (a data asset or a texture) and its kind; selecting entities clears it, and selecting it clears them. */
+  asset: { id: AssetId; kind: AssetKindName } | null;
   select(entities: Entity[]): void;
   add(entity: Entity): void;
-  selectAsset(id: AssetId): void;
+  selectAsset(id: AssetId, kind: AssetKindName): void;
   clear(): void;
 }
 
@@ -23,7 +24,7 @@ export function createSelectionStore(): SelectionStore {
     select: (entities) => set({ entities, asset: null }),
     add: (entity) =>
       set(({ entities }) => (entities.some((selected) => same(selected, entity)) ? {} : { entities: [...entities, entity], asset: null })),
-    selectAsset: (id) => set({ entities: [], asset: id }),
+    selectAsset: (id, kind) => set({ entities: [], asset: { id, kind } }),
     clear: () => set({ entities: [], asset: null }),
   }));
 }

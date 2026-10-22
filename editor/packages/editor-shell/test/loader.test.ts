@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DuplicateRegistration, definePlugin, type Editor } from "../src";
 import { Shell } from "../src/app";
-import { logged, testHost } from "./support";
+import { logged, settle, testHost } from "./support";
 
 const entity = { index: 3, generation: 1 };
 
@@ -228,5 +228,77 @@ describe("loader", () => {
     // Only the cleanup the plugin returned releases it.
     host.loader.deactivate("tools");
     expect(host.editor.commands.list()).toEqual([]);
+  });
+
+  it("a_project_plugin_registers_an_asset_inspector_and_reads_texture_frames", async () => {
+    const meta = { pixels_per_unit: 16, grid: { frame_width: 8, frame_height: 8, margin: 0, spacing: 0 }, pivot: null, filter: "Nearest" } as const;
+    const entries = [
+      { path: "assets/hero.png", id: "0000000000000000000000000000000d", kind: { Texture: meta } },
+      { path: "assets/broken.png", id: "00000000000000000000000000000000", kind: { Texture: { ...meta, grid: null } } },
+      { path: "scenes/main.scene.ron", id: "0000000000000000000000000000000a", kind: "Scene" },
+    ];
+    const frames = { width: 16, height: 8, frames: [{ x: 0, y: 0, width: 8, height: 8, pivot: [4, 4] as [number, number] }, { x: 8, y: 0, width: 8, height: 8, pivot: [4, 4] as [number, number] }] };
+    const cut: { png: string; meta: unknown }[] = [];
+    const HeroInspector = () => createElement("p", null, "hero");
+    let read: Promise<unknown> | undefined;
+    const plugin = definePlugin({
+      name: "my_game",
+      activate(editor) {
+        editor.inspectors.registerAsset("Texture", HeroInspector);
+        read = editor.textures.frames("assets/hero.png");
+      },
+    });
+    const host = await testHost(
+      async () => ({ default: plugin }),
+      (request) => {
+        if (request.type === "list_files") return { type: "files", entries };
+        if (request.type === "read_binary") return { type: "bytes", bytes: btoa(`png of ${request.path}`) };
+        return undefined;
+      },
+      async (png, meta) => {
+        cut.push({ png: new TextDecoder().decode(png), meta });
+        if (cut.length > 1) throw new Error("cannot decode the PNG: invalid signature");
+        return frames;
+      },
+    );
+    await host.loader.load("/plugins/my_game.1.js");
+
+    expect(host.editor.inspectors.getAsset("Texture")).toBe(HeroInspector);
+    expect(host.editor.pluginOf(HeroInspector)).toBe("my_game");
+    await expect(read).resolves.toEqual(frames);
+    expect(cut).toEqual([{ png: "png of assets/hero.png", meta }]);
+    expect(new TextDecoder().decode(await host.editor.textures.bytes("assets/hero.png"))).toBe("png of assets/hero.png");
+    // A refusal is the renderer's own message; a file that is no readable texture says why.
+    await expect(host.editor.textures.frames("assets/hero.png")).rejects.toThrow(/^cannot decode the PNG: invalid signature$/);
+    await expect(host.editor.textures.frames("scenes/main.scene.ron")).rejects.toThrow("scenes/main.scene.ron is not a texture");
+    await expect(host.editor.textures.frames("assets/broken.png")).rejects.toThrow("assets/broken.png: its meta cannot be read; the project's warning names the cause");
+    await expect(host.editor.textures.frames("assets/gone.png")).rejects.toThrow("no project file is at assets/gone.png");
+
+    // The textures whose meta can be read, listed once someone looks, and followed.
+    const changes: number[] = [];
+    const stop = host.editor.textures.subscribe(() => changes.push(host.editor.textures.list().length));
+    await settle();
+    expect(host.editor.textures.list()).toEqual([{ id: "0000000000000000000000000000000d", path: "assets/hero.png", meta }]);
+    entries.splice(0, 1);
+    host.pushProject({ type: "files_changed", changes: [{ Removed: { path: "assets/hero.png", kind: { Texture: meta } } }] });
+    await settle();
+    expect(changes).toEqual([1, 0]);
+    // A change to no texture lists nothing again.
+    host.pushProject({ type: "files_changed", changes: [{ Changed: { path: "scenes/main.scene.ron", kind: "Scene" } }] });
+    await settle();
+    expect(changes).toEqual([1, 0]);
+    stop();
+
+    host.loader.deactivate("my_game");
+    expect(host.editor.inspectors.getAsset("Texture")).toBeUndefined();
+  });
+
+  it("an_editor_without_a_texture_cutter_says_so", async () => {
+    const host = await testHost(undefined, (request) => {
+      if (request.type === "list_files") return { type: "files", entries: [{ path: "assets/hero.png", id: "0000000000000000000000000000000d", kind: { Texture: { pixels_per_unit: 16, grid: null, pivot: null, filter: "Nearest" } } }] };
+      if (request.type === "read_binary") return { type: "bytes", bytes: "" };
+      return undefined;
+    });
+    await expect(host.editor.textures.frames("assets/hero.png")).rejects.toThrow("this editor cannot cut textures into frames: it was created without `textureFrames`");
   });
 });

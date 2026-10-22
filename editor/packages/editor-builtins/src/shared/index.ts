@@ -1,5 +1,5 @@
-import type { AssetId, ControlClient, ProjectInfo } from "@ludenea/control-client";
-import { runReported, type Editor } from "@ludenea/editor-shell";
+import type { AssetId, ControlClient, ProjectInfo, TextureMeta } from "@ludenea/control-client";
+import { runReported, type Editor, type TextureFrames } from "@ludenea/editor-shell";
 import { useLayoutEffect, useRef, useSyncExternalStore, type UIEvent } from "react";
 import { instantiate, type RenderModule } from "./render-module";
 
@@ -29,6 +29,15 @@ export function loadRenderModule(): Promise<RenderModule> {
   );
   renderModule = loading;
   return loading;
+}
+
+/**
+ * What `meta` cuts `png` into, by the renderer's module (`textureFrames`), loaded anew after a
+ * panic; rejects with its message. What the applications give `createEditor` for `editor.textures.frames`.
+ */
+export async function textureFrames(png: Uint8Array, meta: TextureMeta): Promise<TextureFrames> {
+  const module = await loadRenderModule();
+  return JSON.parse(module.textureFrames(png, JSON.stringify(meta))) as TextureFrames;
 }
 
 /** Calls `listener` with the message of each panic of the renderer's module; returns how to stop. */

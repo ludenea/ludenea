@@ -1,15 +1,15 @@
 import type { AssetKind, FileEntry, JsonValue, PathSegment } from "@ludenea/control-client";
-import { runReported, type Editor } from "@ludenea/editor-shell";
+import { runReported, type AssetKindName, type Editor } from "@ludenea/editor-shell";
 import { useRef, type KeyboardEvent } from "react";
 import { setAt } from "../inspector/default-value";
 import { Field } from "../inspector/fields/Field";
 import { ASSET_FOLDERS, errorText, useGame, useKeptScroll, useStore } from "../shared";
-import { kindName, type Action, type Assets, type KindName, type NewData } from "./index";
+import { kindName, type Action, type Assets, type NewData } from "./index";
 import { emptyValue, isComplete } from "./value";
 
-const ICONS: { [kind in KindName]: string } = { Scene: "▣", Prefab: "◇", Data: "≡", Texture: "▦", Replay: "▶", Trace: "∿", Snapshot: "◉", Other: "·" };
-const KINDS = Object.keys(ICONS) as KindName[];
-const OPENABLE = new Set<KindName>(["Scene", "Prefab", "Data", "Replay", "Trace", "Snapshot"]);
+const ICONS: { [kind in AssetKindName]: string } = { Scene: "▣", Prefab: "◇", Data: "≡", Texture: "▦", Replay: "▶", Trace: "∿", Snapshot: "◉", Other: "·" };
+const KINDS = Object.keys(ICONS) as AssetKindName[];
+const OPENABLE = new Set<AssetKindName>(["Scene", "Prefab", "Data", "Texture", "Replay", "Trace", "Snapshot"]);
 
 /** What a file is, as its tooltip says: the type of a data asset, else the kind's name. */
 function kindLabel(kind: AssetKind): string {
@@ -20,7 +20,7 @@ export const baseName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 export const folderOf = (path: string) => path.slice(0, Math.max(path.lastIndexOf("/"), 0));
 
 /** Files grouped under their folder, folders sorted, filtered by kind and by a case-insensitive substring of the path. */
-function grouped(files: FileEntry[], filter: string, kind: KindName | null): [string, FileEntry[]][] {
+function grouped(files: FileEntry[], filter: string, kind: AssetKindName | null): [string, FileEntry[]][] {
   const needle = filter.trim().toLowerCase();
   const folders = new Map<string, FileEntry[]>(ASSET_FOLDERS.map((folder) => [folder, []]));
   for (const file of files) {
@@ -48,17 +48,18 @@ export function AssetsPanel({ editor, assets }: { editor: Editor; assets: Assets
       (failure) => set({ error: errorText(failure) }),
     );
   const groups = grouped(files, filter, kind);
-  // A data asset selected in the browser is the one the inspector edits.
+  // A data asset or texture selected in the browser is the one the inspector shows.
   const select = (file: FileEntry) => {
     set({ selected: file.path, menu: null });
-    if (kindName(file.kind) === "Data") editor.selection.getState().selectAsset(file.id);
+    const kind = kindName(file.kind);
+    if (kind === "Data" || kind === "Texture") editor.selection.getState().selectAsset(file.id, kind);
   };
 
   return (
     <div className="ludenea-assets" ref={scrolled.ref} onScroll={scrolled.onScroll}>
       <input type="search" aria-label="Filter assets" placeholder="Filter" value={filter} onChange={(event) => set({ filter: event.target.value })} />
       <div className="ludenea-toolbar">
-        <select aria-label="Kind" value={kind ?? ""} onChange={(event) => set({ kind: (event.target.value || null) as KindName | null })}>
+        <select aria-label="Kind" value={kind ?? ""} onChange={(event) => set({ kind: (event.target.value || null) as AssetKindName | null })}>
           <option value="">All kinds</option>
           {KINDS.map((name) => (
             <option key={name} value={name}>

@@ -57,7 +57,7 @@ describe("assets", () => {
     expect([title("main.scene.ron"), title("logo.png"), title("settings.ron"), title("hero.png")]).toEqual(["Scene", "Other", "demo::Settings", "Texture"]);
   });
 
-  it("a_texture_is_its_own_kind_and_opening_it_only_selects_it", async () => {
+  it("a_texture_is_its_own_kind_and_opening_it_shows_it_in_the_inspector", async () => {
     const HERO = "0000000000000000000000000000000d";
     const files: FileEntry[] = [...entries, { path: "assets/hero.png", id: HERO, kind: { Texture: { pixels_per_unit: 16, grid: null, pivot: null, filter: "Nearest" } } }];
     const { host } = await browser({ text: "", files });
@@ -69,11 +69,30 @@ describe("assets", () => {
 
     fireEvent.doubleClick(screen.getByText("hero.png"));
     await settle();
-    // Not a data asset: the inspector does not take it, no document opens, and nothing fails.
-    expect(host.editor.selection.getState().asset).not.toBe(HERO);
+    // The inspector previews it; no document opens, and nothing fails.
+    expect(host.editor.selection.getState().asset).toEqual({ id: HERO, kind: "Texture" });
     expect(host.editor.document.getState().current).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByText("hero.png").closest("li")!.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("textures_are_selectable", async () => {
+    const HERO = "0000000000000000000000000000000d";
+    const files: FileEntry[] = [
+      ...entries,
+      { path: "assets/hero.png", id: HERO, kind: { Texture: { pixels_per_unit: 16, grid: null, pivot: null, filter: "Nearest" } } },
+      { path: "assets/settings.ron", id: SETTINGS, kind: { Data: { type: "demo::Settings" } } },
+    ];
+    const { host } = await browser({ text: "", files });
+    act(() => host.editor.selection.getState().select([{ index: 1, generation: 0 }]));
+
+    fireEvent.click(screen.getByText("hero.png"));
+    expect(host.editor.selection.getState()).toMatchObject({ entities: [], asset: { id: HERO, kind: "Texture" } });
+    fireEvent.keyDown(screen.getByText("settings.ron").closest("li")!, { key: " " });
+    expect(host.editor.selection.getState().asset).toEqual({ id: SETTINGS, kind: "Data" });
+    // Another kind of file is no asset the inspector shows: the selection stays.
+    fireEvent.click(screen.getByText("logo.png"));
+    expect(host.editor.selection.getState().asset).toEqual({ id: SETTINGS, kind: "Data" });
   });
 
   it("opening_scene_loads_it_into_the_game", async () => {
@@ -846,7 +865,7 @@ describe("data assets, replays, traces, and snapshots", () => {
     renderPanel(host, "ludenea.inspector");
     fireEvent.click(screen.getByText("settings.ron"));
     await settle();
-    expect(host.editor.selection.getState().asset).toBe(SETTINGS);
+    expect(host.editor.selection.getState().asset).toEqual({ id: SETTINGS, kind: "Data" });
     expect(screen.queryByRole("img", { name: "unsaved changes" })).toBeNull();
 
     type("gravity_scale", "2");

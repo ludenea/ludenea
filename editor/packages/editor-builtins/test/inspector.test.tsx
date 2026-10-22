@@ -1,5 +1,7 @@
 import { definePlugin } from "@ludenea/editor-shell";
 import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
+import type { TypeSchema } from "@ludenea/control-client";
+import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { builtinPlugins } from "../src";
 import { renderPanel, schemas, settle, testEditor, testGame } from "./support";
@@ -257,6 +259,59 @@ describe("inspector", () => {
     expect(component("ludenea::Collider").getByText("custom density 1")).toBeTruthy();
     expect(component("ludenea::Collider").queryByRole("alert")).toBeNull();
     expect(devtools).not.toHaveBeenCalled();
+  });
+
+  describe("asset inspectors", () => {
+    const SETTINGS = "0000000000000000000000000000000c";
+    const settings: TypeSchema = { kind: "struct", name: "demo::Settings", fields: [{ name: "gravity_scale", schema: { kind: "f32" } }] };
+
+    async function dataAsset(inspector: (props: { id: string; value: unknown; onChange(path: unknown[], value: unknown): void }) => ReactNode) {
+      const plugin = definePlugin({ name: "my_game", activate: (editor) => void editor.inspectors.registerAsset("demo::Settings", inspector) });
+      const host = await testEditor([...builtinPlugins, plugin]);
+      const game = await testGame(
+        (command) => {
+          if (command.type === "get_asset") return { type: "asset", asset: "demo::Settings", value: json({ gravity_scale: 0.5 }) };
+          if (command.type === "get_resources") return { type: "resources", resources: {} };
+          return { type: "done" };
+        },
+        { assets: [{ name: "demo::Settings", schema: settings }] },
+      );
+      act(() => host.setControl(game.client));
+      act(() => host.editor.selection.getState().selectAsset(SETTINGS, "Data"));
+      renderPanel(host, "ludenea.inspector");
+      await settle();
+      return { host, game };
+    }
+
+    it("an_asset_inspector_renders_below_the_generic_fields", async () => {
+      const seen: { id: string; value: unknown }[] = [];
+      const { game } = await dataAsset(({ id, value, onChange }) => {
+        seen.push({ id, value });
+        return <button onClick={() => onChange([field("gravity_scale")], 2)}>Double gravity</button>;
+      });
+
+      const section = component("demo::Settings");
+      const generic = section.getByLabelText("gravity_scale");
+      const custom = section.getByRole("button", { name: "Double gravity" });
+      expect(generic.compareDocumentPosition(custom) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(seen.at(-1)).toEqual({ id: SETTINGS, value: { gravity_scale: 0.5 } });
+
+      fireEvent.click(custom);
+      await settle();
+      expect(game.sent).toContainEqual({ type: "set_asset_field", id: SETTINGS, path: [field("gravity_scale")], value: 2 });
+    });
+
+    it("an_asset_inspector_that_throws_leaves_the_generic_fields", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const { host } = await dataAsset(() => {
+        throw new Error("value.clips is undefined");
+      });
+
+      const failure = 'The "demo::Settings" asset inspector of plugin "my_game" failed: value.clips is undefined';
+      expect(component("demo::Settings").getByRole("alert").textContent).toContain(failure);
+      expect(component("demo::Settings").getByLabelText("gravity_scale")).toBeTruthy();
+      expect(host.editor.console.list().map(({ text }) => text)).toEqual([failure]);
+    });
   });
 
   it("add_component_choice_follows_the_components_present", async () => {

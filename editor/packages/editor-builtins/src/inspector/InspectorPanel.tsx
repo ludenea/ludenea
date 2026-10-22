@@ -21,13 +21,47 @@ const schemaMap = (named: { name: string; schema: TypeSchema }[]) => new Map(nam
 
 export function InspectorPanel({ editor, state }: { editor: Editor; state: InspectorState }) {
   const control = useGame(editor);
+  const asset = editor.selection((selection) => selection.asset);
+  // A texture is the project's, not the game's: its inspector shows alone, game or none.
+  if (asset?.kind === "Texture") {
+    if (!editor.inspectors.getAsset("Texture")) return <p className="ludenea-muted">No inspector is registered for textures.</p>;
+    return (
+      <div className="ludenea-inspector">
+        <AssetInspectorSlot editor={editor} name="Texture" id={asset.id} value={null} onChange={changeTexture} />
+      </div>
+    );
+  }
   if (!control) return <p className="ludenea-muted">No game is running.</p>;
   return <Inspector editor={editor} control={control} state={state} />;
 }
 
+/** A texture has no value: its PNG and its meta are files of the project. */
+const changeTexture = () => {
+  throw new Error("a texture has no value to change: write its PNG or its meta through `editor.project`");
+};
+
+/**
+ * The asset inspector registered as `name`, if any, isolated from the panel: one that throws
+ * shows its failure with a button to render it again.
+ */
+function AssetInspectorSlot({ editor, name, id, value, onChange }: { editor: Editor; name: string; id: AssetId; value: unknown | null; onChange(path: PathSegment[], value: unknown): void }) {
+  const Custom = editor.inspectors.getAsset(name);
+  if (!Custom) return null;
+  const fallback = ({ text, retry }: PluginFailure) => (
+    <p role="alert" className="ludenea-error">
+      {text} <button onClick={retry}>Reload inspector</button>
+    </p>
+  );
+  return (
+    <PluginBoundary editor={editor} registration={Custom} name={`The "${name}" asset inspector`} fallback={fallback} resetKeys={[id]}>
+      <Custom id={id} value={value} onChange={onChange} />
+    </PluginBoundary>
+  );
+}
+
 function Inspector({ editor, control, state }: { editor: Editor; control: ControlClient; state: InspectorState }) {
   const entities = editor.selection((selection) => selection.entities);
-  const asset = editor.selection((selection) => selection.asset);
+  const asset = editor.selection((selection) => (selection.asset?.kind === "Data" ? selection.asset.id : null));
   const { adding, focused, expanded } = useStore(state);
   const components = useMemo(() => schemaMap(control.game.components), [control]);
   const resourceSchemas = useMemo(() => schemaMap(control.game.resources), [control]);
@@ -156,6 +190,13 @@ function DataAsset({ editor, control, id }: { editor: Editor; control: ControlCl
       (failure) => setError(errorText(failure)),
     );
   const schema = asset && control.game.assets.find(({ name }) => name === asset.asset)?.schema;
+  const onChange = (path: PathSegment[], value: unknown) =>
+    void setField(path, value as JsonValue).then(
+      () => setError(null),
+      (failure) => setError(errorText(failure)),
+    );
+  // A value without a JSON form is shown as RON, which an asset inspector cannot read.
+  const below = asset && asset.value.type === "json" && <AssetInspectorSlot editor={editor} name={asset.asset} id={id} value={asset.value.value} onChange={onChange} />;
 
   return (
     <>
@@ -170,7 +211,7 @@ function DataAsset({ editor, control, id }: { editor: Editor; control: ControlCl
         )}
       </h2>
       {error && <p className="ludenea-error">{error}</p>}
-      {asset && <Section editor={editor} name={asset.asset} value={asset.value} schema={schema ?? undefined} edit={setField} readOnly={resimulating} />}
+      {asset && <Section editor={editor} name={asset.asset} value={asset.value} schema={schema ?? undefined} edit={setField} readOnly={resimulating} below={below} />}
     </>
   );
 }
@@ -282,13 +323,15 @@ interface SectionProps {
   state?: InspectorState;
   focused?: boolean;
   readOnly?: boolean;
+  /** What shows below the fields, such as a data asset's own inspector. */
+  below?: ReactNode;
 }
 
 /**
- * One component or resource: its custom inspector, its schema-driven fields, or read-only text.
- * A custom inspector that throws gives way to the schema-driven fields.
+ * One component, resource, or data asset: its custom inspector, its schema-driven fields, or
+ * read-only text. A custom inspector that throws gives way to the schema-driven fields.
  */
-function Section({ editor, name, title, value, schema, edit, entity, state, focused = false, readOnly = false }: SectionProps) {
+function Section({ editor, name, title, value, schema, edit, entity, state, focused = false, readOnly = false, below }: SectionProps) {
   const [error, setError] = useState<string | null>(null);
   const Custom = entity ? editor.inspectors.get(name) : undefined;
   // A value shown whole (as RON, or without a schema) differs as a whole.
@@ -349,6 +392,7 @@ function Section({ editor, name, title, value, schema, edit, entity, state, focu
       </h3>
       {differs && <p className="ludenea-mixed">The selected entities have different values; the first one's is shown.</p>}
       {body}
+      {below}
       {error && <p className="ludenea-error">{error}</p>}
     </section>
   );

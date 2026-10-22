@@ -1,5 +1,5 @@
 import type { AssetId, AssetKind, FileChange, FileEntry, JsonValue, TypeSchema } from "@ludenea/control-client";
-import { definePlugin, type Editor, type OpenDocument } from "@ludenea/editor-shell";
+import { definePlugin, type AssetKindName, type Editor, type OpenDocument } from "@ludenea/editor-shell";
 import { createStore, errorText, shared, showPanel, unsavedAssets, type Scroll, type Store } from "../shared";
 import { AssetsPanel, baseName } from "./AssetsPanel";
 import { emptyValue, toRon } from "./value";
@@ -18,8 +18,7 @@ export type ChangedBanner = { path: string; text: string } | { path: string; ass
 export type RemovedBanner = { path: string; removed: true };
 
 /** A file kind without its data type or texture meta: what the browser shows and filters by. */
-export type KindName = "Scene" | "Prefab" | "Data" | "Texture" | "Replay" | "Trace" | "Snapshot" | "Other";
-export const kindName = (kind: AssetKind): KindName => (typeof kind === "string" ? kind : "Data" in kind ? "Data" : "Texture");
+export const kindName = (kind: AssetKind): AssetKindName => (typeof kind === "string" ? kind : "Data" in kind ? "Data" : "Texture");
 
 /**
  * The data asset being created: its type and path, then, for a type without a default value,
@@ -31,7 +30,7 @@ export interface AssetsState {
   files: FileEntry[];
   filter: string;
   /** Only files of this kind; null for every kind. */
-  kind: KindName | null;
+  kind: AssetKindName | null;
   selected: string | null;
   /** The inline form (rename, move) or confirmation (delete) the panel shows. */
   action: Action | null;
@@ -48,7 +47,7 @@ export interface Assets {
   state: Store<AssetsState>;
   /** Kept here, not in the panel: the shell unmounts a panel while its tab is hidden. */
   scroll: Scroll;
-  /** Opens a scene, prefab, or replay as the document, a trace or snapshot in the divergence viewer, and a data asset in the inspector; a texture, which has no preview yet, is only selected. */
+  /** Opens a scene, prefab, or replay as the document, a trace or snapshot in the divergence viewer, and a data asset or a texture in the inspector. */
   open(path: string): Promise<void>;
   /** Starts the "New data asset" form, for the game's asset types. */
   newDataAsset(): void;
@@ -111,12 +110,11 @@ export const assetsPlugin = definePlugin({
         const kind = kindName(entry.kind);
         // Registered by the divergence viewer.
         if (kind === "Trace" || kind === "Snapshot") return editor.commands.run("divergence.open-file", { path });
-        if (kind === "Data") {
-          editor.selection.getState().selectAsset(entry.id);
+        if (kind === "Data" || kind === "Texture") {
+          editor.selection.getState().selectAsset(entry.id, kind);
           return showPanel(editor, "ludenea.inspector");
         }
-        if (kind === "Texture") return;
-        if (kind !== "Scene" && kind !== "Prefab" && kind !== "Replay") throw new Error(`${path} is not a scene, a prefab, a replay, a trace, a snapshot, or a data asset`);
+        if (kind !== "Scene" && kind !== "Prefab" && kind !== "Replay") throw new Error(`${path} is not a scene, a prefab, a replay, a trace, a snapshot, a data asset, or a texture`);
         // Documents are usable before the build: the document is remembered and loaded into each game.
         await documents.getState().open(entry.id);
         state.set({ banners: state.get().banners.filter((banner) => !("text" in banner)), error: null });

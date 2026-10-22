@@ -766,8 +766,7 @@ hash, those of the golden trace and replays included.
   store of its document, and the restore resolves to null instead of failing. Other sessions
   restore as with `restoreSession`.
 - The asset browser shows a texture as its own kind, `Texture`, with its own icon and
-  entry in the kind filter, instead of as a data asset the inspector would take; opening
-  one only selects it, as textures have no preview yet.
+  entry in the kind filter, instead of as a data asset the inspector would take.
 - The asset browser keeps the open document open when its file is moved or renamed outside
   the editor: `DocumentState.current` follows the file's identifier to its new path, or,
   when the meta stayed behind, the file created with the document's text, under that file's
@@ -827,6 +826,20 @@ hash, those of the golden trace and replays included.
 - The mark of a field decoration that failed is a button that renders the decoration again,
   for one that fails until state it reads loads while its field stays the same (a paused
   game); it stayed until the entity or the component changed.
+- `Editor.inspectors.registerAsset(name, inspector)` adds an `AssetInspector` for the data
+  assets of the type `name`, shown below their generic fields with the asset's value and an
+  `onChange` editing a field, or for textures as `"Texture"`, shown alone without a game;
+  `getAsset(name)` finds it, and `pluginOf` names its plugin.
+- `Editor.textures` (`TextureAccess`): `list` and `subscribe` follow the project's textures
+  whose meta can be read (`TextureInfo`), `bytes(path)` reads a texture's PNG, and
+  `frames(path)` the `TextureFrames` its meta cuts it into, rejected with the renderer's
+  reason. `createEditor` takes the cutting function as `textureFrames` (the applications pass
+  the renderer's, exported by `@ludenea/editor-builtins`); without it, `frames` rejects
+  saying so. `textureOf(entry)` tells what a listed file is as a texture.
+- Breaking: `SelectionState.asset` is `{ id, kind }` (an `AssetKindName`) instead of the
+  identifier alone, and `selectAsset(id, kind)` takes the kind: the inspector shows a
+  selected texture as well as a data asset. Opening a texture in the asset browser shows its
+  preview in the inspector, and the built-in sprite sheet inspector plays its clips.
 
 ### Formats
 

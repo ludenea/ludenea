@@ -75,7 +75,8 @@ export const inspectorPlugin = definePlugin({
     const assetOf = (asked?: unknown) => {
       const control = editor.control;
       if (!control) throw new Error("no game is running");
-      const id = typeof asked === "string" ? asked : editor.selection.getState().asset;
+      const selected = editor.selection.getState().asset;
+      const id = typeof asked === "string" ? asked : selected?.kind === "Data" ? selected.id : null;
       if (!id) throw new Error("select a data asset first");
       return { control, id };
     };

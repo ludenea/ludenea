@@ -16,12 +16,21 @@ export const renderers: WebRenderer[] = [];
 
 /**
  * What the next renderers do: the textures `set_textures` refuses; the PNGs (by their text,
- * which the tests use as their bytes) `textureFrames` rejects, with the message; what the next
- * `init` and the next `create` throw; and what the next `create` waits for before it finishes.
+ * which the tests use as their bytes) `textureFrames` rejects, with the message, and the frames
+ * it cuts others into (one frame of 1 by 1 pixel when not set); what the next `init` and the
+ * next `create` throw; and what the next `create` waits for before it finishes.
  */
-export const script: { refused: Refused[]; invalidTextures: { [pngText: string]: string }; initError: Error | null; createError: Error | null; createWaits: Promise<void> | null } = {
+export const script: {
+  refused: Refused[];
+  invalidTextures: { [pngText: string]: string };
+  frames: { [pngText: string]: { width: number; height: number; frames: { x: number; y: number; width: number; height: number; pivot: [number, number] }[] } };
+  initError: Error | null;
+  createError: Error | null;
+  createWaits: Promise<void> | null;
+} = {
   refused: [],
   invalidTextures: {},
+  frames: {},
   initError: null,
   createError: null,
   createWaits: null,
@@ -45,9 +54,10 @@ export function named(name: string, message: string): Error {
 }
 
 export function textureFrames(png: Uint8Array): string {
-  const rejected = script.invalidTextures[new TextDecoder().decode(png)];
+  const text = new TextDecoder().decode(png);
+  const rejected = script.invalidTextures[text];
   if (rejected !== undefined) throw new Error(rejected);
-  return JSON.stringify({ width: 1, height: 1, frames: [{ x: 0, y: 0, width: 1, height: 1, pivot: [0, 0] }] });
+  return JSON.stringify(script.frames[text] ?? { width: 1, height: 1, frames: [{ x: 0, y: 0, width: 1, height: 1, pivot: [0, 0] }] });
 }
 
 export function ghostFrame(frame: string): string {

@@ -1,4 +1,4 @@
-import type { Entity, PathSegment, Vec2 } from "@ludenea/control-client";
+import type { AssetId, Entity, PathSegment, TextureMeta, Vec2 } from "@ludenea/control-client";
 import type { ComponentType, ReactNode } from "react";
 import type { Editor } from "./editor";
 
@@ -43,6 +43,40 @@ export type InspectorComponent<T> = ComponentType<{
   onChange(path: PathSegment[], value: unknown): void;
   entity: Entity;
 }>;
+
+/** What kind of project file a selected asset is: its `AssetKind` without a data type or texture meta. */
+export type AssetKindName = "Scene" | "Prefab" | "Data" | "Texture" | "Replay" | "Trace" | "Snapshot" | "Other";
+
+/**
+ * Inspects one type of asset, registered by its data type name (`"ludenea::SpriteSheet"`) or
+ * as `"Texture"`. A data asset's inspector shows below its generic fields, with its value
+ * (null when it has no JSON form) and `onChange` setting one field as the generic fields do; a
+ * texture's shows alone, with a null `value`, whether or not a game runs.
+ */
+export type AssetInspector = ComponentType<{
+  id: AssetId;
+  value: unknown | null;
+  onChange(path: PathSegment[], value: unknown): void;
+}>;
+
+/** A texture of the project whose meta can be read. */
+export interface TextureInfo {
+  id: AssetId;
+  /** Relative to the project root. */
+  path: string;
+  meta: TextureMeta;
+}
+
+/**
+ * What a texture's meta cuts its PNG into, in pixels: the image's size and its frames,
+ * row-major, each with its rectangle from the image's top-left corner and its pivot from the
+ * frame's top-left corner.
+ */
+export interface TextureFrames {
+  width: number;
+  height: number;
+  frames: { x: number; y: number; width: number; height: number; pivot: [number, number] }[];
+}
 
 /** A value persisted per installation (`localStorage`), falling back to `default`. */
 export interface SettingDefinition<T> {

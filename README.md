@@ -343,6 +343,17 @@ template's `assets/settings.ron`. Systems read it through a `Handle<T>` field an
 the asset browser to edit it in the inspector: the session replays with the new value from
 the tick of the change, and "Save the selected data asset" writes it back to its file.
 
+### Textures and clips
+
+Select a texture (a PNG with its `.meta`) in the asset browser to preview it in the inspector,
+with or without a running game: the image zoomed by a whole factor with nearest filtering, each
+frame its meta cuts outlined and numbered, each pivot marked, and its size, frame count, and
+pixels per unit. A texture its meta cannot cut shows why; one whose meta cannot be read points
+at the project's warning in the console. The preview follows changes on disk. A sprite sheet
+(`ludenea::SpriteSheet` data asset) shows a player under its fields for each clip: play and
+pause, the frame shown and its index, one frame every `ticks_per_frame` ticks at the game's
+tick rate, looping. A clip reaching past its texture's frames says so and does not play.
+
 ### Replays
 
 A replay (`.replay`) holds everything a run needs to be checked again: the resolved scene,
@@ -403,6 +414,13 @@ export default definePlugin({
   },
 });
 ```
+
+`editor.inspectors.registerAsset` adds an inspector for one type of asset: a data type name
+(shown below the asset's generic fields, with its value and an `onChange` that edits a field)
+or `"Texture"` (shown alone, with no game needed). `editor.textures` lists the project's
+textures (`list` and `subscribe`, following changes on disk) and reads a texture's PNG
+(`bytes`) and the frames its meta cuts it into (`frames`, rejected with the renderer's reason).
+The built-in texture previews and clip players are a plugin on this API.
 
 `editor.console` writes to the Console panel: `log` shows a message, `report` a failure.
 A command that fails from the palette or a shortcut is reported there under its title.

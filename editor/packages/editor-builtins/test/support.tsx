@@ -15,6 +15,7 @@ import {
 import type { PluginDefinition } from "@ludenea/editor-shell";
 import { createEditor, reportCaughtErrors, type EditorHost } from "@ludenea/editor-shell/app";
 import { act, render } from "@testing-library/react";
+import { textureFrames } from "../src";
 
 type Message = { type: string; [key: string]: unknown };
 /** A reply, `{ error }` to fail, a promise of either to answer later (out of order), or nothing when undefined. */
@@ -80,10 +81,10 @@ export const testGame = (answer: Answer = () => ({ type: "done" }), info: Partia
     ControlClient.connect,
   );
 
-/** An editor on a fake project service with `plugins` active. */
+/** An editor on a fake project service with `plugins` active, cutting textures as the applications do. */
 export async function testEditor(plugins: PluginDefinition[], answer?: Answer) {
   const project = await testProject(answer);
-  const host = createEditor({ project: project.client });
+  const host = createEditor({ project: project.client, textureFrames });
   for (const plugin of plugins) host.loader.activate(plugin);
   return { ...host, project };
 }

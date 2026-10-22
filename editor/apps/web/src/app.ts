@@ -2,7 +2,7 @@ import "dockview-react/dist/styles/dockview.css";
 import "../../../packages/editor-shell/src/theme.css";
 import "../../../packages/editor-builtins/src/panels.css";
 import type { ConsoleLevel, ControlClient, PluginBundle, ProjectClient } from "@ludenea/control-client";
-import { builtinPlugins } from "@ludenea/editor-builtins";
+import { builtinPlugins, textureFrames } from "@ludenea/editor-builtins";
 import { createEditor, mountShell, type DocumentSessions, type EditorHost } from "@ludenea/editor-shell/app";
 
 /** What the web and desktop applications share: the shell, its plugins, and the game switch. */
@@ -27,7 +27,7 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
  * application serves a bundle.
  */
 export function startEditor(project: ProjectClient, pluginUrl: (bundle: PluginBundle) => string): EditorApp {
-  const host = createEditor({ project });
+  const host = createEditor({ project, textureFrames });
   for (const plugin of builtinPlugins) host.loader.activate(plugin);
   mountShell(document.getElementById("root")!, host);
   const log = (level: ConsoleLevel, text: string) => host.editor.console.log(level, text);

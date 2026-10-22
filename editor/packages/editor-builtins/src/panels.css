@@ -674,3 +674,24 @@
 .ludenea-dock .dv-content-container [aria-label="Recent projects"] {
   margin-top: var(--space-2);
 }
+
+.ludenea-dock .dv-content-container .ludenea-texture-preview {
+  overflow: auto;
+}
+
+.ludenea-texture-frame rect {
+  fill: none;
+  stroke: var(--color-accent);
+  stroke-width: 1;
+}
+
+.ludenea-texture-frame text {
+  fill: var(--color-accent);
+  font-family: var(--font-mono);
+}
+
+.ludenea-texture-pivot {
+  fill: none;
+  stroke: var(--color-warning);
+  stroke-width: 2;
+}

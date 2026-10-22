@@ -9,3 +9,4 @@ export { type Registry } from "./registry";
 export { exportSession, restoreSession, type DocumentSessions, type SavedSession } from "./stores/document";
 export { STORED_SESSION_VERSION } from "./stores/stored-session";
 export { installShortcuts } from "./shortcuts";
+export type { TextureFrameCutter } from "./textures";

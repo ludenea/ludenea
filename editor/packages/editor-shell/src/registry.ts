@@ -1,4 +1,5 @@
 import type {
+  AssetInspector,
   CommandDefinition,
   Disposable,
   ExplorerColumn,
@@ -85,6 +86,8 @@ export class Registry {
   readonly panels: Collection<PanelDefinition> = new Collection("panel", this);
   readonly commands: Collection<CommandDefinition> = new Collection("command", this);
   readonly inspectors: Collection<InspectorComponent<unknown>> = new Collection("inspector", this);
+  /** By data type name, or `"Texture"`. */
+  readonly assetInspectors: Collection<AssetInspector> = new Collection("asset inspector", this);
   /** Normalized key to command id. */
   readonly shortcuts: Collection<string> = new Collection("shortcut", this);
   readonly overlays: Collection<ViewportOverlay> = new Collection("overlay", this);
@@ -99,7 +102,7 @@ export class Registry {
 
   /** Who registered `value`, of any kind but a shortcut; undefined when it is not registered. */
   ownerOf(value: object): string | undefined {
-    const kinds = [this.panels, this.commands, this.inspectors, this.overlays, this.settings, this.decorations, this.columns];
+    const kinds = [this.panels, this.commands, this.inspectors, this.assetInspectors, this.overlays, this.settings, this.decorations, this.columns];
     for (const kind of kinds) {
       const owner = kind.ownerOf(value);
       if (owner !== undefined) return owner;

@@ -4,6 +4,7 @@ import { createConsole, type EditorConsole } from "./console";
 import { createEntityAccess, type ComponentTypes, type EntityAccess } from "./entities";
 import { PluginLoader } from "./loader";
 import type {
+  AssetInspector,
   CommandDefinition,
   Disposable,
   ExplorerColumn,
@@ -19,6 +20,7 @@ import { createBranchStore, type BranchStore } from "./stores/branches";
 import { createDocumentStore, type DocumentSessions, type DocumentStore } from "./stores/document";
 import { createSelectionStore, type SelectionStore } from "./stores/selection";
 import { feedTimeline, createTimelineStore, type TimelineStore } from "./stores/timeline";
+import { createTextureAccess, type TextureAccess, type TextureFrameCutter } from "./textures";
 
 /** The one object every plugin, built-in or not, extends the editor through. */
 export interface Editor {
@@ -30,6 +32,9 @@ export interface Editor {
   inspectors: {
     register<N extends keyof ComponentTypes>(component: N, inspector: InspectorComponent<ComponentTypes[N]>): Disposable;
     get(component: string): InspectorComponent<unknown> | undefined;
+    /** Adds an inspector for the data assets of the type `name` (below their generic fields), or for textures as `"Texture"`. */
+    registerAsset(name: string, inspector: AssetInspector): Disposable;
+    getAsset(name: string): AssetInspector | undefined;
     decorate(decoration: FieldDecoration): Disposable;
     decorations: Observed<FieldDecoration>;
   };
@@ -59,12 +64,14 @@ export interface Editor {
   document: DocumentStore;
   branches: BranchStore;
   assets: AssetAccess;
+  /** The project's textures, their PNGs, and the frames their metas cut them into; no game needed. */
+  textures: TextureAccess;
   /** What the Console panel shows: plugins report their failures here, as the shell reports those of commands. */
   console: EditorConsole;
   onGameChanged(listener: (control: ControlClient | null) => void): Disposable;
   /**
-   * The name of the plugin that registered `registration` (a panel, command, inspector,
-   * overlay, setting, decoration, or column, as given to `register`), `"editor"` for one
+   * The name of the plugin that registered `registration` (a panel, command, inspector, asset
+   * inspector, overlay, setting, decoration, or column, as given to `register`), `"editor"` for one
    * registered outside an `activate`; undefined when it is not registered.
    */
   pluginOf(registration: object): string | undefined;
@@ -111,9 +118,11 @@ export function createEditor(options: {
   control?: ControlClient | null;
   /** Imports a plugin bundle; tests replace it. */
   importModule?: (url: string) => Promise<unknown>;
+  /** Cuts a texture into frames for `editor.textures.frames`: the renderer's; without it, `frames` rejects saying so. */
+  textureFrames?: TextureFrameCutter;
 }): EditorHost {
   const registry = new Registry();
-  const { commands, inspectors, overlays, settings, decorations, columns } = registry;
+  const { commands, inspectors, assetInspectors, overlays, settings, decorations, columns } = registry;
   const gameListeners = new Set<(control: ControlClient | null) => void>();
   const setting = (id: string) => {
     const definition = settings.get(id);
@@ -148,6 +157,8 @@ export function createEditor(options: {
     inspectors: {
       register: (component, inspector) => inspectors.register(component as string, inspector as InspectorComponent<unknown>),
       get: (component) => inspectors.get(component),
+      registerAsset: (name, inspector) => assetInspectors.register(name, inspector),
+      getAsset: (name) => assetInspectors.get(name),
       decorate: (decoration) => decorations.register(decoration.id, decoration),
       decorations: { list: decorations.values, subscribe: decorations.subscribe },
     },
@@ -194,6 +205,7 @@ export function createEditor(options: {
     document: documents.store,
     branches: createBranchStore(() => control, timeline),
     assets: createAssetAccess(() => control, options.project),
+    textures: createTextureAccess(options.project, editorConsole.report, options.textureFrames),
     console: editorConsole,
     onGameChanged(listener) {
       // A fresh entry per call, so registering one function twice needs two disposals.

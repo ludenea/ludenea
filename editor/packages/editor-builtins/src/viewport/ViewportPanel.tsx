@@ -143,7 +143,7 @@ export function ViewportPanel({
       repaint = true;
     };
     const uploadTextures = (target: WebRenderer) => {
-      known ??= loadTextures(editor.project, warnOnce);
+      known ??= loadTextures(editor, warnOnce);
       return known.then((textures) => upload(target, textures)).catch((error) => {
         // Only the initial load starts over: a reload that fails leaves the set as it was.
         known = null;
@@ -158,7 +158,7 @@ export function ViewportPanel({
         before = current;
         // A fresh warning for each break: a version that works clears its path's earlier ones.
         const loaded = (path: string) => textureWarnings.forEach((text) => text.startsWith(`${path}: `) && textureWarnings.delete(text));
-        return reloadChanged(current, changes, editor.project, warnOnce, loaded).catch((error) => {
+        return reloadChanged(current, changes, editor, warnOnce, loaded).catch((error) => {
           if (!disposed) editor.console.report(error, "Reloading the textures for the viewport");
           return current;
         });
