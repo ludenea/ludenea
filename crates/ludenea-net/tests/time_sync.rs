@@ -229,20 +229,23 @@ fn counts(harness: &mut Harness, peer: PeerId) -> Counts {
 }
 
 /// Runs the peers to 10 s, then to 60 s, and returns what each counted over those 50 s and
-/// the widest tick gap between two peers seen at any step.
+/// the widest tick gap between two peers from 10 s on, both ends included.
 fn run_drifting(harness: &mut Harness) -> (Vec<Counts>, u64) {
     harness.run_until(10 * ONE_SECOND, |_| false);
     let peers: Vec<PeerId> = harness.peers().collect();
     let start: Vec<Counts> = peers.iter().map(|peer| counts(harness, *peer)).collect();
-    let mut widest = 0;
-    while harness.now_micros() < 60 * ONE_SECOND {
-        harness.step();
+    let gap = |harness: &Harness| {
         let ticks: Vec<u64> = peers
             .iter()
             .map(|peer| harness.model(*peer).tick())
             .collect();
-        let gap = ticks.iter().max().unwrap() - ticks.iter().min().unwrap();
-        widest = widest.max(gap);
+        ticks.iter().max().unwrap() - ticks.iter().min().unwrap()
+    };
+    // From the step the counts start at, so the gap bounds the ticks at both ends.
+    let mut widest = gap(harness);
+    while harness.now_micros() < 60 * ONE_SECOND {
+        harness.step();
+        widest = widest.max(gap(harness));
     }
 
     for peer in &peers {
@@ -360,10 +363,13 @@ fn peer_behind_never_skips_when_the_round_trip_exceeds_the_window() {
         let (counts, widest) = run_drifting(&mut harness);
         let [fast, slow] = [counts[0], counts[1]];
         assert_eq!(slow.skips, 0, "{latency_micros} us: {counts:?}");
-        // Both peers run the same ticks, within the widest gap, so the faster one loses its
-        // extra frames and one for each of the slower one's stalls, and no more.
+        // A peer's ticks grow by its frames less its skips and stalls. Over the 50 s, the
+        // faster peer's ticks grow by at most `2 * widest` fewer than the slower one's: its
+        // lead moves from at most `widest` ahead to at most `widest` behind. So it loses at
+        // most its extra frames, plus the slower one's skips (none) and stalls, plus
+        // `2 * widest`.
         assert!(
-            fast.skips + fast.stalls <= extra_frames + slow.stalls + widest,
+            fast.skips + fast.stalls <= extra_frames + slow.stalls + 2 * widest,
             "{latency_micros} us: {counts:?}, widest {widest}"
         );
     }
