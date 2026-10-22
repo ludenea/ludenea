@@ -111,7 +111,7 @@ pub enum ViolationRule {
     AckLagging,
 }
 
-/// Why a received packet was dropped. Ordered, so the counts of [`PeerStats::dropped`]
+/// Why a received packet, or one message of it, was dropped. Ordered, so the counts of [`PeerStats::dropped`]
 /// iterate the same way everywhere.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DropReason {
@@ -122,8 +122,8 @@ pub enum DropReason {
     /// The sender is not another peer of this match.
     UnknownPeer,
     /// The packet holds more than the handshake while this session is not running yet, other
-    /// than inputs and acknowledgments from a peer whose matching `Hello` arrived. Its
-    /// handshake messages are still read.
+    /// than inputs, acknowledgments and quality messages from a peer whose matching `Hello`
+    /// arrived. Its handshake messages are still read.
     BeforeRunning,
     /// The inputs start after the next tick expected from that player, within the horizon.
     /// Not a violation: a sender resends from the tick acknowledged last, so a later packet
@@ -131,6 +131,7 @@ pub enum DropReason {
     Gap,
     /// A `QualityReply` echoes no `Quality` request still pending: answered already (a
     /// duplicate), forgotten, or never sent. Not a violation: the network duplicates packets.
+    /// Only that message is dropped: the rest of its packet is read.
     UnknownEcho,
 }
 
@@ -188,7 +189,8 @@ pub struct PeerStats {
     /// The packets dropped, by reason. Each dropped packet counts once, under the reason that
     /// stopped reading it: an `Inputs` message with a gap stops the packet there and is the
     /// reason, even when an earlier message of the same packet came before the session ran;
-    /// otherwise such a message makes the reason [`DropReason::BeforeRunning`].
+    /// otherwise such a message makes the reason [`DropReason::BeforeRunning`]. A
+    /// [`DropReason::UnknownEcho`] counts one dropped reply, and stops nothing.
     pub dropped: BTreeMap<DropReason, u64>,
     /// The rollbacks a misprediction of this peer's inputs caused.
     pub rollbacks: u64,
@@ -536,11 +538,11 @@ impl Session {
                 }
                 // The replier's tick is not read: its requests carry its tick with its view of
                 // the advantage, which the correction needs both of.
+                // A reply answering no request is dropped alone: the rest of the packet is read.
                 Message::QualityReply { echo_micros, .. } => {
                     self.welcomed_by_running_peer(index);
-                    if let Err(refusal) = self.read_reply(index, echo_micros, now) {
-                        self.refuse(now, from, refusal);
-                        return;
+                    if !self.read_reply(index, echo_micros, now) {
+                        self.drop_packet(from, DropReason::UnknownEcho);
                     }
                 }
                 _ if self.state == SessionState::Connecting => before_running = true,
@@ -1120,15 +1122,17 @@ impl Session {
     }
 
     /// Reads a `QualityReply` of the remote at `index`: a reply echoing a pending request adds
-    /// its round trip and updates the ping and the jitter; any other echo is a
-    /// [`DropReason::UnknownEcho`].
-    fn read_reply(&mut self, index: usize, echo_micros: u64, now: u64) -> Result<(), Refusal> {
+    /// its round trip and updates the ping and the jitter. Whether the echo matched one: any
+    /// other echo changes nothing.
+    fn read_reply(&mut self, index: usize, echo_micros: u64, now: u64) -> bool {
         let remote = &mut self.remotes[index];
-        let position = remote
+        let Some(position) = remote
             .pending_quality
             .iter()
             .position(|sent| *sent == echo_micros)
-            .ok_or(Refusal::Drop(DropReason::UnknownEcho))?;
+        else {
+            return false;
+        };
         remote.pending_quality.remove(position);
         // A pending request was sent at a time this session saw, so at most `now`.
         push_bounded(
@@ -1142,7 +1146,7 @@ impl Session {
         let stats = self.stats.peers.entry(remote.id).or_default();
         stats.ping_micros = ping;
         stats.jitter_micros = jitter;
-        Ok(())
+        true
     }
 
     /// The ticks to skip now: the largest mean correction over the peers with

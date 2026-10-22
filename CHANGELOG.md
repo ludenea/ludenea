@@ -116,8 +116,8 @@ hash, those of the golden trace and replays included.
 - A running `ludenea_net::Session` keeps its ticks in step with the other peers. Every
   `QUALITY_INTERVAL_MICROS` (200 ms) it sends each peer a `Quality` request with its tick
   and frame advantage, and answers each request with a `QualityReply`. A reply that echoes
-  no pending request (at most `QUALITY_HISTORY` = 16 kept) is dropped as
-  `DropReason::UnknownEcho`. `PeerStats` gains `ping_micros` (the mean of the latest 16
+  no pending request (at most `QUALITY_HISTORY` = 16 kept) is dropped alone as
+  `DropReason::UnknownEcho`, the rest of its packet read. `PeerStats` gains `ping_micros` (the mean of the latest 16
   round trips), `jitter_micros` (their mean absolute deviation) and `frame_advantage`. When
   the mean correction `(local_advantage - remote_advantage) / 2` of the latest
   `SYNC_MIN_REPORTS` (4) fresh reports of a peer, rounded to the nearest tick, is at least

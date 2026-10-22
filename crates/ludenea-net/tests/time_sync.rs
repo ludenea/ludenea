@@ -305,3 +305,41 @@ fn three_peers_converge() {
     );
     assert_eq!(counts[2].skips, 0, "the slowest peer: {counts:?}");
 }
+
+#[test]
+fn unknown_echo_drops_only_its_reply() {
+    let mut session = handshake(sessions(2)).remove(0);
+    session.events();
+    let packet = Packet {
+        match_id: 1,
+        messages: vec![
+            Message::QualityReply {
+                echo_micros: u64::MAX,
+                tick: 0,
+            },
+            Message::Inputs {
+                player: 1,
+                first_tick: 0,
+                inputs: vec![vec![3]],
+            },
+        ],
+    };
+    session.receive(PeerId(1), &packet.encode(), ONE_SECOND);
+    assert_eq!(dropped(&session, PeerId(1), DropReason::UnknownEcho), 1);
+    session.add_local_input(0, vec![0]).unwrap();
+    session.advance(ONE_SECOND).unwrap();
+    // The input after the reply was read: tick 0 is confirmed with it.
+    assert_eq!(
+        session.events(),
+        [
+            SessionEvent::Dropped {
+                peer: PeerId(1),
+                reason: DropReason::UnknownEcho,
+            },
+            SessionEvent::Confirmed {
+                tick: 0,
+                inputs: vec![vec![0], vec![3]],
+            },
+        ]
+    );
+}
