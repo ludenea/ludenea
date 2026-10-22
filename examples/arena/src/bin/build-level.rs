@@ -4,7 +4,7 @@
 //! platforms with `paint_tiles`, spawns a fixed box collider over each horizontal run of
 //! painted cells, then saves the scene to its file. Every collider of the scene is the
 //! level's. A refused command stops it with the game's own error before the scene file is
-//! written.
+//! written: writing the file is the last thing it does.
 //!
 //! `build-level [<scene>]` builds the committed scene, or `<scene>`, whose prefabs and data
 //! assets come from its project folder; `host --stdio` is how it starts itself as the game.
@@ -225,10 +225,9 @@ impl Game {
         let Reply::Scene { ron } = self.request(Command::SaveScene)? else {
             return Err("the game answered the scene save with another reply".into());
         };
+        // The session ends right after: nothing needs the scene marked as saved.
         fs::write(scene_path, &ron)
-            .map_err(|error| format!("cannot write {}: {error}", scene_path.display()))?;
-        self.request(Command::MarkSceneSaved { text: ron })
-            .map(drop)
+            .map_err(|error| format!("cannot write {}: {error}", scene_path.display()))
     }
 
     fn paint(&mut self, entity: Entity, area: TileArea, tile: Option<u32>) -> Result<(), String> {
