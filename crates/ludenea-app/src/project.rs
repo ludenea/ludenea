@@ -78,7 +78,7 @@ pub fn project_textures(scene: &Path, project: Option<&Path>) -> Result<ProjectT
             Ok(meta) => meta,
             Err(reason) => {
                 failures.push(TextureFailure {
-                    cause: format!("cannot read {name}.meta: {reason}"),
+                    cause: format!("cannot read its meta: {reason}"),
                     path: name,
                 });
                 continue;
@@ -356,10 +356,9 @@ mod tests {
             panic!("{failures:?}")
         };
         assert_eq!(failure.path, broken.display().to_string());
+        // The path is named once, by the failure's prefix.
         assert!(
-            failure
-                .cause
-                .starts_with(&format!("cannot read {}.meta: ", broken.display())),
+            failure.cause.starts_with("cannot read its meta: "),
             "{failure}"
         );
         assert_eq!(

@@ -1182,10 +1182,7 @@ mod tests {
     }
 
     fn update(textures: Vec<ProjectTexture>, failures: Vec<TextureFailure>) -> ProjectTextures {
-        ProjectTextures {
-            textures,
-            failures,
-        }
+        ProjectTextures { textures, failures }
     }
 
     #[test]
@@ -1232,12 +1229,12 @@ mod tests {
         let runner = still_game();
         let failure = TextureFailure {
             path: "hero.png".to_string(),
-            cause: "cannot read hero.png.meta: expected `Meta`".to_string(),
+            cause: "cannot read its meta: expected `Meta`".to_string(),
         };
         let warnings = display.replace_textures(&update(Vec::new(), vec![failure]));
         assert_eq!(
             warnings,
-            ["hero.png: cannot read hero.png.meta: expected `Meta`, keeping the previous version"]
+            ["hero.png: cannot read its meta: expected `Meta`, keeping the previous version"]
         );
         assert_eq!(centre(&mut display, &runner), RED);
     }

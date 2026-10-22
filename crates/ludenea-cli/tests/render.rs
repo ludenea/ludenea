@@ -253,7 +253,10 @@ fn invalid_texture_meta_warns_and_still_renders() {
             .lines()
             .find(|line| line.starts_with("warning: "))
             .unwrap_or_else(|| panic!("no warning in {output}"));
-        assert!(warning.contains("tiles.png.meta"), "{warning}");
+        assert!(
+            warning.contains("tiles.png: cannot read its meta: "),
+            "{warning}"
+        );
         assert!(warning.contains("the texture is left out"), "{warning}");
         let image = decode(&dir.join("frame.png"));
         // The tiles are drawn as placeholders, the walker as before.
