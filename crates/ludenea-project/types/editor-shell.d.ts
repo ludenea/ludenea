@@ -287,9 +287,10 @@ interface SelectionState {
 type SelectionStore = UseBoundStore<StoreApi<SelectionState>>;
 
 /**
- * The project's textures: `list` gives those whose meta can be read, listed when first asked
- * (`list` or `subscribe`), then again when the project opens or a texture changes on disk. Each
- * listing gives new objects: one held from before is out of date once its listing is replaced.
+ * The project's textures: `list` gives those whose meta can be read, listed once a first
+ * listener subscribes (empty until then), then again when the project opens or a texture
+ * changes on disk. Each listing gives new objects: one held from before is out of date once
+ * its listing is replaced.
  */
 interface TextureAccess extends Observed<TextureInfo> {
     /** The PNG at `path`, as the project holds it now. */

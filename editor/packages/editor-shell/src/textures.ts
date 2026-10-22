@@ -4,9 +4,10 @@ import type { Observed } from "./editor";
 import type { TextureFrames, TextureInfo } from "./plugin";
 
 /**
- * The project's textures: `list` gives those whose meta can be read, listed when first asked
- * (`list` or `subscribe`), then again when the project opens or a texture changes on disk. Each
- * listing gives new objects: one held from before is out of date once its listing is replaced.
+ * The project's textures: `list` gives those whose meta can be read, listed once a first
+ * listener subscribes (empty until then), then again when the project opens or a texture
+ * changes on disk. Each listing gives new objects: one held from before is out of date once
+ * its listing is replaced.
  */
 export interface TextureAccess extends Observed<TextureInfo> {
   /** The PNG at `path`, as the project holds it now. */
@@ -83,10 +84,8 @@ export function createTextureAccess(project: ProjectClient, report: EditorConsol
 
   const bytes = async (path: string) => decode((await project.request({ type: "read_binary", path })).bytes);
   return {
-    list() {
-      start();
-      return snapshot;
-    },
+    // Pure: a snapshot getter that `useSyncExternalStore` calls while rendering.
+    list: () => snapshot,
     subscribe(listener) {
       start();
       listeners.add(listener);

@@ -301,4 +301,22 @@ describe("loader", () => {
     });
     await expect(host.editor.textures.frames("assets/hero.png")).rejects.toThrow("this editor cannot cut textures into frames: it was created without `textureFrames`");
   });
+
+  it("reading_the_texture_list_requests_nothing_until_someone_subscribes", async () => {
+    const requests: string[] = [];
+    const host = await testHost(undefined, (request) => {
+      requests.push(request.type);
+      return request.type === "list_files" ? { type: "files", entries: [] } : undefined;
+    });
+
+    // A snapshot getter, as `useSyncExternalStore` calls it while rendering: no side effect.
+    expect(host.editor.textures.list()).toEqual([]);
+    await settle();
+    expect(requests).toEqual([]);
+
+    const stop = host.editor.textures.subscribe(() => {});
+    await settle();
+    expect(requests).toEqual(["list_files"]);
+    stop();
+  });
 });
