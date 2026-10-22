@@ -194,15 +194,9 @@ export const DIVERGENCE_FIXTURES = join(import.meta.dirname, "fixtures/divergenc
 /** The color the renderer clears to (`BACKGROUND` in crates/ludenea-render/src/gpu/mod.rs). */
 const BACKGROUND = [0x12, 0x12, 0x14] as const;
 
-/**
- * Whether the renderer drew in `viewport`: most of its pixels are the background it clears to,
- * and some are drawn over it (the template scene's colliders). A canvas it never drew on shows
- * neither.
- */
-export async function viewportDrew(page: Page, viewport: Locator): Promise<boolean> {
-  const screenshot = (await viewport.screenshot()).toString("base64");
-  // Decoded in the page.
-  const { background, drawn } = await page.evaluate(
+/** How many pixels of the screenshot `png` are the renderer's background, and how many are drawn over it; decoded in the page. */
+export async function pixelCounts(page: Page, png: Buffer): Promise<{ background: number; drawn: number }> {
+  return page.evaluate(
     async ([png, [red, green, blue]]) => {
       const bytes = Uint8Array.from(atob(png as string), (char) => char.charCodeAt(0));
       const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
@@ -215,7 +209,16 @@ export async function viewportDrew(page: Page, viewport: Locator): Promise<boole
       }
       return { background, drawn: data.length / 4 - background };
     },
-    [screenshot, BACKGROUND] as const,
+    [png.toString("base64"), BACKGROUND] as const,
   );
+}
+
+/**
+ * Whether the renderer drew in `viewport`: most of its pixels are the background it clears to,
+ * and some are drawn over it (the template scene's colliders). A canvas it never drew on shows
+ * neither.
+ */
+export async function viewportDrew(page: Page, viewport: Locator): Promise<boolean> {
+  const { background, drawn } = await pixelCounts(page, await viewport.screenshot());
   return background > drawn && drawn > 0;
 }
