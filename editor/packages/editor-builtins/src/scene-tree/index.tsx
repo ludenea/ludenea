@@ -1,4 +1,4 @@
-import { definePlugin, type EditCommand } from "@ludenea/editor-shell";
+import { definePlugin, type BatchableCommand } from "@ludenea/editor-shell";
 import { errorText } from "../shared";
 import { SceneTree } from "./SceneTree";
 
@@ -15,7 +15,7 @@ export const sceneTreePlugin = definePlugin({
       async run() {
         game();
         const { entities } = editor.selection.getState();
-        await editor.batched(entities.map((entity): EditCommand => ({ type: "despawn", entity })));
+        await editor.batched(entities.map((entity): BatchableCommand => ({ type: "despawn", entity })));
         editor.selection.getState().clear();
       },
     });

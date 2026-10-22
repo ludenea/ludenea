@@ -864,7 +864,8 @@ hash, those of the golden trace and replays included.
   game's reply (`ReplyFor<C>`: a `spawn` gives the entity it made); it rejects without a
   game and while the game resimulates. `Editor.batched(commands)` sends several as one
   `batch` (one alone as itself, with its own reply; none not at all, resolving as an empty
-  batch does), and `Editor.onEdited(listener)` hears every edit the game accepted. The
+  batch does); it takes only the `BatchableCommand`s a batch holds (spawn, despawn, insert
+  or remove a component, set a field, paint tiles), and `Editor.onEdited(listener)` hears every edit the game accepted. The
   built-in panels edit through them.
 - `Editor.viewport.tools.register(tool)` adds a `ViewportTool`: while it is the active
   tool (`viewport.setTool(id)`, read from the `viewport.activeTool` store, `null` for the

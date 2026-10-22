@@ -1,5 +1,5 @@
 import { ProtocolFailure, type AssetId, type ComponentValue, type ControlClient, type Entity, type FieldTarget, type JsonValue, type PathSegment, type Timeline, type TypeSchema } from "@ludenea/control-client";
-import { PluginBoundary, type EditCommand, type Editor, type PluginFailure } from "@ludenea/editor-shell";
+import { PluginBoundary, type BatchableCommand, type Editor, type PluginFailure } from "@ludenea/editor-shell";
 import { useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { errorText, useGame, useStore, useUnsavedAsset } from "../shared";
 import { ResimulatingNotice, useResimulating } from "../timeline/editing";
@@ -82,7 +82,7 @@ function Inspector({ editor, control, state }: { editor: Editor; control: Contro
   // A field of several entities changes in one batch: one undo step, all of them or none.
   const setComponent = (component: string): Edit => async (path, value) => {
     const target = (entity: Entity): FieldTarget => ({ type: "component", entity, component });
-    await onEntity(editor, editor.batched(entities.map((entity): EditCommand => ({ type: "set_field", target: target(entity), path, value }))));
+    await onEntity(editor, editor.batched(entities.map((entity): BatchableCommand => ({ type: "set_field", target: target(entity), path, value }))));
     values.refresh();
   };
 
@@ -430,7 +430,7 @@ function AddComponent(props: { editor: Editor; entities: Loaded[]; schemas: Map<
   const insert = async () => {
     if (!schema) return;
     const value = draft ?? defaultValue(schema);
-    const commands = lacking(chosen).map((entity): EditCommand => ({ type: "insert_component", entity, component: chosen, value }));
+    const commands = lacking(chosen).map((entity): BatchableCommand => ({ type: "insert_component", entity, component: chosen, value }));
     try {
       await onEntity(editor, editor.batched(commands));
       state.set({ adding: null, focused: chosen });

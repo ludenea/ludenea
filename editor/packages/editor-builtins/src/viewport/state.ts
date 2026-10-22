@@ -1,5 +1,5 @@
 import type { ControlClient, DebugDrawFrame, Entity, Vec2 } from "@ludenea/control-client";
-import type { EditCommand, Editor } from "@ludenea/editor-shell";
+import type { BatchableCommand, Editor } from "@ludenea/editor-shell";
 import { onEntity } from "../inspector";
 import type { Store } from "../shared";
 import { assertEditable } from "../timeline/editing";
@@ -46,7 +46,7 @@ export const visibleLayers = (control: ControlClient | null, state: ViewportStat
 export async function moveBy(editor: Editor, control: ControlClient, entities: readonly Entity[], offset: Vec2, state: ViewportState): Promise<void> {
   assertEditable(editor);
   const replies = await Promise.all(entities.map((entity) => onEntity(editor, control.request({ type: "get_entity", entity }))));
-  const moves = replies.flatMap(({ entity, components }): EditCommand[] => {
+  const moves = replies.flatMap(({ entity, components }): BatchableCommand[] => {
     const pose = components[POSE];
     if (pose?.type !== "json") return [];
     const { position } = pose.value as { position: Vec2 };

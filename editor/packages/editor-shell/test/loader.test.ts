@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DuplicateRegistration, definePlugin, type EditCommand, type Editor, type ViewportTool } from "../src";
+import { DuplicateRegistration, definePlugin, type BatchableCommand, type Editor, type ViewportTool } from "../src";
 import { Shell } from "../src/app";
 import { logged, settle, testGame, testHost, timeline } from "./support";
 
@@ -388,6 +388,9 @@ describe("loader", () => {
     await expect(host.editor.edit({ type: "get_hash" })).rejects.toThrow("no game is running");
     // @ts-expect-error `replace_scene` loads saved files, which the document store sends
     await expect(host.editor.edit({ type: "replace_scene", scene: "", assets: [] })).rejects.toThrow("no game is running");
+    // A batch holds only the commands the game applies inside one.
+    // @ts-expect-error undo is no command of a batch
+    await expect(host.editor.batched([{ type: "undo" }])).rejects.toThrow("no game is running");
 
     const game = await testGame((command) => {
       if (command.type === "get_timeline") return timeline();
@@ -399,8 +402,8 @@ describe("loader", () => {
     act(() => host.editor.viewport.setTool("my_game.paint"));
     expect(host.editor.viewport.activeTool.getState()).toBe("my_game.paint");
 
-    const score = (value: number): EditCommand => ({ type: "set_field", target: { type: "resource", resource: "demo::Score" }, path: [], value });
-    const lives: EditCommand = { type: "set_field", target: { type: "resource", resource: "demo::Lives" }, path: [], value: 3 };
+    const score = (value: number): BatchableCommand => ({ type: "set_field", target: { type: "resource", resource: "demo::Score" }, path: [], value });
+    const lives: BatchableCommand = { type: "set_field", target: { type: "resource", resource: "demo::Lives" }, path: [], value: 3 };
     // Each edit resolves with the game's reply: a spawn gives the entity it made.
     const spawned = await host.editor.edit({ type: "spawn", components: {} });
     expect(spawned.entity).toEqual(entity);

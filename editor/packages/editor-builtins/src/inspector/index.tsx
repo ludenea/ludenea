@@ -1,5 +1,5 @@
 import { ProtocolFailure, type JsonValue } from "@ludenea/control-client";
-import { definePlugin, type EditCommand, type Editor } from "@ludenea/editor-shell";
+import { definePlugin, type BatchableCommand, type Editor } from "@ludenea/editor-shell";
 import { createStore, shared, showPanel, type Store } from "../shared";
 import { assertEditable } from "../timeline/editing";
 import { InspectorPanel } from "./InspectorPanel";
@@ -55,7 +55,7 @@ export const inspectorPlugin = definePlugin({
       title: "Remove the focused component from the selected entities",
       async run() {
         const { entities, component } = focused();
-        const removals = entities.map((entity): EditCommand => ({ type: "remove_component", entity, component }));
+        const removals = entities.map((entity): BatchableCommand => ({ type: "remove_component", entity, component }));
         await onEntity(editor, editor.batched(removals));
         state.set({ focused: null });
       },

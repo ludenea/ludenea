@@ -54,6 +54,15 @@ const EDIT_COMMAND_TYPES = [
 /** A command that edits the game's session as one undo step (see `EDIT_COMMAND_TYPES`). */
 export type EditCommand = Extract<Command, { type: (typeof EDIT_COMMAND_TYPES)[number] }>;
 
+/**
+ * The edits the game applies inside a `batch`: those that change entities and their
+ * components. Checked against `EditCommand`, so each is an edit of the protocol.
+ */
+const BATCHABLE_COMMAND_TYPES = ["spawn", "despawn", "insert_component", "remove_component", "set_field", "paint_tiles"] as const satisfies readonly EditCommand["type"][];
+
+/** An edit `editor.batched` can group with others (see `BATCHABLE_COMMAND_TYPES`). */
+export type BatchableCommand = Extract<Command, { type: (typeof BATCHABLE_COMMAND_TYPES)[number] }>;
+
 type BatchCommand = Extract<Command, { type: "batch" }>;
 
 /** The active viewport tool's id, null for the built-in select and move: a Zustand store read as a hook or with `getState`/`subscribe`; `editor.viewport.setTool` changes it. */
@@ -105,9 +114,10 @@ export interface Editor {
   /**
    * Sends `commands` as one edit (one undo step, all of them or none): one alone as itself,
    * with its own reply, several as a `batch`. Empty, it sends nothing and resolves with the
-   * reply an empty batch gets.
+   * reply an empty batch gets. Only the edits a batch can hold (`BatchableCommand`: spawn,
+   * despawn, insert or remove a component, set a field, paint tiles) are accepted.
    */
-  batched<C extends EditCommand>(commands: C[]): Promise<ReplyFor<C> | ReplyFor<BatchCommand>>;
+  batched<C extends BatchableCommand>(commands: C[]): Promise<ReplyFor<C> | ReplyFor<BatchCommand>>;
   /** Calls `listener` with each command `edit` and `batched` send, once the game accepted it. */
   onEdited(listener: (command: EditCommand) => void): Disposable;
   settings: {
