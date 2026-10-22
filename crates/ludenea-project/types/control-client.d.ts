@@ -275,6 +275,9 @@ type Command = {
     "type": "paint_tiles";
     entity: Entity;
     area: TileArea;
+    /**
+     * Required: `null` erases, and a missing `tile` is refused instead of erasing.
+     */
     tile: number | null;
 } | {
     "type": "batch";

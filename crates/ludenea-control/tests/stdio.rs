@@ -236,3 +236,33 @@ fn a_line_that_is_not_utf8_gets_an_error_and_the_session_goes_on() {
         }
     ));
 }
+
+#[test]
+fn a_paint_tiles_without_its_tile_is_refused_naming_the_field() {
+    let entity = serde_json::json!({ "index": 0, "generation": 0 });
+    let input = hello()
+        + &line(serde_json::json!({
+            "type": "request",
+            "id": 5,
+            "command": {
+                "type": "paint_tiles",
+                "entity": entity,
+                "area": { "x": 0, "y": 0, "width": 1, "height": 1 },
+            },
+        }));
+    let messages = answers(serve(input));
+    match &messages[1] {
+        ServerMessage::Response {
+            id: 5,
+            result: Err(error),
+        } => {
+            assert_eq!(error.code, ErrorCode::InvalidCommand);
+            assert!(
+                error.message.contains("missing field `tile`"),
+                "{}",
+                error.message
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+}

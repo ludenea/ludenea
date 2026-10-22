@@ -308,6 +308,9 @@ pub enum Command {
     PaintTiles {
         entity: Entity,
         area: TileArea,
+        /// Required: `null` erases, and a missing `tile` is refused instead of erasing.
+        #[serde(with = "required_option")]
+        #[cfg_attr(feature = "ts", ts(as = "Option<u32>"))]
         tile: Option<u32>,
     },
     /// Applies edit commands (`spawn`, `despawn`, `insert_component`, `remove_component`,
@@ -808,6 +811,25 @@ pub struct RecordedEvent {
 pub struct SyncPoint {
     pub after_system: String,
     pub commands: Vec<String>,
+}
+
+/// An `Option` field that must be present: `null` is `None`, and a missing field is refused
+/// where serde would take it for `None`.
+mod required_option {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<T: Serialize, S: Serializer>(
+        value: &Option<T>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        value.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, T: Deserialize<'de>, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<T>, D::Error> {
+        Option::deserialize(deserializer)
+    }
 }
 
 /// A rectangle of tilemap cells: `width` by `height` cells from the cell at column `x`, row

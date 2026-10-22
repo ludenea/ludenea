@@ -553,6 +553,31 @@ fn a_tilemap_whose_tiles_do_not_fill_its_grid_is_refused() {
 }
 
 #[test]
+fn a_paint_without_its_tile_does_not_decode_and_a_null_tile_erases() {
+    let mut host = loaded();
+    let entity = tilemap(&mut host);
+    ok(&mut host, paint(entity, (0, 0, 2, 1), Some(6)));
+    let mut command = serde_json::to_value(paint(entity, (0, 0, 1, 1), None)).unwrap();
+    assert_eq!(command["tile"], Value::Null);
+
+    let without_tile = {
+        let mut command = command.clone();
+        command.as_object_mut().unwrap().remove("tile");
+        command
+    };
+    let error = serde_json::from_value::<Command>(without_tile).unwrap_err();
+    assert!(
+        error.to_string().contains("missing field `tile`"),
+        "{error}"
+    );
+
+    command["tile"] = Value::Null;
+    let erase = serde_json::from_value::<Command>(command).unwrap();
+    ok(&mut host, erase);
+    assert_eq!(tiles(&mut host, entity), expected((1, 0, 1, 1), json!(6)));
+}
+
+#[test]
 fn an_error_after_the_paint_is_read_names_the_paint() {
     let mut host = loaded();
     step(&mut host, 15);
