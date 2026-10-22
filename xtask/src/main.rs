@@ -39,7 +39,7 @@ const CHECKS: &[&str] = &[
     "doc --locked --no-deps --workspace",
     // The browser: the facade's entry, the Web Worker transport, and the renderer on WebGPU and
     // WebGL2.
-    "clippy --locked --target wasm32-unknown-unknown -p ludenea -p ludenea-control -p ludenea-runtime -p boxes -p swarm -p arena --lib -- -D warnings",
+    "clippy --locked --target wasm32-unknown-unknown -p ludenea -p ludenea-control -p ludenea-net -p ludenea-runtime -p boxes -p swarm -p arena --lib -- -D warnings",
     "clippy --locked --target wasm32-unknown-unknown -p ludenea-render --features web --lib -- -D warnings",
     // The standalone web page's exports: the lobby, beside the renderer it links.
     "clippy --locked --target wasm32-unknown-unknown -p ludenea-runtime --features web --lib -- -D warnings",
@@ -47,6 +47,8 @@ const CHECKS: &[&str] = &[
     "clippy --locked --target wasm32-wasip1 -p boxes -p arena --bins -- -D warnings",
     // The runner without a window, as a headless game build links it.
     "clippy --locked --target wasm32-wasip1 -p ludenea-runtime --lib -- -D warnings",
+    // The network crate, tests included: they run under wasmtime in CI.
+    "clippy --locked --target wasm32-wasip1 -p ludenea-net --all-targets -- -D warnings",
 ];
 
 fn main() -> ExitCode {

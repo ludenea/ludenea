@@ -1,0 +1,11 @@
+[package]
+name = "ludenea-net"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+ludenea-app.workspace = true
+ludenea-ecs.workspace = true
+serde.workspace = true
+postcard.workspace = true
+thiserror.workspace = true

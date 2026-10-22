@@ -70,6 +70,7 @@ ludenea-draw = { path = "crates/ludenea-draw" }
 ludenea-render = { path = "crates/ludenea-render" }
 ludenea-control = { path = "crates/ludenea-control" }
 ludenea-cli = { path = "crates/ludenea-cli" }
+ludenea-net = { path = "crates/ludenea-net" }
 ludenea-runtime = { path = "crates/ludenea-runtime" }
 ludenea = { path = "crates/ludenea" }
 ludenea-project = { path = "crates/ludenea-project" }

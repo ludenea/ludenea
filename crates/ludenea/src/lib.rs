@@ -6,6 +6,7 @@ pub use ludenea_control as control;
 pub use ludenea_draw as draw;
 pub use ludenea_ecs as ecs;
 pub use ludenea_math as math;
+pub use ludenea_net as net;
 pub use ludenea_physics as physics;
 pub use ludenea_render as render;
 pub use ludenea_runtime as runtime;

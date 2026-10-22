@@ -32,13 +32,15 @@ jobs:
       - run: cargo doc --locked --no-deps --workspace
       # The browser: the facade's entry, the Web Worker transport, and the renderer on WebGPU and
       # WebGL2.
-      - run: cargo clippy --locked --target wasm32-unknown-unknown -p ludenea -p ludenea-control -p ludenea-runtime -p boxes -p swarm -p arena --lib -- -D warnings
+      - run: cargo clippy --locked --target wasm32-unknown-unknown -p ludenea -p ludenea-control -p ludenea-net -p ludenea-runtime -p boxes -p swarm -p arena --lib -- -D warnings
       - run: cargo clippy --locked --target wasm32-unknown-unknown -p ludenea-render --features web --lib -- -D warnings
       - run: cargo clippy --locked --target wasm32-unknown-unknown -p ludenea-runtime --features web --lib -- -D warnings
       # WebAssembly outside the browser: the command line tools that verify the goldens.
       - run: cargo clippy --locked --target wasm32-wasip1 -p boxes -p arena --bins -- -D warnings
       # The runner without a window, as a headless game build links it.
       - run: cargo clippy --locked --target wasm32-wasip1 -p ludenea-runtime --lib -- -D warnings
+      # The network crate, tests included: they run under wasmtime in the wasm job.
+      - run: cargo clippy --locked --target wasm32-wasip1 -p ludenea-net --all-targets -- -D warnings
 
   native:
     strategy:
@@ -202,6 +204,10 @@ jobs:
       - name: Install the pinned toolchain
         run: rustup toolchain install
       - uses: bytecodealliance/actions/wasmtime/setup@v1
+      - name: Test the network crate
+        run: cargo test --locked --target wasm32-wasip1 -p ludenea-net
+        env:
+          CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime run --dir=.
       - id: build
         run: cargo build --locked --release --target wasm32-wasip1 -p boxes --bin boxes -p arena --bin arena
       # WebAssembly always runs on one thread. The game reaches only the working directory
