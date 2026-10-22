@@ -315,6 +315,44 @@ fn load_refuses() {
     );
 }
 
+#[derive(Asset, Serialize, Deserialize, Debug, PartialEq)]
+#[asset(name = "test::Table")]
+struct TableA(u32);
+
+#[derive(Asset, Serialize, Deserialize, Debug, PartialEq)]
+#[asset(name = "test::Table")]
+struct TableB(u32);
+
+#[test]
+fn load_refuses_other_asset_types() {
+    let with_stats = |world: &mut World| {
+        world.register_asset::<Stats>().unwrap();
+        let bytes = postcard::to_allocvec(&Stats(4)).unwrap();
+        world.insert_asset(AssetId(1), Stats::NAME, &bytes).unwrap();
+    };
+    assert_refused(
+        &saved_from(with_stats),
+        |_| {},
+        SavedError::UnexpectedStorage {
+            name: Stats::NAME.to_string(),
+        },
+    );
+    assert_refused(
+        &saved_from(|_| {}),
+        |world| world.register_asset::<Stats>().unwrap(),
+        SavedError::MissingStorage {
+            name: Stats::NAME.to_string(),
+        },
+    );
+    assert_refused(
+        &saved_from(|world| world.register_asset::<TableA>().unwrap()),
+        |world| world.register_asset::<TableB>().unwrap(),
+        SavedError::TypeMismatch {
+            name: "test::Table".to_string(),
+        },
+    );
+}
+
 #[test]
 fn saved_error_messages_name_the_type() {
     let message = SavedError::TypeMismatch {

@@ -1,5 +1,5 @@
 use ludenea_app::{App, SavedState, Sim, Simulation, StateError};
-use ludenea_ecs::{Commands, Component, Query, ResMut, Resource};
+use ludenea_ecs::{Commands, Component, Query, ResMut, Resource, SavedError};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Component, Serialize, Deserialize)]
@@ -76,6 +76,28 @@ fn load_state_refuses_another_game() {
         message.contains(&format!("{saved_fingerprint:016x}"))
             && message.contains(&format!("{current:016x}")),
         "{message}"
+    );
+    assert_eq!(simulation.snapshot(), before);
+}
+
+#[test]
+fn load_state_refuses_a_world_registered_differently_after_build() {
+    let saved_from = simulation();
+    let mut saved = SavedState::default();
+    saved_from.save_state(&mut saved);
+
+    // Registered after `App::build`, so the cached fingerprints still agree.
+    let mut simulation = simulation();
+    simulation
+        .world_mut()
+        .register_component::<Extra>()
+        .unwrap();
+    let before = simulation.snapshot();
+    let error = simulation.load_state(&saved).unwrap_err();
+    assert!(
+        matches!(&error, StateError::World(SavedError::MissingStorage { name })
+            if name == Extra::NAME),
+        "{error:?}"
     );
     assert_eq!(simulation.snapshot(), before);
 }

@@ -54,8 +54,8 @@ hash, those of the golden trace and replays included.
   asset map only when it changed since the last save. `World::load(&SavedWorld)` loads it
   back as `World::restore` restores a snapshot (queued commands and events dropped, runtime
   resources kept), all or nothing: it refuses with a `SavedError` (`Empty`,
-  `MissingStorage`, `UnexpectedStorage`, `TypeMismatch`, each naming the stable type name)
-  before changing anything. `Simulation::save_state(&mut SavedState)` and
+  `MissingStorage`, `UnexpectedStorage`, `TypeMismatch`, each naming the stable name of
+  the component, resource, or asset type that differs) before changing anything. `Simulation::save_state(&mut SavedState)` and
   `Simulation::load_state(&SavedState)` wrap them for a rollback that saves every tick;
   `load_state` refuses a state never saved into (`StateError::Empty`), one saved by another
   game build (`StateError::OtherWorld`, naming both schema fingerprints), and a world that

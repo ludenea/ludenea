@@ -1,15 +1,18 @@
 //! In-memory saves of a world: what a snapshot holds, cloned instead of encoded, so a
 //! rollback can save every tick and load a past state quickly.
 
+use std::any::TypeId;
 use std::collections::BTreeMap;
 
-use crate::assets::LoadedAsset;
+use crate::assets::{AssetType, LoadedAsset};
 use crate::commands::CommandQueue;
 use crate::world::{ResourceCell, Storage};
 use crate::{AssetId, EntitiesState, World};
 
 /// A copy of a world's entity allocator, component storages, resources, and loaded assets
-/// (shared, not copied). Saving into the same `SavedWorld` again reuses its allocations.
+/// (shared, not copied). Saving into the same `SavedWorld` again reuses its allocations:
+/// each storage's buffer and each resource's cell, and inside them whatever the type's
+/// `Clone::clone_from` reuses (`#[derive(Clone)]` clones afresh).
 /// Runtime resources, queued commands, and events are never saved.
 #[derive(Default)]
 pub struct SavedWorld {
@@ -20,11 +23,15 @@ pub struct SavedWorld {
     pub(crate) components: BTreeMap<&'static str, Option<Box<dyn Storage + Send>>>,
     resources: BTreeMap<&'static str, Option<Box<dyn ResourceCell + Send>>>,
     pub(crate) assets: BTreeMap<AssetId, LoadedAsset>,
+    /// The asset types of the world saved, by stable name, so a load can refuse a world
+    /// whose types would not read `assets`.
+    asset_types: BTreeMap<&'static str, TypeId>,
     /// The `World::assets_version` of `assets`.
     assets_version: u64,
 }
 
-/// Why `World::load` refused a saved world; each names the stable type name involved.
+/// Why `World::load` refused a saved world; each names the stable type name involved: a
+/// component, a resource, or an asset type.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SavedError {
     #[error("nothing was saved into this saved world; save a world into it before loading it")]
@@ -63,6 +70,13 @@ impl World {
                 .value
                 .clone_into(into.resources.entry(name).or_default());
         }
+        if !same_asset_types(&self.asset_types, &into.asset_types) {
+            into.asset_types = self
+                .asset_types
+                .iter()
+                .map(|(&name, entry)| (name, entry.type_id))
+                .collect();
+        }
         if into.assets_version != self.assets_version {
             into.assets.clone_from(&self.assets);
             into.assets_version = self.assets_version;
@@ -83,6 +97,7 @@ impl World {
         check_matching(&self.resources, &saved.resources, |entry, saved| {
             entry.value.check_saved(saved)
         })?;
+        check_asset_types(&self.asset_types, &saved.asset_types)?;
 
         clone_entities(&saved.entities, &mut self.entities);
         // The checks above proved both maps hold the same names, so they zip in order.
@@ -123,6 +138,49 @@ fn clone_entities(from: &EntitiesState, into: &mut EntitiesState) {
     into.free.clone_from(free);
 }
 
+/// Whether `saved` records exactly the asset types of `world`.
+fn same_asset_types(
+    world: &BTreeMap<&'static str, AssetType>,
+    saved: &BTreeMap<&'static str, TypeId>,
+) -> bool {
+    world.len() == saved.len()
+        && world
+            .iter()
+            .zip(saved)
+            .all(|((name, entry), (saved_name, type_id))| {
+                name == saved_name && entry.type_id == *type_id
+            })
+}
+
+/// Fails unless `saved` records exactly the asset types of `world`, so every saved asset
+/// is of a type this world reads as the saving world did.
+fn check_asset_types(
+    world: &BTreeMap<&'static str, AssetType>,
+    saved: &BTreeMap<&'static str, TypeId>,
+) -> Result<(), SavedError> {
+    for (&name, entry) in world {
+        match saved.get(name) {
+            None => {
+                return Err(SavedError::MissingStorage {
+                    name: name.to_string(),
+                });
+            }
+            Some(type_id) if *type_id != entry.type_id => {
+                return Err(SavedError::TypeMismatch {
+                    name: name.to_string(),
+                });
+            }
+            Some(_) => {}
+        }
+    }
+    match saved.keys().find(|name| !world.contains_key(*name)) {
+        Some(name) => Err(SavedError::UnexpectedStorage {
+            name: name.to_string(),
+        }),
+        None => Ok(()),
+    }
+}
+
 /// Fails unless `saved` holds exactly the names of `world`, each passing `check`.
 fn check_matching<E, S: ?Sized>(
     world: &BTreeMap<&'static str, E>,
@@ -154,11 +212,29 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use super::SavedWorld;
+    use std::cell::RefCell;
+
     use crate::world::ComponentStorage;
-    use crate::{Asset, AssetId, Component, World};
+    use crate::{Asset, AssetId, Component, Resource, World};
 
     #[derive(Component, Serialize, Deserialize, Clone)]
     struct Health(u32);
+
+    /// `#[derive(Clone)]` never overrides `clone_from`, so a derived resource gets a fresh
+    /// clone of its fields; this one forwards to `Vec::clone_from`, which shows that a save
+    /// goes through `clone_from` and keeps the buffer.
+    #[derive(Resource, Serialize, Deserialize)]
+    struct History(Vec<u32>);
+
+    impl Clone for History {
+        fn clone(&self) -> Self {
+            Self(self.0.clone())
+        }
+
+        fn clone_from(&mut self, source: &Self) {
+            self.0.clone_from(&source.0);
+        }
+    }
 
     #[derive(Asset, Serialize, Deserialize)]
     struct Stats(u32);
@@ -174,11 +250,23 @@ mod tests {
         storage.0.borrow().as_ptr()
     }
 
+    fn history_buffer(saved: &SavedWorld) -> *const u32 {
+        let cell: &dyn Any = saved.resources[History::NAME]
+            .as_ref()
+            .expect("saved")
+            .as_any();
+        let cell = cell
+            .downcast_ref::<RefCell<History>>()
+            .expect("a History cell");
+        cell.borrow().0.as_ptr()
+    }
+
     #[test]
     fn save_into_reuses_allocations() {
         let mut world = World::new();
         world.register_component::<Health>().unwrap();
         world.register_asset::<Stats>().unwrap();
+        world.register_resource(History(vec![1, 2, 3])).unwrap();
         for hp in 0..8 {
             let entity = world.spawn();
             world.insert(entity, Health(hp)).unwrap();
@@ -188,15 +276,22 @@ mod tests {
         let mut saved = SavedWorld::default();
         world.save_into(&mut saved);
         let first = buffer(&saved);
+        let first_history = history_buffer(&saved);
         assert_eq!(saved.assets.len(), 1);
 
         // The same shape with other values, and the asset map unchanged: emptied here, it
         // stays empty because the save does not copy it again.
         let first_entity = world.entities().next().unwrap();
         world.get_mut::<Health>(first_entity).unwrap().0 = 99;
+        world.resource_mut::<History>().unwrap().0[0] = 7;
         saved.assets.clear();
         world.save_into(&mut saved);
         assert_eq!(buffer(&saved), first, "the storage buffer was reallocated");
+        assert_eq!(
+            history_buffer(&saved),
+            first_history,
+            "the resource buffer was reallocated"
+        );
         assert!(
             saved.assets.is_empty(),
             "an unchanged asset map was copied again"

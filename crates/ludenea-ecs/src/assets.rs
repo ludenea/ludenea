@@ -24,7 +24,7 @@ pub(crate) type AssetValue = Arc<dyn Any + Send + Sync>;
 /// values that are only `Send` (components need not be `Sync`), as shared `Sync` values;
 /// `validate` is the type's `Asset::validate`.
 pub(crate) struct AssetType {
-    type_id: TypeId,
+    pub(crate) type_id: TypeId,
     type_name: &'static str,
     codec: Codec,
     decode: fn(&[u8]) -> Result<AssetValue, String>,
