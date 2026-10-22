@@ -109,6 +109,28 @@ describe("frame times", () => {
     });
   });
 
+  it("a_failing_pause_leaves_the_error_that_ended_the_measurement", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const fake = fakeEditor();
+      fake.connect();
+      fake.state.loaded = { type: "loaded", warnings: [], instances: [], load_addresses: [] };
+      vi.stubGlobal("requestAnimationFrame", () => 0);
+      let plays = 0;
+      fake.editor.commands.run = async (id: string) => {
+        if (id === "timeline.play-pause" && ++plays === 2) throw new Error("the game has exited");
+      };
+      const measuring = expect(measureFrameTimes(fake.editor, 100)).rejects.toThrow("no animation frame for 5 seconds");
+      await vi.advanceTimersByTimeAsync(5000);
+      await measuring;
+      expect(warn).toHaveBeenCalledWith("cannot pause after the frame time measurement: the game has exited");
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("a_scene_that_cannot_load_fails_the_measurement", async () => {
     const fake = fakeEditor();
     fake.connect();

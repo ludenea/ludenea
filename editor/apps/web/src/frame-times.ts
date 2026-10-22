@@ -86,7 +86,8 @@ export async function measureFrameTimes(editor: Measured, playMs: number): Promi
     return { frames, pushed, errors: errors() };
   } finally {
     stop();
-    await editor.commands.run("timeline.play-pause");
+    // A failing pause must not replace the error that ended the measurement.
+    await editor.commands.run("timeline.play-pause").catch((error: unknown) => console.warn(`cannot pause after the frame time measurement: ${error instanceof Error ? error.message : String(error)}`));
   }
 }
 
