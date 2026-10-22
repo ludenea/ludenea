@@ -10,9 +10,14 @@ use std::time::Instant;
 use ludenea::app::{SavedState, Simulation};
 use ludenea::net::MatchRules;
 
-/// What a rollback frame must fit in: half a 60 Hz frame, in microseconds, so the rest of
-/// the frame stays for the game's own work.
-pub const BUDGET_MICROS: u128 = 8_333;
+/// The frame rate the budget is set against.
+const FRAME_RATE: u128 = 120;
+
+/// What the 99th percentile of the rollback frames must fit in: half a 120 Hz frame, in
+/// microseconds (4,166.67 rounded up to 4,167), so the rest of the frame stays for the game's
+/// own work. The 99th percentile is judged, not the worst frame, because the worst frame of a
+/// desktop run mostly measures operating system scheduling noise.
+pub const BUDGET_MICROS: u128 = 1_000_000_u128.div_ceil(FRAME_RATE * 2);
 
 /// The saved states a session keeps: the window, the current tick, and one to spare.
 const SPARE: u64 = 2;
@@ -57,7 +62,17 @@ impl Report {
         })
     }
 
-    /// The two lines every benchmark prints.
+    /// Whether the 99th percentile fits the budget, as the line the benchmark prints.
+    pub fn verdict(&self) -> String {
+        let verdict = if self.p99 <= BUDGET_MICROS {
+            "fits"
+        } else {
+            "exceeds"
+        };
+        format!("p99 {verdict} half a {FRAME_RATE} Hz frame ({BUDGET_MICROS} us)")
+    }
+
+    /// The two lines every benchmark prints. The worst frame is information, not judged.
     pub fn print(&self) {
         let Self {
             frames,
@@ -66,12 +81,7 @@ impl Report {
             worst,
         } = self;
         println!("{frames} frames (1 thread): mean {mean} us, p99 {p99} us, worst {worst} us");
-        let verdict = if *worst <= BUDGET_MICROS {
-            "fits"
-        } else {
-            "exceeds"
-        };
-        println!("worst frame {verdict} half a 60 Hz frame ({BUDGET_MICROS} us)");
+        println!("{}", self.verdict());
     }
 }
 
@@ -152,6 +162,32 @@ mod tests {
                 p99: 198,
                 worst: 200
             }
+        );
+    }
+
+    fn report_with_p99(p99: u128) -> Report {
+        Report {
+            frames: 1,
+            mean: 0,
+            p99,
+            worst: u128::MAX,
+        }
+    }
+
+    #[test]
+    fn the_budget_is_half_a_120_hz_frame_rounded_up() {
+        assert_eq!(BUDGET_MICROS, 4_167);
+    }
+
+    #[test]
+    fn the_verdict_judges_the_99th_percentile_not_the_worst_frame() {
+        assert_eq!(
+            report_with_p99(BUDGET_MICROS).verdict(),
+            "p99 fits half a 120 Hz frame (4167 us)"
+        );
+        assert_eq!(
+            report_with_p99(BUDGET_MICROS + 1).verdict(),
+            "p99 exceeds half a 120 Hz frame (4167 us)"
         );
     }
 
