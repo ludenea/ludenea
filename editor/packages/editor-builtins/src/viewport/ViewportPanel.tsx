@@ -56,6 +56,8 @@ function toolOverlay(tool: ViewportTool): ViewportOverlay | null {
 }
 
 type Point = { x: number; y: number };
+/** A layer's mapping from the screen to the world: `world = screen * scale + offset` on each axis. */
+type Mapping = { scale: Vec2; offset: Vec2 };
 type Press = {
   mode: "pan" | "select" | "tool";
   start: Point;
@@ -183,6 +185,7 @@ export function ViewportPanel({
     const release = (free = true) => {
       const dropped = renderer;
       renderer = null;
+      mappings.clear();
       feed.setTarget(null);
       rendered = { width: 0, height: 0, ratio: 0 };
       if (free) dropped?.free();
@@ -221,6 +224,7 @@ export function ViewportPanel({
             return;
           }
           renderer = created;
+          mappings.clear();
           feed.setTarget(created);
           repaint = true;
           void uploadTextures(created);
@@ -258,14 +262,33 @@ export function ViewportPanel({
     };
     // Where a layer of `parallax` shows a screen point, and back: the renderer's answer through
     // the camera it draws with; before there is a renderer, the editor camera it will draw with.
-    const mapToWorld = (screen: Point, parallax: number): Vec2 =>
-      renderer
-        ? (JSON.parse(renderer.screen_to_world(screen.x, screen.y, parallax, drawnCamera())) as Vec2)
-        : screenToWorld(throughParallax(state.get().camera, parallax), state.get().size, screen);
-    const mapToScreen = (point: Vec2, parallax: number): Point =>
-      renderer
-        ? (JSON.parse(renderer.world_to_screen(point.x, point.y, parallax, drawnCamera())) as Point)
-        : worldToScreen(throughParallax(state.get().camera, parallax), state.get().size, point);
+    // The mapping is affine on each axis (world = screen * scale + offset), so it is read from
+    // the renderer at two corners once per layer, kept until the camera, size, or renderer
+    // changes or a draw shows another frame, and applied here to every point.
+    const mappings = new Map<number, Mapping>();
+    const mapping = (parallax: number): Mapping => {
+      const known = mappings.get(parallax);
+      if (known) return known;
+      const { camera, size } = state.get();
+      // A side of 0 pixels counts as 1, as the renderer draws it.
+      const corner = { x: Math.max(size.width, 1), y: Math.max(size.height, 1) };
+      const at = (point: Point): Vec2 =>
+        renderer
+          ? (JSON.parse(renderer.screen_to_world(point.x, point.y, parallax, drawnCamera())) as Vec2)
+          : screenToWorld(throughParallax(camera, parallax), size, point);
+      const [origin, far] = [at({ x: 0, y: 0 }), at(corner)];
+      const found = { offset: origin, scale: { x: (far.x - origin.x) / corner.x, y: (far.y - origin.y) / corner.y } };
+      mappings.set(parallax, found);
+      return found;
+    };
+    const mapToWorld = (screen: Point, parallax: number): Vec2 => {
+      const { scale, offset } = mapping(parallax);
+      return { x: screen.x * scale.x + offset.x, y: screen.y * scale.y + offset.y };
+    };
+    const mapToScreen = (point: Vec2, parallax: number): Point => {
+      const { scale, offset } = mapping(parallax);
+      return { x: (point.x - offset.x) / scale.x, y: (point.y - offset.y) / scale.y };
+    };
     // What the last draw showed of `entities`' sprites and tilemaps.
     const drawnBounds = (entities: readonly Entity[]): Box | null => {
       const box = renderer?.bounds(JSON.stringify(entities));
@@ -285,6 +308,8 @@ export function ViewportPanel({
             rendered = { ...size, ratio };
           }
           renderer.draw(feed.alpha(performance.now()), drawnCamera());
+          // Through the game camera, each draw may show the frame's camera elsewhere.
+          mappings.clear();
           drawing.worked();
           failedDraws = 0;
         } catch (error) {
@@ -328,6 +353,7 @@ export function ViewportPanel({
 
     const stops = [
       state.subscribe(() => {
+        mappings.clear();
         const next = state.get();
         if (next.hidden !== seen.hidden) feed.layersChanged();
         if (next.revision !== seen.revision) feed.refresh();

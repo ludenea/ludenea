@@ -795,13 +795,18 @@ describe("viewport", () => {
     // A layer of parallax 0.5 moves half as much as the camera: the renderer maps it, with the camera it drew.
     const context = contexts[0]!;
     expect(context.editor).toBe(host.editor);
+    const drawnView = JSON.stringify({ center: { x: 1, y: 0 }, view: { x: 8, y: 6 } });
+    renderers.at(-1)!.calls.length = 0;
     expect(context.screenToWorld({ x: 250, y: 100 }, 0.5)).toEqual({ x: 1.5, y: 1 });
-    const mapped = renderers.at(-1)!.calls.filter((call) => call.method === "screen_to_world").at(-1)!.args;
-    expect(mapped).toEqual([250, 100, 0.5, JSON.stringify({ center: { x: 1, y: 0 }, view: { x: 8, y: 6 } })]);
-    // And back, through the same renderer and camera.
+    // And back, with the same mapping.
     expect(context.worldToScreen({ x: 1.5, y: 1 }, 0.5)).toEqual({ x: 250, y: 100 });
-    const back = renderers.at(-1)!.calls.filter((call) => call.method === "world_to_screen").at(-1)!.args;
-    expect(back).toEqual([1.5, 1, 0.5, JSON.stringify({ center: { x: 1, y: 0 }, view: { x: 8, y: 6 } })]);
+    // A layer not mapped yet is read from the renderer at the view's corners, through the camera it drew with.
+    expect(context.screenToWorld({ x: 250, y: 100 }, 0.25)).toEqual({ x: 1.25, y: 1 });
+    const mapped = renderers.at(-1)!.calls.filter((call) => call.method === "screen_to_world").map((call) => call.args);
+    expect(mapped).toEqual([
+      [0, 0, 0.25, drawnView],
+      [400, 300, 0.25, drawnView],
+    ]);
 
     // The tool's overlay is drawn while it is active, and redrawn on request.
     drawn.calls.length = 0;
@@ -811,6 +816,45 @@ describe("viewport", () => {
       ["brush", 200, 100],
       ["far brush", 250, 100],
     ]);
+  });
+
+  it("tool_mappings_follow_the_renderer_and_ask_it_once_per_layer_until_the_camera_moves", async () => {
+    const { host, view } = await viewport();
+    const { tool, contexts } = recordingTool();
+    act(() => void host.editor.viewport.tools.register(tool));
+    act(() => host.editor.viewport.setTool("test.paint"));
+    fireEvent.pointerDown(view, { button: 0, clientX: 10, clientY: 10, pointerId: 1 });
+    fireEvent.pointerUp(view, { button: 0, clientX: 10, clientY: 10, pointerId: 1 });
+    const context = contexts[0]!;
+    const renderer = renderers.at(-1)!;
+    const asked = () => renderer.calls.filter((call) => call.method === "screen_to_world" || call.method === "world_to_screen").length;
+    const near = ({ x, y }: { x: number; y: number }) => ({ x: expect.closeTo(x, 6), y: expect.closeTo(y, 6) });
+    /** The renderer's own answers, asked directly, and what the tool context answers. */
+    const check = (cameraJson: string) => {
+      for (const parallax of [0, 0.5, 1, 2]) {
+        for (const [x, y] of [[0, 0], [250, 100], [400, 300], [37, 211]] as const) {
+          const world = JSON.parse(renderer.screen_to_world(x, y, parallax, cameraJson));
+          expect(context.screenToWorld({ x, y }, parallax)).toEqual(near(world));
+          expect(context.worldToScreen(world, parallax)).toEqual(near({ x, y }));
+        }
+      }
+    };
+    const view0 = JSON.stringify({ center: { x: 0, y: 0 }, view: { x: 8, y: 6 } });
+    check(view0);
+    // Mapping many points costs the renderer a fixed number of questions per layer, not one per point.
+    renderer.calls.length = 0;
+    for (let point = 0; point < 50; point++) {
+      context.screenToWorld({ x: point, y: point }, 0.5);
+      context.worldToScreen({ x: point, y: point }, 0.5);
+    }
+    expect(asked()).toBe(0);
+
+    // A moved camera is mapped afresh.
+    fireEvent.pointerDown(view, { button: 1, clientX: 200, clientY: 150, pointerId: 2 });
+    fireEvent.pointerMove(view, { button: -1, clientX: 150, clientY: 150, pointerId: 2 });
+    fireEvent.pointerUp(view, { button: 1, clientX: 150, clientY: 150, pointerId: 2 });
+    await waitFor(() => expect(camera()).toEqual([1, 0, 50]));
+    check(JSON.stringify({ center: { x: 1, y: 0 }, view: { x: 8, y: 6 } }));
   });
 
   it("a_tool_pointer_maps_through_the_camera_the_renderer_draws_with", async () => {
@@ -825,7 +869,10 @@ describe("viewport", () => {
     renderer.calls.length = 0;
     fireEvent.pointerDown(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
     // Through the game camera, the renderer maps with the frame's camera (null), as it draws.
-    expect(renderer.calls.filter((call) => call.method === "screen_to_world").map((call) => call.args)).toEqual([[250, 100, 1, null]]);
+    expect(renderer.calls.filter((call) => call.method === "screen_to_world").map((call) => call.args)).toEqual([
+      [0, 0, 1, null],
+      [400, 300, 1, null],
+    ]);
     expect(heard[0]![1]!.world).toEqual({ x: 11, y: 6 });
     expect(heard[0]![1]!.world).toEqual(contexts[0]!.screenToWorld({ x: 250, y: 100 }, 1));
   });
