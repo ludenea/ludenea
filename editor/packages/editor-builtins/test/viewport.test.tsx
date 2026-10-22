@@ -796,16 +796,23 @@ describe("viewport", () => {
     const context = contexts[0]!;
     expect(context.editor).toBe(host.editor);
     const drawnView = JSON.stringify({ center: { x: 1, y: 0 }, view: { x: 8, y: 6 } });
-    renderers.at(-1)!.calls.length = 0;
     expect(context.screenToWorld({ x: 250, y: 100 }, 0.5)).toEqual({ x: 1.5, y: 1 });
-    // And back, with the same mapping.
+    // And back.
     expect(context.worldToScreen({ x: 1.5, y: 1 }, 0.5)).toEqual({ x: 250, y: 100 });
     // A layer not mapped yet is read from the renderer at the view's corners, through the camera it drew with.
+    renderers.at(-1)!.calls.length = 0;
     expect(context.screenToWorld({ x: 250, y: 100 }, 0.25)).toEqual({ x: 1.25, y: 1 });
     const mapped = renderers.at(-1)!.calls.filter((call) => call.method === "screen_to_world").map((call) => call.args);
     expect(mapped).toEqual([
       [0, 0, 0.25, drawnView],
       [400, 300, 0.25, drawnView],
+    ]);
+    // The other direction comes from the renderer's own inverse, at two world points.
+    expect(context.worldToScreen({ x: 1.25, y: 1 }, 0.25)).toEqual({ x: 250, y: 100 });
+    const mappedBack = renderers.at(-1)!.calls.filter((call) => call.method === "world_to_screen").map((call) => call.args);
+    expect(mappedBack).toEqual([
+      [0, 0, 0.25, drawnView],
+      [1, 1, 0.25, drawnView],
     ]);
 
     // The tool's overlay is drawn while it is active, and redrawn on request.

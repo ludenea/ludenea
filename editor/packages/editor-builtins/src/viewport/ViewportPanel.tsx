@@ -56,7 +56,7 @@ function toolOverlay(tool: ViewportTool): ViewportOverlay | null {
 }
 
 type Point = { x: number; y: number };
-/** A layer's mapping from the screen to the world: `world = screen * scale + offset` on each axis. */
+/** A layer's mapping from the screen to the world or back: `out = in * scale + offset` on each axis. */
 type Mapping = { scale: Vec2; offset: Vec2 };
 type Press = {
   mode: "pan" | "select" | "tool";
@@ -260,35 +260,36 @@ export function ViewportPanel({
       const { camera, size, gameCamera } = state.get();
       return gameCamera ? null : JSON.stringify(toCameraView(camera, size));
     };
-    // Where a layer of `parallax` shows a screen point, and back: the renderer's answer through
-    // the camera it draws with; before there is a renderer, the editor camera it will draw with.
-    // The mapping is affine on each axis (world = screen * scale + offset), so it is read from
-    // the renderer at two corners once per layer, kept until the camera, size, or renderer
-    // changes or a draw shows another frame, and applied here to every point.
-    const mappings = new Map<number, Mapping>();
-    const mapping = (parallax: number): Mapping => {
-      const known = mappings.get(parallax);
+    // Where a layer of `parallax` shows a screen point, and back: the renderer's answers through
+    // the camera it draws with (`screen_to_world` one way, `world_to_screen` the other); before
+    // there is a renderer, the editor camera it will draw with. Each direction is affine on each
+    // axis (`out = in * scale + offset`), so it is read from the renderer at two points once per
+    // layer, kept until the camera, size, or renderer changes or a draw shows another frame,
+    // and applied here to every point.
+    const mappings = new Map<string, Mapping>();
+    const mapping = (direction: "toWorld" | "toScreen", parallax: number): Mapping => {
+      const key = `${direction} ${parallax}`;
+      const known = mappings.get(key);
       if (known) return known;
       const { camera, size } = state.get();
-      // A side of 0 pixels counts as 1, as the renderer draws it.
-      const corner = { x: Math.max(size.width, 1), y: Math.max(size.height, 1) };
-      const at = (point: Point): Vec2 =>
-        renderer
-          ? (JSON.parse(renderer.screen_to_world(point.x, point.y, parallax, drawnCamera())) as Vec2)
-          : screenToWorld(throughParallax(camera, parallax), size, point);
-      const [origin, far] = [at({ x: 0, y: 0 }), at(corner)];
-      const found = { offset: origin, scale: { x: (far.x - origin.x) / corner.x, y: (far.y - origin.y) / corner.y } };
-      mappings.set(parallax, found);
+      const seen = throughParallax(camera, parallax);
+      const map = (point: Vec2): Vec2 => {
+        if (direction === "toWorld") {
+          return renderer ? (JSON.parse(renderer.screen_to_world(point.x, point.y, parallax, drawnCamera())) as Vec2) : screenToWorld(seen, size, point);
+        }
+        return renderer ? (JSON.parse(renderer.world_to_screen(point.x, point.y, parallax, drawnCamera())) as Vec2) : worldToScreen(seen, size, point);
+      };
+      // From the screen, the view's corners (a side of 0 pixels counts as 1, as the renderer
+      // draws it); from the world, the origin and a unit step.
+      const far = direction === "toWorld" ? { x: Math.max(size.width, 1), y: Math.max(size.height, 1) } : { x: 1, y: 1 };
+      const [origin, step] = [map({ x: 0, y: 0 }), map(far)];
+      const found = { offset: origin, scale: { x: (step.x - origin.x) / far.x, y: (step.y - origin.y) / far.y } };
+      mappings.set(key, found);
       return found;
     };
-    const mapToWorld = (screen: Point, parallax: number): Vec2 => {
-      const { scale, offset } = mapping(parallax);
-      return { x: screen.x * scale.x + offset.x, y: screen.y * scale.y + offset.y };
-    };
-    const mapToScreen = (point: Vec2, parallax: number): Point => {
-      const { scale, offset } = mapping(parallax);
-      return { x: (point.x - offset.x) / scale.x, y: (point.y - offset.y) / scale.y };
-    };
+    const apply = ({ scale, offset }: Mapping, point: Vec2): Vec2 => ({ x: point.x * scale.x + offset.x, y: point.y * scale.y + offset.y });
+    const mapToWorld = (screen: Point, parallax: number): Vec2 => apply(mapping("toWorld", parallax), screen);
+    const mapToScreen = (point: Vec2, parallax: number): Point => apply(mapping("toScreen", parallax), point);
     // What the last draw showed of `entities`' sprites and tilemaps.
     const drawnBounds = (entities: readonly Entity[]): Box | null => {
       const box = renderer?.bounds(JSON.stringify(entities));
