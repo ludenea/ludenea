@@ -133,7 +133,8 @@ jobs:
             cargo run --locked --release -p arena -- verify golden/arena.replay --threads $threads --dump-dir "$LUDENEA_DUMP_DIR/release/arena-replay-$threads-threads" || status=1
           done
           exit $status
-      # Recorded, not gated: the numbers go to the job summary.
+      # A crash or a hash that differs from the golden replay fails the job; the timings are
+      # only recorded in the job summary, never gated.
       - name: Time a rollback frame
         if: ${{ runner.os == 'Linux' && !cancelled() && steps.tests.outcome != 'skipped' }}
         shell: bash
