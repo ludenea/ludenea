@@ -324,6 +324,8 @@ pub(crate) struct Display {
     /// The textures packed into `atlas`, by path, each the last version that packed: what a
     /// replacement that fails keeps.
     textures: BTreeMap<String, ProjectTexture>,
+    /// The last reading of the textures applied: the same reading again changes nothing.
+    applied: Option<ProjectTextures>,
     atlas: Atlas,
     /// The window's size, which a new screen takes.
     size: (u32, u32),
@@ -353,6 +355,7 @@ impl Display {
             screen: Some((presenter, renderer)),
             open,
             textures,
+            applied: None,
             atlas,
             size,
             stale: true,
@@ -365,8 +368,12 @@ impl Display {
     /// refuses) keeps its previous version; a path in neither list is dropped. The new atlas is uploaded, kept for a new screen, and drawn from the next
     /// frame. Returns a warning per failure (`<path>: <cause>, keeping the previous
     /// version`, or `; the texture is left out` without a previous version), and one per
-    /// texture the atlas leaves out. Never touches the simulation.
+    /// texture the atlas leaves out. The reading applied last changes nothing and warns of
+    /// nothing; one the GPU refused is tried again. Never touches the simulation.
     pub(crate) fn replace_textures(&mut self, update: &ProjectTextures) -> Vec<String> {
+        if self.applied.as_ref() == Some(update) {
+            return Vec::new();
+        }
         let mut warnings = Vec::new();
         let mut next = update.textures.clone();
         for failure in &update.failures {
@@ -419,6 +426,7 @@ impl Display {
             }
         }
         self.textures = textures;
+        self.applied = Some(update.clone());
         self.atlas = atlas;
         self.stale = true;
         warnings
@@ -1292,6 +1300,34 @@ mod tests {
             "{warning}"
         );
         assert_eq!(centre(&mut display, &runner), RED);
+    }
+
+    #[test]
+    fn an_update_already_applied_changes_nothing() {
+        let opened = Rc::new(RefCell::new(Vec::new()));
+        let mut display = textured(&[hero(solid(RED))], &opened);
+        let failure = TextureFailure {
+            path: "hero.png".to_string(),
+            cause: "cannot read its meta: expected `Meta`".to_string(),
+        };
+        let reading = update(Vec::new(), vec![failure]);
+        assert_eq!(display.replace_textures(&reading).len(), 1);
+        assert!(
+            display.replace_textures(&reading).is_empty(),
+            "the same reading again is not reported twice"
+        );
+    }
+
+    #[test]
+    fn an_update_refused_once_is_applied_when_given_again() {
+        let opened = Rc::new(RefCell::new(Vec::new()));
+        let mut display = textured(&[hero(solid(RED))], &opened);
+        let runner = still_game();
+        let reading = update(vec![hero(solid(BLUE))], Vec::new());
+        raise_error(&opened.borrow()[0]);
+        assert_eq!(display.replace_textures(&reading).len(), 1, "refused");
+        assert!(display.replace_textures(&reading).is_empty());
+        assert_eq!(centre(&mut display, &runner), BLUE);
     }
 
     #[test]

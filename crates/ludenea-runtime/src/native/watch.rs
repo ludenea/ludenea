@@ -27,8 +27,6 @@ pub struct TextureWatch {
     _debouncer: Debouncer<RecommendedWatcher, RecommendedCache>,
     /// A texture file changed since the textures were last read.
     changed: bool,
-    /// What `poll` returned last: the same textures read again are not reported twice.
-    last: Option<Result<ProjectTextures, String>>,
 }
 
 impl TextureWatch {
@@ -55,14 +53,14 @@ impl TextureWatch {
             events,
             _debouncer: debouncer,
             changed: false,
-            last: None,
         })
     }
 
     /// Without waiting: the textures read again (`project_textures`'s result) when a `.png`
     /// or a `.png.meta` changed since the last call and the files have settled for the
-    /// debounce, unless they read as what was returned last; or the watcher's errors, the
-    /// change then reported at the next call. `None` when nothing changed.
+    /// debounce; or the watcher's errors, the change then reported at the next call. `None`
+    /// when nothing changed. Every change gives a reading, the same files written again
+    /// too: the display, which knows what it applied, skips a reading it holds.
     pub fn poll(&mut self) -> Option<Result<ProjectTextures, String>> {
         let mut errors = Vec::new();
         while let Ok(batch) = self.events.try_recv() {
@@ -87,12 +85,7 @@ impl TextureWatch {
         if !std::mem::take(&mut self.changed) {
             return None;
         }
-        let read = project_textures(&self.scene, self.project.as_deref());
-        if self.last.as_ref() == Some(&read) {
-            return None;
-        }
-        self.last = Some(read.clone());
-        Some(read)
+        Some(project_textures(&self.scene, self.project.as_deref()))
     }
 }
 
@@ -132,6 +125,17 @@ mod tests {
         while start.elapsed() < period {
             if let Some(update) = watch.poll() {
                 panic!("unexpected report: {update:?}");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Takes the readings still on their way, until none comes for a second.
+    fn quiet_after(watch: &mut TextureWatch) {
+        let mut last = now();
+        while last.elapsed() < Duration::from_secs(1) {
+            if watch.poll().is_some() {
+                last = now();
             }
             thread::sleep(Duration::from_millis(10));
         }
@@ -177,6 +181,23 @@ mod tests {
         assert_eq!(path, &folder.join("hero.png").display().to_string());
         assert_eq!(bytes, b"png bytes");
         quiet(&mut watch, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn the_same_files_written_again_are_read_again() {
+        let (_guard, folder, mut watch) = watched();
+        fs::write(folder.join("hero.png"), b"png bytes").unwrap();
+        fs::write(
+            folder.join("hero.png.meta"),
+            "Meta(version: 2, id: \"00000000000000000000000000000001\", kind: Texture((pixels_per_unit: 8, grid: None, pivot: None, filter: Linear)))",
+        )
+        .unwrap();
+        let first = next(&mut watch).expect("the change is reported");
+        quiet_after(&mut watch);
+        // The display may have refused the first reading: the same files are read again.
+        fs::write(folder.join("hero.png"), b"png bytes").unwrap();
+        let again = next(&mut watch).expect("the rewrite is reported");
+        assert_eq!(again, first);
     }
 
     #[test]
