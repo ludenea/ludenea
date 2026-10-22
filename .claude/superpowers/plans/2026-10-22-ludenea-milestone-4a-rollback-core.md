@@ -104,6 +104,20 @@
 
 ---
 
+### Task 3b: Rollback benchmark on a heavy scene (swarm)
+
+The arena benchmark measures a worst frame of about 90 microseconds against a budget of 8,333, which says nothing on a light scene. Swarm (10,000 sprites, 4 players) has no golden replay, so its benchmark plays 600 ticks straight with seeded inputs, records the hash of every tick, then measures the same worst-case frame at every tick from 8 to 599 and checks that each ends on the straight run's hash.
+
+**Files:**
+- Create: `examples/swarm/src/bin/rollback-bench.rs`, `examples/rollback_bench.rs` (the measuring loop, the statistics, the report and the budget constant `BUDGET_MICROS`, shared by both benchmarks through `#[path]`; not part of any published crate, so the network crate keeps its API and its no-clock rule)
+- Modify: `examples/arena/src/bin/rollback-bench.rs` (uses the shared code, output unchanged), `README.md`, `.github/workflows/determinism.yml` (a step next to the arena one), spec section 4.2
+
+- [ ] **Step 1: Write** the shared module with unit tests for the statistics and the too-short check, move the arena benchmark onto it, then write the swarm binary.
+- [ ] **Step 2: Run** both benchmarks in release and the gates. If the worst swarm frame exceeds the budget, report the numbers and where the time goes.
+- [ ] **Step 3: Commit** `♻️ refactor(arena): share the rollback frame measurement between benchmarks`, then `✨ feat(swarm): add a rollback frame benchmark` with the measured numbers in the body.
+
+---
+
 ### Task 4: `ludenea-net` crate and validated session settings
 
 **Files:**

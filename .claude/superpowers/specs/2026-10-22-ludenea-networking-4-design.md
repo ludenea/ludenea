@@ -180,9 +180,11 @@ snapshot taken at the save, across random worlds and every registered type.
 The session keeps saved states in a ring of W+2 entries; their memory is
 reused, not reallocated, every tick (builder's call on pooling).
 
-A benchmark on the arena measures the worst frame (restore, then W+1 ticks
-with a save each) and CI records it; the target is that the worst frame fits
-in half of a 60 Hz frame on the reference machine, single-threaded.
+A benchmark measures the worst frame (restore, then W+1 ticks with a save
+each) on the arena, whose scene is light, and on swarm (10,000 sprites, 4
+players), whose scene is heavy; CI records both. The target is that the worst
+frame fits in half of a 60 Hz frame on the reference machine,
+single-threaded.
 
 ### 4.3 Transports
 
