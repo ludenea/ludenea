@@ -587,6 +587,11 @@ impl Session {
         })
     }
 
+    /// The settings the session was built with.
+    pub fn settings(&self) -> &SessionSettings {
+        &self.settings
+    }
+
     /// Where the session is in the life of the match.
     pub fn state(&self) -> SessionState {
         self.state.clone()

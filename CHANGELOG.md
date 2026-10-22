@@ -183,7 +183,8 @@ hash, those of the golden trace and replays included.
   state the confirmed inputs give at the end tick: a `Load` of the latest tick built only
   from confirmed inputs, then a `Save` (asking no hash) and an `Advance` of every confirmed
   tick from it; no `Release` follows, and the caller may drop the states it keeps. Later
-  calls are `SessionError::NotRunning`.
+  calls are `SessionError::NotRunning`. Every `Load` is of a tick at most `rollback_window`
+  before the current one. `Session::settings()` gives the settings a session was built with.
 
 - `ludenea_render` answers without a GPU what the renderer draws: `atlas::frames_of(png,
   meta)` gives the `TextureFrames` (the image size and each `FrameRect`, row-major, with its

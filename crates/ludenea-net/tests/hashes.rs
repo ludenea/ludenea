@@ -82,7 +82,7 @@ impl Driven {
         identity.rules = rules;
         Self {
             session: handshake(sessions_of(&identity)).remove(0),
-            model: Model::default(),
+            model: Model::new(&rules),
             remote_ticks: 0,
         }
     }

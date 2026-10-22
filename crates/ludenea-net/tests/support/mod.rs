@@ -74,8 +74,9 @@ pub fn offline_hashes(confirmed: &[(u64, Vec<Vec<u8>>)]) -> Vec<u64> {
 /// It checks the session's promises as it goes: every `Save` and `Advance` is at the model's
 /// tick, and every `Load` restores the latest `Save` of its tick, which must be the state the
 /// inputs the ticks before it last ran with give: no input below a loaded tick changed since
-/// it was saved. A state saved with `hash: true` is kept until its `Release`, which must name
-/// a kept state; a released state is gone, so a later `Load` of it fails.
+/// it was saved, and at most `rollback_window` ticks behind the model's tick, never ahead of
+/// it. A state saved with `hash: true` is kept until its `Release`, which must name a kept
+/// state; a released state is gone, so a later `Load` of it fails.
 #[derive(Debug)]
 pub struct Model {
     tick: u64,
@@ -92,10 +93,20 @@ pub struct Model {
     released: Vec<u64>,
     /// The tick whose reported hash is flipped, as a broken game would.
     flip: Option<u64>,
+    /// The rollback window of the match: how far behind its tick a `Load` may go.
+    window: u64,
 }
 
 impl Default for Model {
+    /// A model of a match under the default rules.
     fn default() -> Self {
+        Self::new(&MatchRules::default())
+    }
+}
+
+impl Model {
+    /// A model of a match under `rules`.
+    pub fn new(rules: &MatchRules) -> Self {
         Self {
             tick: 0,
             hash: MODEL_START,
@@ -106,11 +117,10 @@ impl Default for Model {
             kept: BTreeSet::new(),
             released: Vec::new(),
             flip: None,
+            window: u64::from(rules.rollback_window),
         }
     }
-}
 
-impl Model {
     /// Applies `requests` in order, panicking on any broken promise. Returns the hash of every
     /// state saved with `hash: true`, in order, as `(tick, hash)`.
     pub fn execute(&mut self, requests: &[Request]) -> Vec<(u64, u64)> {
@@ -135,6 +145,12 @@ impl Model {
                     self.released.push(*tick);
                 }
                 Request::Load { tick } => {
+                    assert!(
+                        *tick <= self.tick && self.tick - tick <= self.window,
+                        "Load {{ tick: {tick} }} at tick {}, window {}",
+                        self.tick,
+                        self.window
+                    );
                     let saved = *self
                         .saves
                         .get(tick)
@@ -390,12 +406,12 @@ impl Harness {
             .into_iter()
             .zip(transports)
             .map(|(session, transport)| Peer {
+                model: Model::new(&session.settings().identity.rules),
                 session,
                 transport,
                 events: Vec::new(),
                 muted: false,
                 frozen: false,
-                model: Model::default(),
                 frame_micros: FRAME_MICROS,
                 next_frame_micros: None,
                 frames: 0,
