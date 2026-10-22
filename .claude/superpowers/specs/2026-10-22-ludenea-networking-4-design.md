@@ -182,9 +182,10 @@ reused, not reallocated, every tick (builder's call on pooling).
 
 A benchmark measures the worst frame (restore, then W+1 ticks with a save
 each) on the arena, whose scene is light, and on swarm (10,000 sprites, 4
-players), whose scene is heavy; CI records both. The target is that the worst
-frame fits in half of a 60 Hz frame on the reference machine,
-single-threaded.
+players), whose scene is heavy; CI records both. The target is that the 99th
+percentile of the frames fits in half of a 120 Hz frame (4,167 microseconds) on the
+reference machine, single-threaded; the worst frame is printed but not judged, because
+on a desktop it mostly measures operating system scheduling noise.
 
 ### 4.3 Transports
 

@@ -98,22 +98,22 @@
 **Interfaces:**
 - Consumes: `Simulation::save_state`, `Simulation::load_state` (Task 2).
 
-- [ ] **Step 1: Write** the binary. It loads `golden/arena.replay` (600 ticks) and plays it straight, saving the state of every tick into a ring of 10 `SavedState`s. At every tick `t` from 8 to 599, it measures one worst-case rollback frame: `load_state` of tick `t - 8`, then 9 `play_tick` calls with a `save_state` after each (the spec's W+1 ticks), ending at tick `t + 1`. That is 592 measured frames. It prints the frame count, the mean, the 99th percentile and the worst frame in microseconds at 1 thread, and whether the worst frame fits in half a 60 Hz frame (8,333 microseconds). The bench is display code: timing uses `std::time::Instant` with the `#[expect(clippy::disallowed_methods, reason = "benchmark timing, never feeds the simulation")]` pattern the boxes bench uses.
+- [ ] **Step 1: Write** the binary. It loads `golden/arena.replay` (600 ticks) and plays it straight, saving the state of every tick into a ring of 10 `SavedState`s. At every tick `t` from 8 to 599, it measures one worst-case rollback frame: `load_state` of tick `t - 8`, then 9 `play_tick` calls with a `save_state` after each (the spec's W+1 ticks), ending at tick `t + 1`. That is 592 measured frames. It prints the frame count, the mean, the 99th percentile and the worst frame in microseconds at 1 thread, and whether the 99th percentile fits in half a 120 Hz frame (4,167 microseconds). The bench is display code: timing uses `std::time::Instant` with the `#[expect(clippy::disallowed_methods, reason = "benchmark timing, never feeds the simulation")]` pattern the boxes bench uses.
 - [ ] **Step 2: Run** `cargo run --locked --release -p arena --bin rollback-bench`. Expected: `592 frames` and the measures; record the numbers in the commit message body.
-- [ ] **Step 3: Commit** `✨ feat(arena): add a rollback frame benchmark`. If the worst frame misses the target, stop and report the numbers before the next task: the save path needs work before the session is built on it.
+- [ ] **Step 3: Commit** `✨ feat(arena): add a rollback frame benchmark`. If the 99th percentile misses the target, stop and report the numbers before the next task: the save path needs work before the session is built on it.
 
 ---
 
 ### Task 3b: Rollback benchmark on a heavy scene (swarm)
 
-The arena benchmark measures a worst frame of about 90 microseconds against a budget of 8,333, which says nothing on a light scene. Swarm (10,000 sprites, 4 players) has no golden replay, so its benchmark plays 600 ticks straight with seeded inputs, records the hash of every tick, then measures the same worst-case frame at every tick from 8 to 599 and checks that each ends on the straight run's hash.
+The arena benchmark measures a worst frame of about 90 microseconds against a budget of 4,167 (on the 99th percentile), which says nothing on a light scene. Swarm (10,000 sprites, 4 players) has no golden replay, so its benchmark plays 600 ticks straight with seeded inputs, records the hash of every tick, then measures the same worst-case frame at every tick from 8 to 599 and checks that each ends on the straight run's hash.
 
 **Files:**
 - Create: `examples/swarm/src/bin/rollback-bench.rs`, `examples/rollback_bench.rs` (the measuring loop, the statistics, the report and the budget constant `BUDGET_MICROS`, shared by both benchmarks through `#[path]`; not part of any published crate, so the network crate keeps its API and its no-clock rule)
 - Modify: `examples/arena/src/bin/rollback-bench.rs` (uses the shared code, output unchanged), `README.md`, `.github/workflows/determinism.yml` (a step next to the arena one), spec section 4.2
 
 - [ ] **Step 1: Write** the shared module with unit tests for the statistics and the too-short check, move the arena benchmark onto it, then write the swarm binary.
-- [ ] **Step 2: Run** both benchmarks in release and the gates. If the worst swarm frame exceeds the budget, report the numbers and where the time goes.
+- [ ] **Step 2: Run** both benchmarks in release and the gates. If the swarm 99th percentile exceeds the budget, report the numbers and where the time goes.
 - [ ] **Step 3: Commit** `♻️ refactor(arena): share the rollback frame measurement between benchmarks`, then `✨ feat(swarm): add a rollback frame benchmark` with the measured numbers in the body.
 
 ---
