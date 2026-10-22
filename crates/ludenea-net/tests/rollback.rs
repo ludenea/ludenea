@@ -421,10 +421,9 @@ fn two_local_players_and_one_remote() {
     // Both local players of peer 0 played: their inputs vary, so a lost one would show.
     let confirmed = harness.confirmed(PeerId(0));
     for player in 0..2 {
+        let played = [model_byte(u8::try_from(player).unwrap(), 5)];
         assert!(
-            confirmed
-                .iter()
-                .any(|(_, inputs)| inputs[player] == [model_byte(u8::try_from(player).unwrap(), 5)]),
+            confirmed.iter().any(|(_, inputs)| inputs[player] == played),
             "player {player}"
         );
     }

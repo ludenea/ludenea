@@ -1128,8 +1128,9 @@ fn inputs_for(
 
 /// Encodes `packet`, giving it back with its bytes, leaving out the newest tick of its longest
 /// input message until it fits in [`MAX_PACKET_BYTES`]: the oldest unacknowledged ticks go
-/// first, the rest in a later packet. The settings bound the usual packet within the limit; this only acts for a peer
-/// that has fallen behind by more than the rollback window and the input delay.
+/// first, the rest in a later packet. The settings bound the usual packet within the limit;
+/// this only acts for a peer that has fallen behind by more than the rollback window and the
+/// input delay.
 fn fit(mut packet: Packet) -> (Packet, Vec<u8>) {
     loop {
         let bytes = packet.encode();
