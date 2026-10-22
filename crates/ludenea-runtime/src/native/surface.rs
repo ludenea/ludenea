@@ -7,10 +7,13 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use ludenea_app::project::{ProjectTexture, ProjectTextures};
+use ludenea_app::meta::TextureMeta;
+use ludenea_app::project::{ProjectTexture, ProjectTextures, TextureFailure};
 use ludenea_draw::frame::RenderFrame;
+use ludenea_ecs::AssetId;
 use ludenea_render::atlas::{Atlas, TextureSource, pack};
 use ludenea_render::gpu::{Overlay, RenderError, Renderer, Size};
+use xxhash_rust::xxh3::xxh3_128;
 
 use crate::RuntimeError;
 
@@ -325,7 +328,7 @@ pub(crate) struct Display {
     /// replacement that fails keeps.
     textures: BTreeMap<String, ProjectTexture>,
     /// The last reading of the textures applied: the same reading again changes nothing.
-    applied: Option<ProjectTextures>,
+    applied: Option<Fingerprint>,
     atlas: Atlas,
     /// The window's size, which a new screen takes.
     size: (u32, u32),
@@ -372,7 +375,8 @@ impl Display {
     /// leaves out. The reading applied last changes nothing and warns of nothing; one the
     /// GPU refused is tried again. Never touches the simulation.
     pub(crate) fn replace_textures(&mut self, update: &ProjectTextures) -> Vec<String> {
-        if self.applied.as_ref() == Some(update) {
+        let fingerprint = Fingerprint::of(update);
+        if self.applied.as_ref() == Some(&fingerprint) {
             return Vec::new();
         }
         let mut warnings = Vec::new();
@@ -427,7 +431,7 @@ impl Display {
             }
         }
         self.textures = textures;
-        self.applied = Some(update.clone());
+        self.applied = Some(fingerprint);
         self.atlas = atlas;
         self.stale = true;
         warnings
@@ -567,6 +571,27 @@ impl Display {
     }
 }
 
+/// What tells two readings of the textures apart, without holding their PNG bytes: each
+/// texture's identifier, path, meta and a 128-bit hash of its bytes, and the failures.
+#[derive(Debug, PartialEq)]
+struct Fingerprint {
+    textures: Vec<(AssetId, String, TextureMeta, u128)>,
+    failures: Vec<TextureFailure>,
+}
+
+impl Fingerprint {
+    fn of(reading: &ProjectTextures) -> Fingerprint {
+        Fingerprint {
+            textures: reading
+                .textures
+                .iter()
+                .map(|(id, path, png, meta)| (*id, path.clone(), meta.clone(), xxh3_128(png)))
+                .collect(),
+            failures: reading.failures.clone(),
+        }
+    }
+}
+
 /// Packs `textures` into pages of at most `max_page_side`, with the textures that packed, by
 /// path.
 fn pack_textures(
@@ -598,7 +623,6 @@ mod tests {
     use std::rc::Rc;
 
     use ludenea_app::players::{LiveDevices, automatic_claims};
-    use ludenea_app::project::TextureFailure;
     use ludenea_render::gpu::headless;
 
     use super::*;
@@ -1329,6 +1353,38 @@ mod tests {
         assert_eq!(display.replace_textures(&reading).len(), 1, "refused");
         assert!(display.replace_textures(&reading).is_empty());
         assert_eq!(centre(&mut display, &runner), BLUE);
+    }
+
+    #[test]
+    fn a_fingerprint_tells_readings_apart_by_hashing_their_bytes() {
+        let failure = TextureFailure {
+            path: "broken.png".to_string(),
+            cause: "cannot read the file: denied".to_string(),
+        };
+        let reading = update(vec![hero(solid(RED))], vec![failure.clone()]);
+        assert_eq!(Fingerprint::of(&reading), Fingerprint::of(&reading.clone()));
+        let mut bytes = solid(RED);
+        let last = bytes.len() - 1;
+        bytes[last] ^= 1;
+        let others = [
+            update(vec![hero(bytes)], vec![failure.clone()]),
+            update(vec![hero(solid(RED))], Vec::new()),
+            update(
+                vec![{
+                    let mut texture = hero(solid(RED));
+                    texture.3.pixels_per_unit = 2;
+                    texture
+                }],
+                vec![failure],
+            ),
+        ];
+        for other in &others {
+            assert_ne!(
+                Fingerprint::of(&reading),
+                Fingerprint::of(other),
+                "{other:?}"
+            );
+        }
     }
 
     #[test]

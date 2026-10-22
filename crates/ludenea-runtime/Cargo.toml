@@ -15,6 +15,7 @@ native = [
     "dep:pollster",
     "dep:notify",
     "dep:notify-debouncer-full",
+    "dep:xxhash-rust",
 ]
 # The standalone web page's exports (the lobby, and the browser renderer it links), in the
 # browser only: the renderer's `web` feature and wasm-bindgen are declared for
@@ -40,6 +41,7 @@ notify-debouncer-full = { workspace = true, optional = true }
 pollster = { workspace = true, optional = true }
 wgpu = { workspace = true, optional = true }
 winit = { workspace = true, optional = true }
+xxhash-rust = { workspace = true, optional = true }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 ludenea-render = { workspace = true, optional = true, features = ["web"] }

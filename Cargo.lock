@@ -2134,6 +2134,7 @@ dependencies = [
  "wasm-bindgen",
  "wgpu",
  "winit",
+ "xxhash-rust",
 ]
 
 [[package]]
