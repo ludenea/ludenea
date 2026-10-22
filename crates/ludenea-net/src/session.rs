@@ -103,15 +103,14 @@ pub enum EndReason {
         rule: ViolationRule,
     },
     /// The state hashes of `tick` differ: `local` is this peer's, `remote` that of `peer`. A
-    /// peer that found the difference itself holds both. A peer that learned it from the end
-    /// notice of another names the sender of the notice as `peer`, with the hashes it holds:
-    /// its own once its state of `tick` was built from confirmed inputs, and the sender's once
-    /// its report arrived.
+    /// peer that learned it from another's end notice holds the view of the peer that found
+    /// it, as the notice tells: `local` is the hash of the peer that found it, and `peer`,
+    /// with its hash `remote`, the peer whose hash differed from it, which may be this one.
     Desync {
         tick: u64,
         peer: PeerId,
-        local: Option<u64>,
-        remote: Option<u64>,
+        local: u64,
+        remote: u64,
     },
     /// `peer` stopped answering, as another peer's end notice told.
     Lost { peer: PeerId },
@@ -661,7 +660,7 @@ impl Session {
                     }
                 }
                 Message::End { reason } => {
-                    self.end_by_notice(now, index, reason);
+                    self.end_by_notice(now, reason);
                     return;
                 }
                 _ if self.state == SessionState::Connecting => before_running = true,
@@ -1363,8 +1362,8 @@ impl Session {
                 desync = Some(EndReason::Desync {
                     tick,
                     peer,
-                    local: Some(report.hash),
-                    remote: Some(remote),
+                    local: report.hash,
+                    remote,
                 });
                 break;
             }
@@ -1691,7 +1690,17 @@ impl Session {
     /// lingers.
     fn end(&mut self, now: u64, reason: EndReason) {
         self.end_notice = match reason {
-            EndReason::Desync { tick, peer, .. } => Some(EndNotice::Desync { tick, peer }),
+            EndReason::Desync {
+                tick,
+                peer,
+                local,
+                remote,
+            } => Some(EndNotice::Desync {
+                tick,
+                peer,
+                local,
+                remote,
+            }),
             EndReason::Lost { peer } => Some(EndNotice::Lost { peer }),
             EndReason::LocalFailure { tick } => Some(EndNotice::LocalFailure { tick }),
             EndReason::Mismatch { .. }
@@ -1702,24 +1711,20 @@ impl Session {
         self.ended_micros = Some(now);
     }
 
-    /// Ends the session for the reason the end notice of the remote at `index` tells, which is
-    /// not relayed again. A desync names that remote, the peer this one learned it from: the
-    /// notice's own peer is the one whose hash differed from the sender's, which is this peer
-    /// or another one, and in neither case a peer this one compared with.
-    fn end_by_notice(&mut self, now: u64, index: usize, notice: EndNotice) {
+    /// Ends the session for the reason an end notice tells, which is not relayed again.
+    fn end_by_notice(&mut self, now: u64, notice: EndNotice) {
         let reason = match notice {
-            EndNotice::Desync { tick, .. } => {
-                let report = self.reports.get(&tick);
-                let remote = report
-                    .and_then(|report| report.received[index])
-                    .or_else(|| self.remotes[index].hashes.get(&tick).copied());
-                EndReason::Desync {
-                    tick,
-                    peer: self.remotes[index].id,
-                    local: report.map(|report| report.hash),
-                    remote,
-                }
-            }
+            EndNotice::Desync {
+                tick,
+                peer,
+                local,
+                remote,
+            } => EndReason::Desync {
+                tick,
+                peer,
+                local,
+                remote,
+            },
             EndNotice::Lost { peer } => EndReason::Lost { peer },
             EndNotice::LocalFailure { tick } => EndReason::LocalFailure { tick },
         };

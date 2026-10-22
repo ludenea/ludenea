@@ -314,31 +314,24 @@ fn diverging_hash_ends_every_peer_with_desync() {
         assert!(harness.run_until(10 * ONE_SECOND, ended), "{peers} peers");
         let flipped = harness.model(PeerId(0)).hash_at(tick).unwrap() ^ 1;
         let honest = harness.model(PeerId(1)).hash_at(tick).unwrap();
-        // Peer 0 found it against the first honest report to arrive.
-        match harness.state(PeerId(0)) {
+        // Peer 0 found it against the first honest report to arrive, and every other peer
+        // ends with peer 0's view of it, both hashes included.
+        let found = harness.state(PeerId(0));
+        match &found {
             SessionState::Ended(EndReason::Desync {
-                tick: found,
+                tick: at,
                 peer,
                 local,
                 remote,
             }) => {
-                assert_eq!(found, tick);
-                assert_ne!(peer, PeerId(0));
-                assert_eq!((local, remote), (Some(flipped), Some(honest)));
+                assert_eq!(*at, tick);
+                assert_ne!(*peer, PeerId(0));
+                assert_eq!((*local, *remote), (flipped, honest));
             }
             state => panic!("peer 0 of {peers}: {state:?}"),
         }
         for peer in harness.peers().skip(1) {
-            assert_eq!(
-                harness.state(peer),
-                SessionState::Ended(EndReason::Desync {
-                    tick,
-                    peer: PeerId(0),
-                    local: Some(honest),
-                    remote: None,
-                }),
-                "{peer} of {peers}"
-            );
+            assert_eq!(harness.state(peer), found, "{peer} of {peers}");
         }
     }
 }
@@ -625,14 +618,16 @@ fn desync_notice_lingers_then_stops() {
         SessionState::Ended(EndReason::Desync {
             tick: INTERVAL,
             peer: PeerId(1),
-            local: Some(local),
-            remote: Some(!local),
+            local,
+            remote: !local,
         })
     );
     let notice = vec![Message::End {
         reason: EndNotice::Desync {
             tick: INTERVAL,
             peer: PeerId(1),
+            local,
+            remote: !local,
         },
     }];
     // At most once a tick, for END_LINGER_MICROS, with nothing else.
@@ -646,7 +641,6 @@ fn desync_notice_lingers_then_stops() {
 
 #[test]
 fn end_notice_ends_the_receiver_with_the_same_reason() {
-    let local = |driven: &Driven| driven.model.hash_at(INTERVAL);
     let cases = [
         (
             EndNotice::Lost { peer: PeerId(1) },
@@ -664,21 +658,24 @@ fn end_notice_ends_the_receiver_with_the_same_reason() {
         // A relayed ending is not relayed again.
         assert_eq!(driven.sent(), []);
     }
-    // A desync the sender found against this peer names the sender, with the local hash.
+    // A desync ends the receiver with the sender's view of it: the peer whose hash differed
+    // from the sender's, here this one, the sender's hash and that peer's.
     let mut driven = Driven::at(INTERVAL + 2);
     driven.receive(vec![Message::End {
         reason: EndNotice::Desync {
             tick: INTERVAL,
             peer: PeerId(0),
+            local: 7,
+            remote: 8,
         },
     }]);
     assert_eq!(
         driven.session.state(),
         SessionState::Ended(EndReason::Desync {
             tick: INTERVAL,
-            peer: PeerId(1),
-            local: local(&driven),
-            remote: None,
+            peer: PeerId(0),
+            local: 7,
+            remote: 8,
         })
     );
     assert_eq!(driven.sent(), []);

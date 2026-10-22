@@ -65,6 +65,8 @@ fn every_message() -> Vec<Message> {
             reason: EndNotice::Desync {
                 tick: 90,
                 peer: PeerId(2),
+                local: 0,
+                remote: u64::MAX,
             },
         },
         Message::End {
@@ -148,9 +150,11 @@ fn version_1_bytes_are_pinned() {
                 reason: EndNotice::Desync {
                     tick: 300,
                     peer: PeerId(2),
+                    local: 1,
+                    remote: 300,
                 },
             },
-            vec![8, 0, 0xAC, 0x02, 2],
+            vec![8, 0, 0xAC, 0x02, 2, 1, 0xAC, 0x02],
         ),
         (
             Message::End {
@@ -531,6 +535,8 @@ fn random_message(rng: &mut Rng, kind: u32) -> Message {
                 0 => EndNotice::Desync {
                     tick: u64_of(rng),
                     peer: PeerId(rng.next_u32() as u8),
+                    local: u64_of(rng),
+                    remote: u64_of(rng),
                 },
                 1 => EndNotice::Lost {
                     peer: PeerId(rng.next_u32() as u8),
@@ -636,4 +642,24 @@ fn fuzz_decode_never_panics() {
             );
         }
     }
+}
+
+#[test]
+fn the_largest_end_packet_fits() {
+    // An ended session sends only its end notice: the largest one, at every field's largest
+    // encoding, stays far within a packet.
+    let packet = Packet {
+        match_id: u64::MAX,
+        messages: vec![Message::End {
+            reason: EndNotice::Desync {
+                tick: u64::MAX,
+                peer: PeerId(u8::MAX),
+                local: u64::MAX,
+                remote: u64::MAX,
+            },
+        }],
+    };
+    let bytes = packet.encode();
+    assert!(bytes.len() <= MAX_PACKET_BYTES, "{} bytes", bytes.len());
+    assert_eq!(Packet::decode(&bytes), Ok(packet));
 }

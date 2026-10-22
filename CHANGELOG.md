@@ -135,7 +135,7 @@ hash, those of the golden trace and replays included.
   (acknowledging a report never sent stays `ViolationRule::AckNeverSent`). When every peer's
   hash matches, the session emits `SessionEvent::HashMatched { tick }` and releases the states
   kept for earlier reports. A difference ends it with `EndReason::Desync { tick, peer, local,
-  remote }`. A received hash past the local horizon plus one is
+  remote }`, naming the peer and both hashes. A received hash past the local horizon plus one is
   `ViolationRule::HashBeyondHorizon`; one of tick 0 or off the interval
   (`DropReason::HashOffInterval`), received already (`HashAlreadyReceived`), or beyond the
   `(rollback_window + input_delay) / hash_interval + 2` reports kept waiting for a local hash
@@ -143,8 +143,8 @@ hash, those of the golden trace and replays included.
   tells of sends that `End` notice, and nothing else, to every peer at most once a tick for
   `END_LINGER_MICROS` (500 ms); a received `End` ends the receiver with the same reason, the
   new `EndReason::Lost { peer }` and `EndReason::LocalFailure { tick }` included, a desync
-  naming the sender of the notice. A mismatch found once running has no end notice and is
-  not relayed.
+  with the view of the peer that found it (its hash as `local`, the differing peer and that
+  peer's hash). A mismatch found once running has no end notice and is not relayed.
 - `ludenea_render` answers without a GPU what the renderer draws: `atlas::frames_of(png,
   meta)` gives the `TextureFrames` (the image size and each `FrameRect`, row-major, with its
   pivot) a meta cuts a PNG into, the same cut `pack` makes, or a `FramesError` (`Decode`,
@@ -1010,7 +1010,9 @@ hash, those of the golden trace and replays included.
   is a handshake (`Hello` with the `MatchIdentity`, `Welcome`), a player's inputs for
   consecutive ticks (`Inputs`), an acknowledgment (`Ack`), a time synchronization request
   and its reply (`Quality`, `QualityReply`), a state hash report (`Hash`), a peer leaving
-  (`Goodbye`), or an ending relayed to every peer (`End` with an `EndNotice`).
+  (`Goodbye`), or an ending relayed to every peer (`End` with an `EndNotice`: `Desync` with
+  the tick, the differing peer, the sender's hash and that peer's, `Lost` with the peer, or
+  `LocalFailure` with the tick).
   `Packet::decode` refuses with a `WireError` naming the value: another version (whatever
   the packet's length), a packet over 1200 bytes, bytes that are not one packet (trailing
   bytes included), more than 16 messages, an input message with no tick or more than 32, or

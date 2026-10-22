@@ -65,8 +65,13 @@ pub enum Message {
 /// Why a match ended, as one peer tells the others.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EndNotice {
-    /// The state hashes of `peer` differed at `tick`.
-    Desync { tick: u64, peer: PeerId },
+    /// The state hash of `tick` of `peer`, `remote`, differed from the sender's, `local`.
+    Desync {
+        tick: u64,
+        peer: PeerId,
+        local: u64,
+        remote: u64,
+    },
     /// `peer` stopped answering.
     Lost { peer: PeerId },
     /// The sender's game failed while stepping `tick`.
