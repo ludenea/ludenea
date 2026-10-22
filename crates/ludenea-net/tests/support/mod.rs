@@ -5,8 +5,9 @@
 
 use ludenea_app::{PlayerInputSpec, SimError};
 use ludenea_net::{
-    Conditioned, LinkConditions, MatchIdentity, MatchRules, MemoryNetwork, PeerId, Session,
-    SessionEvent, SessionSettings, SessionState, Timeouts, Transport,
+    Conditioned, LinkConditions, MAX_MESSAGES_PER_PACKET, MAX_PACKET_BYTES, MatchIdentity,
+    MatchRules, MemoryNetwork, Packet, PeerId, Session, SessionEvent, SessionSettings,
+    SessionState, Timeouts, Transport,
 };
 
 /// The time between two steps of the harness.
@@ -68,6 +69,7 @@ struct Peer {
 pub struct Harness {
     peers: Vec<Peer>,
     now_micros: u64,
+    sent_packets: u64,
 }
 
 impl Harness {
@@ -111,6 +113,7 @@ impl Harness {
         Self {
             peers,
             now_micros: 0,
+            sent_packets: 0,
         }
     }
 
@@ -129,8 +132,13 @@ impl Harness {
         self.peers[usize::from(peer.0)].muted = false;
     }
 
-    /// One step at the current time, then the time moves on by [`STEP_MICROS`]. Every send
-    /// must succeed: a session never builds a packet a transport refuses.
+    /// How many packets the sessions sent so far.
+    pub fn sent_packets(&self) -> u64 {
+        self.sent_packets
+    }
+
+    /// One step at the current time, then the time moves on by [`STEP_MICROS`]. Every packet
+    /// a session sends must decode within the limits of one packet, and every send succeed.
     pub fn step(&mut self) {
         let now = self.now_micros;
         for peer in self.peers.iter_mut().filter(|peer| !peer.muted) {
@@ -138,6 +146,8 @@ impl Harness {
                 peer.session.receive(from, &packet, now);
             }
             for (to, packet) in peer.session.outgoing(now) {
+                check_limits(&packet);
+                self.sent_packets += 1;
                 peer.transport
                     .send(to, packet, now)
                     .expect("a session sends only packets a transport accepts");
@@ -189,6 +199,18 @@ impl Harness {
     pub fn peers(&self) -> impl Iterator<Item = PeerId> + use<> {
         (0..self.peers.len()).map(|peer| PeerId(u8::try_from(peer).unwrap()))
     }
+}
+
+/// A packet a session sends decodes, within [`MAX_PACKET_BYTES`] and
+/// [`MAX_MESSAGES_PER_PACKET`].
+fn check_limits(packet: &[u8]) {
+    assert!(packet.len() <= MAX_PACKET_BYTES, "{} bytes", packet.len());
+    let decoded = Packet::decode(packet).expect("a session sends packets that decode");
+    assert!(
+        decoded.messages.len() <= MAX_MESSAGES_PER_PACKET,
+        "{} messages",
+        decoded.messages.len()
+    );
 }
 
 fn network(peers: usize) -> Vec<ludenea_net::MemoryTransport> {

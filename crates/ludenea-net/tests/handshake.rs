@@ -339,6 +339,31 @@ fn only_the_peer_at_fault_is_unreachable() {
 }
 
 #[test]
+fn handshake_packets_respect_the_packet_limits() {
+    // The harness decodes every packet a session sends and checks it against the limits of
+    // one packet: the four-peer handshake, its resends under loss, and a mismatch's linger.
+    let conditions = LinkConditions {
+        latency_micros: 20_000,
+        jitter_micros: 0,
+        loss_per_mille: 500,
+        duplicate_per_mille: 0,
+        reorder_per_mille: 0,
+        reorder_extra_micros: 0,
+        seed: 3,
+    };
+    let mut harness = Harness::conditioned(sessions(4), conditions);
+    assert!(harness.run_until_running(3 * ONE_SECOND));
+    assert!(harness.sent_packets() > 12, "{}", harness.sent_packets());
+    let mut mismatched: Vec<Session> = sessions(4);
+    let mut other = settings(3, &identity(&[0, 1, 2, 3]));
+    other.identity.engine = "e".repeat(ludenea_net::MAX_ENGINE_BYTES);
+    mismatched[3] = Session::new(other, model_input()).unwrap();
+    let mut harness = Harness::new(mismatched);
+    harness.run_until(ONE_SECOND, |_| false);
+    assert!(harness.sent_packets() > 12, "{}", harness.sent_packets());
+}
+
+#[test]
 fn time_never_runs_backwards() {
     // A lower time is read as the last one: the silence of peer 1 still counts from 0.
     let mut session = sessions(2).remove(0);
