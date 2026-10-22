@@ -37,22 +37,38 @@ pub fn project_assets(scene: &Path, project: Option<&Path>) -> Result<NamedAsset
 /// A texture of a project: its identifier, path, PNG bytes, and meta.
 pub type ProjectTexture = (AssetId, String, Vec<u8>, TextureMeta);
 
-/// The textures of a project, and a warning for each texture left out.
-#[derive(Debug, Default, PartialEq)]
+/// The textures of a project, and each texture file that could not be read.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ProjectTextures {
     pub textures: Vec<ProjectTexture>,
+    /// The `.png` files left out because they or their meta cannot be read, by path.
+    pub failures: Vec<TextureFailure>,
     pub warnings: Vec<String>,
+}
+
+/// A texture file left out: its path and why. Shown as `<path>: <cause>`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextureFailure {
+    /// The `.png`'s path, as `ProjectTexture` gives it.
+    pub path: String,
+    pub cause: String,
+}
+
+impl std::fmt::Display for TextureFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}: {}", self.path, self.cause)
+    }
 }
 
 /// Every texture of the project holding `scene` (found as [`project_assets`] finds assets):
 /// each `.png` whose meta makes it a texture ([`Meta::texture`]), with its identifier, path,
 /// bytes, and meta, sorted by identifier. A `.png` without a meta is skipped; one whose meta
-/// cannot be read or is invalid is left out with a warning naming the meta, as a texture
-/// that does not pack is. Two textures with the same identifier are refused naming the
-/// files.
+/// cannot be read or is invalid, or that cannot be read itself, is left out as a failure of
+/// that file, sorted by path. Two textures with the same identifier are refused naming the
+/// files, as is a folder that cannot be listed.
 pub fn project_textures(scene: &Path, project: Option<&Path>) -> Result<ProjectTextures, String> {
     let mut textures: BTreeMap<AssetId, (String, Vec<u8>, TextureMeta)> = BTreeMap::new();
-    let mut warnings = Vec::new();
+    let mut failures = Vec::new();
     for file in project_files(scene, project)? {
         let name = file.to_string_lossy().into_owned();
         let meta_file = PathBuf::from(format!("{name}.meta"));
@@ -62,9 +78,10 @@ pub fn project_textures(scene: &Path, project: Option<&Path>) -> Result<ProjectT
         let meta = match Meta::read(&meta_file) {
             Ok(meta) => meta,
             Err(reason) => {
-                warnings.push(format!(
-                    "cannot read {name}.meta: {reason}; the texture is left out"
-                ));
+                failures.push(TextureFailure {
+                    cause: format!("cannot read {name}.meta: {reason}"),
+                    path: name,
+                });
                 continue;
             }
         };
@@ -77,22 +94,41 @@ pub fn project_textures(scene: &Path, project: Option<&Path>) -> Result<ProjectT
                 meta.id
             ));
         }
-        let bytes = fs::read(&file).map_err(|error| format!("cannot read {name}: {error}"))?;
-        textures.insert(meta.id, (name, bytes, texture));
+        match fs::read(&file) {
+            Ok(bytes) => {
+                textures.insert(meta.id, (name, bytes, texture));
+            }
+            Err(error) => failures.push(TextureFailure {
+                cause: format!("cannot read the file: {error}"),
+                path: name,
+            }),
+        }
     }
+    failures.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(ProjectTextures {
         textures: textures
             .into_iter()
             .map(|(id, (name, bytes, texture))| (id, name, bytes, texture))
             .collect(),
-        warnings,
+        failures,
+        warnings: Vec::new(),
     })
 }
 
-/// Every file of the project holding `scene`: under `project`, else under the nearest folder
-/// above the scene holding `ludenea.toml`, its `scenes/` and `assets/`; else under the
-/// scene's folder.
+/// Every file of the project holding `scene`, under its [`project_folders`].
 fn project_files(scene: &Path, project: Option<&Path>) -> Result<Vec<PathBuf>, String> {
+    let mut files = Vec::new();
+    for folder in project_folders(scene, project)? {
+        collect(&folder, &mut files)?;
+    }
+    Ok(files)
+}
+
+/// The folders [`project_assets`] and [`project_textures`] scan, recursively, for the
+/// project holding `scene`: `project`'s, else the nearest folder above the scene holding
+/// `ludenea.toml`'s, `scenes/` and `assets/` (which may not exist); else the scene's
+/// folder.
+pub fn project_folders(scene: &Path, project: Option<&Path>) -> Result<Vec<PathBuf>, String> {
     // Absolute, so a bare file name has a folder and the manifest search climbs past the
     // current directory.
     let scene = std::path::absolute(scene)
@@ -104,16 +140,13 @@ fn project_files(scene: &Path, project: Option<&Path>) -> Result<Vec<PathBuf>, S
             .find(|dir| dir.join(MANIFEST).is_file())
             .map(Path::to_path_buf)
     });
-    let mut files = Vec::new();
-    match &root {
-        Some(root) => {
-            for directory in ASSET_DIRECTORIES {
-                collect(&root.join(directory), &mut files)?;
-            }
-        }
-        None => collect(folder, &mut files)?,
-    }
-    Ok(files)
+    Ok(match root {
+        Some(root) => ASSET_DIRECTORIES
+            .iter()
+            .map(|directory| root.join(directory))
+            .collect(),
+        None => vec![folder.to_path_buf()],
+    })
 }
 
 /// Adds every file under `directory`, if it exists. Links to folders are not followed, so
@@ -309,7 +342,7 @@ mod tests {
     }
 
     #[test]
-    fn a_texture_whose_meta_cannot_be_read_is_left_out_with_a_warning() {
+    fn an_invalid_meta_is_a_failure_of_that_file() {
         let (_guard, folder) = dir();
         let scene = folder.join("main.scene.ron");
         put(&scene, "");
@@ -318,17 +351,56 @@ mod tests {
         put(&folder.join("broken.png.meta"), "Meta(");
         put(&good, "b");
         texture_meta(&good, 1);
-        let ProjectTextures { textures, warnings } = project_textures(&scene, None).unwrap();
+        let ProjectTextures {
+            textures,
+            failures,
+            warnings,
+        } = project_textures(&scene, None).unwrap();
         let ids: Vec<AssetId> = textures.iter().map(|(id, ..)| *id).collect();
         assert_eq!(ids, [AssetId(1)]);
-        let [warning] = warnings.as_slice() else {
-            panic!("{warnings:?}")
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let [failure] = failures.as_slice() else {
+            panic!("{failures:?}")
         };
+        assert_eq!(failure.path, broken.display().to_string());
         assert!(
-            warning.starts_with(&format!("cannot read {}.meta: ", broken.display())),
-            "{warning}"
+            failure
+                .cause
+                .starts_with(&format!("cannot read {}.meta: ", broken.display())),
+            "{failure}"
         );
-        assert!(warning.ends_with("; the texture is left out"), "{warning}");
+        assert_eq!(
+            failure.to_string(),
+            format!("{}: {}", failure.path, failure.cause)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_png_is_a_failure_of_that_file() {
+        let (_guard, folder) = dir();
+        let scene = folder.join("main.scene.ron");
+        put(&scene, "");
+        let (locked, good) = (folder.join("locked.png"), folder.join("good.png"));
+        // A link to nothing is listed but cannot be read, whoever runs the test (a file
+        // without read permission is still readable by the superuser).
+        std::os::unix::fs::symlink(folder.join("gone.png"), &locked).unwrap();
+        texture_meta(&locked, 2);
+        put(&good, "b");
+        texture_meta(&good, 1);
+        let ProjectTextures {
+            textures, failures, ..
+        } = project_textures(&scene, None).unwrap();
+        let ids: Vec<AssetId> = textures.iter().map(|(id, ..)| *id).collect();
+        assert_eq!(ids, [AssetId(1)]);
+        let [failure] = failures.as_slice() else {
+            panic!("{failures:?}")
+        };
+        assert_eq!(failure.path, locked.display().to_string());
+        assert!(
+            failure.cause.starts_with("cannot read the file: "),
+            "{failure}"
+        );
     }
 
     #[test]

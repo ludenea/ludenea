@@ -4,11 +4,12 @@
 //! or a failure with its cause. `Display` draws the match through the presenter with a
 //! renderer, and replaces both on a new device once when the device is lost.
 
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use ludenea_app::project::ProjectTexture;
+use ludenea_app::project::{ProjectTexture, ProjectTextures};
 use ludenea_draw::frame::RenderFrame;
-use ludenea_render::atlas::{Atlas, TextureSource, pack};
+use ludenea_render::atlas::{Atlas, TextureSource, frames_of, pack};
 use ludenea_render::gpu::{Overlay, RenderError, Renderer, Size};
 
 use crate::RuntimeError;
@@ -320,6 +321,9 @@ pub(crate) struct Display {
     /// `None` only while a new screen opens.
     screen: Option<Screen>,
     open: OpenScreen,
+    /// The textures packed into `atlas`, by path, each the last version that packed: what a
+    /// replacement that fails keeps.
+    textures: BTreeMap<String, ProjectTexture>,
     atlas: Atlas,
     /// The window's size, which a new screen takes.
     size: (u32, u32),
@@ -340,16 +344,7 @@ impl Display {
     ) -> Result<Display, RuntimeError> {
         let (mut presenter, mut renderer) = open()?;
         presenter.resize(size.0, size.1);
-        let sources: Vec<TextureSource<'_>> = textures
-            .iter()
-            .map(|(id, path, png, meta)| TextureSource {
-                id: *id,
-                path: Some(path),
-                png,
-                meta,
-            })
-            .collect();
-        let atlas = pack(&sources, renderer.max_page_side());
+        let (atlas, textures) = pack_textures(textures.to_vec(), renderer.max_page_side());
         let warnings = atlas.errors.iter().map(ToString::to_string).collect();
         renderer
             .set_atlas(&atlas)
@@ -357,11 +352,69 @@ impl Display {
         Ok(Display {
             screen: Some((presenter, renderer)),
             open,
+            textures,
             atlas,
             size,
             stale: true,
             warnings,
         })
+    }
+
+    /// Repacks the textures after they changed on disk: `update`'s textures replace those
+    /// at the same path; a failed path (`update.failures`, or a new version that cannot be
+    /// decoded or cut into frames) keeps its previous version; a path in neither list is
+    /// dropped. The new atlas is uploaded, kept for a new screen, and drawn from the next
+    /// frame. Returns a warning per failure (`<path>: <cause>, keeping the previous
+    /// version`, or `; the texture is left out` without a previous version), per texture
+    /// the atlas leaves out, and `update`'s own warnings. Never touches the simulation.
+    pub(crate) fn replace_textures(&mut self, update: &ProjectTextures) -> Vec<String> {
+        let mut warnings = Vec::new();
+        let mut next = Vec::new();
+        for texture in &update.textures {
+            let (_, path, png, meta) = texture;
+            let previous = self
+                .textures
+                .get(path)
+                .filter(|previous| *previous != texture);
+            match previous.map(|previous| (previous, frames_of(png, meta))) {
+                Some((previous, Err(error))) => {
+                    warnings.push(format!("{path}: {error}, keeping the previous version"));
+                    next.push(previous.clone());
+                }
+                _ => next.push(texture.clone()),
+            }
+        }
+        for failure in &update.failures {
+            match self.textures.get(&failure.path) {
+                Some(previous) => {
+                    warnings.push(format!("{failure}, keeping the previous version"));
+                    next.push(previous.clone());
+                }
+                None => warnings.push(format!("{failure}; the texture is left out")),
+            }
+        }
+        warnings.extend(update.warnings.iter().cloned());
+        // The screen is missing only while `reopen` runs, which holds the display.
+        let Some((_, renderer)) = &mut self.screen else {
+            warnings.push("no GPU device to draw the changed textures with".to_string());
+            return warnings;
+        };
+        let (atlas, textures) = pack_textures(next, renderer.max_page_side());
+        warnings.extend(atlas.errors.iter().map(ToString::to_string));
+        match renderer.set_atlas(&atlas) {
+            // The next frame finds the loss and opens a new screen with this atlas.
+            Ok(()) | Err(RenderError::DeviceLost(_)) => {}
+            Err(error) => {
+                warnings.push(format!(
+                    "cannot upload the changed textures, the previous ones stay drawn: {error}"
+                ));
+                return warnings;
+            }
+        }
+        self.textures = textures;
+        self.atlas = atlas;
+        self.stale = true;
+        warnings
     }
 
     /// The warnings since the last call: textures left out of the atlas, a lost device.
@@ -498,6 +551,30 @@ impl Display {
     }
 }
 
+/// Packs `textures` into pages of at most `max_page_side`, with the textures that packed, by
+/// path.
+fn pack_textures(
+    textures: Vec<ProjectTexture>,
+    max_page_side: u32,
+) -> (Atlas, BTreeMap<String, ProjectTexture>) {
+    let sources: Vec<TextureSource<'_>> = textures
+        .iter()
+        .map(|(id, path, png, meta)| TextureSource {
+            id: *id,
+            path: Some(path),
+            png,
+            meta,
+        })
+        .collect();
+    let atlas = pack(&sources, max_page_side);
+    let packed = textures
+        .into_iter()
+        .filter(|(_, path, ..)| !atlas.errors.iter().any(|error| error.path() == Some(path)))
+        .map(|texture| (texture.1.clone(), texture))
+        .collect();
+    (atlas, packed)
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
@@ -505,6 +582,7 @@ mod tests {
     use std::rc::Rc;
 
     use ludenea_app::players::{LiveDevices, automatic_claims};
+    use ludenea_app::project::TextureFailure;
     use ludenea_render::gpu::headless;
 
     use super::*;
@@ -1027,6 +1105,176 @@ mod tests {
             matches!(&error, RuntimeError::Gpu(message) if message.contains("lost")),
             "{error}"
         );
+    }
+
+    /// A camera showing 4 by 4 units around the origin, filled by a sprite of texture 1 at a
+    /// pixel per unit.
+    const STILL: &str = r#"Scene(version: 2, next_id: 2, resources: {}, entities: [
+        (id: 0, components: {"ludenea::Pose": (position: (x: 0.0, y: 0.0), rotation: (cos: 1.0, sin: 0.0)), "ludenea::Camera2d": (view: (x: 4.0, y: 4.0))}),
+        (id: 1, components: {"ludenea::Pose": (position: (x: 0.0, y: 0.0), rotation: (cos: 1.0, sin: 0.0)), "ludenea::Sprite": (texture: "00000000000000000000000000000001", frame: 0, layer: "world", order: 0, flip_x: false, flip_y: false, tint: (4294967295))}),
+    ])"#;
+
+    const RED: [u8; 4] = [255, 0, 0, 255];
+    const BLUE: [u8; 4] = [0, 0, 255, 255];
+    const MAGENTA: [u8; 4] = [255, 0, 255, 255];
+
+    /// A 4 by 4 PNG of one colour.
+    fn solid(color: [u8; 4]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let mut encoder = png::Encoder::new(&mut bytes, 4, 4);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(&color.repeat(16)).unwrap();
+        writer.finish().unwrap();
+        bytes
+    }
+
+    /// Texture 1 at `hero.png`, a pixel per unit, nearest filtering.
+    fn hero(png: Vec<u8>) -> ProjectTexture {
+        let meta = ludenea_app::meta::TextureMeta {
+            pixels_per_unit: 1,
+            filter: ludenea_app::meta::Filter::Nearest,
+            ..Default::default()
+        };
+        (ludenea_ecs::AssetId(1), "hero.png".to_string(), png, meta)
+    }
+
+    fn still_game() -> Runner {
+        let files = GameFiles {
+            scene: STILL.to_string(),
+            assets: Vec::new(),
+            edits: None,
+        };
+        let mut runner = Runner::load(swarm::app, &files, None, Vec::new()).unwrap();
+        runner.start(automatic_claims(1)).unwrap();
+        runner
+    }
+
+    /// A display of `textures` on a new device per opening, the devices listed in `opened`.
+    fn textured(textures: &[ProjectTexture], opened: &Rc<RefCell<Vec<wgpu::Device>>>) -> Display {
+        let log = Rc::new(RefCell::new(Log::default()));
+        let opened = Rc::clone(opened);
+        let open = move || {
+            let (device, queue) = device();
+            let presenter = fake(&device, &log);
+            let renderer = Renderer::new(device.clone(), queue, FORMAT);
+            opened.borrow_mut().push(device);
+            Ok((presenter, renderer))
+        };
+        Display::new(Box::new(open), textures, (64, 64)).unwrap()
+    }
+
+    /// Shows the game's frame on `display`, then reads the pixel at the centre of what the
+    /// display's renderer draws.
+    fn centre(display: &mut Display, runner: &Runner) -> [u8; 4] {
+        let (previous, current) = runner.frames();
+        display
+            .show(previous, current.unwrap(), &Overlay::default(), false, 1.0)
+            .unwrap();
+        let (_, renderer) = display.screen.as_mut().unwrap();
+        let size = Size {
+            width: 64,
+            height: 64,
+        };
+        let rgba = renderer.render_rgba(size, 1.0, None).unwrap();
+        let at = (32 * 64 + 32) * 4;
+        rgba[at..at + 4].try_into().unwrap()
+    }
+
+    fn update(textures: Vec<ProjectTexture>, failures: Vec<TextureFailure>) -> ProjectTextures {
+        ProjectTextures {
+            textures,
+            failures,
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn replaced_texture_changes_the_drawn_pixels() {
+        let opened = Rc::new(RefCell::new(Vec::new()));
+        let mut display = textured(&[hero(solid(RED))], &opened);
+        let runner = still_game();
+        assert_eq!(centre(&mut display, &runner), RED);
+        let warnings = display.replace_textures(&update(vec![hero(solid(BLUE))], Vec::new()));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(centre(&mut display, &runner), BLUE);
+    }
+
+    #[test]
+    fn broken_replacement_keeps_the_previous_texture() {
+        let opened = Rc::new(RefCell::new(Vec::new()));
+        let mut display = textured(&[hero(solid(RED))], &opened);
+        let runner = still_game();
+        assert_eq!(centre(&mut display, &runner), RED);
+        let truncated = solid(BLUE)[..20].to_vec();
+        let warnings = display.replace_textures(&update(vec![hero(truncated)], Vec::new()));
+        let [warning] = warnings.as_slice() else {
+            panic!("{warnings:?}")
+        };
+        assert!(
+            warning.starts_with("hero.png: cannot decode the PNG: "),
+            "{warning}"
+        );
+        assert!(
+            warning.ends_with(", keeping the previous version"),
+            "{warning}"
+        );
+        assert_eq!(centre(&mut display, &runner), RED);
+        // Fixed, the new version is drawn.
+        let warnings = display.replace_textures(&update(vec![hero(solid(BLUE))], Vec::new()));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(centre(&mut display, &runner), BLUE);
+    }
+
+    #[test]
+    fn invalid_meta_keeps_the_previous_texture() {
+        let opened = Rc::new(RefCell::new(Vec::new()));
+        let mut display = textured(&[hero(solid(RED))], &opened);
+        let runner = still_game();
+        let failure = TextureFailure {
+            path: "hero.png".to_string(),
+            cause: "cannot read hero.png.meta: expected `Meta`".to_string(),
+        };
+        let warnings = display.replace_textures(&update(Vec::new(), vec![failure]));
+        assert_eq!(
+            warnings,
+            ["hero.png: cannot read hero.png.meta: expected `Meta`, keeping the previous version"]
+        );
+        assert_eq!(centre(&mut display, &runner), RED);
+    }
+
+    #[test]
+    fn a_texture_gone_from_the_project_is_dropped() {
+        let opened = Rc::new(RefCell::new(Vec::new()));
+        let mut display = textured(&[hero(solid(RED))], &opened);
+        let runner = still_game();
+        let warnings = display.replace_textures(&update(Vec::new(), Vec::new()));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(centre(&mut display, &runner), MAGENTA, "a placeholder");
+        // A failure with no version to keep leaves the texture out.
+        let failure = TextureFailure {
+            path: "hero.png".to_string(),
+            cause: "cannot read the file: denied".to_string(),
+        };
+        let warnings = display.replace_textures(&update(Vec::new(), vec![failure]));
+        assert_eq!(
+            warnings,
+            ["hero.png: cannot read the file: denied; the texture is left out"]
+        );
+        assert_eq!(centre(&mut display, &runner), MAGENTA);
+    }
+
+    #[test]
+    fn replaced_textures_survive_a_reopen() {
+        let opened = Rc::new(RefCell::new(Vec::new()));
+        let mut display = textured(&[hero(solid(RED))], &opened);
+        let runner = still_game();
+        assert_eq!(centre(&mut display, &runner), RED);
+        display.replace_textures(&update(vec![hero(solid(BLUE))], Vec::new()));
+        lose(&opened.borrow()[0]);
+        assert_eq!(centre(&mut display, &runner), BLUE);
+        assert_eq!(opened.borrow().len(), 2, "a new device opened");
     }
 
     /// A camera showing 4 by 4 units around the origin and one sprite circling it, a radius

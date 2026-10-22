@@ -442,6 +442,12 @@ pub fn render(app: fn() -> App, args: &RenderArgs, out: &mut dyn Write) -> Outco
         return Err("a replay holds its own inputs and edits; drop --inputs and --edits".into());
     }
     let textures = ludenea_app::project::project_textures(&files.scene, files.project.as_deref())?;
+    for failure in &textures.failures {
+        say(
+            out,
+            format_args!("warning: {failure}; the texture is left out"),
+        )?;
+    }
     for warning in &textures.warnings {
         say(out, format_args!("warning: {warning}"))?;
     }
@@ -563,6 +569,10 @@ pub struct PlayArgs {
     /// Draw as fast as possible instead of in step with the display.
     #[arg(long)]
     no_vsync: bool,
+    /// Keep the textures of the launch: without it, a changed PNG or meta is repacked while
+    /// the game plays (a broken one keeps its previous version).
+    #[arg(long)]
+    no_watch: bool,
     /// Print the frame time percentiles when the window closes: the time each frame takes to
     /// make, without its wait for the screen.
     #[arg(long)]
@@ -581,8 +591,9 @@ pub struct PlayArgs {
 }
 
 /// Loads the scene with its project's assets, textures (texture warnings as in `render`) and
-/// edits, then plays it in a window. Everything is read and the game loaded before the window
-/// opens, so bad files fail at once.
+/// edits, then plays it in a window, repacking the textures that change unless `--no-watch`.
+/// Everything is read and the game loaded before the window opens, so bad files fail at
+/// once.
 #[cfg(not(target_family = "wasm"))]
 pub fn play(app: fn() -> App, args: &PlayArgs, out: &mut dyn Write) -> Outcome {
     use ludenea_runtime::GameFiles;
@@ -602,6 +613,12 @@ pub fn play(app: fn() -> App, args: &PlayArgs, out: &mut dyn Write) -> Outcome {
     let sim = simulation(app, None)?;
     let debug_layers = known_debug_layers(&sim, &args.debug_layers)?;
     let textures = ludenea_app::project::project_textures(&files.scene, files.project.as_deref())?;
+    for failure in &textures.failures {
+        say(
+            out,
+            format_args!("warning: {failure}; the texture is left out"),
+        )?;
+    }
     for warning in &textures.warnings {
         say(out, format_args!("warning: {warning}"))?;
     }
@@ -616,6 +633,7 @@ pub fn play(app: fn() -> App, args: &PlayArgs, out: &mut dyn Write) -> Outcome {
             edits,
         },
         textures: textures.textures,
+        watch: (!args.no_watch).then(|| (files.scene.clone(), files.project.clone())),
         players: args.players,
         ticks: args.ticks,
         record: args.record.clone(),

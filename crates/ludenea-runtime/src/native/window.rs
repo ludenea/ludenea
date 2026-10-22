@@ -26,6 +26,7 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Fullscreen, Window, WindowId};
 
 use super::surface::{Display, OpenScreen, Presenter, now};
+use super::watch::TextureWatch;
 use super::{gamepads, keys, lobby};
 use crate::stats::FrameStats;
 use crate::{GameFiles, Runner, RuntimeError};
@@ -40,6 +41,10 @@ pub struct PlayOptions {
     pub files: GameFiles,
     /// The project's textures, packed into the atlas at launch.
     pub textures: Vec<ProjectTexture>,
+    /// The scene and the project folder whose textures are watched while the window plays
+    /// (`TextureWatch::start`), each change repacked into the atlas; `None` to never reload
+    /// them.
+    pub watch: Option<(PathBuf, Option<PathBuf>)>,
     /// The local players, from 1 to `MAX_LOCAL_PLAYERS`, with the automatic claims: no lobby.
     pub players: Option<u8>,
     /// Ends the match at the first frame that reaches this tick.
@@ -74,10 +79,12 @@ pub struct PlayOutcome {
 /// reaches `options.ticks`. A game that cannot load fails before any window opens; a game that
 /// fails while it runs closes the window and fails naming the tick. The replay is written to
 /// `options.record` in every case; failing to write it fails the session, unless it failed
-/// already (the replay's error is then printed). The window's warnings (textures left out of
-/// the atlas, a lost GPU device, gamepads that cannot be read) are written to `out`, as the
-/// command line tool's `render` writes its own; the game's console goes to the standard
-/// error.
+/// already (the replay's error is then printed). With `options.watch`, the textures that
+/// change on disk are repacked while the window plays, a broken one keeping its previous
+/// version; the simulation and its hashes never see it. The window's warnings (textures left
+/// out of the atlas or not reloaded, a lost GPU device, gamepads that cannot be read) are
+/// written to `out`, as the command line tool's `render` writes its own; the game's console
+/// goes to the standard error.
 pub fn play(
     app: fn() -> App,
     options: PlayOptions,
@@ -124,6 +131,9 @@ struct Session<'out> {
     started: bool,
     window: Option<Arc<Window>>,
     display: Option<Display>,
+    /// `None` when the textures are not reloaded, or the watcher could not start (a warning
+    /// says why).
+    watch: Option<TextureWatch>,
     occluded: bool,
     /// `None` when the platform's gamepads cannot be read (a warning says why).
     gilrs: Option<Gilrs>,
@@ -170,6 +180,15 @@ impl<'out> Session<'out> {
             debug_layers: BTreeSet::from([lobby::LAYER.to_string()]),
             ..Overlay::default()
         };
+        let watch = options
+            .watch
+            .as_ref()
+            .map(|(scene, project)| TextureWatch::start(scene, project.as_deref()));
+        let (watch, watch_warning) = match watch {
+            Some(Ok(watch)) => (Some(watch), None),
+            Some(Err(error)) => (None, Some(format!("{error}; textures are not reloaded"))),
+            None => (None, None),
+        };
         let mut session = Session {
             out,
             runner,
@@ -179,6 +198,7 @@ impl<'out> Session<'out> {
             started: false,
             window: None,
             display: None,
+            watch,
             occluded: false,
             gilrs,
             slots,
@@ -192,7 +212,7 @@ impl<'out> Session<'out> {
             stats: FrameStats::default(),
             failure: None,
         };
-        if let Some(warning) = warning {
+        for warning in [warning, watch_warning].into_iter().flatten() {
             session.warn(&warning);
         }
         session
@@ -211,6 +231,22 @@ impl<'out> Session<'out> {
             .as_mut()
             .map(Display::take_warnings)
             .unwrap_or_default();
+        for warning in warnings {
+            self.warn(&warning);
+        }
+    }
+
+    /// Repacks the textures when the watcher reports a change, writing its warnings. Only the
+    /// display changes: the match never hears of it.
+    fn reload_textures(&mut self) {
+        let (Some(watch), Some(display)) = (&mut self.watch, &mut self.display) else {
+            return;
+        };
+        let warnings = match watch.poll() {
+            None => return,
+            Some(Ok(update)) => display.replace_textures(&update),
+            Some(Err(error)) => vec![format!("{error}; the textures drawn stay")],
+        };
         for warning in warnings {
             self.warn(&warning);
         }
@@ -380,6 +416,7 @@ impl<'out> Session<'out> {
             .replace(now)
             .map_or(0.0, |last| now.duration_since(last).as_secs_f64());
         self.poll_gamepads()?;
+        self.reload_textures();
         if !self.started {
             return self.show_lobby().map(|()| false);
         }
@@ -601,6 +638,7 @@ mod tests {
                 edits: None,
             },
             textures: Vec::new(),
+            watch: None,
             players: Some(1),
             ticks: None,
             record: Some(record.clone()),
@@ -641,6 +679,7 @@ mod tests {
                 edits: None,
             },
             textures: Vec::new(),
+            watch: None,
             players: None,
             ticks: None,
             record: None,

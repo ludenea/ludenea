@@ -786,6 +786,17 @@ fn play_help_lists_its_flags() {
 }
 
 #[test]
+fn play_help_lists_no_watch() {
+    let dir = dir("play-help-no-watch");
+    let (code, out) = cli(&dir, &["play", "--help"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("--no-watch"),
+        "--no-watch missing from:\n{out}"
+    );
+}
+
+#[test]
 fn play_refuses_five_players() {
     let dir = dir("play-five");
     let (code, out) = cli(&dir, &["play", "{}/scene.ron", "--players", "5"]);

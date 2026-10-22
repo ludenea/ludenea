@@ -222,13 +222,18 @@ fn write_atlas(
 ) -> Result<(), BuildError> {
     let found =
         project_textures(scene, Some(root)).map_err(|error| BuildError::Textures(vec![error]))?;
-    let mut errors = found.warnings;
     let relative = |path: &str| -> String {
         Path::new(path).strip_prefix(root).map_or_else(
             |_| path.to_string(),
             |path| path.to_string_lossy().into_owned(),
         )
     };
+    let mut errors: Vec<String> = found
+        .failures
+        .iter()
+        .map(|failure| format!("{}: {}", relative(&failure.path), failure.cause))
+        .collect();
+    errors.extend(found.warnings);
     let named: Vec<(AssetId, String, &[u8], &TextureMeta)> = found
         .textures
         .iter()

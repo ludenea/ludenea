@@ -52,6 +52,24 @@ hash, those of the golden trace and replays included.
   `gpu::Size` moves to `camera::Size` (still reachable as `gpu::Size`), and
   `Renderer::regions` gives the regions of the atlas set last. `Renderer::set_atlas` refuses
   an atlas with a region on a page it does not have (`RenderError::InvalidAtlas`).
+- `ludenea_runtime::native::play` repacks the textures that change on disk while a game
+  plays, at most once per frame: `PlayOptions::watch` names the scene and project folder whose
+  textures `native::watch::TextureWatch` watches (debounced, `.png` and `.png.meta` files
+  only). A texture whose new version cannot be read, whose meta is invalid, or whose PNG
+  cannot be decoded or cut into frames keeps its previous version, with a warning
+  (`<path>: <cause>, keeping the previous version`); a texture removed from the project is
+  dropped. The simulation, its state hashes and the replay never see a reload.
+  `RuntimeError::Watch` reports a watcher that cannot start, which `play` writes as a
+  warning before playing without reloads. The command line tool's `play` watches unless
+  `--no-watch` is given.
+- Breaking: `ludenea_app::project::project_textures` reports a `.png` that cannot be read,
+  or whose meta cannot be read or is invalid, as a `TextureFailure { path, cause }` (shown
+  as `<path>: <cause>`) in the new `ProjectTextures::failures`, sorted by path, instead of
+  failing the whole call or a warning; only a folder that cannot be listed, or two
+  textures sharing an identifier, still fail it. `render` and `play` print each failure
+  as a warning, as before, and a web build lists them among its texture errors. The new
+  `project_folders(scene, project)` gives the folders `project_assets` and
+  `project_textures` scan.
 - Breaking: `TextureError::Grid` holds the `reason` (`FramesError::Grid`'s message) instead
   of the `image` size and the `grid`; its message is unchanged.
 - `WebRenderer::push_frame_bytes(bytes, overlay)` pushes a frame in the control protocol's

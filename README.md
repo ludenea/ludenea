@@ -153,7 +153,10 @@ Start begins the match; the window title names each claim. `--players N` skips t
 player holds the keyboard and the first gamepad, two share the keyboard's halves. F11 toggles
 borderless fullscreen (`--fullscreen` starts there), `--record` writes the replay when the
 window closes, after a failure of the game too, and `--ticks` closes it once the match reaches
-that tick. A failure exits with code 2:
+that tick. Saving a texture's PNG or meta while the game plays repacks it at the next frame,
+without touching the simulation; a version that cannot be read or decoded is a warning and the
+previous one stays drawn. `--no-watch` keeps the textures of the launch. A failure exits with
+code 2:
 
 ```sh
 cargo run --locked --release -p swarm -- play examples/swarm/assets/swarm.scene.ron \

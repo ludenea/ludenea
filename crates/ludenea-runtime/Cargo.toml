@@ -4,9 +4,18 @@ version = "0.1.0"
 edition.workspace = true
 
 [features]
-# The native window: winit, gilrs, and the wgpu renderer, on native targets only. Without it the
-# runtime depends on no window, gamepad, or GPU crate.
-native = ["dep:winit", "dep:gilrs", "dep:ludenea-render", "dep:wgpu", "dep:pollster"]
+# The native window: winit, gilrs, the wgpu renderer, and the texture watcher (notify), on
+# native targets only. Without it the runtime depends on no window, gamepad, GPU, or file
+# watcher crate.
+native = [
+    "dep:winit",
+    "dep:gilrs",
+    "dep:ludenea-render",
+    "dep:wgpu",
+    "dep:pollster",
+    "dep:notify",
+    "dep:notify-debouncer-full",
+]
 # The standalone web page's exports (the lobby, and the browser renderer it links), in the
 # browser only: the renderer's `web` feature and wasm-bindgen are declared for
 # `wasm32-unknown-unknown` alone. Cargo cannot limit a feature to a target, so on any other
@@ -26,6 +35,8 @@ thiserror.workspace = true
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 gilrs = { workspace = true, optional = true }
 ludenea-render = { workspace = true, optional = true, features = ["gpu"] }
+notify = { workspace = true, optional = true }
+notify-debouncer-full = { workspace = true, optional = true }
 pollster = { workspace = true, optional = true }
 wgpu = { workspace = true, optional = true }
 winit = { workspace = true, optional = true }
@@ -37,6 +48,7 @@ wasm-bindgen = { workspace = true, optional = true }
 
 [dev-dependencies]
 ludenea.workspace = true
+png.workspace = true
 postcard.workspace = true
 serde.workspace = true
 swarm = { path = "../../examples/swarm" }

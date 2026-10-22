@@ -6,6 +6,7 @@ pub mod gamepads;
 pub mod keys;
 pub mod lobby;
 pub mod surface;
+pub mod watch;
 mod window;
 
 pub use window::{PlayOptions, PlayOutcome, play};

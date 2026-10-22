@@ -63,6 +63,9 @@ pub enum RuntimeError {
     /// The replay of the match cannot be exported or written, with its cause.
     #[error("cannot record the replay: {0}")]
     Record(String),
+    /// The project's textures cannot be watched for changes, with the cause.
+    #[error("cannot watch the textures: {0}")]
+    Watch(String),
 }
 
 /// A game played through its control host.
