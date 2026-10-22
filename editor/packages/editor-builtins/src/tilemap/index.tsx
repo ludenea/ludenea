@@ -1,6 +1,7 @@
 import { ProtocolFailure, type Entity, type LayerInfo } from "@ludenea/control-client";
 import { definePlugin, type Disposable, type Editor, type ViewportTool } from "@ludenea/editor-shell";
 import { createStore, type Store } from "../shared";
+import { same } from "../viewport/camera";
 import { areaBetween, cellAt, cellUnder, type Cell, type Pose, type Tilemap } from "./paint";
 import { TilePalette } from "./TilePalette";
 
@@ -23,8 +24,6 @@ export type TilemapState = Store<{ target: PaintTarget | null; tile: number | nu
 
 /** A drag in progress: the cell it started on, the cell under the pointer, and what it paints (null erases). */
 type Stroke = { start: Cell; end: Cell; tile: number | null };
-
-const same = (a: Entity, b: Entity) => a.index === b.index && a.generation === b.generation;
 
 /** The parallax of the layer named `name` (empty for the first one); 1 for a layer the game does not declare, as it is drawn nowhere. */
 function parallaxOf(layers: LayerInfo[], name: string): number {
