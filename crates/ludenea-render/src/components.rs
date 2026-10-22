@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::sheet::SpriteSheet;
 
 /// A textured quad drawn at the entity's `Pose`. `frame` indexes the frames of `texture`.
-#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
 #[component(name = "ludenea::Sprite")]
 pub struct Sprite {
     pub texture: AssetId,
@@ -22,6 +22,51 @@ pub struct Sprite {
     pub flip_x: bool,
     pub flip_y: bool,
     pub tint: Color,
+}
+
+// Written by hand because the derived `Clone` never forwards `clone_from`, so saving a world
+// would allocate a new `String` per sprite: here `layer` keeps its buffer. Both methods
+// destructure, so a field added later fails to compile until it is copied.
+impl Clone for Sprite {
+    fn clone(&self) -> Self {
+        let Sprite {
+            texture,
+            frame,
+            layer,
+            order,
+            flip_x,
+            flip_y,
+            tint,
+        } = self;
+        Sprite {
+            texture: *texture,
+            frame: *frame,
+            layer: layer.clone(),
+            order: *order,
+            flip_x: *flip_x,
+            flip_y: *flip_y,
+            tint: *tint,
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        let Sprite {
+            texture,
+            frame,
+            layer,
+            order,
+            flip_x,
+            flip_y,
+            tint,
+        } = source;
+        self.texture = *texture;
+        self.frame = *frame;
+        self.layer.clone_from(layer);
+        self.order = *order;
+        self.flip_x = *flip_x;
+        self.flip_y = *flip_y;
+        self.tint = *tint;
+    }
 }
 
 impl Default for Sprite {
@@ -45,7 +90,7 @@ impl Default for Sprite {
 /// `started` counts in `Time.tick`, the steps completed before the current one: a system
 /// starting a clip during a step writes `Time.tick` as it is. `Teleported::tick` counts
 /// render frames instead, one ahead during a step; `Teleported::this_step` writes it.
-#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
 #[component(name = "ludenea::SpriteAnimation")]
 pub struct SpriteAnimation {
     pub sheet: Handle<SpriteSheet>,
@@ -53,6 +98,37 @@ pub struct SpriteAnimation {
     pub started: u64,
     /// Whether the clip starts again after its last frame, rather than holding it.
     pub looping: bool,
+}
+
+// By hand for the same reason as `Sprite`: `clip` keeps its buffer in `clone_from`.
+impl Clone for SpriteAnimation {
+    fn clone(&self) -> Self {
+        let SpriteAnimation {
+            sheet,
+            clip,
+            started,
+            looping,
+        } = self;
+        SpriteAnimation {
+            sheet: *sheet,
+            clip: clip.clone(),
+            started: *started,
+            looping: *looping,
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        let SpriteAnimation {
+            sheet,
+            clip,
+            started,
+            looping,
+        } = source;
+        self.sheet = *sheet;
+        self.clip.clone_from(clip);
+        self.started = *started;
+        self.looping = *looping;
+    }
 }
 
 /// The camera, centred on the entity's `Pose`. Deserialization rejects what
@@ -226,4 +302,77 @@ impl Teleported {
 /// NaN fails the comparison.
 fn finite_and_positive(v: Vec2) -> bool {
     v.x.is_finite() && v.y.is_finite() && v.x > 0.0 && v.y > 0.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sprite(layer: &str) -> Sprite {
+        Sprite {
+            texture: AssetId(3),
+            frame: 7,
+            layer: layer.to_owned(),
+            order: -2,
+            flip_x: true,
+            flip_y: false,
+            tint: Color(0x11223344),
+        }
+    }
+
+    fn animation(clip: &str) -> SpriteAnimation {
+        SpriteAnimation {
+            sheet: Handle::new(AssetId(5)),
+            clip: clip.to_owned(),
+            started: 9,
+            looping: true,
+        }
+    }
+
+    fn round_trip<T: Serialize + for<'a> Deserialize<'a>>(value: &T) -> T {
+        postcard::from_bytes(&postcard::to_allocvec(value).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn sprite_clone_from_reuses_the_layer_buffer() {
+        let source = sprite("world");
+        let mut target = sprite("background");
+        let buffer = target.layer.as_ptr();
+        target.clone_from(&source);
+        assert_eq!(target.layer.as_ptr(), buffer, "the layer was reallocated");
+        assert_eq!(target, source);
+        assert_eq!(target, source.clone());
+        assert_eq!(target, round_trip(&source));
+    }
+
+    #[test]
+    fn sprite_clone_from_overwrites_every_field() {
+        let mut target = Sprite::default();
+        target.clone_from(&sprite("world"));
+        assert_eq!(target, sprite("world"));
+    }
+
+    #[test]
+    fn animation_clone_from_reuses_the_clip_buffer() {
+        let source = animation("fly");
+        let mut target = animation("a longer clip name");
+        let buffer = target.clip.as_ptr();
+        target.clone_from(&source);
+        assert_eq!(target.clip.as_ptr(), buffer, "the clip was reallocated");
+        assert_eq!(target, source);
+        assert_eq!(target, source.clone());
+        assert_eq!(target, round_trip(&source));
+    }
+
+    #[test]
+    fn animation_clone_from_overwrites_every_field() {
+        let mut target = SpriteAnimation {
+            sheet: Handle::new(AssetId(0)),
+            clip: String::new(),
+            started: 0,
+            looping: false,
+        };
+        target.clone_from(&animation("fly"));
+        assert_eq!(target, animation("fly"));
+    }
 }
