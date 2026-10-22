@@ -456,53 +456,23 @@ fn save_precedes_every_load() {
 }
 
 #[test]
-fn inputs_that_cannot_be_accepted_are_dropped_and_counted() {
+fn inputs_after_a_gap_are_dropped_and_counted() {
+    // An input that breaks a rule of the protocol ends the session instead: see the
+    // violation tests.
     let mut session = peer_zero();
     remote_inputs(&mut session, 0, &[3, 4]);
-    let inputs = |player, first_tick, inputs: Vec<Vec<u8>>| Message::Inputs {
-        player,
-        first_tick,
-        inputs,
-    };
-    let cases = [
-        // Player 0 is peer 0's, and player 9 does not exist.
-        (inputs(0, 0, vec![vec![0]]), DropReason::NotOwner),
-        (inputs(9, 0, vec![vec![0]]), DropReason::NotOwner),
-        (inputs(1, 2, vec![vec![0, 0]]), DropReason::InvalidInput),
-        (inputs(1, 1, vec![vec![5]]), DropReason::ConflictingInput),
-        (inputs(1, 3, vec![vec![0]]), DropReason::Gap),
-        (inputs(1, u64::MAX, vec![vec![0], vec![0]]), DropReason::Gap),
-        // The last tick a u64 numbers, far after the next expected one.
-        (inputs(1, u64::MAX, vec![vec![0]]), DropReason::Gap),
-        (
-            Message::Ack {
-                players: vec![(1, 0)],
-                hashes_through: 0,
-            },
-            DropReason::NotOwner,
-        ),
-        // Peer 0 holds inputs of player 0 for ticks 0 and 1 only, the input delay.
-        (
-            Message::Ack {
-                players: vec![(0, 3)],
-                hashes_through: 0,
-            },
-            DropReason::AckNeverSent,
-        ),
-    ];
-    for (message, reason) in cases {
-        let before = dropped(&session, reason);
-        from_peer_one(&mut session, vec![message.clone()]);
-        assert_eq!(dropped(&session, reason), before + 1, "{message:?}");
+    for _ in 0..2 {
+        // Tick 2 is missing; tick 3 waits for a packet that resends from tick 2.
+        remote_inputs(&mut session, 3, &[0]);
         assert_eq!(
             session.events(),
             [SessionEvent::Dropped {
                 peer: PeerId(1),
-                reason
-            }],
-            "{message:?}"
+                reason: DropReason::Gap
+            }]
         );
     }
+    assert_eq!(dropped(&session, DropReason::Gap), 2);
     // The confirmed inputs are unchanged.
     step(&mut session, 0);
     let confirmed: Vec<SessionEvent> = session.events();
@@ -522,6 +492,8 @@ fn acknowledgments_only_move_forward() {
     for _ in 0..4 {
         step(&mut session, 1);
     }
+    // Ticks 0 to 5 are sent.
+    session.outgoing(NOW);
     let ack = |next| Message::Ack {
         players: vec![(0, next)],
         hashes_through: 0,
@@ -604,8 +576,8 @@ fn inputs_of_a_running_peer_are_read_while_connecting() {
 
 #[test]
 fn unacknowledged_inputs_fill_a_packet_oldest_first() {
-    // Three local players with inputs at the largest size, and a peer that never
-    // acknowledges: the unacknowledged ticks outgrow one packet.
+    // Three local players with inputs at the largest size, and a peer whose acknowledgments
+    // trail by as much as they can: the unacknowledged ticks outgrow one packet.
     let identity = identity(&[0, 0, 0, 1]);
     let any_input = PlayerInputSpec {
         default: vec![0],
@@ -615,23 +587,41 @@ fn unacknowledged_inputs_fill_a_packet_oldest_first() {
         .map(|local| Session::new(settings(local, &identity), any_input.clone()).unwrap())
         .collect();
     let mut session = handshake(sessions).remove(0);
+    let rules = MatchRules::default();
+    let (delay, window) = (
+        u64::from(rules.input_delay),
+        u64::from(rules.rollback_window),
+    );
+    let lag = 2 * (window + delay) + 1;
+    let mut acked = 0;
     for tick in 0..40u64 {
         for player in 0..3 {
             session
                 .add_local_input(player, vec![u8::try_from(tick).unwrap(); MAX_INPUT_BYTES])
                 .unwrap();
         }
+        acked = (tick + delay).saturating_sub(lag);
         let packet = Packet {
             match_id: 1,
-            messages: vec![Message::Inputs {
-                player: 3,
-                first_tick: tick,
-                inputs: vec![vec![0]],
-            }],
+            messages: vec![
+                Message::Ack {
+                    players: (0..3).map(|player| (player, acked)).collect(),
+                    hashes_through: 0,
+                },
+                Message::Inputs {
+                    player: 3,
+                    first_tick: tick,
+                    inputs: vec![vec![0]],
+                },
+            ],
         };
         session.receive(PeerId(1), &packet.encode(), NOW);
         assert_ne!(session.advance(NOW).unwrap(), []);
+        if tick < 39 {
+            session.outgoing(NOW);
+        }
     }
+    assert_eq!(session.state(), SessionState::Running);
     let outgoing = session.outgoing(NOW);
     let (_, bytes) = &outgoing[0];
     assert!(bytes.len() <= MAX_PACKET_BYTES, "{} bytes", bytes.len());
@@ -664,7 +654,7 @@ fn unacknowledged_inputs_fill_a_packet_oldest_first() {
     // Every player from its oldest unacknowledged tick, sharing the room.
     assert_eq!(sent.len(), 3, "{sent:?}");
     for (player, first_tick, ticks) in &sent {
-        assert_eq!(*first_tick, 0, "player {player}");
+        assert_eq!(*first_tick, acked, "player {player}");
         assert!(*ticks >= 10, "player {player}: {sent:?}");
     }
 }

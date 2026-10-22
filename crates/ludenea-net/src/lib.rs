@@ -12,7 +12,7 @@ pub mod wire;
 
 pub use session::{
     DropReason, END_LINGER_MICROS, EndReason, HANDSHAKE_RESEND_MICROS, PeerStats, Request, Session,
-    SessionError, SessionEvent, SessionState, SessionStats,
+    SessionError, SessionEvent, SessionState, SessionStats, ViolationRule,
 };
 pub use settings::{
     MAX_ENGINE_BYTES, MAX_INPUT_BYTES, MAX_MESSAGES_PER_PACKET, MAX_PACKET_BYTES, MAX_PEERS,

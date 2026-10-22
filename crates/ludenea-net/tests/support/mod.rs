@@ -233,6 +233,8 @@ struct Peer {
     transport: Box<dyn Transport>,
     events: Vec<SessionEvent>,
     muted: bool,
+    /// Receives and sends, but runs no frame: a machine too slow to keep up.
+    frozen: bool,
     model: Model,
     /// When the next frame is due, from the first step the session runs.
     next_frame_micros: Option<u64>,
@@ -305,6 +307,7 @@ impl Harness {
                 transport,
                 events: Vec::new(),
                 muted: false,
+                frozen: false,
                 model: Model::default(),
                 next_frame_micros: None,
                 frames: 0,
@@ -339,6 +342,17 @@ impl Harness {
         self.peers[usize::from(peer.0)].muted = false;
     }
 
+    /// Stops `peer` from running frames while it still receives and sends. When it thaws, it
+    /// runs one frame per step until it catches up with the time.
+    pub fn freeze(&mut self, peer: PeerId) {
+        self.peers[usize::from(peer.0)].frozen = true;
+    }
+
+    /// Lets a frozen `peer` run frames again.
+    pub fn thaw(&mut self, peer: PeerId) {
+        self.peers[usize::from(peer.0)].frozen = false;
+    }
+
     /// How many packets the sessions sent so far.
     pub fn sent_packets(&self) -> u64 {
         self.sent_packets
@@ -352,7 +366,7 @@ impl Harness {
             while let Some((from, packet)) = peer.transport.receive(now) {
                 peer.session.receive(from, &packet, now);
             }
-            if peer.session.state() == SessionState::Running {
+            if peer.session.state() == SessionState::Running && !peer.frozen {
                 let due = *peer.next_frame_micros.get_or_insert(now);
                 if now >= due {
                     peer.frame(now);

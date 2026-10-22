@@ -14,6 +14,12 @@
 //! prediction wrong, the next `advance` loads the first mispredicted tick and runs again up to
 //! the current one; when the session is `rollback_window` ticks ahead of the last tick every
 //! player's input is confirmed for, it stalls instead of predicting further.
+//!
+//! A packet that proves its sender is broken or hostile ends the session with
+//! [`EndReason::Violation`], naming the sender, the [`ViolationRule`], and the player and tick
+//! when there is one. The rules also bound what a hostile peer can make a session hold: the
+//! remote inputs past the horizon of an honest peer, and the local inputs a peer leaves
+//! unacknowledged.
 
 use std::collections::BTreeMap;
 
@@ -61,6 +67,32 @@ pub enum EndReason {
     /// No packet came for `disconnect_after_micros` from `peer`, whose handshake was
     /// unfinished, while connecting.
     Unreachable { peer: PeerId },
+    /// `peer` broke `rule` of the protocol, for the input of `player` at `tick` when the rule
+    /// is about one, or about the acknowledged `tick` of `player`.
+    Violation {
+        peer: PeerId,
+        player: Option<u8>,
+        tick: Option<u64>,
+        rule: ViolationRule,
+    },
+}
+
+/// A rule of the protocol no honest peer breaks, whatever the network does to its packets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViolationRule {
+    /// An input of a player the sender does not own, or that does not exist; or an
+    /// acknowledgment of a player the receiver does not own.
+    NotOwner,
+    /// An input different from the one already confirmed for its tick, which is kept.
+    ConflictingInput,
+    /// An input the session's input check refuses.
+    InvalidInput,
+    /// An input for a tick past the furthest an honest peer can have reached.
+    BeyondHorizon,
+    /// An acknowledgment of an input or a hash report this peer never sent.
+    AckNeverSent,
+    /// An acknowledgment trailing this peer's inputs by more than an honest peer can.
+    AckLagging,
 }
 
 /// Why a received packet was dropped. Ordered, so the counts of [`PeerStats::dropped`]
@@ -77,18 +109,10 @@ pub enum DropReason {
     /// than inputs and acknowledgments from a peer whose matching `Hello` arrived. Its
     /// handshake messages are still read.
     BeforeRunning,
-    /// An `Inputs` message names a player that does not exist or that the sender does not
-    /// own, or an `Ack` names a player this peer does not own.
-    NotOwner,
-    /// An input the session's input check refuses.
-    InvalidInput,
-    /// An input that differs from the one already confirmed for its tick, which is kept.
-    ConflictingInput,
-    /// The inputs start after the next tick expected from that player, or run past the last
-    /// tick a `u64` numbers. A later packet resends them from the acknowledged tick.
+    /// The inputs start after the next tick expected from that player, within the horizon.
+    /// Not a violation: a sender resends from the tick acknowledged last, so a later packet
+    /// fills the gap.
     Gap,
-    /// An `Ack` asks for a tick after every input this peer has for that player.
-    AckNeverSent,
 }
 
 /// What happened in a session since the caller last asked, for the host to act on or log.
@@ -143,7 +167,7 @@ pub enum SessionError {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PeerStats {
     /// The packets dropped, by reason. Each dropped packet counts once, under the reason that
-    /// stopped reading it: a refused `Inputs` or `Ack` stops the packet there and is the
+    /// stopped reading it: an `Inputs` message with a gap stops the packet there and is the
     /// reason, even when an earlier message of the same packet came before the session ran;
     /// otherwise such a message makes the reason [`DropReason::BeforeRunning`].
     pub dropped: BTreeMap<DropReason, u64>,
@@ -165,6 +189,19 @@ pub struct SessionStats {
     pub peers: BTreeMap<PeerId, PeerStats>,
 }
 
+/// Why a message stops the reading of its packet.
+#[derive(Debug)]
+enum Refusal {
+    /// The packet is dropped, the session goes on.
+    Drop(DropReason),
+    /// The sender broke a rule: the session ends.
+    Violation {
+        player: Option<u8>,
+        tick: Option<u64>,
+        rule: ViolationRule,
+    },
+}
+
 /// What this session knows of another peer.
 #[derive(Debug)]
 struct Remote {
@@ -181,6 +218,9 @@ struct Remote {
     /// Per global player, the first tick of that player's inputs the peer still needs; only
     /// local players' entries are used. Only moves forward.
     acked: Vec<u64>,
+    /// Per global player, the tick after the last input of that player sent to the peer; only
+    /// local players' entries are used. Only moves forward.
+    sent: Vec<u64>,
     /// An advance ran since the last packet: the next one carries inputs and an `Ack`.
     inputs_due: bool,
 }
@@ -245,6 +285,7 @@ impl Session {
                 last_hello_micros: None,
                 last_heard_micros: 0,
                 acked: vec![0; settings.identity.players.len()],
+                sent: vec![0; settings.identity.players.len()],
                 inputs_due: false,
             })
             .collect();
@@ -361,8 +402,8 @@ impl Session {
                     // A different identity ends the session in any state. While connecting,
                     // the other peer finds the mismatch from the lingering `Hello`. Once
                     // running, a peer that changes its identity breaks the protocol: it is to
-                    // be reported through the end notice once violations and end notices
-                    // exist. Until then the other peer ends by its timeout.
+                    // be reported through the end notice once end notices exist. Until then
+                    // the other peer ends by its timeout.
                     if let Some(reason) = self.compare(from, &identity, packet.match_id) {
                         self.end(now, reason);
                         return;
@@ -390,15 +431,24 @@ impl Session {
                     inputs,
                 } => {
                     self.welcomed_by_running_peer(index);
-                    if let Err(reason) = self.read_inputs(from, player, first_tick, inputs) {
-                        self.drop_packet(from, reason);
+                    let read = self
+                        .read_inputs(from, player, first_tick, inputs)
+                        .and_then(|()| self.check_lag(index));
+                    if let Err(refusal) = read {
+                        self.refuse(now, from, refusal);
                         return;
                     }
                 }
-                Message::Ack { players, .. } => {
+                Message::Ack {
+                    players,
+                    hashes_through,
+                } => {
                     self.welcomed_by_running_peer(index);
-                    if let Err(reason) = self.read_ack(index, &players) {
-                        self.drop_packet(from, reason);
+                    let read = self
+                        .read_ack(index, &players, hashes_through)
+                        .and_then(|()| self.check_lag(index));
+                    if let Err(refusal) = read {
+                        self.refuse(now, from, refusal);
                         return;
                     }
                 }
@@ -544,7 +594,24 @@ impl Session {
                     match_id: self.settings.match_id,
                     messages,
                 };
-                packets.push((remote.id, fit(packet)));
+                let (packet, bytes) = fit(packet);
+                for message in &packet.messages {
+                    if let Message::Inputs {
+                        player,
+                        first_tick,
+                        inputs,
+                    } = message
+                    {
+                        // A local input held is below `u64::MAX`, the next confirmed tick.
+                        let end = u64::try_from(inputs.len())
+                            .ok()
+                            .and_then(|count| first_tick.checked_add(count))
+                            .unwrap_or(u64::MAX);
+                        let sent = &mut remote.sent[usize::from(*player)];
+                        *sent = (*sent).max(end);
+                    }
+                }
+                packets.push((remote.id, bytes));
             }
         }
         packets
@@ -683,64 +750,132 @@ impl Session {
         }
     }
 
-    /// Confirms the inputs of `player` from `first_tick` that `from` sent. Every input is
-    /// checked before any is confirmed; a refused one stops the message.
+    /// The local horizon `h`: the current tick plus `input_delay`, one past the highest tick
+    /// a local player has an input for, as the next advance confirms that tick.
+    fn horizon(&self) -> u64 {
+        let delay = u64::from(self.settings.identity.rules.input_delay);
+        self.tick.saturating_add(delay)
+    }
+
+    /// The highest tick an honest peer can send an input for.
+    ///
+    /// A peer stalls `rollback_window` ticks past its confirmed tick, and its inputs apply
+    /// `input_delay` ticks after it: it holds no input beyond its confirmed tick plus
+    /// `rollback_window + input_delay`. Its confirmed tick needs the inputs of the local
+    /// players, which go no further than `h`, so it is at most `h + 1`. An input for a tick
+    /// above `h + 1 + rollback_window + input_delay` is [`ViolationRule::BeyondHorizon`].
+    /// Counted exactly, the highest input an honest peer sends is two ticks lower: `h` is one
+    /// past the highest local input, and so is the peer's own horizon. The slack keeps the
+    /// bound clear of an off-by-one on an honest peer.
+    fn input_limit(&self) -> u64 {
+        let rules = self.settings.identity.rules;
+        self.horizon()
+            .saturating_add(1)
+            .saturating_add(u64::from(rules.rollback_window))
+            .saturating_add(u64::from(rules.input_delay))
+    }
+
+    /// Confirms the inputs of `player` from `first_tick` that `from` sent. Every received tick
+    /// is checked before it is computed on, and every input before any is confirmed: the owner
+    /// ([`ViolationRule::NotOwner`]), the horizon, which a tick range past the last tick a
+    /// `u64` numbers also breaks ([`ViolationRule::BeyondHorizon`]), and the input check
+    /// ([`ViolationRule::InvalidInput`]). Then each input is confirmed in order: one that
+    /// differs from the confirmed input of its tick is [`ViolationRule::ConflictingInput`],
+    /// and inputs that start after the next expected tick are dropped as a [`DropReason::Gap`].
     fn read_inputs(
         &mut self,
         from: PeerId,
         player: u8,
         first_tick: u64,
         inputs: Vec<Vec<u8>>,
-    ) -> Result<(), DropReason> {
+    ) -> Result<(), Refusal> {
+        let violation = |tick, rule| Refusal::Violation {
+            player: Some(player),
+            tick: Some(tick),
+            rule,
+        };
         let index = usize::from(player);
         if self.settings.identity.players.get(index) != Some(&from) {
-            return Err(DropReason::NotOwner);
+            return Err(violation(first_tick, ViolationRule::NotOwner));
         }
-        if inputs
-            .iter()
-            .any(|input| (self.input.check)(input).is_err())
-        {
-            return Err(DropReason::InvalidInput);
-        }
-        let count = u64::try_from(inputs.len()).map_err(|_| DropReason::Gap)?;
-        // A decoded message holds at least one tick: its last is `first_tick + count - 1`. The
-        // ticks are an inclusive range up to it: an open range from `u64::MAX` would overflow
-        // computing the tick after it.
-        let Some(last_tick) = first_tick.checked_add(count.saturating_sub(1)) else {
-            return Err(DropReason::Gap);
-        };
-        for (tick, input) in (first_tick..=last_tick).zip(inputs) {
-            let queue = &mut self.queues[index];
-            let used = queue.used(tick).map(<[u8]>::to_vec);
-            match queue.confirm(tick, input.clone()) {
-                Ok(Confirmed::New) => {
-                    if used.is_some_and(|used| used != input) {
-                        let stats = self.stats.peers.entry(from).or_default();
-                        stats.prediction_misses = stats.prediction_misses.saturating_add(1);
+        // A decoded message holds at least one tick: its last is `first_tick + count - 1`,
+        // `None` when no `u64` numbers it. The ticks are an inclusive range up to it: an open
+        // range from `u64::MAX` would overflow computing the tick after it.
+        let limit = self.input_limit();
+        let last_tick = u64::try_from(inputs.len())
+            .ok()
+            .and_then(|count| first_tick.checked_add(count.saturating_sub(1)));
+        match last_tick {
+            Some(last_tick) if last_tick <= limit => {
+                let ticks = (first_tick..=last_tick).zip(&inputs);
+                if let Some((tick, _)) = ticks
+                    .clone()
+                    .find(|(_, input)| (self.input.check)(input).is_err())
+                {
+                    return Err(violation(tick, ViolationRule::InvalidInput));
+                }
+                for (tick, input) in ticks {
+                    let queue = &mut self.queues[index];
+                    let used = queue.used(tick).map(<[u8]>::to_vec);
+                    match queue.confirm(tick, input.clone()) {
+                        Ok(Confirmed::New) => {
+                            if used.is_some_and(|used| used != *input) {
+                                let stats = self.stats.peers.entry(from).or_default();
+                                stats.prediction_misses = stats.prediction_misses.saturating_add(1);
+                            }
+                        }
+                        Ok(Confirmed::Same | Confirmed::Released) => {}
+                        Err(QueueError::Conflict { .. }) => {
+                            return Err(violation(tick, ViolationRule::ConflictingInput));
+                        }
+                        Err(QueueError::Gap { .. } | QueueError::NotNextSimulated { .. }) => {
+                            return Err(Refusal::Drop(DropReason::Gap));
+                        }
                     }
                 }
-                Ok(Confirmed::Same | Confirmed::Released) => {}
-                Err(QueueError::Conflict { .. }) => return Err(DropReason::ConflictingInput),
-                Err(QueueError::Gap { .. } | QueueError::NotNextSimulated { .. }) => {
-                    return Err(DropReason::Gap);
-                }
+                Ok(())
             }
+            // The first tick beyond the limit; the limit is below `u64::MAX` whenever a tick
+            // range runs past it, as the current tick is.
+            _ => Err(violation(
+                first_tick.max(limit.saturating_add(1)),
+                ViolationRule::BeyondHorizon,
+            )),
         }
-        Ok(())
     }
 
     /// Moves forward what the remote at `index` acknowledged of each local player. Every entry
-    /// is checked before any is used; an older acknowledgment, arriving reordered, is ignored.
-    fn read_ack(&mut self, index: usize, players: &[(u8, u64)]) -> Result<(), DropReason> {
+    /// is checked before any is used: a player this peer does not own is
+    /// [`ViolationRule::NotOwner`], and a tick after the last input sent to that peer, or a
+    /// hash report, as none is sent yet, is [`ViolationRule::AckNeverSent`]. An older
+    /// acknowledgment, arriving reordered, is ignored.
+    fn read_ack(
+        &mut self,
+        index: usize,
+        players: &[(u8, u64)],
+        hashes_through: u64,
+    ) -> Result<(), Refusal> {
+        let remote = &self.remotes[index];
         for (player, next) in players {
+            let violation = |rule| Refusal::Violation {
+                player: Some(*player),
+                tick: Some(*next),
+                rule,
+            };
             let player = usize::from(*player);
             if self.settings.identity.players.get(player) != Some(&self.settings.local) {
-                return Err(DropReason::NotOwner);
+                return Err(violation(ViolationRule::NotOwner));
             }
-            let held = self.queues[player].next_confirmed();
-            if held.is_some_and(|held| *next > held) {
-                return Err(DropReason::AckNeverSent);
+            if *next > remote.sent[player] {
+                return Err(violation(ViolationRule::AckNeverSent));
             }
+        }
+        if hashes_through != 0 {
+            return Err(Refusal::Violation {
+                player: None,
+                tick: Some(hashes_through),
+                rule: ViolationRule::AckNeverSent,
+            });
         }
         let remote = &mut self.remotes[index];
         for (player, next) in players {
@@ -748,6 +883,51 @@ impl Session {
             *acked = (*acked).max(*next);
         }
         Ok(())
+    }
+
+    /// Checks that the newest acknowledgment of each local player from the remote at `index`
+    /// trails the local horizon `h` by at most `2 * (rollback_window + input_delay) + 1` ticks.
+    ///
+    /// Each packet carries an `Ack` with the inputs, written at the same time. The newest
+    /// inputs this peer received from that remote apply at most at its tick plus
+    /// `input_delay`, so this peer's confirmed tick is at most that much plus one, its tick at
+    /// most `rollback_window` more, and `h` at most `input_delay` more. That remote's tick is
+    /// at most `rollback_window` past its confirmed tick, which is at most the tick it
+    /// acknowledges. Beyond the bound it is [`ViolationRule::AckLagging`], checked after every
+    /// `Inputs` and `Ack`, so the local inputs kept for a peer that never acknowledges stay
+    /// bounded too: a peer that sends nothing stalls this one, as it owns a player.
+    fn check_lag(&self, index: usize) -> Result<(), Refusal> {
+        let rules = self.settings.identity.rules;
+        let bound = 2 * (u64::from(rules.rollback_window) + u64::from(rules.input_delay)) + 1;
+        let horizon = self.horizon();
+        let remote = &self.remotes[index];
+        match self
+            .local_players()
+            .find(|player| horizon.saturating_sub(remote.acked[*player]) > bound)
+        {
+            Some(player) => Err(Refusal::Violation {
+                player: u8::try_from(player).ok(),
+                tick: Some(remote.acked[player]),
+                rule: ViolationRule::AckLagging,
+            }),
+            None => Ok(()),
+        }
+    }
+
+    /// Drops the packet `from` sent, or ends the session on a violation of `from`.
+    fn refuse(&mut self, now: u64, from: PeerId, refusal: Refusal) {
+        match refusal {
+            Refusal::Drop(reason) => self.drop_packet(from, reason),
+            Refusal::Violation { player, tick, rule } => self.end(
+                now,
+                EndReason::Violation {
+                    peer: from,
+                    player,
+                    tick,
+                    rule,
+                },
+            ),
+        }
     }
 
     /// Takes `now_micros` as the current time, or the latest one if it is lower. The first
@@ -942,15 +1122,15 @@ fn inputs_for(
     messages
 }
 
-/// Encodes `packet`, leaving out the newest tick of its longest input message until it fits
+/// Encodes `packet`, giving it back with its bytes, leaving out the newest tick of its longest input message until it fits
 /// in [`MAX_PACKET_BYTES`]: the oldest unacknowledged ticks go first, the rest in a later
 /// packet. The settings bound the usual packet within the limit; this only acts for a peer
 /// that has fallen behind by more than the rollback window and the input delay.
-fn fit(mut packet: Packet) -> Vec<u8> {
+fn fit(mut packet: Packet) -> (Packet, Vec<u8>) {
     loop {
         let bytes = packet.encode();
         if bytes.len() <= MAX_PACKET_BYTES {
-            return bytes;
+            return (packet, bytes);
         }
         let longest = packet
             .messages
@@ -972,7 +1152,7 @@ fn fit(mut packet: Packet) -> Vec<u8> {
             }
             // The handshake and the acknowledgment alone always fit: their lengths are
             // bounded by the settings.
-            None => return bytes,
+            None => return (packet, bytes),
         }
     }
 }
