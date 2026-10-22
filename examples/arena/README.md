@@ -23,7 +23,9 @@ must list it, or the fighters spawn without art.
 
 The scene (`assets/arena.scene.ron`) has four layers: `sky` (parallax 0.1) and `town` (0.4)
 hold the town backgrounds, `tiles` holds a 32 by 18 tilemap on the town tileset, and
-`fighters` holds the fighters. The art and its licenses are listed in `CREDITS.md`.
+`fighters` holds the fighters. The art and its licenses are listed in `CREDITS.md`. The game
+registers `FighterSheets` empty, since a control host starts on the built world, which holds
+no asset, before it loads a scene.
 
 It is a Ludenea project (`ludenea.toml`). Its tests live in `tests/`.
 
@@ -33,8 +35,36 @@ Play it:
 cargo run --locked --release -p arena -- play examples/arena/assets/arena.scene.ron
 ```
 
+Draw tick 300 of the golden replay to a PNG, offscreen:
+
+```sh
+cargo run --locked --release -p arena -- render golden/arena.replay --tick 300 --out arena.png
+```
+
 Record a replay of 600 ticks of scripted input for two players:
 
 ```sh
 cargo run --locked --release -p arena --bin record-replay -- arena.replay
 ```
+
+## The level
+
+No one painted the level by hand: `build-level` built it through the control protocol, the
+way the editor's tile palette and inspector do. It starts the arena serving the protocol on
+its standard input and output (`host --stdio`), loads the scene, and sends commands only:
+`paint_tiles` for a ground of town earth across the tilemap, its top at y -5, and two wooden
+platforms of 5 cells with their top at y -2 (their underside a fighter's height above the
+ground, their top within a jump's reach); then a `spawn` of a fixed box collider over each
+horizontal run of painted cells; then `save_scene`, whose text it writes to the scene's file.
+A refused command stops it before the file is written. It clears the colliders and tiles the
+scene holds first, so it rebuilds the level from any state; rebuilt from a built level, the
+colliders get new scene identifiers but the simulation is the same. Build the level again
+after changing the tool:
+
+```sh
+cargo run --locked -p arena --bin build-level
+```
+
+The golden replay `golden/arena.replay` records 600 ticks of `scripted_inputs` on this scene;
+record it again after a deliberate change to the level or the game (see the repository's
+`README.md`).

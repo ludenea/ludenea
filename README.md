@@ -16,6 +16,9 @@ for any thread count. The guarantee rests on:
   WebAssembly under `wasmtime`;
 - a golden replay (`golden/spawner.replay`) of a scene with prefabs, a data
   asset, and edits to both, verified the same way;
+- a golden replay (`golden/arena.replay`) of two fighters running and jumping
+  through the arena's level, which an agent built through the control
+  protocol, verified the same way;
 - a pinned hash of a value that holds every serde shape, and mutation testing
   that checks the tests catch every mutant that `cargo-mutants` generates, and
   that compiles, in the serializer the state hash is computed with
@@ -133,6 +136,16 @@ Record it again after a deliberate change to the simulation (its hashes change w
 
 ```sh
 cargo run --locked --release -p boxes --bin record-replay -- golden/spawner.replay
+```
+
+The arena's golden replay (600 ticks of scripted input for two players) is verified and
+recorded the same way:
+
+```sh
+cargo run --locked --release -p arena -- verify golden/arena.replay --threads 8
+cargo build --locked --release --target wasm32-wasip1 -p arena --bin arena
+wasmtime run --dir=. target/wasm32-wasip1/release/arena.wasm verify golden/arena.replay
+cargo run --locked --release -p arena --bin record-replay -- golden/arena.replay
 ```
 
 Render a tick of a scene or replay to a PNG (1280 by 720 unless `--width` and `--height`
@@ -523,15 +536,20 @@ the machine's GPU:
 cargo xtask wasm-game boxes editor/e2e/golden/pkg
 cargo xtask wasm-render --test-hooks editor/e2e/fixtures/renderer/pkg
 cargo run --locked -p boxes --bin editor-bench
-cargo build --locked -p ludenea-serve -p swarm
+cargo build --locked -p ludenea-serve -p swarm -p arena
 cargo run --locked -p ludenea-serve -- build examples/swarm --web --out editor/e2e/fixtures/standalone
+cargo run --locked -p ludenea-serve -- build examples/arena --web --out editor/e2e/fixtures/arena
 pnpm -C editor e2e
 ```
 
 The standalone page's tests (`editor/e2e/standalone.spec.ts`) open the swarm built as a web
 page: it draws, its hash at tick 300 matches `swarm run --hash`, the lobby claims keyboard
 halves, a saved replay verifies with `swarm verify`, and a `file:` address says to serve the
-folder.
+folder. They open the arena's page too: its hash at tick 300 matches `arena run --hash`, and
+a two-player match played with keys saves a replay that `arena verify` accepts. The arena's
+editor tests (`editor/e2e/arena.spec.ts`) play it in the editor to the hash of `arena run`,
+record a two-player match with keys whose saved replay verifies, and check the viewport draws
+the painted level.
 
 The renderer's pixel tests (`editor/e2e/renderer.spec.ts`) draw a reference frame with the
 browser renderer (`ludenea-render` with its `web` feature) and run twice, once per backend,
