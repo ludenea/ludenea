@@ -172,8 +172,9 @@ pub enum DropReason {
     /// A hash report of tick 0 or of a tick that is not a multiple of `hash_interval`: no peer
     /// reports one. Only that message is dropped.
     HashOffInterval,
-    /// A hash report of a tick whose report from that peer arrived already. Not a violation: a
-    /// peer resends its reports until acknowledged. Only that message is dropped.
+    /// A hash report of a tick whose report from that peer arrived already with another hash.
+    /// The first one is kept. A resend of the same hash, which a peer sends until
+    /// acknowledged, is ignored without a drop. Only that message is dropped.
     HashAlreadyReceived,
     /// A hash report that finds the reports of that peer waiting for a local hash at their
     /// bound, `(rollback_window + input_delay) / hash_interval + 2`. Not acknowledged, so the
@@ -1290,7 +1291,8 @@ impl Session {
     /// horizon plus one is [`ViolationRule::HashBeyondHorizon`], checked first, so any tick
     /// past it is a violation; tick 0 or a tick off the interval is dropped as
     /// [`DropReason::HashOffInterval`], a report of a tick at most the latest received from that
-    /// peer as [`DropReason::HashAlreadyReceived`], one after a missing report as
+    /// peer is ignored when it holds the same hash, or when the first one is forgotten,
+    /// and dropped as [`DropReason::HashAlreadyReceived`] otherwise, one after a missing report as
     /// [`DropReason::HashGap`], and one beyond [`Self::hash_backlog`] as
     /// [`DropReason::HashBacklog`].
     fn read_hash(&mut self, index: usize, tick: u64, hash: u64) -> Result<(), Refusal> {
@@ -1306,7 +1308,16 @@ impl Session {
             return Err(Refusal::Drop(DropReason::HashOffInterval));
         }
         if tick <= self.remotes[index].hashes_received {
-            return Err(Refusal::Drop(DropReason::HashAlreadyReceived));
+            // A resend is ignored. A report forgotten since was matched: nothing to compare.
+            let known = self
+                .reports
+                .get(&tick)
+                .and_then(|report| report.received[index])
+                .or_else(|| self.remotes[index].hashes.get(&tick).copied());
+            return match known {
+                Some(known) if known != hash => Err(Refusal::Drop(DropReason::HashAlreadyReceived)),
+                _ => Ok(()),
+            };
         }
         // Received in tick order: `hashes_received` is the newest of an unbroken run.
         if tick > self.remotes[index].hashes_received.saturating_add(interval) {

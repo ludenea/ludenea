@@ -425,7 +425,13 @@ fn hashes_off_the_interval_or_received_again_are_dropped_alone() {
             hash: 1,
         },
         report.clone(),
+        // Resent until acknowledged: ignored without a trace.
         report,
+        // Another hash of a tick received already: dropped and counted.
+        Message::Hash {
+            tick: INTERVAL,
+            hash: !honest,
+        },
         Message::Inputs {
             player: 1,
             first_tick: 2 * INTERVAL,
@@ -753,6 +759,19 @@ fn honest_edge_run(peers: u8, hash_interval: u32, through: u64) {
         most <= usize::try_from(reports).unwrap(),
         "{most} reports in one packet"
     );
+    // Resent reports are ignored without a trace; an honest peer never sends another hash.
+    for peer in harness.peers() {
+        let other_hash = harness.events(peer).iter().any(|event| {
+            matches!(
+                event,
+                SessionEvent::Dropped {
+                    reason: DropReason::HashAlreadyReceived,
+                    ..
+                }
+            )
+        });
+        assert!(!other_hash, "{peer}");
+    }
 }
 
 #[test]

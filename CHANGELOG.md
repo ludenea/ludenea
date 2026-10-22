@@ -138,7 +138,8 @@ hash, those of the golden trace and replays included.
   difference ends it with `EndReason::Desync { tick, peer, local, remote }`, naming the peer
   and both hashes. A received hash past the local horizon plus one is
   `ViolationRule::HashBeyondHorizon`; one of tick 0 or off the interval
-  (`DropReason::HashOffInterval`), received already (`HashAlreadyReceived`), or beyond the
+  (`DropReason::HashOffInterval`), received already with another hash (`HashAlreadyReceived`;
+  the same hash resent until acknowledged is ignored), or beyond the
   `(rollback_window + input_delay) / hash_interval + 2` reports kept waiting for a local hash
   answered late (`HashBacklog`), or after a report of that peer still missing (`HashGap`,
   as reports arrive in tick order) is dropped alone, and reports match in tick order. `ViolationRule::HashLagging` disconnects a
