@@ -440,6 +440,8 @@ The built-in texture previews and clip players are a plugin on this API.
 resolves with the game's reply (a `spawn` gives the entity it made). `editor.batched(commands)`
 sends several entity edits (spawn, despawn, components, fields, tiles) as one, and
 `editor.onEdited` hears each accepted edit.
+`editor.entities.watch(entity, listener, despawned)` follows one entity's components, and
+`despawned` hears when it is no longer alive at the tick shown.
 
 `editor.viewport.tools.register` adds a viewport tool. Once activated with
 `editor.viewport.setTool(id)`, it receives the pointer events over the viewport in world

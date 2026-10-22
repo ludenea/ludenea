@@ -248,8 +248,13 @@ interface EntityAccess {
     /** The component's value, or undefined when absent or without an exact JSON form (read RON through `control`). */
     get<N extends keyof ComponentTypes>(entity: Entity, component: N): Promise<ComponentTypes[N] | undefined>;
     set<N extends keyof ComponentTypes>(entity: Entity, component: N, path: PathSegment[], value: unknown): Promise<void>;
-    /** Changed components (JSON values only) and removed component names, across game restarts. */
-    watch(entity: Entity, listener: (components: Partial<ComponentTypes>, removed: string[]) => void): Disposable;
+    /**
+     * Changed components (JSON values only) and removed component names, across game restarts;
+     * `despawned`, when given, hears that the entity is no longer alive at the tick shown (an
+     * undo of its spawn, a seek before it, another branch). Alive again (a redo), it reports
+     * all its components as changed.
+     */
+    watch(entity: Entity, listener: (components: Partial<ComponentTypes>, removed: string[]) => void, despawned?: () => void): Disposable;
 }
 
 /** Thrown when an id (or shortcut key) is registered twice; names both owners. */

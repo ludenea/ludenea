@@ -13,11 +13,16 @@ export interface EntityAccess {
   /** The component's value, or undefined when absent or without an exact JSON form (read RON through `control`). */
   get<N extends keyof ComponentTypes>(entity: Entity, component: N): Promise<ComponentTypes[N] | undefined>;
   set<N extends keyof ComponentTypes>(entity: Entity, component: N, path: PathSegment[], value: unknown): Promise<void>;
-  /** Changed components (JSON values only) and removed component names, across game restarts. */
-  watch(entity: Entity, listener: (components: Partial<ComponentTypes>, removed: string[]) => void): Disposable;
+  /**
+   * Changed components (JSON values only) and removed component names, across game restarts;
+   * `despawned`, when given, hears that the entity is no longer alive at the tick shown (an
+   * undo of its spawn, a seek before it, another branch). Alive again (a redo), it reports
+   * all its components as changed.
+   */
+  watch(entity: Entity, listener: (components: Partial<ComponentTypes>, removed: string[]) => void, despawned?: () => void): Disposable;
 }
 
-type Watch = { entity: Entity; listener: (components: Partial<ComponentTypes>, removed: string[]) => void };
+type Watch = { entity: Entity; listener: (components: Partial<ComponentTypes>, removed: string[]) => void; despawned?: () => void };
 
 function jsonValues(components: { [name: string]: ComponentValue }): { [name: string]: JsonValue } {
   const values: { [name: string]: JsonValue } = {};
@@ -34,7 +39,7 @@ export function createEntityAccess(
   report: EditorConsole["report"],
 ): EntityAccess {
   const watches = new Set<Watch>();
-  let stopEvents: (() => void) | undefined;
+  let stopEvents: (() => void)[] = [];
 
   const game = () => {
     const current = control();
@@ -48,13 +53,20 @@ export function createEntityAccess(
       .catch((error) => report(error, `${type === "subscribe" ? "Watching" : "Unwatching"} entity ${key(entity)}`));
   const watched = (entity: Entity) => [...watches].filter((watch) => key(watch.entity) === key(entity));
   const listen = (current: ControlClient | null) => {
-    stopEvents?.();
-    stopEvents = current?.on("entity_changed", (event) => {
-      const matching = watched(event.entity);
-      if (matching.length === 0) return;
-      const components = jsonValues(event.components) as Partial<ComponentTypes>;
-      for (const watch of matching) watch.listener(components, event.removed);
-    });
+    stopEvents.forEach((stop) => stop());
+    stopEvents = current
+      ? [
+          current.on("entity_changed", (event) => {
+            const matching = watched(event.entity);
+            if (matching.length === 0) return;
+            const components = jsonValues(event.components) as Partial<ComponentTypes>;
+            for (const watch of matching) watch.listener(components, event.removed);
+          }),
+          current.on("entity_despawned", (event) => {
+            for (const watch of watched(event.entity)) watch.despawned?.();
+          }),
+        ]
+      : [];
   };
 
   listen(control());
@@ -73,9 +85,9 @@ export function createEntityAccess(
       const target = { type: "component" as const, entity, component: component as string };
       await game().request({ type: "set_field", target, path, value: value as JsonValue });
     },
-    watch(entity, listener) {
+    watch(entity, listener, despawned) {
       subscription("subscribe", entity);
-      const watch = { entity, listener };
+      const watch = { entity, listener, despawned };
       watches.add(watch);
       return own(() => {
         watches.delete(watch);

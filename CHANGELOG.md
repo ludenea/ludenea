@@ -882,6 +882,10 @@ hash, those of the golden trace and replays included.
   the viewport's.
 - `OverlayContext.worldToScreen(point, parallax?)` takes the parallax of the layer the point
   is on (1 when omitted) and maps it as the viewport's renderer draws it.
+- `Editor.entities.watch(entity, listener, despawned?)` takes a third listener, called when
+  the watched entity is no longer alive at the tick shown (an undo of its spawn, a seek
+  before it, another branch); alive again, the entity reports all its components as
+  changed. Watches without it hear nothing of the despawn, as before.
 
 ### Formats
 

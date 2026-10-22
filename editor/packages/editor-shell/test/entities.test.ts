@@ -74,6 +74,29 @@ describe("entities", () => {
     ]);
   });
 
+  it("entities_watch_tells_its_watchers_when_the_entity_is_despawned", async () => {
+    const { editor, setControl } = await testHost();
+    const game = await testGame(() => ({ type: "done" }));
+    setControl(game.control);
+    const changed = vi.fn();
+    const despawned = vi.fn();
+    const silent = vi.fn();
+    editor.entities.watch(entity, changed, despawned);
+    // A watcher without a despawn listener hears nothing of it.
+    editor.entities.watch(entity, silent);
+    game.push({ type: "entity_despawned", entity: { index: 9, generation: 0 } });
+    expect(despawned).not.toHaveBeenCalled();
+
+    game.push({ type: "entity_despawned", entity });
+    expect(despawned).toHaveBeenCalledExactlyOnceWith();
+    expect(changed).not.toHaveBeenCalled();
+    expect(silent).not.toHaveBeenCalled();
+
+    // Alive again (a redo of its spawn), it reports its components as changed.
+    game.push({ type: "entity_changed", entity, components: { "ludenea::Pose": { type: "json", value: pose } }, removed: [] });
+    expect(changed).toHaveBeenCalledExactlyOnceWith({ "ludenea::Pose": pose }, []);
+  });
+
   it("setting_the_same_game_again_changes_nothing", async () => {
     const { editor, setControl } = await testHost();
     const game = await testGame(() => ({ type: "done" }));
