@@ -16,8 +16,16 @@ async function main() {
   // when a game runs.
   project.request({ type: "info" }).then(() => app.loadPlugins(), () => {});
   followNativeGames(project, app, () => tauriTransport("control"));
-  if (await invoke<boolean>("frame_times_requested")) void reportFrameTimes(app);
+  // Optional: failing to ask whether a measurement was requested never stops a started editor.
+  invoke<boolean>("frame_times_requested").then(
+    (requested) => {
+      if (requested) void reportFrameTimes(app);
+    },
+    (error: unknown) => console.error(`cannot tell whether a frame time measurement was requested: ${errorText(error)}`),
+  );
 }
+
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /** How long a frame time measurement plays. */
 const MEASURED_PLAY_MS = 10_000;
@@ -26,9 +34,10 @@ const MEASURED_PLAY_MS = 10_000;
 async function reportFrameTimes(app: EditorApp): Promise<void> {
   const report = await measureFrameTimes(app.host.editor, MEASURED_PLAY_MS).then(
     (times) => times,
-    (error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }),
+    (error: unknown) => ({ error: errorText(error) }),
   );
-  await invoke("frame_times_measured", { report: JSON.stringify(report) });
+  // Unsent, the editor keeps running until the measuring command times out; the cause stays in the webview console.
+  await invoke("frame_times_measured", { report: JSON.stringify(report) }).catch((error: unknown) => console.error(`cannot hand the frame times to the backend: ${errorText(error)}`));
 }
 
 main().catch((error) => {
