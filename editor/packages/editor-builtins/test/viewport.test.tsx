@@ -933,6 +933,27 @@ describe("viewport", () => {
     expect(host.editor.viewport.activeTool.getState()).toBeNull();
   });
 
+  it("a_tool_activated_during_a_drag_ends_the_drag", async () => {
+    const { host, game, view } = await viewport((command) => {
+      if (command.type === "pick") return { type: "picked", entities: [entity(1)] };
+      if (command.type === "get_entity") return { type: "entity", entity: entity(1), components: { "ludenea::Pose": pose(1, 1) } };
+      return undefined;
+    });
+    const { tool, heard } = recordingTool();
+    act(() => void host.editor.viewport.tools.register(tool));
+    act(() => host.editor.selection.getState().select([entity(1)]));
+    fireEvent.pointerDown(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    await settle();
+    fireEvent.pointerMove(view, { button: -1, clientX: 300, clientY: 150, pointerId: 1 });
+    act(() => host.editor.viewport.setTool("test.paint"));
+    fireEvent.pointerUp(view, { button: 0, clientX: 300, clientY: 150, pointerId: 1 });
+    await settle();
+    // The drag ended with the tool's arrival: nothing moves, and the tool hears only what follows it.
+    expect(sentOf(game.sent, "set_field")).toEqual([]);
+    expect(sentOf(game.sent, "get_entity")).toEqual([]);
+    expect(heard.map(([kind]) => kind)).toEqual([]);
+  });
+
   it("escape_without_a_press_cancels_nothing", async () => {
     const { host, view } = await viewport();
     const { tool, heard } = recordingTool();

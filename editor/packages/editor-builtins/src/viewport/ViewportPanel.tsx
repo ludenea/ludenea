@@ -330,8 +330,10 @@ export function ViewportPanel({
       }),
       shared(editor).overlays.subscribe(() => (repaint = true)),
       editor.viewport.activeTool.subscribe(() => {
-        // A press for the tool that left ends without it, and that tool hears so.
+        // A press for the tool that left ends without it, and that tool hears so; a selection
+        // or drag ends too, moving nothing. A pan goes on: it is the viewport's whatever the tool.
         if (press?.mode === "tool") abandonToolPress();
+        else if (press?.mode === "select") press = null;
         showCursor();
         repaint = true;
       }),
