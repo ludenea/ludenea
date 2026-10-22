@@ -22,15 +22,18 @@ pub enum TransportError {
     TooLarge { len: usize },
 }
 
+/// Refuses a packet longer than [`MAX_PACKET_BYTES`]; the one place the size rule is written.
+fn check_size(len: usize) -> Result<(), TransportError> {
+    if len > MAX_PACKET_BYTES {
+        return Err(TransportError::TooLarge { len });
+    }
+    Ok(())
+}
+
 /// A datagram channel to the other peers of a match: unreliable and unordered by contract.
 ///
 /// The caller passes the current time in monotonic microseconds; a transport reads no clock.
 pub trait Transport {
-    /// Checks that a packet of `len` bytes for `to` can be sent, without sending it.
-    /// [`Transport::send`] fails with exactly this error, so a wrapper that delays delivery can
-    /// still refuse at the moment of the call.
-    fn check(&self, to: PeerId, len: usize) -> Result<(), TransportError>;
-
     /// Sends one packet to `to`.
     fn send(&mut self, to: PeerId, packet: Vec<u8>, now_micros: u64) -> Result<(), TransportError>;
 
@@ -48,7 +51,9 @@ pub struct MemoryTransport {
     inboxes: Rc<RefCell<Vec<Inbox>>>,
 }
 
-/// An in-process network of peers `0..peers`, single-threaded.
+/// An in-process network of peers `0..peers`, single-threaded. It is a helper for tests and
+/// local play: any count up to 255 is accepted, and [`crate::MAX_PEERS`] is a limit of
+/// match settings, enforced there.
 #[derive(Debug)]
 pub struct MemoryNetwork;
 
@@ -67,23 +72,16 @@ impl MemoryNetwork {
 }
 
 impl Transport for MemoryTransport {
-    fn check(&self, to: PeerId, len: usize) -> Result<(), TransportError> {
-        if to == self.local || usize::from(to.0) >= self.inboxes.borrow().len() {
-            return Err(TransportError::UnknownPeer { peer: to });
-        }
-        if len > MAX_PACKET_BYTES {
-            return Err(TransportError::TooLarge { len });
-        }
-        Ok(())
-    }
-
     fn send(
         &mut self,
         to: PeerId,
         packet: Vec<u8>,
         _now_micros: u64,
     ) -> Result<(), TransportError> {
-        self.check(to, packet.len())?;
+        if to == self.local || usize::from(to.0) >= self.inboxes.borrow().len() {
+            return Err(TransportError::UnknownPeer { peer: to });
+        }
+        check_size(packet.len())?;
         self.inboxes.borrow_mut()[usize::from(to.0)].push_back((self.local, packet));
         Ok(())
     }
@@ -125,6 +123,12 @@ pub enum ConditionsError {
 
 /// A transport that holds each sent packet back, loses it, duplicates it or reorders it,
 /// deterministically for a seed, then hands it to the inner transport when it is due.
+///
+/// Outbound packets are released only when [`Transport::receive`] is called, so a peer must keep
+/// calling `receive` for its sends to leave. `send` refuses an oversized packet at once; it cannot
+/// know the inner transport's peers, so an unknown destination surfaces at release time, counted
+/// by [`Conditioned::failed_sends`]. Such a packet is dropped, like on an unreliable link: the
+/// session's redundancy resends it.
 pub struct Conditioned<T: Transport> {
     inner: T,
     conditions: LinkConditions,
@@ -132,6 +136,8 @@ pub struct Conditioned<T: Transport> {
     /// Keyed by due time, then send order, so equal due times keep their send order.
     pending: BTreeMap<(u64, u64), (PeerId, Vec<u8>)>,
     sequence: u64,
+    failed_sends: u64,
+    last_send_error: Option<TransportError>,
 }
 
 impl<T: Transport> Conditioned<T> {
@@ -154,7 +160,19 @@ impl<T: Transport> Conditioned<T> {
             links: BTreeMap::new(),
             pending: BTreeMap::new(),
             sequence: 0,
+            failed_sends: 0,
+            last_send_error: None,
         })
+    }
+
+    /// How many due packets the inner transport refused (and so were dropped).
+    pub fn failed_sends(&self) -> u64 {
+        self.failed_sends
+    }
+
+    /// The error of the latest such refusal.
+    pub fn last_send_error(&self) -> Option<&TransportError> {
+        self.last_send_error.as_ref()
     }
 
     fn due(conditions: &LinkConditions, rng: &mut Rng, now_micros: u64) -> u64 {
@@ -173,12 +191,8 @@ impl<T: Transport> Conditioned<T> {
 }
 
 impl<T: Transport> Transport for Conditioned<T> {
-    fn check(&self, to: PeerId, len: usize) -> Result<(), TransportError> {
-        self.inner.check(to, len)
-    }
-
     fn send(&mut self, to: PeerId, packet: Vec<u8>, now_micros: u64) -> Result<(), TransportError> {
-        self.inner.check(to, packet.len())?;
+        check_size(packet.len())?;
         let conditions = self.conditions;
         let rng = self
             .links
@@ -207,9 +221,10 @@ impl<T: Transport> Transport for Conditioned<T> {
                 break;
             }
             let (to, packet) = entry.remove();
-            // The destination and size were checked at send, so the inner transport cannot refuse
-            // this; if it ever did, dropping the packet is what a lossy link does anyway.
-            let _ = self.inner.send(to, packet, now_micros);
+            if let Err(error) = self.inner.send(to, packet, now_micros) {
+                self.failed_sends += 1;
+                self.last_send_error = Some(error);
+            }
         }
         self.inner.receive(now_micros)
     }

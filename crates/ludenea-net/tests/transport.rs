@@ -56,17 +56,35 @@ fn memory_refuses_an_unknown_peer_itself_and_a_large_packet() {
 }
 
 #[test]
-fn conditioned_refuses_like_memory_at_send_time() {
+fn conditioned_refuses_an_oversized_packet_at_send() {
     let (a, _b) = pair();
     let mut a = Conditioned::new(a, conditions()).unwrap();
-    assert_eq!(
-        a.send(PeerId(5), vec![1], 0),
-        Err(TransportError::UnknownPeer { peer: PeerId(5) })
-    );
     let len = MAX_PACKET_BYTES + 1;
     assert_eq!(
         a.send(PeerId(1), vec![0; len], 0),
         Err(TransportError::TooLarge { len })
+    );
+}
+
+#[test]
+fn conditioned_counts_a_release_failure() {
+    let (a, _b) = pair();
+    let mut a = Conditioned::new(
+        a,
+        LinkConditions {
+            latency_micros: 100,
+            ..conditions()
+        },
+    )
+    .unwrap();
+    assert_eq!(a.send(PeerId(5), vec![1], 0), Ok(()));
+    a.receive(99);
+    assert_eq!(a.failed_sends(), 0);
+    a.receive(100);
+    assert_eq!(a.failed_sends(), 1);
+    assert_eq!(
+        a.last_send_error(),
+        Some(&TransportError::UnknownPeer { peer: PeerId(5) })
     );
 }
 
@@ -242,5 +260,13 @@ fn links_are_independent() {
     a.receive(0);
     let to_b = drain(&mut b, 0);
     let to_c = drain(&mut c, 0);
-    assert_ne!(to_b, to_c);
+    for got in [&to_b, &to_c] {
+        assert!(
+            !got.is_empty() && got.len() < 200,
+            "{} delivered",
+            got.len()
+        );
+    }
+    let ids = |v: &[(PeerId, Vec<u8>)]| v.iter().map(|(_, p)| p[0]).collect::<Vec<_>>();
+    assert_ne!(ids(&to_b), ids(&to_c));
 }
