@@ -8,7 +8,10 @@ function fakeEditor() {
   const game = { on: (_type: string, listener: () => void) => (listeners.add(listener), () => listeners.delete(listener)) } as unknown as ControlClient;
   const state = { loaded: null as { type: "loaded"; warnings: string[]; instances: []; load_addresses: [] } | null, error: null as string | null };
   const commands: string[] = [];
-  const entries: { id: number; level: "info" | "warning" | "error"; text: string }[] = [];
+  // As the editor console: the last 5000 entries, and a notification after each.
+  let entries: { id: number; level: "info" | "warning" | "error"; text: string }[] = [];
+  let lastId = 0;
+  const consoleListeners = new Set<() => void>();
   const editor = {
     control: null as ControlClient | null,
     document: { getState: () => state },
@@ -17,13 +20,20 @@ function fakeEditor() {
         commands.push(id);
       },
     },
-    console: { list: () => entries },
+    console: {
+      list: () => entries,
+      subscribe: (listener: () => void) => (consoleListeners.add(listener), () => consoleListeners.delete(listener)),
+    },
   };
   return {
     editor,
     commands,
     state,
-    log: (level: "info" | "warning" | "error", text: string) => entries.push({ id: entries.length + 1, level, text }),
+    log: (level: "info" | "warning" | "error", text: string) => {
+      entries = [...entries.slice(-4999), { id: ++lastId, level, text }];
+      consoleListeners.forEach((listener) => listener());
+    },
+    consoleListening: () => consoleListeners.size,
     connect: () => (editor.control = game),
     push: () => listeners.forEach((listener) => listener()),
     listening: () => listeners.size,
@@ -107,6 +117,25 @@ describe("frame times", () => {
       line: "swarm: 2 frames, p50 90.00 ms, p95 90.00 ms, p99 90.00 ms; 1 render frame events pushed; the editor reported errors: Showing the render frame failed: unexpected end of input",
       failed: true,
     });
+  });
+
+  it("an_error_flooded_out_of_the_console_still_fails_the_verdict", async () => {
+    const fake = fakeEditor();
+    fake.connect();
+    fake.state.loaded = { type: "loaded", warnings: [], instances: [], load_addresses: [] };
+    let frame = 0;
+    animationFrames([1000, 1010, 1100], () => {
+      if (++frame !== 2) return;
+      fake.push();
+      fake.log("error", "Showing the render frame failed: unexpected end of input");
+      // More than the console keeps: the error is gone from its list by the end of play.
+      for (let index = 0; index < 5001; index++) fake.log("info", `entry ${index}`);
+    });
+    const times = await measureFrameTimes(fake.editor, 100);
+    expect(fake.editor.console.list().some((entry) => entry.level === "error")).toBe(false);
+    expect(times.errors).toEqual(["Showing the render frame failed: unexpected end of input"]);
+    expect(frameTimesVerdict(times, "swarm").failed).toBe(true);
+    expect(fake.consoleListening()).toBe(0);
   });
 
   it("a_failing_pause_leaves_the_error_that_ended_the_measurement", async () => {

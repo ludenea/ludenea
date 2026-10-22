@@ -18,7 +18,7 @@ type Measured = {
   control: ControlClient | null;
   document: { getState(): Pick<DocumentState, "loaded" | "error"> };
   commands: Pick<Editor["commands"], "run">;
-  console: Pick<Editor["console"], "list">;
+  console: Pick<Editor["console"], "list" | "subscribe">;
 };
 
 /** How often the measurement checks whether the game and its scene are ready. */
@@ -74,8 +74,25 @@ function recordFrames(playMs: number): Promise<number[]> {
  */
 export async function measureFrameTimes(editor: Measured, playMs: number): Promise<FrameTimes> {
   const control = await loadedGame(editor);
-  const before = editor.console.list().at(-1)?.id ?? 0;
-  const errors = () => editor.console.list().filter((entry) => entry.id > before && entry.level === "error").map((entry) => entry.text);
+  // Collected as they come: the console keeps only its last entries, which a flood would evict.
+  const errors: string[] = [];
+  let seen = editor.console.list().at(-1)?.id ?? 0;
+  const stopErrors = editor.console.subscribe(() => {
+    const entries = editor.console.list();
+    let first = entries.length;
+    while (first > 0 && entries[first - 1]!.id > seen) first--;
+    for (const entry of entries.slice(first)) if (entry.level === "error") errors.push(entry.text);
+    seen = entries.at(-1)?.id ?? seen;
+  });
+  try {
+    return await play(editor, control, playMs, errors);
+  } finally {
+    stopErrors();
+  }
+}
+
+/** Shows the viewport through the game camera and plays for `playMs`, recording; then pauses. */
+async function play(editor: Measured, control: ControlClient, playMs: number, errors: string[]): Promise<FrameTimes> {
   await editor.commands.run("panels.open.ludenea.viewport");
   await editor.commands.run("viewport.toggle-game-camera");
   let pushed = 0;
@@ -83,7 +100,7 @@ export async function measureFrameTimes(editor: Measured, playMs: number): Promi
   await editor.commands.run("timeline.play-pause");
   try {
     const frames = await recordFrames(playMs);
-    return { frames, pushed, errors: errors() };
+    return { frames, pushed, errors: [...errors] };
   } finally {
     stop();
     // A failing pause must not replace the error that ended the measurement.
