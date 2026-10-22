@@ -169,23 +169,36 @@ export function serveBoxes(port: number, prepare: (root: string) => void = () =>
 }
 
 /**
- * A project made by `ludenea new` whose game is the `swarm` example (10,000 animated sprites):
- * its sources, under the crate name `swarm`, and its assets, with its scene as the default one.
+ * A project made by `ludenea new` whose game is the example `name`: its `sources` (in its
+ * `src/`), under the crate name `name`, so its type names match, and its assets, with its scene
+ * `assets/<name>.scene.ron` as the default one; then `prepare` changes it.
  */
-export function serveSwarm(port: number): Promise<ServedProject> {
-  const swarm = join(repository, "examples/swarm");
-  return serveProject("swarm", port, (root) => {
-    for (const file of ["lib.rs", "assets.rs"]) copyFileSync(join(swarm, "src", file), join(root, "src", file));
+function serveExample(name: string, sources: string[], port: number, prepare: (root: string) => void = () => {}): Promise<ServedProject> {
+  const example = join(repository, "examples", name);
+  return serveProject(name, port, (root) => {
+    for (const file of sources) copyFileSync(join(example, "src", file), join(root, "src", file));
     for (const directory of ["assets", "scenes"]) rmSync(join(root, directory), { recursive: true, force: true });
     mkdirSync(join(root, "scenes"));
-    cpSync(join(swarm, "assets"), join(root, "assets"), { recursive: true });
+    cpSync(join(example, "assets"), join(root, "assets"), { recursive: true });
     const manifest = join(root, "ludenea.toml");
-    writeFileSync(manifest, readFileSync(manifest, "utf8").replace(/^default_scene = .*$/m, 'default_scene = "assets/swarm.scene.ron"'));
+    writeFileSync(manifest, readFileSync(manifest, "utf8").replace(/^default_scene = .*$/m, `default_scene = "assets/${name}.scene.ron"`));
+    prepare(root);
+  });
+}
+
+/** A project whose game is the `swarm` example (10,000 animated sprites). */
+export function serveSwarm(port: number): Promise<ServedProject> {
+  return serveExample("swarm", ["lib.rs", "assets.rs"], port, (root) => {
     // The swarm draws its sprite sheet with `png` (its asset generator), at the engine's version.
     const png = /^png = .*$/m.exec(readFileSync(join(repository, "Cargo.toml"), "utf8"))![0];
     const cargo = join(root, "Cargo.toml");
     writeFileSync(cargo, readFileSync(cargo, "utf8").replace("[dependencies]\n", `[dependencies]\n${png}\n`));
   });
+}
+
+/** A project whose game is the `arena` example: local fighters on the level painted through the control surface. */
+export function serveArena(port: number): Promise<ServedProject> {
+  return serveExample("arena", ["lib.rs", "fighter.rs", "camera.rs"], port);
 }
 
 /** The fixtures of the `boxes` app, written by `cargo run -p boxes --bin divergence-fixtures editor/e2e/fixtures/divergence`. */

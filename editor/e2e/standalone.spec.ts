@@ -6,22 +6,37 @@ import { pathToFileURL } from "node:url";
 import { expect, type Page, test } from "@playwright/test";
 import { repository } from "./project";
 
-// The swarm game built as a standalone web page, which vite serves under `/standalone/`.
-const STANDALONE = join(import.meta.dirname, "fixtures/standalone");
-const BUILD = "cargo run --locked -p ludenea-serve -- build examples/swarm --web --out editor/e2e/fixtures/standalone";
-// The swarm's own command line tool, built by `cargo build --locked -p swarm`.
-const SWARM = join(process.env.CARGO_TARGET_DIR ?? join(repository, "target"), "debug", process.platform === "win32" ? "swarm.exe" : "swarm");
+/** A game built as a standalone web page: its folder, which vite serves under `/<url>/`. */
+interface WebGame {
+  folder: string;
+  url: string;
+  build: string;
+}
+const pageOf = (game: string, url: string): WebGame => ({
+  folder: join(import.meta.dirname, "fixtures", url),
+  url,
+  build: `cargo run --locked -p ludenea-serve -- build examples/${game} --web --out editor/e2e/fixtures/${url}`,
+});
+const SWARM_PAGE = pageOf("swarm", "standalone");
+const ARENA_PAGE = pageOf("arena", "arena");
+const STANDALONE = SWARM_PAGE.folder;
+const BUILD = SWARM_PAGE.build;
+/** A game's own command line tool, built by `cargo build --locked -p <game>`. */
+const tool = (game: string) => join(process.env.CARGO_TARGET_DIR ?? join(repository, "target"), "debug", process.platform === "win32" ? `${game}.exe` : game);
+const SWARM = tool("swarm");
+const ARENA = tool("arena");
 const SCENE = join(repository, "examples/swarm/assets/swarm.scene.ron");
+const ARENA_SCENE = join(repository, "examples/arena/assets/arena.scene.ron");
 // The body of the bug sprite (examples/swarm/src/assets.rs), drawn untinted and unfiltered.
 const BUG_BODY = [0x2e, 0x7d, 0x32];
 
-/** Opens the page with `query`, collecting its errors. */
-async function open(page: Page, query: string): Promise<string[]> {
-  expect(existsSync(join(STANDALONE, "game.json")), `${STANDALONE} is missing: run ${BUILD}`).toBe(true);
+/** Opens the page with `query` (the swarm's unless `game` says), collecting its errors. */
+async function open(page: Page, query: string, game: WebGame = SWARM_PAGE): Promise<string[]> {
+  expect(existsSync(join(game.folder, "game.json")), `${game.folder} is missing: run ${game.build}`).toBe(true);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("console", (message) => console.log(`[page] ${message.text()}`));
-  await page.goto(`/standalone/index.html${query}`);
+  await page.goto(`/${game.url}/index.html${query}`);
   return errors;
 }
 
@@ -36,6 +51,11 @@ async function reach(page: Page, tick: number): Promise<string> {
 function swarm(args: string[]): string {
   expect(existsSync(SWARM), `${SWARM} is missing: run cargo build --locked -p swarm`).toBe(true);
   return execFileSync(SWARM, args, { encoding: "utf8" });
+}
+
+function arena(args: string[]): string {
+  expect(existsSync(ARENA), `${ARENA} is missing: run cargo build --locked -p arena`).toBe(true);
+  return execFileSync(ARENA, args, { encoding: "utf8" });
 }
 
 test("draws_the_swarm", async ({ page }) => {
@@ -120,6 +140,36 @@ test("save_replay_downloads_a_replay_that_verifies", async ({ page }) => {
   await download.saveAs(file);
   // Exits with an error, which throws, unless every recorded hash matches.
   expect(swarm(["verify", file])).toContain("121 hashes match");
+  expect(errors).toEqual([]);
+});
+
+test("arena_page_matches_headless_hashes", async ({ page }) => {
+  const errors = await open(page, "?players=1&ticks=300", ARENA_PAGE);
+  const hash = await reach(page, 300);
+  await page.waitForTimeout(500);
+  await expect(page.locator("body")).toHaveAttribute("data-tick", "300");
+  expect(arena(["run", ARENA_SCENE, "--ticks", "300", "--hash"]).trim()).toBe(`tick 300 hash ${hash}`);
+  expect(errors).toEqual([]);
+});
+
+test("arena_page_two_player_replay_verifies", async ({ page }) => {
+  const errors = await open(page, "?players=2&ticks=240", ARENA_PAGE);
+  // Player 1 runs right on D and jumps on W, player 2 runs left on the left arrow.
+  await reach(page, 1);
+  await page.keyboard.down("KeyD");
+  await page.keyboard.down("ArrowLeft");
+  await reach(page, 90);
+  await page.keyboard.down("KeyW");
+  await reach(page, 240);
+  for (const key of ["KeyW", "ArrowLeft", "KeyD"]) await page.keyboard.up(key);
+  const downloaded = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Save replay" }).click();
+  const download = await downloaded;
+  expect(download.suggestedFilename()).toBe("arena.replay");
+  const file = join(mkdtempSync(join(tmpdir(), "ludenea-standalone-")), "arena.replay");
+  await download.saveAs(file);
+  // Exits with an error, which throws, unless every recorded hash matches.
+  expect(arena(["verify", file])).toContain("241 hashes match");
   expect(errors).toEqual([]);
 });
 

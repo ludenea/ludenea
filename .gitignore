@@ -10,6 +10,7 @@ editor/**/dist/
 editor/e2e/golden/pkg/
 editor/e2e/fixtures/renderer/pkg/
 editor/e2e/fixtures/standalone/
+editor/e2e/fixtures/arena/
 editor/test-results/
 editor/playwright-report/
 *.tsbuildinfo

@@ -49,5 +49,6 @@ export default defineConfig({
     mount("/renderer", join(import.meta.dirname, "fixtures/renderer")),
     // A game built as a standalone web page (`ludenea build examples/swarm --web --out ...`).
     mount("/standalone", join(import.meta.dirname, "fixtures/standalone")),
+    mount("/arena", join(import.meta.dirname, "fixtures/arena")),
   ],
 });
