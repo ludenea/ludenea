@@ -9,10 +9,15 @@
     expect(dead_code, reason = "used by the rollback session, which comes next")
 )]
 mod queue;
+pub mod session;
 pub mod settings;
 pub mod transport;
 pub mod wire;
 
+pub use session::{
+    DropReason, END_LINGER_MICROS, EndReason, HANDSHAKE_RESEND_MICROS, PeerStats, Session,
+    SessionEvent, SessionState, SessionStats,
+};
 pub use settings::{
     MAX_ENGINE_BYTES, MAX_INPUT_BYTES, MAX_MESSAGES_PER_PACKET, MAX_PACKET_BYTES, MAX_PEERS,
     MAX_PLAYERS, MAX_TICKS_PER_MESSAGE, MatchIdentity, MatchRules, PeerId, SessionSettings,

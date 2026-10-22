@@ -13,7 +13,7 @@ use ludenea_ecs::{
 };
 
 use crate::app::EditorHooks;
-use crate::input::{self, Input, InputType};
+use crate::input::{self, Input, InputType, PlayerInputSpec};
 use crate::panic::{GamePanic, catch_panic};
 use crate::prefab::LoadedInstance;
 use crate::scene::LoadAddress;
@@ -193,6 +193,15 @@ impl Simulation {
         self.input
             .as_ref()
             .map(|input| (input.encode_defaults)(self.players))
+    }
+
+    /// The encoded default input of one player and the check of one received input, or
+    /// `None` when the app has no input type.
+    pub fn player_input_spec(&self) -> Option<PlayerInputSpec> {
+        self.input.as_ref().map(|input| PlayerInputSpec {
+            default: (input.encode_default_one)(),
+            check: input.check_one,
+        })
     }
 
     /// Maps one raw input per player to the postcard bytes `step_encoded` takes.

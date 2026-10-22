@@ -63,6 +63,24 @@ hash, those of the golden trace and replays included.
   both schema fingerprints), and a world that does not match (`StateError::World`), leaving
   the simulation unchanged. A loaded state gives the same snapshot, byte for byte, as the
   one it was saved from.
+- `Simulation::player_input_spec()` gives a `PlayerInputSpec` (`None` for an app without an
+  input type): the encoding of one default input, and a `check` that accepts only the
+  canonical postcard encoding of exactly one input (it decodes, encodes again and compares,
+  so an overlong varint is refused with `SimError::InputDecode` naming both lengths).
+- `ludenea_net::Session` is the sans-IO rollback session of one peer.
+  `Session::new(SessionSettings, PlayerInputSpec)` validates the settings and refuses a
+  default input over 24 bytes (`SettingsError::DefaultInputTooLarge`) or refused by the
+  check (`SettingsError::DefaultInputRefused`). `receive(from, packet, now_micros)` and
+  `outgoing(now_micros)` run the handshake: a `Hello` to every peer that has not welcomed
+  this one, at most every `HANDSHAKE_RESEND_MICROS` (100 ms), a `Welcome` for every
+  matching `Hello`, and `SessionState::Running` with `SessionEvent::Started` once every
+  peer has welcomed it and sent a matching `Hello`. Another view of the match ends it with
+  `EndReason::Mismatch`, naming the peer, the first differing field (`net_version` while
+  connecting, then the identity's fields in order, then `match_id`) and both values; a
+  peer silent for `disconnect_after_micros` while connecting ends it with
+  `EndReason::Unreachable`. A packet that is not one of this match from another of its
+  peers is dropped, counted per sender and `DropReason` in `Session::stats`, and reported
+  as `SessionEvent::Dropped`.
 - `ludenea_render` answers without a GPU what the renderer draws: `atlas::frames_of(png,
   meta)` gives the `TextureFrames` (the image size and each `FrameRect`, row-major, with its
   pivot) a meta cuts a PNG into, the same cut `pack` makes, or a `FramesError` (`Decode`,

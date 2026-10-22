@@ -109,6 +109,23 @@ pub enum WireError {
     EngineTooLong { len: usize },
 }
 
+impl WireError {
+    /// The name of the variant, which a session counts dropped packets under.
+    pub fn variant(&self) -> &'static str {
+        match self {
+            WireError::TooLarge { .. } => "TooLarge",
+            WireError::Version { .. } => "Version",
+            WireError::Malformed(_) => "Malformed",
+            WireError::TooManyMessages { .. } => "TooManyMessages",
+            WireError::TooManyTicks { .. } => "TooManyTicks",
+            WireError::NoTicks { .. } => "NoTicks",
+            WireError::InputTooLarge { .. } => "InputTooLarge",
+            WireError::TooManyPlayers { .. } => "TooManyPlayers",
+            WireError::EngineTooLong { .. } => "EngineTooLong",
+        }
+    }
+}
+
 impl Packet {
     /// The version prefix followed by the postcard encoding of the packet. The sender keeps
     /// the result within [`MAX_PACKET_BYTES`]; this does not check it.

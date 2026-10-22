@@ -153,6 +153,14 @@ pub enum SettingsError {
     /// `hash_interval` is zero.
     #[error("hash_interval is {value}, expected at least 1")]
     HashInterval { value: u32 },
+    /// The default input of the session's [`ludenea_app::PlayerInputSpec`] is longer than
+    /// [`MAX_INPUT_BYTES`].
+    #[error("the default input takes {len} bytes, at most {MAX_INPUT_BYTES} allowed")]
+    DefaultInputTooLarge { len: usize },
+    /// The check of the session's [`ludenea_app::PlayerInputSpec`] refuses its own default
+    /// input: the two come from different input types.
+    #[error("the input check refuses the default input: {reason}")]
+    DefaultInputRefused { reason: String },
     /// The timeouts do not satisfy `0 < notice < disconnect`.
     #[error(
         "timeouts notice_after_micros {notice_after_micros} and disconnect_after_micros \
