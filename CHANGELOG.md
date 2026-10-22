@@ -123,8 +123,8 @@ hash, those of the golden trace and replays included.
   of the latest `SYNC_MIN_REPORTS` (4) fresh reports of a peer, rounded to the nearest tick,
   is at least one tick, `advance` skips that many ticks for the peer furthest behind, at
   most `rollback_window / 2`, counting only peers the session is ahead of by its own
-  estimate: each skip returns no `Advance`, keeps the pending local inputs and counts in the
-  new `SessionStats::skips`.
+  estimate, and stops once it no longer is: each skip returns no `Advance`, keeps the
+  pending local inputs and counts in the new `SessionStats::skips`.
 - `ludenea_render` answers without a GPU what the renderer draws: `atlas::frames_of(png,
   meta)` gives the `TextureFrames` (the image size and each `FrameRect`, row-major, with its
   pivot) a meta cuts a PNG into, the same cut `pack` makes, or a `FramesError` (`Decode`,

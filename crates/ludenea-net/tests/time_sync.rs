@@ -374,3 +374,43 @@ fn peer_behind_never_skips_when_the_round_trip_exceeds_the_window() {
         );
     }
 }
+
+#[test]
+fn committed_skips_stop_once_the_session_is_no_longer_ahead() {
+    let mut pair = handshake(sessions(2));
+    // A ping of 10 ms, the mean of the handshake's instant round trip and this one: half of
+    // it rounds to no tick.
+    round_trip(&mut pair, ONE_SECOND, 20_000);
+    let mut session = pair.remove(0);
+    let advance = |session: &mut Session, now: u64| {
+        session.add_local_input(0, vec![0]).unwrap();
+        session.advance(now).unwrap()
+    };
+    for _ in 0..5 {
+        assert_ne!(advance(&mut session, ONE_SECOND + 30_000), []);
+    }
+    // Peer 1 reports tick 4, one tick behind the local tick 5, and claims to be four ticks behind: a mean correction of 2.5, three skips.
+    let mut now = ONE_SECOND;
+    for _ in 0..4 {
+        now += QUALITY_INTERVAL_MICROS;
+        let packet = Packet {
+            match_id: 1,
+            messages: vec![Message::Quality {
+                tick: 4,
+                sent_micros: now,
+                advantage: -4,
+            }],
+        };
+        session.receive(PeerId(1), &packet.encode(), now);
+    }
+    assert_eq!(session.stats().peers[&PeerId(1)].frame_advantage, 1);
+    assert_eq!(advance(&mut session, now), []);
+    assert_eq!(session.stats().skips, 1);
+    // A frame later peer 1 is estimated at tick 5: the session is no longer ahead, so the
+    // remaining skips are cancelled and the tick runs.
+    assert_ne!(advance(&mut session, now + FRAME_MICROS), []);
+    assert_eq!(session.stats().skips, 1);
+    // The reports before the cancelled skips count no more.
+    assert_ne!(advance(&mut session, now + 2 * FRAME_MICROS), []);
+    assert_eq!(session.stats().skips, 1);
+}

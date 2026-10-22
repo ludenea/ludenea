@@ -299,8 +299,9 @@ pub struct Session {
     pending: Vec<Option<Vec<u8>>>,
     /// The next tick to advance: every tick below it has run.
     tick: u64,
-    /// The skips of the latest time correction still to run.
-    skips_left: u64,
+    /// The time correction in progress: the index of the remote it skips toward, and the
+    /// skips still to run, at least one.
+    skipping: Option<(usize, u64)>,
     /// The next tick to emit [`SessionEvent::Confirmed`] for.
     next_event: u64,
     state: SessionState,
@@ -393,7 +394,7 @@ impl Session {
             queues,
             pending,
             tick: 0,
-            skips_left: 0,
+            skipping: None,
             next_event: 0,
             state: SessionState::Connecting,
             ended_micros: None,
@@ -604,7 +605,8 @@ impl Session {
     /// [`SYNC_MIN_REPORTS`] fresh reports of some peer, rounded to the nearest tick, is at
     /// least one tick, the session skips that many ticks for the largest one, at most
     /// `rollback_window / 2`, one per call, each counted in [`SessionStats::skips`]. Only a
-    /// peer this session is ahead of right now counts. Each skip forgets the reports so far.
+    /// peer this session is ahead of right now counts, and the skips stop once it is no longer
+    /// ahead of it. Each skip, and each stop, forgets the reports so far.
     ///
     /// # Errors
     ///
@@ -619,10 +621,17 @@ impl Session {
         let confirmed = self.confirmed_tick();
         let window = u64::from(self.settings.identity.rules.rollback_window);
         let stall = self.tick.saturating_sub(confirmed) >= window;
-        if !stall && self.skips_left == 0 {
-            self.skips_left = self.correction(now);
-        }
-        let skip = !stall && self.skips_left > 0;
+        // A correction in progress goes on only while this session is still ahead of the peer
+        // it skips toward: a correction from a stale view of the peer could otherwise skip this
+        // session behind it. A cancelled correction starts no other in the same call.
+        let planned = match self.skipping {
+            _ if stall => None,
+            Some((toward, left)) if self.ahead_of(toward, now) => Some((toward, left)),
+            Some(_) => None,
+            None => self.correction(now),
+        };
+        let cancelled = !stall && self.skipping.is_some() && planned.is_none();
+        let skip = planned.is_some();
         // Every refusal comes before anything changes.
         if !stall && !skip {
             if let Some(player) = self.local_players().find(|p| self.pending[*p].is_none()) {
@@ -637,14 +646,16 @@ impl Session {
         }
         let mut requests = Vec::new();
         self.roll_back(&mut requests);
+        if cancelled {
+            self.skipping = None;
+            self.forget_reports();
+        }
         if stall {
             self.count_stall(confirmed);
-        } else if skip {
-            self.skips_left -= 1;
+        } else if let Some((toward, left)) = planned {
+            self.skipping = (left > 1).then(|| (toward, left - 1));
             self.stats.skips = self.stats.skips.saturating_add(1);
-            for remote in &mut self.remotes {
-                remote.corrections.clear();
-            }
+            self.forget_reports();
         } else {
             self.advance_tick(&mut requests);
         }
@@ -1158,9 +1169,10 @@ impl Session {
         true
     }
 
-    /// The ticks to skip now: the largest mean correction over the peers with
-    /// [`SYNC_MIN_REPORTS`] fresh reports, rounded to the nearest tick, when it is at least
-    /// one tick, at most `rollback_window / 2`; otherwise none. Rounded rather than truncated,
+    /// The correction to start now, as the index of the remote it skips toward and the ticks
+    /// to skip: the largest mean correction over the peers with [`SYNC_MIN_REPORTS`] fresh
+    /// reports, rounded to the nearest tick, when it is at least one tick, at most
+    /// `rollback_window / 2`; otherwise none. Rounded rather than truncated,
     /// so a peer half a tick or more ahead corrects at once instead of drifting a tick further
     /// first.
     ///
@@ -1169,28 +1181,37 @@ impl Session {
     /// both peers run at the edge of their window and the stalls, not the clocks, set their
     /// pace: each stall of the faster peer leaves the slower one briefly ahead in both views,
     /// and a skip of the slower one would only make the faster one stall more.
-    fn correction(&self, now: u64) -> u64 {
+    fn correction(&self, now: u64) -> Option<(usize, u64)> {
         let cap = u64::from(self.settings.identity.rules.rollback_window / 2);
-        let largest = self
+        let (toward, mean) = self
             .remotes
             .iter()
             .enumerate()
             .filter(|(index, remote)| {
-                remote.corrections.len() >= SYNC_MIN_REPORTS
-                    && self.advantage(*index, now).is_some_and(|ahead| ahead > 0)
+                remote.corrections.len() >= SYNC_MIN_REPORTS && self.ahead_of(*index, now)
             })
-            .map(|(_, remote)| {
+            .map(|(index, remote)| {
                 // At most `SYNC_MIN_REPORTS` doubled corrections are kept, each within twice an
                 // `i32`: their sum fits an `i64`. `doubled / (2 * count)`, halves rounded up.
                 let doubled: i64 = remote.corrections.iter().sum();
                 let count = i64::try_from(remote.corrections.len())
                     .expect("at most SYNC_MIN_REPORTS corrections are kept");
-                (doubled + count).div_euclid(2 * count)
+                (index, (doubled + count).div_euclid(2 * count))
             })
-            .max();
-        match largest {
-            Some(mean) if mean >= 1 => u64::try_from(mean).unwrap_or(0).min(cap),
-            _ => 0,
+            .max_by_key(|(_, mean)| *mean)?;
+        let skips = u64::try_from(mean).ok()?.min(cap);
+        (skips >= 1).then_some((toward, skips))
+    }
+
+    /// Whether this session is ahead of the remote at `index` at `now`, by its own estimate.
+    fn ahead_of(&self, index: usize, now: u64) -> bool {
+        self.advantage(index, now).is_some_and(|ahead| ahead > 0)
+    }
+
+    /// Forgets the reports of every peer, so no correction acts on them again.
+    fn forget_reports(&mut self) {
+        for remote in &mut self.remotes {
+            remote.corrections.clear();
         }
     }
 
