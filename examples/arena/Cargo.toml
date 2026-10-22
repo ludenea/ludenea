@@ -22,6 +22,10 @@ doc = false
 [[bin]]
 name = "build-level"
 
+# Times the worst case of a rollback frame on the golden replay.
+[[bin]]
+name = "rollback-bench"
+
 [features]
 # The standalone web page (`ludenea build --web`).
 web = ["ludenea/web"]

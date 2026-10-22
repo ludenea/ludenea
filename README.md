@@ -200,6 +200,14 @@ Run the benchmark:
 cargo run --locked --release -p boxes --bin bench
 ```
 
+Run the rollback benchmark, which times the worst case of a rollback frame (load the state
+eight ticks back, replay nine ticks saving after each) over the arena's golden replay, and
+reports whether the slowest frame fits in half a 60 Hz frame:
+
+```sh
+cargo run --locked --release -p arena --bin rollback-bench
+```
+
 ## Versioning
 
 Every file format and protocol has a version, except those [`CHANGELOG.md`](CHANGELOG.md)

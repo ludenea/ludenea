@@ -133,6 +133,10 @@ jobs:
             cargo run --locked --release -p arena -- verify golden/arena.replay --threads $threads --dump-dir "$LUDENEA_DUMP_DIR/release/arena-replay-$threads-threads" || status=1
           done
           exit $status
+      # Recorded, not gated: the numbers go to the job summary.
+      - name: Time a rollback frame
+        if: runner.os == 'Linux'
+        run: cargo run --locked --release -p arena --bin rollback-bench | tee -a "$GITHUB_STEP_SUMMARY"
       # One artifact per thread count, with the debug and the release dumps of that count.
       # Steps cannot loop: a thread count added to the verify loops above or to the golden
       # tests (examples/boxes/tests/golden.rs, examples/arena/tests/golden.rs) needs an upload
