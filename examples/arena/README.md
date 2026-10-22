@@ -10,16 +10,16 @@ stick and the d-pad run and button 0 jumps.
 
 The fighters are kinematic bodies moved by the game, not by the physics solver: after each
 physics step, a downward raycast from the centre of a fighter's capsule finds the ground and
-where a fall lands, and sideways raycasts at three heights (the centres of the capsule's ends
-and its middle) stop a run at an obstacle. Colliders are one-way upward: a fighter rises
-through any collider and stands only on a surface its feet are on or above, so a jump that
-does not clear a platform drops back through it. Between those three heights, an obstacle
-thinner than the gap between two rays (0.6 units) does not stop a run. A fighter whose feet fall below `KILL_Y`
-(y = -19, 10 units under the bottom of the scene's tilemap, which spans y -9 to 9) returns
-to its spawn point at rest, or to the first spawn point when its own is gone; with no spawn
-point left, it is removed. The scene's `arena::FighterSheets` resource
-names the fighters' sprite sheets, so loading the scene loads them: any arena scene must
-list it, or the fighters spawn without art.
+where a fall lands, and sideways raycasts at three heights (the centres of the capsule's
+ends and its middle) stop a run at an obstacle. Colliders are one-way upward: a fighter
+rises through any collider and stands only on a surface its feet are on or above, so a jump
+that does not clear a platform drops back through it. Between those three heights, an
+obstacle thinner than the gap between two rays (0.6 units) does not stop a run. A fighter
+whose feet fall below `KILL_Y` (y = -19, 10 units under the bottom of the scene's tilemap,
+which spans y -9 to 9) returns to its spawn point at rest, or to the first spawn point when
+its own is gone; with no spawn point left, it is removed. The scene's `arena::FighterSheets`
+resource names the fighters' sprite sheets, so loading the scene loads them: any arena scene
+must list it, or the fighters spawn without art.
 
 The scene (`assets/arena.scene.ron`) has four layers: `sky` (parallax 0.1) and `town` (0.4)
 hold the town backgrounds, `tiles` holds a 32 by 18 tilemap on the town tileset, and
