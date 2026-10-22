@@ -1,7 +1,6 @@
 import { ProtocolFailure, type ControlClient, type Entity, type LayerInfo } from "@ludenea/control-client";
 import { definePlugin, type Disposable, type Editor, type ViewportTool } from "@ludenea/editor-shell";
-import { createStore, type Store } from "../shared";
-import { same } from "../viewport/camera";
+import { createStore, same, type Store } from "../shared";
 import { areaBetween, cellAt, cellUnder, type Cell, type Pose, type Tilemap } from "./paint";
 import { TilePalette } from "./TilePalette";
 

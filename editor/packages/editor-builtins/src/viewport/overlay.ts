@@ -1,6 +1,7 @@
 import type { Color, DebugDrawFrame, Entity, Primitive, Vec2 } from "@ludenea/control-client";
 import type { ViewportOverlay } from "@ludenea/editor-shell";
-import { same, worldToScreen, type Camera, type Size } from "./camera";
+import { same } from "../shared";
+import { worldToScreen, type Camera, type Size } from "./camera";
 
 /** The color the renderer highlights selected entities with. */
 const HIGHLIGHT = "#ffd400";

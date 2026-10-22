@@ -1,7 +1,7 @@
 import type { ControlClient, DebugDrawFrame, Difference, DivergenceReport, Entity, Event, FileEntry, Topic, TraceComparison } from "@ludenea/control-client";
 import { definePlugin, type Disposable, type Editor } from "@ludenea/editor-shell";
 import { useEffect, useState } from "react";
-import { createStore, errorText, loadRenderModule, reportedOnce, shared, showPanel, useGame, useStore, type Store } from "../shared";
+import { createStore, errorText, loadRenderModule, reportedOnce, same, shared, showPanel, useGame, useStore, type Store } from "../shared";
 import { seek } from "../timeline";
 import { css, outline } from "../viewport/overlay";
 import { CausalReport } from "./CausalReport";
@@ -204,7 +204,7 @@ export const divergencePlugin = definePlugin({
       title: "Diverged at",
       width: 80,
       value(entity) {
-        const found = reportState.get().report?.entities.find((row) => row.entity.index === entity.index && row.entity.generation === entity.generation);
+        const found = reportState.get().report?.entities.find((row) => same(row.entity, entity));
         return found ? String(found.first_tick) : null;
       },
       subscribe(listener) {

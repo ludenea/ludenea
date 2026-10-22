@@ -1,9 +1,9 @@
 import type { ControlClient, DebugDrawFrame, Entity, Vec2 } from "@ludenea/control-client";
 import type { BatchableCommand, Editor } from "@ludenea/editor-shell";
 import { onEntity } from "../inspector";
-import type { Store } from "../shared";
+import { same, type Store } from "../shared";
 import { assertEditable } from "../timeline/editing";
-import { same, type Box, type Camera, type Size } from "./camera";
+import type { Box, Camera, Size } from "./camera";
 
 /** What the viewport's commands and panel share; kept while the panel is hidden. */
 export type ViewportState = Store<{

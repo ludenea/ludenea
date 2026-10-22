@@ -1,4 +1,4 @@
-import type { AssetId, ControlClient, ProjectInfo, TextureMeta } from "@ludenea/control-client";
+import type { AssetId, ControlClient, Entity, ProjectInfo, TextureMeta } from "@ludenea/control-client";
 import { runReported, type Editor, type TextureFrames } from "@ludenea/editor-shell";
 import { useLayoutEffect, useRef, useSyncExternalStore, type UIEvent } from "react";
 import { instantiate, type RenderModule } from "./render-module";
@@ -156,6 +156,9 @@ export function reportedOnce(editor: Editor, context: string) {
     worked: () => void (failing = false),
   };
 }
+
+/** Whether `a` and `b` are the same entity: the same index and generation. */
+export const same = (a: Entity, b: Entity) => a.index === b.index && a.generation === b.generation;
 
 /** A failure as one line for a panel to show. */
 export const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));

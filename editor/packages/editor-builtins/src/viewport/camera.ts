@@ -1,4 +1,5 @@
 import type { CameraItem, DebugDrawFrame, Entity, Vec2 } from "@ludenea/control-client";
+import { same } from "../shared";
 
 /** What the viewport looks at: `center` in meters, the scale in CSS pixels per meter. */
 export type Camera = { center: Vec2; pixelsPerMeter: number };
@@ -61,7 +62,6 @@ export const panBy = (camera: Camera, dx: number, dy: number): Camera => ({
   center: { x: camera.center.x - dx / camera.pixelsPerMeter, y: camera.center.y + dy / camera.pixelsPerMeter },
 });
 
-export const same = (a: Entity, b: Entity) => a.index === b.index && a.generation === b.generation;
 const sameEntity = (a: Entity | null, b: Entity) => a !== null && same(a, b);
 
 /** The smallest box holding both, either of which may be missing. */
