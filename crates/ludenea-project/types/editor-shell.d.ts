@@ -299,10 +299,13 @@ type SelectionStore = UseBoundStore<StoreApi<SelectionState>>;
 interface TextureAccess extends Observed<TextureInfo> {
     /**
      * The texture whose identifier is `id` in the latest listing, `"unreadable"` when it names
-     * textures whose meta cannot be read, `"missing"` when it names none, or `"listing"` before
-     * the first listing answers. Pure, like `list`.
+     * textures whose meta cannot be read, `"missing"` when it names none, `"listing"` before the
+     * first listing answers, or `{ failed }` with the reason the latest listing failed (the next
+     * `subscribe` or `frames` lists again). Pure, like `list`.
      */
-    find(id: AssetId): TextureInfo | "unreadable" | "missing" | "listing";
+    find(id: AssetId): TextureInfo | "unreadable" | "missing" | "listing" | {
+        failed: string;
+    };
     /** The PNG at `path`, as the project holds it now. */
     bytes(path: string): Promise<Uint8Array>;
     /**

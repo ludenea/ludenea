@@ -174,6 +174,15 @@ describe("textures", () => {
     expect([sent("list_files").length, sent("read_binary").length]).toEqual([2, 1]);
   });
 
+  it("a_preview_shows_why_the_textures_cannot_be_listed", async () => {
+    const host = await testEditor([inspectorPlugin, texturesPlugin], (request) => (request.type === "list_files" ? { error: { code: "io", message: "the project folder is gone" } } : undefined));
+    renderPanel(host, "ludenea.inspector");
+    act(() => host.editor.selection.getState().selectAsset(HERO, "Texture"));
+    await settle();
+
+    expect(screen.getByRole("alert").textContent).toBe("The project's textures cannot be listed: the project folder is gone");
+  });
+
   it("clip_player_advances_one_frame_every_ticks_per_frame", async () => {
     // 60 ticks per second and 6 ticks per frame: one frame every 100 milliseconds.
     await inspecting({ clips: { walk: { first: 0, count: 2, ticks_per_frame: 6 } } });

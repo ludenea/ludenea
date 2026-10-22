@@ -325,4 +325,30 @@ describe("loader", () => {
     expect(requests).toEqual(["list_files"]);
     stop();
   });
+
+  it("a_failed_texture_listing_is_shown_and_tried_again", async () => {
+    const meta = { pixels_per_unit: 16, grid: null, pivot: null, filter: "Nearest" } as const;
+    let failures = 1;
+    const host = await testHost(
+      undefined,
+      (request) => {
+        if (request.type === "list_files") {
+          if (failures-- > 0) return { error: { code: "io", message: "the project folder is gone" } };
+          return { type: "files", entries: [{ path: "assets/hero.png", id: "0000000000000000000000000000000d", kind: { Texture: meta } }] };
+        }
+        if (request.type === "read_binary") return { type: "bytes", bytes: btoa("png") };
+        return undefined;
+      },
+      async () => ({ width: 1, height: 1, frames: [] }),
+    );
+
+    await expect(host.editor.textures.frames("assets/hero.png")).rejects.toThrow("the project folder is gone");
+    // The failure, not a texture that is missing.
+    expect(host.editor.textures.find("0000000000000000000000000000000d")).toEqual({ failed: "the project folder is gone" });
+    // The same answer each time, as a snapshot getter must give.
+    expect(host.editor.textures.find("0000000000000000000000000000000d")).toBe(host.editor.textures.find("0000000000000000000000000000000a"));
+    // The next call lists again.
+    await expect(host.editor.textures.frames("assets/hero.png")).resolves.toMatchObject({ width: 1, height: 1 });
+    expect(host.editor.textures.find("0000000000000000000000000000000d")).toMatchObject({ path: "assets/hero.png" });
+  });
 });

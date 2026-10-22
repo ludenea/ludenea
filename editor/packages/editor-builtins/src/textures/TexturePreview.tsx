@@ -32,7 +32,7 @@ export function useTexture(editor: Editor, id: AssetId): TextureState {
   const [shown, setShown] = useState<{ found: typeof found; state: TextureState } | null>(null);
 
   useEffect(() => {
-    if (typeof found === "string") return;
+    if (typeof found === "string" || "failed" in found) return;
     let current = true;
     editor.textures.frames(found.path).then(
       ({ png, ...frames }) => current && setShown({ found, state: { texture: { path: found.path, meta: found.meta, frames, url: dataUrl(png) } } }),
@@ -46,9 +46,10 @@ export function useTexture(editor: Editor, id: AssetId): TextureState {
   if (found === "listing") return { loading: true };
   if (found === "missing") return { error: `No texture of the project has the identifier ${id}.` };
   if (found === "unreadable") return { error: "The texture's meta cannot be read: the console shows the project's warning, which names the file and the cause." };
+  if ("failed" in found) return { error: `The project's textures cannot be listed: ${found.failed}` };
   // Until this version loads, the one shown before stays (the same texture changed on disk).
   if (shown?.found === found) return shown.state;
-  return shown && typeof shown.found !== "string" && shown.found.id === id ? shown.state : { loading: true };
+  return shown && typeof shown.found !== "string" && "id" in shown.found && shown.found.id === id ? shown.state : { loading: true };
 }
 
 /** The texture `id`: its image zoomed by a whole factor with nearest filtering, each frame outlined and numbered, and each pivot marked. */

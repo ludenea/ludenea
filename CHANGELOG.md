@@ -832,7 +832,8 @@ hash, those of the golden trace and replays included.
   `getAsset(name)` finds it, and `pluginOf` names its plugin.
 - `Editor.textures` (`TextureAccess`): `list` and `subscribe` follow the project's textures
   whose meta can be read (`TextureInfo`, one object per texture until its file or meta
-  changes), `find(id)` looks one up, `bytes(path)` reads a texture's PNG, and `frames(path)`
+  changes), `find(id)` looks one up (or says the listing failed, listed again on the next
+  `subscribe` or `frames`), `bytes(path)` reads a texture's PNG, and `frames(path)`
   gives the `TextureFrames` its meta cuts it into with the PNG read for them (`TextureCut`),
   rejected with the renderer's reason. `createEditor` takes the cutting function as
   `textureFrames` (the applications pass the renderer's, exported by

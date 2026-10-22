@@ -12,10 +12,11 @@ import type { TextureCut, TextureFrames, TextureInfo } from "./plugin";
 export interface TextureAccess extends Observed<TextureInfo> {
   /**
    * The texture whose identifier is `id` in the latest listing, `"unreadable"` when it names
-   * textures whose meta cannot be read, `"missing"` when it names none, or `"listing"` before
-   * the first listing answers. Pure, like `list`.
+   * textures whose meta cannot be read, `"missing"` when it names none, `"listing"` before the
+   * first listing answers, or `{ failed }` with the reason the latest listing failed (the next
+   * `subscribe` or `frames` lists again). Pure, like `list`.
    */
-  find(id: AssetId): TextureInfo | "unreadable" | "missing" | "listing";
+  find(id: AssetId): TextureInfo | "unreadable" | "missing" | "listing" | { failed: string };
   /** The PNG at `path`, as the project holds it now. */
   bytes(path: string): Promise<Uint8Array>;
   /**
@@ -59,6 +60,10 @@ export function createTextureAccess(project: ProjectClient, report: EditorConsol
   // The latest listing's files, null before the first answer; and the listing awaited by `frames`.
   let entries: FileEntry[] | null = null;
   let listing: Promise<FileEntry[]> | null = null;
+  // Whether anyone asked for the textures: only then do project events list them again.
+  let started = false;
+  // Why the latest listing failed, until one answers: one object, so `find` answers the same one each time.
+  let failed: { failed: string } | null = null;
   // The paths changed on disk since the last listing answered; null after the project opened (all of them).
   let changed: Set<string> | null = new Set();
   // Counts the listings started: only the latest one's answer is kept.
@@ -80,6 +85,7 @@ export function createTextureAccess(project: ProjectClient, report: EditorConsol
           return before && changed && !changed.has(texture.path) && sameTexture(before, texture) ? before : texture;
         };
         entries = listed;
+        failed = null;
         snapshot = listed.flatMap((entry) => {
           const texture = textureOf(entry);
           return texture && texture !== "unreadable" ? [kept(texture)] : [];
@@ -90,7 +96,10 @@ export function createTextureAccess(project: ProjectClient, report: EditorConsol
       (error: unknown) => {
         if (number !== listings) return;
         // Not the previous project's textures, nor the previous version as if it were current.
-        entries = [];
+        // The next `subscribe` or `frames` lists again.
+        entries = null;
+        listing = null;
+        failed = { failed: error instanceof Error ? error.message : String(error) };
         snapshot = [];
         changed = new Set();
         notify();
@@ -99,16 +108,17 @@ export function createTextureAccess(project: ProjectClient, report: EditorConsol
     );
   };
   const start = () => {
+    started = true;
     if (!listing) refresh();
     return listing!;
   };
   project.on("project_opened", () => {
-    if (!listing) return;
+    if (!started) return;
     changed = null;
     refresh();
   });
   project.on("files_changed", ({ changes }) => {
-    if (!listing) return;
+    if (!started) return;
     // A file that is a texture now, or was one: a texture whose PNG became something else goes.
     const known = new Set(snapshot.map((texture) => texture.path));
     const concerned = changes.map(changedPath).filter(({ path, kind }) => known.has(path) || (typeof kind === "object" && "Texture" in kind));
@@ -122,6 +132,7 @@ export function createTextureAccess(project: ProjectClient, report: EditorConsol
     // Pure: a snapshot getter that `useSyncExternalStore` calls while rendering.
     list: () => snapshot,
     find(id) {
+      if (failed !== null) return failed;
       if (entries === null) return "listing";
       const found = snapshot.find((texture) => texture.id === id);
       if (found) return found;
