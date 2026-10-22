@@ -11,4 +11,5 @@ crate-type = ["cdylib", "rlib"]
 ludenea.workspace = true
 
 [dev-dependencies]
+png.workspace = true
 ron.workspace = true
