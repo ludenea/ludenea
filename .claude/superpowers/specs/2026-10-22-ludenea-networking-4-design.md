@@ -154,19 +154,23 @@ is too slow for a save every tick and a restore plus up to W+1 ticks of
 resimulation inside one displayed frame.
 
 The milestone adds a second way to capture state that never leaves memory:
-each registered component, resource and asset storage gains a typed clone.
+each registered component and resource storage gains a typed clone, and
+loaded assets are shared.
 A saved state holds exactly what `Snapshot` holds: the entity allocator,
 every component, resource and asset (the RNG is a resource). Like
 `World::restore`, restoring drops any queued command and event, is all or
 nothing, and keeps runtime resources.
 
-**The `Clone` bound (author).** `Component`, `Resource` and `Asset` require
+**The `Clone` bound (author).** `Component` and `Resource` require
 `Clone` from this milestone on, for every game, online or not: one save
 path, no opt-in. This is a deliberate breaking change of the public API,
 documented in the CHANGELOG with its migration (derive `Clone` on each
 type), and the derive macros and the project template are updated so a new
 game gets it by default. A type that cannot be cloned is refused at compile
-time with an error that names the bound.
+time with an error that names the bound. `Asset` does not require `Clone`
+(author): loaded assets are stored behind `Arc` and only ever replaced, never
+written in place, so a saved state shares them instead of cloning them, and
+copies the asset map only when it changed since the last save.
 
 This is not a second way to do the same thing: the saved state is the
 in-memory counterpart of the snapshot, and a property test proves that

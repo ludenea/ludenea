@@ -26,7 +26,6 @@
 
 ## Deviations From The Spec
 
-- `Asset` does not gain `Clone`. **This overturns an author decision of spec section 4.2 and needs the author's approval before Task 1 starts; on approval, Task 1 also updates that paragraph of the spec.** Loaded assets are stored as `Arc<dyn Any + Send + Sync>` (`crates/ludenea-ecs/src/assets.rs`) and only ever replaced, never written in place, so a saved world shares them instead of cloning them, and copies the asset map only when it changed since the last save. The breaking change covers `Component` and `Resource` only, which is all the saved state needs.
 - The derive macros do not change. `#[derive(Component)]` cannot add `Clone` without conflicting with a `#[derive(Clone)]` the game writes itself; the compiler's error for a missing supertrait already names the `Clone` bound, and the project template already derives it.
 - SyncTest is reachable from the game's command line and the `ludenea-net` API in this milestone; through the host and the editor in 4c.
 - On a hash mismatch between peers, 4a ends the session with `EndReason::Desync` carrying the tick, the peer and both hashes, on every peer through the end notice. Until 4c exchanges hash trees and snapshots, a desync between peers says only that the hashes differ, which the anti-goal "a desync report that only says hash differs" forbids for a shipped feature: online play is not reachable by a game before 4b and 4c, and 4a already keeps the saved states of reported ticks (spec section 5) so 4c can build the report from them. SyncTest, where both states live in one process, already gives the full report.
@@ -45,7 +44,7 @@
 ### Task 1: `Component` and `Resource` require `Clone`
 
 **Files:**
-- Modify: `crates/ludenea-ecs/src/component.rs` (bounds and their doc comments), `crates/ludenea-ecs/src/query.rs` (its doc-test types derive `Clone`, so its `compile_fail` blocks keep failing for their own reason), every `#[derive(Component)]` and `#[derive(Resource)]` type in `crates/`, `examples/` and their tests that lacks `Clone` (85 sites, all in tests and doc examples; the hand-serialized `Fuse`, `Gauge` and `Touchy` test types derive it like the others), `CHANGELOG.md` (Rust API: the breaking change and its migration), and, once the author approves the `Asset` deviation, the `Clone` paragraph of spec section 4.2.
+- Modify: `crates/ludenea-ecs/src/component.rs` (bounds and their doc comments), `crates/ludenea-ecs/src/query.rs` (its doc-test types derive `Clone`, so its `compile_fail` blocks keep failing for their own reason), every `#[derive(Component)]` and `#[derive(Resource)]` type in `crates/`, `examples/` and their tests that lacks `Clone` (85 sites, all in tests and doc examples; the hand-serialized `Fuse`, `Gauge` and `Touchy` test types derive it like the others), `CHANGELOG.md` (Rust API: the breaking change and its migration). `Asset` keeps its bounds: loaded assets are shared behind `Arc` (spec section 4.2).
 - Test: a `compile_fail,E0277` doc test on `Component`.
 
 **Interfaces:**
