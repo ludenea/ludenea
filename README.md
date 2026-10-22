@@ -307,7 +307,9 @@ pushed no render frames, when the editor console reports an error during play (s
 the viewport cannot draw), or when the scene cannot load. The window must stay on screen,
 since a hidden window draws no frames: the command fails at once on a locked screen, and the measurement fails after 5
 seconds without an animation frame. The editor measures only when launched with
-`LUDENEA_FRAME_TIMES` set to the file its report goes to, then exits:
+`LUDENEA_FRAME_TIMES` set to the file its report goes to, then exits. Interrupting the command
+stops the editor, with the game build and the game it started, and removes the temporary
+project:
 
 ```sh
 pnpm -C editor measure:desktop

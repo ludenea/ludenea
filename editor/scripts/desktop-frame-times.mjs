@@ -63,25 +63,50 @@ function measure() {
     throw error;
   }
   return new Promise((resolvePromise, reject) => {
+    // Its own process group: stopping the group stops the game build and the game it started too.
     const editor = spawn(binary, [project], {
+      detached: true,
       // The game builds with the engine's own build artifacts.
       env: { ...process.env, CARGO_TARGET_DIR: join(repository, "target"), LUDENEA_ENGINE_PATH: repository, LUDENEA_FRAME_TIMES: report },
       stdio: "inherit",
     });
-    const timer = setTimeout(() => {
-      editor.kill();
-      reject(new Error(`the editor wrote no frame times within ${TIMEOUT_MS / 60_000} minutes; launch it on a copy of examples/swarm to see why`));
-    }, TIMEOUT_MS);
-    editor.on("error", (error) => reject(new Error(`cannot launch ${binary}: ${error.message}`)));
-    editor.on("exit", (code, signal) => {
-      clearTimeout(timer);
+    const stopEditor = () => {
+      if (editor.pid === undefined || editor.exitCode !== null) return;
       try {
-        if (code !== 0) throw new Error(`the editor exited with ${signal ?? `code ${code}`} before writing the frame times`);
-        resolvePromise(JSON.parse(readFileSync(report, "utf8")));
+        process.kill(-editor.pid, "SIGTERM");
       } catch (error) {
-        reject(error);
-      } finally {
-        rmSync(directory, { recursive: true, force: true });
+        console.error(`cannot stop the editor (process group ${editor.pid}): ${error.message}`);
+      }
+    };
+    let settled = false;
+    // Settles once, whatever comes first: the editor's exit, a launch failure, the timeout, or an interruption.
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      process.off("SIGINT", interrupted);
+      process.off("SIGTERM", interrupted);
+      rmSync(directory, { recursive: true, force: true });
+      if (error) reject(error);
+      else resolvePromise(value);
+    };
+    const interrupted = (signal) => {
+      stopEditor();
+      finish(new Error(`interrupted by ${signal}: the editor was stopped and its temporary project removed`));
+    };
+    process.on("SIGINT", interrupted);
+    process.on("SIGTERM", interrupted);
+    const timer = setTimeout(() => {
+      stopEditor();
+      finish(new Error(`the editor wrote no frame times within ${TIMEOUT_MS / 60_000} minutes; launch it on a copy of examples/swarm to see why`));
+    }, TIMEOUT_MS);
+    editor.on("error", (error) => finish(new Error(`cannot launch ${binary}: ${error.message}`)));
+    editor.on("exit", (code, signal) => {
+      if (code !== 0) return finish(new Error(`the editor exited with ${signal ?? `code ${code}`} before writing the frame times`));
+      try {
+        finish(null, JSON.parse(readFileSync(report, "utf8")));
+      } catch (error) {
+        finish(new Error(`cannot read the frame times the editor wrote: ${error.message}`));
       }
     });
   });
