@@ -46,9 +46,10 @@ hash, those of the golden trace and replays included.
   meta)` gives the `TextureFrames` (the image size and each `FrameRect`, row-major, with its
   pivot) a meta cuts a PNG into, the same cut `pack` makes, or a `FramesError` (`Decode`,
   `Grid`) naming the cause; `camera::screen_to_world` is the inverse of `world_to_clip` for a
-  layer, and `camera::world_to_screen` its own inverse; `pick::pick` lists the entities whose drawn sprite quad (a missing texture's 1 by 1
-  placeholder included) or painted tilemap cell lies under a screen point, topmost first; and
-  `pick::bounds` gives the world box of entities drawn on layers of parallax 1.
+  layer, and `camera::world_to_screen` the inverse of `screen_to_world`; `pick::pick` lists
+  the entities whose drawn sprite quad (a missing texture's 1 by 1 placeholder included) or
+  painted tilemap cell lies under a screen point, topmost first; and `pick::bounds` gives the
+  world box of entities drawn on layers of parallax 1.
   `gpu::Size` moves to `camera::Size` (still reachable as `gpu::Size`), and
   `Renderer::regions` gives the regions of the atlas set last. `Renderer::set_atlas` refuses
   an atlas with a region on a page it does not have (`RenderError::InvalidAtlas`).
@@ -865,19 +866,20 @@ hash, those of the golden trace and replays included.
   game and while the game resimulates. `Editor.batched(commands)` sends several as one
   `batch` (one alone as itself, with its own reply; none not at all, resolving as an empty
   batch does); it takes only the `BatchableCommand`s a batch holds (spawn, despawn, insert
-  or remove a component, set a field, paint tiles), and `Editor.onEdited(listener)` hears every edit the game accepted. The
-  built-in panels edit through them.
+  or remove a component, set a field, paint tiles). `Editor.onEdited(listener)` hears every
+  edit the game accepted. The built-in panels edit through them.
 - `Editor.viewport.tools.register(tool)` adds a `ViewportTool`: while it is the active
   tool (`viewport.setTool(id)`, read from the `viewport.activeTool` store, `null` for the
   built-in select and move), the viewport gives it the pointer's presses, moves, and
   releases (`ToolPointer`, in CSS pixels and world units), or `pointerCancel` when a press
   ends without a release (the browser took the pointer, the tool stopped being active in
-  the middle of it, or the viewport closed). Its `ToolContext` maps screen points onto a layer of any parallax
-  and back (`screenToWorld`, `worldToScreen`) as the renderer draws it. The viewport shows
-  the tool's `cursor` and draws its `overlay`; the right button is the tool's too, without
-  the context menu. Its `available(editor)` is asked again on every selection, timeline,
-  and game change, and a tool that answers false, throws, or is unregistered is
-  deactivated. Escape returns to select and move; panning and zooming stay the viewport's.
+  the middle of it, or the viewport closed). Its `ToolContext` maps screen points onto a
+  layer of any parallax and back (`screenToWorld`, `worldToScreen`) as the renderer draws
+  it. The viewport shows the tool's `cursor` and draws its `overlay`; the right button is
+  the tool's too, without the context menu. Its `available(editor)` is asked again on every
+  selection, timeline, and game change, and a tool that answers false, throws, or is
+  unregistered is deactivated. Escape returns to select and move; panning and zooming stay
+  the viewport's.
 - `OverlayContext.worldToScreen(point, parallax?)` takes the parallax of the layer the point
   is on (1 when omitted) and maps it as the viewport's renderer draws it.
 

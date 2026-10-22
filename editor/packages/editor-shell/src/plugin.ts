@@ -152,8 +152,7 @@ export interface ViewportTool {
   /**
    * The press `pointerDown` started ends without its `pointerUp`: the browser took the pointer,
    * the tool stopped being active (Escape, another tool, unavailable, unregistered), or the
-   * viewport closed. Called
-   * once per such press; a stroke in progress is dropped here.
+   * viewport closed. Called once per such press; a stroke in progress is dropped here.
    */
   pointerCancel?(context: ToolContext): void;
   /** Drawn over the viewport after the overlays, while the tool is active. */

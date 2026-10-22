@@ -426,13 +426,16 @@ its meta cannot be read, or `{ failed }` with the reason the listing failed.
 The built-in texture previews and clip players are a plugin on this API.
 
 `editor.edit(command)` sends an editing command to the running game, as one undo step, and
-resolves with the game's reply (a `spawn` gives the entity it made); `editor.batched(commands)`
-sends several entity edits (spawn, despawn, components, fields, tiles) as one; `editor.onEdited` hears each accepted edit.
-`editor.viewport.tools.register` adds a viewport tool: once activated with
+resolves with the game's reply (a `spawn` gives the entity it made). `editor.batched(commands)`
+sends several entity edits (spawn, despawn, components, fields, tiles) as one, and
+`editor.onEdited` hears each accepted edit.
+
+`editor.viewport.tools.register` adds a viewport tool. Once activated with
 `editor.viewport.setTool(id)`, it receives the pointer events over the viewport in world
 units (`pointerCancel` when a press ends without its release), maps points onto a layer of
-any parallax both ways (`screenToWorld`, `worldToScreen`), and draws its own overlay, until Escape or until its `available(editor)` answers false.
-Panning and zooming stay the viewport's whatever the tool:
+any parallax both ways (`screenToWorld`, `worldToScreen`), and draws its own overlay, until
+Escape or until its `available(editor)` answers false. Panning and zooming stay the
+viewport's whatever the tool:
 
 ```ts
 editor.viewport.tools.register({
