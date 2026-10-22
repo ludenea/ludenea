@@ -53,16 +53,16 @@ hash, those of the golden trace and replays included.
   `Renderer::regions` gives the regions of the atlas set last. `Renderer::set_atlas` refuses
   an atlas with a region on a page it does not have (`RenderError::InvalidAtlas`).
 - `ludenea_runtime::native::play` repacks the textures that change on disk while a game
-  plays, at most once per frame: `PlayOptions::watch` names the scene and project folder whose
-  textures `native::watch::TextureWatch` watches (debounced, `.png` and `.png.meta` files
-  only). A texture whose new version cannot be read, whose meta is invalid, or that the
-  atlas refuses (a PNG that cannot be decoded, cut into frames, or fitted on a page) keeps
-  its previous version, with a warning
-  (`<path>: <cause>, keeping the previous version`); a texture removed from the project is
-  dropped. The simulation, its state hashes and the replay never see a reload.
-  `RuntimeError::Watch` reports a watcher that cannot start, which `play` writes as a
-  warning before playing without reloads. The command line tool's `play` watches unless
-  `--no-watch` is given.
+  plays, at most once per frame: `PlayOptions::watch` names the scene and project folder
+  whose textures `native::watch::TextureWatch` watches (debounced, `.png` and `.png.meta`
+  files only), reading them again on its own thread so a frame never waits for the files. A
+  texture whose new version cannot be read, whose meta is invalid, or that the atlas refuses
+  (a PNG that cannot be decoded, cut into frames, or fitted on a page) keeps its previous
+  version, with a warning (`<path>: <cause>, keeping the previous version`); a texture
+  removed from the project is dropped. The simulation, its state hashes and the replay never
+  see a reload. `RuntimeError::Watch` reports a watcher that cannot start, which `play`
+  writes as a warning before playing without reloads. The command line tool's `play` watches
+  unless `--no-watch` is given.
 - Breaking: `ludenea_app::project::project_textures` reports a `.png` that cannot be read,
   or whose meta cannot be read or is invalid, as a `TextureFailure { path, cause }` (shown
   as `<path>: <cause>`, such as `<path>: cannot read its meta: <reason>`) in the new

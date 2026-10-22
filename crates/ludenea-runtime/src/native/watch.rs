@@ -1,8 +1,9 @@
 //! Watches a project's textures while a game plays, so the window repacks the ones that
 //! change. Only what is drawn changes: the simulation and its hash never see a texture.
 
-use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, channel};
+use std::path::Path;
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::thread;
 use std::time::Duration;
 
 use ludenea_app::meta::is_png;
@@ -16,17 +17,17 @@ use crate::RuntimeError;
 /// in several steps, and an image editor may write the PNG and its meta one after the other.
 const DEBOUNCE: Duration = Duration::from_millis(100);
 
+/// A reading of the textures, or why there is none.
+type Reading = Result<ProjectTextures, String>;
+
 /// Reports, debounced, that a `.png` or a `.png.meta` changed under the folders
-/// `project_textures` scans, with the textures read again. A second watcher beside the
-/// project's own (`ludenea-project`), which the runtime does not depend on.
+/// `project_textures` scans, with the textures read again on the watcher's own thread, so
+/// a frame never waits for the files. A second watcher beside the project's own
+/// (`ludenea-project`), which the runtime does not depend on.
 pub struct TextureWatch {
-    scene: PathBuf,
-    project: Option<PathBuf>,
-    events: Receiver<DebounceEventResult>,
-    /// Watches while it lives.
+    readings: Receiver<Reading>,
+    /// Watches while it lives; dropping it ends the reading thread.
     _debouncer: Debouncer<RecommendedWatcher, RecommendedCache>,
-    /// A texture file changed since the textures were last read.
-    changed: bool,
 }
 
 impl TextureWatch {
@@ -47,26 +48,46 @@ impl TextureWatch {
                     RuntimeError::Watch(format!("cannot watch {}: {error}", folder.display()))
                 })?;
         }
+        let (readings_sender, readings) = channel();
+        let (scene, project) = (scene.to_path_buf(), project.map(Path::to_path_buf));
+        thread::Builder::new()
+            .name("texture watch".to_string())
+            .spawn(move || read_on_change(&events, &readings_sender, &scene, project.as_deref()))
+            .map_err(|error| {
+                RuntimeError::Watch(format!("cannot start the texture reading thread: {error}"))
+            })?;
         Ok(TextureWatch {
-            scene: scene.to_path_buf(),
-            project: project.map(Path::to_path_buf),
-            events,
+            readings,
             _debouncer: debouncer,
-            changed: false,
         })
     }
 
-    /// Without waiting: the textures read again (`project_textures`'s result) when a `.png`
-    /// or a `.png.meta` changed since the last call and the files have settled for the
-    /// debounce; or the watcher's errors, the change then reported at the next call. `None`
-    /// when nothing changed. Every change gives a reading, the same files written again
-    /// too: the display, which knows what it applied, skips a reading it holds.
-    pub fn poll(&mut self) -> Option<Result<ProjectTextures, String>> {
+    /// Without waiting: the next reading of the textures (`project_textures`'s result),
+    /// made once a `.png` or a `.png.meta` changed and the files settled for the debounce,
+    /// or the watcher's errors; `None` when there is none. Every change gives a reading, the
+    /// same files written again too: the display, which knows what it applied, skips a
+    /// reading it holds.
+    pub fn poll(&mut self) -> Option<Reading> {
+        self.readings.try_recv().ok()
+    }
+}
+
+/// Until the debouncer or the watch is dropped: for each batch of debounced events (with
+/// those already waiting), sends the watcher's errors, then a reading of the textures when
+/// a texture file changed.
+fn read_on_change(
+    events: &Receiver<DebounceEventResult>,
+    readings: &Sender<Reading>,
+    scene: &Path,
+    project: Option<&Path>,
+) {
+    while let Ok(batch) = events.recv() {
+        let mut changed = false;
         let mut errors = Vec::new();
-        while let Ok(batch) = self.events.try_recv() {
+        for batch in std::iter::once(batch).chain(events.try_iter()) {
             match batch {
                 Ok(events) => {
-                    self.changed |= events.iter().any(|event| {
+                    changed |= events.iter().any(|event| {
                         // Reading a file is an access event on some platforms: the reads
                         // below must not report a change.
                         !matches!(event.kind, EventKind::Access(_))
@@ -77,15 +98,14 @@ impl TextureWatch {
             }
         }
         if !errors.is_empty() {
-            return Some(Err(format!(
-                "the texture watcher failed: {}",
-                errors.join("; ")
-            )));
+            let error = format!("the texture watcher failed: {}", errors.join("; "));
+            if readings.send(Err(error)).is_err() {
+                return;
+            }
         }
-        if !std::mem::take(&mut self.changed) {
-            return None;
+        if changed && readings.send(project_textures(scene, project)).is_err() {
+            return;
         }
-        Some(project_textures(&self.scene, self.project.as_deref()))
     }
 }
 
@@ -98,7 +118,7 @@ fn is_texture_file(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::thread;
+    use std::path::PathBuf;
     use std::time::Duration;
 
     use super::*;
@@ -198,6 +218,24 @@ mod tests {
         fs::write(folder.join("hero.png"), b"png bytes").unwrap();
         let again = next(&mut watch).expect("the rewrite is reported");
         assert_eq!(again, first);
+    }
+
+    #[test]
+    fn the_textures_are_read_once_settled_not_when_polled() {
+        let (_guard, folder, mut watch) = watched();
+        let (png, meta) = (folder.join("hero.png"), folder.join("hero.png.meta"));
+        fs::write(&png, b"png bytes").unwrap();
+        fs::write(
+            &meta,
+            "Meta(version: 2, id: \"00000000000000000000000000000001\", kind: Texture((pixels_per_unit: 8, grid: None, pivot: None, filter: Linear)))",
+        )
+        .unwrap();
+        // Not polled meanwhile: a frame never waits for the files to be read.
+        thread::sleep(Duration::from_secs(2));
+        fs::remove_file(&png).unwrap();
+        fs::remove_file(&meta).unwrap();
+        let first = next(&mut watch).expect("the change is reported");
+        assert_eq!(first.unwrap().textures.len(), 1, "read before the removal");
     }
 
     #[test]
