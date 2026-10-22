@@ -600,7 +600,8 @@ fn unacknowledged_inputs_fill_a_packet_oldest_first() {
                 .add_local_input(player, vec![u8::try_from(tick).unwrap(); MAX_INPUT_BYTES])
                 .unwrap();
         }
-        acked = (tick + delay).saturating_sub(lag);
+        // The horizon of the session at `tick`: its highest local input.
+        acked = (tick + delay - 1).saturating_sub(lag);
         let packet = Packet {
             match_id: 1,
             messages: vec![

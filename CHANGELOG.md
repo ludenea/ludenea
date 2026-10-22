@@ -106,8 +106,8 @@ hash, those of the golden trace and replays included.
   is one, and the `ViolationRule`: `NotOwner` (an input of a player the sender does not own,
   or an acknowledgment of a player the receiver does not own), `ConflictingInput` (the
   confirmed input is kept), `InvalidInput` (refused by the input check), `BeyondHorizon` (an
-  input past `h + 1 + rollback_window + input_delay`, where the horizon `h` is the current
-  tick plus `input_delay`, or a tick range past the last tick a `u64` numbers),
+  input past `h + 1 + rollback_window + input_delay`, where the horizon `h` is the highest
+  tick a local player has an input for, or a tick range past the last tick a `u64` numbers),
   `AckNeverSent` (an acknowledgment of an input or hash report never sent) and `AckLagging`
   (an acknowledgment trailing `h` by more than `2 * (rollback_window + input_delay) + 1`
   ticks, or none for that long). These bound the remote and the unacknowledged local inputs

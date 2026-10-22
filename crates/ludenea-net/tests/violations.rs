@@ -67,11 +67,17 @@ fn rules() -> (u64, u64) {
     )
 }
 
-/// The highest remote input tick a session at `tick` accepts: its horizon `tick +
-/// input_delay`, plus one, plus `rollback_window + input_delay`.
+/// The local horizon of a session at `tick`: the highest tick it has a local input for.
+fn horizon(tick: u64) -> u64 {
+    let (delay, _) = rules();
+    tick + delay - 1
+}
+
+/// The highest remote input tick a session at `tick` accepts: its horizon, plus one, plus
+/// `rollback_window + input_delay`.
 fn horizon_bound(tick: u64) -> u64 {
     let (delay, window) = rules();
-    tick + delay + 1 + window + delay
+    horizon(tick) + 1 + window + delay
 }
 
 /// How far the newest acknowledgment of a peer may trail the local horizon.
@@ -276,10 +282,9 @@ fn ack_never_sent_is_a_violation() {
 /// Peer 0 running 30 ticks while peer 1 sends its inputs, each with an acknowledgment that
 /// trails peer 0's horizon by `lag` ticks, or with none.
 fn lagging_peer(lag: Option<u64>) -> Session {
-    let (delay, _) = rules();
     let mut session = peer_zero();
     for tick in 0..30 {
-        let horizon = tick + delay;
+        let horizon = horizon(tick);
         let mut messages = Vec::new();
         if let Some(lag) = lag {
             messages.push(ack(0, horizon.saturating_sub(lag)));

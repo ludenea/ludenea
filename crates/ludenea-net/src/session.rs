@@ -750,27 +750,27 @@ impl Session {
         }
     }
 
-    /// The local horizon `h`: the current tick plus `input_delay`, one past the highest tick
-    /// a local player has an input for, as the next advance confirms that tick.
-    fn horizon(&self) -> u64 {
+    /// The tick after the local horizon `h`, the highest tick a local player has an input
+    /// for: an advance of tick `t` confirms the local inputs of `t + input_delay`, so the
+    /// current tick plus `input_delay` is `h + 1`. Kept as `h + 1` because with no input
+    /// delay a session at tick 0 holds no local input yet and `h` would be `-1`.
+    fn after_horizon(&self) -> u64 {
         let delay = u64::from(self.settings.identity.rules.input_delay);
         self.tick.saturating_add(delay)
     }
 
-    /// The highest tick an honest peer can send an input for.
+    /// The highest tick an honest peer can send an input for: `h + 1 + rollback_window +
+    /// input_delay`. Above it is [`ViolationRule::BeyondHorizon`].
     ///
-    /// A peer stalls `rollback_window` ticks past its confirmed tick, and its inputs apply
-    /// `input_delay` ticks after it: it holds no input beyond its confirmed tick plus
-    /// `rollback_window + input_delay`. Its confirmed tick needs the inputs of the local
-    /// players, which go no further than `h`, so it is at most `h + 1`. An input for a tick
-    /// above `h + 1 + rollback_window + input_delay` is [`ViolationRule::BeyondHorizon`].
-    /// Counted exactly, the highest input an honest peer sends is two ticks lower: `h` is one
-    /// past the highest local input, and so is the peer's own horizon. The slack keeps the
-    /// bound clear of an off-by-one on an honest peer.
+    /// A peer advances only while its tick is less than `rollback_window` past its confirmed
+    /// tick, so its tick is at most its confirmed tick plus `rollback_window`, and its highest
+    /// input, at its tick plus `input_delay` minus one, at most its confirmed tick plus
+    /// `rollback_window + input_delay - 1`. Its confirmed tick needs the inputs of the local
+    /// players, which go no further than `h`, so it is at most `h + 1`. An honest peer's inputs
+    /// thus reach `h + rollback_window + input_delay` at most, one tick below the limit.
     fn input_limit(&self) -> u64 {
         let rules = self.settings.identity.rules;
-        self.horizon()
-            .saturating_add(1)
+        self.after_horizon()
             .saturating_add(u64::from(rules.rollback_window))
             .saturating_add(u64::from(rules.input_delay))
     }
@@ -887,23 +887,27 @@ impl Session {
 
     /// Checks that the newest acknowledgment of each local player from the remote at `index`
     /// trails the local horizon `h` by at most `2 * (rollback_window + input_delay) + 1` ticks.
+    /// Beyond it is [`ViolationRule::AckLagging`].
     ///
-    /// Each packet carries an `Ack` with the inputs, written at the same time. The newest
-    /// inputs this peer received from that remote apply at most at its tick plus
-    /// `input_delay`, so this peer's confirmed tick is at most that much plus one, its tick at
-    /// most `rollback_window` more, and `h` at most `input_delay` more. That remote's tick is
-    /// at most `rollback_window` past its confirmed tick, which is at most the tick it
-    /// acknowledges. Beyond the bound it is [`ViolationRule::AckLagging`], checked after every
-    /// `Inputs` and `Ack`, so the local inputs kept for a peer that never acknowledges stay
-    /// bounded too: a peer that sends nothing stalls this one, as it owns a player.
+    /// Each packet carries an `Ack` with the inputs, both written at the same time, when that
+    /// remote is at tick `r` and acknowledges `a`. Its highest input is `r + input_delay - 1`,
+    /// so this peer's confirmed tick is at most `r + input_delay`, its tick at most
+    /// `rollback_window` more, and `h` at most `input_delay - 1` more:
+    /// `h <= r + rollback_window + 2 * input_delay - 1`. That remote's tick is at most
+    /// `rollback_window` past its confirmed tick, which is at most `a`. So an honest `Ack`
+    /// trails `h` by at most `2 * (rollback_window + input_delay) - 1`, two ticks below the
+    /// bound. Checked after every `Inputs` and `Ack`, so the local inputs kept for a peer that
+    /// never acknowledges stay bounded too: a peer that sends nothing stalls this one, as it
+    /// owns a player.
     fn check_lag(&self, index: usize) -> Result<(), Refusal> {
         let rules = self.settings.identity.rules;
         let bound = 2 * (u64::from(rules.rollback_window) + u64::from(rules.input_delay)) + 1;
-        let horizon = self.horizon();
+        // `h - acked > bound`, in terms of `h + 1`, which never underflows.
+        let after_horizon = self.after_horizon();
         let remote = &self.remotes[index];
         match self
             .local_players()
-            .find(|player| horizon.saturating_sub(remote.acked[*player]) > bound)
+            .find(|player| after_horizon.saturating_sub(remote.acked[*player]) > bound + 1)
         {
             Some(player) => Err(Refusal::Violation {
                 player: u8::try_from(player).ok(),
