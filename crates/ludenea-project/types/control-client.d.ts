@@ -1617,7 +1617,7 @@ interface MessageTransport {
     send(message: string): void;
     onMessage(listener: (message: string) => void): () => void;
     /** The frames posted as bytes, in order with the text messages; only the transports that
-     * carry bytes have it. */
+     * carry bytes have it (the text transports carry them in base64, in their `render_frames` events). */
     onFrames?(listener: (frames: PushedFrames) => void): () => void;
     onClose(listener: (reason: string) => void): () => void;
     close(): void;
@@ -1678,17 +1678,14 @@ function handshake<M extends {
 }, speaker: ProtocolPeer, accept: (welcome: Extract<M, {
     type: "welcome";
 }>) => T): Promise<T>;
-/** Render frames pushed during play: postcard bytes over a worker, JSON frames over the
- * other transports. */
+/** Render frames pushed during play, each a `RenderFrame` in the protocol's postcard encoding:
+ * the bytes a worker transfers, or decoded from the base64 text transports carry. */
 type RenderFramesEvent = {
     type: "render_frames";
     progress: number;
     frames: Uint8Array[];
-} | Extract<Event, {
-    type: "render_frames";
-}>;
-/** What `ControlClient.on` delivers: the protocol's events, with the frames as their
- * transport carries them. */
+};
+/** What `ControlClient.on` delivers: the protocol's events, with the frames as bytes. */
 type ClientEvent = Exclude<Event, {
     type: "render_frames";
 }> | RenderFramesEvent;
