@@ -44,7 +44,12 @@ fn run() -> Result<(), String> {
     let bytes =
         std::fs::read(path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
     let replay = Replay::decode(&bytes).map_err(|error| error.to_string())?;
-    let total = replay.hashes.len() as u64 - 1;
+    let total = (replay.hashes.len() as u64).saturating_sub(1);
+    if total <= WINDOW {
+        return Err(format!(
+            "the replay records {total} ticks: a rollback frame needs more than {WINDOW}"
+        ));
+    }
     let mut simulation = arena::app()
         .build()
         .map_err(|error| format!("the arena app does not build: {error}"))?;
@@ -57,7 +62,12 @@ fn run() -> Result<(), String> {
     let play = |simulation: &mut _, tick| {
         play_tick(simulation, &inputs, &edits, tick).map_err(|error| error.to_string())
     };
+    // Every slot holds a state before the first measure, so the timed frames reuse
+    // allocations as a running session does.
     let mut ring: Vec<SavedState> = (0..RING).map(|_| SavedState::default()).collect();
+    for saved in &mut ring {
+        simulation.save_state(saved);
+    }
     let mut frames = Vec::new();
     for tick in 0..total {
         simulation.save_state(&mut ring[slot(tick)]);
@@ -74,7 +84,16 @@ fn run() -> Result<(), String> {
             play(&mut simulation, replayed)?;
             simulation.save_state(&mut ring[slot(replayed + 1)]);
         }
-        frames.push(start.elapsed().as_micros());
+        let elapsed = start.elapsed().as_micros();
+        // A wrong load must not produce a timing: the frame ends on the golden hash.
+        let golden = replay.hashes[(tick + 1) as usize];
+        if simulation.hash() != golden {
+            return Err(format!(
+                "tick {} differs from the golden replay after a rollback frame",
+                tick + 1
+            ));
+        }
+        frames.push(elapsed);
     }
 
     frames.sort_unstable();
