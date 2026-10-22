@@ -139,7 +139,10 @@ export interface ViewportTool {
   cursor?: string;
   /**
    * Whether the tool can be used now; asked again on every selection, timeline, and game
-   * change, and the tool is deactivated once it answers false.
+   * change, and the tool is deactivated once it answers false. The timeline changes on every
+   * tick while the game plays, so this runs that often: keep it cheap and synchronous, reading
+   * what the editor already holds (`editor.control`, the selection and timeline stores)
+   * rather than asking the game.
    */
   available(editor: Editor): boolean;
   pointerDown?(event: ToolPointer, context: ToolContext): void;
