@@ -1,17 +1,17 @@
 use ludenea_ecs::{Component, Entity, EntityFilter, FilterError, World};
 use serde::{Deserialize, Serialize};
 
-#[derive(Component, Serialize, Deserialize)]
+#[derive(Clone, Component, Serialize, Deserialize)]
 struct Position(i32);
 
-#[derive(Component, Serialize, Deserialize)]
+#[derive(Clone, Component, Serialize, Deserialize)]
 struct Frozen;
 
 mod a {
     use ludenea_ecs::Component;
     use serde::{Deserialize, Serialize};
 
-    #[derive(Component, Serialize, Deserialize)]
+    #[derive(Clone, Component, Serialize, Deserialize)]
     pub struct Tag;
 }
 
@@ -19,7 +19,7 @@ mod b {
     use ludenea_ecs::Component;
     use serde::{Deserialize, Serialize};
 
-    #[derive(Component, Serialize, Deserialize)]
+    #[derive(Clone, Component, Serialize, Deserialize)]
     pub struct Tag;
 }
 

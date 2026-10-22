@@ -13,7 +13,22 @@ use crate::Entity;
 ///
 /// Snapshots encode components with postcard, which cannot decode `#[serde(flatten)]` or
 /// `#[serde(skip_serializing_if = "...")]`: component types must not use them.
-pub trait Component: Schema + Serialize + DeserializeOwned + Send + 'static {
+///
+/// Saved states clone component storages instead of encoding them, so a component must be
+/// `Clone`. A hand-written `Clone` must give the same value a postcard round trip gives:
+/// the saved state relies on it.
+///
+/// ```compile_fail,E0277
+/// use ludenea_ecs::Component;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Component, Serialize, Deserialize)]
+/// struct Health(u32);
+///
+/// fn assert_component<T: Component>() {}
+/// assert_component::<Health>();
+/// ```
+pub trait Component: Schema + Serialize + DeserializeOwned + Clone + Send + 'static {
     const NAME: &'static str;
 }
 
@@ -22,7 +37,11 @@ pub trait Component: Schema + Serialize + DeserializeOwned + Send + 'static {
 ///
 /// Snapshots encode resources with postcard, which cannot decode `#[serde(flatten)]` or
 /// `#[serde(skip_serializing_if = "...")]`: resource types must not use them.
-pub trait Resource: Schema + Serialize + DeserializeOwned + Send + 'static {
+///
+/// Saved states clone resources instead of encoding them, so a resource must be `Clone`. A
+/// hand-written `Clone` must give the same value a postcard round trip gives: the saved
+/// state relies on it.
+pub trait Resource: Schema + Serialize + DeserializeOwned + Clone + Send + 'static {
     const NAME: &'static str;
 }
 

@@ -3,13 +3,13 @@ use ludenea_ecs::{
 };
 use serde::{Deserialize, Serialize};
 
-#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Component, Serialize, Deserialize, Debug, PartialEq)]
 struct Health(u32);
 
-#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Component, Serialize, Deserialize, Debug, PartialEq)]
 struct Armor(u32);
 
-#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Component, Serialize, Deserialize, Debug, PartialEq)]
 struct Dead;
 
 #[derive(Query)]

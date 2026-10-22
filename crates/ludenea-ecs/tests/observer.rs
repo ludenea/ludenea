@@ -4,10 +4,10 @@ use ludenea_ecs::{
 };
 use serde::{Deserialize, Serialize};
 
-#[derive(Component, Serialize, Deserialize)]
+#[derive(Clone, Component, Serialize, Deserialize)]
 struct Marker;
 
-#[derive(Resource, Serialize, Deserialize, Default)]
+#[derive(Clone, Resource, Serialize, Deserialize, Default)]
 struct Counter(u32);
 
 #[derive(Event, Serialize)]
@@ -123,7 +123,7 @@ fn observer_sees_this_tick_events_before_they_clear() {
     );
 }
 
-#[derive(Resource, Serialize, Deserialize, Default)]
+#[derive(Clone, Resource, Serialize, Deserialize, Default)]
 struct Target(Option<ludenea_ecs::Entity>);
 
 fn kill_twice(mut commands: Commands, target: Res<Target>) {

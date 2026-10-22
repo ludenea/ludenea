@@ -4,22 +4,22 @@ use ludenea_ecs::{
 };
 use serde::{Deserialize, Serialize};
 
-#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Component, Serialize, Deserialize, Debug, PartialEq)]
 struct Value(u32);
 
-#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Component, Serialize, Deserialize, Debug, PartialEq)]
 struct Health(u32);
 
-#[derive(Resource, Serialize, Deserialize, Default)]
+#[derive(Clone, Resource, Serialize, Deserialize, Default)]
 struct Seen {
     during: usize,
     values: Vec<u32>,
 }
 
-#[derive(Resource, Serialize, Deserialize)]
+#[derive(Clone, Resource, Serialize, Deserialize)]
 struct Counter(u32);
 
-#[derive(Resource, Serialize, Deserialize)]
+#[derive(Clone, Resource, Serialize, Deserialize)]
 struct Target(Entity);
 
 #[derive(Event, Serialize)]

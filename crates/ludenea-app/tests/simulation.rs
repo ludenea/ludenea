@@ -11,10 +11,10 @@ struct Pad {
     steer: i8,
 }
 
-#[derive(Component, Serialize, Deserialize)]
+#[derive(Clone, Component, Serialize, Deserialize)]
 struct Score(u32);
 
-#[derive(Resource, Serialize, Deserialize, Default)]
+#[derive(Clone, Resource, Serialize, Deserialize, Default)]
 struct Log(Vec<String>);
 
 struct First;
@@ -208,7 +208,7 @@ fn step_encoded_decodes_inputs_and_rejects_trailing_bytes() {
 
 #[test]
 fn duplicate_names_fail_at_build() {
-    #[derive(Resource, Serialize, Deserialize)]
+    #[derive(Clone, Resource, Serialize, Deserialize)]
     #[resource(name = "ludenea::Time")]
     struct FakeTime;
 

@@ -1251,7 +1251,7 @@ fn a_prefab_document_refuses_an_instance_of_itself() {
 }
 
 /// A component naming another entity.
-#[derive(Component, Serialize, Deserialize)]
+#[derive(Clone, Component, Serialize, Deserialize)]
 struct Link {
     to: Entity,
 }
@@ -1852,7 +1852,7 @@ fn load_replay_refuses_an_edit_past_the_recorded_ticks() {
     assert_eq!(timeline(&mut loaded).head, 0);
 }
 
-#[derive(Component, Serialize, Deserialize)]
+#[derive(Clone, Component, Serialize, Deserialize)]
 struct Score(u32);
 
 fn grow(mut scores: Query<&mut Score>, mut rng: ResMut<Rng>) {

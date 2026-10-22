@@ -982,7 +982,7 @@ fn a_group_introduces_the_assets_of_every_edit() {
 }
 
 /// Asserts that a count is never 13, as a game in development may, instead of refusing it.
-#[derive(Component, Serialize, Deserialize)]
+#[derive(Clone, Component, Serialize, Deserialize)]
 #[serde(try_from = "u32")]
 struct Unlucky(u32);
 

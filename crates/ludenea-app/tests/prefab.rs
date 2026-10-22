@@ -11,30 +11,30 @@ use serde::{Deserialize, Serialize};
 #[derive(Asset, Serialize, Deserialize, Debug, PartialEq)]
 struct Stats(u32);
 
-#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Component, Serialize, Deserialize, Debug, PartialEq)]
 struct Tag(u32);
 
-#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Component, Serialize, Deserialize, Debug, PartialEq)]
 struct Target(Entity);
 
-#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Component, Serialize, Deserialize, Debug, PartialEq)]
 struct Pos {
     x: f32,
     y: f32,
 }
 
-#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Component, Serialize, Deserialize, Debug, PartialEq)]
 enum Shape {
     Circle { radius: f32 },
     Square(f32),
 }
 
-#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Component, Serialize, Deserialize, Debug, PartialEq)]
 struct Spawner {
     bullet: Handle<Prefab>,
 }
 
-#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Component, Serialize, Deserialize, Debug, PartialEq)]
 struct Turret {
     stats: Handle<Stats>,
 }

@@ -8,15 +8,15 @@ use ludenea_app::{App, AssetTexts, NamedAssetTexts, Resolved, SceneError, Simula
 use ludenea_ecs::{AssetId, Component, Entity};
 use serde::{Deserialize, Serialize};
 
-#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Component, Serialize, Deserialize, Debug, PartialEq)]
 struct Tag(u32);
 
-#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Component, Serialize, Deserialize, Debug, PartialEq)]
 struct Link {
     to: Entity,
 }
 
-#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Component, Serialize, Deserialize, Debug, PartialEq)]
 struct Pos {
     x: f32,
     y: f32,

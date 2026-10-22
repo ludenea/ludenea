@@ -10,7 +10,7 @@ use ludenea_control::{
 use ludenea_ecs::{Asset, Component, Handle, Query, Res, ResMut};
 use serde::{Deserialize, Serialize};
 
-#[derive(Component, Serialize, Deserialize)]
+#[derive(Clone, Component, Serialize, Deserialize)]
 struct Counter(u32);
 
 fn count(mut counters: Query<&mut Counter>, mut rng: ResMut<Rng>) {
@@ -30,7 +30,7 @@ struct Tuning {
     speed: u32,
 }
 
-#[derive(Component, Serialize, Deserialize)]
+#[derive(Clone, Component, Serialize, Deserialize)]
 struct Tuned {
     tuning: Handle<Tuning>,
 }

@@ -17,18 +17,18 @@ struct Stats {
 #[derive(Asset, Serialize, Deserialize, Debug, PartialEq)]
 struct Sound(u8);
 
-#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Component, Serialize, Deserialize, Debug, PartialEq)]
 struct Turret {
     stats: Handle<Stats>,
 }
 
-#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Component, Serialize, Deserialize, Debug, PartialEq)]
 struct Target(Entity);
 
-#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Component, Serialize, Deserialize, Debug, PartialEq)]
 struct Tag(u32);
 
-#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Component, Serialize, Deserialize, Debug, PartialEq)]
 enum Slot {
     Armed(Handle<Stats>),
     Label(String),
@@ -556,11 +556,11 @@ fn handles_are_found_in_the_enum_variant_written_only() {
 
 #[test]
 fn a_resource_and_a_component_may_share_a_stable_name() {
-    #[derive(Resource, Serialize, Deserialize)]
+    #[derive(Clone, Resource, Serialize, Deserialize)]
     #[resource(name = "test::Same")]
     struct Pair(Option<Entity>, Option<Entity>);
 
-    #[derive(Component, Serialize, Deserialize)]
+    #[derive(Clone, Component, Serialize, Deserialize)]
     #[component(name = "test::Same")]
     struct One(Entity);
 

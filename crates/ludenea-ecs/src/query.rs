@@ -6,7 +6,7 @@
 //!
 //! ```
 //! use ludenea_ecs::{Component, Entity, Query};
-//! # #[derive(Component, serde::Serialize, serde::Deserialize)]
+//! # #[derive(Clone, Component, serde::Serialize, serde::Deserialize)]
 //! # struct Health(u32);
 //! #[derive(Query)]
 //! struct Status<'w> {
@@ -19,7 +19,7 @@
 //!
 //! ```compile_fail
 //! use ludenea_ecs::{Component, Query};
-//! # #[derive(Component, serde::Serialize, serde::Deserialize)]
+//! # #[derive(Clone, Component, serde::Serialize, serde::Deserialize)]
 //! # struct Health(u32);
 //! #[derive(Query)]
 //! struct Hidden<'w> {
@@ -31,7 +31,7 @@
 //!
 //! ```compile_fail,E0277
 //! use ludenea_ecs::{Component, Entity, Query};
-//! # #[derive(Component, serde::Serialize, serde::Deserialize)]
+//! # #[derive(Clone, Component, serde::Serialize, serde::Deserialize)]
 //! # struct Health(u32);
 //! mod alias {
 //!     pub type Entity = &'static mut super::Health;

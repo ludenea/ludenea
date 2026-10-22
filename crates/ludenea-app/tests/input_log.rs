@@ -2,7 +2,7 @@ use ludenea_app::{App, INPUT_LOG_VERSION, InputLog, Inputs, Sim, SimError, Simul
 use ludenea_ecs::{ResMut, Resource, Runtime};
 use serde::{Deserialize, Serialize};
 
-#[derive(Resource, Serialize, Deserialize, Default)]
+#[derive(Clone, Resource, Serialize, Deserialize, Default)]
 struct Seen(Vec<u8>);
 
 fn record(inputs: Runtime<Inputs<u8>>, mut seen: ResMut<Seen>) {

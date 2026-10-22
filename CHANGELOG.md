@@ -42,6 +42,12 @@ hash, those of the golden trace and replays included.
 
 ### Rust API
 
+- Breaking: `Component` and `Resource` require `Clone`, so a saved state can clone a
+  storage instead of encoding it. The derive macros do not add it: add `Clone` to the
+  `#[derive(...)]` of every component and resource type (the compiler names the missing
+  bound). A hand-written `Clone` must give the same value a postcard round trip gives, as
+  the saved state relies on it. `Asset` keeps its bounds: loaded assets are shared behind
+  `Arc`.
 - `ludenea_render` answers without a GPU what the renderer draws: `atlas::frames_of(png,
   meta)` gives the `TextureFrames` (the image size and each `FrameRect`, row-major, with its
   pivot) a meta cuts a PNG into, the same cut `pack` makes, or a `FramesError` (`Decode`,

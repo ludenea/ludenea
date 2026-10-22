@@ -16,10 +16,10 @@ struct Stats {
 #[derive(Asset, Serialize, Deserialize, Debug, PartialEq)]
 struct NoDefault(u8);
 
-#[derive(Component, Serialize, Deserialize)]
+#[derive(Clone, Component, Serialize, Deserialize)]
 struct Weapon(u32);
 
-#[derive(Resource, Serialize, Deserialize)]
+#[derive(Clone, Resource, Serialize, Deserialize)]
 struct Read(Option<u32>);
 
 const ID: AssetId = AssetId(7);
@@ -351,7 +351,7 @@ fn restore_refuses_unsorted_or_duplicate_asset_identifiers() {
 
 #[test]
 fn handle_field_appears_in_the_component_schema() {
-    #[derive(Component, Serialize, Deserialize)]
+    #[derive(Clone, Component, Serialize, Deserialize)]
     #[component(name = "test::Armed")]
     struct Armed {
         stats: Handle<Stats>,

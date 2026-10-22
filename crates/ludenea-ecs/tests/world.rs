@@ -1,25 +1,25 @@
 use ludenea_ecs::{Component, EcsError, Resource, World};
 use serde::{Deserialize, Serialize};
 
-#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Component, Serialize, Deserialize, Debug, PartialEq)]
 struct Health(u32);
 
-#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Component, Serialize, Deserialize, Debug, PartialEq)]
 #[component(name = "game::Hp")]
 struct Hp(u32);
 
-#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Component, Serialize, Deserialize, Debug, PartialEq)]
 #[component(name = "game::Hp")]
 struct OtherHp(u32);
 
-#[derive(Resource, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Resource, Serialize, Deserialize, Debug, PartialEq)]
 struct Score(u64);
 
-#[derive(Resource, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Resource, Serialize, Deserialize, Debug, PartialEq)]
 #[resource(name = "game::Score")]
 struct NamedScore(u64);
 
-#[derive(Resource, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Resource, Serialize, Deserialize, Debug, PartialEq)]
 #[resource(name = "game::Score")]
 struct OtherNamedScore(u64);
 

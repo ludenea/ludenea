@@ -7,7 +7,7 @@ use ludenea_physics::{
 use serde::{Deserialize, Serialize};
 
 /// Collisions seen per tick, and the tick at which to despawn the entity `victim`.
-#[derive(Resource, Serialize, Deserialize, Default)]
+#[derive(Clone, Resource, Serialize, Deserialize, Default)]
 struct Log {
     seen: Vec<(bool, Entity, Entity)>,
     victim: Option<Entity>,

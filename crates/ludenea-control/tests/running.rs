@@ -730,7 +730,7 @@ static SUPERSTITIOUS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicB
 
 /// Asserts that a luck is never 13 once `SUPERSTITIOUS` is on: a later build of the game
 /// whose type panics on a value an earlier build recorded.
-#[derive(Component, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Component, serde::Serialize, serde::Deserialize)]
 #[serde(try_from = "u32")]
 struct Luck(u32);
 
@@ -838,7 +838,7 @@ impl TryFrom<MoodLevel> for Mood {
 }
 
 /// Holds the `Mood` its scene loads.
-#[derive(Component, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Component, serde::Serialize, serde::Deserialize)]
 struct Moody {
     mood: Handle<Mood>,
 }

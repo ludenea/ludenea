@@ -18,7 +18,7 @@ struct Stats {
     damage: u32,
 }
 
-#[derive(ludenea_ecs::Component, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, ludenea_ecs::Component, serde::Serialize, serde::Deserialize)]
 struct Turret {
     stats: ludenea_ecs::Handle<Stats>,
 }

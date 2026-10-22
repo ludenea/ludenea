@@ -3,7 +3,7 @@ use ludenea_ecs::{
 };
 use serde::{Deserialize, Serialize};
 
-#[derive(Resource, Serialize, Deserialize, Default)]
+#[derive(Clone, Resource, Serialize, Deserialize, Default)]
 struct Log(Vec<String>);
 
 enum Stage {

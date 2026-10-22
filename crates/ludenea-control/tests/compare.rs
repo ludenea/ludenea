@@ -731,7 +731,7 @@ thread_local! {
 }
 
 /// Loads while `BRITTLE_ARMED` is off and panics while it is on, as a `try_from` that asserts.
-#[derive(ludenea_ecs::Component, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, ludenea_ecs::Component, serde::Serialize, serde::Deserialize)]
 #[serde(try_from = "BrittleValue")]
 struct Brittle(u32);
 

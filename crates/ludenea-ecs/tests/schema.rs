@@ -2,18 +2,18 @@ use ludenea_ecs::schema::{Schema, TypeSchema};
 use ludenea_ecs::{AssetId, Component, Entity, Event, Resource, World};
 use serde::{Deserialize, Serialize};
 
-#[derive(Component, Serialize, Deserialize)]
+#[derive(Clone, Component, Serialize, Deserialize)]
 #[component(name = "test::Pose")]
 struct Pose {
     position: f32,
     rotation: f32,
 }
 
-#[derive(Component, Serialize, Deserialize)]
+#[derive(Clone, Component, Serialize, Deserialize)]
 #[component(name = "test::Alpha")]
 struct Alpha(u8);
 
-#[derive(Resource, Serialize, Deserialize)]
+#[derive(Clone, Resource, Serialize, Deserialize)]
 #[resource(name = "test::Score")]
 struct Score(i64);
 
@@ -106,12 +106,12 @@ fn events_sharing_a_stable_name_are_refused() {
 }
 
 /// A dialogue line, whose replies lead to further lines.
-#[derive(ludenea_ecs::schema::Schema, Serialize, Deserialize, Default)]
+#[derive(ludenea_ecs::schema::Schema, Serialize, Deserialize, Default, Clone)]
 struct Line {
     replies: Vec<Reply>,
 }
 
-#[derive(ludenea_ecs::schema::Schema, Serialize, Deserialize, Default)]
+#[derive(ludenea_ecs::schema::Schema, Serialize, Deserialize, Default, Clone)]
 struct Reply {
     next: Vec<Line>,
 }
@@ -139,11 +139,11 @@ fn assert_recursive<T>(result: Result<(), ludenea_ecs::EcsError>) {
 
 #[test]
 fn every_registration_refuses_a_type_holding_a_recursive_type() {
-    #[derive(Component, Serialize, Deserialize)]
+    #[derive(Clone, Component, Serialize, Deserialize)]
     #[component(name = "test::Speaker")]
     struct Speaker(Line);
 
-    #[derive(Resource, Serialize, Deserialize)]
+    #[derive(Clone, Resource, Serialize, Deserialize)]
     #[resource(name = "test::Script")]
     struct Script(Line);
 

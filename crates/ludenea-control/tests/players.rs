@@ -6,7 +6,7 @@ use ludenea_control::*;
 use ludenea_ecs::{Component, Query, Runtime};
 use serde::{Deserialize, Serialize};
 
-#[derive(Component, Serialize, Deserialize)]
+#[derive(Clone, Component, Serialize, Deserialize)]
 struct Score(u32);
 
 fn grow(mut scores: Query<&mut Score>, inputs: Runtime<Inputs<u8>>) {

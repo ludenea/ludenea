@@ -8,31 +8,31 @@ use ludenea_ecs::{
 };
 use serde::{Deserialize, Serialize};
 
-#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Component, Serialize, Deserialize, Debug, PartialEq)]
 struct Tag(u32);
 
-#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Component, Serialize, Deserialize, Debug, PartialEq)]
 struct Target(Entity);
 
-#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Component, Serialize, Deserialize, Debug, PartialEq)]
 struct Pos {
     x: f32,
     y: f32,
 }
 
-#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Component, Serialize, Deserialize, Debug, PartialEq)]
 struct Aim {
     target: Entity,
     angle: f32,
     spread: Vec<f32>,
 }
 
-#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Component, Serialize, Deserialize, Debug, PartialEq)]
 struct Pair(Entity, f32, Entity);
 
 /// Accepts only an entity in the first slot, which a prefab entity pointing at itself is
 /// (position 0) until it spawns into another slot.
-#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Component, Serialize, Deserialize, Debug, PartialEq)]
 #[serde(try_from = "FirstSlotData")]
 struct FirstSlot(Entity);
 
@@ -51,7 +51,7 @@ impl TryFrom<FirstSlotData> for FirstSlot {
     }
 }
 
-#[derive(Component, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Component, Serialize, Deserialize, Debug, PartialEq)]
 struct Spawner {
     bullet: Handle<Prefab>,
     every: u64,

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 /// Set in the child process, which serves the game instead of testing.
 const CHILD: &str = "LUDENEA_HOST_TEST_CHILD";
 
-#[derive(Component, Serialize, Deserialize)]
+#[derive(Clone, Component, Serialize, Deserialize)]
 struct Counter(u32);
 
 /// Prints from the pool's threads, as game code may.

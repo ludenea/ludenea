@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 mod support;
 
-#[derive(Component, Serialize, Deserialize)]
+#[derive(Clone, Component, Serialize, Deserialize)]
 struct Score(u32);
 
 fn grow(mut scores: Query<&mut Score>, mut rng: ResMut<Rng>, inputs: Runtime<Inputs<u8>>) {
@@ -697,7 +697,7 @@ fn failing_step_names_the_tick_and_keeps_earlier_ticks() {
 }
 
 /// Refuses a negative level on load; `drain` writes one, as a faulty game system would.
-#[derive(Component, Serialize, Deserialize)]
+#[derive(Clone, Component, Serialize, Deserialize)]
 #[serde(try_from = "i32")]
 struct Level(i32);
 
@@ -1046,7 +1046,7 @@ fn drain_events_returns_what_commands_queued() {
 
 /// Asserts that health is never negative, as a game in development may, instead of
 /// refusing the value.
-#[derive(Component, Serialize, Deserialize)]
+#[derive(Clone, Component, Serialize, Deserialize)]
 #[serde(try_from = "i32")]
 struct Health(i32);
 
@@ -1159,7 +1159,7 @@ fn a_panic_while_loading_a_scene_brings_the_session_back() {
 }
 
 /// Serializes as its count, except at 7, where a hand-written serializer may panic.
-#[derive(Component, Deserialize)]
+#[derive(Clone, Component, Deserialize)]
 struct Fuse(u32);
 
 impl Serialize for Fuse {
@@ -1227,7 +1227,7 @@ static FRAGILE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::n
 
 /// Loads while `FRAGILE` is off and panics while it is on: game code that loads a value
 /// once, then not again.
-#[derive(Component, Serialize, Deserialize)]
+#[derive(Clone, Component, Serialize, Deserialize)]
 #[serde(try_from = "u32")]
 struct Fragile(u32);
 
@@ -1376,7 +1376,7 @@ fn a_panic_outside_a_tick_while_resimulating_ends_the_resimulation_once() {
 static BOMB_ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Panics once when dropped while `BOMB_ARMED` is on.
-#[derive(Component, Serialize, Deserialize)]
+#[derive(Clone, Component, Serialize, Deserialize)]
 struct Bomb(u32);
 
 impl Drop for Bomb {
@@ -1476,7 +1476,7 @@ fn a_panic_while_hashing_a_resimulated_tick_keeps_no_stale_hash_for_it() {
 }
 
 /// Refuses on load the default value the game itself holds.
-#[derive(ludenea_ecs::Resource, Serialize, Deserialize)]
+#[derive(Clone, ludenea_ecs::Resource, Serialize, Deserialize)]
 #[serde(try_from = "i32")]
 struct Fuel(i32);
 
@@ -1512,7 +1512,7 @@ fn a_game_whose_built_world_does_not_load_back_is_refused() {
 
 /// Written by its build and kept in snapshots, but refused by the scene loader: a game
 /// whose text form does not read back what it writes.
-#[derive(ludenea_ecs::Resource, Serialize)]
+#[derive(Clone, ludenea_ecs::Resource, Serialize)]
 struct Gauge(i32);
 
 impl<'de> Deserialize<'de> for Gauge {
@@ -1552,7 +1552,7 @@ static TOUCHY_FRAGILE: std::sync::atomic::AtomicBool = std::sync::atomic::Atomic
 static TOUCHY_BROKEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Writes itself, except once after `TOUCHY` is armed; loads unless `TOUCHY_FRAGILE` is on.
-#[derive(Component)]
+#[derive(Clone, Component)]
 struct Touchy(u32);
 
 impl Serialize for Touchy {

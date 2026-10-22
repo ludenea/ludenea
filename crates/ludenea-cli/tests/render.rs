@@ -13,7 +13,7 @@ use ludenea_render::RenderPlugin;
 use serde::{Deserialize, Serialize};
 
 /// Moves right by a sixteenth of a unit per unit of input.
-#[derive(Component, Serialize, Deserialize)]
+#[derive(Clone, Component, Serialize, Deserialize)]
 struct Walker;
 
 fn walk(inputs: Runtime<Inputs<u8>>, mut walkers: Query<&mut Pose, With<Walker>>) {
