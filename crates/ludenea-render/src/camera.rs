@@ -59,6 +59,16 @@ pub fn screen_to_world(screen: Vec2, size: Size, camera: CameraView, parallax: f
     )
 }
 
+/// Where a layer of `parallax` shows `point` through `camera`, in pixels from the top-left of
+/// a target of `size` (+y down): the inverse of `screen_to_world`, a side of 0 pixels counting
+/// as 1 as there.
+pub fn world_to_screen(point: Vec2, size: Size, camera: CameraView, parallax: f32) -> Vec2 {
+    let (width, height) = (size.width.max(1) as f32, size.height.max(1) as f32);
+    let visible = fit(camera.view, width / height);
+    let [x, y] = world_to_clip(point, camera, visible, parallax);
+    Vec2::new((x + 1.0) * width / 2.0, (1.0 - y) * height / 2.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

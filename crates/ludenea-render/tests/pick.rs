@@ -12,7 +12,7 @@ use ludenea_draw::frame::{
 use ludenea_ecs::{AssetId, Entity, World};
 use ludenea_math::{Rot, Vec2};
 use ludenea_render::atlas::Region;
-use ludenea_render::camera::{Size, fit, screen_to_world, world_to_clip};
+use ludenea_render::camera::{Size, fit, screen_to_world, world_to_clip, world_to_screen};
 use ludenea_render::pick::{bounds, pick};
 
 /// 64 by 64 pixels showing 4 by 4 world units around the camera: 16 pixels per unit, the
@@ -321,6 +321,41 @@ fn screen_to_world_inverts_world_to_clip() {
     // The middle of the screen is the camera's centre seen through the parallax.
     let middle = screen_to_world(Vec2::new(32.0, 16.0), size, camera.clone(), 0.5);
     assert_eq!(middle, Vec2::new(1.5, -0.5));
+}
+
+#[test]
+fn world_to_screen_inverts_screen_to_world() {
+    let size = Size {
+        width: 64,
+        height: 32,
+    };
+    let camera = CameraView {
+        center: Vec2::new(3.0, -1.0),
+        view: Vec2::new(4.0, 4.0),
+    };
+    for parallax in [0.0, 0.5, 1.0] {
+        for (x, y) in [(0.0, 0.0), (10.0, 20.0), (32.0, 16.0), (64.0, 32.0)] {
+            let world = screen_to_world(Vec2::new(x, y), size, camera.clone(), parallax);
+            let screen = world_to_screen(world, size, camera.clone(), parallax);
+            assert!(
+                (screen.x - x).abs() < 1e-4 && (screen.y - y).abs() < 1e-4,
+                "({x}, {y}) at parallax {parallax}: {screen:?}"
+            );
+        }
+    }
+    // The camera's centre seen through the parallax is the middle of the screen.
+    let middle = world_to_screen(Vec2::new(1.5, -0.5), size, camera.clone(), 0.5);
+    assert_eq!(middle, Vec2::new(32.0, 16.0));
+    // A side of 0 pixels counts as 1, as `screen_to_world` reads it.
+    let empty = Size {
+        width: 0,
+        height: 0,
+    };
+    let corner = screen_to_world(Vec2::new(1.0, 1.0), empty, camera.clone(), 1.0);
+    assert_eq!(
+        world_to_screen(corner, empty, camera, 1.0),
+        Vec2::new(1.0, 1.0)
+    );
 }
 
 #[test]

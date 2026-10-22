@@ -175,6 +175,19 @@ export class WebRenderer implements Shape {
     });
   }
 
+  /** As the real one: the inverse of `screen_to_world`, through the same camera. */
+  world_to_screen(x: number, y: number, parallax: number, camera?: string | null): string {
+    this.calls.push({ method: "world_to_screen", args: [x, y, parallax, camera ?? null] });
+    const { center, view } = camera ? (JSON.parse(camera) as CameraView) : (this.pushed.at(-1)?.camera ?? DEFAULT_CAMERA);
+    const { width, height } = this.css;
+    const aspect = width / height;
+    const visible = view.x < view.y * aspect ? { x: view.y * aspect, y: view.y } : { x: view.x, y: view.x / aspect };
+    return JSON.stringify({
+      x: width / 2 + ((x - center.x * parallax) * width) / visible.x,
+      y: height / 2 - ((y - center.y * parallax) * height) / visible.y,
+    });
+  }
+
   free() {
     this.calls.push({ method: "free", args: [] });
   }

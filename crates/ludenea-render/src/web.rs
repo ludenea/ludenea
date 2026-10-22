@@ -25,7 +25,7 @@ use web_sys::HtmlCanvasElement;
 use web_sys::js_sys::{Error, Function, Uint8Array};
 
 use crate::atlas::{self, TextureError, TextureSource};
-use crate::camera::{DEFAULT_CAMERA, screen_to_world};
+use crate::camera::{DEFAULT_CAMERA, screen_to_world, world_to_screen};
 use crate::gpu::{DrawReport, Overlay, RenderError, Renderer, Size};
 use crate::interpolate::blended;
 use crate::pick;
@@ -137,6 +137,15 @@ fn to_json(value: &impl Serialize) -> Result<String, JsValue> {
 
 #[wasm_bindgen]
 impl WebRenderer {
+    /// The camera `screen_to_world` and `world_to_screen` map through: `camera_json` when
+    /// given, else the one the last `draw` showed (or the default camera before a frame).
+    fn mapping_camera(&self, camera_json: Option<String>) -> Result<CameraView, JsValue> {
+        Ok(camera_from(camera_json)?.unwrap_or_else(|| {
+            self.shown()
+                .map_or(DEFAULT_CAMERA, |frame| frame_camera(&frame))
+        }))
+    }
+
     /// A renderer drawing into `canvas`, at the canvas's current size. A canvas wider or taller
     /// than the device's `max_texture_dimension_2d` is refused. Until the first `resize`,
     /// `pick` and `screen_to_world` read CSS pixels of the canvas's layout size (its pixel size
@@ -413,11 +422,27 @@ impl WebRenderer {
         parallax: f32,
         camera_json: Option<String>,
     ) -> Result<String, JsValue> {
-        let camera = camera_from(camera_json)?.unwrap_or_else(|| {
-            self.shown()
-                .map_or(DEFAULT_CAMERA, |frame| frame_camera(&frame))
-        });
+        let camera = self.mapping_camera(camera_json)?;
         to_json(&screen_to_world(
+            Vec2::new(x, y),
+            self.css_size,
+            camera,
+            parallax,
+        ))
+    }
+
+    /// Where a layer of `parallax` shows the world point `(x, y)`, in CSS pixels from the
+    /// canvas's top-left, as a JSON `Vec2`: the inverse of `screen_to_world`, through the same
+    /// camera (`camera_json` when given, else the one the last `draw` showed).
+    pub fn world_to_screen(
+        &self,
+        x: f32,
+        y: f32,
+        parallax: f32,
+        camera_json: Option<String>,
+    ) -> Result<String, JsValue> {
+        let camera = self.mapping_camera(camera_json)?;
+        to_json(&world_to_screen(
             Vec2::new(x, y),
             self.css_size,
             camera,

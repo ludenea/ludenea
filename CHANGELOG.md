@@ -46,7 +46,7 @@ hash, those of the golden trace and replays included.
   meta)` gives the `TextureFrames` (the image size and each `FrameRect`, row-major, with its
   pivot) a meta cuts a PNG into, the same cut `pack` makes, or a `FramesError` (`Decode`,
   `Grid`) naming the cause; `camera::screen_to_world` is the inverse of `world_to_clip` for a
-  layer; `pick::pick` lists the entities whose drawn sprite quad (a missing texture's 1 by 1
+  layer, and `camera::world_to_screen` its own inverse; `pick::pick` lists the entities whose drawn sprite quad (a missing texture's 1 by 1
   placeholder included) or painted tilemap cell lies under a screen point, topmost first; and
   `pick::bounds` gives the world box of entities drawn on layers of parallax 1.
   `gpu::Size` moves to `camera::Size` (still reachable as `gpu::Size`), and
@@ -80,7 +80,8 @@ hash, those of the golden trace and replays included.
   postcard encoding (`ludenea_control::protocol::encode_frame`), as the session's worker
   sends it. `push_frame` and `push_frame_bytes` return `{ tick, missing, debug }`: the
   frame's tick and debug draw beside what is drawn as a placeholder. `pick(x, y, camera)`,
-  `bounds(entities)` and `screen_to_world(x, y, parallax, camera)` answer for what the last
+  `bounds(entities)`, `screen_to_world(x, y, parallax, camera)` and its inverse
+  `world_to_screen(x, y, parallax, camera)` answer for what the last
   `draw` showed (the frame pushed last, blended at that draw's alpha), in CSS pixels of the
   canvas's layout until the first `resize`; `pick` and `bounds` find nothing from new
   textures to the next push. `panicForTesting` exists only in a build with the `test-hooks`
