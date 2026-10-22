@@ -472,6 +472,24 @@ fn lowest_goodbye_wins_and_nothing_is_confirmed_beyond_it() {
 }
 
 #[test]
+fn tied_goodbyes_name_the_lowest_peer() {
+    // Whatever order the goodbyes of the same last tick arrive in, `Left` names the lowest
+    // peer, so it is the same on every peer.
+    for order in [[2, 1], [1, 2]] {
+        let mut session = handshake(sessions(3)).remove(0);
+        for _ in 0..12 {
+            step(&mut session, 1);
+        }
+        for from in order {
+            deliver(&mut session, from, vec![Message::Goodbye { last_tick: 8 }]);
+        }
+        deliver(&mut session, 1, vec![inputs(1, 0, &[2; 9]), ack(0, 9)]);
+        deliver(&mut session, 2, vec![inputs(2, 0, &[3; 9]), ack(0, 9)]);
+        assert_eq!(session.state(), left(1, 8), "{order:?}");
+    }
+}
+
+#[test]
 fn ended_session_lands_on_the_confirmed_state() {
     // Exactly: peer 0 ran ticks 0 to 4 predicting peer 1's default input; peer 1's inputs of
     // 0 to 6 differ, and the packet breaks a rule. The landing loads tick 0, the latest state

@@ -172,13 +172,13 @@ hash, those of the golden trace and replays included.
   session takes no more local input, runs up to that tick, and every packet carries a
   `Goodbye { last_tick }`. Every peer then confirms no tick past the lowest last tick heard,
   runs no tick past the one after it, and ignores inputs past it; it ends with
-  `EndReason::Left { peer, last_tick }` once every player's inputs through that tick are
-  confirmed and every peer acknowledged its own, so every peer stops at the same tick with
-  the same confirmed inputs; it then sends every peer an `Ack`, and the leaver its
-  `Goodbye`, at most once a tick for `END_LINGER_MICROS`. The leaver ends anyway
-  `disconnect_after_micros` after `leave`. A `Goodbye` below the receiver's last confirmed
-  tick is `ViolationRule::GoodbyeBehind`, one past the furthest input an honest peer can have
-  `ViolationRule::BeyondHorizon`. Whatever the ending, once the session ran, the next
+  `EndReason::Left { peer, last_tick }` (`peer` the lowest one naming that tick) once every
+  player's inputs through that tick are confirmed and every peer acknowledged its own, so
+  every peer stops at the same tick with the same confirmed inputs; it then sends every peer
+  an `Ack`, and the leaver its `Goodbye`, at most once a tick for `END_LINGER_MICROS`. The
+  leaver ends anyway `disconnect_after_micros` after `leave`. A `Goodbye` below the
+  receiver's last confirmed tick is `ViolationRule::GoodbyeBehind`, one past the furthest
+  input an honest peer can have `ViolationRule::BeyondHorizon`. Whatever the ending, once the session ran, the next
   `advance` (or the one that ended it) returns the requests that land the simulation on the
   state the confirmed inputs give at the end tick: a `Load` of the latest tick built only
   from confirmed inputs, then a `Save` and an `Advance` of every confirmed tick from it.

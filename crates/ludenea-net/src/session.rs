@@ -132,7 +132,7 @@ pub enum EndReason {
     /// stopped answering first: the leaver ends anyway `disconnect_after_micros` after
     /// [`Session::leave`], and a remaining peer whose confirmed inputs reach `last_tick` ends
     /// when a peer is silent that long. When several peers leave, the lowest `last_tick` wins,
-    /// and `peer` is the first peer this one heard naming it.
+    /// and `peer` is the lowest peer naming it, the same on every peer that heard them all.
     Left { peer: PeerId, last_tick: u64 },
     /// A game failed while stepping `tick`, as the end notice of the peer it ran on told.
     LocalFailure { tick: u64 },
@@ -417,7 +417,8 @@ struct Remote {
 #[derive(Debug, Clone, Copy)]
 struct Closing {
     last_tick: u64,
-    /// The first peer heard naming `last_tick`.
+    /// The lowest peer heard naming `last_tick`.
+
     peer: PeerId,
 }
 
@@ -2032,12 +2033,12 @@ impl Session {
         Ok(())
     }
 
-    /// Takes `last_tick`, named by `peer`, as the last tick of the match unless a lower or
-    /// equal one is agreed already.
+    /// Takes `last_tick`, named by `peer`, as the last tick of the match unless a lower one is
+    /// agreed already. On a tie the lowest peer is kept, so every peer names the same one.
     fn close(&mut self, last_tick: u64, peer: PeerId) {
         if self
             .closing
-            .is_none_or(|closing| last_tick < closing.last_tick)
+            .is_none_or(|closing| (last_tick, peer) < (closing.last_tick, closing.peer))
         {
             self.closing = Some(Closing { last_tick, peer });
         }
