@@ -772,7 +772,6 @@ fn fuzz_receive_never_panics() {
             SessionState::Ended(EndReason::Lost { .. }) => "Lost".to_string(),
             SessionState::Ended(EndReason::LocalFailure { .. }) => "LocalFailure".to_string(),
             SessionState::Ended(EndReason::Left { .. }) => "Left".to_string(),
-
             state => format!("{state:?}"),
         });
     }

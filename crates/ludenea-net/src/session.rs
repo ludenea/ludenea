@@ -580,7 +580,6 @@ impl Session {
             closing: None,
             leaving: None,
             land_due: false,
-
             now_micros: None,
             events: Vec::new(),
             stats,
@@ -1115,7 +1114,6 @@ impl Session {
                 ));
                 messages.extend(goodbye.clone());
             }
-
             if let Some(reason) = notice {
                 messages.push(Message::End { reason });
             }

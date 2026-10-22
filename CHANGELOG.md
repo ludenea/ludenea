@@ -185,7 +185,6 @@ hash, those of the golden trace and replays included.
   tick from it; no `Release` follows, and the caller may drop the states it keeps. Later
   calls are `SessionError::NotRunning`. Every `Load` is of a tick at most `rollback_window`
   before the current one. `Session::settings()` gives the settings a session was built with.
-
 - `ludenea_render` answers without a GPU what the renderer draws: `atlas::frames_of(png,
   meta)` gives the `TextureFrames` (the image size and each `FrameRect`, row-major, with its
   pivot) a meta cuts a PNG into, the same cut `pack` makes, or a `FramesError` (`Decode`,
