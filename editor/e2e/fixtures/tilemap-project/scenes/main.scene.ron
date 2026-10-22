@@ -1,0 +1,8 @@
+Scene(
+    version: 2,
+    next_id: 1,
+    resources: {},
+    entities: [
+        (id: 0, components: {"ludenea::Pose": (position: (x: 0.0, y: 0.0), rotation: (cos: 1.0, sin: 0.0)), "ludenea::Tilemap": (tileset: "00000000000000000000000000005b01", cell_size: (x: 1.0, y: 1.0), width: 16, height: 9, tiles: [None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None], layer: "world", order: 0)}),
+    ],
+)

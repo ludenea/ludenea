@@ -226,8 +226,8 @@ in the command line tool to the same hashes, tick for tick. The game always runs
 the interface (a Web Worker in the browser, a separate process on the desktop), so the
 interface stays responsive while it simulates.
 Panels: scene tree, inspector, viewport (the game as its renderer draws it, with the physics
-debug drawing on top), timeline, asset browser, entity explorer, physics, and console, all
-reachable from the command palette.
+debug drawing on top), timeline, asset browser, entity explorer, physics, tile palette, and
+console, all reachable from the command palette.
 A project opens with the document last open in it, or else with the `default_scene` of its
 `ludenea.toml`; without one (or with its file missing) nothing opens and the console says
 why. Double-click a scene, prefab, or replay in the asset browser to open another.
@@ -353,6 +353,17 @@ at the project's warning in the console. The preview follows changes on disk. A 
 (`ludenea::SpriteSheet` data asset) shows a player under its fields for each clip: play and
 pause, the frame shown and its index, one frame every `ticks_per_frame` ticks at the game's
 tick rate, looping. A clip reaching past its texture's frames says so and does not play.
+
+### Tilemaps
+
+Select one entity with a `ludenea::Tilemap` (and its `ludenea::Pose`) and the "Tile palette"
+panel shows its tileset's frames; click one to choose the tile to paint. With the game paused,
+"Paint tiles" (`B`) and "Erase tiles" (`E`) turn the viewport's pointer into a brush: a drag
+selects a rectangle of cells, previewed over the viewport and clamped to the grid, and paints
+it on release as one `paint_tiles` edit, which one undo takes back; a right drag erases. The
+cells follow the tilemap's layer and its parallax. A paint at a past tick forks a branch as
+any edit does, and "Save scene" writes the tiles. A refused paint is reported in the Console
+with the game's reason. The tools and the palette are a plugin on the public editor API.
 
 ### Replays
 
