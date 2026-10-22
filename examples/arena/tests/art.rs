@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ludenea::app::meta::{Filter, Meta};
-use ludenea::app::project::project_textures;
+use ludenea::app::project::{ProjectTextures, project_textures};
 use ludenea::render::SpriteSheet;
 use ludenea::render::atlas::{self, TextureSource, frames_of};
 
@@ -24,6 +24,11 @@ fn root() -> PathBuf {
     PathBuf::from(ROOT)
 }
 
+/// The project's textures, found from its scene as the tools find them.
+fn textures() -> ProjectTextures {
+    project_textures(&root().join("assets/arena.scene.ron"), None).unwrap()
+}
+
 fn files_under(folder: &Path, out: &mut Vec<PathBuf>) {
     for entry in fs::read_dir(folder).unwrap_or_else(|e| panic!("{}: {e}", folder.display())) {
         let path = entry.unwrap().path();
@@ -37,7 +42,7 @@ fn files_under(folder: &Path, out: &mut Vec<PathBuf>) {
 
 #[test]
 fn every_texture_packs_without_errors() {
-    let loaded = project_textures(&root().join("assets"), Some(&root())).unwrap();
+    let loaded = textures();
     assert!(loaded.failures.is_empty(), "{:?}", loaded.failures);
     assert_eq!(loaded.textures.len(), 11, "8 animations and 3 town images");
     let sources: Vec<_> = loaded
@@ -56,7 +61,7 @@ fn every_texture_packs_without_errors() {
 
 #[test]
 fn every_clip_fits_its_texture() {
-    let loaded = project_textures(&root().join("assets"), Some(&root())).unwrap();
+    let loaded = textures();
     assert!(loaded.failures.is_empty(), "{:?}", loaded.failures);
     for name in SHEETS {
         let text = fs::read_to_string(root().join(format!("assets/{name}.sheet.ron")))
@@ -187,7 +192,7 @@ fn idle_extent(path: &str, png: &[u8], frame: u32) -> (u32, u32) {
 
 #[test]
 fn metas_give_the_scale_the_pivot_and_the_sampling_the_game_needs() {
-    let loaded = project_textures(&root().join("assets"), Some(&root())).unwrap();
+    let loaded = textures();
     assert!(loaded.failures.is_empty(), "{:?}", loaded.failures);
     for (_, path, png, meta) in &loaded.textures {
         assert_eq!(meta.filter, Filter::Nearest, "{path}");
