@@ -70,6 +70,8 @@ pub struct SpriteItem {
     pub layer: u16,
     /// The draw order within the layer, lowest first.
     pub order: i32,
+    #[serde(with = "compact_asset")]
+    #[cfg_attr(feature = "ts", ts(as = "AssetId"))]
     pub texture: AssetId,
     pub frame: u32,
     pub position: Vec2,
@@ -87,6 +89,8 @@ pub struct TilemapItem {
     pub layer: u16,
     /// The draw order within the layer, lowest first.
     pub order: i32,
+    #[serde(with = "compact_asset")]
+    #[cfg_attr(feature = "ts", ts(as = "AssetId"))]
     pub tileset: AssetId,
     /// The bottom-left corner of the bottom-left cell.
     pub position: Vec2,
@@ -96,6 +100,30 @@ pub struct TilemapItem {
     /// The tileset frame of each cell, `None` for an empty cell, row-major from the
     /// bottom-left cell.
     pub tiles: Vec<Option<u32>>,
+}
+
+/// An asset identifier in a frame: its 16 little-endian bytes in a binary format, against 33
+/// for its text in postcard (a quarter of a sprite's encoding), and its hexadecimal text in a
+/// readable one.
+mod compact_asset {
+    use ludenea_ecs::AssetId;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(id: &AssetId, serializer: S) -> Result<S::Ok, S::Error> {
+        if serializer.is_human_readable() {
+            id.serialize(serializer)
+        } else {
+            id.0.to_le_bytes().serialize(serializer)
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<AssetId, D::Error> {
+        if deserializer.is_human_readable() {
+            AssetId::deserialize(deserializer)
+        } else {
+            <[u8; 16]>::deserialize(deserializer).map(|bytes| AssetId(u128::from_le_bytes(bytes)))
+        }
+    }
 }
 
 impl RenderFrame {
@@ -207,6 +235,34 @@ mod tests {
         let bytes = postcard::to_allocvec(&frame).unwrap();
         let back: RenderFrame = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(back, frame);
+    }
+
+    #[test]
+    fn asset_ids_take_sixteen_bytes_in_postcard_and_stay_hexadecimal_in_json() {
+        let mut frame = frame();
+        let id = AssetId(0x0123_4567_89ab_cdef_fedc_ba98_7654_3210);
+        frame.sprites[0].texture = id;
+        frame.tilemaps[0].tileset = id;
+        let raw = id.0.to_le_bytes();
+        let holds_raw = |bytes: &[u8]| bytes.windows(16).any(|window| window == raw);
+        let sprite = postcard::to_allocvec(&frame.sprites[0]).unwrap();
+        assert!(holds_raw(&sprite), "{sprite:?}");
+        // Its other fields: entity 2, layer, order, frame, flips (one byte each), position and
+        // rotation (four floats), tint (a varint of up to five bytes).
+        assert!(
+            sprite.len() <= 16 + 2 + 5 + 16 + 5,
+            "{} bytes",
+            sprite.len()
+        );
+        let tilemap = postcard::to_allocvec(&frame.tilemaps[0]).unwrap();
+        assert!(holds_raw(&tilemap), "{tilemap:?}");
+
+        let back: RenderFrame =
+            postcard::from_bytes(&postcard::to_allocvec(&frame).unwrap()).unwrap();
+        assert_eq!(back, frame);
+        let json = serde_json::to_value(&frame).unwrap();
+        assert_eq!(json["sprites"][0]["texture"], id.to_string());
+        assert_eq!(json["tilemaps"][0]["tileset"], id.to_string());
     }
 
     #[test]

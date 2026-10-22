@@ -574,6 +574,9 @@ hash, those of the golden trace and replays included.
   and `protocol::encode_frame`, a render frame's postcard encoding.
   A debug draw `Primitive`, and so a `RenderFrame`, now decodes from postcard: the formats
   that are not human readable tag it by variant index, JSON still with its `type` field.
+  In those formats a sprite's `texture` and a tilemap's `tileset` are the identifier's 16
+  little-endian bytes instead of their 33 bytes of text, a quarter of a sprite's postcard
+  encoding; JSON keeps their hexadecimal text.
   New `paint_tiles` (`entity`, `area`, `tile`) sets every cell of `area`, the new `TileArea`
   (`x`, `y`, `width`, `height`, in cells from the bottom-left cell), of the entity's
   `ludenea::Tilemap` to `tile` and replies `done`. `tile` is required: `null` erases, and a
