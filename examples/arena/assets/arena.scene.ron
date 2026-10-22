@@ -1,7 +1,7 @@
 Scene(
     version: 2,
     next_id: 10,
-    resources: {"arena::FighterSheets": (warrior: (idle: "0000000000000000000000000000a101", run: "0000000000000000000000000000a102", jump: "0000000000000000000000000000a103", fall: "0000000000000000000000000000a104"), hero: (idle: "0000000000000000000000000000a105", run: "0000000000000000000000000000a106", jump: "0000000000000000000000000000a107", fall: "0000000000000000000000000000a108"))},
+    resources: {"arena::FighterSheets": (warrior: Some((idle: "0000000000000000000000000000a101", run: "0000000000000000000000000000a102", jump: "0000000000000000000000000000a103", fall: "0000000000000000000000000000a104")), hero: Some((idle: "0000000000000000000000000000a105", run: "0000000000000000000000000000a106", jump: "0000000000000000000000000000a107", fall: "0000000000000000000000000000a108")))},
     entities: [
         (id: 0, components: {"ludenea::Pose": (position: (x: 0.0, y: 0.0), rotation: (cos: 1.0, sin: 0.0)), "ludenea::Camera2d": (view: (x: 24.0, y: 13.5))}),
         (id: 1, components: {"ludenea::Pose": (position: (x: -6.0, y: 0.0), rotation: (cos: 1.0, sin: 0.0)), "arena::SpawnPoint": (player: 0)}),

@@ -103,44 +103,22 @@ pub struct FighterLook {
 }
 
 /// The fighters' sheets: the warrior for player 0, the hero for the others. A scene lists
-/// this resource so that loading it loads the sheets, which no entity of the scene holds.
-#[derive(Resource, Serialize, Deserialize, Clone, Debug, PartialEq)]
+/// this resource so that loading it loads the sheets, which no entity of the scene holds. The
+/// game registers it empty, since the built world, which a control host starts from before
+/// any scene loads, holds no asset; a fighter whose sheets are missing spawns without art.
+#[derive(Resource, Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
 pub struct FighterSheets {
-    pub warrior: FighterLook,
-    pub hero: FighterLook,
-}
-
-impl Default for FighterSheets {
-    /// The sheets committed in `assets/`.
-    fn default() -> Self {
-        // The constants are fixed hexadecimal literals; the tests load them all.
-        let sheet = |id: &str| {
-            Handle::new(asset_id(id).expect("the sheet constants are hexadecimal identifiers"))
-        };
-        FighterSheets {
-            warrior: FighterLook {
-                idle: sheet(WARRIOR_IDLE_SHEET),
-                run: sheet(WARRIOR_RUN_SHEET),
-                jump: sheet(WARRIOR_JUMP_SHEET),
-                fall: sheet(WARRIOR_FALL_SHEET),
-            },
-            hero: FighterLook {
-                idle: sheet(HERO_IDLE_SHEET),
-                run: sheet(HERO_RUN_SHEET),
-                jump: sheet(HERO_JUMP_SHEET),
-                fall: sheet(HERO_FALL_SHEET),
-            },
-        }
-    }
+    pub warrior: Option<FighterLook>,
+    pub hero: Option<FighterLook>,
 }
 
 impl FighterSheets {
-    /// The look of player `player`'s fighter.
-    pub fn look(&self, player: u8) -> &FighterLook {
+    /// The look of player `player`'s fighter, if the scene names it.
+    pub fn look(&self, player: u8) -> Option<&FighterLook> {
         if player == 0 {
-            &self.warrior
+            self.warrior.as_ref()
         } else {
-            &self.hero
+            self.hero.as_ref()
         }
     }
 }

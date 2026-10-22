@@ -8,6 +8,7 @@ use arena::{
 };
 use ludenea::app::RawGamepad;
 use ludenea::app::project::project_assets;
+use ludenea::control::{Command, Document, Host, InProcess, PROTOCOL_VERSION, Transport};
 use ludenea::ecs::AssetId;
 use ludenea::prelude::*;
 
@@ -175,7 +176,11 @@ fn the_scene_loads_every_fighter_sheet() {
         .clone();
     let loaded = world.asset_ids();
     let mut expected = Vec::new();
-    for look in [&sheets.warrior, &sheets.hero] {
+    let looks = [&sheets.warrior, &sheets.hero].map(|look| {
+        look.as_ref()
+            .expect("the scene names both fighters' sheets")
+    });
+    for look in looks {
         for sheet in [&look.idle, &look.run, &look.jump, &look.fall] {
             expected.push(sheet.id);
         }
@@ -186,6 +191,43 @@ fn the_scene_loads_every_fighter_sheet() {
     for id in expected {
         assert!(loaded.contains(&id), "the scene does not load sheet {id}");
     }
+}
+
+/// The editor, `play`, the standalone page and `host --stdio` all start a control host on the
+/// built world before they load a scene: its resources must reference no asset.
+#[test]
+fn a_control_host_starts_on_the_arena_and_loads_its_scene() {
+    let host = Host::new(arena::app).unwrap_or_else(|error| panic!("{error}"));
+    let mut client = InProcess::connect(host, PROTOCOL_VERSION).unwrap();
+    let assets = project_assets(Path::new(SCENE), None).expect("the project's assets read");
+    client
+        .request(Command::LoadScene {
+            scene: std::fs::read_to_string(SCENE).expect("the scene is committed"),
+            assets: assets.texts.into_iter().collect(),
+            document: Document::Scene,
+        })
+        .unwrap_or_else(|error| panic!("{}", error.message));
+}
+
+#[test]
+fn fighters_without_sheets_spawn_without_art() {
+    let mut simulation = arena(1, &[floor(0.0)]);
+    *simulation
+        .world_mut()
+        .resource_mut::<FighterSheets>()
+        .expect("the arena registers FighterSheets") = FighterSheets::default();
+    step(&mut simulation, &[input(-1.0, true)], 3);
+    let world = simulation.world();
+    let entity = world
+        .entities()
+        .find(|&entity| world.get::<Fighter>(entity).is_some())
+        .expect("the fighter spawns without sheets");
+    assert!(world.get::<SpriteAnimation>(entity).is_none());
+    let sprite = world
+        .get::<Sprite>(entity)
+        .expect("the fighter has a sprite");
+    assert_eq!(sprite.layer, "fighters");
+    assert!(sprite.flip_x, "it still turns to face its run");
 }
 
 #[test]

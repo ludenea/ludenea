@@ -52,7 +52,7 @@ pub(crate) fn spawn_fighters(
             center2: Vec2::new(0.0, FIGHTER_HEIGHT - FIGHTER_RADIUS),
             radius: FIGHTER_RADIUS,
         };
-        commands
+        let fighter = commands
             .spawn()
             .insert(Pose {
                 position: pose.position,
@@ -64,18 +64,20 @@ pub(crate) fn spawn_fighters(
                 layer: "fighters".to_string(),
                 ..Sprite::default()
             })
-            .insert(SpriteAnimation {
-                sheet: sheets.look(point.player).idle,
-                clip: "idle".to_string(),
-                started: time.tick,
-                looping: true,
-            })
             .insert(Fighter {
                 player: point.player,
                 velocity: Vec2::ZERO,
                 grounded: false,
                 facing: 1,
             });
+        if let Some(look) = sheets.look(point.player) {
+            fighter.insert(SpriteAnimation {
+                sheet: look.idle,
+                clip: "idle".to_string(),
+                started: time.tick,
+                looping: true,
+            });
+        }
     }
 }
 
@@ -214,14 +216,18 @@ pub(crate) fn move_fighters(
 }
 
 /// Plays `jump` while rising, `fall` while falling, else `run` or `idle`, restarting the
-/// animation only when its clip changes, and flips the sprite to face the last run.
+/// animation only when its clip changes, and flips the sprite to face the last run. A fighter
+/// without sheets (or without an animation) is only flipped.
 pub(crate) fn animate_fighters(
     time: Res<Time>,
     sheets: Res<FighterSheets>,
-    mut fighters: Query<(&Fighter, &mut SpriteAnimation, &mut Sprite)>,
+    mut fighters: Query<(&Fighter, Option<&mut SpriteAnimation>, &mut Sprite)>,
 ) {
     for (fighter, animation, sprite) in fighters.iter_mut() {
-        let look = sheets.look(fighter.player);
+        sprite.flip_x = fighter.facing < 0;
+        let (Some(animation), Some(look)) = (animation, sheets.look(fighter.player)) else {
+            continue;
+        };
         let (clip, sheet, looping) = if !fighter.grounded && fighter.velocity.y > 0.0 {
             ("jump", look.jump, false)
         } else if !fighter.grounded && fighter.velocity.y < 0.0 {
@@ -239,6 +245,5 @@ pub(crate) fn animate_fighters(
                 looping,
             };
         }
-        sprite.flip_x = fighter.facing < 0;
     }
 }
