@@ -1,7 +1,7 @@
 //! The fighters: spawned on the first tick, sensing the level with raycasts after the physics
 //! step, moved by their own velocity, and animated from what they do.
 
-use ludenea::math::{clamp, max};
+use ludenea::math::{clamp, max, min};
 use ludenea::physics::LINEAR_SLOP;
 use ludenea::prelude::*;
 
@@ -78,7 +78,8 @@ pub(crate) fn spawn_fighters(
 
 /// Turns each fighter's input into this tick's move, limited by the level: a downward ray
 /// from the capsule's centre finds the ground (`GROUND_PROBE` past the bottom) and where a
-/// fall lands, a sideways ray how far a run goes before a wall. Each ray starts inside the
+/// fall lands; sideways rays from the centres of its ends and from its middle find how far a
+/// run goes before an obstacle. Each ray starts inside the
 /// fighter's own capsule, which `raycast` therefore ignores. Colliders are one-way upward: a
 /// fighter rises through them and stands only on a surface its feet are on or above.
 pub(crate) fn sense_fighters(
@@ -122,8 +123,15 @@ pub(crate) fn sense_fighters(
         if step != 0.0 {
             let direction = if step > 0.0 { 1.0 } else { -1.0 };
             let reach = FIGHTER_RADIUS + step * direction;
-            if let Some(hit) = raycast(&colliders, centre, Vec2::new(reach * direction, 0.0)) {
-                step = direction * free(hit.fraction * reach - FIGHTER_RADIUS);
+            // At the centres of the capsule's ends and at its middle, so a run stops at a
+            // step or a ledge that one ray would miss.
+            for height in [FIGHTER_RADIUS, HALF_HEIGHT, FIGHTER_HEIGHT - FIGHTER_RADIUS] {
+                let origin = pose.position + Vec2::new(0.0, height);
+                let ray = Vec2::new(reach * direction, 0.0);
+                if let Some(hit) = raycast(&colliders, origin, ray) {
+                    let allowed = free(hit.fraction * reach - FIGHTER_RADIUS);
+                    step = direction * min(step * direction, allowed);
+                }
             }
             fighter.facing = if direction > 0.0 { 1 } else { -1 };
         }

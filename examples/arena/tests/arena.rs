@@ -334,6 +334,40 @@ fn fighter_stops_at_a_wall() {
     assert!((away.position.x - (face - RUN_SPEED)).abs() < EPSILON);
 }
 
+/// Runs player 0 right from its spawn point at x -6 against a box spanning x -3 to -2 and
+/// `bottom` to `top`, on a floor at 0, and checks it stops with its capsule against the box.
+fn run_into_a_box(bottom: f32, top: f32) {
+    let half_height = (top - bottom) / 2.0;
+    let obstacle = (
+        Vec2::new(-2.5, bottom + half_height),
+        Vec2::new(0.5, half_height),
+    );
+    let mut simulation = arena(1, &[floor(0.0), obstacle]);
+    step(&mut simulation, &[ArenaInput::default()], 1);
+    step(&mut simulation, &[input(1.0, false)], 60);
+    let stopped = fighter(&simulation, 0);
+    let face = -3.0 - FIGHTER_RADIUS;
+    assert!(
+        (stopped.position.x - face).abs() < EPSILON,
+        "a box from {bottom} to {top}: stops at {}, not {face}",
+        stopped.position.x
+    );
+    assert!(stopped.position.y.abs() < EPSILON, "stays on the floor");
+}
+
+#[test]
+fn fighter_stops_at_a_low_step() {
+    run_into_a_box(0.0, 0.5);
+    // A one-tile step, whose top is at the capsule's centre.
+    run_into_a_box(0.0, 1.0);
+}
+
+#[test]
+fn fighter_stops_at_a_low_ceiling() {
+    // Above the capsule's centre, below its top.
+    run_into_a_box(1.5, 3.0);
+}
+
 #[test]
 fn camera_frames_both_fighters_and_keeps_its_minimum_view() {
     let mut simulation = arena(2, &[floor(0.0)]);
