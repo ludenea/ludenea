@@ -186,6 +186,9 @@ players), whose scene is heavy; CI records both. The target is that the 99th
 percentile of the frames fits in half of a 120 Hz frame (4,167 microseconds) on the
 reference machine, single-threaded; the worst frame is printed but not judged, because
 on a desktop it mostly measures operating system scheduling noise.
+On a 120 Hz display a whole frame lasts 8,333 microseconds, so half of a 60 Hz frame would
+leave no room for rendering, input and networking; half of a 120 Hz frame leaves the other
+half for them.
 
 ### 4.3 Transports
 
