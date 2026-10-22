@@ -208,12 +208,11 @@ fn check_matching<E, S: ?Sized>(
 #[cfg(test)]
 mod tests {
     use std::any::Any;
+    use std::cell::RefCell;
 
     use serde::{Deserialize, Serialize};
 
     use super::SavedWorld;
-    use std::cell::RefCell;
-
     use crate::world::ComponentStorage;
     use crate::{Asset, AssetId, Component, Resource, World};
 

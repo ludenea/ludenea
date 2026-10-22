@@ -49,18 +49,19 @@ hash, those of the golden trace and replays included.
   the saved state relies on it. `Asset` keeps its bounds: loaded assets are shared behind
   `Arc`.
 - `World::save_into(&mut SavedWorld)` saves the simulation state in memory (the entity
-  allocator, every component storage and resource, and the loaded assets, shared rather
-  than copied), reusing the allocations of the `SavedWorld` it saves into and copying the
-  asset map only when it changed since the last save. `World::load(&SavedWorld)` loads it
-  back as `World::restore` restores a snapshot (queued commands and events dropped, runtime
+  allocator, every component storage and resource, and the loaded assets, shared rather than
+  copied), reusing the allocations of the `SavedWorld` it saves into and copying the asset
+  map only when it changed since the last save. `World::load(&SavedWorld)` loads it back as
+  `World::restore` restores a snapshot (queued commands and events dropped, runtime
   resources kept), all or nothing: it refuses with a `SavedError` (`Empty`,
-  `MissingStorage`, `UnexpectedStorage`, `TypeMismatch`, each naming the stable name of
-  the component, resource, or asset type that differs) before changing anything. `Simulation::save_state(&mut SavedState)` and
-  `Simulation::load_state(&SavedState)` wrap them for a rollback that saves every tick;
-  `load_state` refuses a state never saved into (`StateError::Empty`), one saved by another
-  game build (`StateError::OtherWorld`, naming both schema fingerprints), and a world that
-  does not match (`StateError::World`), leaving the simulation unchanged. A loaded state
-  gives the same snapshot, byte for byte, as the one it was saved from.
+  `MissingStorage`, `UnexpectedStorage`, `TypeMismatch`, each naming the stable name of the
+  component, resource, or asset type that differs) before changing anything.
+  `Simulation::save_state(&mut SavedState)` and `Simulation::load_state(&SavedState)` wrap
+  them for a rollback that saves every tick; `load_state` refuses a state never saved into
+  (`StateError::Empty`), one saved by another game build (`StateError::OtherWorld`, naming
+  both schema fingerprints), and a world that does not match (`StateError::World`), leaving
+  the simulation unchanged. A loaded state gives the same snapshot, byte for byte, as the
+  one it was saved from.
 - `ludenea_render` answers without a GPU what the renderer draws: `atlas::frames_of(png,
   meta)` gives the `TextureFrames` (the image size and each `FrameRect`, row-major, with its
   pivot) a meta cuts a PNG into, the same cut `pack` makes, or a `FramesError` (`Decode`,
