@@ -68,6 +68,9 @@ hash, those of the golden trace and replays included.
   canonical postcard encoding of exactly one input (it decodes, encodes again and compares,
   so an overlong varint is refused with `SimError::InputDecode` naming both lengths).
 - `ludenea_net::Session` is the sans-IO rollback session of one peer.
+  `SessionSettings::validate` refuses a match where peer 0 owns every player
+  (`SettingsError::SinglePeer`): a rollback session needs at least two peers, and a
+  single-peer game steps its `Simulation` directly.
   `Session::new(SessionSettings, PlayerInputSpec)` validates the settings and refuses a
   default input over 24 bytes (`SettingsError::DefaultInputTooLarge`) or refused by the
   check (`SettingsError::DefaultInputRefused`). `receive(from, packet, now_micros)` and

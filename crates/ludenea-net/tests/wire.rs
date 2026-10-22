@@ -434,14 +434,6 @@ fn every_peer_refuses_a_layout_another_peer_cannot_send() {
 }
 
 #[test]
-fn a_peer_alone_sends_no_packet() {
-    // Four local players over the default window exceed one packet, but no packet is sent.
-    settings(&[0, 0, 0, 0])
-        .validate()
-        .expect("a single peer has nobody to send to");
-}
-
-#[test]
 fn validate_refuses_an_engine_too_long() {
     let mut s = settings(&[0, 1]);
     s.identity.engine = "e".repeat(MAX_ENGINE_BYTES);

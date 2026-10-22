@@ -118,6 +118,13 @@ pub enum SettingsError {
         MAX_PEERS - 1
     )]
     PeerCount { highest_owner: PeerId },
+    /// Every player is owned by peer 0. A rollback session needs at least two peers; a
+    /// single-peer game steps its `Simulation` directly.
+    #[error(
+        "every player is owned by peer 0: a rollback session needs at least two peers, a \
+         single-peer game steps its Simulation directly"
+    )]
+    SinglePeer,
     /// The owners of the players leave a gap: they must be exactly the peers 0 to n.
     #[error("{peer} owns no player: the owners of players must be exactly the peers 0 to n")]
     PeerWithoutPlayer { peer: PeerId },
@@ -201,6 +208,9 @@ impl SessionSettings {
         if peers > MAX_PEERS {
             return Err(SettingsError::PeerCount { highest_owner });
         }
+        if peers < 2 {
+            return Err(SettingsError::SinglePeer);
+        }
         for peer in (0..=highest_owner.0).map(PeerId) {
             if !players.contains(&peer) {
                 return Err(SettingsError::PeerWithoutPlayer { peer });
@@ -234,15 +244,13 @@ impl SessionSettings {
             });
         }
         for peer in (0..=highest_owner.0).map(PeerId) {
-            if let Some(packet) = self.worst_case_packet(peer) {
-                let worst = packet.encode().len();
-                if worst > MAX_PACKET_BYTES {
-                    return Err(SettingsError::PacketTooLarge {
-                        peer,
-                        worst,
-                        max: MAX_PACKET_BYTES,
-                    });
-                }
+            let worst = self.worst_case_packet(peer).encode().len();
+            if worst > MAX_PACKET_BYTES {
+                return Err(SettingsError::PacketTooLarge {
+                    peer,
+                    worst,
+                    max: MAX_PACKET_BYTES,
+                });
             }
         }
         if rules.hash_interval == 0 {
@@ -263,8 +271,7 @@ impl SessionSettings {
         Ok(())
     }
 
-    /// The largest packet `peer` sends while the match runs, or `None` without a remote
-    /// player, as nothing is ever sent. One packet holds, each field at its largest encoding
+    /// The largest packet `peer` sends while the match runs. One packet holds, each field at its largest encoding
     /// for the whole life of a match: the inputs of every player `peer` owns at
     /// [`MAX_INPUT_BYTES`] over `rollback_window + input_delay + 1` ticks, the acknowledgment
     /// of every other player, a quality request and its reply, one hash report, and a
@@ -273,16 +280,13 @@ impl SessionSettings {
     /// Two rules of the sender keep every packet within this bound: a session that has ended
     /// sends no inputs, so a packet carrying an `End` is small and `End` is not counted; and
     /// further unacknowledged hash reports are packed by size, the ones that do not fit resent
-    /// in a later packet. The handshake's `Hello` travels alone, and fits whatever the
-    /// identity, as the engine string and the players are bounded. Expects the rules to have
-    /// passed the tick count check.
-    fn worst_case_packet(&self, peer: PeerId) -> Option<Packet> {
+    /// in a later packet. The handshake's `Hello` and `Welcome` travel without inputs, and fit
+    /// whatever the identity, as the engine string and the players are bounded. Expects the
+    /// settings to have passed the peer and tick count checks, so another peer owns a player.
+    fn worst_case_packet(&self, peer: PeerId) -> Packet {
         let players = &self.identity.players;
         let owned = players.iter().filter(|owner| **owner == peer).count();
         let remote = players.len() - owned;
-        if remote == 0 {
-            return None;
-        }
         let rules = self.identity.rules;
         // Checked by the caller to be at most MAX_TICKS_PER_MESSAGE.
         let ticks = rules.rollback_window as usize + rules.input_delay as usize + 1;
@@ -316,9 +320,9 @@ impl SessionSettings {
                 last_tick: u64::MAX,
             },
         ]);
-        Some(Packet {
+        Packet {
             match_id: u64::MAX,
             messages,
-        })
+        }
     }
 }

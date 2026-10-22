@@ -103,6 +103,19 @@ fn validate_refuses_too_many_peers() {
 }
 
 #[test]
+fn validate_refuses_a_single_peer() {
+    for owners in [&[0][..], &[0, 0, 0, 0]] {
+        let error = refusal(&settings(owners));
+        assert_eq!(error, SettingsError::SinglePeer);
+        assert_eq!(
+            error.to_string(),
+            "every player is owned by peer 0: a rollback session needs at least two peers, \
+             a single-peer game steps its Simulation directly"
+        );
+    }
+}
+
+#[test]
 fn validate_refuses_a_local_peer_outside_the_match() {
     let mut s = settings(&[0, 1]);
     s.local = PeerId(2);
@@ -199,6 +212,8 @@ fn validate_reports_the_first_fault_in_order() {
     assert!(matches!(refusal(&s), SettingsError::PlayerCount { .. }));
     s.identity.players = vec![PeerId(0), PeerId(9)];
     assert!(matches!(refusal(&s), SettingsError::PeerCount { .. }));
+    s.identity.players = vec![PeerId(0), PeerId(0)];
+    assert_eq!(refusal(&s), SettingsError::SinglePeer);
     s.identity.players = vec![PeerId(0), PeerId(2)];
     assert!(matches!(
         refusal(&s),
