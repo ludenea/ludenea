@@ -17,6 +17,12 @@ doc = false
 name = "swarm"
 path = "src/main.rs"
 
+# Same name as the `rollback-bench` of arena: skip it in `cargo doc`, whose output paths would
+# collide.
+[[bin]]
+name = "rollback-bench"
+doc = false
+
 [features]
 # The standalone web page (`ludenea build --web`).
 web = ["ludenea/web"]

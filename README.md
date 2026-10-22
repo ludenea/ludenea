@@ -208,6 +208,13 @@ reports whether the slowest frame fits in half a 60 Hz frame:
 cargo run --locked --release -p arena --bin rollback-bench
 ```
 
+Run the same benchmark on swarm (10,000 sprites, 4 players), a heavy scene that has no golden
+replay: a straight run with seeded inputs gives the hash every rollback frame must end on:
+
+```sh
+cargo run --locked --release -p swarm --bin rollback-bench
+```
+
 ## Versioning
 
 Every file format and protocol has a version, except those [`CHANGELOG.md`](CHANGELOG.md)
