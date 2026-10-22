@@ -39,7 +39,7 @@ const CHECKS: &[&str] = &[
     "doc --locked --no-deps --workspace",
     // The browser: the facade's entry, the Web Worker transport, and the renderer on WebGPU and
     // WebGL2.
-    "clippy --locked --target wasm32-unknown-unknown -p ludenea -p ludenea-control -p ludenea-runtime -p boxes -p swarm --lib -- -D warnings",
+    "clippy --locked --target wasm32-unknown-unknown -p ludenea -p ludenea-control -p ludenea-runtime -p boxes -p swarm -p arena --lib -- -D warnings",
     "clippy --locked --target wasm32-unknown-unknown -p ludenea-render --features web --lib -- -D warnings",
     // The standalone web page's exports: the lobby, beside the renderer it links.
     "clippy --locked --target wasm32-unknown-unknown -p ludenea-runtime --features web --lib -- -D warnings",
