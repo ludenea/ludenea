@@ -138,6 +138,13 @@ impl InputQueue {
         )
     }
 
+    /// The input `tick` was last simulated with, `None` for a tick not simulated yet or released.
+    pub(crate) fn used(&self, tick: u64) -> Option<&[u8]> {
+        self.index(tick, self.used.len())
+            .and_then(|index| self.used.get(index))
+            .map(Vec::as_slice)
+    }
+
     /// Records the input `tick` was simulated with, replacing an earlier record. Ticks are
     /// simulated in order from the base, so only a recorded tick or the next one is accepted.
     pub(crate) fn record_used(&mut self, tick: u64, input: &[u8]) -> Result<(), QueueError> {
@@ -281,6 +288,18 @@ mod tests {
         q.confirm(1, vec![7]).unwrap();
         assert_eq!(q.first_misprediction(u64::MAX), None);
         assert_eq!(q.first_misprediction(1), None);
+    }
+
+    #[test]
+    fn used_gives_the_last_recorded_input_of_a_held_tick() {
+        let mut q = queue_with(3, 2);
+        assert_eq!(q.used(1), Some(&byte(1)[..]));
+        q.record_used(1, &[42]).unwrap();
+        assert_eq!(q.used(1), Some(&[42][..]));
+        assert_eq!(q.used(2), None);
+        q.release_before(1);
+        assert_eq!(q.used(0), None);
+        assert_eq!(q.used(u64::MAX), None);
     }
 
     #[test]

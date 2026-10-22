@@ -6,12 +6,24 @@
 //! both welcomed it and sent a matching `Hello`. Everything it receives comes from another
 //! machine and is checked before it changes anything; an invalid packet is dropped, counted in
 //! [`SessionStats`] and reported as [`SessionEvent::Dropped`].
+//!
+//! Once running, the caller adds an input for each local player and calls
+//! [`Session::advance`] once per frame. The session predicts the inputs of remote players by
+//! repeating their last confirmed input, and answers with [`Request`]s for the caller's
+//! simulation: save a tick, load a tick, advance a tick. When a remote input proves a
+//! prediction wrong, the next `advance` loads the first mispredicted tick and runs again up to
+//! the current one; when the session is `rollback_window` ticks ahead of the last tick every
+//! player's input is confirmed for, it stalls instead of predicting further.
 
 use std::collections::BTreeMap;
 
 use ludenea_app::PlayerInputSpec;
 
-use crate::settings::{MAX_INPUT_BYTES, MatchIdentity, PeerId, SessionSettings, SettingsError};
+use crate::queue::{Confirmed, InputQueue, QueueError};
+use crate::settings::{
+    MAX_INPUT_BYTES, MAX_PACKET_BYTES, MAX_TICKS_PER_MESSAGE, MatchIdentity, PeerId,
+    SessionSettings, SettingsError,
+};
 use crate::wire::{Message, Packet, WireError};
 
 /// The least time between two `Hello`s to the same peer while it has not welcomed this one.
@@ -61,9 +73,22 @@ pub enum DropReason {
     WrongMatch,
     /// The sender is not another peer of this match.
     UnknownPeer,
-    /// The packet holds more than the handshake while this session is not running yet. Its
+    /// The packet holds more than the handshake while this session is not running yet, other
+    /// than inputs and acknowledgments from a peer whose matching `Hello` arrived. Its
     /// handshake messages are still read.
     BeforeRunning,
+    /// An `Inputs` message names a player that does not exist or that the sender does not
+    /// own, or an `Ack` names a player this peer does not own.
+    NotOwner,
+    /// An input the session's input check refuses.
+    InvalidInput,
+    /// An input that differs from the one already confirmed for its tick, which is kept.
+    ConflictingInput,
+    /// The inputs start after the next tick expected from that player, or run past the last
+    /// tick a `u64` numbers. A later packet resends them from the acknowledged tick.
+    Gap,
+    /// An `Ack` asks for a tick after every input this peer has for that player.
+    AckNeverSent,
 }
 
 /// What happened in a session since the caller last asked, for the host to act on or log.
@@ -73,6 +98,45 @@ pub enum SessionEvent {
     Started,
     /// A packet from `peer` was dropped.
     Dropped { peer: PeerId, reason: DropReason },
+    /// Every player's input of `tick` is confirmed: `inputs` holds one per player, in player
+    /// order. Emitted by [`Session::advance`], once per tick, in tick order.
+    Confirmed { tick: u64, inputs: Vec<Vec<u8>> },
+}
+
+/// What the caller's simulation does for the session, in the order given.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Request {
+    /// Save the state of `tick`, before its inputs. It comes right before the first
+    /// `Advance { tick }` after it, and a `Load { tick }` loads the latest one. `hash` asks
+    /// for the state hash too; it is always `false` for now.
+    Save { tick: u64, hash: bool },
+    /// Load the state of `tick` saved last.
+    Load { tick: u64 },
+    /// Step the state of `tick` to `tick + 1` with `inputs`, one per player, in player order.
+    Advance { tick: u64, inputs: Vec<Vec<u8>> },
+}
+
+/// Why a call on a [`Session`] was refused. Nothing changed.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SessionError {
+    /// The session is connecting or has ended.
+    #[error("the session is not running")]
+    NotRunning,
+    /// `player` is not a player of this peer.
+    #[error("player {player} is not a local player of this peer")]
+    NotLocal { player: u8 },
+    /// The input of `player` is longer than [`MAX_INPUT_BYTES`].
+    #[error("the input of player {player} takes {len} bytes, at most {MAX_INPUT_BYTES} allowed")]
+    InputTooLarge { player: u8, len: usize },
+    /// The input check refuses the input of `player`.
+    #[error("the input of player {player} is refused: {reason}")]
+    InvalidInput { player: u8, reason: String },
+    /// The tick would advance, but local `player` has no input added since the last one.
+    #[error("local player {player} has no input for the next tick")]
+    MissingLocalInput { player: u8 },
+    /// The match reached the last tick a `u64` numbers.
+    #[error("tick {tick} is the last tick of a match")]
+    LastTick { tick: u64 },
 }
 
 /// What a session counts about one sender.
@@ -80,6 +144,14 @@ pub enum SessionEvent {
 pub struct PeerStats {
     /// The packets dropped, by reason.
     pub dropped: BTreeMap<DropReason, u64>,
+    /// The rollbacks a misprediction of this peer's inputs caused.
+    pub rollbacks: u64,
+    /// The most ticks one of those rollbacks ran again.
+    pub deepest_rollback: u64,
+    /// The inputs of this peer confirmed different from the input their tick ran with.
+    pub prediction_misses: u64,
+    /// The advances that stalled waiting for this peer's inputs.
+    pub stalls: u64,
 }
 
 /// What a session counts, per sender.
@@ -103,14 +175,26 @@ struct Remote {
     last_hello_micros: Option<u64>,
     /// When the last accepted packet arrived, or when the session first saw the time.
     last_heard_micros: u64,
+    /// Per global player, the first tick of that player's inputs the peer still needs; only
+    /// local players' entries are used. Only moves forward.
+    acked: Vec<u64>,
+    /// An advance ran since the last packet: the next one carries inputs and an `Ack`.
+    inputs_due: bool,
 }
 
 /// The rollback session of one peer of a match.
 #[derive(Debug)]
 pub struct Session {
     settings: SessionSettings,
-    #[expect(dead_code, reason = "read by the input queues, which come next")]
     input: PlayerInputSpec,
+    /// One queue per global player.
+    queues: Vec<InputQueue>,
+    /// Per global player, the input a local player added for the next advanced tick.
+    pending: Vec<Option<Vec<u8>>>,
+    /// The next tick to advance: every tick below it has run.
+    tick: u64,
+    /// The next tick to emit [`SessionEvent::Confirmed`] for.
+    next_event: u64,
     state: SessionState,
     /// When the session ended.
     ended_micros: Option<u64>,
@@ -157,6 +241,26 @@ impl Session {
                 owes_welcome: false,
                 last_hello_micros: None,
                 last_heard_micros: 0,
+                acked: vec![0; settings.identity.players.len()],
+                inputs_due: false,
+            })
+            .collect();
+        // Each local player's ticks before the input delay hold the default input, confirmed
+        // and sent like any other, so every peer knows them.
+        let queues = settings
+            .identity
+            .players
+            .iter()
+            .map(|owner| {
+                let mut queue = InputQueue::new(input.default.clone());
+                if *owner == settings.local {
+                    for tick in 0..u64::from(settings.identity.rules.input_delay) {
+                        // A new queue expects tick 0, then each next one.
+                        let confirmed = queue.confirm(tick, input.default.clone());
+                        debug_assert_eq!(confirmed, Ok(Confirmed::New));
+                    }
+                }
+                queue
             })
             .collect();
         let stats = SessionStats {
@@ -165,9 +269,14 @@ impl Session {
                 .map(|remote| (remote.id, PeerStats::default()))
                 .collect(),
         };
+        let pending = vec![None; settings.identity.players.len()];
         Ok(Self {
             settings,
             input,
+            queues,
+            pending,
+            tick: 0,
+            next_event: 0,
             state: SessionState::Connecting,
             ended_micros: None,
             remotes,
@@ -264,9 +373,35 @@ impl Session {
                     self.remotes[index].welcomed = true;
                     self.start_when_agreed();
                 }
+                // Only a running peer sends inputs and acknowledgments, and a peer runs once
+                // every peer agreed on the match: once its matching `Hello` arrived, they are
+                // read even while this session still waits for a third peer.
+                Message::Inputs { .. } | Message::Ack { .. }
+                    if self.state == SessionState::Connecting && !self.remotes[index].hello =>
+                {
+                    before_running = true;
+                }
+                Message::Inputs {
+                    player,
+                    first_tick,
+                    inputs,
+                } => {
+                    self.welcomed_by_running_peer(index);
+                    if let Err(reason) = self.read_inputs(from, player, first_tick, inputs) {
+                        self.drop_packet(from, reason);
+                        return;
+                    }
+                }
+                Message::Ack { players, .. } => {
+                    self.welcomed_by_running_peer(index);
+                    if let Err(reason) = self.read_ack(index, &players) {
+                        self.drop_packet(from, reason);
+                        return;
+                    }
+                }
                 _ if self.state == SessionState::Connecting => before_running = true,
-                // The messages of a running match are read by the layers built on the
-                // handshake.
+                // Quality, hash, goodbye and end messages are read by the layers built on the
+                // inputs.
                 _ => {}
             }
         }
@@ -275,9 +410,90 @@ impl Session {
         }
     }
 
+    /// Sets the input of local `player` for the next tick the session advances. A second
+    /// call before that advance replaces it, so a caller that adds one input per frame never
+    /// errs while the session stalls. The input applies `input_delay` ticks after the tick
+    /// advanced.
+    ///
+    /// # Errors
+    ///
+    /// [`SessionError::NotRunning`], [`SessionError::NotLocal`] for a player this peer does not
+    /// own, [`SessionError::InputTooLarge`] beyond [`MAX_INPUT_BYTES`], and
+    /// [`SessionError::InvalidInput`] for bytes the input check refuses.
+    pub fn add_local_input(&mut self, player: u8, input: Vec<u8>) -> Result<(), SessionError> {
+        if self.state != SessionState::Running {
+            return Err(SessionError::NotRunning);
+        }
+        let index = usize::from(player);
+        if self.settings.identity.players.get(index) != Some(&self.settings.local) {
+            return Err(SessionError::NotLocal { player });
+        }
+        if input.len() > MAX_INPUT_BYTES {
+            return Err(SessionError::InputTooLarge {
+                player,
+                len: input.len(),
+            });
+        }
+        (self.input.check)(&input).map_err(|error| SessionError::InvalidInput {
+            player,
+            reason: error.to_string(),
+        })?;
+        self.pending[index] = Some(input);
+        Ok(())
+    }
+
+    /// Runs the session one frame: first the rollback a misprediction calls for, a `Load` of
+    /// the first mispredicted tick then a `Save` and an `Advance` of every tick from it to the
+    /// current one; then at most one new tick, taking every local player's pending input, or a
+    /// stall when the current tick is `rollback_window` ticks past the confirmed tick. Every
+    /// call, stalled or not, has the next packet to each peer carry the local inputs it has
+    /// not acknowledged and an `Ack` of its players' inputs.
+    ///
+    /// # Errors
+    ///
+    /// [`SessionError::NotRunning`], [`SessionError::MissingLocalInput`] when the tick would
+    /// advance and a local player has no pending input, and [`SessionError::LastTick`]. A
+    /// refused call changes nothing.
+    pub fn advance(&mut self, now_micros: u64) -> Result<Vec<Request>, SessionError> {
+        self.observe(now_micros);
+        if self.state != SessionState::Running {
+            return Err(SessionError::NotRunning);
+        }
+        let confirmed = self.confirmed_tick();
+        let window = u64::from(self.settings.identity.rules.rollback_window);
+        let stall = self.tick.saturating_sub(confirmed) >= window;
+        // Every refusal comes before anything changes.
+        if !stall {
+            if let Some(player) = self.local_players().find(|p| self.pending[*p].is_none()) {
+                return Err(SessionError::MissingLocalInput {
+                    player: u8::try_from(player).unwrap_or(u8::MAX),
+                });
+            }
+            let delay = u64::from(self.settings.identity.rules.input_delay);
+            if self.tick.checked_add(delay.max(1)).is_none() {
+                return Err(SessionError::LastTick { tick: self.tick });
+            }
+        }
+        let mut requests = Vec::new();
+        self.roll_back(&mut requests);
+        if stall {
+            self.count_stall(confirmed);
+        } else {
+            self.advance_tick(&mut requests);
+        }
+        for remote in &mut self.remotes {
+            remote.inputs_due = true;
+        }
+        self.emit_confirmed();
+        self.release();
+        Ok(requests)
+    }
+
     /// The packets to send now, at most one per peer. While connecting, a session that heard
     /// nothing for `disconnect_after_micros` from a peer whose handshake is unfinished ends
-    /// `Unreachable`.
+    /// `Unreachable`. While running, the packet after an advance carries the local inputs the
+    /// peer has not acknowledged, oldest first, and an `Ack` of the peer's players; when they
+    /// do not all fit in [`MAX_PACKET_BYTES`], the newest ticks wait for a later packet.
     pub fn outgoing(&mut self, now_micros: u64) -> Vec<(PeerId, Vec<u8>)> {
         let now = self.observe(now_micros);
         let greeting = match &self.state {
@@ -311,15 +527,222 @@ impl Session {
                 messages.push(Message::Welcome);
                 remote.owes_welcome = false;
             }
+            if self.state == SessionState::Running && remote.inputs_due {
+                remote.inputs_due = false;
+                messages.extend(inputs_for(
+                    &self.settings,
+                    &self.queues,
+                    remote.id,
+                    &remote.acked,
+                ));
+            }
             if !messages.is_empty() {
                 let packet = Packet {
                     match_id: self.settings.match_id,
                     messages,
                 };
-                packets.push((remote.id, packet.encode()));
+                packets.push((remote.id, fit(packet)));
             }
         }
         packets
+    }
+
+    /// The global indices of the local players, in order.
+    fn local_players(&self) -> impl Iterator<Item = usize> + use<'_> {
+        let local = self.settings.local;
+        self.settings
+            .identity
+            .players
+            .iter()
+            .enumerate()
+            .filter(move |(_, owner)| **owner == local)
+            .map(|(index, _)| index)
+    }
+
+    /// The first tick some player lacks a confirmed input for; `u64::MAX` once every player's
+    /// last tick is confirmed.
+    fn confirmed_tick(&self) -> u64 {
+        self.queues
+            .iter()
+            .map(|queue| queue.next_confirmed().unwrap_or(u64::MAX))
+            .min()
+            .unwrap_or(u64::MAX)
+    }
+
+    /// The input of every player for `tick`, confirmed or predicted.
+    fn inputs_at(&self, tick: u64) -> Vec<Vec<u8>> {
+        self.queues
+            .iter()
+            .map(|queue| {
+                // Queues release only ticks below the confirmed tick that ran with their
+                // confirmed inputs, which no rollback, event or resend reads again.
+                queue
+                    .input_for(tick)
+                    .expect("the inputs of a tick the session reads are held")
+            })
+            .collect()
+    }
+
+    /// Records that `tick` ran with `inputs`.
+    fn record(&mut self, tick: u64, inputs: &[Vec<u8>]) {
+        for (queue, input) in self.queues.iter_mut().zip(inputs) {
+            // Ticks run in order from 0, and a rollback runs again only ticks already run.
+            queue
+                .record_used(tick, input)
+                .expect("the session runs ticks in order");
+        }
+    }
+
+    /// Loads the first tick below the current one whose input a player now has confirmed
+    /// different from the one it ran with, and runs every tick from it up to the current one
+    /// again with the inputs known now.
+    fn roll_back(&mut self, requests: &mut Vec<Request>) {
+        let mut first_by_peer: BTreeMap<PeerId, u64> = BTreeMap::new();
+        for (queue, owner) in self.queues.iter().zip(&self.settings.identity.players) {
+            if let Some(tick) = queue.first_misprediction(self.tick) {
+                let first = first_by_peer.entry(*owner).or_insert(tick);
+                *first = (*first).min(tick);
+            }
+        }
+        let Some(first) = first_by_peer.values().copied().min() else {
+            return;
+        };
+        for (peer, tick) in &first_by_peer {
+            let stats = self.stats.peers.entry(*peer).or_default();
+            stats.rollbacks = stats.rollbacks.saturating_add(1);
+            stats.deepest_rollback = stats.deepest_rollback.max(self.tick - tick);
+        }
+        requests.push(Request::Load { tick: first });
+        for tick in first..self.tick {
+            let inputs = self.inputs_at(tick);
+            self.record(tick, &inputs);
+            requests.push(Request::Save { tick, hash: false });
+            requests.push(Request::Advance { tick, inputs });
+        }
+    }
+
+    /// Runs the current tick with the prediction, and confirms every local player's pending
+    /// input for the tick `input_delay` later. The caller checked that every local player has
+    /// one and that both ticks exist.
+    fn advance_tick(&mut self, requests: &mut Vec<Request>) {
+        let tick = self.tick;
+        let target = tick + u64::from(self.settings.identity.rules.input_delay);
+        let local: Vec<usize> = self.local_players().collect();
+        for player in local {
+            let input = self.pending[player]
+                .take()
+                .expect("the caller checked every local player has an input");
+            // Local inputs are confirmed in order: the queue expects exactly `target`.
+            let confirmed = self.queues[player].confirm(target, input);
+            debug_assert_eq!(confirmed, Ok(Confirmed::New));
+        }
+        let inputs = self.inputs_at(tick);
+        self.record(tick, &inputs);
+        requests.push(Request::Save { tick, hash: false });
+        requests.push(Request::Advance { tick, inputs });
+        self.tick = tick + 1;
+    }
+
+    /// Counts a stall against every peer owning a player whose input of the confirmed tick is
+    /// missing.
+    fn count_stall(&mut self, confirmed: u64) {
+        for (queue, owner) in self.queues.iter().zip(&self.settings.identity.players) {
+            if queue.next_confirmed() == Some(confirmed) {
+                let stats = self.stats.peers.entry(*owner).or_default();
+                stats.stalls = stats.stalls.saturating_add(1);
+            }
+        }
+    }
+
+    /// Emits [`SessionEvent::Confirmed`] for every tick up to the confirmed one not emitted yet.
+    fn emit_confirmed(&mut self) {
+        let confirmed = self.confirmed_tick();
+        while self.next_event < confirmed {
+            let tick = self.next_event;
+            let inputs = self.inputs_at(tick);
+            self.events.push(SessionEvent::Confirmed { tick, inputs });
+            self.next_event = tick + 1;
+        }
+    }
+
+    /// Releases the inputs nothing can read again: those below the confirmed tick, once every
+    /// tick below it ran with them, and for a local player only those every peer acknowledged.
+    fn release(&mut self) {
+        for (player, queue) in self.queues.iter_mut().enumerate() {
+            // Every tick below the next event is confirmed, and emitted.
+            let mut below = self.next_event;
+            if self.settings.identity.players[player] == self.settings.local {
+                for remote in &self.remotes {
+                    below = below.min(remote.acked[player]);
+                }
+            }
+            queue.release_before(below);
+        }
+    }
+
+    /// Confirms the inputs of `player` from `first_tick` that `from` sent. Every input is
+    /// checked before any is confirmed; a refused one stops the message.
+    fn read_inputs(
+        &mut self,
+        from: PeerId,
+        player: u8,
+        first_tick: u64,
+        inputs: Vec<Vec<u8>>,
+    ) -> Result<(), DropReason> {
+        let index = usize::from(player);
+        if self.settings.identity.players.get(index) != Some(&from) {
+            return Err(DropReason::NotOwner);
+        }
+        if inputs
+            .iter()
+            .any(|input| (self.input.check)(input).is_err())
+        {
+            return Err(DropReason::InvalidInput);
+        }
+        let count = u64::try_from(inputs.len()).map_err(|_| DropReason::Gap)?;
+        // A decoded message holds at least one tick: its last is `first_tick + count - 1`.
+        if first_tick.checked_add(count.saturating_sub(1)).is_none() {
+            return Err(DropReason::Gap);
+        }
+        for (tick, input) in (first_tick..).zip(inputs) {
+            let queue = &mut self.queues[index];
+            let used = queue.used(tick).map(<[u8]>::to_vec);
+            match queue.confirm(tick, input.clone()) {
+                Ok(Confirmed::New) => {
+                    if used.is_some_and(|used| used != input) {
+                        let stats = self.stats.peers.entry(from).or_default();
+                        stats.prediction_misses = stats.prediction_misses.saturating_add(1);
+                    }
+                }
+                Ok(Confirmed::Same | Confirmed::Released) => {}
+                Err(QueueError::Conflict { .. }) => return Err(DropReason::ConflictingInput),
+                Err(QueueError::Gap { .. } | QueueError::NotNextSimulated { .. }) => {
+                    return Err(DropReason::Gap);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Moves forward what the remote at `index` acknowledged of each local player. Every entry
+    /// is checked before any is used; an older acknowledgment, arriving reordered, is ignored.
+    fn read_ack(&mut self, index: usize, players: &[(u8, u64)]) -> Result<(), DropReason> {
+        for (player, next) in players {
+            let player = usize::from(*player);
+            if self.settings.identity.players.get(player) != Some(&self.settings.local) {
+                return Err(DropReason::NotOwner);
+            }
+            let held = self.queues[player].next_confirmed();
+            if held.is_some_and(|held| *next > held) {
+                return Err(DropReason::AckNeverSent);
+            }
+        }
+        let remote = &mut self.remotes[index];
+        for (player, next) in players {
+            let acked = &mut remote.acked[usize::from(*player)];
+            *acked = (*acked).max(*next);
+        }
+        Ok(())
     }
 
     /// Takes `now_micros` as the current time, or the latest one if it is lower. The first
@@ -405,6 +828,16 @@ impl Session {
             })
     }
 
+    /// A running peer received this one's matching `Hello`, as it runs only once every peer
+    /// sent one: its running messages welcome this peer, even when every `Welcome` it sent was
+    /// lost.
+    fn welcomed_by_running_peer(&mut self, index: usize) {
+        if !self.remotes[index].welcomed {
+            self.remotes[index].welcomed = true;
+            self.start_when_agreed();
+        }
+    }
+
     /// Runs once every peer has welcomed this one and sent a matching `Hello`.
     fn start_when_agreed(&mut self) {
         let agreed = self
@@ -446,4 +879,91 @@ fn owners(players: &[PeerId]) -> String {
         .map(PeerId::to_string)
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// The `Ack` of `peer`'s players and the inputs of every local player from what `peer`
+/// acknowledged on, at most [`MAX_TICKS_PER_MESSAGE`] ticks each.
+fn inputs_for(
+    settings: &SessionSettings,
+    queues: &[InputQueue],
+    peer: PeerId,
+    acked: &[u64],
+) -> Vec<Message> {
+    let players = &settings.identity.players;
+    let owned_by = |owner: PeerId| {
+        players
+            .iter()
+            .zip(0u8..)
+            .filter(move |(player_owner, _)| **player_owner == owner)
+            .map(|(_, player)| player)
+    };
+    let mut messages = vec![Message::Ack {
+        players: owned_by(peer)
+            .map(|player| {
+                let next = queues[usize::from(player)].next_confirmed();
+                (player, next.unwrap_or(u64::MAX))
+            })
+            .collect(),
+        hashes_through: 0,
+    }];
+    for player in owned_by(settings.local) {
+        let queue = &queues[usize::from(player)];
+        let first_tick = acked[usize::from(player)];
+        let end = queue.next_confirmed().unwrap_or(u64::MAX);
+        let count = end
+            .saturating_sub(first_tick)
+            .min(u64::from(MAX_TICKS_PER_MESSAGE));
+        if count == 0 {
+            continue;
+        }
+        let inputs = (first_tick..first_tick + count)
+            .map(|tick| {
+                // A local input is released only once every peer acknowledged it.
+                queue
+                    .input_for(tick)
+                    .expect("unacknowledged local inputs are held")
+            })
+            .collect();
+        messages.push(Message::Inputs {
+            player,
+            first_tick,
+            inputs,
+        });
+    }
+    messages
+}
+
+/// Encodes `packet`, leaving out the newest tick of its longest input message until it fits
+/// in [`MAX_PACKET_BYTES`]: the oldest unacknowledged ticks go first, the rest in a later
+/// packet. The settings bound the usual packet within the limit; this only acts for a peer
+/// that has fallen behind by more than the rollback window and the input delay.
+fn fit(mut packet: Packet) -> Vec<u8> {
+    loop {
+        let bytes = packet.encode();
+        if bytes.len() <= MAX_PACKET_BYTES {
+            return bytes;
+        }
+        let longest = packet
+            .messages
+            .iter()
+            .enumerate()
+            .filter_map(|(index, message)| match message {
+                Message::Inputs { inputs, .. } => Some((inputs.len(), index)),
+                _ => None,
+            })
+            .max();
+        match longest {
+            Some((1, index)) => {
+                packet.messages.remove(index);
+            }
+            Some((_, index)) => {
+                if let Message::Inputs { inputs, .. } = &mut packet.messages[index] {
+                    inputs.pop();
+                }
+            }
+            // The handshake and the acknowledgment alone always fit: their lengths are
+            // bounded by the settings.
+            None => return bytes,
+        }
+    }
 }

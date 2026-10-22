@@ -1,0 +1,654 @@
+mod support;
+
+use ludenea_app::PlayerInputSpec;
+use ludenea_net::{
+    DropReason, LinkConditions, MAX_INPUT_BYTES, MAX_PACKET_BYTES, MatchRules, Message, Packet,
+    PeerId, Request, Session, SessionError, SessionEvent, SessionState,
+};
+use support::{
+    Harness, handshake, identity, model_byte, offline_hashes, sessions, sessions_of, settings,
+};
+
+const ONE_SECOND: u64 = 1_000_000;
+const NOW: u64 = 1_000;
+
+/// Peer 0 of a running two-peer match at tick 0, with `rules`.
+fn local_session(rules: MatchRules) -> Session {
+    let mut identity = identity(&[0, 1]);
+    identity.rules = rules;
+    handshake(sessions_of(&identity)).remove(0)
+}
+
+/// Peer 0 of a running two-peer match with the default rules.
+fn peer_zero() -> Session {
+    local_session(MatchRules::default())
+}
+
+/// Hands `session` the inputs of player 1 from `first_tick`, as peer 1 sends them.
+fn remote_inputs(session: &mut Session, first_tick: u64, inputs: &[u8]) {
+    let packet = Packet {
+        match_id: 1,
+        messages: vec![Message::Inputs {
+            player: 1,
+            first_tick,
+            inputs: inputs.iter().map(|byte| vec![*byte]).collect(),
+        }],
+    };
+    session.receive(PeerId(1), &packet.encode(), NOW);
+}
+
+/// Hands `session` a packet of `messages` from peer 1.
+fn from_peer_one(session: &mut Session, messages: Vec<Message>) {
+    let packet = Packet {
+        match_id: 1,
+        messages,
+    };
+    session.receive(PeerId(1), &packet.encode(), NOW);
+}
+
+fn dropped(session: &Session, reason: DropReason) -> u64 {
+    peer_one_stats(session)
+        .dropped
+        .get(&reason)
+        .copied()
+        .unwrap_or(0)
+}
+
+/// Adds `input` for player 0, then advances.
+fn step(session: &mut Session, input: u8) -> Vec<Request> {
+    session.add_local_input(0, vec![input]).unwrap();
+    session.advance(NOW).unwrap()
+}
+
+fn save(tick: u64) -> Request {
+    Request::Save { tick, hash: false }
+}
+
+fn advance(tick: u64, inputs: [u8; 2]) -> Request {
+    Request::Advance {
+        tick,
+        inputs: inputs.iter().map(|byte| vec![*byte]).collect(),
+    }
+}
+
+fn peer_one_stats(session: &Session) -> ludenea_net::PeerStats {
+    session.stats().peers[&PeerId(1)].clone()
+}
+
+/// The messages of the packet `session` sends peer 1 now.
+fn sent_to_peer_one(session: &mut Session) -> Vec<Message> {
+    let outgoing = session.outgoing(NOW);
+    let (_, packet) = outgoing
+        .iter()
+        .find(|(to, _)| *to == PeerId(1))
+        .expect("a packet for peer 1");
+    Packet::decode(packet).unwrap().messages
+}
+
+/// Every peer confirmed at least `ticks` ticks, all the same inputs from tick 0, and every
+/// model holds, at every confirmed tick it ran past, the state those inputs give offline.
+fn assert_agree(harness: &Harness, ticks: usize) {
+    let reference = harness.confirmed(PeerId(0));
+    for peer in harness.peers() {
+        let confirmed = harness.confirmed(peer);
+        assert!(
+            confirmed.len() >= ticks,
+            "{peer} confirmed {} ticks",
+            confirmed.len()
+        );
+        for (index, (tick, _)) in confirmed.iter().enumerate() {
+            assert_eq!(*tick, u64::try_from(index).unwrap(), "{peer} out of order");
+        }
+        let common = confirmed.len().min(reference.len());
+        assert_eq!(confirmed[..common], reference[..common], "{peer}");
+        let model = harness.model(peer);
+        for (tick, hash) in (1..).zip(offline_hashes(&confirmed)) {
+            if tick <= model.tick() {
+                assert_eq!(model.hash_at(tick), Some(hash), "{peer} at tick {tick}");
+            }
+        }
+    }
+}
+
+fn confirmed_at_least(harness: &Harness, ticks: usize) -> bool {
+    harness
+        .peers()
+        .all(|peer| harness.confirmed(peer).len() >= ticks)
+}
+
+#[test]
+fn two_peers_without_loss_never_roll_back() {
+    let mut harness = Harness::new(sessions(2));
+    assert!(harness.run_until(15 * ONE_SECOND, |h| confirmed_at_least(h, 600)));
+    assert_agree(&harness, 600);
+    for peer in harness.peers() {
+        assert_eq!(harness.model(peer).loads(), 0, "{peer}");
+        let stats = &harness.session(peer).stats().peers;
+        for (other, stats) in stats {
+            assert_eq!(stats.rollbacks, 0, "{peer} from {other}");
+            assert_eq!(stats.stalls, 0, "{peer} from {other}");
+        }
+    }
+    // The model hashes of both peers agree tick by tick.
+    for tick in 1..=600 {
+        assert_eq!(
+            harness.model(PeerId(0)).hash_at(tick),
+            harness.model(PeerId(1)).hash_at(tick),
+            "tick {tick}"
+        );
+    }
+}
+
+#[test]
+fn local_input_applies_after_the_input_delay() {
+    for delay in [0, 2] {
+        let mut session = local_session(MatchRules {
+            input_delay: delay,
+            ..MatchRules::default()
+        });
+        let mut advanced = Vec::new();
+        for tick in 0..6 {
+            let requests = step(&mut session, 10 + u8::try_from(tick).unwrap());
+            assert_eq!(requests.len(), 2, "delay {delay}: {requests:?}");
+            assert_eq!(requests[0], save(tick), "delay {delay}");
+            advanced.push(requests[1].clone());
+        }
+        for (tick, request) in (0u64..).zip(advanced) {
+            let expected = if tick < u64::from(delay) {
+                0
+            } else {
+                10 + u8::try_from(tick - u64::from(delay)).unwrap()
+            };
+            // Player 1 is predicted with the default input: nothing came from peer 1.
+            assert_eq!(request, advance(tick, [expected, 0]), "delay {delay}");
+        }
+    }
+}
+
+#[test]
+fn default_inputs_of_the_delay_ticks_are_sent() {
+    let mut session = peer_zero();
+    step(&mut session, 7);
+    let messages = sent_to_peer_one(&mut session);
+    assert!(
+        messages.contains(&Message::Inputs {
+            player: 0,
+            first_tick: 0,
+            inputs: vec![vec![0], vec![0], vec![7]],
+        }),
+        "{messages:?}"
+    );
+    assert!(
+        messages.contains(&Message::Ack {
+            players: vec![(1, 0)],
+            hashes_through: 0,
+        }),
+        "{messages:?}"
+    );
+}
+
+#[test]
+fn late_input_rolls_back_to_the_first_misprediction() {
+    let mut session = peer_zero();
+    remote_inputs(&mut session, 0, &[0; 10]);
+    for _ in 0..13 {
+        step(&mut session, 0);
+    }
+    remote_inputs(&mut session, 10, &[5]);
+    let requests = step(&mut session, 0);
+    assert_eq!(
+        requests,
+        [
+            Request::Load { tick: 10 },
+            save(10),
+            advance(10, [0, 5]),
+            save(11),
+            advance(11, [0, 5]),
+            save(12),
+            advance(12, [0, 5]),
+            save(13),
+            advance(13, [0, 5]),
+        ]
+    );
+    let stats = peer_one_stats(&session);
+    assert_eq!(stats.rollbacks, 1);
+    assert_eq!(stats.deepest_rollback, 3);
+    assert_eq!(stats.prediction_misses, 1);
+}
+
+#[test]
+fn correct_prediction_does_not_roll_back() {
+    let mut session = peer_zero();
+    // Tick 2 is known ahead: ticks 3 and after are predicted to repeat it.
+    remote_inputs(&mut session, 0, &[0, 0, 5]);
+    for _ in 0..8 {
+        step(&mut session, 0);
+    }
+    remote_inputs(&mut session, 3, &[5, 5, 5, 5, 5]);
+    assert_eq!(step(&mut session, 0), [save(8), advance(8, [0, 5])]);
+    let stats = peer_one_stats(&session);
+    assert_eq!(stats.rollbacks, 0);
+    assert_eq!(stats.prediction_misses, 0);
+}
+
+#[test]
+fn future_input_is_not_a_misprediction() {
+    let mut session = peer_zero();
+    for _ in 0..5 {
+        step(&mut session, 0);
+    }
+    // Ticks 0 to 4 as predicted; 5 to 9 not simulated yet, and unlike the prediction.
+    remote_inputs(&mut session, 0, &[0, 0, 0, 0, 0, 7, 7, 7, 7, 7]);
+    assert_eq!(step(&mut session, 0), [save(5), advance(5, [0, 7])]);
+    let stats = peer_one_stats(&session);
+    assert_eq!(stats.rollbacks, 0);
+    assert_eq!(stats.prediction_misses, 0);
+}
+
+#[test]
+fn repredicted_tick_is_compared_with_its_new_prediction() {
+    let mut session = peer_zero();
+    remote_inputs(&mut session, 0, &[0; 10]);
+    for _ in 0..13 {
+        step(&mut session, 0);
+    }
+    remote_inputs(&mut session, 10, &[5]);
+    step(&mut session, 0);
+    // Ticks 11 to 13 now ran with 5. Tick 11 confirms it; tick 12 differs.
+    remote_inputs(&mut session, 11, &[5, 6]);
+    assert_eq!(
+        step(&mut session, 0),
+        [
+            Request::Load { tick: 12 },
+            save(12),
+            advance(12, [0, 6]),
+            save(13),
+            advance(13, [0, 6]),
+            save(14),
+            advance(14, [0, 6]),
+        ]
+    );
+    let stats = peer_one_stats(&session);
+    assert_eq!(stats.rollbacks, 2);
+    assert_eq!(stats.deepest_rollback, 3);
+    assert_eq!(stats.prediction_misses, 2);
+}
+
+#[test]
+fn stalls_at_the_window() {
+    let mut session = peer_zero();
+    let window = u64::from(MatchRules::default().rollback_window);
+    for tick in 0..window {
+        // Ticks 0 and 1, within the input delay, hold the default input.
+        let local = if tick < 2 { 0 } else { 1 };
+        assert_eq!(
+            step(&mut session, 1),
+            [save(tick), advance(tick, [local, 0])]
+        );
+    }
+    // A stalled advance needs no input: it advances no tick.
+    assert_eq!(session.advance(NOW), Ok(vec![]));
+    assert_eq!(peer_one_stats(&session).stalls, 1);
+    for stalls in 2..=4 {
+        assert_eq!(step(&mut session, 1), []);
+        assert_eq!(peer_one_stats(&session).stalls, stalls);
+        // Still sending every local input from the unacknowledged tick 0 on.
+        let messages = sent_to_peer_one(&mut session);
+        let mut inputs = vec![vec![0], vec![0]];
+        inputs.extend(vec![vec![1]; 8]);
+        assert!(
+            messages.contains(&Message::Inputs {
+                player: 0,
+                first_tick: 0,
+                inputs,
+            }),
+            "{messages:?}"
+        );
+    }
+    // During the stall, a new input replaces the pending one.
+    session.add_local_input(0, vec![7]).unwrap();
+    session.add_local_input(0, vec![9]).unwrap();
+    remote_inputs(&mut session, 0, &[0; 11]);
+    assert_eq!(session.advance(NOW).unwrap(), [save(8), advance(8, [1, 0])]);
+    let messages = sent_to_peer_one(&mut session);
+    let Some(Message::Inputs { inputs, .. }) = messages
+        .iter()
+        .find(|message| matches!(message, Message::Inputs { .. }))
+    else {
+        panic!("no inputs in {messages:?}");
+    };
+    assert_eq!(inputs.len(), 11);
+    assert_eq!(inputs[10], [9]);
+}
+
+#[test]
+fn advance_without_local_input_is_an_error() {
+    let mut session = peer_zero();
+    assert_eq!(
+        session.advance(NOW),
+        Err(SessionError::MissingLocalInput { player: 0 })
+    );
+    // The input is consumed by the tick it advanced.
+    step(&mut session, 0);
+    assert_eq!(
+        session.advance(NOW),
+        Err(SessionError::MissingLocalInput { player: 0 })
+    );
+}
+
+#[test]
+fn local_inputs_are_refused_with_the_reason() {
+    let mut connecting = sessions(2).remove(0);
+    assert_eq!(
+        connecting.add_local_input(0, vec![0]),
+        Err(SessionError::NotRunning)
+    );
+    assert_eq!(connecting.advance(NOW), Err(SessionError::NotRunning));
+    let mut session = peer_zero();
+    for player in [1, 2, u8::MAX] {
+        assert_eq!(
+            session.add_local_input(player, vec![0]),
+            Err(SessionError::NotLocal { player })
+        );
+    }
+    assert_eq!(
+        session.add_local_input(0, vec![0; MAX_INPUT_BYTES + 1]),
+        Err(SessionError::InputTooLarge {
+            player: 0,
+            len: MAX_INPUT_BYTES + 1
+        })
+    );
+    assert!(matches!(
+        session.add_local_input(0, vec![0, 0]),
+        Err(SessionError::InvalidInput { player: 0, .. })
+    ));
+    // Nothing refused became the pending input.
+    assert_eq!(
+        session.advance(NOW),
+        Err(SessionError::MissingLocalInput { player: 0 })
+    );
+}
+
+#[test]
+fn confirmed_events_follow_every_player_in_tick_order() {
+    let mut session = peer_zero();
+    for _ in 0..4 {
+        step(&mut session, 3);
+    }
+    assert!(
+        !session
+            .events()
+            .iter()
+            .any(|event| matches!(event, SessionEvent::Confirmed { .. }))
+    );
+    remote_inputs(&mut session, 0, &[4, 4, 4]);
+    step(&mut session, 3);
+    let confirmed: Vec<SessionEvent> = session.events();
+    assert_eq!(
+        confirmed,
+        [0, 1, 2].map(|tick| SessionEvent::Confirmed {
+            tick,
+            inputs: vec![vec![if tick < 2 { 0 } else { 3 }], vec![4]],
+        })
+    );
+}
+
+#[test]
+fn redundant_inputs_survive_loss() {
+    let mut harness = Harness::new(sessions(2));
+    harness.drop_every_other_packet();
+    assert!(harness.run_until(15 * ONE_SECOND, |h| confirmed_at_least(h, 300)));
+    assert_agree(&harness, 300);
+}
+
+#[test]
+fn two_local_players_and_one_remote() {
+    let conditions = LinkConditions {
+        latency_micros: 30_000,
+        jitter_micros: 10_000,
+        loss_per_mille: 200,
+        duplicate_per_mille: 20,
+        reorder_per_mille: 50,
+        reorder_extra_micros: 20_000,
+        seed: 11,
+    };
+    let mut harness = Harness::conditioned(sessions_of(&identity(&[0, 0, 1])), conditions);
+    assert!(harness.run_until(20 * ONE_SECOND, |h| confirmed_at_least(h, 300)));
+    assert_agree(&harness, 300);
+    for (tick, inputs) in harness.confirmed(PeerId(1)) {
+        assert_eq!(inputs.len(), 3, "tick {tick}");
+    }
+    // Both local players of peer 0 played: their inputs vary, so a lost one would show.
+    let confirmed = harness.confirmed(PeerId(0));
+    for player in 0..2 {
+        assert!(
+            confirmed
+                .iter()
+                .any(|(_, inputs)| inputs[player] == [model_byte(u8::try_from(player).unwrap(), 5)]),
+            "player {player}"
+        );
+    }
+}
+
+#[test]
+fn save_precedes_every_load() {
+    let mut loads = 0;
+    for seed in 0..4 {
+        let conditions = LinkConditions {
+            latency_micros: 50_000,
+            jitter_micros: 20_000,
+            loss_per_mille: 100,
+            duplicate_per_mille: 20,
+            reorder_per_mille: 50,
+            reorder_extra_micros: 30_000,
+            seed,
+        };
+        let mut harness = Harness::conditioned(sessions(3), conditions);
+        // The model panics on a Load that breaks the invariant.
+        assert!(harness.run_until(20 * ONE_SECOND, |h| confirmed_at_least(h, 300)));
+        assert_agree(&harness, 300);
+        for peer in harness.peers() {
+            loads += harness.model(peer).loads();
+            assert_eq!(harness.state(peer), SessionState::Running);
+        }
+    }
+    assert!(loads > 0, "no rollback happened: the test proves nothing");
+}
+
+#[test]
+fn inputs_that_cannot_be_accepted_are_dropped_and_counted() {
+    let mut session = peer_zero();
+    remote_inputs(&mut session, 0, &[3, 4]);
+    let inputs = |player, first_tick, inputs: Vec<Vec<u8>>| Message::Inputs {
+        player,
+        first_tick,
+        inputs,
+    };
+    let cases = [
+        // Player 0 is peer 0's, and player 9 does not exist.
+        (inputs(0, 0, vec![vec![0]]), DropReason::NotOwner),
+        (inputs(9, 0, vec![vec![0]]), DropReason::NotOwner),
+        (inputs(1, 2, vec![vec![0, 0]]), DropReason::InvalidInput),
+        (inputs(1, 1, vec![vec![5]]), DropReason::ConflictingInput),
+        (inputs(1, 3, vec![vec![0]]), DropReason::Gap),
+        (inputs(1, u64::MAX, vec![vec![0], vec![0]]), DropReason::Gap),
+        (
+            Message::Ack {
+                players: vec![(1, 0)],
+                hashes_through: 0,
+            },
+            DropReason::NotOwner,
+        ),
+        // Peer 0 holds inputs of player 0 for ticks 0 and 1 only, the input delay.
+        (
+            Message::Ack {
+                players: vec![(0, 3)],
+                hashes_through: 0,
+            },
+            DropReason::AckNeverSent,
+        ),
+    ];
+    for (message, reason) in cases {
+        let before = dropped(&session, reason);
+        from_peer_one(&mut session, vec![message.clone()]);
+        assert_eq!(dropped(&session, reason), before + 1, "{message:?}");
+        assert_eq!(
+            session.events(),
+            [SessionEvent::Dropped {
+                peer: PeerId(1),
+                reason
+            }],
+            "{message:?}"
+        );
+    }
+    // The confirmed inputs are unchanged.
+    step(&mut session, 0);
+    let confirmed: Vec<SessionEvent> = session.events();
+    assert_eq!(
+        confirmed,
+        [0, 1].map(|tick| SessionEvent::Confirmed {
+            tick,
+            inputs: vec![vec![0], vec![3 + u8::try_from(tick).unwrap()]],
+        })
+    );
+    assert_eq!(session.state(), SessionState::Running);
+}
+
+#[test]
+fn acknowledgments_only_move_forward() {
+    let mut session = peer_zero();
+    for _ in 0..4 {
+        step(&mut session, 1);
+    }
+    let ack = |next| Message::Ack {
+        players: vec![(0, next)],
+        hashes_through: 0,
+    };
+    from_peer_one(&mut session, vec![ack(5)]);
+    // An older acknowledgment, arriving reordered, is ignored.
+    from_peer_one(&mut session, vec![ack(3)]);
+    assert_eq!(session.events(), []);
+    step(&mut session, 1);
+    let messages = sent_to_peer_one(&mut session);
+    assert!(
+        messages.contains(&Message::Inputs {
+            player: 0,
+            first_tick: 5,
+            inputs: vec![vec![1], vec![1]],
+        }),
+        "{messages:?}"
+    );
+}
+
+#[test]
+fn inputs_of_a_running_peer_are_read_while_connecting() {
+    // Peer 1 has peer 0's Hello but not peer 2's: it is still connecting, while peer 0 runs.
+    let identity = identity(&[0, 1, 2]);
+    let mut session = Session::new(settings(1, &identity), support::model_input()).unwrap();
+    let hello = Message::Hello {
+        identity: identity.clone(),
+    };
+    session.receive(
+        PeerId(0),
+        &Packet {
+            match_id: 1,
+            messages: vec![hello],
+        }
+        .encode(),
+        NOW,
+    );
+    let inputs = Message::Inputs {
+        player: 0,
+        first_tick: 0,
+        inputs: vec![vec![0], vec![0], vec![2]],
+    };
+    // Its inputs say it runs: it received this peer's Hello, even if its Welcome was lost.
+    session.receive(
+        PeerId(0),
+        &Packet {
+            match_id: 1,
+            messages: vec![inputs],
+        }
+        .encode(),
+        NOW,
+    );
+    assert_eq!(session.state(), SessionState::Connecting);
+    assert_eq!(session.events(), []);
+    let hello = Message::Hello {
+        identity: identity.clone(),
+    };
+    let packet = Packet {
+        match_id: 1,
+        messages: vec![hello, Message::Welcome],
+    };
+    session.receive(PeerId(2), &packet.encode(), NOW);
+    assert_eq!(session.state(), SessionState::Running);
+    assert_eq!(session.events(), [SessionEvent::Started]);
+    // The inputs read while connecting are held: tick 2 of player 0 is 2, not predicted.
+    let ticks: Vec<Request> = (0..3)
+        .flat_map(|_| {
+            session.add_local_input(1, vec![0]).unwrap();
+            session.advance(NOW).unwrap()
+        })
+        .collect();
+    assert_eq!(
+        ticks.last(),
+        Some(&Request::Advance {
+            tick: 2,
+            inputs: vec![vec![2], vec![0], vec![0]],
+        })
+    );
+}
+
+#[test]
+fn unacknowledged_inputs_fill_a_packet_oldest_first() {
+    // Three local players with inputs at the largest size, and a peer that never
+    // acknowledges: the unacknowledged ticks outgrow one packet.
+    let identity = identity(&[0, 0, 0, 1]);
+    let any_input = PlayerInputSpec {
+        default: vec![0],
+        check: |_| Ok(()),
+    };
+    let sessions = (0..2)
+        .map(|local| Session::new(settings(local, &identity), any_input.clone()).unwrap())
+        .collect();
+    let mut session = handshake(sessions).remove(0);
+    for tick in 0..40u64 {
+        for player in 0..3 {
+            session
+                .add_local_input(player, vec![u8::try_from(tick).unwrap(); MAX_INPUT_BYTES])
+                .unwrap();
+        }
+        let packet = Packet {
+            match_id: 1,
+            messages: vec![Message::Inputs {
+                player: 3,
+                first_tick: tick,
+                inputs: vec![vec![0]],
+            }],
+        };
+        session.receive(PeerId(1), &packet.encode(), NOW);
+        assert_ne!(session.advance(NOW).unwrap(), []);
+    }
+    let outgoing = session.outgoing(NOW);
+    let (_, bytes) = &outgoing[0];
+    assert!(bytes.len() <= MAX_PACKET_BYTES, "{} bytes", bytes.len());
+    let messages = Packet::decode(bytes).unwrap().messages;
+    let sent: Vec<(u8, u64, usize)> = messages
+        .iter()
+        .filter_map(|message| match message {
+            Message::Inputs {
+                player,
+                first_tick,
+                inputs,
+            } => Some((*player, *first_tick, inputs.len())),
+            _ => None,
+        })
+        .collect();
+    // Every player from its oldest unacknowledged tick, sharing the room.
+    assert_eq!(sent.len(), 3, "{sent:?}");
+    for (player, first_tick, ticks) in &sent {
+        assert_eq!(*first_tick, 0, "player {player}");
+        assert!(*ticks >= 10, "player {player}: {sent:?}");
+    }
+}

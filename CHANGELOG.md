@@ -84,6 +84,24 @@ hash, those of the golden trace and replays included.
   while connecting ends it with `EndReason::Unreachable`. A packet that is not one of this
   match from another of its peers is dropped, counted per sender and `DropReason` in
   `Session::stats`, and reported as `SessionEvent::Dropped`.
+- A running `ludenea_net::Session` predicts and rolls back. `add_local_input(player, input)`
+  sets a local player's input for the next advanced tick (a second call replaces it), and
+  refuses with a `SessionError` (`NotRunning`, `NotLocal`, `InputTooLarge`, `InvalidInput`).
+  `advance(now_micros)` returns the `Request`s for the simulation (`Save { tick, hash }`
+  right before every `Advance`, `Load { tick }`, `Advance { tick, inputs }` with one input
+  per player): first a rollback from the first mispredicted tick, then at most one new tick,
+  or a stall once the current tick is `rollback_window` ticks past the confirmed one. It
+  refuses with `SessionError::MissingLocalInput` when a tick would advance without every
+  local input, and `SessionError::LastTick`. A local input applies `input_delay` ticks later;
+  the ticks before hold the default input. Remote players are predicted by repeating their
+  last confirmed input. `SessionEvent::Confirmed { tick, inputs }` follows every tick whose
+  inputs are confirmed for every player, in tick order. Every packet after an advance
+  carries the local inputs a peer has not acknowledged, oldest first within one packet, and
+  an `Ack`. `PeerStats` gains `rollbacks`, `deepest_rollback`, `prediction_misses` and
+  `stalls`, and `DropReason` gains `NotOwner`, `InvalidInput`, `ConflictingInput`, `Gap` and
+  `AckNeverSent`. A connecting session reads the inputs and acknowledgments of a peer whose
+  matching `Hello` it has, and takes them as that peer's `Welcome`: only a running peer
+  sends them.
 - `ludenea_render` answers without a GPU what the renderer draws: `atlas::frames_of(png,
   meta)` gives the `TextureFrames` (the image size and each `FrameRect`, row-major, with its
   pivot) a meta cuts a PNG into, the same cut `pack` makes, or a `FramesError` (`Decode`,
