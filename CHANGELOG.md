@@ -162,6 +162,28 @@ hash, those of the golden trace and replays included.
   can send is `ViolationRule::ImplausibleEnd`: one naming a peer outside the match, a desync
   of a tick past the local horizon plus one, or a game failure past that plus
   `rollback_window - 1`. A mismatch found once running has no end notice and is not relayed.
+- A `ludenea_net::Session` ends a match for every peer at a tick they agree on. A peer silent
+  for `notice_after_micros` while the match runs raises `SessionEvent::PeerSilent { peer,
+  for_micros }`, once per silence, and `SessionEvent::PeerBack { peer }` when it speaks again;
+  silent for `disconnect_after_micros`, it ends the session with `EndReason::Lost { peer }`,
+  whose end notice ends every other peer too (a notice of a peer lost that is its own sender
+  is `ViolationRule::ImplausibleEnd`). `Session::leave()` (`SessionError::NotRunning` unless
+  running) goes `SessionState::Leaving`: the last tick is the local input horizon, the
+  session takes no more local input, runs up to that tick, and every packet carries a
+  `Goodbye { last_tick }`. Every peer then confirms no tick past the lowest last tick heard,
+  runs no tick past the one after it, and ignores inputs past it; it ends with
+  `EndReason::Left { peer, last_tick }` once every player's inputs through that tick are
+  confirmed and every peer acknowledged its own, so every peer stops at the same tick with
+  the same confirmed inputs; it then sends every peer an `Ack`, and the leaver its
+  `Goodbye`, at most once a tick for `END_LINGER_MICROS`. The leaver ends anyway
+  `disconnect_after_micros` after `leave`. A `Goodbye` below the receiver's last confirmed
+  tick is `ViolationRule::GoodbyeBehind`, one past the furthest input an honest peer can have
+  `ViolationRule::BeyondHorizon`. Whatever the ending, once the session ran, the next
+  `advance` (or the one that ended it) returns the requests that land the simulation on the
+  state the confirmed inputs give at the end tick: a `Load` of the latest tick built only
+  from confirmed inputs, then a `Save` and an `Advance` of every confirmed tick from it.
+  Later calls are `SessionError::NotRunning`.
+
 - `ludenea_render` answers without a GPU what the renderer draws: `atlas::frames_of(png,
   meta)` gives the `TextureFrames` (the image size and each `FrameRect`, row-major, with its
   pivot) a meta cuts a PNG into, the same cut `pack` makes, or a `FramesError` (`Decode`,

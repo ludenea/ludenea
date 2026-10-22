@@ -89,13 +89,15 @@ fn lag_bound() -> u64 {
     2 * (window + delay) + 1
 }
 
-/// An ended session ignores what it receives, and refuses to run.
+/// An ended session ignores what it receives, lands its simulation once, and then refuses
+/// to run.
 fn assert_stays_ended(session: &mut Session) {
     let state = session.state();
     session.events();
     from_peer_one(session, vec![inputs(1, 0, &[0])]);
     assert_eq!(session.state(), state);
     assert_eq!(session.events(), []);
+    assert!(session.advance(NOW).is_ok());
     assert_eq!(session.advance(NOW), Err(SessionError::NotRunning));
     assert_eq!(session.outgoing(NOW), []);
 }
@@ -432,12 +434,11 @@ fn ticks_near_u64_max_never_panic() {
             },
             violation(1, None, Some(u64::MAX), ViolationRule::HashBeyondHorizon),
         ),
-        // Not read yet, and never a panic.
         (
             Message::Goodbye {
                 last_tick: u64::MAX,
             },
-            SessionState::Running,
+            violation(1, None, Some(u64::MAX), ViolationRule::BeyondHorizon),
         ),
         (
             Message::End {
@@ -545,8 +546,13 @@ fn fuzz_message(rng: &mut Rng, tick: u64, identity: &MatchIdentity) -> Message {
                 },
                 hash: fuzz_u64(rng),
             },
+            // Often a last tick around the receiver's, which may be behind it.
             1 => Message::Goodbye {
-                last_tick: fuzz_tick(rng, tick),
+                last_tick: if rng.range_u32(0, 2) == 0 {
+                    tick.saturating_sub(u64::from(rng.range_u32(0, 6)))
+                } else {
+                    fuzz_tick(rng, tick)
+                },
             },
             _ => Message::End {
                 reason: match rng.range_u32(0, 3) {
@@ -583,7 +589,8 @@ fn fuzz_message(rng: &mut Rng, tick: u64, identity: &MatchIdentity) -> Message {
 /// request is dropped, and a report moves at most the skips. An `End` of this match ends it
 /// with the reason it tells, which it then returns as relayed; and a hash report of the sender,
 /// at its tick or one received earlier, with a desync against the sender with two different
-/// hashes. Goodbye messages are not read yet.
+/// hashes. A goodbye waits for the inputs and acknowledgments through its last tick, so the
+/// session may end with `Left` naming the sender on a later packet.
 fn assert_allowed(
     before: &SessionState,
     after: &SessionState,
@@ -621,7 +628,8 @@ fn assert_allowed(
             assert_eq!(*peer, from, "{packet:?}");
             assert_ne!(local, remote, "{packet:?}");
         }
-        (SessionState::Running, SessionState::Ended(EndReason::Violation { peer, .. })) => {
+        (SessionState::Running, SessionState::Ended(EndReason::Violation { peer, .. }))
+        | (SessionState::Running, SessionState::Ended(EndReason::Left { peer, .. })) => {
             assert_eq!(*peer, from, "{packet:?}");
         }
         (SessionState::Running, SessionState::Ended(EndReason::Mismatch { peer, .. }))
@@ -664,7 +672,8 @@ fn deliver(session: &mut Session, from: PeerId, packet: &Packet, now: u64) -> bo
 }
 
 /// One frame of `session` at `frame`: an input for its player, an advance executed by `model`,
-/// which answers the hashes asked, the packet to the other peer.
+/// which answers the hashes asked, the packet to the other peer. An ended session lands its
+/// simulation at its first frame after the end.
 fn honest_frame(
     session: &mut Session,
     model: &mut Model,
@@ -677,7 +686,8 @@ fn honest_frame(
         session.add_local_input(player, input).unwrap();
         let requests = session.advance(now).unwrap();
         model.execute_for(session, &requests);
-    } else {
+    } else if let Ok(requests) = session.advance(now) {
+        model.execute_for(session, &requests);
         assert_eq!(session.advance(now), Err(SessionError::NotRunning));
     }
     session
@@ -761,6 +771,8 @@ fn fuzz_receive_never_panics() {
             SessionState::Ended(EndReason::Desync { .. }) => "Desync".to_string(),
             SessionState::Ended(EndReason::Lost { .. }) => "Lost".to_string(),
             SessionState::Ended(EndReason::LocalFailure { .. }) => "LocalFailure".to_string(),
+            SessionState::Ended(EndReason::Left { .. }) => "Left".to_string(),
+
             state => format!("{state:?}"),
         });
     }
@@ -772,7 +784,9 @@ fn fuzz_receive_never_panics() {
         "Desync",
         "HashBeyondHorizon",
         "ImplausibleEnd",
+        "GoodbyeBehind",
         "InvalidInput",
+        "Left",
         "LocalFailure",
         "Lost",
         "Mismatch",

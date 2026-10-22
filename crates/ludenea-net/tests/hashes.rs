@@ -853,9 +853,10 @@ fn desync_notice_lingers_then_stops() {
 #[test]
 fn end_notice_ends_the_receiver_with_the_same_reason() {
     let cases = [
+        // Peer 1 lost this one, which still hears it.
         (
-            EndNotice::Lost { peer: PeerId(1) },
-            EndReason::Lost { peer: PeerId(1) },
+            EndNotice::Lost { peer: PeerId(0) },
+            EndReason::Lost { peer: PeerId(0) },
         ),
         (
             EndNotice::LocalFailure { tick: 5 },
@@ -906,7 +907,7 @@ fn implausible_end_notices_are_violations() {
     let accepted = [
         desync(INTERVAL, 0),
         EndNotice::LocalFailure { tick: 37 },
-        EndNotice::Lost { peer: PeerId(1) },
+        EndNotice::Lost { peer: PeerId(0) },
     ];
     for notice in accepted {
         let mut driven = Driven::at(ticks);
@@ -924,6 +925,8 @@ fn implausible_end_notices_are_violations() {
         (desync(INTERVAL, 2), Some(INTERVAL)),
         (EndNotice::LocalFailure { tick: 38 }, Some(38)),
         (EndNotice::Lost { peer: PeerId(2) }, None),
+        // A peer never tells it lost itself.
+        (EndNotice::Lost { peer: PeerId(1) }, None),
     ];
     for (notice, tick) in refused {
         let mut driven = Driven::at(ticks);

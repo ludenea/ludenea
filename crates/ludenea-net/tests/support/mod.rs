@@ -1,10 +1,13 @@
 //! The multi-peer harness of the session tests: one session per peer of a match, over a
 //! [`MemoryNetwork`], optionally behind [`Conditioned`], driven in steps of
 //! [`STEP_MICROS`] of `now_micros`. Each step, every peer that is not muted takes every packet
-//! that has arrived, advances its session once per frame while it runs, with [`model_byte`]
-//! for each local player, applies the requests to its [`Model`], then sends what its session
-//! has to send. A frame lasts [`FRAME_MICROS`] unless [`Harness::set_frame_micros`] says
-//! otherwise. The model answers every `Save { hash: true }` through [`Session::report_hash`].
+//! that has arrived, advances its session once per frame while it runs or leaves, with
+//! [`model_byte`] for each local player while it runs, applies the requests to its [`Model`],
+//! then sends what its session has to send. Once a session ended, the harness advances it once
+//! more, right after its last packets, and applies the requests that land its simulation on
+//! the confirmed state. A frame lasts [`FRAME_MICROS`] unless [`Harness::set_frame_micros`]
+//! says otherwise. The model answers every `Save { hash: true }` through
+//! [`Session::report_hash`].
 
 #![allow(
     dead_code,
@@ -194,6 +197,11 @@ impl Model {
         self.tick
     }
 
+    /// The hash of the current state.
+    pub fn hash(&self) -> u64 {
+        self.hash
+    }
+
     /// The latest hash of the state of `tick`.
     pub fn hash_at(&self, tick: u64) -> Option<u64> {
         self.hashes.get(&tick).copied()
@@ -296,12 +304,16 @@ struct Peer {
     lose_hash_of: Option<u64>,
     /// Every frame uses the default input, so every prediction is right.
     default_inputs: bool,
+    /// The session ended and its simulation landed on the confirmed state.
+    landed: bool,
 }
 
 impl Peer {
-    /// One frame: an input for every local player, then one advance, executed by the model.
+    /// One frame: an input for every local player while the session runs, then one advance,
+    /// executed by the model.
     fn frame(&mut self, now: u64) {
-        for player in 0..u8::try_from(MAX_PLAYERS).unwrap() {
+        let running = self.session.state() == SessionState::Running;
+        for player in (0..u8::try_from(MAX_PLAYERS).unwrap()).filter(|_| running) {
             let byte = if self.default_inputs {
                 0
             } else {
@@ -318,6 +330,21 @@ impl Peer {
             .expect("a running session advances");
         self.model.execute_for(&mut self.session, &requests);
         self.frames += 1;
+        self.landed = matches!(self.session.state(), SessionState::Ended(_));
+    }
+
+    /// Once the session ended, the one advance that lands the simulation on the confirmed
+    /// state, unless the advance that ended it did.
+    fn land(&mut self, now: u64) {
+        if self.landed || !matches!(self.session.state(), SessionState::Ended(_)) {
+            return;
+        }
+        self.landed = true;
+        match self.session.advance(now) {
+            Ok(requests) => self.model.execute_for(&mut self.session, &requests),
+            Err(SessionError::NotRunning) => {}
+            Err(error) => panic!("advance of an ended session: {error}"),
+        }
     }
 }
 
@@ -375,6 +402,7 @@ impl Harness {
                 sent_packets: 0,
                 lose_hash_of: None,
                 default_inputs: false,
+                landed: false,
             })
             .collect();
         Self {
@@ -411,6 +439,14 @@ impl Harness {
     /// The time of the next step.
     pub fn now_micros(&self) -> u64 {
         self.now_micros
+    }
+
+    /// Has `peer` leave the match.
+    pub fn leave(&mut self, peer: PeerId) {
+        self.peers[usize::from(peer.0)]
+            .session
+            .leave()
+            .expect("a running session leaves");
     }
 
     /// Stops `peer` from receiving and sending, as a machine that is down.
@@ -458,7 +494,9 @@ impl Harness {
             while let Some((from, packet)) = peer.transport.receive(now) {
                 peer.session.receive(from, &packet, now);
             }
-            if peer.session.state() == SessionState::Running && !peer.frozen {
+            let state = peer.session.state();
+            let active = matches!(state, SessionState::Running | SessionState::Leaving);
+            if active && !peer.frozen {
                 let due = *peer.next_frame_micros.get_or_insert(now);
                 if now >= due {
                     peer.frame(now);
@@ -483,6 +521,7 @@ impl Harness {
                     .send(to, packet, now)
                     .expect("a session sends only packets a transport accepts");
             }
+            peer.land(now);
             peer.events.extend(peer.session.events());
         }
         self.now_micros += STEP_MICROS;

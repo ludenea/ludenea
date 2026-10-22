@@ -4,7 +4,7 @@ use ludenea_net::{
     DropReason, LinkConditions, MatchRules, Message, Packet, PeerId, QUALITY_INTERVAL_MICROS,
     Session, SessionEvent, SessionState,
 };
-use support::{FRAME_MICROS, Harness, handshake, sessions};
+use support::{FRAME_MICROS, Harness, handshake, identity, model_input, sessions, settings};
 
 const ONE_SECOND: u64 = 1_000_000;
 
@@ -131,7 +131,16 @@ fn duplicate_or_unknown_replies_do_not_skew_the_ping() {
     };
     assert_eq!(pair[0].events(), vec![drop; 4]);
     // A request still pending after sixteen later ones is forgotten: its reply is unknown.
-    let mut pair = handshake(sessions(2));
+    // They span 3.4 s of silence from peer 1, which the default timeouts disconnect.
+    let identity = identity(&[0, 1]);
+    let patient = (0..2)
+        .map(|local| {
+            let mut settings = settings(local, &identity);
+            settings.timeouts.disconnect_after_micros = 10 * ONE_SECOND;
+            Session::new(settings, model_input()).unwrap()
+        })
+        .collect();
+    let mut pair = handshake(patient);
     let ping = pair[0].stats().peers[&PeerId(1)].ping_micros;
     let first = packet_to(&mut pair[0], PeerId(1), ONE_SECOND);
     pair[1].receive(PeerId(0), &first.encode(), ONE_SECOND);
