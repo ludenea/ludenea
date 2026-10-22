@@ -364,6 +364,23 @@ describe("tilemap painting", () => {
     expect(host.editor.viewport.activeTool.getState()).toBe("tilemap.paint");
   });
 
+  it("a_despawned_tilemap_leaves_nothing_to_paint", async () => {
+    const { host, game } = await painting();
+    await select(host, MAP);
+    act(() => host.editor.viewport.setTool("tilemap.paint"));
+    // An undo of its spawn, a seek before it, or another branch: the entity is gone.
+    act(() => game.push({ type: "entity_despawned", entity: MAP }));
+    expect(host.editor.viewport.activeTool.getState()).toBeNull();
+    expect(() => host.editor.viewport.setTool("tilemap.paint")).toThrow(/not available/);
+    expect(screen.queryByRole("group", { name: "Tiles of assets/tiles.png" })).toBeNull();
+    expect(screen.getByText(/Select one entity with a ludenea::Tilemap/)).toBeTruthy();
+    // Alive again (a redo of its spawn), it reports all its components.
+    act(() => game.push({ type: "entity_changed", entity: MAP, components: { "ludenea::Tilemap": json(tilemap()), "ludenea::Pose": json(pose(0, 0)) }, removed: [] }));
+    await settle();
+    act(() => host.editor.viewport.setTool("tilemap.paint"));
+    expect(host.editor.viewport.activeTool.getState()).toBe("tilemap.paint");
+  });
+
   it("b_and_e_choose_the_tools", async () => {
     const { host } = await painting();
     expect(host.registry.shortcuts.get("B")).toBe("tilemap.paint");

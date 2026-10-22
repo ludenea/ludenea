@@ -93,6 +93,11 @@ export const tilemapPlugin = definePlugin({
         if (removed.includes(TILEMAP)) tilemap = null;
         if (removed.includes(POSE)) pose = null;
         update();
+      }, () => {
+        // Undone, seeked before its spawn, or on another branch: nothing to paint until it is back.
+        tilemap = null;
+        pose = null;
+        update();
       });
       control
         .request({ type: "get_entity", entity })
