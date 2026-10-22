@@ -813,6 +813,23 @@ describe("viewport", () => {
     ]);
   });
 
+  it("a_tool_pointer_maps_through_the_camera_the_renderer_draws_with", async () => {
+    const camera: CameraItem = { entity: entity(1), center: { x: 10, y: 5 }, view: { x: 8, y: 6 } };
+    const { host, view } = await viewport((command) => (command.type === "get_render_frame" ? { type: "render_frame", frame: frameAt(7, { camera }) } : undefined));
+    const { tool, heard, contexts } = recordingTool();
+    act(() => void host.editor.viewport.tools.register(tool));
+    act(() => host.editor.viewport.setTool("test.paint"));
+    await act(() => host.editor.commands.run("viewport.toggle-game-camera"));
+    await animationFrames(2);
+    const renderer = renderers.at(-1)!;
+    renderer.calls.length = 0;
+    fireEvent.pointerDown(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    // Through the game camera, the renderer maps with the frame's camera (null), as it draws.
+    expect(renderer.calls.filter((call) => call.method === "screen_to_world").map((call) => call.args)).toEqual([[250, 100, 1, null]]);
+    expect(heard[0]![1]!.world).toEqual({ x: 11, y: 6 });
+    expect(heard[0]![1]!.world).toEqual(contexts[0]!.screenToWorld({ x: 250, y: 100 }, 1));
+  });
+
   it("escape_returns_to_select", async () => {
     const { host, game, view } = await viewport((command) => (command.type === "pick" ? { type: "picked", entities: [entity(1)] } : undefined));
     const { tool, heard } = recordingTool();

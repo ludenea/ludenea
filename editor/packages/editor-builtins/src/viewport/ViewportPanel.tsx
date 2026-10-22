@@ -396,8 +396,9 @@ export function ViewportPanel({
     // Gives `event` to `tool`'s `handler`; a tool that throws has its failure reported.
     const toTool = (tool: ViewportTool, handler: "pointerDown" | "pointerMove" | "pointerUp", event: PointerEvent) => {
       const at = local(event);
-      const pointer: ToolPointer = { screen: at, world: world(at), button: event.button, shift: event.shiftKey, alt: event.altKey };
       try {
+        // The world point as `screenToWorld(at, 1)` maps it: one camera for both.
+        const pointer: ToolPointer = { screen: at, world: mapToWorld(at, 1), button: event.button, shift: event.shiftKey, alt: event.altKey };
         tool[handler]?.(pointer, toolContext);
       } catch (error) {
         editor.console.report(error, `The viewport tool "${tool.id}" handling a pointer event`);
