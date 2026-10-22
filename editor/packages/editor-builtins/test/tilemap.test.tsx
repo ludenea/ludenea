@@ -11,7 +11,11 @@ type Command = { type: string; [key: string]: unknown };
 
 const TILESET = "000000000000000000000000000000a1";
 const META: TextureMeta = { pixels_per_unit: 16, grid: { frame_width: 16, frame_height: 16, margin: 0, spacing: 0 }, pivot: null, filter: "Nearest" };
-const files: FileEntry[] = [{ path: "assets/tiles.png", id: TILESET, kind: { Texture: META } }];
+const SMALL_TILESET = "000000000000000000000000000000a2";
+const files: FileEntry[] = [
+  { path: "assets/tiles.png", id: TILESET, kind: { Texture: META } },
+  { path: "assets/small.png", id: SMALL_TILESET, kind: { Texture: META } },
+];
 /** What the fake renderer cuts `assets/tiles.png` into: three frames of 16 by 16 pixels side by side. */
 const TILE_FRAMES = {
   width: 48,
@@ -120,7 +124,7 @@ function recordingCanvas() {
 describe("tilemap painting", () => {
   beforeEach(() => {
     backgroundParallax = 0.5;
-    script.frames = { "assets/tiles.png": TILE_FRAMES };
+    script.frames = { "assets/tiles.png": TILE_FRAMES, "assets/small.png": { width: 16, height: 16, frames: [TILE_FRAMES.frames[0]!] } };
   });
   afterEach(() => {
     cleanup();
@@ -381,6 +385,20 @@ describe("tilemap painting", () => {
     await settle();
     act(() => host.editor.viewport.setTool("tilemap.paint"));
     expect(host.editor.viewport.activeTool.getState()).toBe("tilemap.paint");
+  });
+
+  it("a_chosen_tile_past_the_tilesets_frames_says_so", async () => {
+    const { host, game } = await painting();
+    await select(host, MAP);
+    fireEvent.click(screen.getByRole("button", { name: "Tile 2" }));
+    // The tileset changes to one of a single frame: tile 2 is not in it, and the palette says so.
+    act(() => game.push({ type: "entity_changed", entity: MAP, components: { "ludenea::Tilemap": json(tilemap({ tileset: SMALL_TILESET })) }, removed: [] }));
+    await settle();
+    await settle();
+    expect(within(screen.getByRole("group", { name: "Tiles of assets/small.png" })).getAllByRole("button")).toHaveLength(1);
+    expect(screen.getByText("Tile 2 (not in this tileset)")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Tile 0" }));
+    expect(screen.queryByText(/not in this tileset/)).toBeNull();
   });
 
   it("the_layer_parallax_is_read_again_on_each_selection", async () => {

@@ -357,13 +357,14 @@ tick rate, looping. A clip reaching past its texture's frames says so and does n
 ### Tilemaps
 
 Select one entity with a `ludenea::Tilemap` (and its `ludenea::Pose`) and the "Tile palette"
-panel shows its tileset's frames; click one to choose the tile to paint. With the game paused,
-"Paint tiles" (`B`) and "Erase tiles" (`E`) turn the viewport's pointer into a brush: a drag
-selects a rectangle of cells, previewed over the viewport and clamped to the grid, and paints
-it on release as one `paint_tiles` edit, which one undo takes back; a right drag erases. The
-cells follow the tilemap's layer and its parallax. A paint at a past tick forks a branch as
-any edit does, and "Save scene" writes the tiles. A refused paint is reported in the Console
-with the game's reason. The tools and the palette are a plugin on the public editor API.
+panel shows its tileset's frames; click one to choose the tile to paint (a chosen tile the
+tileset lacks is named as such). With the game paused, "Paint tiles" (`B`) and "Erase tiles"
+(`E`) turn the viewport's pointer into a brush: a drag selects a rectangle of cells, previewed
+over the viewport and clamped to the grid, and paints it on release as one `paint_tiles` edit,
+which one undo takes back; a right drag erases. The cells follow the tilemap's layer and its
+parallax. A paint at a past tick forks a branch as any edit does, and "Save scene" writes the
+tiles. A refused paint is reported in the Console with the game's reason. The tools and the
+palette are a plugin on the public editor API.
 
 ### Replays
 

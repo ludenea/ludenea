@@ -25,6 +25,7 @@ function Tiles({ editor, tileset, tile, choose }: { editor: Editor; tileset: Ass
       <p className="ludenea-muted">
         {path}: B paints the chosen tile, E erases; a right drag erases too. The game must be paused.
       </p>
+      {tile !== null && tile >= frames.frames.length && <p role="status" className="ludenea-warning">{`Tile ${tile} (not in this tileset)`}</p>}
       <div role="group" aria-label={`Tiles of ${path}`} className="ludenea-tiles">
         {frames.frames.map((frame, index) => (
           <button key={index} aria-label={`Tile ${index}`} aria-pressed={tile === index} title={`Tile ${index}`} onClick={() => choose(index)}>
