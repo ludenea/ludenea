@@ -44,6 +44,7 @@ for any thread count. The guarantee rests on:
 | `editor`                 | The editor: web and desktop applications            |
 | `examples/boxes`         | Reference scenario, golden trace, and benchmark     |
 | `examples/swarm`         | Runtime test game: 10,000 sprites, 4 players        |
+| `examples/arena`         | Platform arena: two fighters, run and jump          |
 | `golden`                 | Golden hash traces                                  |
 
 ## Commands
