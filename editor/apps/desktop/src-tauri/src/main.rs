@@ -22,6 +22,10 @@ use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 /// `ludenea.engine-path` travels in `Create`).
 const ENGINE_PATH_VARIABLE: &str = "LUDENEA_ENGINE_PATH";
 
+/// Set at launch, the file a frame time measurement writes its report to before the editor
+/// exits (`editor/scripts/desktop-frame-times.mjs`); unset, the editor never measures.
+const FRAME_TIMES_VARIABLE: &str = "LUDENEA_FRAME_TIMES";
+
 struct Backend {
     service: Mutex<ProjectService>,
     delivery: Mutex<Delivery>,
@@ -30,6 +34,8 @@ struct Backend {
     /// The running game's input, and which game it is: a replaced game's last lines are dropped.
     to_game: Mutex<Option<Sender<String>>>,
     game: AtomicU64,
+    /// Where the frame time measurement requested at launch writes its report.
+    frame_times: Option<PathBuf>,
 }
 
 /// What reaches the front end on the project channel. Locked after the service, never before.
@@ -214,6 +220,36 @@ async fn send(
     }
 }
 
+/// Whether a frame time measurement was requested at launch.
+#[tauri::command]
+fn frame_times_requested(backend: State<'_, Arc<Backend>>) -> bool {
+    backend.frame_times.is_some()
+}
+
+/// Writes the report of the frame time measurement requested at launch, then exits: with
+/// status 0 once it is written, 1 when it cannot be.
+#[tauri::command]
+fn frame_times_measured(
+    report: String,
+    app: tauri::AppHandle,
+    backend: State<'_, Arc<Backend>>,
+) -> Result<(), String> {
+    let path = backend.frame_times.as_ref().ok_or_else(|| {
+        format!("no frame time measurement was requested at launch ({FRAME_TIMES_VARIABLE})")
+    })?;
+    match std::fs::write(path, report) {
+        Ok(()) => app.exit(0),
+        Err(error) => {
+            eprintln!(
+                "cannot write the frame times to {}: {error}",
+                path.display()
+            );
+            app.exit(1);
+        }
+    }
+    Ok(())
+}
+
 /// `ludenea-plugin://localhost/plugins/<file>`: the open project's plugin bundles.
 fn plugin_bundle(backend: &Backend, path: &str) -> Response<Vec<u8>> {
     let respond = |status: StatusCode, body: Vec<u8>| {
@@ -296,13 +332,20 @@ fn main() {
         control: Mutex::new(None),
         to_game: Mutex::new(None),
         game: AtomicU64::new(0),
+        frame_times: std::env::var_os(FRAME_TIMES_VARIABLE).map(PathBuf::from),
     });
     let relay = Arc::clone(&backend);
     thread::spawn(move || relay.relay_events(events));
 
     tauri::Builder::default()
         .manage(backend)
-        .invoke_handler(tauri::generate_handler![subscribe, unsubscribe, send])
+        .invoke_handler(tauri::generate_handler![
+            subscribe,
+            unsubscribe,
+            send,
+            frame_times_requested,
+            frame_times_measured
+        ])
         .register_asynchronous_uri_scheme_protocol(
             "ludenea-plugin",
             |context, request, responder| {

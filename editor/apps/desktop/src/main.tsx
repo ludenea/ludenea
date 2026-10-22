@@ -1,5 +1,7 @@
+import { invoke } from "@tauri-apps/api/core";
 import { ProjectClient, tauriTransport } from "@ludenea/control-client";
-import { startEditor } from "@ludenea/web/app";
+import { startEditor, type EditorApp } from "@ludenea/web/app";
+import { measureFrameTimes } from "@ludenea/web/frame-times";
 import { followNativeGames } from "@ludenea/web/games";
 
 // Where the backend's `ludenea-plugin` scheme answers (Windows webviews reach custom schemes
@@ -14,6 +16,19 @@ async function main() {
   // when a game runs.
   project.request({ type: "info" }).then(() => app.loadPlugins(), () => {});
   followNativeGames(project, app, () => tauriTransport("control"));
+  if (await invoke<boolean>("frame_times_requested")) void reportFrameTimes(app);
+}
+
+/** How long a frame time measurement plays. */
+const MEASURED_PLAY_MS = 10_000;
+
+/** Measures the frame times, as requested at launch, and hands the backend the report, which exits. */
+async function reportFrameTimes(app: EditorApp): Promise<void> {
+  const report = await measureFrameTimes(app.host.editor, MEASURED_PLAY_MS).then(
+    (times) => times,
+    (error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }),
+  );
+  await invoke("frame_times_measured", { report: JSON.stringify(report) });
 }
 
 main().catch((error) => {

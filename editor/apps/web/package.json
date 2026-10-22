@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     "./app": "./src/app.ts",
-    "./games": "./src/games.ts"
+    "./games": "./src/games.ts",
+    "./frame-times": "./src/frame-times.ts"
   },
   "scripts": {
     "build": "vite build",

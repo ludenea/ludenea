@@ -50,6 +50,9 @@ importers:
       '@ludenea/web':
         specifier: workspace:*
         version: link:../web
+      '@tauri-apps/api':
+        specifier: 2.12.4
+        version: 2.12.4
       react:
         specifier: 19.3.1
         version: 19.3.1
