@@ -574,14 +574,19 @@ hash, those of the golden trace and replays included.
   that are not human readable tag it by variant index, JSON still with its `type` field.
   New `paint_tiles` (`entity`, `area`, `tile`) sets every cell of `area`, the new `TileArea`
   (`x`, `y`, `width`, `height`, in cells from the bottom-left cell), of the entity's
-  `ludenea::Tilemap` to `tile`, `null` erasing them, and replies `done`. It applies and
-  records exactly as the `set_field` of the tilemap's `tiles` with the same result (a scene
-  edit at tick 0, an override on a prefab instance's entity, a recorded edit later, one undo
-  step), batches as one, and a batch changing the same tilemap with both is refused. A dead
-  entity is refused with `no_such_entity`; an entity without a tilemap, an empty area, and
-  an area outside the grid (its end past the last cell, overflow included) with
-  `invalid_command`, naming the entity, the area, and the grid. A tile past the tileset's
-  frames is accepted.
+  `ludenea::Tilemap` to `tile` and replies `done`. `tile` is required: `null` erases, and a
+  command without it does not decode. It applies and records exactly as the `set_field` of
+  the tilemap's `tiles` with the same result (a scene edit at tick 0, an override on a
+  prefab instance's entity, a recorded edit later, one undo step), batches as one, and a
+  batch changing the same tilemap with both is refused. Every refusal starts with the
+  entity, as in ``entity 4v1, component `ludenea::Tilemap`, paint_tiles:``, errors of the
+  edit that follows included. A dead entity is refused with `no_such_entity`. With
+  `invalid_command`: an entity without a tilemap (`entity 4v1 has no ludenea::Tilemap; is
+  RenderPlugin added?`), a tilemap the game left without one `tiles` entry per cell (`the
+  tilemap cannot be read:` and the cause), an empty area (its size), and an area outside
+  the grid (`area x 30..34, y 0..2 is outside the 32 by 18 grid`; an area whose end
+  overflows names its start, its size, and the grid). A tile past the tileset's frames is
+  accepted.
 - Over `host --stdio` and in a browser worker, the events a request causes come before its
   response, not after the response to a later request: a `load_session` sent right after
   `load_scene` answered could be followed by the scene's `timeline_changed` (head 0), which
