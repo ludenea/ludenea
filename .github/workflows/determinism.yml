@@ -35,8 +35,8 @@ jobs:
       - run: cargo clippy --locked --target wasm32-unknown-unknown -p ludenea -p ludenea-control -p ludenea-runtime -p boxes -p swarm -p arena --lib -- -D warnings
       - run: cargo clippy --locked --target wasm32-unknown-unknown -p ludenea-render --features web --lib -- -D warnings
       - run: cargo clippy --locked --target wasm32-unknown-unknown -p ludenea-runtime --features web --lib -- -D warnings
-      # WebAssembly outside the browser: the command line tool that verifies the goldens.
-      - run: cargo clippy --locked --target wasm32-wasip1 -p boxes --bins -- -D warnings
+      # WebAssembly outside the browser: the command line tools that verify the goldens.
+      - run: cargo clippy --locked --target wasm32-wasip1 -p boxes -p arena --bins -- -D warnings
       # The runner without a window, as a headless game build links it.
       - run: cargo clippy --locked --target wasm32-wasip1 -p ludenea-runtime --lib -- -D warnings
 
@@ -71,13 +71,25 @@ jobs:
       - id: tests
         run: cargo test --locked --workspace
       - run: cargo test --locked -p ludenea-runtime --features native
-      # The native window end to end, on a virtual display and lavapipe: a short match played
-      # and recorded, whose replay must verify.
+      # The native window end to end, on a virtual display and lavapipe: short matches played
+      # and recorded, whose replays must verify.
       - name: Play and verify a match in the native window
         if: runner.os == 'Linux'
         run: |
           xvfb-run --auto-servernum cargo run --locked --release -p swarm -- play examples/swarm/assets/swarm.scene.ron --players 1 --ticks 120 --record play/swarm.replay
           cargo run --locked --release -p swarm -- verify play/swarm.replay
+          xvfb-run --auto-servernum cargo run --locked --release -p arena -- play examples/arena/assets/arena.scene.ron --players 2 --ticks 600 --record play/arena-native.replay
+          cargo run --locked --release -p arena -- verify play/arena-native.replay
+      # A tick of the arena's golden replay drawn offscreen, to look at.
+      - name: Render the arena
+        if: runner.os == 'Linux'
+        run: cargo run --locked --release -p arena -- render golden/arena.replay --tick 300 --out play/arena.png
+      - name: Upload the arena's render
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: arena-render
+          path: play/arena.png
       # A divergence fails the golden tests first, so the verify steps run once the tests ran,
       # passed or not, but not after a clippy failure. Every thread count runs, even after one
       # fails, and dumps into a folder of its own.
@@ -106,9 +118,19 @@ jobs:
             cargo run --locked --release -p boxes -- verify golden/spawner.replay --threads $threads --dump-dir "$LUDENEA_DUMP_DIR/release/boxes-spawner-$threads-threads" || status=1
           done
           exit $status
+      - name: Verify the arena's golden replay
+        if: ${{ !cancelled() && steps.tests.outcome != 'skipped' }}
+        shell: bash
+        run: |
+          status=0
+          for threads in 1 2 8; do
+            cargo run --locked --release -p arena -- verify golden/arena.replay --threads $threads --dump-dir "$LUDENEA_DUMP_DIR/release/arena-replay-$threads-threads" || status=1
+          done
+          exit $status
       # One artifact per thread count, with the debug and the release dumps of that count.
       # Steps cannot loop: a thread count added to the verify loops above or to the golden
-      # tests (examples/boxes/tests/golden.rs) needs an upload step of its own here.
+      # tests (examples/boxes/tests/golden.rs, examples/arena/tests/golden.rs) needs an upload
+      # step of its own here.
       - name: Upload the divergence dump at 1 thread
         if: failure()
         uses: actions/upload-artifact@v4
@@ -169,7 +191,7 @@ jobs:
         run: rustup toolchain install
       - uses: bytecodealliance/actions/wasmtime/setup@v1
       - id: build
-        run: cargo build --locked --release --target wasm32-wasip1 -p boxes --bin boxes
+        run: cargo build --locked --release --target wasm32-wasip1 -p boxes --bin boxes -p arena --bin arena
       # WebAssembly always runs on one thread. The game reaches only the working directory
       # (--dir=.), so the dumps go to dump/ in it, a folder per golden.
       - name: Verify the golden trace
@@ -186,6 +208,9 @@ jobs:
       - name: Verify the golden replay
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: wasmtime run --dir=. target/wasm32-wasip1/release/boxes.wasm verify golden/spawner.replay --dump-dir dump/boxes-spawner-1-threads
+      - name: Verify the arena's golden replay
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: wasmtime run --dir=. target/wasm32-wasip1/release/arena.wasm verify golden/arena.replay --dump-dir dump/arena-replay-1-threads
       - name: Upload the divergence dump
         if: failure()
         uses: actions/upload-artifact@v4
@@ -249,10 +274,12 @@ jobs:
       - run: pnpm -C editor build
       - run: cargo build --locked -p ludenea-serve --features embed-editor
       - run: cargo build --locked -p ludenea-serve
-      # The standalone page's tests (standalone.spec.ts) open the swarm built as a web page and
-      # check it against the swarm's own command line tool.
-      - run: cargo build --locked -p swarm
+      # The standalone page's tests (standalone.spec.ts) open the swarm and the arena built as
+      # web pages and check them against each game's own command line tool, which the arena's
+      # editor tests (arena.spec.ts) run too.
+      - run: cargo build --locked -p swarm -p arena
       - run: cargo run --locked -p ludenea-serve -- build examples/swarm --web --out editor/e2e/fixtures/standalone
+      - run: cargo run --locked -p ludenea-serve -- build examples/arena --web --out editor/e2e/fixtures/arena
       # The performance test only reports its numbers here: it asserts on the reference
       # machine (PERF_STRICT=1).
       - run: pnpm -C editor e2e
