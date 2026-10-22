@@ -1,9 +1,9 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DuplicateRegistration, definePlugin, type Editor } from "../src";
+import { DuplicateRegistration, definePlugin, type EditCommand, type Editor, type ViewportTool } from "../src";
 import { Shell } from "../src/app";
-import { logged, settle, testHost } from "./support";
+import { logged, settle, testGame, testHost, timeline } from "./support";
 
 const entity = { index: 3, generation: 1 };
 
@@ -350,5 +350,74 @@ describe("loader", () => {
     // The next call lists again.
     await expect(host.editor.textures.frames("assets/hero.png")).resolves.toMatchObject({ width: 1, height: 1 });
     expect(host.editor.textures.find("0000000000000000000000000000000d")).toMatchObject({ path: "assets/hero.png" });
+  });
+  it("a_project_plugin_registers_a_viewport_tool_and_edits", async () => {
+    const tool: ViewportTool = { id: "my_game.paint", title: "Paint", available: (editor) => editor.control !== null };
+    const edited: string[] = [];
+    const plugin = definePlugin({
+      name: "my_game",
+      activate(editor) {
+        editor.viewport.tools.register(tool);
+        editor.onEdited((command) => edited.push(command.type));
+      },
+    });
+    const host = await testHost(async () => ({ default: plugin }));
+    // A listener that throws is reported; the edit stands and the other listeners hear it.
+    host.loader.activate(
+      definePlugin({
+        name: "broken",
+        activate(editor) {
+          editor.onEdited(() => {
+            throw new Error("no score panel");
+          });
+        },
+      }),
+    );
+    await host.loader.load("/plugins/my_game.1.js");
+    expect(host.editor.viewport.tools.list()).toEqual([tool]);
+    expect(host.editor.pluginOf(tool)).toBe("my_game");
+    expect(() => host.editor.viewport.tools.register({ ...tool })).toThrow(DuplicateRegistration);
+
+    // Without a game the tool cannot be used and nothing can be edited.
+    expect(host.editor.viewport.activeTool.getState()).toBeNull();
+    expect(() => host.editor.viewport.setTool("my_game.paint")).toThrow('the viewport tool "my_game.paint" is not available now');
+    expect(() => host.editor.viewport.setTool("my_game.erase")).toThrow('no viewport tool "my_game.erase" is registered');
+    await expect(host.editor.edit({ type: "undo" })).rejects.toThrow("no game is running");
+
+    const game = await testGame((command) => (command.type === "get_timeline" ? timeline() : command.type === "redo" ? { error: { code: "invalid_command", message: "nothing to redo" } } : { type: "done" }));
+    act(() => host.setControl(game.control));
+    act(() => host.editor.viewport.setTool("my_game.paint"));
+    expect(host.editor.viewport.activeTool.getState()).toBe("my_game.paint");
+
+    const score = (value: number): EditCommand => ({ type: "set_field", target: { type: "resource", resource: "demo::Score" }, path: [], value });
+    const lives: EditCommand = { type: "set_field", target: { type: "resource", resource: "demo::Lives" }, path: [], value: 3 };
+    await host.editor.edit(score(1));
+    await host.editor.batched([score(2)]);
+    await host.editor.batched([score(3), lives]);
+    await host.editor.batched([]);
+    await expect(host.editor.edit({ type: "redo" })).rejects.toThrow("nothing to redo");
+    await settle();
+    const edits = game.sent.filter((command) => !["get_timeline", "get_hash"].includes(command.type));
+    // One command is sent alone, several as one batch, none not at all.
+    expect(edits).toEqual([score(1), score(2), { type: "batch", commands: [score(3), lives] }, { type: "redo" }]);
+    // Listeners hear the accepted edits only; every edit sent, refused or not, refreshes the timeline.
+    expect(edited).toEqual(["set_field", "set_field", "batch"]);
+    expect(logged(host).filter(([level]) => level === "error").map(([, text]) => text)).toEqual([
+      'Reacting to the edit "set_field" failed: no score panel',
+      'Reacting to the edit "set_field" failed: no score panel',
+      'Reacting to the edit "batch" failed: no score panel',
+    ]);
+    expect(game.sent.filter((command) => command.type === "get_timeline")).toHaveLength(5);
+
+    act(() => host.editor.timeline.setState({ timeline: { ...timeline(), resimulating: true } }));
+    await expect(host.editor.edit({ type: "undo" })).rejects.toThrow("the game is resimulating; edit once it finishes");
+
+    // Deactivating the plugin removes its tool, which stops being the active one, and its listener.
+    act(() => host.editor.timeline.setState({ timeline: { ...timeline(), resimulating: false } }));
+    act(() => host.loader.deactivate("my_game"));
+    expect(host.editor.viewport.tools.list()).toEqual([]);
+    expect(host.editor.viewport.activeTool.getState()).toBeNull();
+    await host.editor.edit({ type: "undo" });
+    expect(edited).toHaveLength(3);
   });
 });

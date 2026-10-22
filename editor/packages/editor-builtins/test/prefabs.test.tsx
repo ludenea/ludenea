@@ -4,7 +4,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { builtinPlugins } from "../src";
 import { Field } from "../src/inspector/fields/Field";
 import { prefabsOf } from "../src/prefabs";
-import { edit } from "../src/timeline/editing";
 import { renderPanel, settle, testEditor, testGame } from "./support";
 
 // The project template's shape: `scenes/main.scene.ron` holds instances 4 and 5 of
@@ -319,10 +318,8 @@ describe("prefabs", () => {
         return refreshes++ === 0 ? new Promise<object>((resolve) => (answerFirst = resolve)) : answer(newer);
       },
     });
-    const control = host.editor.control!;
-
-    await act(() => edit(host.editor, control, { type: "despawn", entity: entity(0) }));
-    await act(() => edit(host.editor, control, { type: "despawn", entity: entity(1) }));
+    await act(() => host.editor.edit({ type: "despawn", entity: entity(0) }));
+    await act(() => host.editor.edit({ type: "despawn", entity: entity(1) }));
     await settle();
     expect(prefabsOf(host.editor)!.state.get().instances).toEqual(newer);
     answerFirst(answer(older));

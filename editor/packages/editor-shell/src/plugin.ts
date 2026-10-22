@@ -105,6 +105,48 @@ export interface ViewportOverlay {
   draw(context: OverlayContext): void;
 }
 
+/** A pointer event over the viewport as a tool hears it: `screen` in CSS pixels from the viewport's top-left corner, `world` in world units on a layer of parallax 1. */
+export interface ToolPointer {
+  screen: { x: number; y: number };
+  world: Vec2;
+  /** The DOM `PointerEvent.button`: 0 for the main button, -1 for a move with no button change. */
+  button: number;
+  shift: boolean;
+  alt: boolean;
+}
+
+/** What a viewport tool works with while it handles an event. */
+export interface ToolContext {
+  editor: Editor;
+  /** Where `screen` (CSS pixels) falls on a layer of `parallax`, as the viewport's renderer draws it. */
+  screenToWorld(screen: { x: number; y: number }, parallax: number): Vec2;
+  /** Draws the viewport again, its overlays included. */
+  redraw(): void;
+}
+
+/**
+ * A tool of the viewport: while it is active (`editor.viewport.setTool`), the presses, moves,
+ * and releases of the pointer over the viewport are its own instead of selecting and moving
+ * entities. Panning (Space-drag, middle-drag) and zooming stay the viewport's.
+ */
+export interface ViewportTool {
+  id: string;
+  title: string;
+  /** The CSS cursor over the viewport while the tool is active. */
+  cursor?: string;
+  /**
+   * Whether the tool can be used now; asked again on every selection, timeline, and game
+   * change, and the tool is deactivated once it answers false.
+   */
+  available(editor: Editor): boolean;
+  pointerDown?(event: ToolPointer, context: ToolContext): void;
+  /** Every move over the viewport while the tool is active, pressed or not. */
+  pointerMove?(event: ToolPointer, context: ToolContext): void;
+  pointerUp?(event: ToolPointer, context: ToolContext): void;
+  /** Drawn over the viewport after the overlays, while the tool is active. */
+  overlay?(context: OverlayContext): void;
+}
+
 /** Drawn by the inspector beside every field of every component, the component itself (empty `path`) included. */
 export interface FieldDecoration {
   id: string;

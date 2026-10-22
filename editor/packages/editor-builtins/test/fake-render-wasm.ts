@@ -164,6 +164,7 @@ export class WebRenderer implements Shape {
 
   /** As the real one: through `camera`, else the last frame's camera, fitted to the canvas. */
   screen_to_world(x: number, y: number, parallax: number, camera?: string | null): string {
+    this.calls.push({ method: "screen_to_world", args: [x, y, parallax, camera ?? null] });
     const { center, view } = camera ? (JSON.parse(camera) as CameraView) : (this.pushed.at(-1)?.camera ?? DEFAULT_CAMERA);
     const { width, height } = this.css;
     const aspect = width / height;

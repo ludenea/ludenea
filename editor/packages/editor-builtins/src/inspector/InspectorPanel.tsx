@@ -1,8 +1,8 @@
-import { ProtocolFailure, type AssetId, type Command, type ComponentValue, type ControlClient, type Entity, type FieldTarget, type JsonValue, type PathSegment, type Timeline, type TypeSchema } from "@ludenea/control-client";
-import { PluginBoundary, type Editor, type PluginFailure } from "@ludenea/editor-shell";
+import { ProtocolFailure, type AssetId, type ComponentValue, type ControlClient, type Entity, type FieldTarget, type JsonValue, type PathSegment, type Timeline, type TypeSchema } from "@ludenea/control-client";
+import { PluginBoundary, type EditCommand, type Editor, type PluginFailure } from "@ludenea/editor-shell";
 import { useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { errorText, useGame, useStore, useUnsavedAsset } from "../shared";
-import { batched, edit, ResimulatingNotice, useResimulating } from "../timeline/editing";
+import { ResimulatingNotice, useResimulating } from "../timeline/editing";
 import { defaultValue, setAt } from "./default-value";
 import { Field } from "./fields/Field";
 import { MixedPaths, type Edit } from "./fields/inputs";
@@ -77,12 +77,12 @@ function Inspector({ editor, control, state }: { editor: Editor; control: Contro
   const single = entities.length === 1 ? entities[0] : undefined;
 
   const setResource = (resource: string): Edit => async (path, value) => {
-    await edit(editor, control, { type: "set_field", target: { type: "resource", resource }, path, value });
+    await editor.edit({ type: "set_field", target: { type: "resource", resource }, path, value });
   };
   // A field of several entities changes in one batch: one undo step, all of them or none.
   const setComponent = (component: string): Edit => async (path, value) => {
     const target = (entity: Entity): FieldTarget => ({ type: "component", entity, component });
-    await onEntity(editor, edit(editor, control, batched(entities.map((entity): Command => ({ type: "set_field", target: target(entity), path, value })))));
+    await onEntity(editor, editor.batched(entities.map((entity): EditCommand => ({ type: "set_field", target: target(entity), path, value }))));
     values.refresh();
   };
 
@@ -97,7 +97,7 @@ function Inspector({ editor, control, state }: { editor: Editor; control: Contro
             <button disabled={resimulating} onClick={() => void editor.commands.run("inspector.add-component").catch((error) => values.setError(errorText(error)))}>Add component</button>
           </h2>
           {values.error && <p className="ludenea-error">{values.error}</p>}
-          {adding && <AddComponent editor={editor} control={control} entities={values.loaded ?? []} schemas={components} state={state} onAdded={values.refresh} />}
+          {adding && <AddComponent editor={editor} entities={values.loaded ?? []} schemas={components} state={state} onAdded={values.refresh} />}
           {shared(values.loaded ?? [], components).map(({ name, value, mixed }) => (
             <MixedPaths.Provider key={name} value={mixed}>
               <Section
@@ -187,7 +187,7 @@ function DataAsset({ editor, control, id }: { editor: Editor; control: ControlCl
   }, [control, id, changes, reloaded, version]);
 
   const setField: Edit = async (path, value) => {
-    await edit(editor, control, { type: "set_asset_field", id, path, value });
+    await editor.edit({ type: "set_asset_field", id, path, value });
     setVersion((version) => version + 1);
   };
   const run = (command: string) => () => showOutcome(editor.commands.run(command), setError);
@@ -415,8 +415,8 @@ function RonText({ name, text }: { name: string; text: string }) {
  * Picks a component a selected entity lacks and inserts its default value into each one lacking
  * it, in one batch; a rejected value opens a form to fix it.
  */
-function AddComponent(props: { editor: Editor; control: ControlClient; entities: Loaded[]; schemas: Map<string, TypeSchema>; state: InspectorState; onAdded(): void }) {
-  const { editor, control, entities, schemas, state, onAdded } = props;
+function AddComponent(props: { editor: Editor; entities: Loaded[]; schemas: Map<string, TypeSchema>; state: InspectorState; onAdded(): void }) {
+  const { editor, entities, schemas, state, onAdded } = props;
   const adding = useStore(state).adding!;
   const update = (patch: Partial<AddDraft>) => state.set({ adding: { ...state.get().adding!, ...patch } });
   const lacking = (name: string) => entities.filter(({ components }) => !(name in components)).map(({ entity }) => entity);
@@ -430,9 +430,9 @@ function AddComponent(props: { editor: Editor; control: ControlClient; entities:
   const insert = async () => {
     if (!schema) return;
     const value = draft ?? defaultValue(schema);
-    const commands = lacking(chosen).map((entity): Command => ({ type: "insert_component", entity, component: chosen, value }));
+    const commands = lacking(chosen).map((entity): EditCommand => ({ type: "insert_component", entity, component: chosen, value }));
     try {
-      await onEntity(editor, edit(editor, control, batched(commands)));
+      await onEntity(editor, editor.batched(commands));
       state.set({ adding: null, focused: chosen });
       onAdded();
     } catch (failure) {

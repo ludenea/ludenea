@@ -2,7 +2,7 @@ import type { ControlClient, Entity, FileEntry, InstanceInfo, OverrideInfo, Path
 import { definePlugin, type Editor, type Loaded, type TimelineState } from "@ludenea/editor-shell";
 import { createStore, errorText, showPanel, type Store } from "../shared";
 import { entityKey } from "../shared/EntityList";
-import { assertEditable, edit, onEdited } from "../timeline/editing";
+import { assertEditable } from "../timeline/editing";
 import { OverrideMark } from "./OverrideMark";
 
 export interface PrefabsState {
@@ -112,14 +112,17 @@ export const prefabsPlugin = definePlugin({
     const prefabs: Prefabs = {
       state,
       async place(prefab) {
-        await edit(editor, game(), { type: "place_instance", prefab });
+        await editor.edit({ type: "place_instance", prefab });
         state.set({ placing: false });
       },
       async revert(target) {
-        await edit(editor, game(), { type: "revert_override", ...targetOf(target), component: target.component, path: target.path });
+        // Without a game, say so rather than that the entity is in no instance.
+        game();
+        await editor.edit({ type: "revert_override", ...targetOf(target), component: target.component, path: target.path });
       },
       async apply(target) {
-        await edit(editor, game(), { type: "apply_to_prefab", ...targetOf(target), component: target.component, path: target.path });
+        game();
+        await editor.edit({ type: "apply_to_prefab", ...targetOf(target), component: target.component, path: target.path });
       },
     };
     plugins.set(editor, prefabs);
@@ -148,7 +151,7 @@ export const prefabsPlugin = definePlugin({
         const path = freePath(entries);
         const created = await editor.project.request({ type: "create_asset", path, kind: "Prefab", text });
         try {
-          await edit(editor, control, { type: "replace_with_instance", entities, prefab: created.id, prefab_text: text });
+          await editor.edit({ type: "replace_with_instance", entities, prefab: created.id, prefab_text: text });
         } catch (error) {
           // Refused: the new file is no one's prefab.
           await editor.project.request({ type: "delete", path }).catch((failure: unknown) =>
@@ -175,8 +178,8 @@ export const prefabsPlugin = definePlugin({
 
     // Every edit, undo, and redo the editor sends may change the scene, and so may a branch switch.
     const branchOf = (timeline: TimelineState["timeline"]) => timeline?.branch;
+    editor.onEdited(() => void refresh().catch(report));
     const stops = [
-      onEdited(editor, () => void refresh().catch(report)),
       editor.document.subscribe((current, previous) => {
         if (current.loaded !== previous.loaded) onLoaded(current.loaded);
       }),

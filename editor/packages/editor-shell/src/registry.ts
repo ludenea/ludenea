@@ -8,6 +8,7 @@ import type {
   PanelDefinition,
   SettingDefinition,
   ViewportOverlay,
+  ViewportTool,
 } from "./plugin";
 
 /** Thrown when an id (or shortcut key) is registered twice; names both owners. */
@@ -91,6 +92,7 @@ export class Registry {
   /** Normalized key to command id. */
   readonly shortcuts: Collection<string> = new Collection("shortcut", this);
   readonly overlays: Collection<ViewportOverlay> = new Collection("overlay", this);
+  readonly tools: Collection<ViewportTool> = new Collection("viewport tool", this);
   readonly settings: Collection<SettingDefinition<unknown>> = new Collection("setting", this);
   readonly decorations: Collection<FieldDecoration> = new Collection("decoration", this);
   readonly columns: Collection<ExplorerColumn> = new Collection("column", this);
@@ -102,7 +104,7 @@ export class Registry {
 
   /** Who registered `value`, of any kind but a shortcut; undefined when it is not registered. */
   ownerOf(value: object): string | undefined {
-    const kinds = [this.panels, this.commands, this.inspectors, this.assetInspectors, this.overlays, this.settings, this.decorations, this.columns];
+    const kinds = [this.panels, this.commands, this.inspectors, this.assetInspectors, this.overlays, this.tools, this.settings, this.decorations, this.columns];
     for (const kind of kinds) {
       const owner = kind.ownerOf(value);
       if (owner !== undefined) return owner;

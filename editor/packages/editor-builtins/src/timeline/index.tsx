@@ -2,7 +2,6 @@ import type { BranchId, FileEntry } from "@ludenea/control-client";
 import { definePlugin, type Editor } from "@ludenea/editor-shell";
 import { createStore, errorText, shared, showPanel, type Store } from "../shared";
 import type { BranchAction, BranchForms } from "./BranchLanes";
-import { edit } from "./editing";
 import { TimelinePanel } from "./TimelinePanel";
 
 /** The speed last asked of the host, which no reply reports back; the host clamps it to [0.1, 8]. */
@@ -106,14 +105,14 @@ export const timelinePlugin = definePlugin({
       get title() {
         return editor.timeline.getState().timeline?.undo_label ?? "Undo";
       },
-      run: () => edit(editor, game(editor), { type: "undo" }).then(() => {}),
+      run: () => editor.edit({ type: "undo" }),
     });
     editor.commands.register({
       id: "edit.redo",
       get title() {
         return editor.timeline.getState().timeline?.redo_label ?? "Redo";
       },
-      run: () => edit(editor, game(editor), { type: "redo" }).then(() => {}),
+      run: () => editor.edit({ type: "redo" }),
     });
 
     const forms: BranchForms = {

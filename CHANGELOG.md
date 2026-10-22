@@ -858,6 +858,19 @@ hash, those of the golden trace and replays included.
   identifier alone, and `selectAsset(id, kind)` takes the kind: the inspector shows a
   selected texture as well as a data asset. Opening a texture in the asset browser shows its
   preview in the inspector, and the built-in sprite sheet inspector plays its clips.
+- `Editor.edit(command)` sends an `EditCommand` (a command that edits the session as one
+  undo step) to the running game and refreshes the timeline and hash; it rejects without a
+  game and while the game resimulates. `Editor.batched(commands)` sends several as one
+  `batch` (one alone as itself, none not at all), and `Editor.onEdited(listener)` hears
+  every edit the game accepted. The built-in panels edit through them.
+- `Editor.viewport.tools.register(tool)` adds a `ViewportTool`: while it is the active
+  tool (`viewport.setTool(id)`, read from the `viewport.activeTool` store, `null` for the
+  built-in select and move), the viewport gives it the pointer's presses, moves, and
+  releases (`ToolPointer`, in CSS pixels and world units) with a `ToolContext` mapping
+  screen points onto a layer of any parallax as the renderer draws it, shows its `cursor`,
+  and draws its `overlay`. Its `available(editor)` is asked again on every selection,
+  timeline, and game change, and a tool that answers false, throws, or is unregistered is
+  deactivated. Escape returns to select and move; panning and zooming stay the viewport's.
 
 ### Formats
 

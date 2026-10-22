@@ -1,6 +1,6 @@
 import type { WebRenderer } from "@ludenea/render-wasm";
 import type { Entity, FileChange, Vec2 } from "@ludenea/control-client";
-import { runReported, type Editor, type ViewportOverlay } from "@ludenea/editor-shell";
+import { runReported, type Editor, type ToolContext, type ToolPointer, type ViewportOverlay, type ViewportTool } from "@ludenea/editor-shell";
 import { useEffect, useRef, useState } from "react";
 import { captureInput } from "../input/capture";
 import { errorText, loadRenderModule, onRenderPanic, reportedOnce, shared, useGame } from "../shared";
@@ -45,9 +45,19 @@ function shownCamera(renderer: WebRenderer, size: Size): Camera {
   return fromCameraItem({ center, view: { x: bottomRight.x - topLeft.x, y: topLeft.y - bottomRight.y } }, size);
 }
 
+/** The overlay drawing each viewport tool's `overlay`: the same one every frame, so its failure is reported once. */
+const toolOverlays = new WeakMap<ViewportTool, ViewportOverlay>();
+function toolOverlay(tool: ViewportTool): ViewportOverlay | null {
+  const draw = tool.overlay;
+  if (!draw) return null;
+  let overlay = toolOverlays.get(tool);
+  if (!overlay) toolOverlays.set(tool, (overlay = { id: tool.id, draw: (context) => draw.call(tool, context) }));
+  return overlay;
+}
+
 type Point = { x: number; y: number };
 type Press = {
-  mode: "pan" | "select";
+  mode: "pan" | "select" | "tool";
   start: Point;
   last: Point;
   moved: boolean;
@@ -55,6 +65,8 @@ type Press = {
   picked?: Promise<Entity[]>;
   /** The selected entity under the press, once the pick answers: a drag moves the selection holding it. */
   target?: Entity | null;
+  /** The tool the press is for: it hears the moves and the release while it stays active. */
+  tool?: ViewportTool;
 };
 
 /**
@@ -285,7 +297,9 @@ export function ViewportPanel({
       if (canvas.width !== Math.round(size.width * ratio)) canvas.width = Math.round(size.width * ratio);
       if (canvas.height !== Math.round(size.height * ratio)) canvas.height = Math.round(size.height * ratio);
       const drag = press?.mode === "select" && press.moved && press.target ? { entities: dragged(press.target), offset: dragOffset(press) } : null;
-      const overlays = editor.overlays.list();
+      const tool = activeTool();
+      const drawnByTool = tool && toolOverlay(tool);
+      const overlays = drawnByTool ? [...editor.overlays.list(), drawnByTool] : editor.overlays.list();
       // One unregistered then registered again is a new registration: its failure is news.
       for (const overlay of failedOverlays) if (!overlays.includes(overlay)) failedOverlays.delete(overlay);
       drawOverlay(context, { camera: viewCamera(), size, frame, layers, tick, selection, overlays, drag }, ratio, overlayFailed);
@@ -315,6 +329,12 @@ export function ViewportPanel({
         repaint = true;
       }),
       shared(editor).overlays.subscribe(() => (repaint = true)),
+      editor.viewport.activeTool.subscribe(() => {
+        // A press for the tool that left ends without it.
+        if (press?.mode === "tool") press = null;
+        showCursor();
+        repaint = true;
+      }),
       subscribeGame(editor, () => (repaint = true)),
       editor.project.on("files_changed", ({ changes }) => reload(changes)),
     ];
@@ -332,6 +352,34 @@ export function ViewportPanel({
     const dragged = (target: Entity): readonly Entity[] => {
       const { entities } = editor.selection.getState();
       return entities.some((entity) => same(entity, target)) ? entities : [target];
+    };
+
+    // The active viewport tool, null for select and move.
+    const activeTool = (): ViewportTool | null => {
+      const id = editor.viewport.activeTool.getState();
+      return id === null ? null : (editor.viewport.tools.list().find((tool) => tool.id === id) ?? null);
+    };
+    const showCursor = () => {
+      element.style.cursor = activeTool()?.cursor ?? "";
+    };
+    showCursor();
+    const toolContext: ToolContext = {
+      editor,
+      screenToWorld(screen, parallax) {
+        if (!renderer) throw new Error("the viewport has no renderer to map the point with: it is starting or stopped");
+        return JSON.parse(renderer.screen_to_world(screen.x, screen.y, parallax, drawnCamera())) as Vec2;
+      },
+      redraw: () => void (repaint = true),
+    };
+    // Gives `event` to `tool`'s `handler`; a tool that throws has its failure reported.
+    const toTool = (tool: ViewportTool, handler: "pointerDown" | "pointerMove" | "pointerUp", event: PointerEvent) => {
+      const at = local(event);
+      const pointer: ToolPointer = { screen: at, world: world(at), button: event.button, shift: event.shiftKey, alt: event.altKey };
+      try {
+        tool[handler]?.(pointer, toolContext);
+      } catch (error) {
+        editor.console.report(error, `The viewport tool "${tool.id}" handling a pointer event`);
+      }
     };
 
     // The sprites and tilemaps drawn under `at`, topmost first; none when the renderer cannot say.
@@ -354,8 +402,12 @@ export function ViewportPanel({
       element.focus();
       const at = local(event);
       const control = editor.control;
+      const tool = activeTool();
       if (event.button === 1 || (event.button === 0 && space)) {
         press = { mode: "pan", start: at, last: at, moved: false, shift: false };
+      } else if (tool) {
+        press = { mode: "tool", start: at, last: at, moved: false, shift: event.shiftKey, tool };
+        toTool(tool, "pointerDown", event);
       } else if (event.button === 0 && control) {
         // The renderer answers for what it drew last, so it is asked now; its failure leaves the host's hits.
         const sprites = spritesAt(at);
@@ -376,6 +428,9 @@ export function ViewportPanel({
     };
 
     const onPointerMove = (event: PointerEvent) => {
+      // An active tool hears every move but a pan's, pressed or not.
+      const tool = activeTool();
+      if (tool && press?.mode !== "pan") toTool(tool, "pointerMove", event);
       if (!press) return;
       const at = local(event);
       if (Math.hypot(at.x - press.start.x, at.y - press.start.y) > DRAG_THRESHOLD) press.moved = true;
@@ -391,6 +446,7 @@ export function ViewportPanel({
       const released = press;
       press = null;
       repaint = true;
+      if (released?.mode === "tool" && released.tool) return toTool(released.tool, "pointerUp", event);
       if (released?.mode !== "select" || !released.picked) return;
       released.last = local(event);
       const control = editor.control;
@@ -431,6 +487,11 @@ export function ViewportPanel({
       if (event.key === " ") {
         space = true;
         event.preventDefault();
+        return;
+      }
+      if (event.key === "Escape" && editor.viewport.activeTool.getState() !== null) {
+        event.preventDefault();
+        editor.viewport.setTool(null);
         return;
       }
       // While playing, plain keys are the game's; without a game there is nothing to change.

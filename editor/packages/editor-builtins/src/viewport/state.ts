@@ -1,8 +1,8 @@
-import type { Command, ControlClient, DebugDrawFrame, Entity, Vec2 } from "@ludenea/control-client";
-import type { Editor } from "@ludenea/editor-shell";
+import type { ControlClient, DebugDrawFrame, Entity, Vec2 } from "@ludenea/control-client";
+import type { EditCommand, Editor } from "@ludenea/editor-shell";
 import { onEntity } from "../inspector";
 import type { Store } from "../shared";
-import { assertEditable, batched, edit } from "../timeline/editing";
+import { assertEditable } from "../timeline/editing";
 import { same, type Box, type Camera, type Size } from "./camera";
 
 /** What the viewport's commands and panel share; kept while the panel is hidden. */
@@ -46,7 +46,7 @@ export const visibleLayers = (control: ControlClient | null, state: ViewportStat
 export async function moveBy(editor: Editor, control: ControlClient, entities: readonly Entity[], offset: Vec2, state: ViewportState): Promise<void> {
   assertEditable(editor);
   const replies = await Promise.all(entities.map((entity) => onEntity(editor, control.request({ type: "get_entity", entity }))));
-  const moves = replies.flatMap(({ entity, components }): Command[] => {
+  const moves = replies.flatMap(({ entity, components }): EditCommand[] => {
     const pose = components[POSE];
     if (pose?.type !== "json") return [];
     const { position } = pose.value as { position: Vec2 };
@@ -54,6 +54,6 @@ export async function moveBy(editor: Editor, control: ControlClient, entities: r
     return [{ type: "set_field", target: { type: "component", entity, component: POSE }, path: [{ type: "field", name: "position" }], value }];
   });
   if (moves.length === 0) return;
-  await onEntity(editor, edit(editor, control, batched(moves)));
+  await onEntity(editor, editor.batched(moves));
   state.set({ revision: state.get().revision + 1 });
 }

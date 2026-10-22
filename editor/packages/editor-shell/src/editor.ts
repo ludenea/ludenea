@@ -1,4 +1,5 @@
-import type { ControlClient, ProjectClient } from "@ludenea/control-client";
+import type { Command, ControlClient, ProjectClient } from "@ludenea/control-client";
+import { create, type StoreApi, type UseBoundStore } from "zustand";
 import { createAssetAccess, type AssetAccess } from "./assets";
 import { createConsole, type EditorConsole } from "./console";
 import { createEntityAccess, type ComponentTypes, type EntityAccess } from "./entities";
@@ -13,6 +14,7 @@ import type {
   PanelDefinition,
   SettingDefinition,
   ViewportOverlay,
+  ViewportTool,
 } from "./plugin";
 import { Registry } from "./registry";
 import { normalizeShortcut } from "./shortcuts";
@@ -21,6 +23,37 @@ import { createDocumentStore, type DocumentSessions, type DocumentStore } from "
 import { createSelectionStore, type SelectionStore } from "./stores/selection";
 import { feedTimeline, createTimelineStore, type TimelineStore } from "./stores/timeline";
 import { createTextureAccess, type TextureAccess, type TextureFrameCutter } from "./textures";
+
+/**
+ * A command that edits the game's session: one undo step, which the timeline records. A
+ * `batch` applies its commands as one edit, or none of them when one fails.
+ */
+export type EditCommand = Extract<
+  Command,
+  {
+    type:
+      | "spawn"
+      | "despawn"
+      | "insert_component"
+      | "remove_component"
+      | "set_field"
+      | "paint_tiles"
+      | "batch"
+      | "apply_to_scene"
+      | "set_asset_field"
+      | "apply_to_asset"
+      | "place_instance"
+      | "replace_with_instance"
+      | "apply_override"
+      | "revert_override"
+      | "apply_to_prefab"
+      | "undo"
+      | "redo";
+  }
+>;
+
+/** The active viewport tool's id, null for the built-in select and move: a Zustand store read as a hook or with `getState`/`subscribe`; `editor.viewport.setTool` changes it. */
+export type ActiveToolStore = UseBoundStore<Pick<StoreApi<string | null>, "getState" | "getInitialState" | "subscribe">>;
 
 /** The one object every plugin, built-in or not, extends the editor through. */
 export interface Editor {
@@ -53,6 +86,21 @@ export interface Editor {
     capture(): Disposable;
   };
   overlays: { register(overlay: ViewportOverlay): Disposable; list(): ViewportOverlay[] };
+  viewport: {
+    tools: Observed<ViewportTool> & { register(tool: ViewportTool): Disposable };
+    activeTool: ActiveToolStore;
+    /** Activates the tool `id`, or the built-in select and move for null; throws when it is not registered or not available. */
+    setTool(id: string | null): void;
+  };
+  /**
+   * Sends an editing command to the running game, then refreshes the timeline and hash it
+   * changed. Throws without a game and while the game resimulates; the game's refusal rejects.
+   */
+  edit(command: EditCommand): Promise<void>;
+  /** Sends `commands` as one edit (one undo step, all of them or none); nothing when empty. */
+  batched(commands: EditCommand[]): Promise<void>;
+  /** Calls `listener` with each command `edit` and `batched` send, once the game accepted it. */
+  onEdited(listener: (command: EditCommand) => void): Disposable;
   settings: {
     register<T>(setting: SettingDefinition<T>): Disposable;
     get<T>(id: string): T;
@@ -71,8 +119,8 @@ export interface Editor {
   onGameChanged(listener: (control: ControlClient | null) => void): Disposable;
   /**
    * The name of the plugin that registered `registration` (a panel, command, inspector, asset
-   * inspector, overlay, setting, decoration, or column, as given to `register`), `"editor"` for one
-   * registered outside an `activate`; undefined when it is not registered.
+   * inspector, overlay, viewport tool, setting, decoration, or column, as given to `register`),
+   * `"editor"` for one registered outside an `activate`; undefined when it is not registered.
    */
   pluginOf(registration: object): string | undefined;
 }
@@ -122,8 +170,10 @@ export function createEditor(options: {
   textureFrames?: TextureFrameCutter;
 }): EditorHost {
   const registry = new Registry();
-  const { commands, inspectors, assetInspectors, overlays, settings, decorations, columns } = registry;
+  const { commands, inspectors, assetInspectors, overlays, tools, settings, decorations, columns } = registry;
   const gameListeners = new Set<(control: ControlClient | null) => void>();
+  const editListeners = new Set<(command: EditCommand) => void>();
+  const activeTool = create<string | null>()(() => null);
   const setting = (id: string) => {
     const definition = settings.get(id);
     if (!definition) throw new Error(`no setting "${id}" is registered`);
@@ -142,6 +192,33 @@ export function createEditor(options: {
     log: editorConsole.log,
     playing: () => timeline.getState().playing,
   });
+  const edit = async (command: EditCommand) => {
+    const game = control;
+    if (!game) throw new Error("no game is running");
+    if (timeline.getState().timeline?.resimulating) throw new Error("the game is resimulating; edit once it finishes");
+    try {
+      await game.request(command);
+      // The game took the edit: a listener that throws costs only its own reaction.
+      for (const listener of [...editListeners]) {
+        try {
+          listener(command);
+        } catch (error) {
+          editorConsole.report(error, `Reacting to the edit "${command.type}"`);
+        }
+      }
+    } finally {
+      void timeline.getState().refresh();
+    }
+  };
+  /** Whether `tool` can be used now; one that throws cannot, and its failure is reported. */
+  const available = (tool: ViewportTool) => {
+    try {
+      return tool.available(editor);
+    } catch (error) {
+      editorConsole.report(error, `Asking whether the viewport tool "${tool.id}" is available`);
+      return false;
+    }
+  };
   const editor: Editor = {
     get control() {
       return control;
@@ -183,6 +260,30 @@ export function createEditor(options: {
       },
     },
     overlays: { register: (overlay) => overlays.register(overlay.id, overlay), list: () => overlays.values() },
+    viewport: {
+      tools: { register: (tool) => tools.register(tool.id, tool), list: tools.values, subscribe: tools.subscribe },
+      activeTool,
+      setTool(id) {
+        if (id !== null) {
+          const tool = tools.get(id);
+          if (!tool) throw new Error(`no viewport tool "${id}" is registered`);
+          if (!available(tool)) throw new Error(`the viewport tool "${id}" is not available now`);
+        }
+        activeTool.setState(id, true);
+      },
+    },
+    edit,
+    async batched(commands) {
+      const [only] = commands;
+      if (!only) return;
+      await edit(commands.length === 1 ? only : { type: "batch", commands });
+    },
+    onEdited(listener) {
+      // A fresh entry per call, as `onGameChanged`.
+      const entry = (command: EditCommand) => listener(command);
+      editListeners.add(entry);
+      return registry.own(() => editListeners.delete(entry));
+    },
     settings: {
       register: (definition) => settings.register(definition.id, definition),
       get<T>(id: string): T {
@@ -220,6 +321,17 @@ export function createEditor(options: {
   documents.store.subscribe((state, previous) => {
     if (state.current?.id !== previous.current?.id) timeline.setState({ divergence: null });
   });
+  // The active tool stays while registered and available: asked again on every change that may change the answer.
+  const checkTool = () => {
+    const id = activeTool.getState();
+    if (id === null) return;
+    const tool = tools.get(id);
+    if (!tool || !available(tool)) activeTool.setState(null, true);
+  };
+  tools.subscribe(checkTool);
+  editor.selection.subscribe(checkTool);
+  timeline.subscribe(checkTool);
+  gameListeners.add(checkTool);
   let stopTimeline = feedTimeline(control, editor.timeline);
   const setControl = (next: ControlClient | null) => {
     if (next === control) return;

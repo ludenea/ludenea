@@ -425,6 +425,26 @@ first listing answers, `"missing"` when no texture has that identifier, `"unread
 its meta cannot be read, or `{ failed }` with the reason the listing failed.
 The built-in texture previews and clip players are a plugin on this API.
 
+`editor.edit(command)` sends an editing command to the running game, as one undo step, and
+`editor.batched(commands)` sends several as one; `editor.onEdited` hears each accepted edit.
+`editor.viewport.tools.register` adds a viewport tool: once activated with
+`editor.viewport.setTool(id)`, it receives the pointer events over the viewport in world
+units and draws its own overlay, until Escape or until its `available(editor)` answers false.
+Panning and zooming stay the viewport's whatever the tool:
+
+```ts
+editor.viewport.tools.register({
+  id: "my_game.spawn",
+  title: "Spawn a crate",
+  cursor: "crosshair",
+  available: (editor) => editor.control !== null,
+  pointerDown: ({ world }, { editor }) =>
+    editor
+      .edit({ type: "spawn", components: { "ludenea::Pose": { position: world, rotation: { cos: 1, sin: 0 } } } })
+      .catch((error) => editor.console.report(error, "Spawning a crate")),
+});
+```
+
 `editor.console` writes to the Console panel: `log` shows a message, `report` a failure.
 A command that fails from the palette or a shortcut is reported there under its title.
 

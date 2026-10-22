@@ -1,7 +1,5 @@
-import type { Command } from "@ludenea/control-client";
-import { definePlugin } from "@ludenea/editor-shell";
+import { definePlugin, type EditCommand } from "@ludenea/editor-shell";
 import { errorText } from "../shared";
-import { batched, edit } from "../timeline/editing";
 import { SceneTree } from "./SceneTree";
 
 export const sceneTreePlugin = definePlugin({
@@ -15,9 +13,9 @@ export const sceneTreePlugin = definePlugin({
       id: "scene.despawn-selection",
       title: "Despawn selected entities",
       async run() {
-        const control = game();
+        game();
         const { entities } = editor.selection.getState();
-        if (entities.length > 0) await edit(editor, control, batched(entities.map((entity): Command => ({ type: "despawn", entity }))));
+        await editor.batched(entities.map((entity): EditCommand => ({ type: "despawn", entity })));
         editor.selection.getState().clear();
       },
     });

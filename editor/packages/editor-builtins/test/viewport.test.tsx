@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { CameraItem, DebugDrawFrame, Entity, GameInfo, RenderFrame, TextureMeta } from "@ludenea/control-client";
+import type { ToolContext, ToolPointer, ViewportTool } from "@ludenea/editor-shell";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { consolePlugin } from "../src/console";
@@ -740,6 +741,171 @@ describe("viewport", () => {
     act(() => host.editor.timeline.setState({ playing: true }));
     await expect(host.editor.commands.run("viewport.nudge-right")).rejects.toThrow(/pause/);
     expect(sentOf(game.sent, "get_entity")).toEqual([]);
+  });
+
+  /** A tool recording the events it hears, as `[kind, event]`, with the context of the last one. */
+  const recordingTool = (available: ViewportTool["available"] = () => true) => {
+    const heard: [string, ToolPointer][] = [];
+    const contexts: ToolContext[] = [];
+    const record = (kind: string) => (event: ToolPointer, context: ToolContext) => {
+      heard.push([kind, event]);
+      contexts.push(context);
+    };
+    const tool: ViewportTool = { id: "test.paint", title: "Paint", cursor: "crosshair", available, pointerDown: record("down"), pointerMove: record("move"), pointerUp: record("up") };
+    return { tool, heard, contexts };
+  };
+
+  it("an_active_tool_receives_pointer_events_in_world_units", async () => {
+    const { host, game, view } = await viewport((command) => (command.type === "pick" ? { type: "picked", entities: [entity(1)] } : undefined));
+    const { tool, heard, contexts } = recordingTool();
+    tool.overlay = ({ canvas, worldToScreen }) => {
+      const at = worldToScreen({ x: 1, y: 1 });
+      canvas.fillText("brush", at.x, at.y);
+    };
+    act(() => void host.editor.viewport.tools.register(tool));
+    act(() => host.editor.viewport.setTool("test.paint"));
+    expect(view.style.cursor).toBe("crosshair");
+    // A middle-drag of 50 pixels left: the view looks at (1, 0).
+    fireEvent.pointerDown(view, { button: 1, clientX: 200, clientY: 150, pointerId: 1 });
+    fireEvent.pointerMove(view, { button: -1, clientX: 150, clientY: 150, pointerId: 1 });
+    fireEvent.pointerUp(view, { button: 1, clientX: 150, clientY: 150, pointerId: 1 });
+    await waitFor(() => expect(camera()).toEqual([1, 0, 50]));
+    expect(heard).toEqual([]);
+
+    fireEvent.pointerDown(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1, shiftKey: true });
+    fireEvent.pointerMove(view, { button: -1, clientX: 300, clientY: 150, pointerId: 1, altKey: true });
+    fireEvent.pointerUp(view, { button: 0, clientX: 300, clientY: 150, pointerId: 1 });
+    await settle();
+    expect(heard).toEqual([
+      ["down", { screen: { x: 250, y: 100 }, world: { x: 2, y: 1 }, button: 0, shift: true, alt: false }],
+      ["move", { screen: { x: 300, y: 150 }, world: { x: 3, y: 0 }, button: -1, shift: false, alt: true }],
+      ["up", { screen: { x: 300, y: 150 }, world: { x: 3, y: 0 }, button: 0, shift: false, alt: false }],
+    ]);
+    // The press was the tool's: nothing is picked, selected, or moved.
+    expect(sentOf(game.sent, "pick")).toEqual([]);
+    expect(host.editor.selection.getState().entities).toEqual([]);
+
+    // A layer of parallax 0.5 moves half as much as the camera: the renderer maps it, with the camera it drew.
+    const context = contexts[0]!;
+    expect(context.editor).toBe(host.editor);
+    expect(context.screenToWorld({ x: 250, y: 100 }, 0.5)).toEqual({ x: 1.5, y: 1 });
+    const mapped = renderers.at(-1)!.calls.filter((call) => call.method === "screen_to_world").at(-1)!.args;
+    expect(mapped).toEqual([250, 100, 0.5, JSON.stringify({ center: { x: 1, y: 0 }, view: { x: 8, y: 6 } })]);
+
+    // The tool's overlay is drawn while it is active, and redrawn on request.
+    drawn.calls.length = 0;
+    act(() => context.redraw());
+    await animationFrames(2);
+    expect(drawn.calls.filter((call) => call.method === "fillText").map((call) => call.args)).toEqual([["brush", 200, 100]]);
+  });
+
+  it("escape_returns_to_select", async () => {
+    const { host, game, view } = await viewport((command) => (command.type === "pick" ? { type: "picked", entities: [entity(1)] } : undefined));
+    const { tool, heard } = recordingTool();
+    act(() => void host.editor.viewport.tools.register(tool));
+    act(() => host.editor.viewport.setTool("test.paint"));
+    fireEvent.keyDown(view, { key: "Escape" });
+    expect(host.editor.viewport.activeTool.getState()).toBeNull();
+    expect(view.style.cursor).toBe("");
+
+    fireEvent.pointerDown(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    fireEvent.pointerUp(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    await settle();
+    expect(heard).toEqual([]);
+    expect(sentOf(game.sent, "pick")).toEqual([{ type: "pick", point: { x: 1, y: 1 } }]);
+    expect(host.editor.selection.getState().entities).toEqual([entity(1)]);
+  });
+
+  it("a_tool_that_becomes_unavailable_is_deactivated", async () => {
+    const { host } = await viewport();
+    // Paints the selected entity of a running game, unless the game resimulates.
+    const { tool } = recordingTool(
+      (editor) => editor.control !== null && editor.selection.getState().entities.length > 0 && !editor.timeline.getState().timeline?.resimulating,
+    );
+    act(() => void host.editor.viewport.tools.register(tool));
+    const active = () => host.editor.viewport.activeTool.getState();
+    expect(() => host.editor.viewport.setTool("test.paint")).toThrow('the viewport tool "test.paint" is not available now');
+
+    act(() => host.editor.selection.getState().select([entity(1)]));
+    act(() => host.editor.viewport.setTool("test.paint"));
+    act(() => host.editor.selection.getState().clear());
+    expect(active()).toBeNull();
+
+    act(() => host.editor.selection.getState().select([entity(1)]));
+    act(() => host.editor.viewport.setTool("test.paint"));
+    atTick(host, 3);
+    expect(active()).toBe("test.paint");
+    const resimulating = { ...host.editor.timeline.getState().timeline!, resimulating: true };
+    act(() => host.editor.timeline.setState({ timeline: resimulating }));
+    expect(active()).toBeNull();
+
+    atTick(host, 3);
+    act(() => host.editor.viewport.setTool("test.paint"));
+    act(() => host.setControl(null));
+    expect(active()).toBeNull();
+
+    // A tool whose answer throws is not available: deactivated, its failure reported.
+    const game = await testGame((command) => (command.type === "get_render_frame" ? renderFrame(7) : { type: "done" }));
+    act(() => host.setControl(game.client));
+    act(() => host.editor.viewport.setTool("test.paint"));
+    tool.available = () => {
+      throw new Error("no tilemap");
+    };
+    act(() => host.editor.selection.getState().select([entity(2)]));
+    expect(active()).toBeNull();
+    expect(host.editor.console.list().map(({ text }) => text)).toContain('Asking whether the viewport tool "test.paint" is available failed: no tilemap');
+  });
+
+  it("a_failing_tool_is_reported_in_the_editor_console", async () => {
+    const { host, view } = await viewport();
+    const tool: ViewportTool = {
+      id: "test.broken",
+      title: "Broken",
+      available: () => true,
+      pointerDown() {
+        throw new Error("no brush chosen");
+      },
+      overlay() {
+        throw new Error("no font loaded");
+      },
+    };
+    act(() => void host.editor.viewport.tools.register(tool));
+    act(() => host.editor.viewport.setTool("test.broken"));
+    await animationFrames(2);
+    fireEvent.pointerDown(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    fireEvent.pointerUp(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    await animationFrames(2);
+    // The overlay is reported once while it stays active, not on every frame.
+    expect(host.editor.console.list().filter(({ level }) => level === "error").map(({ text }) => text)).toEqual([
+      'Drawing the viewport overlay "test.broken" failed: no font loaded',
+      'The viewport tool "test.broken" handling a pointer event failed: no brush chosen',
+    ]);
+    expect(host.editor.viewport.activeTool.getState()).toBe("test.broken");
+  });
+
+  it("pan_and_zoom_work_with_a_tool_active", async () => {
+    const { host, view } = await viewport();
+    const { tool, heard } = recordingTool();
+    act(() => void host.editor.viewport.tools.register(tool));
+    act(() => host.editor.viewport.setTool("test.paint"));
+
+    fireEvent.keyDown(view, { key: " " });
+    fireEvent.pointerDown(view, { button: 0, clientX: 200, clientY: 150, pointerId: 1 });
+    fireEvent.pointerMove(view, { clientX: 250, clientY: 100, pointerId: 1 });
+    fireEvent.pointerUp(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    fireEvent.keyUp(view, { key: " " });
+    await waitFor(() => expect(camera()).toEqual([-1, -1, 50]));
+
+    fireEvent.pointerDown(view, { button: 1, clientX: 200, clientY: 150, pointerId: 1 });
+    fireEvent.pointerMove(view, { clientX: 150, clientY: 150, pointerId: 1 });
+    fireEvent.pointerUp(view, { button: 1, clientX: 150, clientY: 150, pointerId: 1 });
+    await waitFor(() => expect(camera()).toEqual([0, -1, 50]));
+
+    fireEvent.wheel(view, { deltaY: -200, clientX: 200, clientY: 150 });
+    await waitFor(() => expect(camera()?.[2]).toBeCloseTo(50 * Math.exp(0.3), 6));
+    // The pans were the viewport's: the tool heard none of their presses, moves, or releases.
+    expect(heard).toEqual([]);
+    expect(host.editor.viewport.activeTool.getState()).toBe("test.paint");
   });
 });
 
