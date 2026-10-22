@@ -4,6 +4,11 @@
 //! The crate reads no clock and uses no floating point: the caller passes the current time.
 #![deny(clippy::float_arithmetic)]
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the rollback session, which comes next")
+)]
+mod queue;
 pub mod settings;
 pub mod transport;
 pub mod wire;
