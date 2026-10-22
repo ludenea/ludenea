@@ -44,6 +44,19 @@ pub struct MatchRules {
     pub hash_interval: u32,
 }
 
+impl MatchRules {
+    /// The most local hash reports a peer leaves unacknowledged without breaking
+    /// `ViolationRule::HashLagging`: `(2 * (rollback_window + input_delay) + hash_interval - 1)
+    /// / hash_interval + 1`, the multiples of `hash_interval` in a span of the lag bound of an
+    /// acknowledgment, `2 * (rollback_window + input_delay) + hash_interval - 1` ticks. Every
+    /// packet of a running session carries all of them. Expects a positive `hash_interval`.
+    pub fn unacknowledged_hash_reports(&self) -> u64 {
+        let interval = u64::from(self.hash_interval);
+        let ticks = 2 * (u64::from(self.rollback_window) + u64::from(self.input_delay));
+        ticks.div_ceil(interval) + 1
+    }
+}
+
 impl Default for MatchRules {
     fn default() -> Self {
         Self {
@@ -157,6 +170,18 @@ pub enum SettingsError {
         worst: usize,
         max: usize,
     },
+    /// The worst-case packet of `peer` holds more messages than [`MAX_MESSAGES_PER_PACKET`],
+    /// most often because a small `hash_interval` leaves many hash reports unacknowledged.
+    #[error(
+        "the worst-case packet of {peer} holds {messages} messages, more than the {max} of one \
+         packet: a larger hash_interval, a smaller rollback_window or input_delay, or fewer \
+         players per peer fit"
+    )]
+    PacketTooManyMessages {
+        peer: PeerId,
+        messages: usize,
+        max: usize,
+    },
     /// `hash_interval` is zero.
     #[error("hash_interval is {value}, expected at least 1")]
     HashInterval { value: u32 },
@@ -243,8 +268,15 @@ impl SessionSettings {
                 input_delay: rules.input_delay,
             });
         }
+        // Before the worst case, which divides by it.
+        if rules.hash_interval == 0 {
+            return Err(SettingsError::HashInterval {
+                value: rules.hash_interval,
+            });
+        }
         for peer in (0..=highest_owner.0).map(PeerId) {
-            let worst = self.worst_case_packet(peer).encode().len();
+            let packet = self.worst_case_packet(peer);
+            let worst = packet.encode().len();
             if worst > MAX_PACKET_BYTES {
                 return Err(SettingsError::PacketTooLarge {
                     peer,
@@ -252,11 +284,13 @@ impl SessionSettings {
                     max: MAX_PACKET_BYTES,
                 });
             }
-        }
-        if rules.hash_interval == 0 {
-            return Err(SettingsError::HashInterval {
-                value: rules.hash_interval,
-            });
+            if packet.messages.len() > MAX_MESSAGES_PER_PACKET {
+                return Err(SettingsError::PacketTooManyMessages {
+                    peer,
+                    messages: packet.messages.len(),
+                    max: MAX_MESSAGES_PER_PACKET,
+                });
+            }
         }
         let Timeouts {
             notice_after_micros,
@@ -274,16 +308,15 @@ impl SessionSettings {
     /// The largest packet `peer` sends while the match runs. One packet holds, each field at
     /// its largest encoding for the whole life of a match: the inputs of every player `peer`
     /// owns at [`MAX_INPUT_BYTES`] over `rollback_window + input_delay + 1` ticks, the
-    /// acknowledgment of every other player, a quality request and its reply, one hash report,
-    /// and a goodbye.
+    /// acknowledgment of every other player, a quality request and its reply, a welcome (owed
+    /// to a peer that greets this one again), every hash report a peer may leave
+    /// unacknowledged ([`MatchRules::unacknowledged_hash_reports`]), and a goodbye.
     ///
-    /// Two rules of the sender keep every packet within this bound: a session that has ended
-    /// sends no inputs, so a packet carrying an `End` is small and `End` is not counted; and
-    /// further unacknowledged hash reports are packed by size and by
-    /// [`MAX_MESSAGES_PER_PACKET`], the ones that do not fit resent in a later packet. The
-    /// handshake's `Hello` and `Welcome` travel without inputs, and fit whatever the identity,
-    /// as the engine string and the players are bounded. Expects the
-    /// settings to have passed the peer and tick count checks, so another peer owns a player.
+    /// A session that has ended sends no inputs, so a packet carrying an `End` is small and
+    /// `End` is not counted. The handshake's `Hello` travels without inputs, and fits whatever
+    /// the identity, as the engine string and the players are bounded. Expects the settings to
+    /// have passed the peer, tick count and hash interval checks, so another peer owns a
+    /// player.
     fn worst_case_packet(&self, peer: PeerId) -> Packet {
         let players = &self.identity.players;
         let owned = players.iter().filter(|owner| **owner == peer).count();
@@ -313,14 +346,16 @@ impl SessionSettings {
                 echo_micros: u64::MAX,
                 tick: u64::MAX,
             },
-            Message::Hash {
-                tick: u64::MAX,
-                hash: u64::MAX,
-            },
+            Message::Welcome,
             Message::Goodbye {
                 last_tick: u64::MAX,
             },
         ]);
+        let reports = rules.unacknowledged_hash_reports();
+        messages.extend((0..reports).map(|_| Message::Hash {
+            tick: u64::MAX,
+            hash: u64::MAX,
+        }));
         Packet {
             match_id: u64::MAX,
             messages,

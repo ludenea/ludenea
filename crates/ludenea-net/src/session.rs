@@ -42,8 +42,8 @@ use ludenea_app::PlayerInputSpec;
 
 use crate::queue::{Confirmed, InputQueue, QueueError};
 use crate::settings::{
-    MAX_INPUT_BYTES, MAX_MESSAGES_PER_PACKET, MAX_PACKET_BYTES, MAX_TICKS_PER_MESSAGE,
-    MatchIdentity, PeerId, SessionSettings, SettingsError,
+    MAX_INPUT_BYTES, MAX_PACKET_BYTES, MAX_TICKS_PER_MESSAGE, MatchIdentity, PeerId,
+    SessionSettings, SettingsError,
 };
 use crate::wire::{EndNotice, Message, Packet, WireError};
 
@@ -137,6 +137,10 @@ pub enum ViolationRule {
     /// A hash report of a tick past the local horizon plus one, which no honest peer can have
     /// confirmed: its confirmed tick needs the local inputs.
     HashBeyondHorizon,
+    /// Hash reports, or acknowledgments of the local ones, trailing the newest final local
+    /// hash by more than an honest peer can (see [`Session`]'s hash lag bounds). They bound
+    /// the local reports a session keeps and the states its caller keeps for them.
+    HashLagging,
 }
 
 /// Why a received packet, or one message of it, was dropped. Ordered, so the counts of
@@ -685,7 +689,11 @@ impl Session {
     }
 
     /// Answers the `Save { tick, hash: true }` executed first among those not answered yet
-    /// with the hash of the state it saved. An ended session ignores the answer.
+    /// with the hash of the state it saved. An ended session ignores the answer. The caller
+    /// answers every hash an advance asks for before the next [`Session::outgoing`]: the lag
+    /// bounds of [`ViolationRule::HashLagging`] rely on it, on every peer, and a session whose
+    /// own answers come late may find an honest peer lagging. Reports waiting for a late answer
+    /// are bounded by [`DropReason::HashBacklog`].
     ///
     /// # Errors
     ///
@@ -920,16 +928,15 @@ impl Session {
                     remote.reply_due = false;
                 }
                 // Reports ride on the packets sent anyway, so they never make one of their own.
-                // More than a packet holds wait for a later one.
+                // All of them: at most `MatchRules::unacknowledged_hash_reports`, which the
+                // settings leave room for, as more breaks `ViolationRule::HashLagging`.
                 if !messages.is_empty() {
                     let unacknowledged =
                         self.reports.range(remote.hashes_acked.saturating_add(1)..);
-                    messages.extend(unacknowledged.take(MAX_MESSAGES_PER_PACKET).map(
-                        |(tick, report)| Message::Hash {
-                            tick: *tick,
-                            hash: report.hash,
-                        },
-                    ));
+                    messages.extend(unacknowledged.map(|(tick, report)| Message::Hash {
+                        tick: *tick,
+                        hash: report.hash,
+                    }));
                 }
             }
             if let Some(reason) = notice {
@@ -1335,6 +1342,49 @@ impl Session {
         }
     }
 
+    /// The first peer whose hash reports lag the newest final local hash `F` beyond what an
+    /// honest peer can, with the tick that lags: [`ViolationRule::HashLagging`]. With `W` the
+    /// rollback window, `D` the input delay and `I` the hash interval:
+    ///
+    /// - Its newest report trails `F` by at most `W + D + I - 1`. `F` is final, so this
+    ///   session holds that peer's input of `F - 1`, which the peer sent once its tick `r` was
+    ///   at least `F - D`. The peer reached `r` by an advance that did not stall, so its
+    ///   confirmed tick was then at least `r - W`, and that advance ran its rollback. Its
+    ///   caller answers the hashes of an advance before the next packet, so every multiple of
+    ///   `I` up to `F - D - W` was final there, and the packet carrying that input carries
+    ///   every report not acknowledged yet: one of a tick at least `F - D - W - (I - 1)`
+    ///   arrived with it, or before.
+    /// - Its acknowledgment of the local reports trails `F` by at most `2 * (W + D) + I - 1`.
+    ///   The packet above carries an `Ack` of the newest report received from this session.
+    ///   At that advance, the peer used this session's inputs below `r - W`, sent once this
+    ///   session's tick was at least `r - W - D`; by the same argument, the packet carrying
+    ///   them carried every local report up to at least `F - 2 * (W + D) - (I - 1)`.
+    ///
+    /// A report dropped as [`DropReason::HashBacklog`] keeps both: it is above a report
+    /// already waiting, above the receiver's own newest final hash. Checked whenever a hash
+    /// becomes final, so a session never holds more than
+    /// [`MatchRules::unacknowledged_hash_reports`](crate::MatchRules::unacknowledged_hash_reports)
+    /// unacknowledged reports, which every packet carries, and the reports of every peer up to
+    /// `F - (W + D + I - 1)` have arrived: the states kept for reported ticks span at most
+    /// `W + D + I - 1` ticks below `F` plus the ticks from `F` to the current one.
+    fn hash_lagging(&self) -> Option<(PeerId, u64)> {
+        let rules = self.settings.identity.rules;
+        let window_and_delay = u64::from(rules.rollback_window) + u64::from(rules.input_delay);
+        let interval = u64::from(rules.hash_interval);
+        let reports_bound = window_and_delay + interval - 1;
+        let acks_bound = 2 * window_and_delay + interval - 1;
+        let newest = self.final_through;
+        self.remotes.iter().find_map(|remote| {
+            if newest > remote.hashes_received.saturating_add(reports_bound) {
+                Some((remote.id, remote.hashes_received))
+            } else if newest > remote.hashes_acked.saturating_add(acks_bound) {
+                Some((remote.id, remote.hashes_acked))
+            } else {
+                None
+            }
+        })
+    }
+
     /// Compares every final local hash not matched yet with the peers' reports of its tick, in
     /// tick order: a difference ends the session with [`EndReason::Desync`]; a tick every peer
     /// matched emits [`SessionEvent::HashMatched`] and releases the states kept for the
@@ -1381,6 +1431,17 @@ impl Session {
             self.matched_through = tick;
         }
         if let Some(reason) = desync {
+            self.end(now, reason);
+            return;
+        }
+        if let Some((peer, tick)) = self.hash_lagging() {
+            let rule = ViolationRule::HashLagging;
+            let reason = EndReason::Violation {
+                peer,
+                player: None,
+                tick: Some(tick),
+                rule,
+            };
             self.end(now, reason);
             return;
         }
@@ -1833,28 +1894,16 @@ fn inputs_for(
     messages
 }
 
-/// Encodes `packet`, giving it back with its bytes, fitting it in [`MAX_PACKET_BYTES`] and
-/// [`MAX_MESSAGES_PER_PACKET`]: first by leaving out its newest hash report but one, then the
-/// newest tick of its longest input message. The oldest unacknowledged reports and ticks go
-/// first, the rest in a later packet. The settings bound a packet with one report and the
-/// usual inputs within the limits; inputs are left out only for a peer that has fallen behind
+/// Encodes `packet`, giving it back with its bytes, leaving out the newest tick of its longest
+/// input message until it fits in [`MAX_PACKET_BYTES`]: the oldest unacknowledged ticks go
+/// first, the rest in a later packet. The settings bound the usual packet, every unacknowledged
+/// hash report included, within the limits; this only acts for a peer that has fallen behind
 /// by more than the rollback window and the input delay.
 fn fit(mut packet: Packet) -> (Packet, Vec<u8>) {
     loop {
         let bytes = packet.encode();
-        if bytes.len() <= MAX_PACKET_BYTES && packet.messages.len() <= MAX_MESSAGES_PER_PACKET {
+        if bytes.len() <= MAX_PACKET_BYTES {
             return (packet, bytes);
-        }
-        let hashes: Vec<usize> = packet
-            .messages
-            .iter()
-            .enumerate()
-            .filter(|(_, message)| matches!(message, Message::Hash { .. }))
-            .map(|(index, _)| index)
-            .collect();
-        if let [_, .., newest] = hashes[..] {
-            packet.messages.remove(newest);
-            continue;
         }
         let longest = packet
             .messages

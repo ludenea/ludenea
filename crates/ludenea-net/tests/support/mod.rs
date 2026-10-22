@@ -327,6 +327,8 @@ pub struct Harness {
     now_micros: u64,
     sent_packets: u64,
     drop_every_other: bool,
+    /// The most hash reports one sent packet carried.
+    most_hash_reports: usize,
 }
 
 impl Harness {
@@ -380,6 +382,7 @@ impl Harness {
             now_micros: 0,
             sent_packets: 0,
             drop_every_other: false,
+            most_hash_reports: 0,
         }
     }
 
@@ -437,6 +440,11 @@ impl Harness {
         self.peers[usize::from(peer.0)].frame_micros = frame_micros;
     }
 
+    /// The most hash reports one packet any session sent carried so far.
+    pub fn most_hash_reports(&self) -> usize {
+        self.most_hash_reports
+    }
+
     /// How many packets the sessions sent so far.
     pub fn sent_packets(&self) -> u64 {
         self.sent_packets
@@ -458,7 +466,8 @@ impl Harness {
                 }
             }
             for (to, packet) in peer.session.outgoing(now) {
-                check_limits(&packet);
+                let reports = check_limits(&packet);
+                self.most_hash_reports = self.most_hash_reports.max(reports);
                 self.sent_packets += 1;
                 peer.sent_packets += 1;
                 if self.drop_every_other && peer.sent_packets % 2 == 0 {
@@ -541,8 +550,8 @@ impl Harness {
 }
 
 /// A packet a session sends decodes, within [`MAX_PACKET_BYTES`] and
-/// [`MAX_MESSAGES_PER_PACKET`].
-fn check_limits(packet: &[u8]) {
+/// [`MAX_MESSAGES_PER_PACKET`]. Returns how many hash reports it carries.
+fn check_limits(packet: &[u8]) -> usize {
     assert!(packet.len() <= MAX_PACKET_BYTES, "{} bytes", packet.len());
     let decoded = Packet::decode(packet).expect("a session sends packets that decode");
     assert!(
@@ -550,6 +559,11 @@ fn check_limits(packet: &[u8]) {
         "{} messages",
         decoded.messages.len()
     );
+    decoded
+        .messages
+        .iter()
+        .filter(|message| matches!(message, Message::Hash { .. }))
+        .count()
 }
 
 /// Whether `packet` carries a hash report of `tick`.

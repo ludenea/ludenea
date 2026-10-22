@@ -1,13 +1,11 @@
 mod support;
 
-use ludenea_app::PlayerInputSpec;
 use ludenea_net::{
-    DropReason, END_LINGER_MICROS, EndNotice, EndReason, LinkConditions, MAX_MESSAGES_PER_PACKET,
-    MAX_PACKET_BYTES, MatchIdentity, MatchRules, Message, Packet, PeerId, Request, Session,
-    SessionError, SessionEvent, SessionState, ViolationRule,
+    DropReason, END_LINGER_MICROS, EndNotice, EndReason, LinkConditions, MatchRules, Message,
+    Packet, PeerId, Request, Session, SessionError, SessionEvent, SessionState, ViolationRule,
 };
 use support::{
-    FRAME_MICROS, Harness, Model, handshake, identity, offline_hashes, sessions, settings,
+    FRAME_MICROS, Harness, Model, handshake, identity, offline_hashes, sessions, sessions_of,
 };
 
 const ONE_SECOND: u64 = 1_000_000;
@@ -75,8 +73,15 @@ struct Driven {
 
 impl Driven {
     fn new() -> Self {
+        Self::with_rules(MatchRules::default())
+    }
+
+    /// Peer 0 of a running two-peer match under `rules`.
+    fn with_rules(rules: MatchRules) -> Self {
+        let mut identity = identity(&[0, 1]);
+        identity.rules = rules;
         Self {
-            session: handshake(sessions(2)).remove(0),
+            session: handshake(sessions_of(&identity)).remove(0),
             model: Model::default(),
             remote_ticks: 0,
         }
@@ -478,19 +483,20 @@ fn received_hashes_wait_in_bounded_storage() {
             _ => None,
         });
     assert_eq!(acked, Some(2 * INTERVAL));
-    for (tick, hash) in unanswered {
+    // Answering the hash of 30 makes it final and matched: its waiting report leaves room.
+    // Only a caller answering late lets reports wait here at all; answering every hash at
+    // once would make 60 final too, which peer 1 could not have acknowledged in time.
+    for (tick, hash) in unanswered.into_iter().filter(|(tick, _)| *tick == INTERVAL) {
         driven.session.report_hash(tick, hash).unwrap();
     }
     driven.receive(vec![ninety]);
     assert_eq!(driven.session.state(), SessionState::Running);
     assert_eq!(dropped(&driven.session, DropReason::HashBacklog), 1);
     let events = driven.session.events();
-    for n in 1..=2 {
-        assert!(
-            events.contains(&SessionEvent::HashMatched { tick: n * INTERVAL }),
-            "{n}: {events:?}"
-        );
-    }
+    assert!(
+        events.contains(&SessionEvent::HashMatched { tick: INTERVAL }),
+        "{events:?}"
+    );
 }
 
 #[test]
@@ -536,73 +542,169 @@ fn acknowledged_hash_reports_are_no_longer_sent() {
     }
 }
 
-#[test]
-fn unacknowledged_hash_reports_are_packed_within_the_packet_limits() {
-    // Three local players with the largest inputs, a report every tick, and a peer that
-    // never acknowledges a report: they pile up beyond what one packet holds.
-    let mut identity: MatchIdentity = identity(&[0, 0, 0, 1]);
-    identity.rules = MatchRules {
+/// The rules where the lag bounds are one and two ticks: `rollback_window` 1, `input_delay`
+/// 0, `hash_interval` 1.
+fn tight() -> MatchRules {
+    MatchRules {
+        input_delay: 0,
+        rollback_window: 1,
         hash_interval: 1,
-        ..MatchRules::default()
-    };
-    let any_input = PlayerInputSpec {
-        default: vec![0],
-        check: |_| Ok(()),
-    };
-    let mut pair: Vec<Session> = (0..2)
-        .map(|local| Session::new(settings(local, &identity), any_input.clone()).unwrap())
-        .collect();
-    pair = handshake(pair);
-    let mut session = pair.remove(0);
-    let large = vec![0xff; ludenea_net::MAX_INPUT_BYTES];
-    let mut first_unacked = 1;
-    for tick in 0..60u64 {
-        let messages = vec![
+    }
+}
+
+/// Drives peer 0 under [`tight`] rules for `frames` frames, peer 1 sending each frame its
+/// input, an acknowledgment of the report ticks `acked(frame, newest sent)` and its own hash
+/// reports of every tick up to `reported(frame)`, with the hashes peer 0's model has. After
+/// frame `t`, peer 0's newest final hash is of tick `t`. Returns peer 0, stopped at the first
+/// frame that ended it.
+fn tight_run(
+    frames: u64,
+    reported: impl Fn(u64) -> u64,
+    acked: impl Fn(u64, u64) -> u64,
+) -> Driven {
+    let mut driven = Driven::with_rules(tight());
+    let (mut newest_sent, mut newest_reported) = (0, 0);
+    for frame in 0..frames {
+        let mut messages = vec![
             Message::Inputs {
-                player: 3,
-                first_tick: tick,
+                player: 1,
+                first_tick: frame,
                 inputs: vec![vec![0]],
             },
             Message::Ack {
-                players: (0..3).map(|player| (player, tick)).collect(),
-                hashes_through: if tick == 40 { first_unacked - 1 } else { 0 },
+                players: vec![(0, frame)],
+                hashes_through: acked(frame, newest_sent),
             },
         ];
-        let packet = Packet {
-            match_id: 1,
-            messages,
-        };
-        session.receive(PeerId(1), &packet.encode(), NOW);
-        assert_eq!(session.state(), SessionState::Running, "tick {tick}");
-        for player in 0..3 {
-            session.add_local_input(player, large.clone()).unwrap();
+        let through = reported(frame);
+        messages.extend((newest_reported + 1..=through).map(|tick| Message::Hash {
+            tick,
+            hash: driven.model.hash_at(tick).unwrap(),
+        }));
+        newest_reported = newest_reported.max(through);
+        driven.receive(messages);
+        if driven.session.state() != SessionState::Running {
+            break;
         }
-        for request in session.advance(NOW).unwrap() {
-            if let Request::Save { tick, hash: true } = request {
-                session.report_hash(tick, tick.wrapping_mul(7)).unwrap();
-            }
+        let sent = driven.frame(0);
+        if let Some((tick, _)) = hash_reports(&sent).last() {
+            newest_sent = *tick;
         }
-        for (_, bytes) in session.outgoing(NOW) {
-            assert!(bytes.len() <= MAX_PACKET_BYTES, "{} bytes", bytes.len());
-            let messages = Packet::decode(&bytes).unwrap().messages;
-            assert!(messages.len() <= MAX_MESSAGES_PER_PACKET, "{messages:?}");
-            let ticks: Vec<u64> = hash_reports(&messages).iter().map(|(t, _)| *t).collect();
-            // The oldest unacknowledged reports, in order.
-            if let Some(first) = ticks.first() {
-                assert_eq!(*first, first_unacked, "tick {tick}");
-                let count = u64::try_from(ticks.len()).unwrap();
-                let expected: Vec<u64> = (*first..*first + count).collect();
-                assert_eq!(ticks, expected);
-                if tick == 39 {
-                    first_unacked = ticks.last().unwrap() + 1;
-                }
-            }
-            if tick == 59 {
-                assert!(ticks.len() > 1 && ticks.len() < 50, "{ticks:?}");
-            }
+        if driven.session.state() != SessionState::Running {
+            break;
         }
     }
-    assert!(first_unacked > 1);
+    driven
+}
+
+#[test]
+fn hash_reports_lagging_beyond_the_bound_disconnect() {
+    // The newest report may trail the newest final hash by `rollback_window + input_delay +
+    // hash_interval - 1` = 1 tick: after frame `t`, peer 1 has reported tick `t - 1`.
+    let lagging = |frame: u64| frame.saturating_sub(1);
+    let at_bound = tight_run(20, lagging, |_, sent| sent);
+    assert_eq!(at_bound.session.state(), SessionState::Running);
+    // Peer 1 stops reporting at tick 9: after frame 11 it trails by 2.
+    let mut beyond = tight_run(20, |frame| lagging(frame.min(10)), |_, sent| sent);
+    assert_eq!(
+        beyond.session.state(),
+        violation(9, ViolationRule::HashLagging)
+    );
+    assert_eq!(beyond.model.tick(), 12);
+    assert_eq!(beyond.sent(), []);
+}
+
+#[test]
+fn acknowledgments_lagging_beyond_the_bound_disconnect() {
+    // The acknowledgment of the local reports may trail the newest final hash by
+    // `2 * (rollback_window + input_delay) + hash_interval - 1` = 2 ticks: after frame `t`,
+    // peer 1 acknowledged tick `t - 2`, which peer 0 sent after frame `t - 2`.
+    let reporting = |frame: u64| frame;
+    let lagging = |frame: u64, _| frame.saturating_sub(2);
+    let at_bound = tight_run(20, reporting, lagging);
+    assert_eq!(at_bound.session.state(), SessionState::Running);
+    // Peer 1 stops acknowledging at tick 8: after frame 11 it trails by 3.
+    let mut beyond = tight_run(20, reporting, |frame, sent| lagging(frame.min(10), sent));
+    assert_eq!(
+        beyond.session.state(),
+        violation(8, ViolationRule::HashLagging)
+    );
+    assert_eq!(beyond.model.tick(), 12);
+    assert_eq!(beyond.sent(), []);
+}
+
+/// Runs `peers` honest peers with `hash_interval` under 150 ms of latency, 30 of jitter and
+/// 100 per mille of loss until every peer matched every report up to `through`, checking at
+/// every step that no peer keeps more reported states than the lag bounds allow, then that
+/// no packet carried more reports than the settings leave room for.
+fn honest_edge_run(peers: u8, hash_interval: u32, through: u64) {
+    let owners: Vec<u8> = (0..peers).collect();
+    let mut identity = identity(&owners);
+    identity.rules.hash_interval = hash_interval;
+    let conditions = LinkConditions {
+        latency_micros: 150_000,
+        jitter_micros: 30_000,
+        loss_per_mille: 100,
+        duplicate_per_mille: 20,
+        reorder_per_mille: 50,
+        reorder_extra_micros: 20_000,
+        seed: u64::from(hash_interval) * 10 + u64::from(peers),
+    };
+    let mut harness = Harness::conditioned(sessions_of(&identity), conditions);
+    let rules = identity.rules;
+    let (window, delay, interval) = (
+        u64::from(rules.rollback_window),
+        u64::from(rules.input_delay),
+        u64::from(rules.hash_interval),
+    );
+    // Every peer's reports up to `newest final - (window + delay + interval - 1)` arrived and
+    // matched, the newest final is within `window + interval - 1` of the current tick, and a
+    // release waits for the next advance: the kept states span at most that many ticks.
+    let span = (window + interval - 1) + (window + delay + interval - 1) + interval;
+    let kept_bound = usize::try_from(span / interval + 2).unwrap();
+    let matched_through = |h: &Harness| {
+        let expected: Vec<u64> = (1..=through / interval).map(|n| n * interval).collect();
+        h.peers().all(|peer| {
+            let matched = matched(h, peer);
+            matched.starts_with(&expected)
+        })
+    };
+    while !matched_through(&harness) {
+        assert!(
+            harness.now_micros() < 60 * ONE_SECOND,
+            "{peers} peers at {hash_interval}: no match through {through}"
+        );
+        harness.step();
+        for peer in harness.peers() {
+            let state = harness.state(peer);
+            assert!(
+                !matches!(state, SessionState::Ended(_)),
+                "{peer}: {state:?}"
+            );
+            let kept = harness.model(peer).kept().len();
+            assert!(
+                kept <= kept_bound,
+                "{peer}: {kept} kept, bound {kept_bound}"
+            );
+        }
+    }
+    // `(2 * (window + delay) + interval - 1) / interval + 1`, what the settings leave room for.
+    let reports = (2 * (window + delay)).div_ceil(interval) + 1;
+    let most = harness.most_hash_reports();
+    assert!(
+        most <= usize::try_from(reports).unwrap(),
+        "{most} reports in one packet"
+    );
+}
+
+#[test]
+fn honest_peers_at_the_edge_are_never_lagging() {
+    for peers in [2, 3] {
+        // The smallest interval the layout accepts, where reports pile up fastest: before
+        // every packet carried every unacknowledged report, this backlog grew without end.
+        honest_edge_run(peers, 3, 600);
+        honest_edge_run(peers, 30, 600);
+    }
 }
 
 #[test]

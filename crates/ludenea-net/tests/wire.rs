@@ -390,11 +390,12 @@ fn worst_case_packet_fits() {
 #[test]
 fn validate_refuses_a_layout_whose_worst_packet_does_not_fit() {
     // Three local players: each tick of the window adds three inputs of 25 encoded bytes, on
-    // top of 979 bytes at the default window of 8 (11 ticks).
+    // top of 1001 bytes at the default window of 8 (11 ticks), two hash reports of 21 bytes
+    // and a welcome included. A window of 24 leaves a third report unacknowledged.
     let mut s = settings(&[0, 0, 0, 1]);
     s.identity.rules.rollback_window = 10;
-    s.validate().expect("13 ticks take 1129 bytes");
-    for (window, expected) in [(11, 1204), (24, 2179)] {
+    s.validate().expect("13 ticks take 1151 bytes");
+    for (window, expected) in [(11, 1226), (24, 2222)] {
         s.identity.rules.rollback_window = window;
         let error = s
             .validate()
@@ -407,6 +408,37 @@ fn validate_refuses_a_layout_whose_worst_packet_does_not_fit() {
         assert!(
             text.contains(&expected.to_string()) && text.contains("1200"),
             "{text}"
+        );
+    }
+}
+
+#[test]
+fn validate_refuses_a_hash_interval_whose_reports_do_not_fit() {
+    // With the default window and delay, up to `(2 * 10 + hash_interval - 1) / hash_interval
+    // + 1` reports are unacknowledged: 8 at an interval of 3, 11 at 2, 21 at 1. One local
+    // player's packet holds its inputs, an acknowledgment, a quality request and its reply, a
+    // welcome, a goodbye and those reports, at most 16 messages.
+    let mut s = settings(&[0, 1]);
+    s.identity.rules.hash_interval = 3;
+    s.validate().expect("14 messages fit");
+    for (interval, messages) in [(2, 17), (1, 27)] {
+        s.identity.rules.hash_interval = interval;
+        let error = s.validate().expect_err("too many messages");
+        assert_eq!(
+            error,
+            SettingsError::PacketTooManyMessages {
+                peer: PeerId(0),
+                messages,
+                max: MAX_MESSAGES_PER_PACKET,
+            }
+        );
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "the worst-case packet of peer 0 holds {messages} messages, more than the 16 \
+                 of one packet: a larger hash_interval, a smaller rollback_window or \
+                 input_delay, or fewer players per peer fit"
+            )
         );
     }
 }
@@ -425,13 +457,13 @@ fn every_peer_refuses_a_layout_another_peer_cannot_send() {
             error,
             SettingsError::PacketTooLarge {
                 peer: PeerId(1),
-                worst: 1204,
+                worst: 1226,
                 max: MAX_PACKET_BYTES
             }
         );
         assert_eq!(
             error.to_string(),
-            "the worst-case packet of peer 1 takes 1204 bytes, more than the 1200 bytes of one \
+            "the worst-case packet of peer 1 takes 1226 bytes, more than the 1200 bytes of one \
              packet: fewer players per peer, a smaller rollback_window or input_delay fit"
         );
     }
