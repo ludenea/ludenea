@@ -477,20 +477,62 @@ fn mapping_reads_keys_and_the_gamepad() {
 
 #[test]
 fn same_hashes_at_one_two_and_eight_threads() {
+    // Dynamic crates dropped in the fighters' path give the threaded solver contacts to
+    // solve, and the fighters' raycasts read where it puts them.
+    let crates: Vec<Vec2> = [-10.0, -7.0, -3.0, 0.0, 3.0, 7.0, 10.0]
+        .iter()
+        .flat_map(|&x| [Vec2::new(x, 2.0), Vec2::new(x + 0.3, 4.0)])
+        .collect();
     let run = |threads: usize| {
         let mut simulation = arena(2, &[floor(-2.0)]);
+        let world = simulation.world_mut();
+        for &position in &crates {
+            let entity = world.spawn();
+            world
+                .insert(
+                    entity,
+                    Pose {
+                        position,
+                        rotation: Rot::IDENTITY,
+                    },
+                )
+                .unwrap();
+            world.insert(entity, Body::dynamic()).unwrap();
+            world
+                .insert(
+                    entity,
+                    Collider::new(Shape::Polygon(Polygon::make_box(0.5, 0.5))),
+                )
+                .unwrap();
+        }
         simulation.set_threads(threads).unwrap();
-        (0..600)
+        let hashes: Vec<u64> = (0..600)
             .map(|tick| {
                 simulation.step_with(&arena::scripted_inputs(tick)).unwrap();
                 simulation.hash()
             })
-            .collect::<Vec<_>>()
+            .collect();
+        let world = simulation.world();
+        let resting = world
+            .entities()
+            .filter(|&entity| {
+                world
+                    .get::<Body>(entity)
+                    .is_some_and(|body| body.kind == BodyKind::Dynamic)
+            })
+            .filter(|&entity| world.get::<Pose>(entity).unwrap().position.y < 1.0)
+            .count();
+        (hashes, resting)
     };
-    let one = run(1);
+    let (one, resting) = run(1);
+    assert_eq!(
+        resting,
+        crates.len(),
+        "every crate fell onto the floor or a crate"
+    );
     assert_ne!(one[0], one[599], "the simulation advances");
     for threads in [2, 8] {
-        let other = run(threads);
+        let (other, _) = run(threads);
         let first = one.iter().zip(&other).position(|(a, b)| a != b);
         assert_eq!(first, None, "{threads} threads diverge at this tick");
     }
