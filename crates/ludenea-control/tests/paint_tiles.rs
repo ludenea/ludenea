@@ -578,6 +578,28 @@ fn a_paint_without_its_tile_does_not_decode_and_a_null_tile_erases() {
 }
 
 #[test]
+fn a_paint_past_tick_0_undoes_in_one_step() {
+    let mut host = loaded();
+    step(&mut host, 6);
+    let entity = tilemap(&mut host);
+    let before = hash(&mut host);
+    ok(&mut host, paint(entity, (0, 0, 3, 3), Some(5)));
+    assert_eq!(timeline(&mut host).edit_ticks, vec![6]);
+
+    ok(&mut host, Command::Undo);
+    assert_eq!(
+        tiles(&mut host, entity),
+        expected((0, 0, 0, 0), Value::Null)
+    );
+    assert_eq!(hash(&mut host), before);
+    assert!(timeline(&mut host).edit_ticks.is_empty());
+    assert_eq!(
+        host.handle(Command::Undo).unwrap_err().code,
+        ErrorCode::NothingToUndo
+    );
+}
+
+#[test]
 fn an_error_after_the_paint_is_read_names_the_paint() {
     let mut host = loaded();
     step(&mut host, 15);
