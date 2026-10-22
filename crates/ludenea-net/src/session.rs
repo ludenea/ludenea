@@ -246,6 +246,9 @@ impl Session {
         for message in packet.messages {
             match message {
                 Message::Hello { identity } => {
+                    // Once running, a peer that changes its identity breaks the protocol: it
+                    // is to be reported through the end notice once violations and end
+                    // notices exist. Until then the other peer ends by its timeout.
                     if let Some(reason) = self.compare(from, &identity, packet.match_id) {
                         self.end(now, reason);
                         return;
