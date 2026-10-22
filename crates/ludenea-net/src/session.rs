@@ -46,7 +46,8 @@ pub enum EndReason {
         local: String,
         remote: String,
     },
-    /// No packet came from `peer` for `disconnect_after_micros` while connecting.
+    /// No packet came for `disconnect_after_micros` from `peer`, whose handshake was
+    /// unfinished, while connecting.
     Unreachable { peer: PeerId },
 }
 
@@ -270,7 +271,8 @@ impl Session {
     }
 
     /// The packets to send now, at most one per peer. While connecting, a session that heard
-    /// nothing from a peer for `disconnect_after_micros` ends `Unreachable`.
+    /// nothing for `disconnect_after_micros` from a peer whose handshake is unfinished ends
+    /// `Unreachable`.
     pub fn outgoing(&mut self, now_micros: u64) -> Vec<(PeerId, Vec<u8>)> {
         let now = self.observe(now_micros);
         let greeting = match &self.state {
@@ -331,11 +333,14 @@ impl Session {
         now
     }
 
-    /// The first peer silent for `disconnect_after_micros`.
+    /// The first peer whose handshake is unfinished and that has been silent for
+    /// `disconnect_after_micros`. A peer that finished its handshake with this one has
+    /// nothing more to send until the match runs, so its silence says nothing.
     fn silent_peer(&self, now: u64) -> Option<PeerId> {
         let limit = self.settings.timeouts.disconnect_after_micros;
         self.remotes
             .iter()
+            .filter(|remote| !(remote.hello && remote.welcomed))
             .find(|remote| now.saturating_sub(remote.last_heard_micros) >= limit)
             .map(|remote| remote.id)
     }

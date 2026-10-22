@@ -124,6 +124,11 @@ impl Harness {
         self.peers[usize::from(peer.0)].muted = true;
     }
 
+    /// Lets a muted `peer` receive and send again.
+    pub fn unmute(&mut self, peer: PeerId) {
+        self.peers[usize::from(peer.0)].muted = false;
+    }
+
     /// One step at the current time, then the time moves on by [`STEP_MICROS`]. Every send
     /// must succeed: a session never builds a packet a transport refuses.
     pub fn step(&mut self) {

@@ -272,18 +272,63 @@ fn other_version_names_net_version() {
     );
 }
 
-#[test]
-fn unreachable_peer_ends_the_handshake() {
-    let mut harness = Harness::new(sessions(3));
-    harness.mute(PeerId(2));
-    let timeout = ludenea_net::Timeouts::default().disconnect_after_micros;
-    harness.run_until(timeout, |_| false);
-    // The last step ran one step short of the limit.
-    assert_eq!(harness.now_micros(), timeout);
-    for peer in [PeerId(0), PeerId(1)] {
-        assert_eq!(harness.state(peer), SessionState::Connecting, "{peer}");
+/// Steps until just before `at`, asserting `peers` are still connecting, then once more.
+fn step_to(harness: &mut Harness, peers: &[PeerId], at: u64) {
+    harness.run_until(at - harness.now_micros(), |_| false);
+    assert_eq!(harness.now_micros(), at);
+    for &peer in peers {
+        assert_eq!(
+            harness.state(peer),
+            SessionState::Connecting,
+            "{peer} before {at}"
+        );
     }
     harness.step();
+}
+
+#[test]
+fn unreachable_peer_ends_the_handshake() {
+    // Peer 2 never answers. Peer 1 comes up one second late, so its clock and its silence
+    // of peer 2 start then, and peers 0 and 1 hear each other from then on: each limit below
+    // is a second away from any other silence.
+    let mut harness = Harness::new(sessions(3));
+    harness.mute(PeerId(1));
+    harness.mute(PeerId(2));
+    harness.run_until(ONE_SECOND, |_| false);
+    harness.unmute(PeerId(1));
+    let timeout = ludenea_net::Timeouts::default().disconnect_after_micros;
+    let unreachable = SessionState::Ended(EndReason::Unreachable { peer: PeerId(2) });
+    step_to(&mut harness, &[PeerId(0)], timeout);
+    assert_eq!(harness.state(PeerId(0)), unreachable);
+    step_to(&mut harness, &[PeerId(1)], ONE_SECOND + timeout);
+    assert_eq!(harness.state(PeerId(1)), unreachable);
+    // An ended session stays ended and sends nothing more.
+    harness.run_until(ONE_SECOND, |_| false);
+    let now = harness.now_micros();
+    assert_eq!(harness.session(PeerId(0)).outgoing(now), []);
+    assert_eq!(harness.state(PeerId(0)), unreachable);
+}
+
+#[test]
+fn only_the_peer_at_fault_is_unreachable() {
+    // Peers 0 and 1 finish their handshake at once and have nothing more to tell each other;
+    // peer 2 sends a single Hello at 2.9 s, then goes dark. Only peer 2 is at fault, from
+    // its last packet.
+    let mut harness = Harness::new(sessions(3));
+    harness.mute(PeerId(2));
+    harness.run_until(2_900_000, |_| false);
+    let now = harness.now_micros();
+    let hello = bytes(
+        1,
+        vec![Message::Hello {
+            identity: identity(&[0, 1, 2]),
+        }],
+    );
+    for peer in [PeerId(0), PeerId(1)] {
+        harness.session(peer).receive(PeerId(2), &hello, now);
+    }
+    let timeout = ludenea_net::Timeouts::default().disconnect_after_micros;
+    step_to(&mut harness, &[PeerId(0), PeerId(1)], now + timeout);
     for peer in [PeerId(0), PeerId(1)] {
         assert_eq!(
             harness.state(peer),
@@ -291,11 +336,6 @@ fn unreachable_peer_ends_the_handshake() {
             "{peer}"
         );
     }
-    // An ended session stays ended and sends nothing more.
-    harness.run_until(ONE_SECOND, |_| false);
-    let now = harness.now_micros();
-    assert_eq!(harness.session(PeerId(0)).outgoing(now), []);
-    assert!(matches!(harness.state(PeerId(0)), SessionState::Ended(_)));
 }
 
 #[test]

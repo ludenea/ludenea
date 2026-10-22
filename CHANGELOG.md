@@ -80,8 +80,8 @@ hash, those of the golden trace and replays included.
   peer has welcomed it and sent a matching `Hello`. Another view of the match ends it with
   `EndReason::Mismatch`, naming the peer, the first differing field (`net_version` while
   connecting, then the identity's fields in order, then `match_id`) and both values; a
-  peer silent for `disconnect_after_micros` while connecting ends it with
-  `EndReason::Unreachable`. A packet that is not one of this match from another of its
+  peer whose handshake is unfinished and that stays silent for `disconnect_after_micros`
+  while connecting ends it with `EndReason::Unreachable`. A packet that is not one of this match from another of its
   peers is dropped, counted per sender and `DropReason` in `Session::stats`, and reported
   as `SessionEvent::Dropped`.
 - `ludenea_render` answers without a GPU what the renderer draws: `atlas::frames_of(png,
