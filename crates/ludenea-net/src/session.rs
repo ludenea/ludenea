@@ -111,8 +111,8 @@ pub enum ViolationRule {
     AckLagging,
 }
 
-/// Why a received packet, or one message of it, was dropped. Ordered, so the counts of [`PeerStats::dropped`]
-/// iterate the same way everywhere.
+/// Why a received packet, or one message of it, was dropped. Ordered, so the counts of
+/// [`PeerStats::dropped`] iterate the same way everywhere.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DropReason {
     /// The bytes are not a packet of this build, named after the [`WireError`] variant.
@@ -186,11 +186,11 @@ pub enum SessionError {
 /// What a session counts about one sender.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PeerStats {
-    /// The packets dropped, by reason. Each dropped packet counts once, under the reason that
-    /// stopped reading it: an `Inputs` message with a gap stops the packet there and is the
-    /// reason, even when an earlier message of the same packet came before the session ran;
-    /// otherwise such a message makes the reason [`DropReason::BeforeRunning`]. A
-    /// [`DropReason::UnknownEcho`] counts one dropped reply, and stops nothing.
+    /// The drops, by reason. A [`DropReason::UnknownEcho`] counts each dropped reply, and the
+    /// rest of its packet is still read. Every other reason counts a dropped packet once, under
+    /// the reason that stopped reading it: an `Inputs` message with a gap stops the packet there
+    /// and is the reason, even when an earlier message of the same packet came before the
+    /// session ran; otherwise such a message makes the reason [`DropReason::BeforeRunning`].
     pub dropped: BTreeMap<DropReason, u64>,
     /// The rollbacks a misprediction of this peer's inputs caused.
     pub rollbacks: u64,
