@@ -47,13 +47,16 @@ pub struct MatchRules {
 impl MatchRules {
     /// The most local hash reports a peer leaves unacknowledged without breaking
     /// `ViolationRule::HashLagging`: `(2 * (rollback_window + input_delay) + hash_interval - 1)
-    /// / hash_interval + 1`, the multiples of `hash_interval` in a span of the lag bound of an
-    /// acknowledgment, `2 * (rollback_window + input_delay) + hash_interval - 1` ticks. Every
-    /// packet of a running session carries all of them. Expects a positive `hash_interval`.
+    /// / hash_interval`. The reports not acknowledged are the multiples of `hash_interval`
+    /// after the newest acknowledged one, itself a multiple, up to the newest final one, and
+    /// the session checks that the two are at most `2 * (rollback_window + input_delay) +
+    /// hash_interval - 1` ticks apart whenever a hash becomes final, before any packet carries
+    /// it. Every packet of a running session carries all of them. Expects a positive
+    /// `hash_interval`.
     pub fn unacknowledged_hash_reports(&self) -> u64 {
         let interval = u64::from(self.hash_interval);
         let ticks = 2 * (u64::from(self.rollback_window) + u64::from(self.input_delay));
-        ticks.div_ceil(interval) + 1
+        ticks.div_ceil(interval)
     }
 }
 

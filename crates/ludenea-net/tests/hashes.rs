@@ -688,8 +688,8 @@ fn honest_edge_run(peers: u8, hash_interval: u32, through: u64) {
             );
         }
     }
-    // `(2 * (window + delay) + interval - 1) / interval + 1`, what the settings leave room for.
-    let reports = (2 * (window + delay)).div_ceil(interval) + 1;
+    // `(2 * (window + delay) + interval - 1) / interval`, what the settings leave room for.
+    let reports = (2 * (window + delay)).div_ceil(interval);
     let most = harness.most_hash_reports();
     assert!(
         most <= usize::try_from(reports).unwrap(),
@@ -702,7 +702,7 @@ fn honest_peers_at_the_edge_are_never_lagging() {
     for peers in [2, 3] {
         // The smallest interval the layout accepts, where reports pile up fastest: before
         // every packet carried every unacknowledged report, this backlog grew without end.
-        honest_edge_run(peers, 3, 600);
+        honest_edge_run(peers, 2, 600);
         honest_edge_run(peers, 30, 600);
     }
 }

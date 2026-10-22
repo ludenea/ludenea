@@ -147,10 +147,10 @@ hash, those of the golden trace and replays included.
   1`, which no honest peer does: this bounds the reports a session keeps and the states its
   caller keeps for them. The worst-case packet of `SessionSettings::validate` counts a
   `Welcome` and the `MatchRules::unacknowledged_hash_reports()` reports a peer may leave
-  unacknowledged, `(2 * (rollback_window + input_delay) + hash_interval - 1) / hash_interval
-  + 1` (2 with the defaults); a worst packet of more than 16 messages is refused with
+  unacknowledged, `(2 * (rollback_window + input_delay) + hash_interval - 1) / hash_interval`
+  (1 with the defaults); a worst packet of more than 16 messages is refused with
   `SettingsError::PacketTooManyMessages`, naming the peer and both counts (with the default
-  window and delay and one player per peer, a `hash_interval` below 3). An ending a session decides alone that an end
+  window and delay and one player per peer, a `hash_interval` of 1). An ending a session decides alone that an end
   notice tells of sends that `End` notice, and nothing else, to every peer at most once a
   tick for `END_LINGER_MICROS` (500 ms); a received `End` ends the receiver with the same
   reason, the new `EndReason::Lost { peer }` and `EndReason::LocalFailure { tick }` included,
