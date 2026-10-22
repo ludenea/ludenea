@@ -20,8 +20,14 @@
 //! when there is one. The rules also bound what a hostile peer can make a session hold: the
 //! remote inputs past the horizon of an honest peer, and the local inputs a peer leaves
 //! unacknowledged.
+//!
+//! Peers keep their ticks in step without a shared clock. Every [`QUALITY_INTERVAL_MICROS`],
+//! a session sends each peer a `Quality` request with its tick and its frame advantage over
+//! that peer; the peer answers with a `QualityReply` echoing the request's time, which gives
+//! the ping. A session ahead of the others skips ticks, GGPO style: an advance that runs no
+//! tick, so the others catch up without stalling, a few ticks at a time.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 use ludenea_app::PlayerInputSpec;
 
@@ -39,6 +45,16 @@ pub const HANDSHAKE_RESEND_MICROS: u64 = 100_000;
 /// cause ends for the same reason rather than by a timeout. After a mismatch, it keeps sending
 /// its `Hello`, from which every other peer finds the mismatch itself.
 pub const END_LINGER_MICROS: u64 = 500_000;
+
+/// The time between two `Quality` requests to the same peer while the session runs.
+pub const QUALITY_INTERVAL_MICROS: u64 = 200_000;
+
+/// How many unanswered `Quality` requests a session keeps per peer, the oldest forgotten
+/// first, and how many of the latest round trips the ping and the jitter are measured over.
+pub const QUALITY_HISTORY: usize = 16;
+
+/// How many fresh reports of a peer a time correction needs, and is the mean of.
+pub const SYNC_MIN_REPORTS: usize = 4;
 
 /// Where a session is in the life of a match.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,6 +129,9 @@ pub enum DropReason {
     /// Not a violation: a sender resends from the tick acknowledged last, so a later packet
     /// fills the gap.
     Gap,
+    /// A `QualityReply` echoes no `Quality` request still pending: answered already (a
+    /// duplicate), forgotten, or never sent. Not a violation: the network duplicates packets.
+    UnknownEcho,
 }
 
 /// What happened in a session since the caller last asked, for the host to act on or log.
@@ -179,6 +198,14 @@ pub struct PeerStats {
     pub prediction_misses: u64,
     /// The advances that stalled waiting for this peer's inputs.
     pub stalls: u64,
+    /// The mean of the latest [`QUALITY_HISTORY`] round trips to this peer, `0` before the
+    /// first.
+    pub ping_micros: u64,
+    /// The mean absolute deviation of those round trips from `ping_micros`.
+    pub jitter_micros: u64,
+    /// How many ticks this session is ahead of this peer, negative when behind, as of the
+    /// peer's latest report: the local tick minus the peer's estimated tick.
+    pub frame_advantage: i32,
 }
 
 /// What a session counts, per sender.
@@ -187,6 +214,8 @@ pub struct SessionStats {
     /// Every other peer of the match from the start, and any sender the transport named that
     /// is not one, from its first packet.
     pub peers: BTreeMap<PeerId, PeerStats>,
+    /// The advances that skipped a tick so the other peers catch up, apart from the stalls.
+    pub skips: u64,
 }
 
 /// Why a message stops the reading of its packet.
@@ -200,6 +229,15 @@ enum Refusal {
         tick: Option<u64>,
         rule: ViolationRule,
     },
+}
+
+/// The latest time report of a peer: a `Quality` request it sent.
+#[derive(Debug, Clone, Copy)]
+struct Report {
+    /// The peer's tick when it sent the report.
+    tick: u64,
+    /// When the report arrived, on the local clock.
+    received_micros: u64,
 }
 
 /// What this session knows of another peer.
@@ -223,6 +261,24 @@ struct Remote {
     sent: Vec<u64>,
     /// An advance ran since the last packet: the next one carries inputs and an `Ack`.
     inputs_due: bool,
+    /// When the last `Quality` request was sent to the peer.
+    last_quality_micros: Option<u64>,
+    /// The times of the `Quality` requests the peer has not answered, oldest first, at most
+    /// [`QUALITY_HISTORY`].
+    pending_quality: VecDeque<u64>,
+    /// The latest round trips to the peer, oldest first, at most [`QUALITY_HISTORY`].
+    round_trips: VecDeque<u64>,
+    /// The `sent_micros` of the latest `Quality` request of the peer, on its clock.
+    last_request_micros: Option<u64>,
+    /// The next packet answers that request.
+    reply_due: bool,
+    /// The latest report counted.
+    report: Option<Report>,
+    /// Twice the corrections of the latest fresh reports, at most [`SYNC_MIN_REPORTS`]: each
+    /// `local_advantage - remote_advantage`, the ticks this session should skip by the report
+    /// being half of it. Kept doubled so their mean is rounded once, not each of them. Cleared
+    /// by every skip, so a correction never acts twice on the same evidence.
+    corrections: VecDeque<i64>,
 }
 
 /// The rollback session of one peer of a match.
@@ -236,6 +292,8 @@ pub struct Session {
     pending: Vec<Option<Vec<u8>>>,
     /// The next tick to advance: every tick below it has run.
     tick: u64,
+    /// The skips of the latest time correction still to run.
+    skips_left: u64,
     /// The next tick to emit [`SessionEvent::Confirmed`] for.
     next_event: u64,
     state: SessionState,
@@ -287,6 +345,13 @@ impl Session {
                 acked: vec![0; settings.identity.players.len()],
                 sent: vec![0; settings.identity.players.len()],
                 inputs_due: false,
+                last_quality_micros: None,
+                pending_quality: VecDeque::new(),
+                round_trips: VecDeque::new(),
+                last_request_micros: None,
+                reply_due: false,
+                report: None,
+                corrections: VecDeque::new(),
             })
             .collect();
         // Each local player's ticks before the input delay hold the default input, confirmed
@@ -312,6 +377,7 @@ impl Session {
                 .iter()
                 .map(|remote| (remote.id, PeerStats::default()))
                 .collect(),
+            skips: 0,
         };
         let pending = vec![None; settings.identity.players.len()];
         Ok(Self {
@@ -320,6 +386,7 @@ impl Session {
             queues,
             pending,
             tick: 0,
+            skips_left: 0,
             next_event: 0,
             state: SessionState::Connecting,
             ended_micros: None,
@@ -420,7 +487,10 @@ impl Session {
                 // Only a running peer sends inputs and acknowledgments, and a peer runs once
                 // every peer agreed on the match: once its matching `Hello` arrived, they are
                 // read even while this session still waits for a third peer.
-                Message::Inputs { .. } | Message::Ack { .. }
+                Message::Inputs { .. }
+                | Message::Ack { .. }
+                | Message::Quality { .. }
+                | Message::QualityReply { .. }
                     if self.state == SessionState::Connecting && !self.remotes[index].hello =>
                 {
                     before_running = true;
@@ -452,9 +522,29 @@ impl Session {
                         return;
                     }
                 }
+                Message::Quality {
+                    tick,
+                    sent_micros,
+                    advantage,
+                } => {
+                    self.welcomed_by_running_peer(index);
+                    // A session still waiting for another peer has no tick to report yet: it
+                    // answers the requests once it runs.
+                    if self.state == SessionState::Running {
+                        self.read_quality(index, tick, sent_micros, advantage, now);
+                    }
+                }
+                // The replier's tick is not read: its requests carry its tick with its view of
+                // the advantage, which the correction needs both of.
+                Message::QualityReply { echo_micros, .. } => {
+                    self.welcomed_by_running_peer(index);
+                    if let Err(refusal) = self.read_reply(index, echo_micros, now) {
+                        self.refuse(now, from, refusal);
+                        return;
+                    }
+                }
                 _ if self.state == SessionState::Connecting => before_running = true,
-                // Quality, hash, goodbye and end messages are read by the layers built on the
-                // inputs.
+                // Hash, goodbye and end messages are read by the layers built on the inputs.
                 _ => {}
             }
         }
@@ -502,6 +592,13 @@ impl Session {
     /// call, stalled or not, has the next packet to each peer carry the local inputs it has
     /// not acknowledged and an `Ack` of its players' inputs.
     ///
+    /// When the session is ahead of the other peers, a call that would run a tick skips it
+    /// instead, keeping the pending local inputs: when the mean correction of the latest
+    /// [`SYNC_MIN_REPORTS`] fresh reports of some peer, rounded to the nearest tick, is at
+    /// least one tick, the session skips that many ticks for the largest one, at most
+    /// `rollback_window / 2`, one per call, each counted in [`SessionStats::skips`]. Each skip
+    /// forgets the reports so far.
+    ///
     /// # Errors
     ///
     /// [`SessionError::NotRunning`], [`SessionError::MissingLocalInput`] when the tick would
@@ -515,8 +612,12 @@ impl Session {
         let confirmed = self.confirmed_tick();
         let window = u64::from(self.settings.identity.rules.rollback_window);
         let stall = self.tick.saturating_sub(confirmed) >= window;
+        if !stall && self.skips_left == 0 {
+            self.skips_left = self.correction();
+        }
+        let skip = !stall && self.skips_left > 0;
         // Every refusal comes before anything changes.
-        if !stall {
+        if !stall && !skip {
             if let Some(player) = self.local_players().find(|p| self.pending[*p].is_none()) {
                 return Err(SessionError::MissingLocalInput {
                     player: u8::try_from(player).unwrap_or(u8::MAX),
@@ -531,6 +632,12 @@ impl Session {
         self.roll_back(&mut requests);
         if stall {
             self.count_stall(confirmed);
+        } else if skip {
+            self.skips_left -= 1;
+            self.stats.skips = self.stats.skips.saturating_add(1);
+            for remote in &mut self.remotes {
+                remote.corrections.clear();
+            }
         } else {
             self.advance_tick(&mut requests);
         }
@@ -546,7 +653,9 @@ impl Session {
     /// nothing for `disconnect_after_micros` from a peer whose handshake is unfinished ends
     /// `Unreachable`. While running, the packet after an advance carries the local inputs the
     /// peer has not acknowledged, oldest first, and an `Ack` of the peer's players; when they
-    /// do not all fit in [`MAX_PACKET_BYTES`], the newest ticks wait for a later packet.
+    /// do not all fit in [`MAX_PACKET_BYTES`], the newest ticks wait for a later packet. A
+    /// running session also sends each peer a `Quality` request every
+    /// [`QUALITY_INTERVAL_MICROS`], and answers the peer's latest request once.
     pub fn outgoing(&mut self, now_micros: u64) -> Vec<(PeerId, Vec<u8>)> {
         let now = self.observe(now_micros);
         let greeting = match &self.state {
@@ -564,8 +673,11 @@ impl Session {
             SessionState::Ended(_) => false,
         };
         let running = !matches!(self.state, SessionState::Ended(_));
+        let advantages: Vec<i32> = (0..self.remotes.len())
+            .map(|index| self.advantage(index, now).unwrap_or(0))
+            .collect();
         let mut packets = Vec::new();
-        for remote in &mut self.remotes {
+        for (remote, advantage) in self.remotes.iter_mut().zip(advantages) {
             let mut messages = Vec::new();
             let hello_due = remote
                 .last_hello_micros
@@ -588,6 +700,27 @@ impl Session {
                     remote.id,
                     &remote.acked,
                 ));
+            }
+            if self.state == SessionState::Running {
+                let quality_due = remote
+                    .last_quality_micros
+                    .is_none_or(|sent| now.saturating_sub(sent) >= QUALITY_INTERVAL_MICROS);
+                if quality_due {
+                    messages.push(Message::Quality {
+                        tick: self.tick,
+                        sent_micros: now,
+                        advantage,
+                    });
+                    remote.last_quality_micros = Some(now);
+                    push_bounded(&mut remote.pending_quality, now, QUALITY_HISTORY);
+                }
+                if let Some(echo_micros) = remote.last_request_micros.filter(|_| remote.reply_due) {
+                    messages.push(Message::QualityReply {
+                        echo_micros,
+                        tick: self.tick,
+                    });
+                    remote.reply_due = false;
+                }
             }
             if !messages.is_empty() {
                 let packet = Packet {
@@ -918,6 +1051,126 @@ impl Session {
         }
     }
 
+    /// The length of a tick in microseconds, at least one.
+    fn tick_micros(&self) -> u64 {
+        (1_000_000 / u64::from(self.settings.identity.tick_rate)).max(1)
+    }
+
+    /// The local advantage over the remote at `index` at `now`: the local tick minus the
+    /// peer's estimated tick, its latest reported tick plus the ticks elapsed since the report
+    /// plus half the ping in ticks, those two rounded together to the nearest tick, so the
+    /// estimate is not biased low; saturated to an `i32`. `None` before a report and a round
+    /// trip. The reported tick is untrusted: the arithmetic is wide enough for any.
+    fn advantage(&self, index: usize, now: u64) -> Option<i32> {
+        let remote = &self.remotes[index];
+        let report = remote.report?;
+        let ping = mean(remote.round_trips.iter().copied())?;
+        let elapsed = now.saturating_sub(report.received_micros);
+        let ahead_micros = i128::from(elapsed) + i128::from(ping / 2);
+        let tick_micros = i128::from(self.tick_micros());
+        let ahead_ticks = (ahead_micros + tick_micros / 2) / tick_micros;
+        let advantage = i128::from(self.tick) - (i128::from(report.tick) + ahead_ticks);
+        Some(i32::try_from(advantage).unwrap_or(if advantage < 0 { i32::MIN } else { i32::MAX }))
+    }
+
+    /// Reads a `Quality` request of the remote at `index`: answered in the next packet unless
+    /// an equal or later one came already (a duplicate or a reordered request), and counted as
+    /// a report unless it comes within half a [`QUALITY_INTERVAL_MICROS`] of the last one
+    /// counted, so a peer cannot hurry a correction by flooding reports. A report counted once
+    /// a ping is known adds the correction it calls for, `(local_advantage -
+    /// remote_advantage) / 2`, where `remote_advantage` is the peer's own view of the
+    /// advantage it has over this session.
+    fn read_quality(
+        &mut self,
+        index: usize,
+        tick: u64,
+        sent_micros: u64,
+        advantage: i32,
+        now: u64,
+    ) {
+        let remote = &mut self.remotes[index];
+        if remote
+            .last_request_micros
+            .is_some_and(|last| sent_micros <= last)
+        {
+            return;
+        }
+        remote.last_request_micros = Some(sent_micros);
+        remote.reply_due = true;
+        let fresh = remote.report.is_none_or(|report| {
+            now.saturating_sub(report.received_micros) >= QUALITY_INTERVAL_MICROS / 2
+        });
+        if !fresh {
+            return;
+        }
+        remote.report = Some(Report {
+            tick,
+            received_micros: now,
+        });
+        let Some(local) = self.advantage(index, now) else {
+            return;
+        };
+        let id = self.remotes[index].id;
+        self.stats.peers.entry(id).or_default().frame_advantage = local;
+        push_bounded(
+            &mut self.remotes[index].corrections,
+            i64::from(local) - i64::from(advantage),
+            SYNC_MIN_REPORTS,
+        );
+    }
+
+    /// Reads a `QualityReply` of the remote at `index`: a reply echoing a pending request adds
+    /// its round trip and updates the ping and the jitter; any other echo is a
+    /// [`DropReason::UnknownEcho`].
+    fn read_reply(&mut self, index: usize, echo_micros: u64, now: u64) -> Result<(), Refusal> {
+        let remote = &mut self.remotes[index];
+        let position = remote
+            .pending_quality
+            .iter()
+            .position(|sent| *sent == echo_micros)
+            .ok_or(Refusal::Drop(DropReason::UnknownEcho))?;
+        remote.pending_quality.remove(position);
+        // A pending request was sent at a time this session saw, so at most `now`.
+        push_bounded(
+            &mut remote.round_trips,
+            now.saturating_sub(echo_micros),
+            QUALITY_HISTORY,
+        );
+        let ping = mean(remote.round_trips.iter().copied()).unwrap_or(0);
+        let deviations = remote.round_trips.iter().map(|trip| trip.abs_diff(ping));
+        let jitter = mean(deviations).unwrap_or(0);
+        let stats = self.stats.peers.entry(remote.id).or_default();
+        stats.ping_micros = ping;
+        stats.jitter_micros = jitter;
+        Ok(())
+    }
+
+    /// The ticks to skip now: the largest mean correction over the peers with
+    /// [`SYNC_MIN_REPORTS`] fresh reports, rounded to the nearest tick, when it is at least
+    /// one tick, at most `rollback_window / 2`; otherwise none. Rounded rather than truncated,
+    /// so a peer half a tick or more ahead corrects at once instead of drifting a tick further
+    /// first.
+    fn correction(&self) -> u64 {
+        let cap = u64::from(self.settings.identity.rules.rollback_window / 2);
+        let largest = self
+            .remotes
+            .iter()
+            .filter(|remote| remote.corrections.len() >= SYNC_MIN_REPORTS)
+            .map(|remote| {
+                // At most `SYNC_MIN_REPORTS` doubled corrections are kept, each within twice an
+                // `i32`: their sum fits an `i64`. `doubled / (2 * count)`, halves rounded up.
+                let doubled: i64 = remote.corrections.iter().sum();
+                let count = i64::try_from(remote.corrections.len())
+                    .expect("at most SYNC_MIN_REPORTS corrections are kept");
+                (doubled + count).div_euclid(2 * count)
+            })
+            .max();
+        match largest {
+            Some(mean) if mean >= 1 => u64::try_from(mean).unwrap_or(0).min(cap),
+            _ => 0,
+        }
+    }
+
     /// Drops the packet `from` sent, or ends the session on a violation of `from`.
     fn refuse(&mut self, now: u64, from: PeerId, refusal: Refusal) {
         match refusal {
@@ -1058,6 +1311,23 @@ impl Session {
         *count = count.saturating_add(1);
         self.events.push(SessionEvent::Dropped { peer, reason });
     }
+}
+
+/// Appends `value`, forgetting the oldest values beyond `capacity`.
+fn push_bounded<T>(values: &mut VecDeque<T>, value: T, capacity: usize) {
+    values.push_back(value);
+    while values.len() > capacity {
+        values.pop_front();
+    }
+}
+
+/// The mean of `values`, rounded down; `None` when there are none.
+fn mean(values: impl Iterator<Item = u64>) -> Option<u64> {
+    let (sum, count) = values.fold((0u128, 0u128), |(sum, count), value| {
+        (sum + u128::from(value), count + 1)
+    });
+    // The mean of `u64`s is a `u64`.
+    (count > 0).then(|| u64::try_from(sum / count).unwrap_or(u64::MAX))
 }
 
 fn hex(value: u64) -> String {

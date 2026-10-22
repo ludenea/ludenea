@@ -1,9 +1,10 @@
 //! The multi-peer harness of the session tests: one session per peer of a match, over a
 //! [`MemoryNetwork`], optionally behind [`Conditioned`], driven in steps of
 //! [`STEP_MICROS`] of `now_micros`. Each step, every peer that is not muted takes every packet
-//! that has arrived, advances its session once per frame of the tick rate while it runs, with
-//! [`model_byte`] for each local player, applies the requests to its [`Model`], then sends what
-//! its session has to send.
+//! that has arrived, advances its session once per frame while it runs, with [`model_byte`]
+//! for each local player, applies the requests to its [`Model`], then sends what its session
+//! has to send. A frame lasts [`FRAME_MICROS`] unless [`Harness::set_frame_micros`] says
+//! otherwise.
 
 #![allow(
     dead_code,
@@ -236,6 +237,8 @@ struct Peer {
     /// Receives and sends, but runs no frame: a machine too slow to keep up.
     frozen: bool,
     model: Model,
+    /// The time between two frames of this peer.
+    frame_micros: u64,
     /// When the next frame is due, from the first step the session runs.
     next_frame_micros: Option<u64>,
     frames: u64,
@@ -309,6 +312,7 @@ impl Harness {
                 muted: false,
                 frozen: false,
                 model: Model::default(),
+                frame_micros: FRAME_MICROS,
                 next_frame_micros: None,
                 frames: 0,
                 sent_packets: 0,
@@ -353,6 +357,12 @@ impl Harness {
         self.peers[usize::from(peer.0)].frozen = false;
     }
 
+    /// Runs the frames of `peer` every `frame_micros` instead of [`FRAME_MICROS`]: a machine
+    /// whose clock runs fast or slow.
+    pub fn set_frame_micros(&mut self, peer: PeerId, frame_micros: u64) {
+        self.peers[usize::from(peer.0)].frame_micros = frame_micros;
+    }
+
     /// How many packets the sessions sent so far.
     pub fn sent_packets(&self) -> u64 {
         self.sent_packets
@@ -370,7 +380,7 @@ impl Harness {
                 let due = *peer.next_frame_micros.get_or_insert(now);
                 if now >= due {
                     peer.frame(now);
-                    peer.next_frame_micros = Some(due + FRAME_MICROS);
+                    peer.next_frame_micros = Some(due + peer.frame_micros);
                 }
             }
             for (to, packet) in peer.session.outgoing(now) {

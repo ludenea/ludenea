@@ -4,8 +4,9 @@ use std::collections::BTreeSet;
 
 use ludenea_app::{PlayerInputSpec, Rng};
 use ludenea_net::{
-    EndNotice, EndReason, LinkConditions, MAX_INPUT_BYTES, MAX_TICKS_PER_MESSAGE, MatchIdentity,
-    MatchRules, Message, Packet, PeerId, Session, SessionError, SessionState, ViolationRule,
+    DropReason, EndNotice, EndReason, LinkConditions, MAX_INPUT_BYTES, MAX_TICKS_PER_MESSAGE,
+    MatchIdentity, MatchRules, Message, Packet, PeerId, Session, SessionError, SessionState,
+    ViolationRule,
 };
 use support::{Harness, handshake, identity, sessions, settings};
 
@@ -405,7 +406,8 @@ fn ticks_near_u64_max_never_panic() {
             },
             violation(1, None, Some(u64::MAX), ViolationRule::AckNeverSent),
         ),
-        // Read by the layers built on the inputs; ignored for now, and never a panic.
+        // A report of a peer at the last tick, read and answered; a reply to no request,
+        // dropped. Never a panic.
         (
             Message::Quality {
                 tick: u64::MAX,
@@ -421,6 +423,7 @@ fn ticks_near_u64_max_never_panic() {
             },
             SessionState::Running,
         ),
+        // Read by the layers built on the inputs; ignored for now, and never a panic.
         (
             Message::Hash {
                 tick: u64::MAX,
@@ -556,8 +559,10 @@ fn fuzz_message(rng: &mut Rng, tick: u64, identity: &MatchIdentity) -> Message {
 /// What a fuzzed session may become after reading `packet`, given what it was before: a
 /// session stays as it is or ends with a violation of the sender, or, for a `Hello` of another
 /// view of the match in a packet of this match, with a mismatch, which is how this build ends
-/// on a peer that changes its identity. Quality, hash, goodbye and end messages are ignored
-/// by this build: the layers that read them extend this list with their own endings.
+/// on a peer that changes its identity. Quality messages end nothing: a reply that answers no
+/// request is dropped, and a report moves at most the skips. Hash, goodbye and end messages
+/// are ignored by this build: the layers that read them extend this list with their own
+/// endings.
 fn assert_allowed(before: &SessionState, after: &SessionState, from: PeerId, packet: &Packet) {
     if after == before {
         return;
@@ -610,6 +615,7 @@ fn fuzz_receive_never_panics() {
     let identity = identity(&[0, 1]);
     // How the fuzzed session ended, by seed, so the fuzz is shown to reach every rule.
     let mut outcomes = BTreeSet::new();
+    let mut unknown_echoes = 0;
     for seed in 0..10_000 {
         let mut rng = Rng::new(seed, 0);
         let mut pair = handshake(sessions(2));
@@ -649,6 +655,11 @@ fn fuzz_receive_never_panics() {
         if hostility == 0 && !never_acknowledges {
             assert_eq!(pair[0].state(), SessionState::Running, "seed {seed}");
         }
+        unknown_echoes += pair[0].stats().peers[&PeerId(1)]
+            .dropped
+            .get(&DropReason::UnknownEcho)
+            .copied()
+            .unwrap_or(0);
         outcomes.insert(match pair[0].state() {
             SessionState::Ended(EndReason::Violation { rule, .. }) => format!("{rule:?}"),
             SessionState::Ended(EndReason::Mismatch { .. }) => "Mismatch".to_string(),
@@ -666,4 +677,6 @@ fn fuzz_receive_never_panics() {
         "Running",
     ];
     assert_eq!(outcomes, expected.map(String::from).into(), "{outcomes:?}");
+    // Replies echoing a time in the future answer no request.
+    assert!(unknown_echoes > 0);
 }
