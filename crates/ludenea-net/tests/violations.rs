@@ -2,10 +2,10 @@ mod support;
 
 use std::collections::BTreeSet;
 
-use ludenea_app::Rng;
+use ludenea_app::{PlayerInputSpec, Rng};
 use ludenea_net::{
-    EndNotice, EndReason, LinkConditions, MAX_TICKS_PER_MESSAGE, MatchIdentity, MatchRules,
-    Message, Packet, PeerId, Session, SessionError, SessionState, ViolationRule,
+    EndNotice, EndReason, LinkConditions, MAX_INPUT_BYTES, MAX_TICKS_PER_MESSAGE, MatchIdentity,
+    MatchRules, Message, Packet, PeerId, Session, SessionError, SessionState, ViolationRule,
 };
 use support::{Harness, handshake, identity, sessions, settings};
 
@@ -104,7 +104,8 @@ fn conflicting_input_disconnects_the_peer() {
     assert_eq!(session.state(), SessionState::Running);
     // Tick 0 is the same and tick 1 differs: the confirmed input of tick 1 is kept, as the
     // queue refuses to overwrite it (the queue's own test
-    // `refuses_a_conflict_and_a_gap_without_changing_anything` checks it), and the peer that sent another one is disconnected.
+    // `refuses_a_conflict_and_a_gap_without_changing_anything` checks it), and the peer that
+    // sent another one is disconnected.
     from_peer_one(&mut session, vec![inputs(1, 0, &[3, 5, 6])]);
     assert_eq!(
         session.state(),
@@ -277,6 +278,60 @@ fn ack_never_sent_is_a_violation() {
         violation(1, None, Some(7), ViolationRule::AckNeverSent)
     );
     assert_stays_ended(&mut session);
+}
+
+#[test]
+fn ack_of_a_tick_left_out_of_a_full_packet_is_never_sent() {
+    // Three local players with inputs at the largest size: 18 unacknowledged ticks each do
+    // not fit in one packet, so the newest ticks wait for a later one.
+    let identity = identity(&[0, 0, 0, 1]);
+    let any_input = PlayerInputSpec {
+        default: vec![0],
+        check: |_| Ok(()),
+    };
+    let sessions = (0..2)
+        .map(|local| Session::new(settings(local, &identity), any_input.clone()).unwrap())
+        .collect();
+    let mut session = handshake(sessions).remove(0);
+    for tick in 0..16 {
+        for player in 0..3 {
+            session
+                .add_local_input(player, vec![0; MAX_INPUT_BYTES])
+                .unwrap();
+        }
+        let packet = Packet {
+            match_id: 1,
+            messages: vec![inputs(3, tick, &[0])],
+        };
+        session.receive(PeerId(1), &packet.encode(), NOW);
+        session.advance(NOW).unwrap();
+    }
+    let outgoing = session.outgoing(NOW);
+    let messages = Packet::decode(&outgoing[0].1).unwrap().messages;
+    // The player the packet cut the most ticks of, and how many of its ticks it holds.
+    let (sent, player) = messages
+        .iter()
+        .filter_map(|message| match message {
+            Message::Inputs { player, inputs, .. } => {
+                Some((u64::try_from(inputs.len()).unwrap(), *player))
+            }
+            _ => None,
+        })
+        .min()
+        .expect("inputs of the local players");
+    // Ticks 0 to 17 are held; the packet holds only the first `sent`.
+    assert!(sent < 18, "{sent} ticks sent: the packet was not full");
+    let ack = |next| Packet {
+        match_id: 1,
+        messages: vec![ack(player, next)],
+    };
+    session.receive(PeerId(1), &ack(sent).encode(), NOW);
+    assert_eq!(session.state(), SessionState::Running);
+    session.receive(PeerId(1), &ack(sent + 1).encode(), NOW);
+    assert_eq!(
+        session.state(),
+        violation(1, Some(player), Some(sent + 1), ViolationRule::AckNeverSent)
+    );
 }
 
 /// Peer 0 running 30 ticks while peer 1 sends its inputs, each with an acknowledgment that
@@ -586,6 +641,13 @@ fn fuzz_receive_never_panics() {
                 let packet = Packet { match_id, messages };
                 deliver(&mut pair[0], PeerId(1), &packet, now);
             }
+        }
+        // Without hostile packets, an honest pair never disconnects. Only `pair[0]` is
+        // checked: hostile packets forge inputs of peer 1 that `pair[0]` acknowledges, so
+        // `pair[1]` can end with `AckNeverSent` on a hostile seed (seed 179, for one), which
+        // is right, as `pair[0]` then acknowledges inputs peer 1 never sent.
+        if hostility == 0 && !never_acknowledges {
+            assert_eq!(pair[0].state(), SessionState::Running, "seed {seed}");
         }
         outcomes.insert(match pair[0].state() {
             SessionState::Ended(EndReason::Violation { rule, .. }) => format!("{rule:?}"),
