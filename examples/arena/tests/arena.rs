@@ -618,7 +618,9 @@ fn same_hashes_at_one_two_and_eight_threads() {
                     .get::<Body>(entity)
                     .is_some_and(|body| body.kind == BodyKind::Dynamic)
             })
-            .filter(|&entity| world.get::<Pose>(entity).unwrap().position.y < 1.0)
+            // On the floor (top at -2) a crate's centre rests at -1.5, on another at -0.5; an
+            // inert solver would let them fall through, below -2.
+            .filter(|&entity| (-2.0..1.0).contains(&world.get::<Pose>(entity).unwrap().position.y))
             .count();
         (hashes, resting)
     };
