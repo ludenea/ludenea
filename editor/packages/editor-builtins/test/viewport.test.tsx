@@ -55,8 +55,24 @@ async function viewport(answer: Answer = () => undefined, info: Partial<GameInfo
 const sentOf = (sent: Command[], type: string) => sent.filter((command) => command.type === type);
 /** The render frame of `tick`, with `extra` fields. */
 const frameAt = (tick: number, extra: Partial<RenderFrame> = {}): RenderFrame => ({ ...renderFrame(tick).frame, ...extra });
-/** `frame` as the fake renderer reads bytes: its JSON in UTF-8. */
-const bytesOf = (frame: RenderFrame) => new TextEncoder().encode(JSON.stringify(frame)).buffer as ArrayBuffer;
+/** `frame` as the fake renderer reads bytes: its tick as postcard starts a frame, then its JSON in UTF-8. */
+const bytesOf = (frame: RenderFrame) => {
+  const tick: number[] = [];
+  for (let rest = frame.tick; ; rest = Math.floor(rest / 128)) {
+    if (rest < 128) {
+      tick.push(rest);
+      break;
+    }
+    tick.push((rest % 128) | 0x80);
+  }
+  const json = new TextEncoder().encode(JSON.stringify(frame));
+  const bytes = new Uint8Array(tick.length + json.length);
+  bytes.set(tick);
+  bytes.set(json, tick.length);
+  return bytes.buffer;
+};
+/** The `render_frames` event of `frames` as a text transport carries it: each frame's bytes in base64. */
+const textFrames = (progress: number, frames: RenderFrame[]) => ({ type: "render_frames", progress, frames: frames.map((frame) => Buffer.from(bytesOf(frame)).toString("base64")) });
 const ticksPushed = (renderer: WebRenderer) => renderer.pushed.map((frame) => frame.tick);
 const drawsOf = (renderer: WebRenderer) => renderer.calls.filter((call) => call.method === "draw").map((call) => call.args as [number, string | null]);
 /** The commands that follow the pushed frames. */
@@ -1664,12 +1680,12 @@ describe("viewport frames", () => {
       { type: "set_pushed_layers", debug_layers: ["colliders", "contacts"] },
       { type: "subscribe", topic: { type: "render_frames" } },
     ]);
-    // JSON frames, then bytes as the worker sends them: each pushed in order.
-    act(() => game.push({ type: "render_frames", frames: [frameAt(8), frameAt(9)], progress: 0.25 }));
+    // Base64 over a text transport, then bytes as the worker sends them: each pushed in order, as bytes.
+    act(() => game.push(textFrames(0.25, [frameAt(8), frameAt(9)])));
     act(() => game.pushFrames(0.5, [bytesOf(frameAt(10)), bytesOf(frameAt(11))]));
     expect(ticksPushed(renderer)).toEqual([7, 8, 9, 10, 11]);
     const pushes = renderer.calls.filter((call) => call.method.startsWith("push_frame")).slice(1);
-    expect(pushes.map((call) => call.method)).toEqual(["push_frame", "push_frame", "push_frame_bytes", "push_frame_bytes"]);
+    expect(pushes.map((call) => call.method)).toEqual(Array(4).fill("push_frame_bytes"));
     expect(pushes.map((call) => call.args[1])).toEqual(Array(4).fill({ debug_layers: ["colliders", "contacts"], selected: [] }));
     await animationFrames(2);
     expect(host.editor.console.list()).toEqual([]);
@@ -1681,7 +1697,7 @@ describe("viewport frames", () => {
     const renderer = renderers.at(-1)!;
     play(host);
     await settle();
-    act(() => game.push({ type: "render_frames", frames: [frameAt(8), frameAt(9)], progress: 0.5 }));
+    act(() => game.push(textFrames(0.5, [frameAt(8), frameAt(9)])));
     onScreen = 9;
     pause(host);
     atTick(host, 9);
@@ -1693,7 +1709,7 @@ describe("viewport frames", () => {
     expect(shown.slice(0, 4)).toEqual([7, 8, 9, 9]);
     expect(new Set(shown.slice(2))).toEqual(new Set([9]));
     // Frames still on their way when play stopped are not the tick on screen.
-    act(() => game.push({ type: "render_frames", frames: [frameAt(10)], progress: 0 }));
+    act(() => game.push(textFrames(0, [frameAt(10)])));
     expect(ticksPushed(renderer)).toEqual(shown);
     await animationFrames(2);
     expect(drawsOf(renderer).at(-1)![0]).toBe(1);
@@ -1727,13 +1743,13 @@ describe("viewport frames", () => {
     };
     // A quarter speed: 15 ticks a second.
     act(() => game.push(ticked(8, 15)));
-    act(() => game.push({ type: "render_frames", frames: [frameAt(8)], progress: 0.2 }));
+    act(() => game.push(textFrames(0.2, [frameAt(8)])));
     expect(await alphaAfter(20, 1000)).toBeCloseTo(0.5, 5);
     expect(await alphaAfter(100, 1000)).toBe(1);
     // Four times the speed: 240 ticks a second.
     now = 2000;
     act(() => game.push(ticked(10, 240)));
-    act(() => game.push({ type: "render_frames", frames: [frameAt(9), frameAt(10)], progress: 0.1 }));
+    act(() => game.push(textFrames(0.1, [frameAt(9), frameAt(10)])));
     expect(await alphaAfter(2, 2000)).toBeCloseTo(0.58, 5);
     expect(await alphaAfter(10, 2000)).toBe(1);
   });
@@ -1751,7 +1767,7 @@ describe("viewport frames", () => {
       { type: "set_pushed_layers", debug_layers: ["contacts"] },
     ]);
     expect(sentOf(game.sent, "get_render_frame")).toHaveLength(1);
-    act(() => game.push({ type: "render_frames", frames: [frameAt(8)], progress: 0 }));
+    act(() => game.push(textFrames(0, [frameAt(8)])));
     expect(ticksPushed(renderer).at(-1)).toBe(8);
     expect(renderer.calls.at(-1)!.args[1]).toEqual({ debug_layers: ["contacts"], selected: [] });
   });
@@ -1775,7 +1791,7 @@ describe("viewport frames", () => {
     expect(held).not.toBeNull();
     play(host);
     await settle();
-    act(() => game.push({ type: "render_frames", frames: [frameAt(8), frameAt(9)], progress: 0 }));
+    act(() => game.push(textFrames(0, [frameAt(8), frameAt(9)])));
     held!(renderFrame(7));
     await settle();
     expect(ticksPushed(renderer).slice(-2)).toEqual([8, 9]);
@@ -1876,8 +1892,8 @@ describe("viewport frames", () => {
     play(host);
     await settle();
     // Play pushed tick 10 before the pause; the timeline stopped on tick 9.
-    act(() => game.push({ type: "render_frames", frames: [frameAt(8), frameAt(9)], progress: 0 }));
-    act(() => game.push({ type: "render_frames", frames: [frameAt(10)], progress: 0 }));
+    act(() => game.push(textFrames(0, [frameAt(8), frameAt(9)])));
+    act(() => game.push(textFrames(0, [frameAt(10)])));
     onScreen = 9;
     pause(host);
     atTick(host, 9);
@@ -1899,10 +1915,10 @@ describe("viewport frames", () => {
     atTick(host, 9);
     play(host);
     act(() => game.push(ticked(9, 15)));
-    act(() => game.push({ type: "render_frames", frames: [frameAt(9)], progress: 0.2 }));
+    act(() => game.push(textFrames(0.2, [frameAt(9)])));
     now = 1010;
     // Older than the newest shown: dropped, and its progress with it.
-    act(() => game.push({ type: "render_frames", frames: [frameAt(8)], progress: 0.9 }));
+    act(() => game.push(textFrames(0.9, [frameAt(8)])));
     now = 1020;
     await animationFrames(2);
     expect(drawsOf(renderer).at(-1)![0]).toBeCloseTo(0.5, 5);
@@ -1955,7 +1971,7 @@ describe("viewport frames", () => {
       { type: "set_pushed_layers", debug_layers: ["colliders"] },
       { type: "subscribe", topic: { type: "render_frames" } },
     ]);
-    act(() => game.push({ type: "render_frames", frames: [frameAt(50)], progress: 0 }));
+    act(() => game.push(textFrames(0, [frameAt(50)])));
     act(() => other.pushFrames(0, [bytesOf(frameAt(2))]));
     expect(ticksPushed(renderer).at(-1)).toBe(2);
     expect(ticksPushed(renderer)).not.toContain(50);

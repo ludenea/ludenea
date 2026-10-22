@@ -1,6 +1,7 @@
 //! Serves a host over line-delimited JSON on stdin and stdout: the transport of a game
 //! binary run by the desktop editor. Lines starting with `{"type":` are protocol; anything
-//! else a game prints is console output for the reader.
+//! else a game prints is console output for the reader. Pushed render frames travel on the
+//! same lines as the other messages, each frame postcard-encoded then base64.
 
 use std::io::{self, BufRead, Write};
 use std::num::NonZeroUsize;

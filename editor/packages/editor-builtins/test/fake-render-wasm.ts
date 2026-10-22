@@ -125,8 +125,10 @@ export class WebRenderer implements Shape {
     return this.push("push_frame", JSON.parse(json) as RenderFrame, overlay);
   }
 
+  /** Reads the tests' stand-in for postcard: the tick as postcard starts a frame (a varint), then the frame's JSON. */
   push_frame_bytes(bytes: Uint8Array, overlay: string): string {
-    return this.push("push_frame_bytes", JSON.parse(new TextDecoder().decode(bytes)) as RenderFrame, overlay);
+    const json = bytes.subarray(bytes.findIndex((byte) => byte < 0x80) + 1);
+    return this.push("push_frame_bytes", JSON.parse(new TextDecoder().decode(json)) as RenderFrame, overlay);
   }
 
   draw(alpha: number, camera?: string | null) {

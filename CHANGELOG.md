@@ -539,7 +539,7 @@ hash, those of the golden trace and replays included.
 
 ### Control protocol
 
-- Control protocol 5, fingerprint `c2a0b9a003eec8f7`. Breaking: `get_render_frame`
+- Control protocol 5, fingerprint `cd1e75810002a446`. Breaking: `get_render_frame`
   (`debug_layers`) replaces `get_debug_draw` (`layers`), and its reply `render_frame`
   (`frame`) replaces `debug_draw` (`tick`, `frame`). The frame is the `RenderFrame` of the
   current tick: its tick, camera, render layers, sprites, tilemaps, the entities teleported
@@ -563,11 +563,13 @@ hash, those of the golden trace and replays included.
   the debug layers those frames draw, none until set. A frame that fails to extract pushes
   nothing for that advance and writes `render frame of tick N: <cause>` to the console, once
   per cause (at its first tick) until a scene or a session loads; play goes on. The browser
-  worker posts these frames postcard-encoded in transferred buffers, which the control
-  client hands to listeners as `Uint8Array`s.
+  worker posts these frames postcard-encoded in transferred buffers; in JSON (`run --stdio`,
+  which the desktop editor relays) each of `frames` is that encoding as a standard base64
+  string, under a quarter of the frame's JSON at 10,000 sprites. The control client hands
+  them to listeners as `Uint8Array`s whatever the transport.
   In the control client, `ControlClient.on` is typed on the new `ClientEvent`: the
   protocol's events with `render_frames` as the new `RenderFramesEvent`, whose `frames` are
-  `Uint8Array`s over a worker and `RenderFrame`s over the other transports.
+  `Uint8Array`s, each a frame's postcard encoding.
   `MessageTransport` gains an optional `onFrames` for the frames a transport carries as
   bytes (the new `PushedFrames`), which `startWorkerGame` and `postMessageTransport` provide.
   New in the Rust API: `Host::tick_progress`, the fraction of the next tick that play owes,

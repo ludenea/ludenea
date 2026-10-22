@@ -318,7 +318,8 @@ pnpm -C editor measure:desktop
 The viewport draws the game with the renderer the game runs with (`ludenea-render`, on WebGPU,
 or WebGL2 where the browser offers no WebGPU adapter): its sprites, tilemaps, and layers, with
 the debug layers shown on top, the selected entities' shapes highlighted. While the game plays,
-the game pushes the frame of each tick it runs (as bytes, from the browser's worker) and the
+the game pushes the frame of each tick it runs (as bytes: transferred from the browser's
+worker, base64 in the lines of the desktop game's standard output) and the
 viewport draws between the last two, as the game's own window does; paused, it shows the tick
 on screen, fetched again after a step, a seek, an undo, an edit, a reload, or a change of debug
 layers. The project's textures are loaded when the viewport opens; one that cannot be read or

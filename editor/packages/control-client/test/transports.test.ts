@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { postMessageTransport, tauriTransport, webSocketTransport } from "../src";
+import { ControlClient, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION, postMessageTransport, tauriTransport, webSocketTransport, type RenderFramesEvent } from "../src";
 
 vi.mock("@tauri-apps/api/core", () => ({
   Channel: class {
@@ -37,6 +37,7 @@ class FakePort extends EventTarget {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.mocked(invoke).mockClear();
 });
 
 describe("transports", () => {
@@ -79,6 +80,24 @@ describe("transports", () => {
     transport.onClose((reason) => closes.push(reason));
     port.dispatchEvent(new Event("messageerror"));
     expect(closes).toEqual(["a message could not be read"]);
+  });
+
+  it("tauri_render_frames_arrive_as_bytes", async () => {
+    const transport = await tauriTransport("control");
+    const [, subscribed] = vi.mocked(invoke).mock.calls.find(([command]) => command === "subscribe")!;
+    const backend = (subscribed as { onMessage: { onmessage(batch: string): void } }).onMessage;
+    const connecting = ControlClient.connect(transport);
+    const game = { components: [], resources: [], assets: [], events: [], fingerprint: "0000000000000000", input: null, tick_rate: 60, debug_layers: [] };
+    backend.onmessage(JSON.stringify({ type: "welcome", protocol_version: PROTOCOL_VERSION, protocol_fingerprint: PROTOCOL_FINGERPRINT, engine_version: "0", game }));
+    const client = await connecting;
+    const received: RenderFramesEvent[] = [];
+    client.on("render_frames", (event) => received.push(event));
+    // One batch: what the game printed in one advance, a line each.
+    const ticked = { type: "ticked", tick: 2, hash: "0000000000000001", pending: false, playing: true, effective_rate: 60 };
+    const frames = { type: "render_frames", frames: ["AQID", "BA=="], progress: 0.25 };
+    backend.onmessage([ticked, frames].map((event) => JSON.stringify({ type: "event", event })).join("\n"));
+    expect(received).toEqual([{ type: "render_frames", progress: 0.25, frames: [new Uint8Array([1, 2, 3]), new Uint8Array([4])] }]);
+    expect(received[0]!.frames[0]).toBeInstanceOf(Uint8Array);
   });
 
   it("tauri_close_detaches_its_own_backend_channel_once", async () => {

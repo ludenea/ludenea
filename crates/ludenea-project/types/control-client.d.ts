@@ -631,92 +631,6 @@ type PauseReason = {
 };
 
 /**
- * A render layer. Its draw order is its index in `RenderFrame::layers`.
- */
-type LayerInfo = {
-    name: string;
-    /**
-     * How much the layer moves with the camera: 1.0 moves with the world, 0.0 is fixed to
-     * the screen.
-     */
-    parallax: number;
-};
-
-/**
- * Rotation stored as cosine and sine of the angle, unit length (`cos² + sin² = 1`).
- * `from_angle`, `integrate`, and `normalize` give `IDENTITY` for an input they cannot turn
- * into a unit rotation; code that writes the fields directly keeps them unit length.
- */
-type Rot = {
-    cos: number;
-    sin: number;
-};
-
-/**
- * One sprite to draw.
- */
-type SpriteItem = {
-    entity: Entity;
-    layer: number;
-    /**
-     * The draw order within the layer, lowest first.
-     */
-    order: number;
-    texture: AssetId;
-    frame: number;
-    position: Vec2;
-    rotation: Rot;
-    flip_x: boolean;
-    flip_y: boolean;
-    tint: Color;
-};
-
-/**
- * One tilemap to draw.
- */
-type TilemapItem = {
-    entity: Entity;
-    layer: number;
-    /**
-     * The draw order within the layer, lowest first.
-     */
-    order: number;
-    tileset: AssetId;
-    /**
-     * The bottom-left corner of the bottom-left cell.
-     */
-    position: Vec2;
-    cell_size: Vec2;
-    width: number;
-    height: number;
-    /**
-     * The tileset frame of each cell, `None` for an empty cell, row-major from the
-     * bottom-left cell.
-     */
-    tiles: Array<number | null>;
-};
-
-/**
- * What a renderer draws for one tick.
- */
-type RenderFrame = {
-    tick: number;
-    camera: CameraItem | null;
-    /**
-     * The app's render layers, in draw order: `SpriteItem::layer` indexes this list.
-     */
-    layers: Array<LayerInfo>;
-    sprites: Array<SpriteItem>;
-    tilemaps: Array<TilemapItem>;
-    /**
-     * The entities that moved without travelling this tick, so they are not interpolated.
-     */
-    teleported: Array<Entity>;
-    debug: DebugDrawFrame;
-    warnings: Array<string>;
-};
-
-/**
  * What the timeline shows.
  */
 type Timeline = {
@@ -810,7 +724,7 @@ type Event = {
     up_to: number;
 } | {
     "type": "render_frames";
-    frames: Array<RenderFrame>;
+    frames: Array<string>;
     progress: number;
 };
 
@@ -980,6 +894,18 @@ type InstanceInfo = {
     overrides: Array<OverrideInfo>;
 };
 
+/**
+ * A render layer. Its draw order is its index in `RenderFrame::layers`.
+ */
+type LayerInfo = {
+    name: string;
+    /**
+     * How much the layer moves with the camera: 1.0 moves with the world, 0.0 is fixed to
+     * the screen.
+     */
+    parallax: number;
+};
+
 type ProtocolError = {
     code: ErrorCode;
     message: string;
@@ -991,6 +917,80 @@ type ProtocolError = {
 type RecordedEvent = {
     event_type: string;
     value: JsonValue;
+};
+
+/**
+ * Rotation stored as cosine and sine of the angle, unit length (`cos² + sin² = 1`).
+ * `from_angle`, `integrate`, and `normalize` give `IDENTITY` for an input they cannot turn
+ * into a unit rotation; code that writes the fields directly keeps them unit length.
+ */
+type Rot = {
+    cos: number;
+    sin: number;
+};
+
+/**
+ * One sprite to draw.
+ */
+type SpriteItem = {
+    entity: Entity;
+    layer: number;
+    /**
+     * The draw order within the layer, lowest first.
+     */
+    order: number;
+    texture: AssetId;
+    frame: number;
+    position: Vec2;
+    rotation: Rot;
+    flip_x: boolean;
+    flip_y: boolean;
+    tint: Color;
+};
+
+/**
+ * One tilemap to draw.
+ */
+type TilemapItem = {
+    entity: Entity;
+    layer: number;
+    /**
+     * The draw order within the layer, lowest first.
+     */
+    order: number;
+    tileset: AssetId;
+    /**
+     * The bottom-left corner of the bottom-left cell.
+     */
+    position: Vec2;
+    cell_size: Vec2;
+    width: number;
+    height: number;
+    /**
+     * The tileset frame of each cell, `None` for an empty cell, row-major from the
+     * bottom-left cell.
+     */
+    tiles: Array<number | null>;
+};
+
+/**
+ * What a renderer draws for one tick.
+ */
+type RenderFrame = {
+    tick: number;
+    camera: CameraItem | null;
+    /**
+     * The app's render layers, in draw order: `SpriteItem::layer` indexes this list.
+     */
+    layers: Array<LayerInfo>;
+    sprites: Array<SpriteItem>;
+    tilemaps: Array<TilemapItem>;
+    /**
+     * The entities that moved without travelling this tick, so they are not interpolated.
+     */
+    teleported: Array<Entity>;
+    debug: DebugDrawFrame;
+    warnings: Array<string>;
 };
 
 /**
@@ -1185,7 +1185,7 @@ type ServerMessage = {
 /** The control protocol version this build speaks: a client and a host connect only when theirs are equal. */
 const PROTOCOL_VERSION = 5;
 /** The wire shape of `PROTOCOL_VERSION`, a hash of the protocol's types: a client and a host connect only when theirs are equal too. */
-const PROTOCOL_FINGERPRINT = "c2a0b9a003eec8f7";
+const PROTOCOL_FINGERPRINT = "cd1e75810002a446";
 /** The `type` of the reply each command type gets when it succeeds. */
 type ReplyTypes = {
     apply_override: "done";

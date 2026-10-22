@@ -17,7 +17,7 @@ export interface MessageTransport {
   send(message: string): void;
   onMessage(listener: (message: string) => void): () => void;
   /** The frames posted as bytes, in order with the text messages; only the transports that
-   * carry bytes have it. */
+   * carry bytes have it (the text transports carry them in base64, in their `render_frames` events). */
   onFrames?(listener: (frames: PushedFrames) => void): () => void;
   onClose(listener: (reason: string) => void): () => void;
   close(): void;

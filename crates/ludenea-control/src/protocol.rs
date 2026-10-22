@@ -29,7 +29,7 @@ pub const PROTOCOL_VERSION: u32 = 5;
 /// instead of misreading fields. A change the declarations do not show, such as a new serde
 /// default or another encoding of a type declared as a string, leaves it as it is.
 /// `tests/typescript.rs` pins it.
-pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0xc2a0_b9a0_03ee_c8f7);
+pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0xcd1e_7581_0002_a446);
 
 /// Binary data, serialized as a standard base64 string.
 #[derive(Clone, Debug, PartialEq)]
@@ -926,17 +926,46 @@ pub enum Event {
     },
     /// The frames of the last two ticks an advance played (one when it played one), oldest
     /// first, after its `Ticked` events, while `RenderFrames` is subscribed. `progress` is
-    /// `Host::tick_progress` after them: how far play is into the next tick.
+    /// `Host::tick_progress` after them: how far play is into the next tick. In JSON each
+    /// frame is its postcard encoding (`encode_frame`) as a standard base64 string; the
+    /// transports that carry bytes send the bytes themselves.
     RenderFrames {
+        #[serde(with = "encoded_frames")]
+        #[cfg_attr(feature = "ts", ts(type = "Array<string>"))]
         frames: Vec<RenderFrame>,
         progress: f64,
     },
 }
 
-/// A render frame as the transports that carry bytes send it (postcard): a fraction of its
-/// JSON, which costs about 2 MB a tick at 10,000 sprites.
+/// A render frame as the transports that carry bytes send it (postcard), and as JSON carries
+/// it in base64: a fraction of its JSON, which costs about 2 MB a tick at 10,000 sprites.
 pub fn encode_frame(frame: &RenderFrame) -> Vec<u8> {
     postcard::to_allocvec(frame).expect("a render frame encodes")
+}
+
+/// The frames of `Event::RenderFrames` as the base64 strings of their postcard encoding.
+mod encoded_frames {
+    use super::*;
+
+    pub fn serialize<S: Serializer>(
+        frames: &[RenderFrame],
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(frames.iter().map(|frame| Bytes(encode_frame(frame))))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<RenderFrame>, D::Error> {
+        Vec::<Bytes>::deserialize(deserializer)?
+            .into_iter()
+            .map(|Bytes(bytes)| {
+                postcard::from_bytes(&bytes).map_err(|error| {
+                    serde::de::Error::custom(format!("cannot decode a render frame: {error}"))
+                })
+            })
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

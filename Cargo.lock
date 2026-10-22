@@ -1988,6 +1988,7 @@ dependencies = [
  "postcard",
  "serde",
  "serde_json",
+ "swarm",
  "thiserror 2.0.21",
  "ts-rs",
  "wasm-bindgen",

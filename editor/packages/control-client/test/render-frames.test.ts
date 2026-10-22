@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ControlClient, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION, postMessageTransport, type GameInfo, type MessageTransport, type RenderFramesEvent } from "../src";
+import { ControlClient, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION, fakeTransport, postMessageTransport, type GameInfo, type MessageTransport, type RenderFramesEvent } from "../src";
 import { startWorkerGame } from "../src/worker/supervisor";
 
 const game: GameInfo = { components: [], resources: [], assets: [], events: [], fingerprint: "0000000000000000", input: null, tick_rate: 60, debug_layers: [] };
@@ -27,7 +27,7 @@ class FakeWorker extends EventTarget {
 }
 
 /** Connects a client over `transport`, then has the worker post a tick and two frames. */
-async function framesOver(transport: MessageTransport, worker: FakeWorker) {
+async function framesOver(transport: MessageTransport, worker: { emit(data: unknown): void }) {
   const client = await ControlClient.connect(transport);
   const received: (RenderFramesEvent | { type: "ticked" })[] = [];
   client.on("ticked", () => received.push({ type: "ticked" }));
@@ -49,6 +49,47 @@ describe("render frames", () => {
     vi.stubGlobal("Worker", FakeWorker);
     const started = startWorkerGame({ workerUrl: new URL("https://editor.test/host-worker.js"), glueUrl: "/pkg/game.js" });
     expect(await framesOver(started.transport, FakeWorker.last)).toEqual(expected);
+  });
+
+  it("every_transport_delivers_bytes", async () => {
+    // A text transport (the desktop's standard output, a WebSocket) carries the same bytes in base64.
+    const text = fakeTransport((message) => (JSON.parse(message).type === "hello" ? [welcome] : []));
+    const worker = new FakeWorker();
+    const overText = framesOver(text, { emit: (data) => text.push(typeof data === "string" ? data : JSON.stringify({ type: "event", event: { ...(data as object), frames: ["AQID", "BA=="] } })) });
+    expect(await overText).toEqual(expected);
+    expect(await framesOver(postMessageTransport(worker as unknown as Worker), worker)).toEqual(expected);
+  });
+
+  it("a_frame_that_is_not_base64_is_dropped_with_a_warning", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const text = fakeTransport((message) => (JSON.parse(message).type === "hello" ? [welcome] : []));
+    const client = await ControlClient.connect(text);
+    const received: RenderFramesEvent[] = [];
+    client.on("render_frames", (event) => received.push(event));
+    text.push(JSON.stringify({ type: "event", event: { type: "render_frames", progress: 0, frames: ["not base64!"] } }));
+    text.push(JSON.stringify({ type: "event", event: { type: "render_frames", progress: 0.5, frames: ["BA=="] } }));
+    expect(received).toEqual([{ type: "render_frames", progress: 0.5, frames: [new Uint8Array([4])] }]);
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^ignoring render frames that are not base64: /));
+    warn.mockRestore();
+  });
+
+  it("frames_decode_with_the_native_base64_decoder_when_there_is_one", async () => {
+    const decoder = Uint8Array as { fromBase64?: (text: string) => Uint8Array };
+    const native = decoder.fromBase64;
+    const fromBase64 = vi.fn((text: string) => new Uint8Array([text.length]));
+    decoder.fromBase64 = fromBase64;
+    try {
+      const text = fakeTransport((message) => (JSON.parse(message).type === "hello" ? [welcome] : []));
+      const client = await ControlClient.connect(text);
+      const received: RenderFramesEvent[] = [];
+      client.on("render_frames", (event) => received.push(event));
+      text.push(JSON.stringify({ type: "event", event: { type: "render_frames", progress: 0, frames: ["AQID"] } }));
+      expect(fromBase64).toHaveBeenCalledWith("AQID");
+      expect(received).toEqual([{ type: "render_frames", progress: 0, frames: [new Uint8Array([4])] }]);
+    } finally {
+      if (native) decoder.fromBase64 = native;
+      else delete decoder.fromBase64;
+    }
   });
 
   it("post_message_frames_arrive_as_bytes", async () => {

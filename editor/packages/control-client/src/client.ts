@@ -154,13 +154,34 @@ export function handshake<M extends { type: string }, T>(
   });
 }
 
-/** Render frames pushed during play: postcard bytes over a worker, JSON frames over the
- * other transports. */
-export type RenderFramesEvent = { type: "render_frames"; progress: number; frames: Uint8Array[] } | Extract<Event, { type: "render_frames" }>;
+/** Render frames pushed during play, each a `RenderFrame` in the protocol's postcard encoding:
+ * the bytes a worker transfers, or decoded from the base64 text transports carry. */
+export type RenderFramesEvent = { type: "render_frames"; progress: number; frames: Uint8Array[] };
 
-/** What `ControlClient.on` delivers: the protocol's events, with the frames as their
- * transport carries them. */
+/** What `ControlClient.on` delivers: the protocol's events, with the frames as bytes. */
 export type ClientEvent = Exclude<Event, { type: "render_frames" }> | RenderFramesEvent;
+
+type Base64Decoder = { fromBase64?(text: string): Uint8Array };
+
+/** The bytes of standard base64 `text`; throws when it is not base64. */
+function fromBase64(text: string): Uint8Array {
+  if ((Uint8Array as Base64Decoder).fromBase64) return (Uint8Array as Base64Decoder).fromBase64!(text);
+  const binary = atob(text);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+/** A protocol event as `ControlClient.on` delivers it; undefined, with a warning, for frames that are not base64. */
+function clientEvent(event: Event): ClientEvent | undefined {
+  if (event.type !== "render_frames") return event;
+  try {
+    return { type: "render_frames", progress: event.progress, frames: event.frames.map(fromBase64) };
+  } catch (error) {
+    console.warn(`ignoring render frames that are not base64: ${String(error)}`);
+    return undefined;
+  }
+}
 
 type Listener = (event: never) => void;
 
@@ -192,7 +213,10 @@ export class ControlClient {
     transport.onMessage((raw) => {
       const message = parseFrame<ServerMessage>(raw);
       if (message?.type === "response") requests.resolve(message.id, message.result);
-      else if (message?.type === "event") this.dispatch(message.event);
+      else if (message?.type === "event") {
+        const event = clientEvent(message.event);
+        if (event) this.dispatch(event);
+      }
     });
     transport.onFrames?.(({ progress, frames }) => this.dispatch({ type: "render_frames", progress, frames: frames.map((buffer) => new Uint8Array(buffer)) }));
     transport.onClose((reason) => {

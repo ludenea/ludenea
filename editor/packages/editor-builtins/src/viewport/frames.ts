@@ -2,7 +2,7 @@ import type { ControlClient, DebugDrawFrame, Entity, RenderFrame, RenderFramesEv
 import type { Disposable, Editor } from "@ludenea/editor-shell";
 import { reportedOnce } from "../shared";
 
-/** A render frame as it came: JSON text, or postcard bytes from the game's worker. */
+/** A render frame to push: postcard bytes as play pushes them, or JSON text as fetched while paused. */
 export type Frame = { json?: string; bytes?: Uint8Array };
 
 /** What frames are pushed into: the renderer (`WebRenderer`). */
@@ -217,17 +217,15 @@ export class FrameFeed {
     // What play pushed on its way to a pause: the tick on screen is fetched instead.
     if (!playing) return;
     let shown = false;
-    for (const frame of frames as (Uint8Array | RenderFrame)[]) {
-      if (frame instanceof Uint8Array) {
-        let tick: number;
-        try {
-          tick = tickOf(frame);
-        } catch (error) {
-          this.pushFailures.failed(error);
-          continue;
-        }
-        shown = this.show({ bytes: frame }, tick) || shown;
-      } else shown = this.show({ json: JSON.stringify(frame) }, frame.tick) || shown;
+    for (const frame of frames) {
+      let tick: number;
+      try {
+        tick = tickOf(frame);
+      } catch (error) {
+        this.pushFailures.failed(error);
+        continue;
+      }
+      shown = this.show({ bytes: frame }, tick) || shown;
     }
     // The timing belongs to the frames on screen: an event dropped whole leaves it.
     if (shown) this.timing = { progress, rate: effectiveRate, arrival: performance.now() };
