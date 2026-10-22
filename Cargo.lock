@@ -2060,9 +2060,6 @@ dependencies = [
 name = "ludenea-net"
 version = "0.1.0"
 dependencies = [
- "ludenea-app",
- "ludenea-ecs",
- "postcard",
  "serde",
  "thiserror 2.0.21",
 ]
