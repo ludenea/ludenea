@@ -1,5 +1,5 @@
 import type { WebRenderer } from "@ludenea/render-wasm";
-import type { Entity, FileChange, Vec2 } from "@ludenea/control-client";
+import type { Entity, Vec2 } from "@ludenea/control-client";
 import { runReported, type Editor, type ToolContext, type ToolPointer, type ViewportOverlay, type ViewportTool } from "@ludenea/editor-shell";
 import { useEffect, useRef, useState } from "react";
 import { captureInput } from "../input/capture";
@@ -9,7 +9,7 @@ import { fromCameraItem, panBy, same, screenToWorld, throughParallax, toCameraVi
 import { FrameFeed } from "./frames";
 import { mergeHits, moveBy, moveCamera, visibleLayers, type Shown, type ViewportState } from "./state";
 import { drawOverlay } from "./overlay";
-import { loadTextures, reloadChanged, type LoadedTextures } from "./textures";
+import { updateTextures, type LoadedTextures } from "./textures";
 
 /** Pointer travel, in CSS pixels, past which a press is a drag rather than a click. */
 const DRAG_THRESHOLD = 3;
@@ -145,40 +145,41 @@ export function ViewportPanel({
     const resizes = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
     resizes?.observe(element);
 
-    // The project's textures as the viewport last knew them: a renderer created again starts from
-    // them, not from the disk. Reloads queue behind the initial load; one that fails is dropped.
-    let known: Promise<LoadedTextures> | null = null;
-    const upload = (target: WebRenderer, { sources, pngs }: LoadedTextures) => {
-      if (disposed || renderer !== target) return;
+    // The project's textures as the viewport last knew them, followed through `editor.textures`:
+    // a renderer created again starts from them, not from the disk. Null until the first listing
+    // answers; each update waits for the one before.
+    let known: LoadedTextures | null = null;
+    let following: Promise<void> = Promise.resolve();
+    // What was uploaded last, and to which renderer: a renderer created while the textures load gets them once.
+    let uploaded: { target: WebRenderer; textures: LoadedTextures } | null = null;
+    const upload = (target: WebRenderer, textures: LoadedTextures) => {
+      if (disposed || renderer !== target || (uploaded?.target === target && uploaded.textures === textures)) return;
+      uploaded = { target, textures };
+      const { sources, pngs } = textures;
       const refused = JSON.parse(target.set_textures(JSON.stringify(sources), pngs)) as Refused[];
       for (const { id, path, message } of refused) warnOnce(`${path ?? id}: ${message}`);
       // New textures blank the canvas until the next push.
       feed.again();
       repaint = true;
     };
-    const uploadTextures = (target: WebRenderer) => {
-      known ??= loadTextures(editor, warnOnce);
-      return known.then((textures) => upload(target, textures)).catch((error) => {
-        // Only the initial load starts over: a reload that fails leaves the set as it was.
-        known = null;
-        if (!disposed) editor.console.report(error, "Loading the textures for the viewport");
-      });
-    };
+    const uploadTextures = (target: WebRenderer) =>
+      following.then(() => known && upload(target, known)).catch((error) => editor.console.report(error, "Drawing the textures in the viewport"));
     // A changed texture is drawn at once, with no command to the game: the session does not change.
-    const reload = (changes: FileChange[]) => {
-      if (!known) return;
-      let before: LoadedTextures | null = null;
-      const next = known.then((current) => {
-        before = current;
-        // A fresh warning for each break: a version that works clears its path's earlier ones.
-        const loaded = (path: string) => textureWarnings.forEach((text) => text.startsWith(`${path}: `) && textureWarnings.delete(text));
-        return reloadChanged(current, changes, editor, warnOnce, loaded).catch((error) => {
-          if (!disposed) editor.console.report(error, "Reloading the textures for the viewport");
-          return current;
+    const followTextures = () => {
+      following = following
+        .then(async () => {
+          if (disposed) return;
+          // A fresh warning for each break: a version that works clears its path's earlier ones.
+          // Not on the first load: a viewport mounted again is no news.
+          const loaded = known === null ? () => {} : (path: string) => textureWarnings.forEach((text) => text.startsWith(`${path}: `) && textureWarnings.delete(text));
+          const next = await updateTextures(known ?? { sources: [], pngs: [] }, editor, warnOnce, loaded);
+          if (next === null || disposed) return;
+          known = next;
+          if (renderer) upload(renderer, next);
+        })
+        .catch((error) => {
+          if (!disposed) editor.console.report(error, "Drawing the reloaded textures in the viewport");
         });
-      });
-      known = next;
-      next.then((textures) => renderer && textures !== before && upload(renderer, textures)).catch((error) => editor.console.report(error, "Drawing the reloaded textures in the viewport"));
     };
 
     // Drops the renderer, freed unless `free` is false: the frames wait for the next one, which starts with them.
@@ -375,8 +376,10 @@ export function ViewportPanel({
         repaint = true;
       }),
       subscribeGame(editor, () => (repaint = true)),
-      editor.project.on("files_changed", ({ changes }) => reload(changes)),
+      editor.textures.subscribe(followTextures),
     ];
+    // A listing another plugin started already answered: the subscription hears only the next.
+    followTextures();
 
     const local = (event: MouseEvent): Point => {
       const rect = element.getBoundingClientRect();

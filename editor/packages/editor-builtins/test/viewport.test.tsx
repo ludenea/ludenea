@@ -1401,7 +1401,7 @@ describe("viewport frames", () => {
   it("textures_that_cannot_be_listed_are_reported_and_the_frame_still_drawn", async () => {
     const { host } = await viewport(undefined, {}, (request) => (request.type === "list_files" ? { error: { code: "io", message: "the project folder is gone" } } : undefined));
     await waitFor(() => expect(host.editor.console.list()).toHaveLength(1));
-    expect(host.editor.console.list().map(({ level, text }) => [level, text])).toEqual([["error", "Loading the textures for the viewport failed: the project folder is gone"]]);
+    expect(host.editor.console.list().map(({ level, text }) => [level, text])).toEqual([["error", "Listing the project's textures failed: the project folder is gone"]]);
     expect(ticksPushed(renderers.at(-1)!)).toEqual([7]);
   });
 
@@ -1501,6 +1501,24 @@ describe("viewport frames", () => {
       await waitFor(() => expect(renderer.pushed.length).toBeGreaterThan(pushes));
     });
 
+    it("the_viewport_follows_the_textures_other_plugins_follow_with_one_listing", async () => {
+      const project = mutable([bug]);
+      const { host } = await viewport(undefined, {}, project.answer);
+      // Followed elsewhere too, as the inspector's previews and the tile palette do.
+      const stop = host.editor.textures.subscribe(() => {});
+      const renderer = renderers.at(-1)!;
+      await uploaded(renderer, 1);
+      await settle();
+      const listings = () => host.project.sent.filter((request) => request.type === "list_files").length;
+      expect(listings()).toBe(1);
+      project.entries = [{ ...bug, id: NEWER }];
+      pushed(host, files("assets/bug.png", { Texture: META }));
+      expect(await uploaded(renderer, 2)).toEqual([{ id: NEWER, path: "assets/bug.png", meta: META }]);
+      await settle();
+      expect(listings()).toBe(2);
+      stop();
+    });
+
     it("a_changed_meta_reloads_its_texture", async () => {
       const project = mutable([bug]);
       const { host } = await viewport(undefined, {}, project.answer);
@@ -1543,6 +1561,7 @@ describe("viewport frames", () => {
       script.invalidTextures = { "assets/bug.png": "the image is not a PNG" };
       project.entries = [{ ...bug, id: NEWER }];
       pushed(host, files("assets/bug.png", { Texture: META }));
+      await uploaded(renderer, 2);
       pushed(host, files("assets/bug.png", { Texture: META }));
       expect(await uploaded(renderer, 3)).toEqual([{ id: BUG, path: "assets/bug.png", meta: META }]);
       expect(host.editor.console.list().map(({ level, text }) => [level, text])).toEqual([["warning", "assets/bug.png: the image is not a PNG"]]);
@@ -1562,6 +1581,7 @@ describe("viewport frames", () => {
       project.entries = [{ ...bug, id: UNREADABLE }];
       pushed(host, { type: "warning", message: "assets/bug.png.meta cannot be read: expected `Meta`" });
       pushed(host, files("assets/bug.png", { Texture: META }));
+      await uploaded(renderer, 2);
       pushed(host, files("assets/bug.png", { Texture: META }));
       expect(await uploaded(renderer, 3)).toEqual([{ id: BUG, path: "assets/bug.png", meta: META }]);
       await settle();
@@ -1572,7 +1592,9 @@ describe("viewport frames", () => {
     it("a_failed_reload_is_reported_and_the_next_one_still_redraws", async () => {
       const project = mutable([bug]);
       let failing = true;
-      const uploadsSeen = () => renderers.at(-1)!.calls.some((call) => call.method === "set_textures");
+      // The textures are listed as the viewport mounts, before its renderer exists.
+      const earlier = renderers.length;
+      const uploadsSeen = () => renderers.slice(earlier).some((renderer) => renderer.calls.some((call) => call.method === "set_textures"));
       const { host } = await viewport(undefined, {}, (request) =>
         failing && request.type === "list_files" && uploadsSeen() ? { error: { code: "io", message: "the project folder is busy" } } : project.answer(request),
       );
@@ -1580,7 +1602,7 @@ describe("viewport frames", () => {
       await uploaded(renderer, 1);
       project.entries = [{ ...bug, id: NEWER }];
       pushed(host, files("assets/bug.png", { Texture: META }));
-      await waitFor(() => expect(host.editor.console.list().map(({ text }) => text)).toEqual(["Reloading the textures for the viewport failed: the project folder is busy"]));
+      await waitFor(() => expect(host.editor.console.list().map(({ text }) => text)).toEqual(["Listing the project's textures failed: the project folder is busy"]));
       failing = false;
       pushed(host, files("assets/bug.png", { Texture: META }));
       expect(await uploaded(renderer, 2)).toEqual([{ id: NEWER, path: "assets/bug.png", meta: META }]);

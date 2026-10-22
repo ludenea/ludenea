@@ -1,6 +1,5 @@
-import type { FileChange } from "@ludenea/control-client";
-import { textureOf, type Editor, type TextureInfo } from "@ludenea/editor-shell";
-import { errorText, textureFrames } from "../shared";
+import type { Editor, TextureInfo } from "@ludenea/editor-shell";
+import { errorText } from "../shared";
 
 /** The project's textures, as the renderer's `set_textures` takes them: `pngs[i]` is `sources[i]`'s. */
 export interface LoadedTextures {
@@ -9,83 +8,44 @@ export interface LoadedTextures {
 }
 
 /**
- * Every `Texture` asset of the project with its PNG. A texture whose meta cannot be read is
- * left out: the project reports it once. One whose PNG cannot be read (removed meanwhile) is
- * left out too, and `skipped` hears `<path>: <cause>`.
+ * `current` brought to the latest listing of `editor.textures`, or null while it has none (still
+ * listing, or failed: the access reports it, and the viewport keeps what it holds).
+ *
+ * A texture whose object is the one held is kept as is. A new one is read with
+ * `editor.textures.bytes`; one that cannot be read (removed meanwhile) is left out and `warn`
+ * hears `<path>: <cause>`. A new version of a held texture must be cut by
+ * `editor.textures.frames`, or the previous version stays and `warn` hears why. `loaded` hears
+ * the path of each texture read anew. A held texture the listing leaves out for an
+ * unreadable meta stays too (the project warns about it itself); one no longer listed goes.
  */
-export async function loadTextures(editor: Editor, skipped: (text: string) => void = () => {}): Promise<LoadedTextures> {
-  const { entries } = await editor.project.request({ type: "list_files" });
-  const textures = entries.flatMap((entry) => {
-    const texture = textureOf(entry);
-    return texture && texture !== "unreadable" ? [texture] : [];
-  });
-  const read = await Promise.allSettled(textures.map(({ path }) => editor.textures.bytes(path)));
-  const loaded: LoadedTextures = { sources: [], pngs: [] };
-  read.forEach((result, index) => {
-    const source = textures[index]!;
-    if (result.status === "rejected") return skipped(`${source.path}: ${errorText(result.reason)}`);
-    loaded.sources.push(source);
-    loaded.pngs.push(result.value);
-  });
-  return loaded;
-}
-
-const changeOf = (change: FileChange): { path: string; removed: boolean; texture: boolean } => {
-  const [kind, { path, kind: asset }] = Object.entries(change)[0] as [string, { path: string; kind: unknown }];
-  return { path, removed: kind === "Removed", texture: typeof asset === "object" && asset !== null && "Texture" in asset };
-};
-
-/**
- * `current` after `changes`: the changed and created textures read again, the removed ones (and
- * those that stopped being textures) dropped. A new version that cannot be used (unreadable
- * meta or PNG, or refused by `textureFrames`) leaves the previous one in the set, and `warn`
- * hears `<path>: <cause>` (an unreadable meta is the project's own warning), and `loaded` hears
- * the path of each version that works. Returns `current` itself when no texture is concerned.
- */
-export async function reloadChanged(current: LoadedTextures, changes: FileChange[], editor: Editor, warn: (text: string) => void = () => {}, loaded: (path: string) => void = () => {}): Promise<LoadedTextures> {
-  const known = (path: string) => current.sources.some((source) => source.path === path);
-  const concerned = changes.map(changeOf).filter(({ path, texture }) => texture || known(path));
-  if (concerned.length === 0) return current;
-  const reread = concerned.filter(({ removed }) => !removed).map(({ path }) => path);
-  const { entries } = reread.length > 0 ? await editor.project.request({ type: "list_files" }) : { entries: [] };
-  const listed = new Map(entries.map((entry) => [entry.path, entry]));
-  const sources = [...current.sources];
-  const pngs = [...current.pngs];
-  const drop = (path: string) => {
-    const index = sources.findIndex((source) => source.path === path);
-    if (index < 0) return;
-    sources.splice(index, 1);
-    pngs.splice(index, 1);
+export async function updateTextures(current: LoadedTextures, editor: Editor, warn: (text: string) => void, loaded: (path: string) => void): Promise<LoadedTextures | null> {
+  const status = editor.textures.status();
+  if (status === "listing" || "failed" in status) return null;
+  const listed = editor.textures.list();
+  const held = new Map(current.sources.map((source, index) => [source.path, { source, png: current.pngs[index]! }]));
+  const next: LoadedTextures = { sources: [], pngs: [] };
+  const keep = (source: TextureInfo, png: Uint8Array) => {
+    next.sources.push(source);
+    next.pngs.push(png);
   };
-  for (const { path, removed } of concerned) {
-    if (removed) {
-      drop(path);
+  for (const texture of listed) {
+    const before = held.get(texture.path);
+    if (before?.source === texture) {
+      keep(before.source, before.png);
       continue;
     }
-    const entry = listed.get(path);
-    const texture: TextureInfo | "unreadable" | null = entry ? textureOf(entry) : null;
-    if (texture === null) {
-      drop(path);
-      continue;
-    }
-    // The project warns about an unreadable meta itself, naming the file and the cause: the previous version stays.
-    if (texture === "unreadable") continue;
     try {
-      const png = await editor.textures.bytes(path);
-      await textureFrames(png, texture.meta);
-      loaded(path);
-      const source = texture;
-      const index = sources.findIndex((candidate) => candidate.path === path);
-      if (index < 0) {
-        sources.push(source);
-        pngs.push(png);
-      } else {
-        sources[index] = source;
-        pngs[index] = png;
-      }
+      const png = before ? (await editor.textures.frames(texture.path)).png : await editor.textures.bytes(texture.path);
+      loaded(texture.path);
+      keep(texture, png);
     } catch (error) {
-      warn(`${path}: ${errorText(error)}`);
+      warn(`${texture.path}: ${errorText(error)}`);
+      if (before) keep(before.source, before.png);
     }
   }
-  return { sources, pngs };
+  for (const path of status.unreadable) {
+    const before = held.get(path);
+    if (before) keep(before.source, before.png);
+  }
+  return next;
 }
