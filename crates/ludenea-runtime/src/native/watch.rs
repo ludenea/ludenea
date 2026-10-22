@@ -2,8 +2,8 @@
 //! change. Only what is drawn changes: the simulation and its hash never see a texture.
 
 use std::path::Path;
-use std::sync::mpsc::{Receiver, Sender, channel};
-use std::thread;
+use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use ludenea_app::meta::is_png;
@@ -28,6 +28,10 @@ pub struct TextureWatch {
     readings: Receiver<Reading>,
     /// The newest reading taken while errors were reported, given at the next poll.
     pending: Option<ProjectTextures>,
+    /// The thread making the readings, joined once it ended to tell why.
+    thread: Option<JoinHandle<()>>,
+    /// The thread's end was reported.
+    stopped: bool,
     /// Watches while it lives; dropping it ends the reading thread.
     _debouncer: Debouncer<RecommendedWatcher, RecommendedCache>,
 }
@@ -52,7 +56,7 @@ impl TextureWatch {
         }
         let (readings_sender, readings) = channel();
         let (scene, project) = (scene.to_path_buf(), project.map(Path::to_path_buf));
-        thread::Builder::new()
+        let thread = thread::Builder::new()
             .name("texture watch".to_string())
             .spawn(move || read_on_change(&events, &readings_sender, &scene, project.as_deref()))
             .map_err(|error| {
@@ -61,6 +65,8 @@ impl TextureWatch {
         Ok(TextureWatch {
             readings,
             pending: None,
+            thread: Some(thread),
+            stopped: false,
             _debouncer: debouncer,
         })
     }
@@ -68,22 +74,44 @@ impl TextureWatch {
     /// Without waiting: the newest reading of the textures (`project_textures`'s result),
     /// made once a `.png` or a `.png.meta` changed and the files settled for the debounce;
     /// `None` when there is none. Older readings waiting behind it are dropped, never
-    /// replayed. Errors waiting (the watcher's, or a reading that failed) come first, joined
-    /// in one, and the newest reading at the next call. Every change gives a reading, the
-    /// same files written again too: the display, which knows what it applied, skips a
-    /// reading it holds.
+    /// replayed. Errors waiting (the watcher's, a reading that failed, or the end of the
+    /// reading thread, reported once) come first, joined in one, and the newest reading at
+    /// the next call. Every change gives a reading, the same files written again too: the
+    /// display, which knows what it applied, skips a reading it holds.
     pub fn poll(&mut self) -> Option<Reading> {
         let mut errors = Vec::new();
-        for reading in self.readings.try_iter() {
-            match reading {
-                Ok(textures) => self.pending = Some(textures),
-                Err(error) => errors.push(error),
+        loop {
+            match self.readings.try_recv() {
+                Ok(Ok(textures)) => self.pending = Some(textures),
+                Ok(Err(error)) => errors.push(error),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    if !std::mem::replace(&mut self.stopped, true) {
+                        errors.push(format!("the texture watcher stopped: {}", self.end()));
+                    }
+                    break;
+                }
             }
         }
         if !errors.is_empty() {
             return Some(Err(errors.join("; ")));
         }
         self.pending.take().map(Ok)
+    }
+
+    /// Why the reading thread ended: its panic, else the end of the file events.
+    fn end(&mut self) -> String {
+        match self.thread.take().map(JoinHandle::join) {
+            Some(Err(panic)) => {
+                let message = panic
+                    .downcast_ref::<&str>()
+                    .map(|message| message.to_string())
+                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "an unknown cause".to_string());
+                format!("its reading thread panicked: {message}")
+            }
+            _ => "its reading thread ended".to_string(),
+        }
     }
 }
 
@@ -262,6 +290,8 @@ mod tests {
         let watch = TextureWatch {
             readings,
             pending: None,
+            thread: None,
+            stopped: false,
             _debouncer: new_debouncer(DEBOUNCE, None, |_| {}).unwrap(),
         };
         (sender, watch)
@@ -297,6 +327,43 @@ mod tests {
         assert_eq!(watch.poll(), Some(Err("first; second".to_string())));
         assert_eq!(watch.poll(), Some(reading("new.png")));
         assert_eq!(watch.poll(), None);
+    }
+
+    #[test]
+    fn a_reading_thread_that_ended_is_reported_once() {
+        let (sender, mut watch) = fed();
+        sender.send(reading("last.png")).unwrap();
+        drop(sender);
+        let Some(Err(error)) = watch.poll() else {
+            panic!("the end is reported");
+        };
+        assert!(
+            error.starts_with("the texture watcher stopped: "),
+            "{error}"
+        );
+        assert_eq!(watch.poll(), Some(reading("last.png")));
+        assert_eq!(watch.poll(), None, "reported once");
+    }
+
+    #[test]
+    fn a_reading_thread_that_panicked_is_reported_with_the_panic() {
+        let (sender, mut watch) = fed();
+        watch.thread = Some(thread::spawn(move || {
+            let _sender = sender;
+            panic!("boom");
+        }));
+        let start = now();
+        let error = loop {
+            assert!(start.elapsed() < PATIENCE, "the end is never reported");
+            if let Some(Err(error)) = watch.poll() {
+                break error;
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert!(
+            error.starts_with("the texture watcher stopped: ") && error.contains("boom"),
+            "{error}"
+        );
     }
 
     #[test]
