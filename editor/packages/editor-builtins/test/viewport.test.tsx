@@ -745,13 +745,17 @@ describe("viewport", () => {
 
   /** A tool recording the events it hears, as `[kind, event]`, with the context of the last one. */
   const recordingTool = (available: ViewportTool["available"] = () => true) => {
-    const heard: [string, ToolPointer][] = [];
+    const heard: [string, ToolPointer | null][] = [];
     const contexts: ToolContext[] = [];
     const record = (kind: string) => (event: ToolPointer, context: ToolContext) => {
       heard.push([kind, event]);
       contexts.push(context);
     };
     const tool: ViewportTool = { id: "test.paint", title: "Paint", cursor: "crosshair", available, pointerDown: record("down"), pointerMove: record("move"), pointerUp: record("up") };
+    tool.pointerCancel = (context) => {
+      heard.push(["cancel", null]);
+      contexts.push(context);
+    };
     return { tool, heard, contexts };
   };
 
@@ -868,6 +872,9 @@ describe("viewport", () => {
       overlay() {
         throw new Error("no font loaded");
       },
+      pointerCancel() {
+        throw new Error("no stroke to drop");
+      },
     };
     act(() => void host.editor.viewport.tools.register(tool));
     act(() => host.editor.viewport.setTool("test.broken"));
@@ -875,12 +882,66 @@ describe("viewport", () => {
     fireEvent.pointerDown(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
     fireEvent.pointerUp(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
     await animationFrames(2);
+    expect(host.editor.viewport.activeTool.getState()).toBe("test.broken");
+    fireEvent.pointerDown(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    fireEvent.pointerCancel(view, { pointerId: 1 });
     // The overlay is reported once while it stays active, not on every frame.
     expect(host.editor.console.list().filter(({ level }) => level === "error").map(({ text }) => text)).toEqual([
       'Drawing the viewport overlay "test.broken" failed: no font loaded',
       'The viewport tool "test.broken" handling a pointer event failed: no brush chosen',
+      'The viewport tool "test.broken" handling a pointer event failed: no brush chosen',
+      'The viewport tool "test.broken" cancelling a press failed: no stroke to drop',
     ]);
-    expect(host.editor.viewport.activeTool.getState()).toBe("test.broken");
+  });
+
+  it("a_tool_hears_once_that_its_press_was_abandoned", async () => {
+    const { host, view } = await viewport();
+    const { tool, heard } = recordingTool();
+    const registration = host.editor.viewport.tools.register(tool);
+    act(() => void host.editor.viewport.tools.register({ id: "test.erase", title: "Erase", available: () => true }));
+    const kinds = () => heard.map(([kind]) => kind);
+    const press = () => {
+      act(() => host.editor.viewport.setTool("test.paint"));
+      heard.length = 0;
+      fireEvent.pointerDown(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    };
+    const release = () => fireEvent.pointerUp(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+
+    // The browser takes the pointer: the tool hears the cancel, and no release follows.
+    press();
+    fireEvent.pointerCancel(view, { pointerId: 1 });
+    release();
+    expect(kinds()).toEqual(["down", "cancel"]);
+
+    // Escape in the middle of a press.
+    press();
+    fireEvent.keyDown(view, { key: "Escape" });
+    release();
+    expect(kinds()).toEqual(["down", "cancel"]);
+
+    // Another tool activated in the middle of a press.
+    press();
+    act(() => host.editor.viewport.setTool("test.erase"));
+    release();
+    expect(kinds()).toEqual(["down", "cancel"]);
+
+    // The tool unregistered (its plugin deactivated) in the middle of a press.
+    press();
+    act(() => registration.dispose());
+    release();
+    expect(kinds()).toEqual(["down", "cancel"]);
+    expect(host.editor.viewport.activeTool.getState()).toBeNull();
+  });
+
+  it("escape_without_a_press_cancels_nothing", async () => {
+    const { host, view } = await viewport();
+    const { tool, heard } = recordingTool();
+    act(() => void host.editor.viewport.tools.register(tool));
+    act(() => host.editor.viewport.setTool("test.paint"));
+    fireEvent.pointerDown(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    fireEvent.pointerUp(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    fireEvent.keyDown(view, { key: "Escape" });
+    expect(heard.map(([kind]) => kind)).toEqual(["down", "up"]);
   });
 
   it("pan_and_zoom_work_with_a_tool_active", async () => {

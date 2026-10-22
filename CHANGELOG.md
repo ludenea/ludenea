@@ -866,7 +866,9 @@ hash, those of the golden trace and replays included.
 - `Editor.viewport.tools.register(tool)` adds a `ViewportTool`: while it is the active
   tool (`viewport.setTool(id)`, read from the `viewport.activeTool` store, `null` for the
   built-in select and move), the viewport gives it the pointer's presses, moves, and
-  releases (`ToolPointer`, in CSS pixels and world units) with a `ToolContext` mapping
+  releases (`ToolPointer`, in CSS pixels and world units), or `pointerCancel` when a press
+  ends without a release (the browser took the pointer, or the tool stopped being active
+  in the middle of it), with a `ToolContext` mapping
   screen points onto a layer of any parallax as the renderer draws it, shows its `cursor`,
   and draws its `overlay`. Its `available(editor)` is asked again on every selection,
   timeline, and game change, and a tool that answers false, throws, or is unregistered is

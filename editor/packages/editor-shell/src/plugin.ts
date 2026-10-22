@@ -143,6 +143,12 @@ export interface ViewportTool {
   /** Every move over the viewport while the tool is active, pressed or not. */
   pointerMove?(event: ToolPointer, context: ToolContext): void;
   pointerUp?(event: ToolPointer, context: ToolContext): void;
+  /**
+   * The press `pointerDown` started ends without its `pointerUp`: the browser took the pointer,
+   * or the tool stopped being active (Escape, another tool, unavailable, unregistered). Called
+   * once per such press; a stroke in progress is dropped here.
+   */
+  pointerCancel?(context: ToolContext): void;
   /** Drawn over the viewport after the overlays, while the tool is active. */
   overlay?(context: OverlayContext): void;
 }

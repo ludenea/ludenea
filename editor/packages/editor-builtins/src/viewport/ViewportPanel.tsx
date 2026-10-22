@@ -330,8 +330,8 @@ export function ViewportPanel({
       }),
       shared(editor).overlays.subscribe(() => (repaint = true)),
       editor.viewport.activeTool.subscribe(() => {
-        // A press for the tool that left ends without it.
-        if (press?.mode === "tool") press = null;
+        // A press for the tool that left ends without it, and that tool hears so.
+        if (press?.mode === "tool") abandonToolPress();
         showCursor();
         repaint = true;
       }),
@@ -370,6 +370,18 @@ export function ViewportPanel({
         return JSON.parse(renderer.screen_to_world(screen.x, screen.y, parallax, drawnCamera())) as Vec2;
       },
       redraw: () => void (repaint = true),
+    };
+    // Ends the tool's press without a release: the tool hears it through `pointerCancel`.
+    const abandonToolPress = () => {
+      const tool = press?.tool;
+      press = null;
+      repaint = true;
+      if (!tool) return;
+      try {
+        tool.pointerCancel?.(toolContext);
+      } catch (error) {
+        editor.console.report(error, `The viewport tool "${tool.id}" cancelling a press`);
+      }
     };
     // Gives `event` to `tool`'s `handler`; a tool that throws has its failure reported.
     const toTool = (tool: ViewportTool, handler: "pointerDown" | "pointerMove" | "pointerUp", event: PointerEvent) => {
@@ -472,6 +484,7 @@ export function ViewportPanel({
 
     // The browser took the pointer (a gesture, a lost touch): drop the press, move nothing.
     const onPointerCancel = () => {
+      if (press?.mode === "tool") return abandonToolPress();
       press = null;
       repaint = true;
     };
