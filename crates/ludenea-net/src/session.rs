@@ -598,8 +598,8 @@ impl Session {
     /// instead, keeping the pending local inputs: when the mean correction of the latest
     /// [`SYNC_MIN_REPORTS`] fresh reports of some peer, rounded to the nearest tick, is at
     /// least one tick, the session skips that many ticks for the largest one, at most
-    /// `rollback_window / 2`, one per call, each counted in [`SessionStats::skips`]. Each skip
-    /// forgets the reports so far.
+    /// `rollback_window / 2`, one per call, each counted in [`SessionStats::skips`]. Only a
+    /// peer this session is ahead of right now counts. Each skip forgets the reports so far.
     ///
     /// # Errors
     ///
@@ -607,7 +607,7 @@ impl Session {
     /// advance and a local player has no pending input, and [`SessionError::LastTick`]. A
     /// refused call changes nothing.
     pub fn advance(&mut self, now_micros: u64) -> Result<Vec<Request>, SessionError> {
-        self.observe(now_micros);
+        let now = self.observe(now_micros);
         if self.state != SessionState::Running {
             return Err(SessionError::NotRunning);
         }
@@ -615,7 +615,7 @@ impl Session {
         let window = u64::from(self.settings.identity.rules.rollback_window);
         let stall = self.tick.saturating_sub(confirmed) >= window;
         if !stall && self.skips_left == 0 {
-            self.skips_left = self.correction();
+            self.skips_left = self.correction(now);
         }
         let skip = !stall && self.skips_left > 0;
         // Every refusal comes before anything changes.
@@ -1154,13 +1154,23 @@ impl Session {
     /// one tick, at most `rollback_window / 2`; otherwise none. Rounded rather than truncated,
     /// so a peer half a tick or more ahead corrects at once instead of drifting a tick further
     /// first.
-    fn correction(&self) -> u64 {
+    ///
+    /// Only a peer this session is ahead of at `now`, by its own estimate, counts: the peer
+    /// behind never skips. Once the round trip passes `rollback_window + input_delay` ticks,
+    /// both peers run at the edge of their window and the stalls, not the clocks, set their
+    /// pace: each stall of the faster peer leaves the slower one briefly ahead in both views,
+    /// and a skip of the slower one would only make the faster one stall more.
+    fn correction(&self, now: u64) -> u64 {
         let cap = u64::from(self.settings.identity.rules.rollback_window / 2);
         let largest = self
             .remotes
             .iter()
-            .filter(|remote| remote.corrections.len() >= SYNC_MIN_REPORTS)
-            .map(|remote| {
+            .enumerate()
+            .filter(|(index, remote)| {
+                remote.corrections.len() >= SYNC_MIN_REPORTS
+                    && self.advantage(*index, now).is_some_and(|ahead| ahead > 0)
+            })
+            .map(|(_, remote)| {
                 // At most `SYNC_MIN_REPORTS` doubled corrections are kept, each within twice an
                 // `i32`: their sum fits an `i64`. `doubled / (2 * count)`, halves rounded up.
                 let doubled: i64 = remote.corrections.iter().sum();

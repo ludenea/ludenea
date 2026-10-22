@@ -343,3 +343,28 @@ fn unknown_echo_drops_only_its_reply() {
         ]
     );
 }
+
+#[test]
+fn peer_behind_never_skips_when_the_round_trip_exceeds_the_window() {
+    // From 135 ms each way, the round trip passes `rollback_window + input_delay` ticks: both
+    // peers run at the edge of their window, and each stall of the faster one leaves the
+    // slower one briefly ahead. Were the slower one to skip then, the faster one would stall
+    // the more for it.
+    let fast_frame = FRAME_MICROS * 98 / 100;
+    // The frames the faster peer runs beyond the slower one's in 50 s, one more for each
+    // count's rounding.
+    let extra_frames = 50 * ONE_SECOND / fast_frame - 50 * ONE_SECOND / FRAME_MICROS + 2;
+    for latency_micros in [135_000, 150_000] {
+        let mut harness = Harness::conditioned(sessions(2), latency(latency_micros, 10_000, 0));
+        harness.set_frame_micros(PeerId(0), fast_frame);
+        let (counts, widest) = run_drifting(&mut harness);
+        let [fast, slow] = [counts[0], counts[1]];
+        assert_eq!(slow.skips, 0, "{latency_micros} us: {counts:?}");
+        // Both peers run the same ticks, within the widest gap, so the faster one loses its
+        // extra frames and one for each of the slower one's stalls, and no more.
+        assert!(
+            fast.skips + fast.stalls <= extra_frames + slow.stalls + widest,
+            "{latency_micros} us: {counts:?}, widest {widest}"
+        );
+    }
+}
