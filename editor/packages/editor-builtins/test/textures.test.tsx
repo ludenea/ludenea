@@ -28,9 +28,9 @@ const SHEET_SCHEMA: TypeSchema = { kind: "struct", name: "ludenea_render::sheet:
 /**
  * The editor with every built-in plugin on a project of `files` (or `listed.files` once set),
  * whose `read_binary` answers a path's text as its bytes; the asset browser and the inspector
- * shown, and a game when `game` gives the sprite sheet's clips.
+ * shown, and a game when `clips` gives the sprite sheet's clips (or `value` its whole value).
  */
-async function inspecting(options: { clips?: object } = {}) {
+async function inspecting(options: { clips?: object; value?: unknown } = {}) {
   const listed = { files };
   const host = await testEditor(builtinPlugins, (request) => {
     if (request.type === "list_files") return { type: "files", entries: listed.files };
@@ -40,8 +40,8 @@ async function inspecting(options: { clips?: object } = {}) {
     if (request.type === "info") return undefined;
     return { type: "done" };
   });
-  if (options.clips) {
-    const value = { texture: HERO, clips: options.clips };
+  if (options.clips || options.value) {
+    const value = options.value ?? { texture: HERO, clips: options.clips };
     const game = await testGame((command) => (command.type === "get_asset" ? { type: "asset", asset: "ludenea::SpriteSheet", value: { type: "json", value } } : { type: "done" }), {
       assets: [{ name: "ludenea::SpriteSheet", schema: SHEET_SCHEMA }],
       tick_rate: 60,
@@ -207,5 +207,26 @@ describe("textures", () => {
     expect(run.queryByRole("button", { name: "Play" })).toBeNull();
     // The other clips still play.
     expect(within(screen.getByRole("region", { name: "Clip idle" })).getByRole("button", { name: "Play" })).toBeTruthy();
+  });
+
+  it("a_clip_without_frames_or_ticks_per_frame_does_not_play", async () => {
+    await inspecting({ clips: { still: { first: 0, count: 1, ticks_per_frame: 0 } } });
+    await select("hero.sheet.ron");
+
+    const still = within(screen.getByRole("region", { name: "Clip still" }));
+    expect(still.getByRole("alert").textContent).toBe("The clip needs at least one frame and one tick per frame.");
+    expect(still.queryByRole("button", { name: "Play" })).toBeNull();
+  });
+
+  it("a_sprite_sheet_without_clips_says_so", async () => {
+    await inspecting({ clips: {} });
+    await select("hero.sheet.ron");
+    expect(screen.getByText("This sprite sheet has no clips.")).toBeTruthy();
+  });
+
+  it("a_sprite_sheet_value_without_texture_and_clips_is_reported", async () => {
+    await inspecting({ value: { texture: 7 } });
+    await select("hero.sheet.ron");
+    expect(screen.getByRole("alert").textContent).toBe("This sprite sheet's value has no texture and clips to play.");
   });
 });

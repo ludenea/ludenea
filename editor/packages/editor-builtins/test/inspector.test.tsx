@@ -326,6 +326,11 @@ describe("inspector", () => {
       return host;
     }
 
+    it("a_texture_without_a_registered_inspector_says_so", async () => {
+      await texture();
+      expect(screen.getByText("No inspector is registered for textures.")).toBeTruthy();
+    });
+
     it("a_texture_inspector_changing_a_value_is_reported_naming_its_plugin", async () => {
       const Changing = ({ onChange }: { onChange(path: unknown[], value: unknown): void }) => <button onClick={() => onChange([], 1)}>Change</button>;
       const host = await texture([...withoutTextures, definePlugin({ name: "my_game", activate: (editor) => void editor.inspectors.registerAsset("Texture", Changing) })]);
