@@ -26,6 +26,8 @@ type Reading = Result<ProjectTextures, String>;
 /// (`ludenea-project`), which the runtime does not depend on.
 pub struct TextureWatch {
     readings: Receiver<Reading>,
+    /// The newest reading taken while errors were reported, given at the next poll.
+    pending: Option<ProjectTextures>,
     /// Watches while it lives; dropping it ends the reading thread.
     _debouncer: Debouncer<RecommendedWatcher, RecommendedCache>,
 }
@@ -58,17 +60,30 @@ impl TextureWatch {
             })?;
         Ok(TextureWatch {
             readings,
+            pending: None,
             _debouncer: debouncer,
         })
     }
 
-    /// Without waiting: the next reading of the textures (`project_textures`'s result),
-    /// made once a `.png` or a `.png.meta` changed and the files settled for the debounce,
-    /// or the watcher's errors; `None` when there is none. Every change gives a reading, the
+    /// Without waiting: the newest reading of the textures (`project_textures`'s result),
+    /// made once a `.png` or a `.png.meta` changed and the files settled for the debounce;
+    /// `None` when there is none. Older readings waiting behind it are dropped, never
+    /// replayed. Errors waiting (the watcher's, or a reading that failed) come first, joined
+    /// in one, and the newest reading at the next call. Every change gives a reading, the
     /// same files written again too: the display, which knows what it applied, skips a
     /// reading it holds.
     pub fn poll(&mut self) -> Option<Reading> {
-        self.readings.try_recv().ok()
+        let mut errors = Vec::new();
+        for reading in self.readings.try_iter() {
+            match reading {
+                Ok(textures) => self.pending = Some(textures),
+                Err(error) => errors.push(error),
+            }
+        }
+        if !errors.is_empty() {
+            return Some(Err(errors.join("; ")));
+        }
+        self.pending.take().map(Ok)
     }
 }
 
@@ -239,6 +254,49 @@ mod tests {
         fs::remove_file(&meta).unwrap();
         let first = next(&mut watch).expect("the change is reported");
         assert_eq!(first.unwrap().textures.len(), 1, "read before the removal");
+    }
+
+    /// A watch whose readings come from the returned sender instead of a reading thread.
+    fn fed() -> (Sender<Reading>, TextureWatch) {
+        let (sender, readings) = channel();
+        let watch = TextureWatch {
+            readings,
+            pending: None,
+            _debouncer: new_debouncer(DEBOUNCE, None, |_| {}).unwrap(),
+        };
+        (sender, watch)
+    }
+
+    /// A reading of one failure at `path`, to tell readings apart.
+    fn reading(path: &str) -> Reading {
+        Ok(ProjectTextures {
+            textures: Vec::new(),
+            failures: vec![ludenea_app::project::TextureFailure {
+                path: path.to_string(),
+                cause: "cause".to_string(),
+            }],
+        })
+    }
+
+    #[test]
+    fn a_backlog_of_readings_gives_the_newest_only() {
+        let (sender, mut watch) = fed();
+        sender.send(reading("old.png")).unwrap();
+        sender.send(reading("new.png")).unwrap();
+        assert_eq!(watch.poll(), Some(reading("new.png")));
+        assert_eq!(watch.poll(), None, "the older reading is never replayed");
+    }
+
+    #[test]
+    fn errors_in_a_backlog_are_reported_once_before_the_newest_reading() {
+        let (sender, mut watch) = fed();
+        sender.send(Err("first".to_string())).unwrap();
+        sender.send(reading("old.png")).unwrap();
+        sender.send(Err("second".to_string())).unwrap();
+        sender.send(reading("new.png")).unwrap();
+        assert_eq!(watch.poll(), Some(Err("first; second".to_string())));
+        assert_eq!(watch.poll(), Some(reading("new.png")));
+        assert_eq!(watch.poll(), None);
     }
 
     #[test]
