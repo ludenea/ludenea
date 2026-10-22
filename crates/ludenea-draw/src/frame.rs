@@ -102,9 +102,9 @@ pub struct TilemapItem {
     pub tiles: Vec<Option<u32>>,
 }
 
-/// An asset identifier in a frame: its 16 little-endian bytes in a binary format, against 33
-/// for its text in postcard (a quarter of a sprite's encoding), and its hexadecimal text in a
-/// readable one.
+/// An asset identifier in a frame: its 16 little-endian bytes in a binary format instead of 33
+/// bytes of text in postcard, saving about a quarter of a sprite's encoding, and its
+/// hexadecimal text in a readable one.
 mod compact_asset {
     use ludenea_ecs::AssetId;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
