@@ -1332,7 +1332,8 @@ impl Host {
             return Ok(command);
         };
         let tiles = self
-            .painted_tiles(entity, area, tile)
+            .tilemap_json(entity)
+            .and_then(|tilemap| painted_tiles(tilemap, area, tile))
             .map_err(|error| in_context(error, context))?;
         Ok(Command::SetField {
             target: FieldTarget::Component {
@@ -1346,84 +1347,21 @@ impl Host {
         })
     }
 
-    /// The `tiles` of the tilemap of `entity` with every cell of `area` set to `tile`.
-    fn painted_tiles(
-        &self,
-        entity: Entity,
-        area: TileArea,
-        tile: Option<u32>,
-    ) -> Result<Vec<JsonValue>, ProtocolError> {
-        let invalid = |message: String| ProtocolError::new(ErrorCode::InvalidCommand, message);
+    /// The JSON of the tilemap of `entity`, checked as loading checks it.
+    fn tilemap_json(&self, entity: Entity) -> Result<JsonValue, ProtocolError> {
         let world = self.simulation.world();
         if !world.is_alive(entity) {
             return Err(edit_error(&EditError::NoSuchEntity(entity)));
         }
-        let mut tilemap = world
+        world
             .component_json(entity, TILEMAP)
             .ok_or_else(|| {
-                invalid(format!(
+                invalid_command(format!(
                     "entity {entity} has no {TILEMAP}; is RenderPlugin added?"
                 ))
             })?
             // Reading checks the tilemap as loading does: one the game broke fails here.
-            .map_err(|reason| invalid(format!("the tilemap cannot be read: {reason}")))?;
-        let size = |name: &str| {
-            tilemap[name]
-                .as_u64()
-                .and_then(|value| u32::try_from(value).ok())
-        };
-        let (Some(width), Some(height)) = (size("width"), size("height")) else {
-            return Err(invalid(format!(
-                "`{TILEMAP}` has no `width` and `height` of 32 bits; this host does not \
-                 match the game's renderer"
-            )));
-        };
-        let Some(JsonValue::Array(mut tiles)) = tilemap.get_mut("tiles").map(JsonValue::take)
-        else {
-            return Err(invalid(format!(
-                "`{TILEMAP}` has no `tiles` list; this host does not match the game's renderer"
-            )));
-        };
-        let cells = u64::from(width) * u64::from(height);
-        if u64::try_from(tiles.len()) != Ok(cells) {
-            return Err(invalid(format!(
-                "its `tiles` has {} entries, but width {width} by height {height} needs \
-                 {cells}; the game changed the tilemap without keeping one entry per cell",
-                tiles.len()
-            )));
-        }
-        let TileArea {
-            x,
-            y,
-            width: columns,
-            height: rows,
-        } = area;
-        if columns == 0 || rows == 0 {
-            return Err(invalid(format!(
-                "area of {columns} by {rows} cells is empty; paint at least one cell"
-            )));
-        }
-        let (right, top) = match (x.checked_add(columns), y.checked_add(rows)) {
-            (Some(right), Some(top)) if right <= width && top <= height => (right, top),
-            (Some(right), Some(top)) => {
-                return Err(invalid(format!(
-                    "area x {x}..{right}, y {y}..{top} is outside the {width} by {height} grid"
-                )));
-            }
-            _ => {
-                return Err(invalid(format!(
-                    "area of {columns} by {rows} cells from x {x}, y {y} ends past the largest \
-                     cell index, so it is outside the {width} by {height} grid"
-                )));
-            }
-        };
-        let value = tile.map_or(JsonValue::Null, JsonValue::from);
-        // Within the grid, so every index is below `tiles.len()`.
-        let index = |column: u32, row: u32| row as usize * width as usize + column as usize;
-        for row in y..top {
-            tiles[index(x, row)..index(right, row)].fill(value.clone());
-        }
-        Ok(tiles)
+            .map_err(|reason| invalid_command(format!("the tilemap cannot be read: {reason}")))
     }
 
     /// The edit that sets the value at `path` of `target` to `value`: the exact current
@@ -1814,6 +1752,75 @@ fn changed_value(command: &Command) -> Option<String> {
     }
 }
 
+/// The `tiles` of `tilemap`, the JSON of a `ludenea::Tilemap`, with every cell of `area` set
+/// to `tile`.
+fn painted_tiles(
+    mut tilemap: JsonValue,
+    area: TileArea,
+    tile: Option<u32>,
+) -> Result<Vec<JsonValue>, ProtocolError> {
+    let size = |name: &str| {
+        tilemap[name]
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+    };
+    let (Some(width), Some(height)) = (size("width"), size("height")) else {
+        return Err(invalid_command(format!(
+            "`{TILEMAP}` has no `width` and `height` of 32 bits; this host does not match the \
+             game's renderer"
+        )));
+    };
+    let Some(JsonValue::Array(mut tiles)) = tilemap.get_mut("tiles").map(JsonValue::take) else {
+        return Err(invalid_command(format!(
+            "`{TILEMAP}` has no `tiles` list; this host does not match the game's renderer"
+        )));
+    };
+    let cells = u64::from(width) * u64::from(height);
+    if u64::try_from(tiles.len()) != Ok(cells) {
+        return Err(invalid_command(format!(
+            "the tilemap's `tiles` has {} entries, but width {width} by height {height} needs \
+             {cells}; the game changed the tilemap without keeping one entry per cell",
+            tiles.len()
+        )));
+    }
+    let TileArea {
+        x,
+        y,
+        width: columns,
+        height: rows,
+    } = area;
+    if columns == 0 || rows == 0 {
+        return Err(invalid_command(format!(
+            "area of {columns} by {rows} cells is empty; paint at least one cell"
+        )));
+    }
+    let (right, top) = match (x.checked_add(columns), y.checked_add(rows)) {
+        (Some(right), Some(top)) if right <= width && top <= height => (right, top),
+        (Some(right), Some(top)) => {
+            return Err(invalid_command(format!(
+                "area x {x}..{right}, y {y}..{top} is outside the {width} by {height} grid"
+            )));
+        }
+        _ => {
+            return Err(invalid_command(format!(
+                "area of {columns} by {rows} cells from x {x}, y {y} ends past the largest cell \
+                 index, so it is outside the {width} by {height} grid"
+            )));
+        }
+    };
+    let value = tile.map_or(JsonValue::Null, JsonValue::from);
+    // Within the grid, so every index is below `tiles.len()`.
+    let index = |column: u32, row: u32| row as usize * width as usize + column as usize;
+    for row in y..top {
+        tiles[index(x, row)..index(right, row)].fill(value.clone());
+    }
+    Ok(tiles)
+}
+
+fn invalid_command(message: String) -> ProtocolError {
+    ProtocolError::new(ErrorCode::InvalidCommand, message)
+}
+
 fn filter_error(error: &FilterError) -> ProtocolError {
     ProtocolError::new(ErrorCode::InvalidFilter, error)
 }
@@ -1930,6 +1937,61 @@ fn decode_edits(bytes: &Bytes) -> Result<EditLog, ProtocolError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn area(x: u32, y: u32, width: u32, height: u32) -> TileArea {
+        TileArea {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn painting_a_tilemap_whose_tiles_do_not_fill_its_grid_is_refused() {
+        let tilemap = serde_json::json!({ "width": 2, "height": 2, "tiles": [null, null, null] });
+        let error = painted_tiles(tilemap, area(0, 0, 1, 1), Some(1)).unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidCommand);
+        assert_eq!(
+            error.message,
+            "the tilemap's `tiles` has 3 entries, but width 2 by height 2 needs 4; the game \
+             changed the tilemap without keeping one entry per cell"
+        );
+    }
+
+    #[test]
+    fn painting_a_tilemap_of_another_shape_is_refused() {
+        for (tilemap, missing) in [
+            (
+                serde_json::json!({ "height": 1, "tiles": [null] }),
+                "`width` and `height`",
+            ),
+            (
+                serde_json::json!({ "width": 4_294_967_296_u64, "height": 1, "tiles": [] }),
+                "`width` and `height`",
+            ),
+            (
+                serde_json::json!({ "width": 1, "height": 1 }),
+                "`tiles` list",
+            ),
+            (
+                serde_json::json!({ "width": 1, "height": 1, "tiles": "none" }),
+                "`tiles` list",
+            ),
+            (serde_json::json!([1, 2]), "`width` and `height`"),
+        ] {
+            let error = painted_tiles(tilemap, area(0, 0, 1, 1), None).unwrap_err();
+            assert_eq!(error.code, ErrorCode::InvalidCommand);
+            assert!(
+                error.message.contains(&format!("has no {missing}"))
+                    && error
+                        .message
+                        .ends_with("this host does not match the game's renderer"),
+                "{}",
+                error.message
+            );
+        }
+    }
 
     #[test]
     fn asking_for_an_unknown_asset_is_an_invalid_command() {
