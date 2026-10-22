@@ -162,6 +162,18 @@ test("arena_page_two_player_replay_verifies", async ({ page }) => {
   await page.keyboard.down("KeyW");
   await reach(page, 240);
   for (const key of ["KeyW", "ArrowLeft", "KeyD"]) await page.keyboard.up(key);
+  // Play stops at tick 240: its hash there, then the same match without keys on a page of its
+  // own. A replay without input verifies too, so only a different hash proves the keys
+  // reached the game.
+  await expect(page.locator("body")).toHaveAttribute("data-tick", "240");
+  const played = await page.locator("body").getAttribute("data-hash");
+  const still = await page.context().newPage();
+  const stillErrors = await open(still, "?players=2&ticks=240", ARENA_PAGE);
+  await reach(still, 240);
+  await expect(still.locator("body")).toHaveAttribute("data-tick", "240");
+  expect(await still.locator("body").getAttribute("data-hash")).not.toBe(played);
+  expect(stillErrors).toEqual([]);
+  await still.close();
   const downloaded = page.waitForEvent("download");
   await page.getByRole("button", { name: "Save replay" }).click();
   const download = await downloaded;
