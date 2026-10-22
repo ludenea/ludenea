@@ -954,6 +954,26 @@ describe("viewport", () => {
     expect(heard.map(([kind]) => kind)).toEqual([]);
   });
 
+  it("a_right_drag_reaches_the_tool_without_the_context_menu", async () => {
+    const { host, game, view } = await viewport();
+    const { tool, heard } = recordingTool();
+    act(() => void host.editor.viewport.tools.register(tool));
+    // Without a tool the browser's menu shows as usual.
+    expect(fireEvent.contextMenu(view)).toBe(true);
+    act(() => host.editor.viewport.setTool("test.paint"));
+    fireEvent.pointerDown(view, { button: 2, clientX: 250, clientY: 100, pointerId: 1 });
+    fireEvent.pointerMove(view, { button: -1, clientX: 300, clientY: 150, pointerId: 1 });
+    // fireEvent returns false when the event's default is prevented.
+    expect(fireEvent.contextMenu(view, { button: 2, clientX: 300, clientY: 150 })).toBe(false);
+    fireEvent.pointerUp(view, { button: 2, clientX: 300, clientY: 150, pointerId: 1 });
+    expect(heard.map(([kind, event]) => [kind, event?.button])).toEqual([
+      ["down", 2],
+      ["move", -1],
+      ["up", 2],
+    ]);
+    expect(sentOf(game.sent, "pick")).toEqual([]);
+  });
+
   it("escape_without_a_press_cancels_nothing", async () => {
     const { host, view } = await viewport();
     const { tool, heard } = recordingTool();

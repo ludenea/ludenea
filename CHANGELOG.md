@@ -870,7 +870,7 @@ hash, those of the golden trace and replays included.
   ends without a release (the browser took the pointer, or the tool stopped being active
   in the middle of it), with a `ToolContext` mapping
   screen points onto a layer of any parallax as the renderer draws it, shows its `cursor`,
-  and draws its `overlay`. Its `available(editor)` is asked again on every selection,
+  and draws its `overlay`; the right button is the tool's too, without the context menu. Its `available(editor)` is asked again on every selection,
   timeline, and game change, and a tool that answers false, throws, or is unregistered is
   deactivated. Escape returns to select and move; panning and zooming stay the viewport's.
 

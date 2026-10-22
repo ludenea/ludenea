@@ -527,6 +527,10 @@ export function ViewportPanel({
       if (event.key === " ") space = false;
     };
     const onBlur = () => (space = false);
+    // The right button is the tool's while one is active: its drag opens no menu.
+    const onContextMenu = (event: Event) => {
+      if (activeTool() && !onControl(event)) event.preventDefault();
+    };
 
     const listeners: [string, EventListener][] = [
       ["pointerdown", onPointerDown as EventListener],
@@ -536,6 +540,7 @@ export function ViewportPanel({
       ["keydown", onKeyDown as EventListener],
       ["keyup", onKeyUp as EventListener],
       ["blur", onBlur],
+      ["contextmenu", onContextMenu],
     ];
     for (const [type, listener] of listeners) element.addEventListener(type, listener);
     element.addEventListener("wheel", onWheel, { passive: false });
