@@ -1172,9 +1172,8 @@ impl Session {
     /// The correction to start now, as the index of the remote it skips toward and the ticks
     /// to skip: the largest mean correction over the peers with [`SYNC_MIN_REPORTS`] fresh
     /// reports, rounded to the nearest tick, when it is at least one tick, at most
-    /// `rollback_window / 2`; otherwise none. Rounded rather than truncated,
-    /// so a peer half a tick or more ahead corrects at once instead of drifting a tick further
-    /// first.
+    /// `rollback_window / 2`; otherwise none. Rounded rather than truncated, so a peer half a
+    /// tick or more ahead corrects at once instead of drifting a tick further first.
     ///
     /// Only a peer this session is ahead of at `now`, by its own estimate, counts: the peer
     /// behind never skips. Once the round trip passes `rollback_window + input_delay` ticks,

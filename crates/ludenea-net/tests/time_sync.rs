@@ -389,7 +389,8 @@ fn committed_skips_stop_once_the_session_is_no_longer_ahead() {
     for _ in 0..5 {
         assert_ne!(advance(&mut session, ONE_SECOND + 30_000), []);
     }
-    // Peer 1 reports tick 4, one tick behind the local tick 5, and claims to be four ticks behind: a mean correction of 2.5, three skips.
+    // Peer 1 reports tick 4, one tick behind the local tick 5, and claims to be four ticks
+    // behind: a mean correction of 2.5, three skips.
     let mut now = ONE_SECOND;
     for _ in 0..4 {
         now += QUALITY_INTERVAL_MICROS;
