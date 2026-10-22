@@ -862,7 +862,9 @@ hash, those of the golden trace and replays included.
   rejected with the renderer's reason. `createEditor` takes the cutting function as
   `textureFrames` (the applications pass the renderer's, exported by
   `@ludenea/editor-builtins/app`); without it, `frames` rejects saying so. `textureOf(entry)`
-  tells what a listed file is as a texture.
+  tells what a listed file is as a texture. `@ludenea/control-client` exports
+  `fromBase64(text)`, which decodes the base64 the project and text transports carry with the
+  runtime's native decoder when it has one; `bytes` reads the PNGs with it.
 - Breaking: `SelectionState.asset` is `{ id, kind }` (an `AssetKindName`) instead of the
   identifier alone, and `selectAsset(id, kind)` takes the kind: the inspector shows a
   selected texture as well as a data asset. Opening a texture in the asset browser shows its

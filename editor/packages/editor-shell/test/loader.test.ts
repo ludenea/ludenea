@@ -301,6 +301,21 @@ describe("loader", () => {
     expect(host.editor.inspectors.getAsset("Texture")).toBeUndefined();
   });
 
+  it("texture_bytes_decode_with_the_native_base64_decoder_when_there_is_one", async () => {
+    const decoder = Uint8Array as { fromBase64?: (text: string) => Uint8Array };
+    const native = decoder.fromBase64;
+    const fromBase64 = vi.fn((text: string) => new Uint8Array([text.length]));
+    decoder.fromBase64 = fromBase64;
+    try {
+      const host = await testHost(undefined, (request) => (request.type === "read_binary" ? { type: "bytes", bytes: "AQID" } : undefined));
+      expect(await host.editor.textures.bytes("assets/hero.png")).toEqual(new Uint8Array([4]));
+      expect(fromBase64).toHaveBeenCalledWith("AQID");
+    } finally {
+      if (native) decoder.fromBase64 = native;
+      else delete decoder.fromBase64;
+    }
+  });
+
   it("an_editor_without_a_texture_cutter_says_so", async () => {
     const host = await testHost(undefined, (request) => {
       if (request.type === "list_files") return { type: "files", entries: [{ path: "assets/hero.png", id: "0000000000000000000000000000000d", kind: { Texture: { pixels_per_unit: 16, grid: null, pivot: null, filter: "Nearest" } } }] };

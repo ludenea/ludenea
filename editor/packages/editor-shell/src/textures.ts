@@ -1,4 +1,4 @@
-import type { AssetId, FileChange, FileEntry, ProjectClient, TextureMeta } from "@ludenea/control-client";
+import { fromBase64, type AssetId, type FileChange, type FileEntry, type ProjectClient, type TextureMeta } from "@ludenea/control-client";
 import type { EditorConsole } from "./console";
 import type { Observed } from "./editor";
 import type { TextureCut, TextureFrames, TextureInfo } from "./plugin";
@@ -47,13 +47,6 @@ export function textureOf(entry: FileEntry): TextureInfo | "unreadable" | null {
   const { id, path, kind } = entry;
   if (typeof kind !== "object" || !("Texture" in kind)) return null;
   return UNREADABLE.test(id) ? "unreadable" : { id, path, meta: kind.Texture };
-}
-
-function decode(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
-  return bytes;
 }
 
 const changedPath = (change: FileChange) => Object.values(change)[0] as { path: string; kind: FileEntry["kind"] };
@@ -137,7 +130,7 @@ export function createTextureAccess(project: ProjectClient, report: EditorConsol
     refresh();
   });
 
-  const bytes = async (path: string) => decode((await project.request({ type: "read_binary", path })).bytes);
+  const bytes = async (path: string) => fromBase64((await project.request({ type: "read_binary", path })).bytes);
   return {
     // Pure: a snapshot getter that `useSyncExternalStore` calls while rendering.
     list: () => snapshot,

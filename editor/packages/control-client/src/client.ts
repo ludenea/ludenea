@@ -163,8 +163,8 @@ export type ClientEvent = Exclude<Event, { type: "render_frames" }> | RenderFram
 
 type Base64Decoder = { fromBase64?(text: string): Uint8Array };
 
-/** The bytes of standard base64 `text`; throws when it is not base64. */
-function fromBase64(text: string): Uint8Array {
+/** The bytes of standard base64 `text`, by the native decoder when the runtime has one; throws when it is not base64. */
+export function fromBase64(text: string): Uint8Array {
   if ((Uint8Array as Base64Decoder).fromBase64) return (Uint8Array as Base64Decoder).fromBase64!(text);
   const binary = atob(text);
   const bytes = new Uint8Array(binary.length);
