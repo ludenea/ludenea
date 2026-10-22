@@ -35,10 +35,12 @@ Play it:
 cargo run --locked --release -p arena -- play examples/arena/assets/arena.scene.ron
 ```
 
-Draw tick 300 of the golden replay to a PNG, offscreen:
+Draw tick 300 of the golden replay to a PNG, offscreen, with the textures of this folder (a
+replay holds no PNG):
 
 ```sh
-cargo run --locked --release -p arena -- render golden/arena.replay --tick 300 --out arena.png
+cargo run --locked --release -p arena -- render golden/arena.replay --project examples/arena \
+  --tick 300 --out arena.png
 ```
 
 Record a replay of 600 ticks of scripted input for two players:

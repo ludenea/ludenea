@@ -80,10 +80,16 @@ jobs:
           cargo run --locked --release -p swarm -- verify play/swarm.replay
           xvfb-run --auto-servernum cargo run --locked --release -p arena -- play examples/arena/assets/arena.scene.ron --players 2 --ticks 600 --record play/arena-native.replay
           cargo run --locked --release -p arena -- verify play/arena-native.replay
-      # A tick of the arena's golden replay drawn offscreen, to look at.
+      # A tick of the arena's golden replay drawn offscreen, to look at. The textures come from
+      # the arena's project folder; a warning (a texture left out, drawn as a placeholder)
+      # fails the step.
       - name: Render the arena
         if: runner.os == 'Linux'
-        run: cargo run --locked --release -p arena -- render golden/arena.replay --tick 300 --out play/arena.png
+        shell: bash
+        run: |
+          mkdir -p play
+          cargo run --locked --release -p arena -- render golden/arena.replay --project examples/arena --tick 300 --out play/arena.png | tee play/render.log
+          ! grep -q '^warning:' play/render.log
       - name: Upload the arena's render
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
