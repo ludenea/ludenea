@@ -33,9 +33,10 @@ pub(crate) enum QueueError {
     #[error("confirmed inputs must arrive in order, the next expected tick is {next}")]
     Gap { next: u64 },
     /// A simulated tick was recorded out of order or after its release. These are local ticks, so
-    /// this is a session bug, and ignoring it would hide a misprediction.
-    #[error("tick {tick} was recorded as simulated, the next expected tick is {next}")]
-    NotNextSimulated { tick: u64, next: u64 },
+    /// this is a session bug, and ignoring it would hide a misprediction. `next` is `None`
+    /// when tick `u64::MAX` is recorded and no tick can follow.
+    #[error("tick {tick} was recorded as simulated, expected {}", describe_next(*next))]
+    NotNextSimulated { tick: u64, next: Option<u64> },
 }
 
 /// The confirmed inputs of one player from a base tick on, and what each tick last ran with.
@@ -49,6 +50,14 @@ pub(crate) struct InputQueue {
     last_confirmed: Option<Vec<u8>>,
     /// The input each simulated tick last ran with, recorded in order from the base.
     used: VecDeque<Vec<u8>>,
+}
+
+/// Words for the next expected tick of a [`QueueError::NotNextSimulated`].
+fn describe_next(next: Option<u64>) -> String {
+    next.map_or_else(
+        || "no tick, the last one is recorded".to_owned(),
+        |tick| format!("tick {tick}"),
+    )
 }
 
 /// Number of held entries as a `u64`; `usize` never exceeds it on a supported target.
@@ -143,7 +152,7 @@ impl InputQueue {
         }
         Err(QueueError::NotNextSimulated {
             tick,
-            next: self.base.saturating_add(recorded),
+            next: self.base.checked_add(recorded),
         })
     }
 
@@ -279,13 +288,19 @@ mod tests {
         let mut q = queue();
         assert_eq!(
             q.record_used(1, &[0]),
-            Err(QueueError::NotNextSimulated { tick: 1, next: 0 })
+            Err(QueueError::NotNextSimulated {
+                tick: 1,
+                next: Some(0)
+            })
         );
         q.record_used(0, &[0]).unwrap();
         for tick in [2, 1 << 32, u64::MAX] {
             assert_eq!(
                 q.record_used(tick, &[0]),
-                Err(QueueError::NotNextSimulated { tick, next: 1 })
+                Err(QueueError::NotNextSimulated {
+                    tick,
+                    next: Some(1)
+                })
             );
         }
         assert_eq!(q.record_used(1, &[0]), Ok(()));
@@ -313,7 +328,10 @@ mod tests {
         assert_eq!(q.input_for(1), None);
         assert_eq!(
             q.record_used(1, &[9]),
-            Err(QueueError::NotNextSimulated { tick: 1, next: 3 })
+            Err(QueueError::NotNextSimulated {
+                tick: 1,
+                next: Some(3)
+            })
         );
         assert_eq!(q.first_misprediction(u64::MAX), None);
         assert_eq!(q.next_confirmed(), Some(3));
@@ -367,5 +385,19 @@ mod tests {
         assert_eq!(q.next_confirmed(), None);
         q.release_before(u64::MAX);
         assert_eq!(q.next_confirmed(), None);
+    }
+
+    #[test]
+    fn nothing_is_expected_after_the_last_tick_is_recorded() {
+        let mut q = queue_at(u64::MAX);
+        q.record_used(u64::MAX, &[1]).unwrap();
+        assert_eq!(
+            q.record_used(0, &[1]),
+            Err(QueueError::NotNextSimulated {
+                tick: 0,
+                next: None
+            })
+        );
+        assert_eq!(q.record_used(u64::MAX, &[2]), Ok(()));
     }
 }
