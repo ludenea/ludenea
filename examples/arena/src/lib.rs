@@ -113,7 +113,10 @@ pub struct FighterSheets {
 impl Default for FighterSheets {
     /// The sheets committed in `assets/`.
     fn default() -> Self {
-        let sheet = |id: &str| Handle::new(asset_id(id));
+        // The constants are fixed hexadecimal literals; the tests load them all.
+        let sheet = |id: &str| {
+            Handle::new(asset_id(id).expect("the sheet constants are hexadecimal identifiers"))
+        };
         FighterSheets {
             warrior: FighterLook {
                 idle: sheet(WARRIOR_IDLE_SHEET),
@@ -142,12 +145,10 @@ impl FighterSheets {
     }
 }
 
-/// The identifier a constant of this crate spells in hexadecimal.
-pub fn asset_id(hexadecimal: &str) -> AssetId {
-    AssetId(
-        u128::from_str_radix(hexadecimal, 16)
-            .unwrap_or_else(|_| panic!("`{hexadecimal}` is not a hexadecimal identifier")),
-    )
+/// The identifier `hexadecimal` spells, as the crate's constants and the `.meta` files write
+/// it; `None` when it is not hexadecimal or does not fit 128 bits.
+pub fn asset_id(hexadecimal: &str) -> Option<AssetId> {
+    u128::from_str_radix(hexadecimal, 16).ok().map(AssetId)
 }
 
 pub struct ArenaPlugin;

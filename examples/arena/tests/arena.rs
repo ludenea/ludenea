@@ -8,11 +8,26 @@ use arena::{
 };
 use ludenea::app::RawGamepad;
 use ludenea::app::project::project_assets;
+use ludenea::ecs::AssetId;
 use ludenea::prelude::*;
 
 const SCENE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/arena.scene.ron");
 /// Within this distance, two positions computed along different float paths agree.
 const EPSILON: f32 = 1e-4;
+
+/// The identifier a constant of the crate spells.
+fn id(hexadecimal: &str) -> AssetId {
+    asset_id(hexadecimal).expect("the crate's identifier constants are hexadecimal")
+}
+
+#[test]
+fn asset_id_refuses_what_is_not_an_identifier() {
+    assert_eq!(id("00ff"), AssetId(0xff));
+    assert_eq!(asset_id("not hexadecimal"), None);
+    assert_eq!(asset_id(""), None);
+    // 33 digits do not fit 128 bits.
+    assert_eq!(asset_id(&"f".repeat(33)), None);
+}
 
 /// The arena scene for `players` players, plus a static box of half extents `half` at
 /// `centre`: the scene has no colliders until its level is built.
@@ -140,11 +155,11 @@ fn one_player_spawns_one_fighter() {
     assert_eq!(seen.body.linear_velocity, Vec2::ZERO);
     assert!(matches!(seen.collider.shape, Shape::Capsule(_)));
     assert_eq!(seen.sprite.layer, "fighters");
-    assert_eq!(seen.animation.sheet.id, asset_id(WARRIOR_IDLE_SHEET));
+    assert_eq!(seen.animation.sheet.id, id(WARRIOR_IDLE_SHEET));
     assert_eq!(seen.animation.clip, "idle");
     assert_eq!(
         seen.sprite.texture,
-        asset_id(WARRIOR_IDLE_TEXTURE),
+        id(WARRIOR_IDLE_TEXTURE),
         "the scene's `FighterSheets` loads the sheets, so the animation plays"
     );
     assert!(seen.fighter.grounded);
@@ -185,8 +200,8 @@ fn two_players_spawn_two_fighters() {
     assert_eq!(all.len(), 2);
     assert_eq!(all[0].position, spawn_point(&simulation, 0));
     assert_eq!(all[1].position, spawn_point(&simulation, 1));
-    assert_eq!(all[0].animation.sheet.id, asset_id(WARRIOR_IDLE_SHEET));
-    assert_eq!(all[1].animation.sheet.id, asset_id(HERO_IDLE_SHEET));
+    assert_eq!(all[0].animation.sheet.id, id(WARRIOR_IDLE_SHEET));
+    assert_eq!(all[1].animation.sheet.id, id(HERO_IDLE_SHEET));
     // Later ticks spawn no more.
     step(
         &mut simulation,
@@ -207,7 +222,7 @@ fn fighter_runs_and_turns_its_sprite() {
     assert!((right.position.x - (start.x + 10.0 * RUN_SPEED)).abs() < EPSILON);
     assert_eq!(right.position.y, start.y);
     assert_eq!(right.animation.clip, "run");
-    assert_eq!(right.animation.sheet.id, asset_id(WARRIOR_RUN_SHEET));
+    assert_eq!(right.animation.sheet.id, id(WARRIOR_RUN_SHEET));
     assert_eq!(right.fighter.facing, 1);
     assert!(!right.sprite.flip_x);
 
@@ -238,7 +253,7 @@ fn fighter_lands_on_a_collider_and_idles() {
     let falling = fighter(&simulation, 0);
     assert!(!falling.fighter.grounded);
     assert_eq!(falling.animation.clip, "fall");
-    assert_eq!(falling.animation.sheet.id, asset_id(WARRIOR_FALL_SHEET));
+    assert_eq!(falling.animation.sheet.id, id(WARRIOR_FALL_SHEET));
 
     step(&mut simulation, &[ArenaInput::default()], 60);
     let landed = fighter(&simulation, 0);
@@ -250,7 +265,7 @@ fn fighter_lands_on_a_collider_and_idles() {
     assert!(landed.fighter.grounded);
     assert_eq!(landed.fighter.velocity, Vec2::ZERO);
     assert_eq!(landed.animation.clip, "idle");
-    assert_eq!(landed.animation.sheet.id, asset_id(WARRIOR_IDLE_SHEET));
+    assert_eq!(landed.animation.sheet.id, id(WARRIOR_IDLE_SHEET));
 }
 
 #[test]
@@ -264,7 +279,7 @@ fn jump_then_fall_switch_sheet_and_clip() {
     let jump_tick = simulation.tick() - 1;
     assert!((jumped.position.y - (ground + JUMP_SPEED)).abs() < EPSILON);
     assert_eq!(jumped.animation.clip, "jump");
-    assert_eq!(jumped.animation.sheet.id, asset_id(WARRIOR_JUMP_SHEET));
+    assert_eq!(jumped.animation.sheet.id, id(WARRIOR_JUMP_SHEET));
     assert_eq!(jumped.animation.started, jump_tick);
     assert!(!jumped.animation.looping);
 
@@ -283,7 +298,7 @@ fn jump_then_fall_switch_sheet_and_clip() {
     }
     let falling = fighter(&simulation, 0);
     assert_eq!(falling.animation.clip, "fall");
-    assert_eq!(falling.animation.sheet.id, asset_id(WARRIOR_FALL_SHEET));
+    assert_eq!(falling.animation.sheet.id, id(WARRIOR_FALL_SHEET));
     assert_eq!(falling.animation.started, simulation.tick() - 1);
 
     step(&mut simulation, &[ArenaInput::default()], 60);
