@@ -16,6 +16,7 @@ pub mod hash;
 pub mod observer;
 pub mod prefab;
 pub mod query;
+pub mod saved;
 pub mod schedule;
 pub mod snapshot;
 pub mod system;
@@ -39,6 +40,7 @@ pub use query::{
     Access, Query, QueryData, QueryError, QueryFilter, ReadOnlyQueryData, With, Without, accesses,
     check_accesses,
 };
+pub use saved::{SavedError, SavedWorld};
 pub use schedule::{
     BuildError, IntoSystemConfig, Schedule, ScheduleBuilder, SystemConfig, SystemInfo, SystemLabel,
 };

@@ -5,6 +5,7 @@ use std::any::{Any, TypeId, type_name};
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use ludenea_schema::TypeSchema;
 use xxhash_rust::xxh3::Xxh3;
@@ -32,12 +33,17 @@ pub(crate) struct AssetType {
     default: Option<fn() -> AssetValue>,
 }
 
-/// One loaded asset: its type's stable name, its value, and its canonical postcard bytes.
+/// One loaded asset: its type's stable name, its value, and its canonical postcard bytes,
+/// both shared so that saving a world clones them cheaply.
+#[derive(Clone)]
 pub(crate) struct LoadedAsset {
     pub(crate) type_name: &'static str,
     pub(crate) value: AssetValue,
-    pub(crate) bytes: Vec<u8>,
+    pub(crate) bytes: Arc<[u8]>,
 }
+
+/// The last version given to an asset map; `0` is the empty map of a new world.
+static ASSETS_VERSION: AtomicU64 = AtomicU64::new(0);
 
 /// An asset its type decoded and validated, not stored yet: `World::decode_asset` runs the
 /// type's own code before `World::insert_decoded_asset` changes the world.
@@ -140,6 +146,7 @@ impl World {
     /// runs the type's own code.
     pub fn insert_decoded_asset(&mut self, asset: DecodedAsset) {
         self.assets.insert(asset.id, asset.asset);
+        self.assets_changed();
     }
 
     /// Inserts or replaces the asset `id` from a RON text of the type `type_name`, refused
@@ -163,7 +170,7 @@ impl World {
     /// The type name and canonical postcard bytes of the loaded asset `id`.
     pub fn asset_bytes(&self, id: AssetId) -> Option<(&str, Vec<u8>)> {
         let asset = self.assets.get(&id)?;
-        Some((asset.type_name, asset.bytes.clone()))
+        Some((asset.type_name, asset.bytes.to_vec()))
     }
 
     /// The loaded asset `id` as a single-line RON string.
@@ -176,6 +183,7 @@ impl World {
     /// Unloads every asset.
     pub fn clear_assets(&mut self) {
         self.assets.clear();
+        self.assets_changed();
     }
 
     /// xxh3 over each loaded asset, in identifier order: its identifier as 16 little-endian
@@ -195,6 +203,15 @@ impl World {
             .into_iter()
             .map(|decoded| (decoded.id, decoded.asset))
             .collect();
+        self.assets_changed();
+    }
+
+    /// Gives the asset map a version no asset map of this process had before, so that two
+    /// maps of the same version, in any worlds, hold the same assets: a save or a load
+    /// copies the map only when the versions differ. Every change to `assets` calls it.
+    fn assets_changed(&mut self) {
+        // Relaxed: the counter orders nothing else, it only has to give each call a new value.
+        self.assets_version = ASSETS_VERSION.fetch_add(1, Ordering::Relaxed) + 1;
     }
 
     fn store_asset(
@@ -205,6 +222,7 @@ impl World {
     ) -> Result<(), EcsError> {
         let (id, asset) = self.loaded(id, type_name, decoded)?;
         self.assets.insert(id, asset);
+        self.assets_changed();
         Ok(())
     }
 
@@ -231,7 +249,7 @@ impl World {
             LoadedAsset {
                 type_name: name,
                 value,
-                bytes,
+                bytes: bytes.into(),
             },
         ))
     }

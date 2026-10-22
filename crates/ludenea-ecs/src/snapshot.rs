@@ -132,7 +132,7 @@ impl World {
             assets: self
                 .assets
                 .iter()
-                .map(|(&id, asset)| (id, asset.type_name.to_string(), asset.bytes.clone()))
+                .map(|(&id, asset)| (id, asset.type_name.to_string(), asset.bytes.to_vec()))
                 .collect(),
             fingerprint: 0,
         }

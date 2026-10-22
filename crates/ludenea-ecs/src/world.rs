@@ -7,7 +7,7 @@ use ludenea_schema::{Schema, TypeSchema};
 use crate::assets::{AssetType, LoadedAsset};
 use crate::commands::CommandQueue;
 use crate::event::{Event, EventQueue};
-use crate::{AssetId, Codec, Component, EcsError, EntitiesState, Entity, Resource};
+use crate::{AssetId, Codec, Component, EcsError, EntitiesState, Entity, Resource, SavedError};
 
 /// Type-erased access to one component storage.
 pub(crate) trait Storage {
@@ -26,6 +26,13 @@ pub(crate) trait Storage {
     fn insert_boxed(&mut self, index: u32, value: Box<dyn Any + Send>);
     /// Replaces every component with `values`, each a boxed `T` from this type's codec.
     fn replace_all(&mut self, values: Vec<(u32, Box<dyn Any + Send>)>);
+    /// Copies every component into `into`, reusing its buffer when it holds this type.
+    fn clone_into(&self, into: &mut Option<Box<dyn Storage + Send>>);
+    /// Fails with `SavedError::TypeMismatch` unless `saved` stores this type.
+    fn check_saved(&self, saved: &dyn Storage) -> Result<(), SavedError>;
+    /// Replaces every component with a copy of those of `saved`, which `check_saved`
+    /// accepted.
+    fn load_from(&mut self, saved: &dyn Storage);
 }
 
 /// Components of one type, indexed by entity index.
@@ -80,6 +87,29 @@ impl<T: Component> Storage for ComponentStorage<T> {
             self.insert_boxed(index, value);
         }
     }
+
+    fn clone_into(&self, into: &mut Option<Box<dyn Storage + Send>>) {
+        let slots = self.0.borrow();
+        match into
+            .as_mut()
+            .and_then(|saved| saved.as_any_mut().downcast_mut::<Self>())
+        {
+            Some(saved) => saved.0.get_mut().clone_from(&slots),
+            None => *into = Some(Box::new(Self(RefCell::new(slots.clone())))),
+        }
+    }
+
+    fn check_saved(&self, saved: &dyn Storage) -> Result<(), SavedError> {
+        check_saved_type::<Self>(saved.as_any(), T::NAME)
+    }
+
+    fn load_from(&mut self, saved: &dyn Storage) {
+        let saved = saved
+            .as_any()
+            .downcast_ref::<Self>()
+            .expect("accepted by `check_saved`");
+        self.0.get_mut().clone_from(&saved.0.borrow());
+    }
 }
 
 /// Type-erased access to one resource, stored as a `RefCell<T>`.
@@ -89,6 +119,12 @@ pub(crate) trait ResourceCell {
     fn value(&self) -> Ref<'_, dyn Any>;
     /// Replaces the value with `value`, a boxed `T` from this type's codec.
     fn set(&mut self, value: Box<dyn Any + Send>);
+    /// Copies the value into `into`, reusing its allocations when it holds this type.
+    fn clone_into(&self, into: &mut Option<Box<dyn ResourceCell + Send>>);
+    /// Fails with `SavedError::TypeMismatch` unless `saved` holds this type.
+    fn check_saved(&self, saved: &dyn ResourceCell) -> Result<(), SavedError>;
+    /// Replaces the value with a copy of that of `saved`, which `check_saved` accepted.
+    fn load_from(&mut self, saved: &dyn ResourceCell);
 }
 
 impl<T: Resource> ResourceCell for RefCell<T> {
@@ -106,6 +142,40 @@ impl<T: Resource> ResourceCell for RefCell<T> {
 
     fn set(&mut self, value: Box<dyn Any + Send>) {
         *self.get_mut() = *downcast::<T>(value);
+    }
+
+    fn clone_into(&self, into: &mut Option<Box<dyn ResourceCell + Send>>) {
+        let value = self.borrow();
+        match into
+            .as_mut()
+            .and_then(|saved| saved.as_any_mut().downcast_mut::<Self>())
+        {
+            Some(saved) => saved.get_mut().clone_from(&value),
+            None => *into = Some(Box::new(RefCell::new(value.clone()))),
+        }
+    }
+
+    fn check_saved(&self, saved: &dyn ResourceCell) -> Result<(), SavedError> {
+        check_saved_type::<Self>(saved.as_any(), T::NAME)
+    }
+
+    fn load_from(&mut self, saved: &dyn ResourceCell) {
+        let saved = saved
+            .as_any()
+            .downcast_ref::<Self>()
+            .expect("accepted by `check_saved`");
+        self.get_mut().clone_from(&saved.borrow());
+    }
+}
+
+/// Fails with `SavedError::TypeMismatch` naming `name` unless `saved` is a `S`.
+fn check_saved_type<S: 'static>(saved: &dyn Any, name: &str) -> Result<(), SavedError> {
+    if saved.is::<S>() {
+        Ok(())
+    } else {
+        Err(SavedError::TypeMismatch {
+            name: name.to_string(),
+        })
     }
 }
 
@@ -141,6 +211,8 @@ pub struct World {
     pub(crate) asset_types: BTreeMap<&'static str, AssetType>,
     /// Loaded assets: hashed (only when not empty) and snapshotted, never written by systems.
     pub(crate) assets: BTreeMap<AssetId, LoadedAsset>,
+    /// Identifies the content of `assets`; see `World::assets_changed`.
+    pub(crate) assets_version: u64,
     /// Never hashed, snapshotted, or iterated; each value is a `RefCell<T>`.
     runtime: BTreeMap<TypeId, Box<dyn Any + Send>>,
     /// Events of the current tick, keyed by stable name; each value is a `RefCell<Vec<T>>`.

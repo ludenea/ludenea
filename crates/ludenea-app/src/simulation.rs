@@ -8,7 +8,8 @@ use ludenea_math::Vec2;
 
 use ludenea_ecs::schema::TypeSchema;
 use ludenea_ecs::{
-    HashTree, Schedule, ScheduleObserver, Snapshot, SnapshotError, SystemInfo, World, hash_value,
+    HashTree, SavedError, SavedWorld, Schedule, ScheduleObserver, Snapshot, SnapshotError,
+    SystemInfo, World, hash_value,
 };
 
 use crate::app::EditorHooks;
@@ -49,6 +50,31 @@ pub enum SimError {
     /// The asset type is not registered, or has no default value.
     #[error(transparent)]
     AssetDefault(Box<EcsError>),
+}
+
+/// The simulation state saved in memory by `Simulation::save_state`, stamped with the
+/// schema fingerprint of the simulation that saved it. Saving into the same `SavedState`
+/// again reuses its allocations.
+#[derive(Default)]
+pub struct SavedState {
+    /// `None` until a simulation saves into it.
+    fingerprint: Option<u64>,
+    world: SavedWorld,
+}
+
+/// Why `Simulation::load_state` refused a saved state; the simulation is unchanged.
+#[derive(Debug, thiserror::Error)]
+pub enum StateError {
+    #[error(
+        "nothing was saved into this saved state; save the simulation into it before loading it"
+    )]
+    Empty,
+    #[error(
+        "the state was saved by another game build (schema fingerprint {saved:016x}, this simulation has {current:016x}); load it into the simulation that saved it"
+    )]
+    OtherWorld { saved: u64, current: u64 },
+    #[error(transparent)]
+    World(#[from] SavedError),
 }
 
 /// A built app: the world and its schedule, stepped one fixed tick at a time.
@@ -321,6 +347,27 @@ impl Simulation {
 
     pub fn restore(&mut self, snapshot: &Snapshot) -> Result<(), SnapshotError> {
         self.world.restore(snapshot)
+    }
+
+    /// Saves the simulation state into `into`, reusing its allocations: far cheaper than
+    /// `snapshot`, for a rollback that saves every tick.
+    pub fn save_state(&self, into: &mut SavedState) {
+        into.fingerprint = Some(self.initial.fingerprint);
+        self.world.save_into(&mut into.world);
+    }
+
+    /// Loads a state `save_state` saved, as `restore` restores a snapshot: queued commands
+    /// and events are dropped, runtime resources kept. Refuses a state never saved into or
+    /// saved by another simulation, before changing anything.
+    pub fn load_state(&mut self, saved: &SavedState) -> Result<(), StateError> {
+        let fingerprint = saved.fingerprint.ok_or(StateError::Empty)?;
+        if fingerprint != self.initial.fingerprint {
+            return Err(StateError::OtherWorld {
+                saved: fingerprint,
+                current: self.initial.fingerprint,
+            });
+        }
+        Ok(self.world.load(&saved.world)?)
     }
 
     /// Replaces the `Parallel` runtime resource with a pool of `threads`, from 1 to

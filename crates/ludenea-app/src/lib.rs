@@ -33,5 +33,5 @@ pub use prefab::{InstanceInfo, PREFAB_VERSION, Resolved, ResolvedEntity, resolve
 pub use raw_input::{RawGamepad, RawInput};
 pub use rng::Rng;
 pub use scene::{LoadAddress, SceneError, SceneLoad};
-pub use simulation::{SimError, Simulation};
+pub use simulation::{SavedState, SimError, Simulation, StateError};
 pub use time::Time;
