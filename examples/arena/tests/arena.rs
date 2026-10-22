@@ -447,6 +447,66 @@ fn fighter_below_the_level_respawns_at_its_spawn_point() {
     assert_eq!(falling.animation.clip, "fall");
 }
 
+/// Despawns the spawn points of `players`, as an editor deleting them during a match does.
+fn remove_spawn_points(simulation: &mut Simulation, players: &[u8]) {
+    let world = simulation.world_mut();
+    let doomed: Vec<Entity> = world
+        .entities()
+        .filter(|&entity| {
+            world
+                .get::<SpawnPoint>(entity)
+                .is_some_and(|point| players.contains(&point.player))
+        })
+        .collect();
+    assert_eq!(doomed.len(), players.len(), "one spawn point per player");
+    for entity in doomed {
+        world.despawn(entity).unwrap();
+    }
+}
+
+#[test]
+fn fighter_without_its_spawn_point_respawns_at_the_first_one() {
+    let mut simulation = arena(2, &[]);
+    let idle = [ArenaInput::default(), ArenaInput::default()];
+    step(&mut simulation, &idle, 1);
+    let first = spawn_point(&simulation, 0);
+    remove_spawn_points(&mut simulation, &[1]);
+    for _ in 0..200 {
+        step(&mut simulation, &idle, 1);
+        let seen = fighter(&simulation, 1);
+        assert!(
+            seen.position.y >= KILL_Y,
+            "ends no tick below the kill line"
+        );
+        if seen.position == first {
+            return;
+        }
+    }
+    panic!("player 1's fighter never came back to the first spawn point");
+}
+
+#[test]
+fn fighter_without_any_spawn_point_is_despawned_below_the_level() {
+    let mut simulation = arena(2, &[]);
+    let idle = [ArenaInput::default(), ArenaInput::default()];
+    step(&mut simulation, &idle, 1);
+    remove_spawn_points(&mut simulation, &[0, 1]);
+    for _ in 0..200 {
+        step(&mut simulation, &idle, 1);
+        let all = fighters(&simulation);
+        assert!(
+            all.iter().all(|seen| seen.position.y >= KILL_Y),
+            "ends no tick below the kill line"
+        );
+        if all.is_empty() {
+            // The camera keeps its last framing rather than following nothing.
+            step(&mut simulation, &idle, 1);
+            return;
+        }
+    }
+    panic!("the fighters fell below the level and were not despawned");
+}
+
 #[test]
 fn camera_frames_both_fighters_and_keeps_its_minimum_view() {
     let mut simulation = arena(2, &[floor(0.0)]);

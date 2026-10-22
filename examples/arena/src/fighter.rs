@@ -174,8 +174,9 @@ fn free(gap: f32) -> f32 {
 }
 
 /// Moves each fighter by the velocity `sense_fighters` allowed. One that ends below `KILL_Y`
-/// returns to the first spawn point of its player, at rest and not interpolated; without a
-/// spawn point it stays where it fell.
+/// returns to the first spawn point of its player, else to the first spawn point of any
+/// player (the editor can delete or reassign spawn points during a match), at rest and not
+/// interpolated. Without any spawn point it is despawned, so it does not fall forever.
 ///
 /// One query holds both, since the spawn points' and the fighters' `Pose` are the same
 /// storage.
@@ -200,7 +201,9 @@ pub(crate) fn move_fighters(
         if pose.position.y >= KILL_Y {
             continue;
         }
-        let Some(&(_, spawn)) = spawns.iter().find(|(player, _)| *player == fighter.player) else {
+        let own = spawns.iter().find(|(player, _)| *player == fighter.player);
+        let Some(&(_, spawn)) = own.or(spawns.first()) else {
+            commands.despawn(entity);
             continue;
         };
         pose.position = spawn;

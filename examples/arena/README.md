@@ -16,7 +16,8 @@ through any collider and stands only on a surface its feet are on or above, so a
 does not clear a platform drops back through it. Between those three heights, an obstacle
 thinner than the gap between two rays (0.6 units) does not stop a run. A fighter whose feet fall below `KILL_Y`
 (y = -19, 10 units under the bottom of the scene's tilemap, which spans y -9 to 9) returns
-to its spawn point at rest. The scene's `arena::FighterSheets` resource
+to its spawn point at rest, or to the first spawn point when its own is gone; with no spawn
+point left, it is removed. The scene's `arena::FighterSheets` resource
 names the fighters' sprite sheets, so loading the scene loads them: any arena scene must
 list it, or the fighters spawn without art.
 
