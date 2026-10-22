@@ -298,14 +298,14 @@ native process:
 LUDENEA_ENGINE_PATH=$PWD pnpm -C editor/apps/desktop tauri dev -- -- ~/games/my_game
 ```
 
-Measure the desktop editor's frame times, unattended: the command builds the desktop
-application in release, opens a copy of `examples/swarm` in it (made with `ludenea new` in a
+Measure the desktop editor's frame times, unattended: the command builds the renderer and the
+desktop application in release, opens a copy of `examples/swarm` in it (made with `ludenea new` in a
 temporary directory, so the example gains no files), plays the scene for 10 seconds with the
 viewport shown through the game camera, prints the 50th, 95th and 99th percentiles of the time
 between animation frames, and fails when the 95th percentile is above 20 ms, when the game
-pushed no render frames, or when the scene cannot load. Build the renderer first
-(`pnpm -C editor build:render`); the window must stay on screen, since a hidden window draws
-no frames: the command fails at once on a locked screen, and the measurement fails after 5
+pushed no render frames, when the editor console reports an error during play (such as a frame
+the viewport cannot draw), or when the scene cannot load. The window must stay on screen,
+since a hidden window draws no frames: the command fails at once on a locked screen, and the measurement fails after 5
 seconds without an animation frame. The editor measures only when launched with
 `LUDENEA_FRAME_TIMES` set to the file its report goes to, then exits:
 

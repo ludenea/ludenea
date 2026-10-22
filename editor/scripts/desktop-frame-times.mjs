@@ -1,10 +1,11 @@
-// Measures the desktop editor's frame times on the swarm, unattended: builds the desktop
-// application, opens a copy of `examples/swarm` in it (a project made by `ludenea new` with the
-// swarm's sources and assets, as the end-to-end tests make it, so the example itself gains no
-// files) with `LUDENEA_FRAME_TIMES`, which plays the scene
-// for 10 seconds with the viewport shown through the game camera and writes the time between
+// Measures the desktop editor's frame times on the swarm, unattended: builds the renderer and
+// the desktop application, opens a copy of `examples/swarm` in it (a project made by
+// `ludenea new` with the swarm's sources and assets, as the end-to-end tests make it, so the
+// example itself gains no files) with `LUDENEA_FRAME_TIMES`, which plays the scene for 10
+// seconds with the viewport shown through the game camera and writes the time between
 // animation frames, then prints their percentiles. Fails when the 95th percentile is above
-// 20 ms, when the game pushed no render frames, or when the editor reports an error.
+// 20 ms, when the game pushed no render frames, or when the editor reports an error (the
+// viewport reports there a frame its renderer cannot draw).
 //
 //   pnpm -C editor measure:desktop
 //
@@ -89,6 +90,8 @@ function measure() {
 try {
   if (screenLocked()) throw new Error("the screen is locked: unlock it, since the editor window must be on screen to draw frames");
   execFileSync("cargo", ["build", "--locked", "-p", "ludenea-serve"], { cwd: repository, stdio: "inherit" });
+  // A renderer older than the frame encoding would draw nothing.
+  execFileSync("pnpm", ["build:render"], { cwd: join(repository, "editor"), stdio: "inherit" });
   // `tauri build` builds the front end, then the backend in release with the front end inside.
   execFileSync("pnpm", ["exec", "tauri", "build", "--no-bundle", "--", "--locked"], { cwd: desktop, stdio: "inherit" });
   const { line, failed } = frameTimesVerdict(await measure(), "desktop editor, swarm");
