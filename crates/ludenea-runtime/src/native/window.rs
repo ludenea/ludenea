@@ -14,7 +14,7 @@ use ludenea_app::App;
 use ludenea_app::players::{
     Claim, LiveDevices, Lobby, LobbyEvent, LobbyPress, MAX_LOCAL_PLAYERS, automatic_claims,
 };
-use ludenea_app::project::ProjectTexture;
+use ludenea_app::project::{ProjectTexture, ProjectTextures};
 use ludenea_control::ConsoleLevel;
 use ludenea_draw::frame::RenderFrame;
 use ludenea_render::gpu::{Overlay, Renderer, for_surface};
@@ -242,12 +242,10 @@ impl<'out> Session<'out> {
         let (Some(watch), Some(display)) = (&mut self.watch, &mut self.display) else {
             return;
         };
-        let warnings = match watch.poll() {
-            None => return,
-            Some(Ok(update)) => display.replace_textures(&update),
-            Some(Err(error)) => vec![format!("{error}; the textures drawn stay")],
+        let Some(polled) = watch.poll() else {
+            return;
         };
-        for warning in warnings {
+        for warning in reload(polled, |update| display.replace_textures(update)) {
             self.warn(&warning);
         }
     }
@@ -522,6 +520,18 @@ impl<'out> Session<'out> {
     }
 }
 
+/// The warnings of a texture reload: `replace`'s for a reading of the textures, else the
+/// reading's failure, the textures drawn staying.
+fn reload(
+    polled: Result<ProjectTextures, String>,
+    replace: impl FnOnce(&ProjectTextures) -> Vec<String>,
+) -> Vec<String> {
+    match polled {
+        Ok(update) => replace(&update),
+        Err(error) => vec![format!("{error}; the textures drawn stay")],
+    }
+}
+
 /// How the loop gets its next frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Pace {
@@ -710,6 +720,62 @@ mod tests {
         session.key(KeyCode::KeyD, pressed, false).unwrap();
         let held: Vec<&str> = session.keys.iter().map(String::as_str).collect();
         assert_eq!(held, ["Enter", "KeyD"]);
+    }
+
+    #[test]
+    fn a_failed_reading_of_the_textures_is_a_warning() {
+        let warnings = reload(Err("two textures share 1".to_string()), |_| {
+            panic!("nothing to replace")
+        });
+        assert_eq!(warnings, ["two textures share 1; the textures drawn stay"]);
+        let update = ProjectTextures::default();
+        let warnings = reload(Ok(update.clone()), |given| {
+            assert_eq!(given, &update);
+            vec!["replaced".to_string()]
+        });
+        assert_eq!(warnings, ["replaced"]);
+    }
+
+    #[test]
+    fn a_watcher_that_cannot_start_is_a_warning() {
+        let options = PlayOptions {
+            files: GameFiles {
+                scene: "Scene(version: 2, next_id: 0, resources: {}, entities: [])".to_string(),
+                assets: Vec::new(),
+                edits: None,
+            },
+            textures: Vec::new(),
+            // An empty path has no folder to watch.
+            watch: Some((PathBuf::new(), None)),
+            players: Some(1),
+            ticks: None,
+            record: None,
+            fullscreen: false,
+            vsync: true,
+            stats: false,
+            threads: None,
+            debug_layers: Vec::new(),
+            size: (64, 64),
+            title: "test".to_string(),
+        };
+        let runner = Runner::load(swarm::app, &options.files, None, Vec::new()).unwrap();
+        let mut out = Vec::new();
+        let session = Session::new(runner, options, &mut out);
+        assert!(session.watch.is_none());
+        drop(session);
+        let out = String::from_utf8(out).unwrap();
+        let warning = out
+            .lines()
+            .find(|line| line.contains("textures"))
+            .unwrap_or_else(|| panic!("no warning in {out}"));
+        assert!(
+            warning.starts_with("warning: cannot watch the textures: cannot locate "),
+            "{warning}"
+        );
+        assert!(
+            warning.ends_with("; textures are not reloaded"),
+            "{warning}"
+        );
     }
 
     #[test]

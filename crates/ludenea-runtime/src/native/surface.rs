@@ -1260,6 +1260,41 @@ mod tests {
     }
 
     #[test]
+    fn a_device_lost_while_replacing_draws_the_new_textures_on_a_new_device() {
+        let opened = Rc::new(RefCell::new(Vec::new()));
+        let mut display = textured(&[hero(solid(RED))], &opened);
+        let runner = still_game();
+        assert_eq!(centre(&mut display, &runner), RED);
+        lose(&opened.borrow()[0]);
+        let warnings = display.replace_textures(&update(vec![hero(solid(BLUE))], Vec::new()));
+        assert!(
+            warnings.is_empty(),
+            "the next frame reports the loss: {warnings:?}"
+        );
+        assert_eq!(centre(&mut display, &runner), BLUE);
+        assert_eq!(opened.borrow().len(), 2, "a new device opened");
+    }
+
+    #[test]
+    fn an_upload_the_gpu_refuses_keeps_the_previous_textures() {
+        let opened = Rc::new(RefCell::new(Vec::new()));
+        let mut display = textured(&[hero(solid(RED))], &opened);
+        let runner = still_game();
+        assert_eq!(centre(&mut display, &runner), RED);
+        raise_error(&opened.borrow()[0]);
+        let warnings = display.replace_textures(&update(vec![hero(solid(BLUE))], Vec::new()));
+        let [warning] = warnings.as_slice() else {
+            panic!("{warnings:?}")
+        };
+        assert!(
+            warning
+                .starts_with("cannot upload the changed textures, the previous ones stay drawn: "),
+            "{warning}"
+        );
+        assert_eq!(centre(&mut display, &runner), RED);
+    }
+
+    #[test]
     fn invalid_meta_keeps_the_previous_texture() {
         let opened = Rc::new(RefCell::new(Vec::new()));
         let mut display = textured(&[hero(solid(RED))], &opened);
