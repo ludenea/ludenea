@@ -279,7 +279,12 @@ struct Remote {
     /// Twice the corrections of the latest fresh reports, at most [`SYNC_MIN_REPORTS`]: each
     /// `local_advantage - remote_advantage`, the ticks this session should skip by the report
     /// being half of it. Kept doubled so their mean is rounded once, not each of them. Cleared
-    /// by every skip, so a correction never acts twice on the same evidence.
+    /// by every skip, so no report counted before a skip counts after it. The reports after a
+    /// skip still lag it: the peer's `remote_advantage` reflects the state before the skip
+    /// until the peer has heard of it, about one [`QUALITY_INTERVAL_MICROS`] plus a round trip.
+    /// That lag is inherent to GGPO-style synchronization; ignoring the reports for that long
+    /// leaves the drift uncorrected for too long and was measured to break the gap the
+    /// synchronization keeps.
     corrections: VecDeque<i64>,
 }
 
@@ -675,6 +680,10 @@ impl Session {
             SessionState::Ended(_) => false,
         };
         let running = !matches!(self.state, SessionState::Ended(_));
+        // Before its first report and round trip from a peer, the session sends an advantage of
+        // 0, which the peer cannot tell from a measured 0: the format is frozen. The bias is
+        // negligible: it lasts one round trip at the start of a match, and the peer's
+        // correction averages it with later reports.
         let advantages: Vec<i32> = (0..self.remotes.len())
             .map(|index| self.advantage(index, now).unwrap_or(0))
             .collect();
