@@ -155,7 +155,10 @@ hash, those of the golden trace and replays included.
   tick for `END_LINGER_MICROS` (500 ms); a received `End` ends the receiver with the same
   reason, the new `EndReason::Lost { peer }` and `EndReason::LocalFailure { tick }` included,
   a desync with the view of the peer that found it (its hash as `local`, the differing peer
-  and that peer's hash). A mismatch found once running has no end notice and is not relayed.
+  and that peer's hash). A notice no honest peer can send is `ViolationRule::ImplausibleEnd`:
+  one naming a peer outside the match, a desync of a tick past the local horizon plus one, or
+  a game failure past that plus `rollback_window - 1`. A mismatch found once running has no
+  end notice and is not relayed.
 - `ludenea_render` answers without a GPU what the renderer draws: `atlas::frames_of(png,
   meta)` gives the `TextureFrames` (the image size and each `FrameRect`, row-major, with its
   pivot) a meta cuts a PNG into, the same cut `pack` makes, or a `FramesError` (`Decode`,

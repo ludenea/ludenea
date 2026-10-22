@@ -141,6 +141,10 @@ pub enum ViolationRule {
     /// hash by more than an honest peer can (see [`Session`]'s hash lag bounds). They bound
     /// the local reports a session keeps and the states its caller keeps for them.
     HashLagging,
+    /// An end notice no honest peer can send: one naming a peer outside the match, a desync
+    /// of a tick past the local horizon plus one, or a game failure past the furthest tick an
+    /// honest peer steps.
+    ImplausibleEnd,
 }
 
 /// Why a received packet, or one message of it, was dropped. Ordered, so the counts of
@@ -664,7 +668,10 @@ impl Session {
                     }
                 }
                 Message::End { reason } => {
-                    self.end_by_notice(now, reason);
+                    match self.check_notice(reason) {
+                        Ok(()) => self.end_by_notice(now, reason),
+                        Err(refusal) => self.refuse(now, from, refusal),
+                    }
                     return;
                 }
                 _ if self.state == SessionState::Connecting => before_running = true,
@@ -1770,6 +1777,41 @@ impl Session {
         };
         self.state = SessionState::Ended(reason);
         self.ended_micros = Some(now);
+    }
+
+    /// Checks that an honest peer can send `notice`, or refuses it as
+    /// [`ViolationRule::ImplausibleEnd`], naming its tick when it has one. A peer it names
+    /// must be one of the match. A desync is of a tick whose hash was final on the sender,
+    /// which needs the local input of the tick before: at most the local horizon plus one, as
+    /// for [`ViolationRule::HashBeyondHorizon`]. A game fails while stepping a tick its
+    /// session ran, which is below the sender's tick, at most `rollback_window - 1` past its
+    /// confirmed tick, itself at most the local horizon plus one.
+    fn check_notice(&self, notice: EndNotice) -> Result<(), Refusal> {
+        let implausible = |tick| {
+            Err(Refusal::Violation {
+                player: None,
+                tick,
+                rule: ViolationRule::ImplausibleEnd,
+            })
+        };
+        let of_match = |peer: PeerId| {
+            peer == self.settings.local || self.remotes.iter().any(|remote| remote.id == peer)
+        };
+        // Validated to be at least one.
+        let window = u64::from(self.settings.identity.rules.rollback_window);
+        match notice {
+            EndNotice::Desync { tick, peer, .. } if !of_match(peer) => implausible(Some(tick)),
+            EndNotice::Desync { tick, .. } if tick > self.after_horizon() => {
+                implausible(Some(tick))
+            }
+            EndNotice::Lost { peer } if !of_match(peer) => implausible(None),
+            EndNotice::LocalFailure { tick }
+                if tick > self.after_horizon().saturating_add(window - 1) =>
+            {
+                implausible(Some(tick))
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Ends the session for the reason an end notice tells, which is not relayed again.

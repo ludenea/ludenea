@@ -443,7 +443,7 @@ fn ticks_near_u64_max_never_panic() {
             Message::End {
                 reason: EndNotice::LocalFailure { tick: u64::MAX },
             },
-            SessionState::Ended(EndReason::LocalFailure { tick: u64::MAX }),
+            violation(1, None, Some(u64::MAX), ViolationRule::ImplausibleEnd),
         ),
         (
             Message::End {
@@ -454,12 +454,7 @@ fn ticks_near_u64_max_never_panic() {
                     remote: 0,
                 },
             },
-            SessionState::Ended(EndReason::Desync {
-                tick: u64::MAX,
-                peer: PeerId(u8::MAX),
-                local: u64::MAX,
-                remote: 0,
-            }),
+            violation(1, None, Some(u64::MAX), ViolationRule::ImplausibleEnd),
         ),
     ];
     for (message, state) in cases {
@@ -776,6 +771,7 @@ fn fuzz_receive_never_panics() {
         "ConflictingInput",
         "Desync",
         "HashBeyondHorizon",
+        "ImplausibleEnd",
         "InvalidInput",
         "LocalFailure",
         "Lost",

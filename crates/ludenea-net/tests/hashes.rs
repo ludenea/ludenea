@@ -784,6 +784,55 @@ fn end_notice_ends_the_receiver_with_the_same_reason() {
 }
 
 #[test]
+fn implausible_end_notices_are_violations() {
+    // At tick 28, the local horizon plus one is 30: no honest peer has a final hash of a
+    // later tick, and it steps no tick past 30 + rollback_window - 1 = 37.
+    let ticks = INTERVAL - 2;
+    let desync = |tick, peer| EndNotice::Desync {
+        tick,
+        peer: PeerId(peer),
+        local: 7,
+        remote: 8,
+    };
+    let accepted = [
+        desync(INTERVAL, 0),
+        EndNotice::LocalFailure { tick: 37 },
+        EndNotice::Lost { peer: PeerId(1) },
+    ];
+    for notice in accepted {
+        let mut driven = Driven::at(ticks);
+        driven.receive(vec![Message::End { reason: notice }]);
+        let state = driven.session.state();
+        assert!(
+            matches!(state, SessionState::Ended(EndReason::Desync { .. }))
+                || matches!(state, SessionState::Ended(EndReason::LocalFailure { .. }))
+                || matches!(state, SessionState::Ended(EndReason::Lost { .. })),
+            "{notice:?}: {state:?}"
+        );
+    }
+    let refused = [
+        (desync(INTERVAL + 1, 0), Some(INTERVAL + 1)),
+        (desync(INTERVAL, 2), Some(INTERVAL)),
+        (EndNotice::LocalFailure { tick: 38 }, Some(38)),
+        (EndNotice::Lost { peer: PeerId(2) }, None),
+    ];
+    for (notice, tick) in refused {
+        let mut driven = Driven::at(ticks);
+        driven.receive(vec![Message::End { reason: notice }]);
+        assert_eq!(
+            driven.session.state(),
+            SessionState::Ended(EndReason::Violation {
+                peer: PeerId(1),
+                player: None,
+                tick,
+                rule: ViolationRule::ImplausibleEnd,
+            }),
+            "{notice:?}"
+        );
+    }
+}
+
+#[test]
 fn identity_change_while_running_is_not_relayed() {
     // No end notice tells of a mismatch: the peer that changed its identity is the one at
     // fault, and the other peers find it themselves or stop hearing from this one.
