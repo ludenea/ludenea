@@ -1,4 +1,4 @@
-import { ProtocolFailure, type Entity, type LayerInfo } from "@ludenea/control-client";
+import { ProtocolFailure, type ControlClient, type Entity, type LayerInfo } from "@ludenea/control-client";
 import { definePlugin, type Disposable, type Editor, type ViewportTool } from "@ludenea/editor-shell";
 import { createStore, type Store } from "../shared";
 import { same } from "../viewport/camera";
@@ -39,6 +39,21 @@ export const tilemapPlugin = definePlugin({
   activate(editor) {
     const state: TilemapState = createStore({ target: null as PaintTarget | null, tile: null as number | null });
 
+    // The game's render layers, read once per game: it declares them as it is built, and they
+    // do not change while it runs. A read that fails is tried again on the next selection.
+    let layers: { control: ControlClient; read: Promise<LayerInfo[]> } | null = null;
+    const layersOf = (control: ControlClient) => {
+      if (layers?.control !== control) {
+        const read = control.request({ type: "get_render_frame", debug_layers: [] }).then(({ frame }) => frame.layers);
+        const entry = { control, read };
+        layers = entry;
+        read.catch(() => {
+          if (layers === entry) layers = null;
+        });
+      }
+      return layers.read;
+    };
+
     // The selection is read again on every change; `loads` drops the answers of an older one.
     let loads = 0;
     let watch: Disposable | null = null;
@@ -55,7 +70,7 @@ export const tilemapPlugin = definePlugin({
         if (number === loads) editor.console.report(error, `Reading the selected entity ${entity.index}v${entity.generation} for tilemap painting`);
       };
       // Both components as the game last reported them, undefined until the entity is read; the
-      // game's layers, read once per selection once it has a tilemap.
+      // game's layers, once it has a tilemap.
       let tilemap: Tilemap | null | undefined;
       let pose: Pose | null | undefined;
       let declared: LayerInfo[] | null = null;
@@ -64,8 +79,8 @@ export const tilemapPlugin = definePlugin({
         if (number !== loads) return;
         if (tilemap && !declared && !reading) {
           reading = true;
-          control.request({ type: "get_render_frame", debug_layers: [] }).then(({ frame }) => {
-            declared = frame.layers;
+          layersOf(control).then((read) => {
+            declared = read;
             update();
           }, failed);
         }

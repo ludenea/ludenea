@@ -55,7 +55,7 @@ async function painting(options: { refuse?: string; read?: (command: Command) =>
     if (request.type === "read_binary") return { type: "bytes", bytes: btoa(request.path as string) };
     return undefined;
   });
-  const game = await testGame((command: Command) => {
+  const answer = (command: Command) => {
     const read = options.read?.(command);
     if (read) return read;
     if (command.type === "get_entity") {
@@ -66,11 +66,12 @@ async function painting(options: { refuse?: string; read?: (command: Command) =>
     if (command.type === "get_render_frame") return { type: "render_frame", frame: { ...renderFrame(0).frame, layers: LAYERS() } };
     if (command.type === "paint_tiles" && options.refuse) return { error: { code: "invalid_command", message: options.refuse } };
     return { type: "done" };
-  });
+  };
+  const game = await testGame(answer);
   act(() => host.setControl(game.client));
   renderPanel(host, "ludenea.tile-palette");
   await settle();
-  return { host, game };
+  return { host, game, answer };
 }
 
 async function select(host: Awaited<ReturnType<typeof painting>>["host"], entity: Entity) {
@@ -401,12 +402,20 @@ describe("tilemap painting", () => {
     expect(screen.queryByText(/not in this tileset/)).toBeNull();
   });
 
-  it("the_layer_parallax_is_read_again_on_each_selection", async () => {
-    const { host } = await painting();
+  it("the_layers_are_read_once_per_game", async () => {
+    const { host, game, answer } = await painting();
     await select(host, MAP);
-    backgroundParallax = 0.25;
     await select(host, OTHER);
     await select(host, MAP);
+    // Declared as the game is built, they do not change while it runs: a selection reads none again.
+    expect(sentOf(game.sent as Command[], "get_render_frame")).toHaveLength(1);
+    // Another game may declare others.
+    backgroundParallax = 0.25;
+    const next = await testGame(answer);
+    act(() => host.setControl(next.client));
+    await select(host, OTHER);
+    await select(host, MAP);
+    expect(sentOf(next.sent as Command[], "get_render_frame")).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Tile 0" }));
     act(() => host.editor.viewport.setTool("tilemap.paint"));
     const { context, parallaxes } = toolContext(host);
