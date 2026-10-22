@@ -855,7 +855,9 @@ hash, those of the golden trace and replays included.
 - `Editor.textures` (`TextureAccess`): `list` and `subscribe` follow the project's textures
   whose meta can be read (`TextureInfo`, one object per texture until its file or meta
   changes), `find(id)` looks one up (or says the listing failed, listed again on the next
-  `subscribe` or `frames`), `bytes(path)` reads a texture's PNG, and `frames(path)`
+  `subscribe` or `frames`), `status()` tells how the latest listing went (still listing,
+  failed, or the paths of the textures it left out for an unreadable meta), `bytes(path)`
+  reads a texture's PNG, and `frames(path)`
   gives the `TextureFrames` its meta cuts it into with the PNG read for them (`TextureCut`),
   rejected with the renderer's reason. `createEditor` takes the cutting function as
   `textureFrames` (the applications pass the renderer's, exported by

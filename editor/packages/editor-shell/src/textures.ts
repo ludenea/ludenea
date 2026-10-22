@@ -17,6 +17,13 @@ export interface TextureAccess extends Observed<TextureInfo> {
    * `subscribe` or `frames` lists again). Pure, like `list`.
    */
   find(id: AssetId): TextureInfo | "unreadable" | "missing" | "listing" | { failed: string };
+  /**
+   * How the latest listing went: `"listing"` before the first answers, `{ failed }` with the
+   * reason it failed (the object `find` gives), or `{ unreadable }`, the paths of the listed
+   * textures whose meta cannot be read, which `list` leaves out (the project warns about each
+   * once). Pure, like `list`: the same object until the next listing.
+   */
+  status(): "listing" | { failed: string } | { unreadable: readonly string[] };
   /** The PNG at `path`, as the project holds it now. */
   bytes(path: string): Promise<Uint8Array>;
   /**
@@ -64,6 +71,8 @@ export function createTextureAccess(project: ProjectClient, report: EditorConsol
   let started = false;
   // Why the latest listing failed, until one answers: one object, so `find` answers the same one each time.
   let failed: { failed: string } | null = null;
+  // The paths of the latest listing's textures whose meta cannot be read: one object per listing.
+  let unreadable: { unreadable: readonly string[] } = { unreadable: [] };
   // The paths changed on disk since the last listing answered; null after the project opened (all of them).
   let changed: Set<string> | null = new Set();
   // Counts the listings started: only the latest one's answer is kept.
@@ -86,6 +95,7 @@ export function createTextureAccess(project: ProjectClient, report: EditorConsol
         };
         entries = listed;
         failed = null;
+        unreadable = { unreadable: listed.filter((entry) => textureOf(entry) === "unreadable").map((entry) => entry.path) };
         snapshot = listed.flatMap((entry) => {
           const texture = textureOf(entry);
           return texture && texture !== "unreadable" ? [kept(texture)] : [];
@@ -138,6 +148,7 @@ export function createTextureAccess(project: ProjectClient, report: EditorConsol
       if (found) return found;
       return entries.some((entry) => entry.id === id && textureOf(entry) === "unreadable") ? "unreadable" : "missing";
     },
+    status: () => failed ?? (entries === null ? "listing" : unreadable),
     subscribe(listener) {
       void start().catch(() => {});
       listeners.add(listener);

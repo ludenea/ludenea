@@ -373,6 +373,17 @@ interface TextureAccess extends Observed<TextureInfo> {
     find(id: AssetId): TextureInfo | "unreadable" | "missing" | "listing" | {
         failed: string;
     };
+    /**
+     * How the latest listing went: `"listing"` before the first answers, `{ failed }` with the
+     * reason it failed (the object `find` gives), or `{ unreadable }`, the paths of the listed
+     * textures whose meta cannot be read, which `list` leaves out (the project warns about each
+     * once). Pure, like `list`: the same object until the next listing.
+     */
+    status(): "listing" | {
+        failed: string;
+    } | {
+        unreadable: readonly string[];
+    };
     /** The PNG at `path`, as the project holds it now. */
     bytes(path: string): Promise<Uint8Array>;
     /**

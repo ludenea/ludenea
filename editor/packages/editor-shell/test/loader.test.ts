@@ -284,6 +284,9 @@ describe("loader", () => {
     expect(host.editor.textures.find("0000000000000000000000000000000d")).toBe(host.editor.textures.list()[0]);
     expect(host.editor.textures.find("00000000000000000000000000000000")).toBe("unreadable");
     expect(host.editor.textures.find("0000000000000000000000000000000a")).toBe("missing");
+    // The textures left out of the list for their meta, as one answer until the next listing.
+    expect(host.editor.textures.status()).toEqual({ unreadable: ["assets/broken.png"] });
+    expect(host.editor.textures.status()).toBe(host.editor.textures.status());
     entries.splice(0, 1);
     host.pushProject({ type: "files_changed", changes: [{ Removed: { path: "assets/hero.png", kind: { Texture: meta } } }] });
     await settle();
@@ -317,6 +320,7 @@ describe("loader", () => {
     // Snapshot getters, as `useSyncExternalStore` calls them while rendering: no side effect.
     expect(host.editor.textures.list()).toEqual([]);
     expect(host.editor.textures.find("0000000000000000000000000000000d")).toBe("listing");
+    expect(host.editor.textures.status()).toBe("listing");
     await settle();
     expect(requests).toEqual([]);
 
@@ -347,9 +351,11 @@ describe("loader", () => {
     expect(host.editor.textures.find("0000000000000000000000000000000d")).toEqual({ failed: "the project folder is gone" });
     // The same answer each time, as a snapshot getter must give.
     expect(host.editor.textures.find("0000000000000000000000000000000d")).toBe(host.editor.textures.find("0000000000000000000000000000000a"));
+    expect(host.editor.textures.status()).toBe(host.editor.textures.find("0000000000000000000000000000000d"));
     // The next call lists again.
     await expect(host.editor.textures.frames("assets/hero.png")).resolves.toMatchObject({ width: 1, height: 1 });
     expect(host.editor.textures.find("0000000000000000000000000000000d")).toMatchObject({ path: "assets/hero.png" });
+    expect(host.editor.textures.status()).toEqual({ unreadable: [] });
   });
   it("a_project_plugin_registers_a_viewport_tool_and_edits", async () => {
     const tool: ViewportTool = { id: "my_game.paint", title: "Paint", available: (editor) => editor.control !== null };
