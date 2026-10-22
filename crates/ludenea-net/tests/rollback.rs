@@ -472,6 +472,8 @@ fn inputs_that_cannot_be_accepted_are_dropped_and_counted() {
         (inputs(1, 1, vec![vec![5]]), DropReason::ConflictingInput),
         (inputs(1, 3, vec![vec![0]]), DropReason::Gap),
         (inputs(1, u64::MAX, vec![vec![0], vec![0]]), DropReason::Gap),
+        // The last tick a u64 numbers, far after the next expected one.
+        (inputs(1, u64::MAX, vec![vec![0]]), DropReason::Gap),
         (
             Message::Ack {
                 players: vec![(1, 0)],
@@ -645,10 +647,71 @@ fn unacknowledged_inputs_fill_a_packet_oldest_first() {
             _ => None,
         })
         .collect();
+    // The packet is full: one more tick of any player would not fit.
+    let mut grown = Packet {
+        match_id: 1,
+        messages: messages.clone(),
+    };
+    let Some(Message::Inputs { inputs, .. }) = grown
+        .messages
+        .iter_mut()
+        .find(|message| matches!(message, Message::Inputs { .. }))
+    else {
+        panic!("no inputs in {messages:?}");
+    };
+    inputs.push(vec![0; MAX_INPUT_BYTES]);
+    assert!(grown.encode().len() > MAX_PACKET_BYTES);
     // Every player from its oldest unacknowledged tick, sharing the room.
     assert_eq!(sent.len(), 3, "{sent:?}");
     for (player, first_tick, ticks) in &sent {
         assert_eq!(*first_tick, 0, "player {player}");
         assert!(*ticks >= 10, "player {player}: {sent:?}");
     }
+}
+
+#[test]
+fn rollback_starts_at_the_earliest_misprediction_of_any_player() {
+    let mut session = handshake(sessions(3)).remove(0);
+    let send = |session: &mut Session, peer: u8, first_tick: u64, inputs: Vec<Vec<u8>>| {
+        let packet = Packet {
+            match_id: 1,
+            messages: vec![Message::Inputs {
+                player: peer,
+                first_tick,
+                inputs,
+            }],
+        };
+        session.receive(PeerId(peer), &packet.encode(), NOW);
+    };
+    send(&mut session, 1, 0, vec![vec![0]; 9]);
+    send(&mut session, 2, 0, vec![vec![0]; 11]);
+    for _ in 0..13 {
+        step(&mut session, 0);
+    }
+    // Player 2 mispredicted at tick 11, arriving first; player 1 at tick 9.
+    send(&mut session, 2, 11, vec![vec![6]]);
+    send(&mut session, 1, 9, vec![vec![5]]);
+    let three = |tick, one: u8, two: u8| Request::Advance {
+        tick,
+        inputs: vec![vec![0], vec![one], vec![two]],
+    };
+    assert_eq!(
+        step(&mut session, 0),
+        [
+            Request::Load { tick: 9 },
+            save(9),
+            three(9, 5, 0),
+            save(10),
+            three(10, 5, 0),
+            save(11),
+            three(11, 5, 6),
+            save(12),
+            three(12, 5, 6),
+            save(13),
+            three(13, 5, 6),
+        ]
+    );
+    let stats = &session.stats().peers;
+    assert_eq!(stats[&PeerId(1)].deepest_rollback, 4);
+    assert_eq!(stats[&PeerId(2)].deepest_rollback, 2);
 }

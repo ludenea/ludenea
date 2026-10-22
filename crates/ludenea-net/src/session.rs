@@ -142,7 +142,10 @@ pub enum SessionError {
 /// What a session counts about one sender.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PeerStats {
-    /// The packets dropped, by reason.
+    /// The packets dropped, by reason. Each dropped packet counts once, under the reason that
+    /// stopped reading it: a refused `Inputs` or `Ack` stops the packet there and is the
+    /// reason, even when an earlier message of the same packet came before the session ran;
+    /// otherwise such a message makes the reason [`DropReason::BeforeRunning`].
     pub dropped: BTreeMap<DropReason, u64>,
     /// The rollbacks a misprediction of this peer's inputs caused.
     pub rollbacks: u64,
@@ -700,11 +703,13 @@ impl Session {
             return Err(DropReason::InvalidInput);
         }
         let count = u64::try_from(inputs.len()).map_err(|_| DropReason::Gap)?;
-        // A decoded message holds at least one tick: its last is `first_tick + count - 1`.
-        if first_tick.checked_add(count.saturating_sub(1)).is_none() {
+        // A decoded message holds at least one tick: its last is `first_tick + count - 1`. The
+        // ticks are an inclusive range up to it: an open range from `u64::MAX` would overflow
+        // computing the tick after it.
+        let Some(last_tick) = first_tick.checked_add(count.saturating_sub(1)) else {
             return Err(DropReason::Gap);
-        }
-        for (tick, input) in (first_tick..).zip(inputs) {
+        };
+        for (tick, input) in (first_tick..=last_tick).zip(inputs) {
             let queue = &mut self.queues[index];
             let used = queue.used(tick).map(<[u8]>::to_vec);
             match queue.confirm(tick, input.clone()) {
@@ -855,6 +860,8 @@ impl Session {
         self.ended_micros = Some(now);
     }
 
+    /// Counts one dropped packet of `peer` under `reason` and reports it. Called once per
+    /// dropped packet, as [`PeerStats::dropped`] describes.
     fn drop_packet(&mut self, peer: PeerId, reason: DropReason) {
         let count = self
             .stats
@@ -916,6 +923,8 @@ fn inputs_for(
         if count == 0 {
             continue;
         }
+        // `count` is at most `end - first_tick`, so the sum never passes `end`, whatever the
+        // peer acknowledged.
         let inputs = (first_tick..first_tick + count)
             .map(|tick| {
                 // A local input is released only once every peer acknowledged it.
