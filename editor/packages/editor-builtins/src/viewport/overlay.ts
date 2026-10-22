@@ -15,6 +15,8 @@ export type OverlayScene = {
   overlays: readonly ViewportOverlay[];
   /** The entities being dragged: their outlines are drawn moved by `offset` meters. */
   drag: { entities: readonly Entity[]; offset: Vec2 } | null;
+  /** The renderer's mapping of a world point on a layer of `parallax` to the screen, which overlays get. */
+  mapToScreen(point: Vec2, parallax: number): { x: number; y: number };
 };
 
 export const css = (color: Color) => `rgba(${color >>> 24}, ${(color >>> 16) & 255}, ${(color >>> 8) & 255}, ${(color & 255) / 255})`;
@@ -51,7 +53,7 @@ export function drawOverlay(context: CanvasRenderingContext2D, scene: OverlaySce
 
   for (const overlay of scene.overlays) {
     try {
-      overlay.draw({ canvas: context, worldToScreen: toScreen, tick: scene.tick, selection: scene.selection });
+      overlay.draw({ canvas: context, worldToScreen: (point, parallax = 1) => scene.mapToScreen(point, parallax), tick: scene.tick, selection: scene.selection });
     } catch (error) {
       failed(overlay, error);
     }

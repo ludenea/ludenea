@@ -429,7 +429,8 @@ The built-in texture previews and clip players are a plugin on this API.
 `editor.batched(commands)` sends several as one; `editor.onEdited` hears each accepted edit.
 `editor.viewport.tools.register` adds a viewport tool: once activated with
 `editor.viewport.setTool(id)`, it receives the pointer events over the viewport in world
-units (`pointerCancel` when a press ends without its release) and draws its own overlay, until Escape or until its `available(editor)` answers false.
+units (`pointerCancel` when a press ends without its release), maps points onto a layer of
+any parallax both ways (`screenToWorld`, `worldToScreen`), and draws its own overlay, until Escape or until its `available(editor)` answers false.
 Panning and zooming stay the viewport's whatever the tool:
 
 ```ts

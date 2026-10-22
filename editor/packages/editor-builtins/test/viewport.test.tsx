@@ -765,6 +765,9 @@ describe("viewport", () => {
     tool.overlay = ({ canvas, worldToScreen }) => {
       const at = worldToScreen({ x: 1, y: 1 });
       canvas.fillText("brush", at.x, at.y);
+      // On a layer of parallax 0.5, the point under the press drawn earlier.
+      const far = worldToScreen({ x: 1.5, y: 1 }, 0.5);
+      canvas.fillText("far brush", far.x, far.y);
     };
     act(() => void host.editor.viewport.tools.register(tool));
     act(() => host.editor.viewport.setTool("test.paint"));
@@ -795,12 +798,19 @@ describe("viewport", () => {
     expect(context.screenToWorld({ x: 250, y: 100 }, 0.5)).toEqual({ x: 1.5, y: 1 });
     const mapped = renderers.at(-1)!.calls.filter((call) => call.method === "screen_to_world").at(-1)!.args;
     expect(mapped).toEqual([250, 100, 0.5, JSON.stringify({ center: { x: 1, y: 0 }, view: { x: 8, y: 6 } })]);
+    // And back, through the same renderer and camera.
+    expect(context.worldToScreen({ x: 1.5, y: 1 }, 0.5)).toEqual({ x: 250, y: 100 });
+    const back = renderers.at(-1)!.calls.filter((call) => call.method === "world_to_screen").at(-1)!.args;
+    expect(back).toEqual([1.5, 1, 0.5, JSON.stringify({ center: { x: 1, y: 0 }, view: { x: 8, y: 6 } })]);
 
     // The tool's overlay is drawn while it is active, and redrawn on request.
     drawn.calls.length = 0;
     act(() => context.redraw());
     await animationFrames(2);
-    expect(drawn.calls.filter((call) => call.method === "fillText").map((call) => call.args)).toEqual([["brush", 200, 100]]);
+    expect(drawn.calls.filter((call) => call.method === "fillText").map((call) => call.args)).toEqual([
+      ["brush", 200, 100],
+      ["far brush", 250, 100],
+    ]);
   });
 
   it("escape_returns_to_select", async () => {
@@ -1181,6 +1191,7 @@ describe("viewport failures", () => {
     const near = (x: number, y: number) => ({ x: expect.closeTo(x, 9), y: expect.closeTo(y, 9) });
     expect(points[0]!.world).toEqual(near(2.28, 1));
     expect(context!.screenToWorld({ x: 250, y: 100 }, 0.5)).toEqual(near(1.64, 1));
+    expect(context!.worldToScreen({ x: 1.64, y: 1 }, 0.5)).toEqual(near(250, 100));
   });
 
   it("a_panic_shows_the_alert", async () => {

@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { captureInput } from "../input/capture";
 import { errorText, loadRenderModule, onRenderPanic, reportedOnce, shared, useGame } from "../shared";
 import { ResimulatingNotice } from "../timeline/editing";
-import { fromCameraItem, panBy, same, screenToWorld, throughParallax, toCameraView, zoomAt, type Box, type Camera, type Size } from "./camera";
+import { fromCameraItem, panBy, same, screenToWorld, throughParallax, toCameraView, worldToScreen, zoomAt, type Box, type Camera, type Size } from "./camera";
 import { FrameFeed } from "./frames";
 import { mergeHits, moveBy, moveCamera, visibleLayers, type Shown, type ViewportState } from "./state";
 import { drawOverlay } from "./overlay";
@@ -256,6 +256,16 @@ export function ViewportPanel({
       const { camera, size, gameCamera } = state.get();
       return gameCamera ? null : JSON.stringify(toCameraView(camera, size));
     };
+    // Where a layer of `parallax` shows a screen point, and back: the renderer's answer through
+    // the camera it draws with; before there is a renderer, the editor camera it will draw with.
+    const mapToWorld = (screen: Point, parallax: number): Vec2 =>
+      renderer
+        ? (JSON.parse(renderer.screen_to_world(screen.x, screen.y, parallax, drawnCamera())) as Vec2)
+        : screenToWorld(throughParallax(state.get().camera, parallax), state.get().size, screen);
+    const mapToScreen = (point: Vec2, parallax: number): Point =>
+      renderer
+        ? (JSON.parse(renderer.world_to_screen(point.x, point.y, parallax, drawnCamera())) as Point)
+        : worldToScreen(throughParallax(state.get().camera, parallax), state.get().size, point);
     // What the last draw showed of `entities`' sprites and tilemaps.
     const drawnBounds = (entities: readonly Entity[]): Box | null => {
       const box = renderer?.bounds(JSON.stringify(entities));
@@ -302,7 +312,7 @@ export function ViewportPanel({
       const overlays = drawnByTool ? [...editor.overlays.list(), drawnByTool] : editor.overlays.list();
       // One unregistered then registered again is a new registration: its failure is news.
       for (const overlay of failedOverlays) if (!overlays.includes(overlay)) failedOverlays.delete(overlay);
-      drawOverlay(context, { camera: viewCamera(), size, frame, layers, tick, selection, overlays, drag }, ratio, overlayFailed);
+      drawOverlay(context, { camera: viewCamera(), size, frame, layers, tick, selection, overlays, drag, mapToScreen }, ratio, overlayFailed);
     };
 
     // Every animation frame while playing, between the ticks the host pushes; on change otherwise.
@@ -367,12 +377,8 @@ export function ViewportPanel({
     showCursor();
     const toolContext: ToolContext = {
       editor,
-      // The renderer's answer through the camera it draws with; before there is a renderer (it
-      // is starting or stopped), the editor camera it will draw with.
-      screenToWorld: (screen, parallax) =>
-        renderer
-          ? (JSON.parse(renderer.screen_to_world(screen.x, screen.y, parallax, drawnCamera())) as Vec2)
-          : screenToWorld(throughParallax(state.get().camera, parallax), state.get().size, screen),
+      screenToWorld: mapToWorld,
+      worldToScreen: mapToScreen,
       redraw: () => void (repaint = true),
     };
     // Ends the tool's press without a release: the tool hears it through `pointerCancel`.

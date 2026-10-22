@@ -94,7 +94,8 @@ export interface SettingDefinition<T> {
 
 export interface OverlayContext {
   canvas: CanvasRenderingContext2D;
-  worldToScreen(point: Vec2): { x: number; y: number };
+  /** Where a layer of `parallax` (1 when omitted) shows `point`, in CSS pixels, as the viewport's renderer draws it. */
+  worldToScreen(point: Vec2, parallax?: number): { x: number; y: number };
   tick: number;
   selection: readonly Entity[];
 }
@@ -120,6 +121,8 @@ export interface ToolContext {
   editor: Editor;
   /** Where `screen` (CSS pixels) falls on a layer of `parallax`, as the viewport's renderer draws it. */
   screenToWorld(screen: { x: number; y: number }, parallax: number): Vec2;
+  /** Where a layer of `parallax` shows `point`, in CSS pixels: the inverse of `screenToWorld`. */
+  worldToScreen(point: Vec2, parallax: number): { x: number; y: number };
   /** Draws the viewport again, its overlays included. */
   redraw(): void;
 }
