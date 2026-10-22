@@ -43,7 +43,6 @@ pub struct ProjectTextures {
     pub textures: Vec<ProjectTexture>,
     /// The `.png` files left out because they or their meta cannot be read, by path.
     pub failures: Vec<TextureFailure>,
-    pub warnings: Vec<String>,
 }
 
 /// A texture file left out: its path and why. Shown as `<path>: <cause>`.
@@ -111,7 +110,6 @@ pub fn project_textures(scene: &Path, project: Option<&Path>) -> Result<ProjectT
             .map(|(id, (name, bytes, texture))| (id, name, bytes, texture))
             .collect(),
         failures,
-        warnings: Vec::new(),
     })
 }
 
@@ -351,14 +349,9 @@ mod tests {
         put(&folder.join("broken.png.meta"), "Meta(");
         put(&good, "b");
         texture_meta(&good, 1);
-        let ProjectTextures {
-            textures,
-            failures,
-            warnings,
-        } = project_textures(&scene, None).unwrap();
+        let ProjectTextures { textures, failures } = project_textures(&scene, None).unwrap();
         let ids: Vec<AssetId> = textures.iter().map(|(id, ..)| *id).collect();
         assert_eq!(ids, [AssetId(1)]);
-        assert!(warnings.is_empty(), "{warnings:?}");
         let [failure] = failures.as_slice() else {
             panic!("{failures:?}")
         };

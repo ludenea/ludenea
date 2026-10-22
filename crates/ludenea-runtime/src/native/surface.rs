@@ -365,8 +365,8 @@ impl Display {
     /// decoded or cut into frames) keeps its previous version; a path in neither list is
     /// dropped. The new atlas is uploaded, kept for a new screen, and drawn from the next
     /// frame. Returns a warning per failure (`<path>: <cause>, keeping the previous
-    /// version`, or `; the texture is left out` without a previous version), per texture
-    /// the atlas leaves out, and `update`'s own warnings. Never touches the simulation.
+    /// version`, or `; the texture is left out` without a previous version), and one per
+    /// texture the atlas leaves out. Never touches the simulation.
     pub(crate) fn replace_textures(&mut self, update: &ProjectTextures) -> Vec<String> {
         let mut warnings = Vec::new();
         let mut next = Vec::new();
@@ -393,7 +393,6 @@ impl Display {
                 None => warnings.push(format!("{failure}; the texture is left out")),
             }
         }
-        warnings.extend(update.warnings.iter().cloned());
         // The screen is missing only while `reopen` runs, which holds the display.
         let Some((_, renderer)) = &mut self.screen else {
             warnings.push("no GPU device to draw the changed textures with".to_string());
@@ -1186,7 +1185,6 @@ mod tests {
         ProjectTextures {
             textures,
             failures,
-            warnings: Vec::new(),
         }
     }
 

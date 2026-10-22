@@ -233,7 +233,6 @@ fn write_atlas(
         .iter()
         .map(|failure| format!("{}: {}", relative(&failure.path), failure.cause))
         .collect();
-    errors.extend(found.warnings);
     let named: Vec<(AssetId, String, &[u8], &TextureMeta)> = found
         .textures
         .iter()

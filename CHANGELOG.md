@@ -65,9 +65,10 @@ hash, those of the golden trace and replays included.
 - Breaking: `ludenea_app::project::project_textures` reports a `.png` that cannot be read,
   or whose meta cannot be read or is invalid, as a `TextureFailure { path, cause }` (shown
   as `<path>: <cause>`) in the new `ProjectTextures::failures`, sorted by path, instead of
-  failing the whole call or a warning; only a folder that cannot be listed, or two
-  textures sharing an identifier, still fail it. `render` and `play` print each failure
-  as a warning, as before, and a web build lists them among its texture errors. The new
+  failing the whole call or a warning; `ProjectTextures::warnings` is removed, its warnings
+  being these failures. Only a folder that cannot be listed, or two textures sharing an
+  identifier, still fail it. `render` and `play` print each failure as a warning, as
+  before, and a web build lists them among its texture errors. The new
   `project_folders(scene, project)` gives the folders `project_assets` and
   `project_textures` scan.
 - Breaking: `TextureError::Grid` holds the `reason` (`FramesError::Grid`'s message) instead

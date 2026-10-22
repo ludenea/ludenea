@@ -448,9 +448,6 @@ pub fn render(app: fn() -> App, args: &RenderArgs, out: &mut dyn Write) -> Outco
             format_args!("warning: {failure}; the texture is left out"),
         )?;
     }
-    for warning in &textures.warnings {
-        say(out, format_args!("warning: {warning}"))?;
-    }
     // A replay is decoded before the adapter opens: a corrupt one is refused without a GPU.
     let decoded = if is_replay {
         Some(Replay::decode(&read(&files.scene)?).map_err(|error| error.to_string())?)
@@ -618,9 +615,6 @@ pub fn play(app: fn() -> App, args: &PlayArgs, out: &mut dyn Write) -> Outcome {
             out,
             format_args!("warning: {failure}; the texture is left out"),
         )?;
-    }
-    for warning in &textures.warnings {
-        say(out, format_args!("warning: {warning}"))?;
     }
     let title = files
         .scene
