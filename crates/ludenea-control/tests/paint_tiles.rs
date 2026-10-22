@@ -551,3 +551,21 @@ fn a_tilemap_whose_tiles_do_not_fill_its_grid_is_refused() {
         error.message
     );
 }
+
+#[test]
+fn an_error_after_the_paint_is_read_names_the_paint() {
+    let mut host = loaded();
+    step(&mut host, 15);
+    ok(&mut host, Command::Seek { tick: 0 });
+    let entity = tilemap(&mut host);
+    // A scene edit makes the recorded future stale.
+    ok(&mut host, paint(entity, (0, 0, 1, 1), Some(1)));
+    assert!(timeline(&mut host).resimulating);
+
+    // The session refuses the edit while the future resimulates, after the paint was read.
+    let refused = error(&mut host, paint(entity, (1, 0, 1, 1), Some(1)));
+    assert_eq!(refused.code, ErrorCode::Resimulating);
+    let context = format!("entity {entity}, component `ludenea::Tilemap`, paint_tiles: ");
+    assert!(refused.message.starts_with(&context), "{}", refused.message);
+    assert!(!refused.message.contains("path"), "{}", refused.message);
+}

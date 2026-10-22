@@ -1157,15 +1157,17 @@ impl Host {
 
     /// Applies one edit command: at tick 0 to the scene, later as a recorded edit.
     fn edit_command(&mut self, command: Command) -> Result<Reply, ProtocolError> {
-        let command = self.painted_as_set_field(command)?;
+        // Named as the client sent it: a `PaintTiles`, not the `SetField` it turns into.
+        let context = edit_context(&command);
+        let command = self.painted_as_set_field(command, &context)?;
         let spawn = matches!(command, Command::Spawn { .. });
         let spawned = if self.session.timeline().current == 0 {
-            let (change, context) = self.scene_change_of(command)?;
+            let change = self.scene_change_of(command, &context)?;
             self.session
                 .edit_scene(&mut self.simulation, &[change])
                 .map_err(|e| in_context(self.fail(e), &context))?
         } else {
-            let (edit, context) = self.edit_of(command)?;
+            let edit = self.edit_of(command, &context)?;
             self.edit(edit, &context)?
         };
         Ok(if spawn {
@@ -1200,11 +1202,14 @@ impl Host {
                 ));
             }
             let in_batch = |error| in_context(error, &format!("command {index} of the batch"));
-            let command = self.painted_as_set_field(command).map_err(in_batch)?;
+            let context = edit_context(&command);
+            let command = self
+                .painted_as_set_field(command, &context)
+                .map_err(in_batch)?;
             if at_scene {
-                changes.push(self.scene_change_of(command).map_err(in_batch)?.0);
+                changes.push(self.scene_change_of(command, &context).map_err(in_batch)?);
             } else {
-                edits.push(self.edit_of(command).map_err(in_batch)?.0);
+                edits.push(self.edit_of(command, &context).map_err(in_batch)?);
             }
         }
         let sim = &mut self.simulation;
@@ -1223,10 +1228,14 @@ impl Host {
         Ok(Reply::Done)
     }
 
-    /// The change `command`, an edit command, makes to the scene at tick 0, and the context
-    /// its errors name: a field of a prefab instance's entity is an override of that field;
-    /// any other change is its edit.
-    fn scene_change_of(&self, command: Command) -> Result<(SceneChange, String), ProtocolError> {
+    /// The change `command`, an edit command, makes to the scene at tick 0, its errors naming
+    /// `context`: a field of a prefab instance's entity is an override of that field; any
+    /// other change is its edit.
+    fn scene_change_of(
+        &self,
+        command: Command,
+        context: &str,
+    ) -> Result<SceneChange, ProtocolError> {
         if let Command::SetField {
             target: FieldTarget::Component { entity, component },
             path,
@@ -1235,10 +1244,9 @@ impl Host {
             && let Some(address) = self.simulation.load_addresses().get(entity)
             && address.len() > 1
         {
-            let context = edit_context(&command);
             let ron = self
                 .override_ron(address, component, path, value.clone())
-                .map_err(|error| in_context(error, &context))?;
+                .map_err(|error| in_context(error, context))?;
             let change = SceneChange::Override {
                 instance: address[..1].to_vec(),
                 entity: address[1..].to_vec(),
@@ -1246,17 +1254,15 @@ impl Host {
                 path: path.clone(),
                 value: ron,
             };
-            return Ok((change, context));
+            return Ok(change);
         }
-        let (edit, context) = self.edit_of(command)?;
-        Ok((SceneChange::Edit(edit), context))
+        Ok(SceneChange::Edit(self.edit_of(command, context)?))
     }
 
-    /// The edit `command`, an edit command, makes now, and the context its errors name: what
-    /// it changes. Any other command is an `InvalidCommand`.
-    fn edit_of(&self, command: Command) -> Result<(Edit, String), ProtocolError> {
+    /// The edit `command`, an edit command, makes now, its errors naming `context`: what it
+    /// changes. Any other command is an `InvalidCommand`.
+    fn edit_of(&self, command: Command, context: &str) -> Result<Edit, ProtocolError> {
         let sim = &self.simulation;
-        let context = edit_context(&command);
         let edit = match command {
             Command::Spawn { components } => {
                 let components = components
@@ -1282,10 +1288,10 @@ impl Host {
                         ErrorCode::InvalidEdit,
                         "the entity already has this component; use SetField to change it",
                     );
-                    return Err(in_context(error, &context));
+                    return Err(in_context(error, context));
                 }
                 let value = encode_value(sim, ValueKind::Component, &component, value)
-                    .map_err(|e| in_context(edit_error(&e), &context))?;
+                    .map_err(|e| in_context(edit_error(&e), context))?;
                 Edit::Insert {
                     entity: sim.entity_ref(entity),
                     component,
@@ -1302,7 +1308,7 @@ impl Host {
                 value,
             } => self
                 .field_edit(target, &path, value)
-                .map_err(|error| in_context(error, &context))?,
+                .map_err(|error| in_context(error, context))?,
             _ => {
                 return Err(ProtocolError::new(
                     ErrorCode::InvalidCommand,
@@ -1311,20 +1317,23 @@ impl Host {
                 ));
             }
         };
-        Ok((edit, context))
+        Ok(edit)
     }
 
     /// `command` with a `PaintTiles` turned into the `SetField` of the tilemap's `tiles` that
     /// has the same result, so it applies and records exactly as that `SetField`; any other
-    /// command as it is.
-    fn painted_as_set_field(&self, command: Command) -> Result<Command, ProtocolError> {
-        let context = edit_context(&command);
+    /// command as it is. Its errors name `context`.
+    fn painted_as_set_field(
+        &self,
+        command: Command,
+        context: &str,
+    ) -> Result<Command, ProtocolError> {
         let Command::PaintTiles { entity, area, tile } = command else {
             return Ok(command);
         };
         let tiles = self
             .painted_tiles(entity, area, tile)
-            .map_err(|error| in_context(error, &context))?;
+            .map_err(|error| in_context(error, context))?;
         Ok(Command::SetField {
             target: FieldTarget::Component {
                 entity,
