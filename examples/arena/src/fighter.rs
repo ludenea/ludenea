@@ -79,7 +79,8 @@ pub(crate) fn spawn_fighters(
 /// Turns each fighter's input into this tick's move, limited by the level: a downward ray
 /// from the capsule's centre finds the ground (`GROUND_PROBE` past the bottom) and where a
 /// fall lands, a sideways ray how far a run goes before a wall. Each ray starts inside the
-/// fighter's own capsule, which `raycast` therefore ignores.
+/// fighter's own capsule, which `raycast` therefore ignores. Colliders are one-way upward: a
+/// fighter rises through them and stands only on a surface its feet are on or above.
 pub(crate) fn sense_fighters(
     inputs: Runtime<Inputs<ArenaInput>>,
     colliders: Query<(Entity, &Pose, &Collider)>,
@@ -97,22 +98,19 @@ pub(crate) fn sense_fighters(
         };
         let centre = pose.position + Vec2::new(0.0, HALF_HEIGHT);
 
-        let ground = raycast(
-            &colliders,
-            centre,
-            Vec2::new(0.0, -(HALF_HEIGHT + GROUND_PROBE)),
-        );
-        let on_ground = ground.is_some() && fighter.velocity.y <= 0.0;
-        let mut rise = if on_ground {
-            if input.jump { JUMP_SPEED } else { 0.0 }
+        let ground =
+            surface_below(&colliders, centre, GROUND_PROBE).filter(|_| fighter.velocity.y <= 0.0);
+        let on_ground = ground.is_some();
+        let mut rise = if let Some(gap) = ground {
+            // Settles onto the ground rather than hovering up to `GROUND_PROBE` above it.
+            if input.jump { JUMP_SPEED } else { -free(gap) }
         } else {
             max(fighter.velocity.y - GRAVITY, -MAX_FALL)
         };
-        if rise < 0.0 {
-            let reach = HALF_HEIGHT - rise;
-            if let Some(hit) = raycast(&colliders, centre, Vec2::new(0.0, -reach)) {
-                rise = -free(hit.fraction * reach - HALF_HEIGHT);
-            }
+        if rise < 0.0
+            && let Some(gap) = surface_below(&colliders, centre, -rise)
+        {
+            rise = -free(gap);
         }
 
         let run = if input.run.is_finite() {
@@ -132,6 +130,28 @@ pub(crate) fn sense_fighters(
 
         fighter.velocity = Vec2::new(step, rise);
         fighter.grounded = on_ground && rise <= 0.0;
+    }
+}
+
+/// The gap from the feet of the fighter centred at `centre` down to the first surface at
+/// most `depth` below them, skipping each surface above the feet (within `LINEAR_SLOP`): a
+/// fighter rising through a collider does not stand inside it. A skipped surface is passed
+/// by casting again from just inside its collider, which `raycast` then ignores.
+fn surface_below(
+    colliders: &Query<(Entity, &Pose, &Collider)>,
+    centre: Vec2,
+    depth: f32,
+) -> Option<f32> {
+    let feet = centre.y - HALF_HEIGHT;
+    let mut origin = centre;
+    // Each pass moves the origin down by `LINEAR_SLOP` at least, toward `feet - depth`.
+    loop {
+        let hit = raycast(colliders, origin, Vec2::new(0.0, feet - depth - origin.y))?;
+        let gap = feet - hit.point.y;
+        if gap >= -LINEAR_SLOP {
+            return Some(gap);
+        }
+        origin = Vec2::new(origin.x, hit.point.y - LINEAR_SLOP);
     }
 }
 

@@ -269,6 +269,50 @@ fn jump_then_fall_switch_sheet_and_clip() {
     assert_eq!(landed.animation.clip, "idle");
 }
 
+/// Jumps from the floor at 0 under a platform whose top is at `top`, and plays `ticks` ticks,
+/// checking that the fighter never stands with its feet inside the platform: it may pass
+/// through, rising or falling, but not stop there.
+fn jump_under_a_platform(top: f32, ticks: usize) -> Seen {
+    // Above player 0's spawn point, 0.5 thick.
+    let platform = (Vec2::new(-6.0, top - 0.25), Vec2::new(2.0, 0.25));
+    let mut simulation = arena(1, &[floor(0.0), platform]);
+    step(&mut simulation, &[ArenaInput::default()], 2);
+    step(&mut simulation, &[input(0.0, true)], 1);
+    for tick in 0..ticks {
+        step(&mut simulation, &[ArenaInput::default()], 1);
+        let seen = fighter(&simulation, 0);
+        let (feet, centre) = (seen.position.y, seen.position.y + 1.0);
+        let embedded = feet < top - EPSILON && centre > top;
+        let standing = seen.fighter.grounded || seen.fighter.velocity.y == 0.0;
+        assert!(
+            !(embedded && standing),
+            "tick {tick}: stands with its feet at {feet} inside the platform whose top is {top}"
+        );
+    }
+    fighter(&simulation, 0)
+}
+
+#[test]
+fn fighter_rising_through_a_platform_falls_back_or_lands_on_top() {
+    // The jump peaks with the feet at about 3.24: under a top at 4 the centre passes it, the
+    // feet do not, and the fighter drops back through to the floor.
+    let back = jump_under_a_platform(4.0, 80);
+    assert!(
+        back.position.y.abs() < EPSILON,
+        "back on the floor: {}",
+        back.position.y
+    );
+    assert!(back.fighter.grounded);
+    // Under a top at 2 the feet clear it, and the fighter lands on it.
+    let on_top = jump_under_a_platform(2.0, 80);
+    assert!(
+        (on_top.position.y - 2.0).abs() < EPSILON,
+        "on the platform: {}",
+        on_top.position.y
+    );
+    assert!(on_top.fighter.grounded);
+}
+
 #[test]
 fn fighter_stops_at_a_wall() {
     let wall = (Vec2::new(-2.5, 2.0), Vec2::new(0.5, 2.0));
