@@ -4,7 +4,7 @@ use ludenea_net::{
     EndReason, LinkConditions, MatchRules, Message, Packet, PeerId, Request, Session, SessionError,
     SessionEvent, SessionState, Timeouts, ViolationRule,
 };
-use support::{Harness, handshake, identity, offline_hashes, sessions};
+use support::{Harness, handshake, identity, offline_hashes, sessions, sessions_of};
 
 const ONE_SECOND: u64 = 1_000_000;
 const NOW: u64 = 1_000;
@@ -120,6 +120,44 @@ fn lossy(seed: u64) -> LinkConditions {
         reorder_extra_micros: 0,
         seed,
     }
+}
+
+/// [`lossy`], with 30 ms of jitter and 150 per mille of packets reordered by 60 ms more.
+fn reordered(seed: u64) -> LinkConditions {
+    LinkConditions {
+        jitter_micros: 30_000,
+        reorder_per_mille: 150,
+        reorder_extra_micros: 60_000,
+        ..lossy(seed)
+    }
+}
+
+/// Steps until every peer ended, within `max_micros`; whether they did.
+fn run_until_all_ended(harness: &mut Harness, max_micros: u64) -> bool {
+    harness.run_until(max_micros, |harness| {
+        harness
+            .peers()
+            .all(|peer| matches!(harness.state(peer), SessionState::Ended(_)))
+    })
+}
+
+/// Every peer ended with the same `Left`, at the state of the tick after its last tick, with
+/// the same confirmed inputs, encoded. Returns the `Left`'s peer and last tick.
+fn assert_same_left(harness: &Harness, case: &str) -> (PeerId, u64) {
+    let SessionState::Ended(EndReason::Left { peer, last_tick }) = harness.state(PeerId(0)) else {
+        panic!("{case}: peer 0 ended {:?}", harness.state(PeerId(0)));
+    };
+    let reference = encoded_confirmed(harness, PeerId(0));
+    for other in harness.peers() {
+        assert_eq!(harness.state(other), left(peer.0, last_tick), "{case}");
+        assert_eq!(assert_landed(harness, other), last_tick + 1, "{case}");
+        assert_eq!(
+            encoded_confirmed(harness, other),
+            reference,
+            "{case}: peer {other} confirmed other inputs"
+        );
+    }
+    (peer, last_tick)
 }
 
 #[test]
@@ -250,21 +288,17 @@ fn lost_notice_naming_its_sender_is_implausible() {
 /// Runs a match of `peers` behind [`lossy`] conditions seeded with `seed`, has `leaver` leave
 /// after two seconds, and checks every peer ends with the same `Left`, holding the same
 /// confirmed inputs through its last tick, at the state they give, well before any timeout.
-fn goodbye_run(peers: u8, seed: u64, leaver: PeerId) {
-    let mut harness = Harness::conditioned(sessions(peers), lossy(seed));
-    assert!(harness.run_until_running(2 * ONE_SECOND), "seed {seed}");
+fn goodbye_run(peers: u8, conditions: LinkConditions, leaver: PeerId) {
+    let case = format!("{peers} peers, {conditions:?}");
+    let mut harness = Harness::conditioned(sessions(peers), conditions);
+    assert!(harness.run_until_running(2 * ONE_SECOND), "{case}");
     harness.run_until(2 * ONE_SECOND, |_| false);
     harness.leave(leaver);
     assert_eq!(harness.state(leaver), SessionState::Leaving);
-    let all_ended = |harness: &Harness| {
-        harness
-            .peers()
-            .all(|peer| matches!(harness.state(peer), SessionState::Ended(_)))
-    };
     // Well within `disconnect_after_micros`: the peers ended on the goodbye, not by silence.
     assert!(
-        harness.run_until(2 * ONE_SECOND, all_ended),
-        "seed {seed}: {:?}",
+        run_until_all_ended(&mut harness, 2 * ONE_SECOND),
+        "{case}: {:?}",
         harness
             .peers()
             .map(|peer| harness.state(peer))
@@ -272,36 +306,79 @@ fn goodbye_run(peers: u8, seed: u64, leaver: PeerId) {
     );
     // Lingering ends quietly: every peer stays as it ended.
     harness.run_until(ONE_SECOND, |_| false);
-    let SessionState::Ended(EndReason::Left { peer, last_tick }) = harness.state(leaver) else {
-        panic!("seed {seed}: the leaver ended {:?}", harness.state(leaver));
-    };
-    assert_eq!(peer, leaver, "seed {seed}");
-    let reference = encoded_confirmed(&harness, leaver);
-    for peer in harness.peers() {
-        assert_eq!(
-            harness.state(peer),
-            left(leaver.0, last_tick),
-            "seed {seed}"
-        );
-        assert_eq!(assert_landed(&harness, peer), last_tick + 1, "seed {seed}");
-        assert_eq!(
-            encoded_confirmed(&harness, peer),
-            reference,
-            "seed {seed}: peer {peer} confirmed other inputs"
-        );
-    }
+    assert_eq!(assert_same_left(&harness, &case).0, leaver, "{case}");
 }
 
 #[test]
 fn goodbye_ends_everyone_at_the_same_tick() {
     for peers in [2, 3] {
         for seed in 0..8 {
-            goodbye_run(
-                peers,
-                seed,
-                PeerId(u8::try_from(seed % u64::from(peers)).unwrap()),
-            );
+            let leaver = PeerId(u8::try_from(seed % u64::from(peers)).unwrap());
+            goodbye_run(peers, lossy(seed), leaver);
+            goodbye_run(peers, reordered(seed), leaver);
         }
+    }
+}
+
+#[test]
+fn two_leavers_end_everyone_at_the_lowest_last_tick() {
+    // Peers 1 and 2 leave 0, 20 or 150 ms apart, under loss, duplication and reordering:
+    // every peer ends at the lowest last tick, naming the same leaver, with the same inputs.
+    for peers in [3, 4] {
+        for offset_micros in [0, 20_000, 150_000] {
+            for seed in 0..4 {
+                let case = format!("{peers} peers, {offset_micros} us apart, seed {seed}");
+                let mut harness = Harness::conditioned(sessions(peers), reordered(seed));
+                assert!(harness.run_until_running(2 * ONE_SECOND), "{case}");
+                harness.run_until(2 * ONE_SECOND, |_| false);
+                harness.leave(PeerId(1));
+                harness.run_until(offset_micros, |_| false);
+                assert_eq!(harness.state(PeerId(2)), SessionState::Running, "{case}");
+                harness.leave(PeerId(2));
+                assert!(run_until_all_ended(&mut harness, 2 * ONE_SECOND), "{case}");
+                harness.run_until(ONE_SECOND, |_| false);
+                let (peer, _) = assert_same_left(&harness, &case);
+                assert!([PeerId(1), PeerId(2)].contains(&peer), "{case}: {peer}");
+            }
+        }
+    }
+}
+
+#[test]
+fn leave_at_tick_zero_stops_after_the_input_delay() {
+    // With no input delay, the leaver's last input is the default one of tick 0; with the
+    // default delay of 2, those of ticks 0 and 1. It runs those ticks, then waits.
+    for delay in [0u32, 2] {
+        let mut identity = identity(&[0, 1]);
+        identity.rules.input_delay = delay;
+        let mut session = handshake(sessions_of(&identity)).remove(0);
+        session.leave().unwrap();
+        assert_eq!(session.state(), SessionState::Leaving, "delay {delay}");
+        let last_tick = u64::from(delay.max(1)) - 1;
+        let mut ran = Vec::new();
+        for _ in 0..4 {
+            let requests = session.advance(NOW).unwrap();
+            ran.extend(requests.into_iter().filter_map(|request| match request {
+                Request::Advance { tick, .. } => Some(tick),
+                _ => None,
+            }));
+        }
+        assert_eq!(ran, (0..=last_tick).collect::<Vec<_>>(), "delay {delay}");
+        let sent = session.outgoing(NOW);
+        let goodbye = Packet::decode(&sent[0].1).unwrap();
+        assert!(
+            goodbye.messages.contains(&Message::Goodbye { last_tick }),
+            "delay {delay}: {goodbye:?}"
+        );
+        let remote = vec![0; usize::try_from(last_tick + 1).unwrap()];
+        deliver(
+            &mut session,
+            1,
+            vec![inputs(1, 0, &remote), ack(0, last_tick + 1)],
+        );
+        assert_eq!(session.state(), left(0, last_tick), "delay {delay}");
+        assert_eq!(session.advance(NOW), Ok(Vec::new()), "delay {delay}");
+        assert_eq!(session.advance(NOW), Err(SessionError::NotRunning));
     }
 }
 
@@ -550,7 +627,11 @@ fn landing_asks_no_hash() {
     for tick in 0..33 {
         step(&mut session, 0);
         if tick < 28 {
-            deliver(&mut session, 1, vec![inputs(1, tick, &[0]), ack(0, tick + 1)]);
+            deliver(
+                &mut session,
+                1,
+                vec![inputs(1, tick, &[0]), ack(0, tick + 1)],
+            );
         }
     }
     deliver(
