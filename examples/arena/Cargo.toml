@@ -35,3 +35,4 @@ serde_json.workspace = true
 png.workspace = true
 postcard.workspace = true
 ron.workspace = true
+tempfile.workspace = true
