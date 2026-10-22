@@ -1,4 +1,4 @@
-import { ProtocolFailure, type ControlClient, type Entity, type LayerInfo } from "@ludenea/control-client";
+import { ProtocolFailure, type Entity, type LayerInfo } from "@ludenea/control-client";
 import { definePlugin, type Disposable, type Editor, type ViewportTool } from "@ludenea/editor-shell";
 import { createStore, type Store } from "../shared";
 import { areaBetween, cellAt, cellUnder, type Cell, type Pose, type Tilemap } from "./paint";
@@ -39,18 +39,6 @@ export const tilemapPlugin = definePlugin({
   name: "ludenea.tilemap",
   activate(editor) {
     const state: TilemapState = createStore({ target: null as PaintTarget | null, tile: null as number | null });
-    // The render layers of each game: what the game declares, so read once per game.
-    const layers = new WeakMap<ControlClient, Promise<LayerInfo[]>>();
-    const layersOf = (control: ControlClient) => {
-      let known = layers.get(control);
-      if (!known) {
-        known = control.request({ type: "get_render_frame", debug_layers: [] }).then(({ frame }) => frame.layers);
-        // A failure is read again on the next selection.
-        known.catch(() => layers.delete(control));
-        layers.set(control, known);
-      }
-      return known;
-    };
 
     // The selection is read again on every change; `loads` drops the answers of an older one.
     let loads = 0;
@@ -68,7 +56,7 @@ export const tilemapPlugin = definePlugin({
         if (number === loads) editor.console.report(error, `Reading the selected entity ${entity.index}v${entity.generation} for tilemap painting`);
       };
       // Both components as the game last reported them, undefined until the entity is read; the
-      // game's layers, read once it has a tilemap.
+      // game's layers, read once per selection once it has a tilemap.
       let tilemap: Tilemap | null | undefined;
       let pose: Pose | null | undefined;
       let declared: LayerInfo[] | null = null;
@@ -77,8 +65,8 @@ export const tilemapPlugin = definePlugin({
         if (number !== loads) return;
         if (tilemap && !declared && !reading) {
           reading = true;
-          layersOf(control).then((layers) => {
-            declared = layers;
+          control.request({ type: "get_render_frame", debug_layers: [] }).then(({ frame }) => {
+            declared = frame.layers;
             update();
           }, failed);
         }

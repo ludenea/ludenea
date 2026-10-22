@@ -34,10 +34,11 @@ const tilemap = (extra: Partial<Tilemap> = {}): Tilemap => ({
 const pose = (x: number, y: number, rotation = { cos: 1, sin: 0 }): Pose => ({ position: { x, y }, rotation });
 const json = (value: unknown) => ({ type: "json", value });
 /** The game's render layers: the tilemap's `background` moves at half the camera's speed. */
-const LAYERS = [
-  { name: "background", parallax: 0.5 },
+const LAYERS = () => [
+  { name: "background", parallax: backgroundParallax },
   { name: "world", parallax: 1 },
 ];
+let backgroundParallax = 0.5;
 
 /**
  * An editor with the tilemap plugin over a game holding the tilemap `MAP` (at `(0, 0)`, on
@@ -58,7 +59,7 @@ async function painting(options: { refuse?: string; read?: (command: Command) =>
       const components = entity.index === MAP.index ? { "ludenea::Tilemap": json(tilemap()), "ludenea::Pose": json(pose(0, 0)) } : { "ludenea::Pose": json(pose(3, 3)) };
       return { type: "entity", entity, components };
     }
-    if (command.type === "get_render_frame") return { type: "render_frame", frame: { ...renderFrame(0).frame, layers: LAYERS } };
+    if (command.type === "get_render_frame") return { type: "render_frame", frame: { ...renderFrame(0).frame, layers: LAYERS() } };
     if (command.type === "paint_tiles" && options.refuse) return { error: { code: "invalid_command", message: options.refuse } };
     return { type: "done" };
   });
@@ -118,6 +119,7 @@ function recordingCanvas() {
 
 describe("tilemap painting", () => {
   beforeEach(() => {
+    backgroundParallax = 0.5;
     script.frames = { "assets/tiles.png": TILE_FRAMES };
   });
   afterEach(() => {
@@ -379,6 +381,21 @@ describe("tilemap painting", () => {
     await settle();
     act(() => host.editor.viewport.setTool("tilemap.paint"));
     expect(host.editor.viewport.activeTool.getState()).toBe("tilemap.paint");
+  });
+
+  it("the_layer_parallax_is_read_again_on_each_selection", async () => {
+    const { host } = await painting();
+    await select(host, MAP);
+    backgroundParallax = 0.25;
+    await select(host, OTHER);
+    await select(host, MAP);
+    fireEvent.click(screen.getByRole("button", { name: "Tile 0" }));
+    act(() => host.editor.viewport.setTool("tilemap.paint"));
+    const { context, parallaxes } = toolContext(host);
+    const paint = tool(host, "tilemap.paint");
+    paint.pointerDown!(pointer(5, 5), context);
+    paint.pointerUp!(pointer(5, 5), context);
+    expect(new Set(parallaxes)).toEqual(new Set([0.25]));
   });
 
   it("b_and_e_choose_the_tools", async () => {
