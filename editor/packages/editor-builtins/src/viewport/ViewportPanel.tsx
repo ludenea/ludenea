@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { captureInput } from "../input/capture";
 import { errorText, loadRenderModule, onRenderPanic, reportedOnce, shared, useGame } from "../shared";
 import { ResimulatingNotice } from "../timeline/editing";
-import { fromCameraItem, panBy, same, screenToWorld, toCameraView, zoomAt, type Box, type Camera, type Size } from "./camera";
+import { fromCameraItem, panBy, same, screenToWorld, throughParallax, toCameraView, zoomAt, type Box, type Camera, type Size } from "./camera";
 import { FrameFeed } from "./frames";
 import { mergeHits, moveBy, moveCamera, visibleLayers, type Shown, type ViewportState } from "./state";
 import { drawOverlay } from "./overlay";
@@ -367,10 +367,12 @@ export function ViewportPanel({
     showCursor();
     const toolContext: ToolContext = {
       editor,
-      screenToWorld(screen, parallax) {
-        if (!renderer) throw new Error("the viewport has no renderer to map the point with: it is starting or stopped");
-        return JSON.parse(renderer.screen_to_world(screen.x, screen.y, parallax, drawnCamera())) as Vec2;
-      },
+      // The renderer's answer through the camera it draws with; before there is a renderer (it
+      // is starting or stopped), the editor camera it will draw with.
+      screenToWorld: (screen, parallax) =>
+        renderer
+          ? (JSON.parse(renderer.screen_to_world(screen.x, screen.y, parallax, drawnCamera())) as Vec2)
+          : screenToWorld(throughParallax(state.get().camera, parallax), state.get().size, screen),
       redraw: () => void (repaint = true),
     };
     // Ends the tool's press without a release: the tool hears it through `pointerCancel`.

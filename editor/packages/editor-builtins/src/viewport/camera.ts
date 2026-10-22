@@ -37,6 +37,9 @@ export const worldToScreen = ({ center, pixelsPerMeter }: Camera, size: Size, po
   y: size.height / 2 - (point.y - center.y) * pixelsPerMeter,
 });
 
+/** How a layer of `parallax` sees `camera`: at `center * parallax`, as the renderer draws it. */
+export const throughParallax = ({ center, pixelsPerMeter }: Camera, parallax: number): Camera => ({ center: { x: center.x * parallax, y: center.y * parallax }, pixelsPerMeter });
+
 export const screenToWorld = ({ center, pixelsPerMeter }: Camera, size: Size, point: Point): Vec2 => ({
   x: center.x + (point.x - size.width / 2) / pixelsPerMeter,
   y: center.y - (point.y - size.height / 2) / pixelsPerMeter,

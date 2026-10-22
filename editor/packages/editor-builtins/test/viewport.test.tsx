@@ -1166,6 +1166,23 @@ describe("viewport failures", () => {
     expect(alert()).toBeNull();
   });
 
+  it("without_a_renderer_a_tool_maps_through_the_editor_camera", async () => {
+    script.createError = named("NoAdapter", "the browser offers no GPU adapter");
+    const { host, view } = await viewport();
+    await waitFor(() => expect(alert()).not.toBeNull());
+    const contexts: ToolContext[] = [];
+    const points: ToolPointer[] = [];
+    act(() => void host.editor.viewport.tools.register({ id: "test.probe", title: "Probe", available: () => true, pointerDown: (event, context) => void (points.push(event), contexts.push(context)) }));
+    act(() => host.editor.viewport.setTool("test.probe"));
+    await act(() => host.editor.commands.run("viewport.pan-right"));
+    fireEvent.pointerDown(view, { button: 0, clientX: 250, clientY: 100, pointerId: 1 });
+    // The editor camera looks at (1.28, 0) at 50 pixels per meter; a layer of parallax 0.5 sees it at (0.64, 0).
+    const [context] = contexts;
+    const near = (x: number, y: number) => ({ x: expect.closeTo(x, 9), y: expect.closeTo(y, 9) });
+    expect(points[0]!.world).toEqual(near(2.28, 1));
+    expect(context!.screenToWorld({ x: 250, y: 100 }, 0.5)).toEqual(near(1.64, 1));
+  });
+
   it("a_panic_shows_the_alert", async () => {
     const { host, renderer } = await drawing();
     const loads = inits.length;
