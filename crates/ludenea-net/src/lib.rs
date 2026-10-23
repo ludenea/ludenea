@@ -1,5 +1,5 @@
 //! Rollback networking for Ludenea: the settings every peer of a match agrees on, the wire
-//! format of their packets, the room where peers agree on who plays, the sans-IO session built
+//! format of their packets, the room where peers agree on who plays, one peer's room then match over one link, the sans-IO session built
 //! on them, the executor that applies a session's requests to a simulation, and SyncTest,
 //! which catches game code a rollback makes diverge.
 //!
@@ -9,6 +9,7 @@
 pub mod code;
 pub mod execute;
 pub mod link;
+pub mod online;
 mod queue;
 pub mod room;
 pub mod session;
@@ -23,6 +24,7 @@ pub use link::{
     Channel, Link, LinkError, LinkEvent, LinkId, LinkTransport, MAX_ROOM_MESSAGE_BYTES, MemoryLink,
     MemoryMesh,
 };
+pub use online::{OnlineError, OnlinePeer, OnlineStatus};
 pub use room::{MatchLayout, Room, RoomDrop, RoomError, RoomEvent, RoomRole, RoomState, RoomView};
 pub use session::{
     Advanced, DropReason, END_LINGER_MICROS, EndReason, HANDSHAKE_RESEND_MICROS, PeerStats,

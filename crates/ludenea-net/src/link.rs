@@ -295,6 +295,12 @@ impl<L: Link> LinkTransport<L> {
         }
     }
 
+    /// Makes `links` the peers of the match, in peer order, with the same rule as
+    /// [`LinkTransport::new`].
+    pub fn set_links(&mut self, links: Vec<LinkId>) {
+        self.links = links;
+    }
+
     /// How many packets from links outside the match were dropped.
     pub fn strays(&self) -> u64 {
         self.strays

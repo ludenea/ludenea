@@ -101,7 +101,8 @@ hash, those of the golden trace and replays included.
   refuses a chance above 1000 per mille (`ConditionsError::PerMilleTooLarge`, naming the
   field) or a `jitter_micros` of `u32::MAX` (`ConditionsError::JitterTooLarge`). It releases
   the packets due when `receive` is called; `failed_sends()` counts those the inner transport
-  refused, which are dropped, and `last_send_error()` gives the latest refusal.
+  refused, which are dropped, and `last_send_error()` gives the latest refusal. `inner()` and
+  `inner_mut()` reach the wrapped transport.
 - `ludenea_net::link` carries messages between peers known by `LinkId` (16 bytes, shown as a
   UUID). The `Link` trait has a reliable, ordered `Channel::Room` (at most
   `MAX_ROOM_MESSAGE_BYTES`, 512) and an unreliable `Channel::Match` (at most
@@ -111,7 +112,8 @@ hash, those of the golden trace and replays included.
   sender. `MemoryMesh` joins `MemoryLink`s in process for tests (`join`, `join_with`,
   `connect`, `disconnect`; dropping a link disconnects it). `LinkTransport::new(link, links)`
   is a `Transport` over the match channel where `PeerId(i)` is `links[i]`; it drops and counts
-  (`strays()`) packets from other links. `TransportError` gains `Unreachable { peer }`, for a
+  (`strays()`) packets from other links, and `set_links(links)` names the peers again.
+  `TransportError` gains `Unreachable { peer }`, for a
   peer of the match whose link is not connected: the packet is lost.
 - `ludenea_net::room` is the sans-IO room where a host and its joiners agree on a match.
   `Room::new(RoomRole, MatchRules)` takes `RoomRole::Host { peers, match_id }` (2 to 4 peers,
@@ -131,6 +133,17 @@ hash, those of the golden trace and replays included.
   `RoomEvent::Dropped { link, reason: RoomDrop }` (`Wire`, `Unexpected` or `Invalid`).
   `view()` gives a `RoomView { host, peers, connected, ready, unmeshed, unfit, local_ready }`
   whose `describe()` says what the room waits for, such as "2 of 3 peers here, 1 not ready".
+- `ludenea_net::online` drives one peer's room, then its match, over one link.
+  `OnlinePeer::new(link, RoomRole, LinkConditions)` refuses with `OnlineError::Room` or
+  `OnlineError::Conditions`; all-zero conditions add nothing. `poll(now_micros)` feeds the
+  link's events and every room message to the room, sends the room's messages, and gives an
+  `OnlineStatus`: `Room(RoomView)`, `Ready(MatchLayout)`, which it stays, or
+  `Failed(String)`. A link that closes before the layout fails the room ("the connection to
+  the room closed: ..."); afterwards `closed()` keeps the reason. Once ready, `receive` and
+  `send` carry the match packets over the layout's links behind the conditions; before, they
+  carry nothing, and match packets that arrive are dropped. `set_ready(players)`, `layout()`,
+  `failed_sends()`, `strays()` and `room_drops()` (the room's dropped messages since the last
+  call) complete it.
 - `ludenea_net::wire` is the network protocol of the Formats section:
   `Packet { match_id, messages }` with `encode()`, `Packet::decode(bytes)` and
   `Packet::version_of(bytes)`, the `Message` and `EndNotice` it carries, and `WireError`

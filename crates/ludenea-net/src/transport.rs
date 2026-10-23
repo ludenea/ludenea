@@ -176,6 +176,16 @@ impl<T: Transport> Conditioned<T> {
         })
     }
 
+    /// The wrapped transport.
+    pub fn inner(&self) -> &T {
+        &self.inner
+    }
+
+    /// The wrapped transport, to send through it without conditions or reach what it wraps.
+    pub fn inner_mut(&mut self) -> &mut T {
+        &mut self.inner
+    }
+
     /// How many due packets the inner transport refused (and so were dropped).
     pub fn failed_sends(&self) -> u64 {
         self.failed_sends
