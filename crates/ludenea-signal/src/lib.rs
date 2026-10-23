@@ -225,7 +225,8 @@ async fn room(
             match reservation.arrive() {
                 Some(membership) => member(socket, membership, remote, &limits).await,
                 None => {
-                    send_close(&mut socket, close_code::ERROR, "the room is gone", &limits).await;
+                    let ending = Ending::new(close_code::ERROR, "the room is gone");
+                    close(&mut socket, &ending, &limits).await;
                 }
             }
         })
