@@ -227,8 +227,9 @@ hash, those of the golden trace and replays included.
   two simulations can be compared in the shape of the editor's branch report.
   `EntityDivergence`, `DivergenceKind` and `Cause` move there unchanged and stay reachable
   from `ludenea_control::divergence`; the control protocol does not change, and its
-  TypeScript bindings only describe these types without branches. A `TickRecorder`, passed to `Simulation::step_observed`, gives the events and
-  commands of one tick as a `TickRecord` (`into_record(tick)`).
+  TypeScript bindings only describe these types without branches. A `TickRecorder`, passed
+  to `Simulation::step_observed`, gives the events and commands of one tick as a
+  `TickRecord` (`into_record(tick)`).
   `EntityComparison::new(&Simulation)` starts a comparison of simulations of that app,
   taking its event schemas and system names from it. `compare([&Simulation; 2], records,
   explains_from)` gives the entities diverging for the first time at the tick both
