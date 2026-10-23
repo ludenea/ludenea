@@ -114,9 +114,11 @@ ludenea-webrtc = { path = "crates/ludenea-webrtc" }
 # is dropped, since neither webrtc-rs nor the browser frees one left open: `offer_handshake`
 # (131, 112) and `accept_handshake` (216, 208) of `native.rs` and `wasm.rs` wrap it in a
 # `ClosingConnection`, whose drop closes it, and hand it to `peer_loop` (291, 313) through
-# `HandshakeMeta` (124, 110). Natively the close runs on async-compat's tokio runtime (so
-# `Cargo.toml` adds `tokio`, already a dependency of webrtc) and first waits up to 5 s for the
-# candidates' gathering, since webrtc-rs leaks the sockets of a gathering a close interrupts.
+# `HandshakeMeta` (124, 110). Natively the guard keeps the tokio runtime the connection was
+# made on (async-compat's, inside `.compat()`) and spawns the close there, since it may be
+# dropped on the message loop's own executor (so `Cargo.toml` adds `tokio`, already a
+# dependency of webrtc); the close first waits up to 5 s for the candidates' gathering, since
+# webrtc-rs leaks the sockets of a gathering a close interrupts.
 # The sites, by their line in the 0.14.0 sources:
 # - `native.rs`: in `offer_handshake`, the peer connection (147), the local offer (163, 165),
 #   a signaling connection or peer lost before the answer (172), and a malformed or unusable

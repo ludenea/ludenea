@@ -393,11 +393,19 @@ const GATHERING_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) struct ClosingConnection {
     connection: Arc<RTCPeerConnection>,
     peer: PeerId,
+    /// The runtime the connection was made on, which runs its close: the guard may be dropped
+    /// outside it, on the message loop's own executor.
+    runtime: tokio::runtime::Handle,
 }
 
 impl ClosingConnection {
+    /// Called inside `.compat()`, which provides the tokio runtime webrtc-rs runs on.
     fn new(connection: Arc<RTCPeerConnection>, peer: PeerId) -> Self {
-        Self { connection, peer }
+        Self {
+            connection,
+            peer,
+            runtime: tokio::runtime::Handle::current(),
+        }
     }
 }
 
@@ -405,14 +413,7 @@ impl Drop for ClosingConnection {
     fn drop(&mut self) {
         let connection = Arc::clone(&self.connection);
         let peer = self.peer;
-        // The handshakes and peer loops run, and are dropped, inside async-compat's tokio
-        // context, which runs the close.
-        match tokio::runtime::Handle::try_current() {
-            Ok(runtime) => {
-                runtime.spawn(async move { close(&connection, peer).await });
-            }
-            Err(error) => warn!("cannot close the connection to peer {peer}: {error}"),
-        }
+        self.runtime.spawn(async move { close(&connection, peer).await });
     }
 }
 
