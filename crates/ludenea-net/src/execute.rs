@@ -12,6 +12,23 @@ pub enum ExecuteError {
     /// The app has no input type, so the session's inputs cannot reach it.
     #[error("this app has no input type; register one with `App::input` before running a session")]
     NoInputType,
+    /// The match is of the game build whose schema fingerprint is `match_fingerprint`, and
+    /// the simulation of another one, `simulation`: the peers would step different games.
+    #[error(
+        "the match is of the game build with schema fingerprint {match_fingerprint:016x}, \
+         this simulation has {simulation:016x}; drive the session with a simulation of the \
+         match's game build"
+    )]
+    OtherBuild {
+        match_fingerprint: u64,
+        simulation: u64,
+    },
+    /// The match runs at `match_rate` ticks per second, and the simulation at `simulation`.
+    #[error(
+        "the match runs at {match_rate} ticks per second, this simulation at {simulation}; \
+         drive the session with a simulation of the match's tick rate"
+    )]
+    OtherTickRate { match_rate: u32, simulation: u32 },
     /// A `Save` or an `Advance` of `expected` while the simulation stands at `found`: the
     /// requests come from another session, or the simulation was stepped outside the executor.
     #[error(
@@ -81,13 +98,29 @@ impl Executor {
     ///
     /// # Errors
     ///
-    /// [`ExecuteError::NoInputType`] for an app without an input type.
+    /// [`ExecuteError::NoInputType`] for an app without an input type,
+    /// [`ExecuteError::OtherBuild`] for a simulation whose schema fingerprint is not the
+    /// match's, and [`ExecuteError::OtherTickRate`] for one whose tick rate is not. Nothing
+    /// changed.
     pub fn new(
         simulation: &mut Simulation,
         settings: &SessionSettings,
     ) -> Result<Executor, ExecuteError> {
         if simulation.player_input_spec().is_none() {
             return Err(ExecuteError::NoInputType);
+        }
+        let identity = &settings.identity;
+        if identity.fingerprint != simulation.schema_fingerprint() {
+            return Err(ExecuteError::OtherBuild {
+                match_fingerprint: identity.fingerprint,
+                simulation: simulation.schema_fingerprint(),
+            });
+        }
+        if identity.tick_rate != simulation.tick_rate() {
+            return Err(ExecuteError::OtherTickRate {
+                match_rate: identity.tick_rate,
+                simulation: simulation.tick_rate(),
+            });
         }
         simulation.set_players(settings.identity.players.len());
         let rules = settings.identity.rules;

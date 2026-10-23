@@ -691,3 +691,14 @@ pub fn test_simulation() -> ludenea_app::Simulation {
         .system(ludenea_app::Sim, fold_inputs);
     app.build().expect("the test app builds")
 }
+
+/// The identity of a match of the test app where player `i` is owned by `owners[i]`: its
+/// schema fingerprint and tick rate are those of [`test_simulation`].
+pub fn test_identity(owners: &[u8]) -> MatchIdentity {
+    let simulation = test_simulation();
+    MatchIdentity {
+        fingerprint: simulation.schema_fingerprint(),
+        tick_rate: simulation.tick_rate(),
+        ..identity(owners)
+    }
+}

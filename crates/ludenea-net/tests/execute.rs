@@ -5,17 +5,17 @@ use ludenea_net::{
     EndReason, ExecuteError, Executor, PeerId, Request, Session, SessionError, SessionSettings,
     SessionState,
 };
-use support::{handshake, identity, settings, test_simulation};
+use support::{handshake, settings, test_identity, test_simulation};
 
 /// The settings of peer 0 in a match of the test app where player `i` is owned by
 /// `owners[i]`.
 fn test_settings(owners: &[u8]) -> SessionSettings {
-    settings(0, &identity(owners))
+    settings(0, &test_identity(owners))
 }
 
 /// Peer 0's session of a two-peer match of the test app, running at tick 0.
 fn running_session() -> Session {
-    let identity = identity(&[0, 1]);
+    let identity = test_identity(&[0, 1]);
     let spec = test_simulation().player_input_spec().unwrap();
     let sessions = (0..2)
         .map(|local| Session::new(settings(local, &identity), spec.clone()).unwrap())
@@ -61,6 +61,46 @@ fn executor_refuses_an_app_without_an_input_type() {
         Executor::new(&mut simulation, &test_settings(&[0, 1])),
         Err(ExecuteError::NoInputType)
     ));
+}
+
+#[test]
+fn executor_refuses_a_simulation_of_another_match() {
+    let simulation = test_simulation();
+    let fingerprint = simulation.schema_fingerprint();
+    let mut other_build = test_settings(&[0, 1]);
+    other_build.identity.fingerprint ^= 1;
+    let error = Executor::new(&mut test_simulation(), &other_build).err();
+    assert!(
+        matches!(
+            error,
+            Some(ExecuteError::OtherBuild { match_fingerprint, simulation })
+                if match_fingerprint == fingerprint ^ 1 && simulation == fingerprint
+        ),
+        "{error:?}"
+    );
+    let message = error.unwrap().to_string();
+    assert!(
+        message.contains(&format!("{fingerprint:016x}")),
+        "{message}"
+    );
+
+    let mut other_rate = test_settings(&[0, 1]);
+    other_rate.identity.tick_rate = 30;
+    let error = Executor::new(&mut test_simulation(), &other_rate).err();
+    assert!(
+        matches!(
+            error,
+            Some(ExecuteError::OtherTickRate {
+                match_rate: 30,
+                simulation: 60
+            })
+        ),
+        "{error:?}"
+    );
+    // Refused before anything changed.
+    let mut simulation = test_simulation();
+    assert!(Executor::new(&mut simulation, &other_rate).is_err());
+    assert_eq!(simulation.players(), 1);
 }
 
 #[test]
@@ -163,7 +203,7 @@ fn executor_capacity() -> usize {
 fn executor_capacity_follows_the_rules() {
     // `rollback_window + 2` states, plus the reported states the hash bounds let a session
     // keep: `(2 * window + delay + 3 * interval - 2) / interval + 3`.
-    let mut identity = identity(&[0, 1]);
+    let mut identity = test_identity(&[0, 1]);
     for (window, delay, interval, expected) in [(8, 2, 30, 10 + 6), (1, 0, 1, 3 + 6)] {
         identity.rules.rollback_window = window;
         identity.rules.input_delay = delay;

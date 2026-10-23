@@ -197,7 +197,10 @@ hash, those of the golden trace and replays included.
   `Session::settings()` gives the settings a session was built with.
 - `ludenea_net::Executor` drives a `Simulation` from a `Session`. `Executor::new(&mut
   Simulation, &SessionSettings)` sets the simulation's player count to the match's and
-  refuses an app without an input type (`ExecuteError::NoInputType`). `execute(&mut
+  refuses an app without an input type (`ExecuteError::NoInputType`), a simulation of
+  another game build than the match's (`ExecuteError::OtherBuild`, naming both schema
+  fingerprints) and one of another tick rate (`ExecuteError::OtherTickRate`, naming both
+  rates), changing nothing. `execute(&mut
   Simulation, &mut Session, Vec<Request>)` applies an advance's requests in order: it checks
   that each `Save` and `Advance` is at the simulation's tick (`ExecuteError::OutOfStep`),
   answers each `Save { hash: true }` through `Session::report_hash` at once, steps with the

@@ -5,13 +5,13 @@ mod support;
 
 use ludenea_app::SimError;
 use ludenea_net::{EndReason, ExecuteError, Executor, PeerId, Session, SessionError, SessionState};
-use support::{PANIC_BYTE, handshake, identity, settings, test_simulation};
+use support::{PANIC_BYTE, handshake, settings, test_identity, test_simulation};
 
 const NOW: u64 = 1_000;
 
 #[test]
 fn panic_during_resimulation_restores_and_ends() {
-    let identity = identity(&[0, 1]);
+    let identity = test_identity(&[0, 1]);
     let spec = test_simulation().player_input_spec().unwrap();
     let sessions = (0..2)
         .map(|local| Session::new(settings(local, &identity), spec.clone()).unwrap())
