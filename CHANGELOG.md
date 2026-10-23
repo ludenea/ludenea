@@ -102,6 +102,17 @@ hash, those of the golden trace and replays included.
   field) or a `jitter_micros` of `u32::MAX` (`ConditionsError::JitterTooLarge`). It releases
   the packets due when `receive` is called; `failed_sends()` counts those the inner transport
   refused, which are dropped, and `last_send_error()` gives the latest refusal.
+- `ludenea_net::link` carries messages between peers known by `LinkId` (16 bytes, shown as a
+  UUID). The `Link` trait has a reliable, ordered `Channel::Room` (at most
+  `MAX_ROOM_MESSAGE_BYTES`, 512) and an unreliable `Channel::Match` (at most
+  `MAX_PACKET_BYTES`): `poll()` gives `LinkEvent`s (`Assigned`, `Connected`, `Disconnected`,
+  `Closed`), `send(channel, to, bytes)` refuses with a `LinkError` (`UnknownLink` for a peer
+  not connected, `TooLarge`, `Closed`) and `receive(channel)` gives the next message with its
+  sender. `MemoryMesh` joins `MemoryLink`s in process for tests (`join`, `join_with`,
+  `connect`, `disconnect`; dropping a link disconnects it). `LinkTransport::new(link, links)`
+  is a `Transport` over the match channel where `PeerId(i)` is `links[i]`; it drops and counts
+  (`strays()`) packets from other links. `TransportError` gains `Unreachable { peer }`, for a
+  peer of the match whose link is not connected: the packet is lost.
 - `ludenea_net::wire` is the network protocol of the Formats section:
   `Packet { match_id, messages }` with `encode()`, `Packet::decode(bytes)` and
   `Packet::version_of(bytes)`, the `Message` and `EndNotice` it carries, and `WireError`

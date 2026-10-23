@@ -20,6 +20,10 @@ pub enum TransportError {
     /// The packet is longer than [`MAX_PACKET_BYTES`].
     #[error("a packet of {len} bytes exceeds the {MAX_PACKET_BYTES} byte limit")]
     TooLarge { len: usize },
+    /// The destination is a peer of the match whose link is not connected; the packet is lost,
+    /// as the network loses packets.
+    #[error("{peer} is not connected")]
+    Unreachable { peer: PeerId },
 }
 
 /// Refuses a packet longer than [`MAX_PACKET_BYTES`]; the one place the size rule is written.

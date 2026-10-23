@@ -7,6 +7,7 @@
 #![deny(clippy::float_arithmetic)]
 
 pub mod execute;
+pub mod link;
 mod queue;
 pub mod session;
 pub mod settings;
@@ -15,6 +16,10 @@ pub mod transport;
 pub mod wire;
 
 pub use execute::{ExecuteError, Executor};
+pub use link::{
+    Channel, Link, LinkError, LinkEvent, LinkId, LinkTransport, MAX_ROOM_MESSAGE_BYTES, MemoryLink,
+    MemoryMesh,
+};
 pub use session::{
     Advanced, DropReason, END_LINGER_MICROS, EndReason, HANDSHAKE_RESEND_MICROS, PeerStats,
     QUALITY_HISTORY, QUALITY_INTERVAL_MICROS, Request, SYNC_MIN_REPORTS, Session, SessionError,
