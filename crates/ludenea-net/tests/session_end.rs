@@ -323,7 +323,8 @@ fn goodbye_ends_everyone_at_the_same_tick() {
 #[test]
 fn two_leavers_end_everyone_at_the_lowest_last_tick() {
     // Peers 1 and 2 leave 0, 20 or 150 ms apart, under loss, duplication and reordering:
-    // every peer ends at the lowest last tick, naming the same leaver, with the same inputs.
+    // every peer ends at the lowest last tick the two announced, naming the same leaver, with
+    // the same inputs.
     for peers in [3, 4] {
         for offset_micros in [0, 20_000, 150_000] {
             for seed in 0..4 {
@@ -337,8 +338,18 @@ fn two_leavers_end_everyone_at_the_lowest_last_tick() {
                 harness.leave(PeerId(2));
                 assert!(run_until_all_ended(&mut harness, 2 * ONE_SECOND), "{case}");
                 harness.run_until(ONE_SECOND, |_| false);
-                let (peer, _) = assert_same_left(&harness, &case);
+                let (peer, last_tick) = assert_same_left(&harness, &case);
                 assert!([PeerId(1), PeerId(2)].contains(&peer), "{case}: {peer}");
+                let announced = [PeerId(1), PeerId(2)].map(|leaver| {
+                    harness
+                        .goodbye(leaver)
+                        .unwrap_or_else(|| panic!("{case}: {leaver} said no goodbye"))
+                });
+                assert_eq!(
+                    last_tick,
+                    announced[0].min(announced[1]),
+                    "{case}: {announced:?}"
+                );
             }
         }
     }

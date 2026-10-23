@@ -320,6 +320,8 @@ struct Peer {
     lose_hash_of: Option<u64>,
     /// The packets to this peer lose their inputs, the rest of them delivered.
     strip_inputs_to: Option<PeerId>,
+    /// The last tick of the latest goodbye this peer sent.
+    goodbye: Option<u64>,
     /// Every frame uses the default input, so every prediction is right.
     default_inputs: bool,
     /// The session ended and its simulation landed on the confirmed state.
@@ -420,6 +422,7 @@ impl Harness {
                 sent_packets: 0,
                 lose_hash_of: None,
                 strip_inputs_to: None,
+                goodbye: None,
                 default_inputs: false,
                 landed: false,
             })
@@ -452,6 +455,11 @@ impl Harness {
     /// link that loses what matters one way, while `to` still hears `from`.
     pub fn strip_inputs(&mut self, from: PeerId, to: Option<PeerId>) {
         self.peers[usize::from(from.0)].strip_inputs_to = to;
+    }
+
+    /// The last tick of the latest goodbye `peer` sent.
+    pub fn goodbye(&self, peer: PeerId) -> Option<u64> {
+        self.peers[usize::from(peer.0)].goodbye
     }
 
     /// Has every peer add the default input every frame, so every prediction is right.
@@ -532,6 +540,11 @@ impl Harness {
                 let reports = check_limits(&packet);
                 let mut decoded =
                     Packet::decode(&packet).expect("a session sends packets that decode");
+                for message in &decoded.messages {
+                    if let Message::Goodbye { last_tick } = message {
+                        peer.goodbye = Some(*last_tick);
+                    }
+                }
                 if peer.strip_inputs_to == Some(to) {
                     decoded
                         .messages
