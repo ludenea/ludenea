@@ -180,10 +180,15 @@ hash, those of the golden trace and replays included.
   an `Ack`, and the leaver its `Goodbye`, at most once a tick for `END_LINGER_MICROS`. The
   leaver ends anyway `disconnect_after_micros` after `leave`. A peer holding every input
   through that tick ends with `Lost { peer }` when a peer still talking makes no progress
-  acknowledging its inputs for `disconnect_after_micros`: that peer cannot hear it. A
-  `Goodbye` below the receiver's last confirmed tick is `ViolationRule::GoodbyeBehind`, one
-  past the furthest input an honest peer can have `ViolationRule::BeyondHorizon`. Whatever
-  the ending, once the session ran, the next `advance` (or the one that ended it) returns
+  acknowledging its inputs for `disconnect_after_micros`: that peer cannot hear it. A peer
+  still talking whose inputs make no progress for `disconnect_after_micros` while the session
+  waits for them to run its next tick, stalled at the edge of its window or at the agreed
+  last tick (a peer that only acknowledges, or whose game froze while its network answers),
+  ends it with `Lost { peer }` too, counted from the later of its last input progress and the
+  start of the wait, so it never stalls the match without bound. A `Goodbye` below the
+  receiver's last confirmed tick is `ViolationRule::GoodbyeBehind`, one past the furthest
+  input an honest peer can have `ViolationRule::BeyondHorizon`. Whatever the ending, once
+  the session ran, the next `advance` (or the one that ended it) returns
   the requests that land the simulation on the state the confirmed inputs give at the end
   tick: a `Load` of the latest tick built only from confirmed inputs, then a `Save` (asking
   no hash) and an `Advance` of every confirmed tick from it; no `Release` follows, and the

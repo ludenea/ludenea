@@ -37,11 +37,12 @@
 //! end for the same reason.
 //!
 //! A peer silent for `notice_after_micros` raises [`SessionEvent::PeerSilent`], and
-//! [`SessionEvent::PeerBack`] when it speaks again; silent for `disconnect_after_micros`, it
-//! ends the match with [`EndReason::Lost`] for every peer. A peer that leaves on purpose calls
-//! [`Session::leave`]: its `Goodbye` names the last tick it has its own inputs for, and every
-//! peer, the leaver included, stops at that tick with the same confirmed inputs and ends with
-//! [`EndReason::Left`]. Whatever the ending, the next [`Session::advance`] lands the caller's
+//! [`SessionEvent::PeerBack`] when it speaks again; silent for `disconnect_after_micros`, it ends
+//! the match with [`EndReason::Lost`] for every peer, and so does a peer that still talks but whose
+//! inputs, which the session waits for, make no progress for that long. A peer that leaves on
+//! purpose calls [`Session::leave`]: its `Goodbye` names the last tick it has its own inputs for,
+//! and every peer, the leaver included, stops at that tick with the same confirmed inputs and ends
+//! with [`EndReason::Left`]. Whatever the ending, the next [`Session::advance`] lands the caller's
 //! simulation on the state the confirmed inputs give, unless the caller's game failed: then
 //! [`Session::fail`] ends the match for every peer with [`EndReason::LocalFailure`].
 
@@ -127,8 +128,11 @@ pub enum EndReason {
         local: u64,
         remote: u64,
     },
-    /// No packet came from `peer` for `disconnect_after_micros` while the match ran, here or,
-    /// as its end notice told, on another peer.
+    /// `peer` stopped taking part for `disconnect_after_micros` while the match ran, here or,
+    /// as its end notice told, on another peer: no packet came from it; or its inputs made no
+    /// progress while the session waited for them to run its next tick; or, once the match
+    /// ended on purpose, its acknowledgments of the local inputs made no progress, as
+    /// [`Session::outgoing`] checks.
     Lost { peer: PeerId },
     /// The match ended on purpose at `last_tick`: `peer` left, and every player's inputs
     /// through `last_tick` are confirmed, on this peer and on every other one, unless a peer
@@ -405,6 +409,9 @@ struct Remote {
     /// When the peer's acknowledgment of a local player last moved forward, or the session
     /// started running.
     acks_moved_micros: u64,
+    /// When the confirmed inputs of one of the peer's players last moved forward, or the
+    /// session started running.
+    inputs_moved_micros: u64,
     /// The hash reports of the peer that wait for the local hash of their tick, at most
     /// [`Session::hash_backlog`].
     hashes: BTreeMap<u64, u64>,
@@ -481,6 +488,9 @@ pub struct Session {
     leaving: Option<(u64, u64)>,
     /// When this session first held every input through the agreed last tick.
     complete_micros: Option<u64>,
+    /// Since when this session waits for remote inputs to run its next tick, as
+    /// [`Session::check_silence`] last saw it.
+    waiting_micros: Option<u64>,
     /// The session ended while running or leaving, and the advance that lands the caller's
     /// simulation on the confirmed state has not been returned yet.
     land_due: bool,
@@ -537,6 +547,7 @@ impl Session {
                 silent: false,
                 said_goodbye: false,
                 acks_moved_micros: 0,
+                inputs_moved_micros: 0,
                 corrections: VecDeque::new(),
                 hashes: BTreeMap::new(),
                 hashes_received: 0,
@@ -593,6 +604,7 @@ impl Session {
             closing: None,
             leaving: None,
             complete_micros: None,
+            waiting_micros: None,
             land_due: false,
             now_micros: None,
             events: Vec::new(),
@@ -1395,7 +1407,8 @@ impl Session {
     /// ([`ViolationRule::InvalidInput`]). Then each input is confirmed in order: one that
     /// differs from the confirmed input of its tick is [`ViolationRule::ConflictingInput`],
     /// and inputs that start after the next expected tick are dropped as a [`DropReason::Gap`].
-    /// Inputs past the agreed last tick are ignored.
+    /// Inputs past the agreed last tick are ignored. A new confirmed input records the time
+    /// the sender's inputs moved forward.
     fn read_inputs(
         &mut self,
         from: PeerId,
@@ -1429,11 +1442,17 @@ impl Session {
                     return Err(violation(tick, ViolationRule::InvalidInput));
                 }
                 let last = self.closing.map_or(u64::MAX, |closing| closing.last_tick);
+                let now = self.now_micros.unwrap_or(0);
                 for (tick, input) in ticks.take_while(|(tick, _)| *tick <= last) {
                     let queue = &mut self.queues[index];
                     let used = queue.used(tick).map(<[u8]>::to_vec);
                     match queue.confirm(tick, input.clone()) {
                         Ok(Confirmed::New) => {
+                            if let Some(remote) =
+                                self.remotes.iter_mut().find(|remote| remote.id == from)
+                            {
+                                remote.inputs_moved_micros = now;
+                            }
                             if used.is_some_and(|used| used != *input) {
                                 let stats = self.stats.peers.entry(from).or_default();
                                 stats.prediction_misses = stats.prediction_misses.saturating_add(1);
@@ -2019,6 +2038,7 @@ impl Session {
             for remote in &mut self.remotes {
                 remote.last_heard_micros = now;
                 remote.acks_moved_micros = now;
+                remote.inputs_moved_micros = now;
             }
         }
     }
@@ -2040,6 +2060,18 @@ impl Session {
     /// may have ended with `Left` already; the wait is bounded either way. It raises no
     /// [`SessionEvent::PeerSilent`] before: the peer is heard, and the notice says it is not.
     /// Otherwise the session ends with [`EndReason::Lost`] naming the first silent peer.
+    ///
+    /// A peer still talking can also stall the match: one that only acknowledges, or whose
+    /// game froze while its network answers. While this session waits for remote inputs to
+    /// run its next tick (stalled `rollback_window` ticks past the confirmed tick, or past the
+    /// agreed last tick with an input through it missing), a peer owning a player whose input
+    /// of the confirmed tick is missing, and whose inputs made no progress for
+    /// `disconnect_after_micros`, ends the session with [`EndReason::Lost`] naming it, as for
+    /// a silent peer, and its end notice ends the other peers the same way. The time is
+    /// counted from the later of the peer's last input progress and the start of the wait, so
+    /// a peer that just stalled on another one still has the whole timeout to answer. An
+    /// honest peer sends a new input with every tick it runs: only a peer that stopped running
+    /// for that long trips it, and a peer stalled on a third one finds that one first.
     ///
     /// A peer that said goodbye and whose inputs through the agreed last tick are all
     /// confirmed raises no notice and is never lost: it has nothing more to send, and ends
@@ -2080,6 +2112,17 @@ impl Session {
             now.saturating_sub(remote.last_heard_micros) >= timeouts.disconnect_after_micros
         };
         let confirmed = self.confirmed_tick();
+        let window = u64::from(self.settings.identity.rules.rollback_window);
+        let waiting = match self.closing {
+            Some(closing) if self.tick > closing.last_tick => confirmed <= closing.last_tick,
+            _ => self.tick.saturating_sub(confirmed) >= window,
+        };
+        let waiting_since = if waiting {
+            Some(*self.waiting_micros.get_or_insert(now))
+        } else {
+            self.waiting_micros = None;
+            None
+        };
         let reason = match self.closing {
             Some(closing) if confirmed > closing.last_tick => {
                 let complete = *self.complete_micros.get_or_insert(now);
@@ -2103,16 +2146,39 @@ impl Session {
                     None => (any_silent && talking_acknowledged).then(|| left(closing)),
                 }
             }
-            _ => self
-                .remotes
-                .iter()
-                .zip(&heard_out)
-                .find(|(remote, out)| !**out && is_silent(remote))
-                .map(|(remote, _)| EndReason::Lost { peer: remote.id }),
+            _ => {
+                let silent = self
+                    .remotes
+                    .iter()
+                    .zip(&heard_out)
+                    .find(|(remote, out)| !**out && is_silent(remote))
+                    .map(|(remote, _)| remote.id);
+                let withholding = || {
+                    let since = waiting_since?;
+                    self.remotes
+                        .iter()
+                        .find(|remote| {
+                            self.holds_back(remote.id, confirmed)
+                                && now.saturating_sub(remote.inputs_moved_micros.max(since))
+                                    >= timeouts.disconnect_after_micros
+                        })
+                        .map(|remote| remote.id)
+                };
+                silent
+                    .or_else(withholding)
+                    .map(|peer| EndReason::Lost { peer })
+            }
         };
         if let Some(reason) = reason {
             self.end(now, reason);
         }
+    }
+
+    /// Whether a player of `peer` lacks its confirmed input of `confirmed`, the confirmed tick:
+    /// the session cannot confirm that tick until `peer` sends it.
+    fn holds_back(&self, peer: PeerId, confirmed: u64) -> bool {
+        owned_by(&self.settings, peer)
+            .any(|player| self.queues[usize::from(player)].next_confirmed() == Some(confirmed))
     }
 
     /// Whether `peer` said goodbye and every input of its players through the agreed last

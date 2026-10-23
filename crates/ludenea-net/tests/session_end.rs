@@ -1,8 +1,8 @@
 mod support;
 
 use ludenea_net::{
-    EndReason, LinkConditions, MatchRules, Message, Packet, PeerId, Request, Session, SessionError,
-    SessionEvent, SessionState, Timeouts, ViolationRule,
+    EndNotice, EndReason, LinkConditions, MatchRules, Message, Packet, PeerId, Request, Session,
+    SessionError, SessionEvent, SessionState, Timeouts, ViolationRule,
 };
 use support::{Harness, handshake, identity, offline_hashes, sessions, sessions_of};
 
@@ -606,6 +606,80 @@ fn peer_that_never_acknowledges_after_the_end_is_lost() {
         waited <= timeouts.disconnect_after_micros + ONE_SECOND / 2,
         "{waited}"
     );
+}
+
+#[test]
+fn peer_that_answers_without_inputs_is_lost_on_every_peer() {
+    // The game of the last peer freezes while its network still answers: it acknowledges and
+    // answers quality requests, and sends no input. The other peers stall at the edge of
+    // their window; `disconnect_after_micros` after its inputs last moved forward, they end
+    // with `Lost` naming it, and their notice ends it the same way.
+    let timeouts = Timeouts::default();
+    for peers in [2, 3] {
+        let frozen = PeerId(peers - 1);
+        let lost = ended(EndReason::Lost { peer: frozen });
+        let mut harness = Harness::new(sessions(peers));
+        assert!(harness.run_until_running(ONE_SECOND));
+        harness.run_until(ONE_SECOND, |_| false);
+        let froze = harness.now_micros();
+        harness.freeze(frozen);
+        assert!(
+            harness.run_until(2 * timeouts.disconnect_after_micros, |harness| {
+                harness.peers().all(|peer| harness.state(peer) == lost)
+            }),
+            "{peers} peers: {:?}",
+            harness
+                .peers()
+                .map(|peer| harness.state(peer))
+                .collect::<Vec<_>>()
+        );
+        let waited = harness.now_micros() - froze;
+        assert!(
+            waited >= timeouts.disconnect_after_micros - ONE_SECOND / 10
+                && waited <= timeouts.disconnect_after_micros + ONE_SECOND / 2,
+            "{peers} peers: {waited}"
+        );
+        for peer in harness.peers().filter(|peer| *peer != frozen) {
+            assert_landed(&harness, peer);
+        }
+    }
+}
+
+#[test]
+fn stalled_session_waits_for_inputs_up_to_the_timeout() {
+    // Peer 0 runs to the edge of its window on the default inputs of peer 1's first ticks,
+    // then stalls at `NOW`. Peer 1 keeps acknowledging and sends no input: peer 0 waits
+    // `disconnect_after_micros` from the later of the stall and peer 1's last input progress
+    // (the start, at 0), then ends with `Lost { 1 }`.
+    let disconnect = NOW + Timeouts::default().disconnect_after_micros;
+    let mut session = handshake(sessions(2)).remove(0);
+    let window = u64::from(MatchRules::default().rollback_window);
+    let delay = u64::from(MatchRules::default().input_delay);
+    for _ in 0..window + delay {
+        step(&mut session, 0);
+    }
+    assert!(session.stats().peers[&PeerId(1)].stalls > 0);
+    let packet = Packet {
+        match_id: 1,
+        messages: vec![ack(0, 1)],
+    };
+    let mut now = NOW;
+    while now + 500_000 < disconnect {
+        now += 500_000;
+        session.receive(PeerId(1), &packet.encode(), now);
+        session.outgoing(now);
+        assert_eq!(session.state(), SessionState::Running, "at {now}");
+    }
+    session.outgoing(disconnect - 1);
+    assert_eq!(session.state(), SessionState::Running);
+    let sent = session.outgoing(disconnect);
+    assert_eq!(session.state(), ended(EndReason::Lost { peer: PeerId(1) }));
+    // Its notice tells peer 1 why.
+    let notice = vec![Message::End {
+        reason: EndNotice::Lost { peer: PeerId(1) },
+    }];
+    assert_eq!(sent.len(), 1);
+    assert_eq!(Packet::decode(&sent[0].1).unwrap().messages, notice);
 }
 
 #[test]
