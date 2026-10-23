@@ -704,10 +704,6 @@ fn link(byte: u8) -> LinkId {
     LinkId([byte; 16])
 }
 
-fn room_bytes(message: &RoomMessage) -> Vec<u8> {
-    message.encode()
-}
-
 #[test]
 fn room_messages_round_trip() {
     let messages = [
@@ -732,7 +728,7 @@ fn room_messages_round_trip() {
         },
     ];
     for message in messages {
-        let bytes = room_bytes(&message);
+        let bytes = message.encode();
         assert_eq!(&bytes[..2], &NET_PROTOCOL_VERSION.to_le_bytes());
         assert!(bytes.len() <= MAX_ROOM_MESSAGE_BYTES);
         assert_eq!(RoomMessage::decode(&bytes), Ok(message));
@@ -741,7 +737,7 @@ fn room_messages_round_trip() {
 
 #[test]
 fn room_decode_refuses() {
-    let host = room_bytes(&RoomMessage::Host { peers: 2 });
+    let host = RoomMessage::Host { peers: 2 }.encode();
 
     let mut too_large = host.clone();
     too_large.resize(MAX_ROOM_MESSAGE_BYTES + 1, 0);
@@ -794,26 +790,80 @@ fn room_decode_refuses() {
             counts: vec![1; 5],
         },
     ] {
-        let error = RoomMessage::decode(&room_bytes(&message)).expect_err("five peers");
+        let error = RoomMessage::decode(&message.encode()).expect_err("five peers");
         assert_eq!(error, WireError::TooManyPeers { count: 5 });
         assert_eq!(error.variant(), "TooManyPeers");
         assert!(error.to_string().contains('5'));
     }
 }
 
+/// Messages whose lists sit at, or one past, the limit of peers.
+fn room_samples() -> Vec<RoomMessage> {
+    let links = |count: u8| (1..=count).map(link).collect::<Vec<_>>();
+    vec![
+        RoomMessage::Host { peers: 4 },
+        RoomMessage::Ready {
+            players: 3,
+            connected: links(3),
+        },
+        RoomMessage::Ready {
+            players: 4,
+            connected: links(5),
+        },
+        RoomMessage::Layout {
+            match_id: u64::MAX,
+            links: links(4),
+            counts: vec![1, 2, 0, 1],
+        },
+        RoomMessage::Layout {
+            match_id: 7,
+            links: links(5),
+            counts: vec![1; 5],
+        },
+        RoomMessage::Refuse {
+            reason: RoomRefusal::TooManyPlayers { total: 9 },
+        },
+    ]
+}
+
 #[test]
 fn fuzz_room_decode_never_panics() {
+    let samples = room_samples();
     for seed in 0..20_000u64 {
         let mut rng = Rng::new(seed, 0);
-        let len = below(&mut rng, MAX_ROOM_MESSAGE_BYTES + 100);
-        let mut bytes = bytes_of(&mut rng, len);
-        if seed % 2 == 1 && len >= 2 {
-            bytes[..2].copy_from_slice(&NET_PROTOCOL_VERSION.to_le_bytes());
-        }
-        if seed % 4 == 3 && len >= 3 {
-            // A variant tag in range, so the decoder reads into the lists.
-            bytes[2] = rng.range_u32(0, 4) as u8;
-        }
+        let bytes = if seed % 2 == 0 {
+            let mut bytes = samples[(seed / 2) as usize % samples.len()].encode();
+            match rng.range_u32(0, 3) {
+                0 => {
+                    for _ in 0..1 + rng.range_u32(0, 4) {
+                        let at = below(&mut rng, bytes.len());
+                        bytes[at] ^= 1 << rng.range_u32(0, 8);
+                    }
+                }
+                1 => {
+                    let at = below(&mut rng, bytes.len() + 1);
+                    let extra = 1 + below(&mut rng, 8);
+                    let inserted = bytes_of(&mut rng, extra);
+                    bytes.splice(at..at, inserted);
+                }
+                _ => {
+                    let len = below(&mut rng, bytes.len());
+                    bytes.truncate(len);
+                }
+            }
+            bytes
+        } else {
+            let len = below(&mut rng, MAX_ROOM_MESSAGE_BYTES + 100);
+            let mut bytes = bytes_of(&mut rng, len);
+            if seed % 4 == 1 && len >= 2 {
+                bytes[..2].copy_from_slice(&NET_PROTOCOL_VERSION.to_le_bytes());
+            }
+            if seed % 8 == 1 && len >= 3 {
+                // A variant tag in range, so the decoder reads into the lists.
+                bytes[2] = rng.range_u32(0, 4) as u8;
+            }
+            bytes
+        };
         if let Ok(decoded) = RoomMessage::decode(&bytes) {
             assert!(
                 decoded.encode().len() <= MAX_ROOM_MESSAGE_BYTES,

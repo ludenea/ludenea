@@ -34,44 +34,38 @@ fn room_code_parse_accepts_lowercase_and_spaces() {
 
 #[test]
 fn room_code_parse_refuses() {
-    let cases: [(&str, RoomCodeError, &str); 8] = [
-        (
-            "ABCDE",
-            RoomCodeError::Length { found: 5 },
-            "a room code has 6 characters, this one has 5",
-        ),
-        (
-            "ABCDEFG",
-            RoomCodeError::Length { found: 7 },
-            "a room code has 6 characters, this one has 7",
-        ),
-        ("ABC0EF", character('0', 4), ""),
-        ("ABCDEO", character('O', 6), ""),
-        ("1BCDEF", character('1', 1), ""),
-        ("ABIDEF", character('I', 3), ""),
-        ("AbcdeL", character('L', 6), ""),
-        ("ABC-EF", character('-', 4), ""),
+    for (text, found) in [("ABCDE", 5), ("ABCDEFG", 7)] {
+        let error = RoomCode::parse(text).expect_err(text);
+        assert_eq!(error, RoomCodeError::Length { found }, "{text}");
+        assert_eq!(
+            error.to_string(),
+            format!("a room code has 6 characters, this one has {found}")
+        );
+    }
+    let characters = [
+        ("ABC0EF", '0', 4),
+        ("ABCDEO", 'O', 6),
+        ("1BCDEF", '1', 1),
+        ("ABIDEF", 'I', 3),
+        ("AbcdeL", 'L', 6),
+        ("ABC-EF", '-', 4),
     ];
-    for (text, error, message) in cases {
-        let found = RoomCode::parse(text).expect_err(text);
-        assert_eq!(found, error, "{text}");
-        let expected = match error {
-            RoomCodeError::Length { .. } => message.to_string(),
+    for (text, character, position) in characters {
+        let error = RoomCode::parse(text).expect_err(text);
+        assert_eq!(
+            error,
             RoomCodeError::Character {
                 character,
-                position,
-            } => format!(
+                position
+            },
+            "{text}"
+        );
+        assert_eq!(
+            error.to_string(),
+            format!(
                 "'{character}' (character {position}) is not in a room code, which uses the \
                  digits 2 to 9 and the letters except I, L and O"
-            ),
-        };
-        assert_eq!(found.to_string(), expected);
-    }
-}
-
-fn character(character: char, position: usize) -> RoomCodeError {
-    RoomCodeError::Character {
-        character,
-        position,
+            )
+        );
     }
 }
