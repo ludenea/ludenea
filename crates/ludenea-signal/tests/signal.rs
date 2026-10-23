@@ -638,3 +638,24 @@ fn a_client_that_stops_reading_a_file_is_cut_off() {
     let _ = stalled.read_to_end(&mut received);
     assert!(received.len() < SIZE, "the whole file arrived");
 }
+
+#[test]
+fn a_close_frame_is_given_time_to_arrive() {
+    let address = start_with(Limits {
+        idle: Duration::from_secs(1),
+        ..Limits::default()
+    });
+    let (host, _) = join(address, "/rooms/ABCDEF?host=2");
+    let MaybeTlsStream::Plain(mut stream) = host.into_inner() else {
+        panic!("a plain connection");
+    };
+    // Read the close frame's bytes past the WebSocket client, which would answer it.
+    let mut frame = [0; 4];
+    stream.read_exact(&mut frame).unwrap();
+    assert_eq!(frame[0], 0x88, "a close frame");
+    assert_eq!(u16::from_be_bytes([frame[2], frame[3]]), 1001);
+    let mut rest = vec![0; usize::from(frame[1]) - 2];
+    stream.read_exact(&mut rest).unwrap();
+    // The listener keeps the connection open a moment for the client's answer.
+    assert!(unanswered(&mut stream, Duration::from_millis(300)));
+}

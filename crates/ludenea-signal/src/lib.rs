@@ -206,7 +206,9 @@ async fn room(
             // The reservation moved here: dropped unused if the upgrade fails.
             match reservation.arrive() {
                 Some(membership) => member(socket, membership, remote, &limits).await,
-                None => close(&mut socket, close_code::ERROR, "the room is gone", &limits).await,
+                None => {
+                    send_close(&mut socket, close_code::ERROR, "the room is gone", &limits).await;
+                }
             }
         })
 }
@@ -267,111 +269,137 @@ async fn member(
 ) {
     let idle = tokio::time::sleep(limits.idle);
     tokio::pin!(idle);
-    loop {
-        tokio::select! {
+    let ending = loop {
+        let step = tokio::select! {
             frame = socket.recv() => {
                 idle.set(tokio::time::sleep(limits.idle));
-                if !received(&mut socket, &membership, remote, limits, frame).await {
-                    return;
-                }
+                received(&membership, limits, frame)
             }
-            event = membership.events.recv() => {
-                if !forward(&mut socket, remote, limits, event).await {
-                    return;
-                }
-            }
+            event = membership.events.recv() => forward(&mut socket, limits, event).await,
             () = &mut idle => {
                 let reason = format!("no frame for {} seconds", limits.idle.as_secs());
-                close(&mut socket, close_code::AWAY, &reason, limits).await;
-                return;
+                Step::Close(Ending::new(close_code::AWAY, reason))
             }
+        };
+        match step {
+            Step::Go => {}
+            Step::Stop => return,
+            Step::Close(ending) => break ending,
+        }
+    };
+    // The member leaves its room before the close lingers.
+    drop(membership);
+    if ending.code != close_code::AWAY {
+        eprintln!(
+            "warning: closed the signaling connection of {remote} ({}): {}",
+            ending.code, ending.reason
+        );
+    }
+    if !send_close(&mut socket, ending.code, &ending.reason, limits).await {
+        return;
+    }
+    if ending.code == close_code::SIZE {
+        // The rest of the refused message cannot be read past: wait without reading.
+        tokio::time::sleep(LINGER).await;
+        return;
+    }
+    // Wait for the client's answer, reading past whatever it still sends, so the connection
+    // does not reset before the close frame arrives. No answer in time: it ends anyway.
+    let answer = async {
+        while let Some(Ok(message)) = socket.recv().await {
+            if matches!(message, Message::Close(_)) {
+                break;
+            }
+        }
+    };
+    let _ = tokio::time::timeout(LINGER, answer).await;
+}
+
+/// What the connection of a member does next.
+enum Step {
+    Go,
+    /// The client is gone, or cannot be written to: nothing to say.
+    Stop,
+    Close(Ending),
+}
+
+/// How a member's connection closes.
+struct Ending {
+    code: u16,
+    reason: String,
+}
+
+impl Ending {
+    fn new(code: u16, reason: impl Into<String>) -> Ending {
+        Ending {
+            code,
+            reason: reason.into(),
         }
     }
 }
 
-/// Handles a frame from the member; `false` once its connection is to end.
-async fn received(
-    socket: &mut WebSocket,
+/// Handles a frame from the member.
+fn received(
     membership: &Membership,
-    remote: SocketAddr,
     limits: &Limits,
     frame: Option<Result<Message, axum::Error>>,
-) -> bool {
+) -> Step {
     let text = match frame {
         Some(Ok(Message::Text(text))) => text,
-        Some(Ok(Message::Ping(_) | Message::Pong(_))) => return true,
+        Some(Ok(Message::Ping(_) | Message::Pong(_))) => return Step::Go,
         Some(Ok(Message::Binary(_))) => {
-            let reason = "signaling messages are JSON text";
-            refuse(socket, remote, close_code::POLICY, reason, limits).await;
-            return false;
+            return Step::Close(Ending::new(
+                close_code::POLICY,
+                "signaling messages are JSON text",
+            ));
         }
-        Some(Ok(Message::Close(_))) | None => return false,
+        Some(Ok(Message::Close(_))) | None => return Step::Stop,
         Some(Err(error)) => {
-            if oversized(error).is_some() {
-                let limit = limits.max_message_bytes;
-                let reason = format!("a message over the limit of {limit} bytes");
-                refuse(socket, remote, close_code::SIZE, &reason, limits).await;
-                tokio::time::sleep(LINGER).await;
+            if oversized(error).is_none() {
+                return Step::Stop;
             }
-            return false;
+            let limit = limits.max_message_bytes;
+            let reason = format!("a message over the limit of {limit} bytes");
+            return Step::Close(Ending::new(close_code::SIZE, reason));
         }
     };
     match text.as_str().parse::<JsonPeerRequest>() {
         Ok(JsonPeerRequest::Signal { receiver, data }) => {
             membership.relay(receiver, data);
-            true
+            Step::Go
         }
-        Ok(JsonPeerRequest::KeepAlive) => true,
-        Err(_) => {
-            let reason = "not a signaling request";
-            refuse(socket, remote, close_code::POLICY, reason, limits).await;
-            false
-        }
+        Ok(JsonPeerRequest::KeepAlive) => Step::Go,
+        Err(_) => Step::Close(Ending::new(close_code::POLICY, "not a signaling request")),
     }
 }
 
-/// Sends an event queued for the member; `false` once its connection is to end: the queue
-/// ended because the member fell behind, or the send failed or stayed blocked for
-/// [`Limits::idle`].
-async fn forward(
-    socket: &mut WebSocket,
-    remote: SocketAddr,
-    limits: &Limits,
-    event: Option<String>,
-) -> bool {
+/// Sends an event queued for the member. The queue ends when the member fell behind; a
+/// send that fails or stays blocked for [`Limits::idle`] stops the connection.
+async fn forward(socket: &mut WebSocket, limits: &Limits, event: Option<String>) -> Step {
     match event {
         Some(text) => {
             let send = socket.send(Message::Text(text.into()));
-            matches!(tokio::time::timeout(limits.idle, send).await, Ok(Ok(())))
+            match tokio::time::timeout(limits.idle, send).await {
+                Ok(Ok(())) => Step::Go,
+                _ => Step::Stop,
+            }
         }
         None => {
             let reason = format!("more than {} messages were waiting", limits.queue);
-            refuse(socket, remote, close_code::AGAIN, &reason, limits).await;
-            false
+            Step::Close(Ending::new(close_code::AGAIN, reason))
         }
     }
 }
 
-/// Closes a connection that broke a rule with `code` and `reason`, and logs it.
-async fn refuse(
-    socket: &mut WebSocket,
-    remote: SocketAddr,
-    code: u16,
-    reason: &str,
-    limits: &Limits,
-) {
-    eprintln!("warning: closed the signaling connection of {remote} ({code}): {reason}");
-    close(socket, code, reason, limits).await;
-}
-
-async fn close(socket: &mut WebSocket, code: u16, reason: &str, limits: &Limits) {
+/// Sends a close frame; `false` when it cannot be sent within [`Limits::idle`], which means
+/// the client is gone or not reading.
+async fn send_close(socket: &mut WebSocket, code: u16, reason: &str, limits: &Limits) -> bool {
     let frame = CloseFrame {
         code,
         reason: reason.into(),
     };
-    // A close that cannot be sent in time means the client is gone or not reading: the
-    // connection ends either way.
-    let _ = tokio::time::timeout(limits.idle, socket.send(Message::Close(Some(frame)))).await;
+    let send = socket.send(Message::Close(Some(frame)));
+    matches!(tokio::time::timeout(limits.idle, send).await, Ok(Ok(())))
 }
 
 /// The size and the limit of a message over a WebSocket's size limit, if `error` refuses
