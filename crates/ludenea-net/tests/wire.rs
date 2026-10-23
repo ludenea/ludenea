@@ -826,49 +826,57 @@ fn room_samples() -> Vec<RoomMessage> {
     ]
 }
 
+fn assert_room_decode_holds(seed: u64, bytes: &[u8]) {
+    if let Ok(decoded) = RoomMessage::decode(bytes) {
+        assert!(
+            decoded.encode().len() <= MAX_ROOM_MESSAGE_BYTES,
+            "seed {seed}: a decoded message encodes beyond the limit"
+        );
+    }
+}
+
 #[test]
 fn fuzz_room_decode_never_panics() {
-    let samples = room_samples();
     for seed in 0..20_000u64 {
         let mut rng = Rng::new(seed, 0);
-        let bytes = if seed % 2 == 0 {
-            let mut bytes = samples[(seed / 2) as usize % samples.len()].encode();
-            match rng.range_u32(0, 3) {
-                0 => {
-                    for _ in 0..1 + rng.range_u32(0, 4) {
-                        let at = below(&mut rng, bytes.len());
-                        bytes[at] ^= 1 << rng.range_u32(0, 8);
-                    }
-                }
-                1 => {
-                    let at = below(&mut rng, bytes.len() + 1);
-                    let extra = 1 + below(&mut rng, 8);
-                    let inserted = bytes_of(&mut rng, extra);
-                    bytes.splice(at..at, inserted);
-                }
-                _ => {
-                    let len = below(&mut rng, bytes.len());
-                    bytes.truncate(len);
-                }
-            }
-            bytes
-        } else {
-            let len = below(&mut rng, MAX_ROOM_MESSAGE_BYTES + 100);
-            let mut bytes = bytes_of(&mut rng, len);
-            if seed % 4 == 1 && len >= 2 {
-                bytes[..2].copy_from_slice(&NET_PROTOCOL_VERSION.to_le_bytes());
-            }
-            if seed % 8 == 1 && len >= 3 {
-                // A variant tag in range, so the decoder reads into the lists.
-                bytes[2] = rng.range_u32(0, 4) as u8;
-            }
-            bytes
-        };
-        if let Ok(decoded) = RoomMessage::decode(&bytes) {
-            assert!(
-                decoded.encode().len() <= MAX_ROOM_MESSAGE_BYTES,
-                "seed {seed}: a decoded message encodes beyond the limit"
-            );
+        let len = below(&mut rng, MAX_ROOM_MESSAGE_BYTES + 100);
+        let mut bytes = bytes_of(&mut rng, len);
+        // Half of them carry this version's prefix, so the decoder reads past it.
+        if seed % 2 == 1 && len >= 2 {
+            bytes[..2].copy_from_slice(&NET_PROTOCOL_VERSION.to_le_bytes());
         }
+        if seed % 4 == 3 && len >= 3 {
+            // A variant tag in range, so the decoder reads into the lists.
+            bytes[2] = rng.range_u32(0, 4) as u8;
+        }
+        assert_room_decode_holds(seed, &bytes);
+    }
+}
+
+#[test]
+fn fuzz_room_decode_of_mutated_encodings_never_panics() {
+    let samples = room_samples();
+    for seed in 0..20_000u64 {
+        let mut rng = Rng::new(seed, 1);
+        let mut bytes = samples[seed as usize % samples.len()].encode();
+        match rng.range_u32(0, 3) {
+            0 => {
+                for _ in 0..1 + rng.range_u32(0, 4) {
+                    let at = below(&mut rng, bytes.len());
+                    bytes[at] ^= 1 << rng.range_u32(0, 8);
+                }
+            }
+            1 => {
+                let at = below(&mut rng, bytes.len() + 1);
+                let extra = 1 + below(&mut rng, 8);
+                let inserted = bytes_of(&mut rng, extra);
+                bytes.splice(at..at, inserted);
+            }
+            _ => {
+                let len = below(&mut rng, bytes.len());
+                bytes.truncate(len);
+            }
+        }
+        assert_room_decode_holds(seed, &bytes);
     }
 }
