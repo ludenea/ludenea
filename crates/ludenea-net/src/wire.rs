@@ -7,9 +7,10 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::link::{LinkId, MAX_ROOM_MESSAGE_BYTES};
 use crate::settings::{
-    MAX_ENGINE_BYTES, MAX_INPUT_BYTES, MAX_MESSAGES_PER_PACKET, MAX_PACKET_BYTES, MAX_PLAYERS,
-    MAX_TICKS_PER_MESSAGE, MatchIdentity, PeerId,
+    MAX_ENGINE_BYTES, MAX_INPUT_BYTES, MAX_MESSAGES_PER_PACKET, MAX_PACKET_BYTES, MAX_PEERS,
+    MAX_PLAYERS, MAX_TICKS_PER_MESSAGE, MatchIdentity, PeerId,
 };
 
 /// The version of the network wire format this build writes and reads.
@@ -81,9 +82,10 @@ pub enum EndNotice {
 /// Why received bytes are not a packet this build accepts.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum WireError {
-    /// The datagram is longer than [`MAX_PACKET_BYTES`].
-    #[error("packet of {len} bytes exceeds {MAX_PACKET_BYTES} bytes")]
-    TooLarge { len: usize },
+    /// The bytes are longer than `max`: [`MAX_PACKET_BYTES`] for a packet,
+    /// [`MAX_ROOM_MESSAGE_BYTES`] for a room message.
+    #[error("{len} bytes exceed the {max} bytes allowed")]
+    TooLarge { len: usize, max: usize },
     /// The prefix names another version of the format.
     #[error("network protocol version {found}, expected {expected}")]
     Version { found: u16, expected: u16 },
@@ -112,6 +114,9 @@ pub enum WireError {
     /// A `Hello` whose engine string is longer than [`MAX_ENGINE_BYTES`].
     #[error("engine string of {len} bytes exceeds {MAX_ENGINE_BYTES} bytes")]
     EngineTooLong { len: usize },
+    /// A list of peers in a room message is longer than [`MAX_PEERS`].
+    #[error("room message lists {count} peers, at most {MAX_PEERS} allowed")]
+    TooManyPeers { count: usize },
 }
 
 impl WireError {
@@ -127,6 +132,7 @@ impl WireError {
             WireError::InputTooLarge { .. } => "InputTooLarge",
             WireError::TooManyPlayers { .. } => "TooManyPlayers",
             WireError::EngineTooLong { .. } => "EngineTooLong",
+            WireError::TooManyPeers { .. } => "TooManyPeers",
         }
     }
 }
@@ -153,21 +159,12 @@ impl Packet {
     ///
     /// The first limit the bytes break, as a [`WireError`].
     pub fn decode(bytes: &[u8]) -> Result<Packet, WireError> {
-        // The version first, so a packet of another version names it whatever its length.
-        let found = Self::version_of(bytes).ok_or_else(|| {
-            WireError::Malformed(format!(
-                "{} bytes, shorter than the {PREFIX_BYTES}-byte version prefix",
-                bytes.len()
-            ))
-        })?;
-        if found != NET_PROTOCOL_VERSION {
-            return Err(WireError::Version {
-                found,
-                expected: NET_PROTOCOL_VERSION,
-            });
-        }
+        check_version(bytes)?;
         if bytes.len() > MAX_PACKET_BYTES {
-            return Err(WireError::TooLarge { len: bytes.len() });
+            return Err(WireError::TooLarge {
+                len: bytes.len(),
+                max: MAX_PACKET_BYTES,
+            });
         }
         // What postcard allocates is bounded by the bytes: it gives a sequence's declared
         // length as the size hint only when at least that many bytes remain, none otherwise
@@ -238,5 +235,97 @@ fn check_players(message: &'static str, count: usize) -> Result<(), WireError> {
         Err(WireError::TooManyPlayers { message, count })
     } else {
         Ok(())
+    }
+}
+
+/// Refuses bytes that do not start with this build's version prefix. The version comes first,
+/// so bytes of another version name it whatever their length.
+fn check_version(bytes: &[u8]) -> Result<(), WireError> {
+    let found = Packet::version_of(bytes).ok_or_else(|| {
+        WireError::Malformed(format!(
+            "{} bytes, shorter than the {PREFIX_BYTES}-byte version prefix",
+            bytes.len()
+        ))
+    })?;
+    if found == NET_PROTOCOL_VERSION {
+        Ok(())
+    } else {
+        Err(WireError::Version {
+            found,
+            expected: NET_PROTOCOL_VERSION,
+        })
+    }
+}
+
+/// A message of the reliable room channel, which peers exchange before a match to agree on
+/// who plays.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RoomMessage {
+    /// The host opens a room for `peers` peers, itself included.
+    Host { peers: u8 },
+    /// The room is complete: `players` players in all, and the peers `connected` to the sender.
+    Ready { players: u8, connected: Vec<LinkId> },
+    /// The match the host decided: its id, the peers in peer order, and the local players of
+    /// each, in the same order.
+    Layout {
+        match_id: u64,
+        links: Vec<LinkId>,
+        counts: Vec<u8>,
+    },
+    /// The host refuses the room.
+    Refuse { reason: RoomRefusal },
+}
+
+/// Why a host refuses a room.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RoomRefusal {
+    /// The room already holds all its peers.
+    Full,
+    /// The peers bring `total` players, more than a match allows.
+    TooManyPlayers { total: u8 },
+    /// The game cannot be played with the players that came.
+    Unplayable,
+}
+
+impl RoomMessage {
+    /// The version prefix followed by the postcard encoding of the message. The sender keeps
+    /// the result within [`MAX_ROOM_MESSAGE_BYTES`]; this does not check it.
+    pub fn encode(&self) -> Vec<u8> {
+        postcard::to_extend(self, NET_PROTOCOL_VERSION.to_le_bytes().to_vec())
+            .expect("a room message always encodes")
+    }
+
+    /// Decodes untrusted bytes, refusing anything but one message of this version within
+    /// every limit of the format.
+    ///
+    /// # Errors
+    ///
+    /// The first limit the bytes break, as a [`WireError`].
+    pub fn decode(bytes: &[u8]) -> Result<RoomMessage, WireError> {
+        check_version(bytes)?;
+        if bytes.len() > MAX_ROOM_MESSAGE_BYTES {
+            return Err(WireError::TooLarge {
+                len: bytes.len(),
+                max: MAX_ROOM_MESSAGE_BYTES,
+            });
+        }
+        // Bounded like a packet: the length check above caps what a declared length reserves.
+        let message: RoomMessage =
+            ludenea_ecs::decode_exact(&bytes[PREFIX_BYTES..]).map_err(WireError::Malformed)?;
+        message.check()?;
+        Ok(message)
+    }
+
+    fn check(&self) -> Result<(), WireError> {
+        let count = match self {
+            RoomMessage::Ready { connected, .. } => connected.len(),
+            RoomMessage::Layout { links, counts, .. } => links.len().max(counts.len()),
+            RoomMessage::Host { .. } | RoomMessage::Refuse { .. } => return Ok(()),
+        };
+        if count > MAX_PEERS {
+            Err(WireError::TooManyPeers { count })
+        } else {
+            Ok(())
+        }
     }
 }

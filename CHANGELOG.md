@@ -1209,6 +1209,15 @@ hash, those of the golden trace and replays included.
   not fit in 1200 bytes (`SettingsError::PacketTooLarge`, naming the peer and both sizes) or
   holds more than 16 messages (`SettingsError::PacketTooManyMessages`, naming the peer and
   both counts), so every peer refuses the same settings.
+  Before a match, peers exchange `RoomMessage`s on a reliable room channel, with the same
+  version prefix and postcard encoding: `Host` (the number of peers), `Ready` (the players
+  in all and the peers connected to the sender), `Layout` (the match id, the peers in peer
+  order and the local players of each) or `Refuse` (a `RoomRefusal`: `Full`,
+  `TooManyPlayers` with the total, or `Unplayable`). `RoomMessage::decode` refuses over 512
+  bytes, another version, bytes that are not one message (trailing bytes included), or a
+  list of more than 4 peers (`WireError::TooManyPeers`). `WireError::TooLarge` now names the
+  limit it was checked against (`len` and `max`). A room code (`RoomCode`) is 6 characters
+  of `23456789ABCDEFGHJKMNPQRSTUVWXYZ`.
 - Meta 2: `Texture(TextureMeta)` describes how a PNG is cut into frames (pixels per unit,
   an optional frame grid, a pivot, and a filter); version 1 metas still read. A `.png`
   without a meta gets one with the defaults (16 pixels per unit, no grid, centred pivot,

@@ -1,8 +1,9 @@
 use ludenea_app::Rng;
 use ludenea_net::{
-    EndNotice, MAX_ENGINE_BYTES, MAX_INPUT_BYTES, MAX_MESSAGES_PER_PACKET, MAX_PACKET_BYTES,
-    MAX_PLAYERS, MAX_TICKS_PER_MESSAGE, MatchIdentity, MatchRules, Message, NET_PROTOCOL_VERSION,
-    Packet, PeerId, SessionSettings, SettingsError, Timeouts, WireError,
+    EndNotice, LinkId, MAX_ENGINE_BYTES, MAX_INPUT_BYTES, MAX_MESSAGES_PER_PACKET,
+    MAX_PACKET_BYTES, MAX_PLAYERS, MAX_ROOM_MESSAGE_BYTES, MAX_TICKS_PER_MESSAGE, MatchIdentity,
+    MatchRules, Message, NET_PROTOCOL_VERSION, Packet, PeerId, RoomMessage, RoomRefusal,
+    SessionSettings, SettingsError, Timeouts, WireError,
 };
 
 fn identity(owners: &[u8]) -> MatchIdentity {
@@ -186,8 +187,15 @@ fn version_1_bytes_are_pinned() {
 fn decode_refuses_a_packet_too_large() {
     let mut bytes = vec![0; MAX_PACKET_BYTES + 1];
     bytes[..2].copy_from_slice(&NET_PROTOCOL_VERSION.to_le_bytes());
-    assert_eq!(refusal(&bytes), WireError::TooLarge { len: 1201 });
-    assert!(refusal(&bytes).to_string().contains("1201"));
+    assert_eq!(
+        refusal(&bytes),
+        WireError::TooLarge {
+            len: 1201,
+            max: 1200
+        }
+    );
+    let text = refusal(&bytes).to_string();
+    assert!(text.contains("1201") && text.contains("1200"), "{text}");
 }
 
 #[test]
@@ -690,4 +698,127 @@ fn the_largest_end_packet_fits() {
     let bytes = packet.encode();
     assert!(bytes.len() <= MAX_PACKET_BYTES, "{} bytes", bytes.len());
     assert_eq!(Packet::decode(&bytes), Ok(packet));
+}
+
+fn link(byte: u8) -> LinkId {
+    LinkId([byte; 16])
+}
+
+fn room_bytes(message: &RoomMessage) -> Vec<u8> {
+    message.encode()
+}
+
+#[test]
+fn room_messages_round_trip() {
+    let messages = [
+        RoomMessage::Host { peers: 4 },
+        RoomMessage::Ready {
+            players: 3,
+            connected: vec![link(1), link(2)],
+        },
+        RoomMessage::Layout {
+            match_id: u64::MAX,
+            links: vec![link(1), link(2), link(3), link(4)],
+            counts: vec![1, 2, 0, 1],
+        },
+        RoomMessage::Refuse {
+            reason: RoomRefusal::Full,
+        },
+        RoomMessage::Refuse {
+            reason: RoomRefusal::TooManyPlayers { total: 9 },
+        },
+        RoomMessage::Refuse {
+            reason: RoomRefusal::Unplayable,
+        },
+    ];
+    for message in messages {
+        let bytes = room_bytes(&message);
+        assert_eq!(&bytes[..2], &NET_PROTOCOL_VERSION.to_le_bytes());
+        assert!(bytes.len() <= MAX_ROOM_MESSAGE_BYTES);
+        assert_eq!(RoomMessage::decode(&bytes), Ok(message));
+    }
+}
+
+#[test]
+fn room_decode_refuses() {
+    let host = room_bytes(&RoomMessage::Host { peers: 2 });
+
+    let mut too_large = host.clone();
+    too_large.resize(MAX_ROOM_MESSAGE_BYTES + 1, 0);
+    assert_eq!(
+        RoomMessage::decode(&too_large),
+        Err(WireError::TooLarge { len: 513, max: 512 })
+    );
+    let text = RoomMessage::decode(&too_large).unwrap_err().to_string();
+    assert!(text.contains("513") && text.contains("512"), "{text}");
+
+    let mut other_version = too_large.clone();
+    other_version[..2].copy_from_slice(&7u16.to_le_bytes());
+    assert_eq!(
+        RoomMessage::decode(&other_version),
+        Err(WireError::Version {
+            found: 7,
+            expected: 1
+        })
+    );
+
+    assert!(matches!(
+        RoomMessage::decode(&[1]),
+        Err(WireError::Malformed(_))
+    ));
+    assert!(matches!(
+        RoomMessage::decode(&[1, 0, 200]),
+        Err(WireError::Malformed(_))
+    ));
+    let mut trailing = host;
+    trailing.push(0);
+    assert!(matches!(
+        RoomMessage::decode(&trailing),
+        Err(WireError::Malformed(_))
+    ));
+
+    let five = (1..=5).map(link).collect::<Vec<_>>();
+    for message in [
+        RoomMessage::Ready {
+            players: 1,
+            connected: five.clone(),
+        },
+        RoomMessage::Layout {
+            match_id: 1,
+            links: five,
+            counts: vec![1],
+        },
+        RoomMessage::Layout {
+            match_id: 1,
+            links: vec![link(1)],
+            counts: vec![1; 5],
+        },
+    ] {
+        let error = RoomMessage::decode(&room_bytes(&message)).expect_err("five peers");
+        assert_eq!(error, WireError::TooManyPeers { count: 5 });
+        assert_eq!(error.variant(), "TooManyPeers");
+        assert!(error.to_string().contains('5'));
+    }
+}
+
+#[test]
+fn fuzz_room_decode_never_panics() {
+    for seed in 0..20_000u64 {
+        let mut rng = Rng::new(seed, 0);
+        let len = below(&mut rng, MAX_ROOM_MESSAGE_BYTES + 100);
+        let mut bytes = bytes_of(&mut rng, len);
+        if seed % 2 == 1 && len >= 2 {
+            bytes[..2].copy_from_slice(&NET_PROTOCOL_VERSION.to_le_bytes());
+        }
+        if seed % 4 == 3 && len >= 3 {
+            // A variant tag in range, so the decoder reads into the lists.
+            bytes[2] = rng.range_u32(0, 4) as u8;
+        }
+        if let Ok(decoded) = RoomMessage::decode(&bytes) {
+            assert!(
+                decoded.encode().len() <= MAX_ROOM_MESSAGE_BYTES,
+                "seed {seed}: a decoded message encodes beyond the limit"
+            );
+        }
+    }
 }

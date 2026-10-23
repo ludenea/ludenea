@@ -6,6 +6,7 @@
 //! The crate reads no clock and uses no floating point: the caller passes the current time.
 #![deny(clippy::float_arithmetic)]
 
+pub mod code;
 pub mod execute;
 pub mod link;
 mod queue;
@@ -15,6 +16,7 @@ pub mod sync_test;
 pub mod transport;
 pub mod wire;
 
+pub use code::{ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH, RoomCode, RoomCodeError};
 pub use execute::{ExecuteError, Executor};
 pub use link::{
     Channel, Link, LinkError, LinkEvent, LinkId, LinkTransport, MAX_ROOM_MESSAGE_BYTES, MemoryLink,
@@ -35,4 +37,6 @@ pub use transport::{
     Conditioned, ConditionsError, LinkConditions, MemoryNetwork, MemoryTransport, Transport,
     TransportError,
 };
-pub use wire::{EndNotice, Message, NET_PROTOCOL_VERSION, Packet, WireError};
+pub use wire::{
+    EndNotice, Message, NET_PROTOCOL_VERSION, Packet, RoomMessage, RoomRefusal, WireError,
+};
