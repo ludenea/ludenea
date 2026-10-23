@@ -174,7 +174,7 @@ impl Rooms {
                 let hosted = self
                     .rooms
                     .values()
-                    .filter(|room| room.host_address == address)
+                    .filter(|room| room.host_address == address && room.host != Host::Left)
                     .count();
                 if hosted >= self.limits.rooms_per_address {
                     return Err(Refusal::Hosting(hosted));
@@ -367,7 +367,11 @@ mod tests {
     }
 
     fn reserve(rooms: &Shared, size: Option<usize>) -> Result<Reservation, Refusal> {
-        let code = RoomCode::parse("ABCDEF").unwrap();
+        reserve_in(rooms, "ABCDEF", size)
+    }
+
+    fn reserve_in(rooms: &Shared, code: &str, size: Option<usize>) -> Result<Reservation, Refusal> {
+        let code = RoomCode::parse(code).unwrap();
         #[expect(clippy::disallowed_methods, reason = "a test of network pacing")]
         let now = Instant::now();
         Reservation::new(rooms, code, size, IpAddr::from([127, 0, 0, 1]), now)
@@ -394,5 +398,28 @@ mod tests {
         drop(joiner);
         // Empty, the room is forgotten.
         assert!(matches!(reserve(&rooms, None), Err(Refusal::Missing(_))));
+    }
+
+    #[test]
+    fn a_room_whose_host_left_no_longer_counts_against_its_address() {
+        let rooms = Arc::new(Mutex::new(Rooms::new(Limits {
+            rooms_per_address: 1,
+            ..Limits::default()
+        })));
+        let host = reserve_in(&rooms, "AAAAAA", Some(2))
+            .unwrap()
+            .arrive()
+            .unwrap();
+        let _joiner = reserve_in(&rooms, "AAAAAA", None)
+            .unwrap()
+            .arrive()
+            .unwrap();
+        assert!(matches!(
+            reserve_in(&rooms, "BBBBBB", Some(2)),
+            Err(Refusal::Hosting(1))
+        ));
+        // The joiner keeps the room alive after its host left; the address may host again.
+        drop(host);
+        let _again = reserve_in(&rooms, "BBBBBB", Some(2)).unwrap();
     }
 }

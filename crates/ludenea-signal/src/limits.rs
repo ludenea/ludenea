@@ -11,6 +11,7 @@ pub struct Limits {
     pub max_rooms: usize,
     /// The rooms one client address may host at once; beyond them it is refused with 429.
     /// An address is the TCP peer's: an IPv4 address, or an IPv6 address by its /64 network.
+    /// A room whose host left no longer counts.
     pub rooms_per_address: usize,
     /// The refused joins (404, 409 and 410) after which an address is refused with 429 until
     /// a minute after its first refusal.
