@@ -106,33 +106,43 @@ ludenea-webrtc = { path = "crates/ludenea-webrtc" }
 # "..". That search made loading a scene quadratic in its size (minutes for 100,000 entities).
 # The project template carries the same patch. Drop it once upstream bounds the search.
 #
-# matchbox_socket 0.14.0 from crates.io with two changes. An empty list of ICE URLs gives no
+# matchbox_socket 0.14.0 from crates.io with these changes. An empty list of ICE URLs gives no
 # ICE server, natively and in the browser (`create_rtc_peer_connection` of `native.rs` and
 # `wasm.rs`), instead of one server without URLs, which Chromium refuses. And every `unwrap`
 # or `expect` that signaling or peer data could reach now drops that peer's handshake with a
-# `warn!` (`or_drop` in `mod.rs`), and the socket carries on with its other peers. The sites,
-# by their line in the 0.14.0 sources:
+# `warn!` (`or_drop` in `mod.rs`), and the socket carries on with its other peers. A dropped
+# handshake closes its peer connection, in one place per stack (`offer_handshake` (131, 112)
+# and `accept_handshake` (216, 208) of `native.rs` and `wasm.rs` run their steps in an inner
+# block and close the connection when it yields none): neither webrtc-rs nor the browser frees
+# an abandoned one. Natively the close first waits up to 5 s for the candidates' gathering
+# (`close_dropped`), since webrtc-rs leaks the sockets of a gathering a close interrupts. The
+# sites, by their line in the 0.14.0 sources:
 # - `native.rs`: in `offer_handshake`, the peer connection (147), the local offer (163, 165),
 #   a signaling connection or peer lost before the answer (172), and a malformed or unusable
 #   answer (187, 191); in `accept_handshake`, the peer connection (232), a signaling
 #   connection or peer lost before the offer (248), a malformed or unusable offer (258,
 #   262), and the local answer (264, 266); in `complete_handshake`, signals that end before
 #   the data channels open (362), when the peer or the signaling connection left, drop the
-#   handshake and close its connection; a data channel that opens once its handshake was
-#   dropped (545, in `create_data_channel`).
+#   handshake; in `listen_for_remote_candidates`, a candidate webrtc-rs refuses is skipped
+#   with a `warn!` instead of ending the candidates, so the end of the signals is still seen
+#   (429); a data channel that opens once its handshake was dropped (545, in
+#   `create_data_channel`).
 # - `wasm.rs`: in `offer_handshake`, the peer connection (121), the local offer (138 to 149,
 #   158), a signaling connection or peer lost before the answer (167), and an unusable answer
 #   (187 to 190); in `accept_handshake`, the peer connection (217), a signaling connection or
 #   peer lost before the offer (239), an unusable offer (261 to 263), and the local answer
 #   (267 to 286, 294); an ICE candidate the browser refuses (413, through
-#   `complete_handshake`), and signals that end before the data channels open (365), both of
-#   which close the connection (192, 297); the peer connection's configuration (431, 432); a
-#   data channel that opens once its handshake was dropped (526, in `create_data_channel`).
+#   `complete_handshake`), and signals that end before the data channels open (365); the
+#   peer connection's configuration (431, 432); a data channel that opens once its handshake
+#   was dropped (526, in `create_data_channel`).
 # - `mod.rs`, `message_loop`: a second `IdAssigned` is ignored (224), a packet for a peer
 #   without that data channel is dropped (277 to 280), a dropped handshake is skipped, and a
 #   peer that leaves (`PeerLeft`) ends the handshake still waiting for its signals.
 # - `signal_peer.rs`: a signal sent once the signaling loop ended is dropped (16).
-# Drop the patch once upstream takes no ICE server and never panics on peer data.
+# - `socket.rs`: `try_next`, deprecated in futures-channel 0.3.34, becomes `try_recv` (332,
+#   565), with the same behaviour.
+# Drop the patch once upstream takes no ICE server, frees an abandoned handshake, and never
+# panics on peer data.
 [patch.crates-io]
 rolldown_common = { path = "vendor/rolldown_common" }
 ron = { path = "vendor/ron" }

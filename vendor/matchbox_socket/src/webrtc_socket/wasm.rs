@@ -125,108 +125,111 @@ impl Messenger for WasmMessenger {
             peer,
             "cannot create the peer connection",
         )?;
+        // A handshake dropped past this point closes its connection here, which its event
+        // handlers would otherwise keep alive.
+        let result = async {
 
-        let (data_channel_ready_txs, data_channels_ready_fut) =
-            create_data_channels_ready_fut(channel_configs);
+            let (data_channel_ready_txs, data_channels_ready_fut) =
+                create_data_channels_ready_fut(channel_configs);
 
-        let (peer_disconnected_tx, peer_disconnected_rx) = futures_channel::mpsc::channel(1);
+            let (peer_disconnected_tx, peer_disconnected_rx) = futures_channel::mpsc::channel(1);
 
-        let data_channels = create_data_channels(
-            conn.clone(),
-            messages_from_peers_tx,
-            signal_peer.id,
-            peer_disconnected_tx,
-            data_channel_ready_txs,
-            channel_configs,
-        );
+            let data_channels = create_data_channels(
+                conn.clone(),
+                messages_from_peers_tx,
+                signal_peer.id,
+                peer_disconnected_tx,
+                data_channel_ready_txs,
+                channel_configs,
+            );
 
-        // Create offer
-        let offer = or_drop(
-            JsFuture::from(conn.create_offer()).await.efix(),
-            peer,
-            "cannot create the offer",
-        )?;
-        let offer_sdp = or_drop(sdp_of(&offer), peer, "cannot read the offer")?;
-        let rtc_session_desc_init_dict = RtcSessionDescriptionInit::new(RtcSdpType::Offer);
-        rtc_session_desc_init_dict.set_sdp(&offer_sdp);
-        or_drop(
-            JsFuture::from(conn.set_local_description(&rtc_session_desc_init_dict))
-                .await
-                .efix(),
-            peer,
-            "cannot set the local offer",
-        )?;
-        debug!("created offer for new peer");
-
-        // todo: the point of implementing ice trickle is to avoid this wait...
-        // however, for some reason removing this wait causes problems with NAT
-        // punching in practice.
-        // We should figure out why this is happening.
-        wait_for_ice_gathering_complete(conn.clone()).await;
-
-        let local_description = or_drop(
-            conn.local_description().ok_or("no local description"),
-            peer,
-            "cannot read the local offer",
-        )?;
-        signal_peer.send(PeerSignal::Offer(local_description.sdp()));
-
-        let mut received_candidates = vec![];
-
-        // Wait for answer
-        let sdp = loop {
-            let signal = or_drop(
-                peer_signal_rx.next().await.ok_or("no more signals"),
+            // Create offer
+            let offer = or_drop(
+                JsFuture::from(conn.create_offer()).await.efix(),
                 peer,
-                "the peer or the signaling server left before answering",
+                "cannot create the offer",
+            )?;
+            let offer_sdp = or_drop(sdp_of(&offer), peer, "cannot read the offer")?;
+            let rtc_session_desc_init_dict = RtcSessionDescriptionInit::new(RtcSdpType::Offer);
+            rtc_session_desc_init_dict.set_sdp(&offer_sdp);
+            or_drop(
+                JsFuture::from(conn.set_local_description(&rtc_session_desc_init_dict))
+                    .await
+                    .efix(),
+                peer,
+                "cannot set the local offer",
+            )?;
+            debug!("created offer for new peer");
+
+            // todo: the point of implementing ice trickle is to avoid this wait...
+            // however, for some reason removing this wait causes problems with NAT
+            // punching in practice.
+            // We should figure out why this is happening.
+            wait_for_ice_gathering_complete(conn.clone()).await;
+
+            let local_description = or_drop(
+                conn.local_description().ok_or("no local description"),
+                peer,
+                "cannot read the local offer",
+            )?;
+            signal_peer.send(PeerSignal::Offer(local_description.sdp()));
+
+            let mut received_candidates = vec![];
+
+            // Wait for answer
+            let sdp = loop {
+                let signal = or_drop(
+                    peer_signal_rx.next().await.ok_or("no more signals"),
+                    peer,
+                    "the peer or the signaling server left before answering",
+                )?;
+
+                match signal {
+                    PeerSignal::Answer(answer) => break answer,
+                    PeerSignal::IceCandidate(candidate) => {
+                        debug!(
+                            "offerer: received an ice candidate while waiting for answer: {candidate:?}"
+                        );
+                        received_candidates.push(candidate);
+                    }
+                    _ => {
+                        warn!("ignoring unexpected signal: {signal:?}");
+                    }
+                };
+            };
+
+            // Set remote description
+            let remote_description = RtcSessionDescriptionInit::new(RtcSdpType::Answer);
+            remote_description.set_sdp(&sdp);
+            debug!("setting remote description");
+            or_drop(
+                JsFuture::from(conn.set_remote_description(&remote_description))
+                    .await
+                    .efix(),
+                peer,
+                "unusable answer",
             )?;
 
-            match signal {
-                PeerSignal::Answer(answer) => break answer,
-                PeerSignal::IceCandidate(candidate) => {
-                    debug!(
-                        "offerer: received an ice candidate while waiting for answer: {candidate:?}"
-                    );
-                    received_candidates.push(candidate);
-                }
-                _ => {
-                    warn!("ignoring unexpected signal: {signal:?}");
-                }
-            };
-        };
+            complete_handshake(
+                signal_peer.clone(),
+                conn.clone(),
+                received_candidates,
+                data_channels_ready_fut,
+                peer_signal_rx,
+            )
+            .await?;
 
-        // Set remote description
-        let remote_description = RtcSessionDescriptionInit::new(RtcSdpType::Answer);
-        remote_description.set_sdp(&sdp);
-        debug!("setting remote description");
-        or_drop(
-            JsFuture::from(conn.set_remote_description(&remote_description))
-                .await
-                .efix(),
-            peer,
-            "unusable answer",
-        )?;
-
-        if complete_handshake(
-            signal_peer.clone(),
-            conn.clone(),
-            received_candidates,
-            data_channels_ready_fut,
-            peer_signal_rx,
-        )
-        .await
-        .is_none()
-        {
-            // So that its data channels never open.
-            conn.close();
-            return None;
+            Some(HandshakeResult {
+                peer_id: signal_peer.id,
+                data_channels,
+                metadata: peer_disconnected_rx,
+            })
         }
-
-        Some(HandshakeResult {
-            peer_id: signal_peer.id,
-            data_channels,
-            metadata: peer_disconnected_rx,
-        })
+        .await;
+        if result.is_none() {
+            conn.close();
+        }
+        result
     }
 
     async fn accept_handshake(
@@ -244,116 +247,119 @@ impl Messenger for WasmMessenger {
             peer,
             "cannot create the peer connection",
         )?;
+        // A handshake dropped past this point closes its connection here, which its event
+        // handlers would otherwise keep alive.
+        let result = async {
 
-        let (data_channel_ready_txs, data_channels_ready_fut) =
-            create_data_channels_ready_fut(channel_configs);
+            let (data_channel_ready_txs, data_channels_ready_fut) =
+                create_data_channels_ready_fut(channel_configs);
 
-        let (peer_disconnected_tx, peer_disconnected_rx) = futures_channel::mpsc::channel(1);
+            let (peer_disconnected_tx, peer_disconnected_rx) = futures_channel::mpsc::channel(1);
 
-        let data_channels = create_data_channels(
-            conn.clone(),
-            messages_from_peers_tx,
-            signal_peer.id,
-            peer_disconnected_tx,
-            data_channel_ready_txs,
-            channel_configs,
-        );
+            let data_channels = create_data_channels(
+                conn.clone(),
+                messages_from_peers_tx,
+                signal_peer.id,
+                peer_disconnected_tx,
+                data_channel_ready_txs,
+                channel_configs,
+            );
 
-        let mut received_candidates = vec![];
+            let mut received_candidates = vec![];
 
-        let offer = loop {
-            let signal = or_drop(
-                peer_signal_rx.next().await.ok_or("no more signals"),
+            let offer = loop {
+                let signal = or_drop(
+                    peer_signal_rx.next().await.ok_or("no more signals"),
+                    peer,
+                    "the peer or the signaling server left before offering",
+                )?;
+
+                match signal {
+                    PeerSignal::Offer(o) => {
+                        break o;
+                    }
+                    PeerSignal::IceCandidate(candidate) => {
+                        debug!("received IceCandidate signal: {candidate:?}");
+                        received_candidates.push(candidate);
+                    }
+                    _ => {
+                        warn!("ignoring unexpected signal: {signal:?}");
+                    }
+                }
+            };
+            debug!("received offer");
+
+            // Set remote description
+            {
+                let remote_description = RtcSessionDescriptionInit::new(RtcSdpType::Offer);
+                let sdp = offer;
+                remote_description.set_sdp(&sdp);
+                or_drop(
+                    JsFuture::from(conn.set_remote_description(&remote_description))
+                        .await
+                        .efix(),
+                    peer,
+                    "unusable offer",
+                )?;
+                debug!("set remote_description from offer");
+            }
+
+            let answer = or_drop(
+                JsFuture::from(conn.create_answer()).await.efix(),
                 peer,
-                "the peer or the signaling server left before offering",
+                "cannot create the answer",
             )?;
 
-            match signal {
-                PeerSignal::Offer(o) => {
-                    break o;
-                }
-                PeerSignal::IceCandidate(candidate) => {
-                    debug!("received IceCandidate signal: {candidate:?}");
-                    received_candidates.push(candidate);
-                }
-                _ => {
-                    warn!("ignoring unexpected signal: {signal:?}");
-                }
-            }
-        };
-        debug!("received offer");
+            debug!("created answer");
 
-        // Set remote description
-        {
-            let remote_description = RtcSessionDescriptionInit::new(RtcSdpType::Offer);
-            let sdp = offer;
-            remote_description.set_sdp(&sdp);
+            let session_desc_init = RtcSessionDescriptionInit::new(RtcSdpType::Answer);
+
+            let answer_sdp = or_drop(sdp_of(&answer), peer, "cannot read the answer")?;
+
+            session_desc_init.set_sdp(&answer_sdp);
+
             or_drop(
-                JsFuture::from(conn.set_remote_description(&remote_description))
+                JsFuture::from(conn.set_local_description(&session_desc_init))
                     .await
                     .efix(),
                 peer,
-                "unusable offer",
+                "cannot set the local answer",
             )?;
-            debug!("set remote_description from offer");
+
+            // todo: the point of implementing ice trickle is to avoid this wait...
+            // however, for some reason removing this wait causes problems with NAT
+            // punching in practice.
+            // We should figure out why this is happening.
+            wait_for_ice_gathering_complete(conn.clone()).await;
+
+            let local_description = or_drop(
+                conn.local_description().ok_or("no local description"),
+                peer,
+                "cannot read the local answer",
+            )?;
+            let answer = PeerSignal::Answer(local_description.sdp());
+            signal_peer.send(answer);
+
+            complete_handshake(
+                signal_peer.clone(),
+                conn.clone(),
+                received_candidates,
+                data_channels_ready_fut,
+                peer_signal_rx,
+            )
+            .await?;
+
+            Some(HandshakeResult {
+                peer_id: signal_peer.id,
+                data_channels,
+                metadata: peer_disconnected_rx,
+            })
         }
-
-        let answer = or_drop(
-            JsFuture::from(conn.create_answer()).await.efix(),
-            peer,
-            "cannot create the answer",
-        )?;
-
-        debug!("created answer");
-
-        let session_desc_init = RtcSessionDescriptionInit::new(RtcSdpType::Answer);
-
-        let answer_sdp = or_drop(sdp_of(&answer), peer, "cannot read the answer")?;
-
-        session_desc_init.set_sdp(&answer_sdp);
-
-        or_drop(
-            JsFuture::from(conn.set_local_description(&session_desc_init))
-                .await
-                .efix(),
-            peer,
-            "cannot set the local answer",
-        )?;
-
-        // todo: the point of implementing ice trickle is to avoid this wait...
-        // however, for some reason removing this wait causes problems with NAT
-        // punching in practice.
-        // We should figure out why this is happening.
-        wait_for_ice_gathering_complete(conn.clone()).await;
-
-        let local_description = or_drop(
-            conn.local_description().ok_or("no local description"),
-            peer,
-            "cannot read the local answer",
-        )?;
-        let answer = PeerSignal::Answer(local_description.sdp());
-        signal_peer.send(answer);
-
-        if complete_handshake(
-            signal_peer.clone(),
-            conn.clone(),
-            received_candidates,
-            data_channels_ready_fut,
-            peer_signal_rx,
-        )
-        .await
-        .is_none()
-        {
-            // So that its data channels never open.
+        .await;
+        if result.is_none() {
             conn.close();
-            return None;
         }
-
-        Some(HandshakeResult {
-            peer_id: signal_peer.id,
-            data_channels,
-            metadata: peer_disconnected_rx,
-        })
+        result
     }
 
     async fn peer_loop(peer_uuid: PeerId, handshake_meta: Self::HandshakeMeta) -> PeerId {

@@ -34,6 +34,7 @@ use webrtc::{
     data_channel::{RTCDataChannel, data_channel_init::RTCDataChannelInit},
     ice_transport::{
         ice_candidate::{RTCIceCandidate, RTCIceCandidateInit},
+        ice_gathering_state::RTCIceGatheringState,
         ice_server::RTCIceServer,
     },
     peer_connection::{
@@ -148,83 +149,92 @@ impl Messenger for NativeMessenger {
                 peer,
                 "cannot create the peer connection",
             )?;
+            // A handshake dropped past this point closes its connection here: webrtc-rs frees
+            // its sockets and tasks only on close.
+            let result = async {
 
-            let (data_channel_ready_txs, data_channels_ready_fut) =
-                create_data_channels_ready_fut(channel_configs);
+                let (data_channel_ready_txs, data_channels_ready_fut) =
+                    create_data_channels_ready_fut(channel_configs);
 
-            let data_channels = create_data_channels(
-                &connection,
-                data_channel_ready_txs,
-                signal_peer.id,
-                peer_disconnected_tx,
-                messages_from_peers_tx,
-                channel_configs,
-            )
-            .await;
+                let data_channels = create_data_channels(
+                    &connection,
+                    data_channel_ready_txs,
+                    signal_peer.id,
+                    peer_disconnected_tx,
+                    messages_from_peers_tx,
+                    channel_configs,
+                )
+                .await;
 
-            // TODO: maybe pass in options? ice restart etc.?
-            let offer = or_drop(
-                connection.create_offer(None).await,
-                peer,
-                "cannot create the offer",
-            )?;
-            let sdp = offer.sdp.clone();
-            or_drop(
-                connection.set_local_description(offer).await,
-                peer,
-                "cannot set the local offer",
-            )?;
-            signal_peer.send(PeerSignal::Offer(sdp));
-
-            let answer = loop {
-                let signal = or_drop(
-                    peer_signal_rx.next().await.ok_or("no more signals"),
+                // TODO: maybe pass in options? ice restart etc.?
+                let offer = or_drop(
+                    connection.create_offer(None).await,
                     peer,
-                    "the peer or the signaling server left before answering",
+                    "cannot create the offer",
+                )?;
+                let sdp = offer.sdp.clone();
+                or_drop(
+                    connection.set_local_description(offer).await,
+                    peer,
+                    "cannot set the local offer",
+                )?;
+                signal_peer.send(PeerSignal::Offer(sdp));
+
+                let answer = loop {
+                    let signal = or_drop(
+                        peer_signal_rx.next().await.ok_or("no more signals"),
+                        peer,
+                        "the peer or the signaling server left before answering",
+                    )?;
+
+                    match signal {
+                        PeerSignal::Answer(answer) => {
+                            break answer;
+                        }
+                        PeerSignal::Offer(_) => {
+                            warn!("Got an unexpected Offer, while waiting for Answer. Ignoring.")
+                        }
+                        PeerSignal::IceCandidate(_) => {
+                            warn!("Got an unexpected IceCandidate, while waiting for Answer. Ignoring.")
+                        }
+                    };
+                };
+
+                let remote_description = or_drop(
+                    RTCSessionDescription::answer(answer),
+                    peer,
+                    "malformed answer",
+                )?;
+                or_drop(
+                    connection.set_remote_description(remote_description).await,
+                    peer,
+                    "unusable answer",
                 )?;
 
-                match signal {
-                    PeerSignal::Answer(answer) => {
-                        break answer;
-                    }
-                    PeerSignal::Offer(_) => {
-                        warn!("Got an unexpected Offer, while waiting for Answer. Ignoring.")
-                    }
-                    PeerSignal::IceCandidate(_) => {
-                        warn!("Got an unexpected IceCandidate, while waiting for Answer. Ignoring.")
-                    }
-                };
-            };
+                let trickle_fut = complete_handshake(
+                    trickle,
+                    &connection,
+                    peer_signal_rx,
+                    data_channels_ready_fut,
+                )
+                .await?;
 
-            let remote_description = or_drop(
-                RTCSessionDescription::answer(answer),
-                peer,
-                "malformed answer",
-            )?;
-            or_drop(
-                connection.set_remote_description(remote_description).await,
-                peer,
-                "unusable answer",
-            )?;
-
-            let trickle_fut = complete_handshake(
-                trickle,
-                &connection,
-                peer_signal_rx,
-                data_channels_ready_fut,
-            )
-            .await?;
-
-            Some(HandshakeResult::<Self::DataChannel, Self::HandshakeMeta> {
-                peer_id: signal_peer.id,
-                data_channels: to_peer_message_tx,
-                metadata: (
-                    to_peer_message_rx,
-                    data_channels,
-                    trickle_fut,
-                    peer_disconnected_rx,
-                ),
-            })
+                Some(HandshakeResult::<Self::DataChannel, Self::HandshakeMeta> {
+                    peer_id: signal_peer.id,
+                    data_channels: to_peer_message_tx,
+                    metadata: (
+                        to_peer_message_rx,
+                        data_channels,
+                        trickle_fut,
+                        peer_disconnected_rx,
+                    ),
+                })
+            }
+            .await;
+            if result.is_none() {
+                close_dropped(&connection, peer).await;
+            }
+            result
         }
         .compat() // Required to run tokio futures with other async executors
         .await
@@ -249,74 +259,83 @@ impl Messenger for NativeMessenger {
                 peer,
                 "cannot create the peer connection",
             )?;
+            // A handshake dropped past this point closes its connection here: webrtc-rs frees
+            // its sockets and tasks only on close.
+            let result = async {
 
-            let (data_channel_ready_txs, data_channels_ready_fut) =
-                create_data_channels_ready_fut(channel_configs);
+                let (data_channel_ready_txs, data_channels_ready_fut) =
+                    create_data_channels_ready_fut(channel_configs);
 
-            let data_channels = create_data_channels(
-                &connection,
-                data_channel_ready_txs,
-                signal_peer.id,
-                peer_disconnected_tx.clone(),
-                messages_from_peers_tx,
-                channel_configs,
-            )
-            .await;
+                let data_channels = create_data_channels(
+                    &connection,
+                    data_channel_ready_txs,
+                    signal_peer.id,
+                    peer_disconnected_tx.clone(),
+                    messages_from_peers_tx,
+                    channel_configs,
+                )
+                .await;
 
-            let offer = loop {
-                let signal = or_drop(
-                    peer_signal_rx.next().await.ok_or("no more signals"),
+                let offer = loop {
+                    let signal = or_drop(
+                        peer_signal_rx.next().await.ok_or("no more signals"),
+                        peer,
+                        "the peer or the signaling server left before offering",
+                    )?;
+                    match signal {
+                        PeerSignal::Offer(offer) => {
+                            break offer;
+                        }
+                        _ => {
+                            warn!("ignoring other signal!!!");
+                        }
+                    }
+                };
+                debug!("received offer");
+                let remote_description =
+                    or_drop(RTCSessionDescription::offer(offer), peer, "malformed offer")?;
+                or_drop(
+                    connection.set_remote_description(remote_description).await,
                     peer,
-                    "the peer or the signaling server left before offering",
+                    "unusable offer",
                 )?;
-                match signal {
-                    PeerSignal::Offer(offer) => {
-                        break offer;
-                    }
-                    _ => {
-                        warn!("ignoring other signal!!!");
-                    }
-                }
-            };
-            debug!("received offer");
-            let remote_description =
-                or_drop(RTCSessionDescription::offer(offer), peer, "malformed offer")?;
-            or_drop(
-                connection.set_remote_description(remote_description).await,
-                peer,
-                "unusable offer",
-            )?;
 
-            let answer = or_drop(
-                connection.create_answer(None).await,
-                peer,
-                "cannot create the answer",
-            )?;
-            signal_peer.send(PeerSignal::Answer(answer.sdp.clone()));
-            or_drop(
-                connection.set_local_description(answer).await,
-                peer,
-                "cannot set the local answer",
-            )?;
+                let answer = or_drop(
+                    connection.create_answer(None).await,
+                    peer,
+                    "cannot create the answer",
+                )?;
+                signal_peer.send(PeerSignal::Answer(answer.sdp.clone()));
+                or_drop(
+                    connection.set_local_description(answer).await,
+                    peer,
+                    "cannot set the local answer",
+                )?;
 
-            let trickle_fut = complete_handshake(
-                trickle,
-                &connection,
-                peer_signal_rx,
-                data_channels_ready_fut,
-            )
-            .await?;
+                let trickle_fut = complete_handshake(
+                    trickle,
+                    &connection,
+                    peer_signal_rx,
+                    data_channels_ready_fut,
+                )
+                .await?;
 
-            Some(HandshakeResult::<Self::DataChannel, Self::HandshakeMeta> {
-                peer_id: signal_peer.id,
-                data_channels: to_peer_message_tx,
-                metadata: (
-                    to_peer_message_rx,
-                    data_channels,
-                    trickle_fut,
-                    peer_disconnected_rx,
-                ),
-            })
+                Some(HandshakeResult::<Self::DataChannel, Self::HandshakeMeta> {
+                    peer_id: signal_peer.id,
+                    data_channels: to_peer_message_tx,
+                    metadata: (
+                        to_peer_message_rx,
+                        data_channels,
+                        trickle_fut,
+                        peer_disconnected_rx,
+                    ),
+                })
+            }
+            .await;
+            if result.is_none() {
+                close_dropped(&connection, peer).await;
+            }
+            result
         }
         .compat() // Required to run tokio futures with other async executors
         .await
@@ -374,6 +393,26 @@ fn new_senders_and_receivers<T>(
         .unzip()
 }
 
+/// How long a dropped handshake waits for its candidates' gathering before it closes.
+const GATHERING_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Closes the connection of a dropped handshake with `peer`.
+async fn close_dropped(connection: &RTCPeerConnection, peer: PeerId) {
+    // webrtc-rs leaks the sockets of a gathering that a close interrupts.
+    if connection.ice_gathering_state() == RTCIceGatheringState::Gathering {
+        let mut gathered = connection.gathering_complete_promise().await;
+        select! {
+            _ = gathered.recv().fuse() => {},
+            _ = Delay::new(GATHERING_TIMEOUT).fuse() => {
+                warn!("closing the connection to peer {peer} before its gathering completed");
+            },
+        }
+    }
+    if let Err(error) = connection.close().await {
+        warn!("cannot close the connection to peer {peer}: {error:?}");
+    }
+}
+
 async fn complete_handshake<T: Future<Output = ()>>(
     trickle: Arc<CandidateTrickle>,
     connection: &Arc<RTCPeerConnection>,
@@ -392,22 +431,14 @@ async fn complete_handshake<T: Future<Output = ()>>(
             _ = wait_for_channels => {
                 break;
             },
-            result = trickle_fut => {
+            _ = trickle_fut => {
                 // The signals end when the peer leaves or the signaling loop ends: the data
                 // channels will never open.
-                if result.is_ok() {
-                    warn!(
-                        "dropping the handshake with peer {peer}: the peer or the signaling \
-                         server left before the data channels opened"
-                    );
-                    if let Err(error) = connection.close().await {
-                        warn!("cannot close the connection to peer {peer}: {error:?}");
-                    }
-                    return None;
-                }
-                // TODO: this means that the signaling is down, should return an
-                // error
-                continue;
+                warn!(
+                    "dropping the handshake with peer {peer}: the peer or the signaling server \
+                     left before the data channels opened"
+                );
+                return None;
             },
         };
     }
@@ -475,7 +506,13 @@ impl CandidateTrickle {
                     match serde_json::from_str::<RTCIceCandidateInit>(&candidate_json) {
                         Ok(candidate_init) => {
                             debug!("ice candidate received: {}", candidate_init.candidate);
-                            peer_connection.add_ice_candidate(candidate_init).await?;
+                            // A candidate refused is skipped: the next ones may do, and the
+                            // end of the signals must still be seen.
+                            if let Err(error) =
+                                peer_connection.add_ice_candidate(candidate_init).await
+                            {
+                                warn!("ignoring an ICE candidate webrtc-rs refuses: {error:?}");
+                            }
                         }
                         Err(err) => {
                             if *candidate_json == *"null" {

@@ -329,7 +329,7 @@ impl WebRtcChannel {
     /// Messages are removed from the socket when called.
     pub fn receive(&mut self) -> Vec<(PeerId, Packet)> {
         let mut messages = vec![];
-        while let Ok(Some(x)) = self.rx.try_next() {
+        while let Ok(x) = self.rx.try_recv() {
             messages.push(x);
         }
         messages
@@ -562,15 +562,18 @@ impl WebRtcSocket {
     /// socket is closed.
     pub fn try_update_peers(&mut self) -> Result<Vec<(PeerId, PeerState)>, ChannelError> {
         let mut changes = Vec::new();
-        while let Ok(res) = self.peer_state_rx.try_next() {
-            match res {
-                Some((id, state)) => {
+        loop {
+            match self.peer_state_rx.try_recv() {
+                Ok((id, state)) => {
                     let old = self.peers.insert(id, state);
                     if old != Some(state) {
                         changes.push((id, state));
                     }
                 }
-                None => return Err(ChannelError::Closed),
+                Err(futures_channel::mpsc::TryRecvError::Closed) => {
+                    return Err(ChannelError::Closed);
+                }
+                Err(futures_channel::mpsc::TryRecvError::Empty) => break,
             }
         }
 
