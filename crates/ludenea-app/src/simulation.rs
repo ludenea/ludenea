@@ -41,6 +41,8 @@ pub enum SimError {
     EditLogDecode(String),
     #[error("this app has no raw input mapping; register one with `App::input_mapping`")]
     NoInputMapping,
+    #[error("player {player} does not exist: the game has {players} players")]
+    NoSuchPlayer { player: usize, players: usize },
     #[error("the input log has no players; record it with at least one player")]
     NoPlayers,
     /// Game code panicked. A tick it was running is left halfway: restore a snapshot before
@@ -220,6 +222,23 @@ impl Simulation {
             .ok_or(SimError::NoInputMapping)?;
         input::check_player_count(self.players, players.len())?;
         self.guarded(|| (mapping.encode)(players))
+    }
+
+    /// The postcard encoding of one input of global player `player`, mapped with that index
+    /// as `map_players` maps it; `None` (no connected device) encodes `I::default()`.
+    pub fn map_player(&self, player: usize, raw: Option<&RawInput>) -> Result<Vec<u8>, SimError> {
+        let mapping = self
+            .hooks
+            .mapping
+            .as_ref()
+            .ok_or(SimError::NoInputMapping)?;
+        if player >= self.players {
+            return Err(SimError::NoSuchPlayer {
+                player,
+                players: self.players,
+            });
+        }
+        self.guarded(|| (mapping.encode_one)(raw, player))
     }
 
     /// The schema of the app's input type, or `None` when it has none.

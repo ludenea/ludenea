@@ -1950,6 +1950,7 @@ dependencies = [
 name = "ludenea-app"
 version = "0.1.0"
 dependencies = [
+ "arena",
  "boxes",
  "ludenea",
  "ludenea-draw",

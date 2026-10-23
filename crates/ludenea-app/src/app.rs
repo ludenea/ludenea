@@ -37,11 +37,16 @@ pub(crate) struct EditorHooks {
 /// `Vec` of the mapped input type.
 pub(crate) type MapRawFn = Box<dyn Fn(&[Option<RawInput>]) -> Vec<u8> + Send + Sync>;
 
+/// Encodes the input of one player (`None`: the default input) as the postcard bytes of one
+/// mapped input, mapped with the given player index.
+pub(crate) type MapRawOneFn = Box<dyn Fn(Option<&RawInput>, usize) -> Vec<u8> + Send + Sync>;
+
 /// A registered raw input mapping, erased like `InputType`.
 pub(crate) struct RawMapping {
     pub(crate) id: TypeId,
     pub(crate) name: &'static str,
     pub(crate) encode: MapRawFn,
+    pub(crate) encode_one: MapRawOneFn,
 }
 
 /// A group of registrations and systems added to an app in one call.
@@ -198,6 +203,10 @@ impl App {
                     .map(|(index, raw)| raw.as_ref().map_or_else(I::default, |raw| map(raw, index)))
                     .collect();
                 postcard::to_allocvec(&inputs).expect("inputs always encode")
+            }),
+            encode_one: Box::new(move |raw, player| {
+                let input = raw.map_or_else(I::default, |raw| map(raw, player));
+                postcard::to_allocvec(&input).expect("inputs always encode")
             }),
         });
         self

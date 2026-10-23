@@ -1917,7 +1917,8 @@ fn sim_error(error: &SimError) -> ProtocolError {
         | SimError::InputLogVersion { .. }
         | SimError::EditLogVersion { .. }
         | SimError::EditLogDecode(_)
-        | SimError::NoPlayers => ErrorCode::InvalidInputs,
+        | SimError::NoPlayers
+        | SimError::NoSuchPlayer { .. } => ErrorCode::InvalidInputs,
     };
     ProtocolError::new(code, error)
 }

@@ -43,6 +43,9 @@ hash, those of the golden trace and replays included.
 
 ### Rust API
 
+- `Simulation::map_player(player, raw)` encodes the input of one global player, mapped with
+  that index as `map_players` maps it (`None` encodes the default input). It refuses a
+  player the game does not have with the new `SimError::NoSuchPlayer`.
 - Breaking: `Component` and `Resource` require `Clone`, so a saved state can clone a
   storage instead of encoding it. The derive macros do not add it: add `Clone` to the
   `#[derive(...)]` of every component and resource type (the compiler names the missing

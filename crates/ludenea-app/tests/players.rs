@@ -4,7 +4,7 @@ use ludenea_app::players::{
     Claim, ClaimError, KeyboardPart, LiveDevices, Lobby, LobbyEvent, LobbyPress, MAX_LOCAL_PLAYERS,
     automatic_claims, check_claims, split,
 };
-use ludenea_app::{App, RawGamepad, RawInput};
+use ludenea_app::{App, RawGamepad, RawInput, SimError, join_player_inputs};
 use ludenea_ecs::schema::Schema;
 use serde::{Deserialize, Serialize};
 
@@ -509,4 +509,82 @@ fn a_claim_describes_its_devices_in_words() {
     );
     assert_eq!(claim(None, Some(u32::MAX)).describe(), "gamepad 4294967296");
     assert_eq!(claim(None, None).describe(), "no device");
+}
+
+fn arena_raws() -> Vec<Option<RawInput>> {
+    vec![
+        Some(RawInput {
+            keys: keys(&["ArrowRight", "Space"]),
+            gamepads: Vec::new(),
+        }),
+        None,
+        Some(RawInput {
+            keys: keys(&["KeyA"]),
+            gamepads: vec![pad(1.0)],
+        }),
+        Some(RawInput::default()),
+    ]
+}
+
+fn arena_simulation(players: usize) -> ludenea_app::Simulation {
+    let mut simulation = arena::app().build().unwrap();
+    simulation.set_players(players);
+    simulation
+}
+
+#[test]
+fn map_player_matches_map_players() {
+    for players in 1..=4 {
+        let simulation = arena_simulation(players);
+        let raws = &arena_raws()[..players];
+        let each: Vec<Vec<u8>> = raws
+            .iter()
+            .enumerate()
+            .map(|(player, raw)| simulation.map_player(player, raw.as_ref()).unwrap())
+            .collect();
+        assert_eq!(
+            join_player_inputs(&each),
+            simulation.map_players(raws).unwrap(),
+            "{players} players"
+        );
+    }
+}
+
+#[test]
+fn map_player_output_passes_the_input_check() {
+    let simulation = arena_simulation(4);
+    let spec = simulation.player_input_spec().unwrap();
+    for (player, raw) in arena_raws().iter().enumerate() {
+        let bytes = simulation.map_player(player, raw.as_ref()).unwrap();
+        (spec.check)(&bytes).unwrap();
+    }
+    assert_eq!(simulation.map_player(0, None).unwrap(), spec.default);
+}
+
+#[test]
+fn map_player_refuses_a_missing_player() {
+    let simulation = arena_simulation(2);
+    let error = simulation.map_player(2, None).unwrap_err();
+    assert!(matches!(
+        error,
+        SimError::NoSuchPlayer {
+            player: 2,
+            players: 2
+        }
+    ));
+    assert_eq!(
+        error.to_string(),
+        "player 2 does not exist: the game has 2 players"
+    );
+}
+
+#[test]
+fn map_player_without_a_mapping_is_an_error() {
+    let mut app = App::new();
+    app.input::<arena::ArenaInput>();
+    let simulation = app.build().unwrap();
+    assert!(matches!(
+        simulation.map_player(0, None),
+        Err(SimError::NoInputMapping)
+    ));
 }
