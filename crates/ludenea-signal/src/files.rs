@@ -57,9 +57,25 @@ pub fn relative_path(url_path: &str) -> Option<String> {
 }
 
 /// A single file or directory name: nothing that could lead out of the directory it is
-/// looked up in.
+/// looked up in, nor a Windows device name, which opens the device wherever it is.
 pub fn plain_name(name: &str) -> bool {
-    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', ':', '\0'])
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains(['/', '\\', ':', '\0'])
+        && !device_name(name)
+}
+
+/// Whether Windows reads `name` as a device (`CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`,
+/// `LPT1` to `LPT9`): in any case, with any extension, and with trailing spaces before it.
+fn device_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name).trim_end_matches(' ');
+    let stem = stem.to_ascii_uppercase();
+    match stem.as_bytes() {
+        b"CON" | b"PRN" | b"AUX" | b"NUL" => true,
+        [b'C', b'O', b'M', digit] | [b'L', b'P', b'T', digit] => (b'1'..=b'9').contains(digit),
+        _ => false,
+    }
 }
 
 /// The content type of a served file, from its extension.
@@ -89,6 +105,32 @@ mod tests {
         assert_eq!(relative_path("/a//b.js").as_deref(), Some("a/b.js"));
         for path in ["/../x", "/a/./b", "/a\\b", "/c:", "/a\0"] {
             assert_eq!(relative_path(path), None, "{path:?}");
+        }
+    }
+
+    #[test]
+    fn windows_device_names_are_not_plain() {
+        for name in [
+            "CON",
+            "con",
+            "PRN",
+            "Aux",
+            "nul",
+            "COM1",
+            "com9",
+            "LPT1",
+            "lpt9",
+            "NUL.txt",
+            "con.tar.gz",
+            "AUX ",
+            "COM1 .js",
+        ] {
+            assert!(!plain_name(name), "{name:?}");
+        }
+        for name in [
+            "CONSOLE", "icon.png", "COM", "COM10", "LPT0x", "null.js", "aux_data",
+        ] {
+            assert!(plain_name(name), "{name:?}");
         }
     }
 }
