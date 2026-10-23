@@ -533,24 +533,33 @@ fn leaver_heard_out_is_not_silent() {
     assert_eq!(session.state(), ended(EndReason::Lost { peer: PeerId(2) }));
 }
 
-#[test]
-fn silent_leaver_waives_only_its_own_acknowledgments() {
-    // Three peers: peer 2 leaves and ends. Peer 0 then holds every input through the last
-    // tick, but peer 1, which still hears peer 0, gets none of peer 0's inputs, so it cannot
-    // acknowledge them. Peer 2's silence must not end peer 0 while peer 1, still talking,
-    // needs its inputs: once the link heals, every peer ends at the same tick.
-    let timeouts = Timeouts::default();
+/// Three peers: peer 2 leaves and ends, after peer 0's inputs to peer 1 started being
+/// stripped, so peer 1, which still hears peer 0, lacks peer 0's inputs up to the last tick
+/// and cannot acknowledge them. Runs `stripped_micros` from the start of the strip, then
+/// heals the link. Returns the harness with peer 2 ended.
+fn one_way_loss_after_a_leave(stripped_micros: u64) -> Harness {
     let mut harness = Harness::new(sessions(3));
     assert!(harness.run_until_running(ONE_SECOND));
     harness.run_until(ONE_SECOND, |_| false);
-    // A few frames before the leave, so peer 1 lacks peer 0's inputs up to the last tick.
+    let stripped = harness.now_micros();
     harness.strip_inputs(PeerId(0), Some(PeerId(1)));
     harness.run_until(ONE_SECOND / 10, |_| false);
     harness.leave(PeerId(2));
     assert!(harness.run_until(ONE_SECOND, |harness| {
         matches!(harness.state(PeerId(2)), SessionState::Ended(_))
     }));
-    harness.run_until(timeouts.disconnect_after_micros + ONE_SECOND, |_| false);
+    let heal = stripped + stripped_micros;
+    harness.run_until(heal.saturating_sub(harness.now_micros()), |_| false);
+    harness.strip_inputs(PeerId(0), None);
+    harness
+}
+
+#[test]
+fn one_way_loss_that_heals_in_time_still_ends_left() {
+    // Peer 0 holds every input through the last tick but waits for peer 1's
+    // acknowledgments, which resume before `disconnect_after_micros` without progress.
+    let timeouts = Timeouts::default();
+    let mut harness = one_way_loss_after_a_leave(timeouts.disconnect_after_micros - 200_000);
     for peer in [0, 1] {
         assert_eq!(
             harness.state(PeerId(peer)),
@@ -558,10 +567,78 @@ fn silent_leaver_waives_only_its_own_acknowledgments() {
             "peer {peer}"
         );
     }
-    harness.strip_inputs(PeerId(0), None);
     assert!(run_until_all_ended(&mut harness, ONE_SECOND));
     let (peer, _) = assert_same_left(&harness, "one-way loss");
     assert_eq!(peer, PeerId(2));
+}
+
+#[test]
+fn peer_that_never_acknowledges_after_the_end_is_lost() {
+    // The link never heals: peer 1 talks but cannot hear peer 0's inputs. Once peer 0 holds
+    // every input through the last tick, peer 1's acknowledgments making no progress for
+    // `disconnect_after_micros` end it with `Lost { 1 }`, and its notice ends peer 1 the same
+    // way: the wait is bounded and diagnosable.
+    let timeouts = Timeouts::default();
+    let harness = one_way_loss_after_a_leave(10 * timeouts.disconnect_after_micros);
+    let lost = ended(EndReason::Lost { peer: PeerId(1) });
+    for peer in [0, 1] {
+        assert_eq!(harness.state(PeerId(peer)), lost, "peer {peer}");
+        assert_landed(&harness, PeerId(peer));
+    }
+    // Bounded: within the timeout of the moment peer 0 held every input, soon after the
+    // leave, a tenth of a second into the strip.
+    let mut harness = Harness::new(sessions(3));
+    assert!(harness.run_until_running(ONE_SECOND));
+    harness.run_until(ONE_SECOND, |_| false);
+    let stripped = harness.now_micros();
+    harness.strip_inputs(PeerId(0), Some(PeerId(1)));
+    harness.run_until(ONE_SECOND / 10, |_| false);
+    harness.leave(PeerId(2));
+    assert!(
+        harness.run_until(2 * timeouts.disconnect_after_micros, |harness| {
+            [0, 1]
+                .into_iter()
+                .all(|peer| harness.state(PeerId(peer)) == lost)
+        })
+    );
+    let waited = harness.now_micros() - stripped;
+    assert!(
+        waited <= timeouts.disconnect_after_micros + ONE_SECOND / 2,
+        "{waited}"
+    );
+}
+
+#[test]
+fn slowly_acknowledging_peer_is_waited_for() {
+    // Peer 0 of three holds every input through tick 5: peer 2 said goodbye and fell silent,
+    // and peer 1 acknowledges peer 0's inputs one tick at a time, every 900 ms. Neither
+    // peer 2's silence nor the slow acknowledgments end peer 0 while peer 1 makes progress;
+    // its acknowledgment of the last tick ends it with `Left`, peer 2's own waived.
+    let mut session = handshake(sessions(3)).remove(0);
+    for _ in 0..5 {
+        step(&mut session, 0);
+    }
+    deliver(
+        &mut session,
+        2,
+        vec![inputs(2, 0, &[0; 6]), Message::Goodbye { last_tick: 5 }],
+    );
+    deliver(&mut session, 1, vec![inputs(1, 0, &[0; 6])]);
+    let packet = |next| Packet {
+        match_id: 1,
+        messages: vec![ack(0, next)],
+    };
+    let mut now = NOW;
+    for next in 1..=5 {
+        now += 900_000;
+        session.receive(PeerId(1), &packet(next).encode(), now);
+        session.outgoing(now);
+        assert_eq!(session.state(), SessionState::Running, "at {now}");
+    }
+    now += 900_000;
+    session.receive(PeerId(1), &packet(6).encode(), now);
+    session.outgoing(now);
+    assert_eq!(session.state(), left(2, 5));
 }
 
 #[test]

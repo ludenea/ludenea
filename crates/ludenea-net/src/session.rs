@@ -395,6 +395,9 @@ struct Remote {
     silent: bool,
     /// A goodbye of the peer arrived.
     said_goodbye: bool,
+    /// When the peer's acknowledgment of a local player last moved forward, or the session
+    /// started running.
+    acks_moved_micros: u64,
     /// The hash reports of the peer that wait for the local hash of their tick, at most
     /// [`Session::hash_backlog`].
     hashes: BTreeMap<u64, u64>,
@@ -469,6 +472,8 @@ pub struct Session {
     closing: Option<Closing>,
     /// The local goodbye's last tick, and when [`Session::leave`] was called.
     leaving: Option<(u64, u64)>,
+    /// When this session first held every input through the agreed last tick.
+    complete_micros: Option<u64>,
     /// The session ended while running or leaving, and the advance that lands the caller's
     /// simulation on the confirmed state has not been returned yet.
     land_due: bool,
@@ -524,6 +529,7 @@ impl Session {
                 report: None,
                 silent: false,
                 said_goodbye: false,
+                acks_moved_micros: 0,
                 corrections: VecDeque::new(),
                 hashes: BTreeMap::new(),
                 hashes_received: 0,
@@ -579,6 +585,7 @@ impl Session {
             last_notice_micros: None,
             closing: None,
             leaving: None,
+            complete_micros: None,
             land_due: false,
             now_micros: None,
             events: Vec::new(),
@@ -1418,6 +1425,7 @@ impl Session {
     /// peer, or the tick of no hash report sent to it, is [`ViolationRule::AckNeverSent`]. The
     /// reports sent to a peer are every multiple of `hash_interval` up to the highest sent, as
     /// they are sent oldest first. An older acknowledgment, arriving reordered, is ignored.
+    /// One that moves a local player forward records the time.
     fn read_ack(
         &mut self,
         index: usize,
@@ -1447,10 +1455,14 @@ impl Session {
                 rule: ViolationRule::AckNeverSent,
             });
         }
+        let now = self.now_micros.unwrap_or(0);
         let remote = &mut self.remotes[index];
         for (player, next) in players {
             let acked = &mut remote.acked[usize::from(*player)];
-            *acked = (*acked).max(*next);
+            if *next > *acked {
+                *acked = *next;
+                remote.acks_moved_micros = now;
+            }
         }
         remote.hashes_acked = remote.hashes_acked.max(hashes_through);
         Ok(())
@@ -1965,6 +1977,7 @@ impl Session {
             let now = self.now_micros.unwrap_or(0);
             for remote in &mut self.remotes {
                 remote.last_heard_micros = now;
+                remote.acks_moved_micros = now;
             }
         }
     }
@@ -1976,8 +1989,15 @@ impl Session {
     /// match ends on purpose and every player's input through its last tick is confirmed, only
     /// acknowledgments can be missing: the silent peers' are waived, and the session ends with
     /// [`EndReason::Left`] once every peer still talking acknowledged the local inputs through
-    /// that tick, so none of them is left without them. Otherwise it ends with
-    /// [`EndReason::Lost`] naming the first such peer.
+    /// that tick, so none of them is left without them. A peer still talking whose
+    /// acknowledgments of the local players make no progress for `disconnect_after_micros`,
+    /// counted from when this session first held every input through that tick, as this
+    /// check sees it, then cannot hear this one: the session ends with [`EndReason::Lost`]
+    /// naming it, so the
+    /// wait is bounded and its end notice ends the other peers, that one included, the same
+    /// way. It raises no [`SessionEvent::PeerSilent`] before: the peer is heard, and the
+    /// notice says it is not. Otherwise the session ends with [`EndReason::Lost`] naming the
+    /// first silent peer.
     ///
     /// A peer that said goodbye and whose inputs through the agreed last tick are all
     /// confirmed raises no notice and is never lost: it has nothing more to send, and ends
@@ -2020,13 +2040,26 @@ impl Session {
         let confirmed = self.confirmed_tick();
         let reason = match self.closing {
             Some(closing) if confirmed > closing.last_tick => {
+                let complete = *self.complete_micros.get_or_insert(now);
                 let through = closing.last_tick.saturating_add(1);
                 let local: Vec<usize> = self.local_players().collect();
-                let talking_acknowledged = self.remotes.iter().all(|remote| {
-                    is_silent(remote) || local.iter().all(|player| remote.acked[*player] >= through)
-                });
+                let acknowledged =
+                    |remote: &Remote| local.iter().all(|player| remote.acked[*player] >= through);
+                let talking_acknowledged = self
+                    .remotes
+                    .iter()
+                    .all(|remote| is_silent(remote) || acknowledged(remote));
                 let any_silent = self.remotes.iter().any(is_silent);
-                (any_silent && talking_acknowledged).then(|| left(closing))
+                let deaf = self.remotes.iter().find(|remote| {
+                    !is_silent(remote)
+                        && !acknowledged(remote)
+                        && now.saturating_sub(remote.acks_moved_micros.max(complete))
+                            >= timeouts.disconnect_after_micros
+                });
+                match deaf {
+                    Some(remote) => Some(EndReason::Lost { peer: remote.id }),
+                    None => (any_silent && talking_acknowledged).then(|| left(closing)),
+                }
             }
             _ => self
                 .remotes
