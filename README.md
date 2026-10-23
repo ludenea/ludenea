@@ -357,7 +357,10 @@ as does a client that stops reading for as long. The limits per address count th
 an IPv4 address, or an IPv6 address by its /64 network. Behind a reverse proxy every client
 shares the proxy's address, so they share its limits too. Only pages served from the address in
 the Host header may open rooms; a page served elsewhere needs `--allow-origin` with its
-origin (repeatable).
+origin (repeatable). The Host header itself is not checked, so a page proxied under any name
+(`wss://` through a reverse proxy) works: a page on a name rebound to the listener passes the
+origin check too, which gives it no more than anyone who reaches the listener has, and its
+guesses of room codes are rate-limited like everyone's.
 
 A stock `matchbox_server` works too: pass its root URL as `--signaling`
 (`ws://ADDRESS:3536`). It knows nothing of hosts, sizes, or limits, so it admits anyone to
