@@ -2207,6 +2207,7 @@ name = "ludenea-signal"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "futures-util",
  "hyper-util",
  "ludenea-net",
  "matchbox_protocol",

@@ -563,3 +563,78 @@ fn page_files_are_served_read_only() {
         "no page here: pass the folder `ludenea build --web` wrote"
     );
 }
+
+/// Whether `stream` gets nothing within `wait`.
+fn unanswered(stream: &mut TcpStream, wait: Duration) -> bool {
+    stream.set_read_timeout(Some(wait)).unwrap();
+    let mut byte = [0];
+    let quiet = matches!(
+        stream.read(&mut byte),
+        Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut)
+    );
+    stream.set_read_timeout(Some(TIMEOUT)).unwrap();
+    quiet
+}
+
+#[test]
+fn held_open_connections_stay_bounded() {
+    let page = TempDir::new().unwrap();
+    fs::write(page.path().join("index.html"), "<p>game</p>").unwrap();
+    let address = start(Options {
+        page: Some(page.path().to_path_buf()),
+        limits: Limits {
+            max_connections: 2,
+            header_timeout: Duration::from_secs(30),
+            ..Limits::default()
+        },
+        ..Options::default()
+    });
+    // Two clients hold every connection the listener serves, sending nothing.
+    let held: Vec<TcpStream> = (0..2)
+        .map(|_| TcpStream::connect(address).unwrap())
+        .collect();
+    std::thread::sleep(Duration::from_millis(200));
+    let mut waiting = TcpStream::connect(address).unwrap();
+    write!(
+        waiting,
+        "GET / HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    assert!(unanswered(&mut waiting, Duration::from_millis(500)));
+    // Once they go, the waiting client is served.
+    drop(held);
+    let mut response = String::new();
+    waiting.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(response.ends_with("<p>game</p>"), "{response}");
+}
+
+#[test]
+fn a_client_that_stops_reading_a_file_is_cut_off() {
+    const SIZE: usize = 48 << 20;
+    let page = TempDir::new().unwrap();
+    fs::write(page.path().join("index.html"), "<p>game</p>").unwrap();
+    fs::write(page.path().join("game.wasm"), vec![7u8; SIZE]).unwrap();
+    let address = start(Options {
+        page: Some(page.path().to_path_buf()),
+        limits: Limits {
+            max_connections: 1,
+            idle: Duration::from_secs(1),
+            ..Limits::default()
+        },
+        ..Options::default()
+    });
+    let mut stalled = TcpStream::connect(address).unwrap();
+    write!(
+        stalled,
+        "GET /game.wasm HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    // It reads nothing; once its writes stay blocked for `idle`, the listener drops it and
+    // serves the next client.
+    let (status, _, body) = http(address, "GET", "/");
+    assert_eq!((status, body.as_str()), (200, "<p>game</p>"));
+    let mut received = Vec::new();
+    let _ = stalled.read_to_end(&mut received);
+    assert!(received.len() < SIZE, "the whole file arrived");
+}

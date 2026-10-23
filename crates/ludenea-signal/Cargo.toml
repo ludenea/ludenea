@@ -5,6 +5,8 @@ edition.workspace = true
 
 [dependencies]
 axum.workspace = true
+# The stream a file is sent through; already a dependency of axum.
+futures-util = { version = "0.3.34", default-features = false }
 # The connection builder axum's own `serve` uses, which also bounds the time a request's
 # headers may take.
 hyper-util = { version = "0.1.21", features = ["http1", "server", "service", "tokio"] }
@@ -13,7 +15,7 @@ matchbox_protocol.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["fs", "macros", "net", "sync", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "sync", "time"] }
 tungstenite.workspace = true
 uuid.workspace = true
 
@@ -21,5 +23,5 @@ uuid.workspace = true
 matchbox_protocol.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
 tungstenite.workspace = true

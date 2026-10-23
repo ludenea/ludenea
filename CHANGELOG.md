@@ -46,7 +46,8 @@ hash, those of the golden trace and replays included.
 - New crate `ludenea-signal`: the signaling listener of online matches, which speaks
   matchbox's JSON messages (`matchbox_protocol` 0.14.0) as `matchbox_server` does in a full
   mesh. `router(Options)` gives its axum routes and `serve(listeners, Options)` serves them
-  on every listener, each connection given `Limits::header_timeout` for its headers.
+  on every listener: at most `Limits::max_connections` at once, each given
+  `Limits::header_timeout` for its headers and ended by a write blocked for `Limits::idle`.
   `GET /rooms/{code}?host=N` creates a room of N peers (2 to `MAX_PEERS`) and
   `GET /rooms/{code}` joins one, both upgrading to a WebSocket; a refusal comes before the
   upgrade, with its reason as the body: 400 for a code `RoomCode::parse` refuses or a bad
@@ -57,7 +58,9 @@ hash, those of the golden trace and replays included.
   over `Limits::max_message_bytes`, 1008 for one that is not a request, 1001 after
   `Limits::idle` without a frame, and 1013 when more than `Limits::queue` messages wait for
   it. Every other path serves `Options::page` read-only. `ludenea_signal::files` holds the
-  static file helpers `ludenea serve` uses too.
+  static file helpers `ludenea serve` uses too, which stream a file in pieces of 64 KiB
+  instead of reading it whole, and `check_origin`, `allowed_origins`, `oversized` and
+  `LINGER` the WebSocket checks both share.
 - `ludenea_control::Session::adopt_inputs(sim, log)` replaces the inputs with the confirmed
   inputs of an online match and resimulates them from tick 0 in the background, at most
   `RESIMULATION_BUDGET` ticks per `Host::advance` whatever the log's length; until it gets

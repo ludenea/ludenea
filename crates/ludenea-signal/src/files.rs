@@ -2,15 +2,44 @@
 
 use std::path::Path;
 
+use axum::body::{Body, Bytes};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use tokio::io::AsyncReadExt;
 
-/// The file at `path` with its content type, or 404 when it cannot be read.
+/// The size of the pieces a file is sent in: a response holds one at a time, whatever the
+/// file's size.
+const CHUNK: usize = 64 * 1024;
+
+/// The file at `path` with its content type and length, streamed, or 404 when it cannot be
+/// opened.
 pub async fn serve_file(path: &Path) -> Response {
-    match tokio::fs::read(path).await {
-        Ok(bytes) => ([(header::CONTENT_TYPE, content_type(path))], bytes).into_response(),
-        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    let Ok(file) = tokio::fs::File::open(path).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Ok(metadata) = file.metadata().await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !metadata.is_file() {
+        return StatusCode::NOT_FOUND.into_response();
     }
+    let chunks = futures_util::stream::try_unfold(file, |mut file| async move {
+        let mut chunk = vec![0; CHUNK];
+        let read = file.read(&mut chunk).await?;
+        if read == 0 {
+            return Ok::<_, std::io::Error>(None);
+        }
+        chunk.truncate(read);
+        Ok(Some((Bytes::from(chunk), file)))
+    });
+    (
+        [
+            (header::CONTENT_TYPE, content_type(path).to_string()),
+            (header::CONTENT_LENGTH, metadata.len().to_string()),
+        ],
+        Body::from_stream(chunks),
+    )
+        .into_response()
 }
 
 /// The path, relative to a served folder, that the URL path `url_path` names: its segments

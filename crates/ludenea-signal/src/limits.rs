@@ -15,8 +15,8 @@ pub struct Limits {
     /// a minute after its first refusal.
     pub refused_joins_per_minute: usize,
     /// How long a connection may go without sending a frame (a message, a keep-alive, a ping
-    /// or a pong) before it is closed with 1001. A write to a member that stays blocked this
-    /// long ends its connection too.
+    /// or a pong) before it is closed with 1001. A write to any client (a member, or one
+    /// loading a page file) that stays blocked this long ends its connection too.
     pub idle: Duration,
     /// The largest message, and frame, a client may send; a larger one closes with 1009.
     pub max_message_bytes: usize,
@@ -25,11 +25,15 @@ pub struct Limits {
     pub queue: usize,
     /// How long a client may take to send the headers of a request.
     pub header_timeout: Duration,
+    /// The connections served at once, page loads and room members together, at least 1;
+    /// further clients wait to be accepted until one ends.
+    pub max_connections: usize,
 }
 
 impl Default for Limits {
     /// 64 rooms, 4 per address, 30 refused joins a minute, 30 seconds idle, messages of
-    /// 16 KiB, 64 queued messages, and 10 seconds for headers.
+    /// 16 KiB, 64 queued messages, 10 seconds for headers, and 512 connections: enough for
+    /// every member of 64 full rooms and as many page loads.
     fn default() -> Limits {
         Limits {
             max_rooms: 64,
@@ -39,6 +43,7 @@ impl Default for Limits {
             max_message_bytes: 16 * 1024,
             queue: 64,
             header_timeout: Duration::from_secs(10),
+            max_connections: 512,
         }
     }
 }

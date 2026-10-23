@@ -11,6 +11,7 @@
 pub mod files;
 mod limits;
 mod rooms;
+mod stall;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -32,6 +33,7 @@ use ludenea_net::{MAX_PEERS, RoomCode};
 use matchbox_protocol::JsonPeerRequest;
 use serde::Deserialize;
 use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
 use tungstenite::error::CapacityError;
 
 pub use limits::Limits;
@@ -79,8 +81,10 @@ pub fn router(options: Options) -> Router {
         .fallback(move |method: Method, uri: Uri| page_file(Arc::clone(&page), method, uri))
 }
 
-/// Serves [`router`] on every listener until the process ends, giving each connection
-/// [`Limits::header_timeout`] to send the headers of each request.
+/// Serves [`router`] on every listener until the process ends: at most
+/// [`Limits::max_connections`] connections at once, each given [`Limits::header_timeout`] to
+/// send the headers of each request, and ended by a write that stays blocked for
+/// [`Limits::idle`].
 ///
 /// # Errors
 ///
@@ -89,11 +93,20 @@ pub async fn serve(listeners: Vec<TcpListener>, options: Options) -> Result<(), 
     if listeners.is_empty() {
         return Err("the signaling listener has no address to listen on".into());
     }
-    let header_timeout = options.limits.header_timeout;
+    let limits = options.limits.clone();
     let router = router(options);
+    let connections = Arc::new(Semaphore::new(
+        limits.max_connections.clamp(1, Semaphore::MAX_PERMITS),
+    ));
     let mut tasks = tokio::task::JoinSet::new();
     for listener in listeners {
-        tasks.spawn(accept(listener, router.clone(), header_timeout));
+        let connections = Arc::clone(&connections);
+        tasks.spawn(accept(
+            listener,
+            router.clone(),
+            connections,
+            limits.clone(),
+        ));
     }
     while let Some(result) = tasks.join_next().await {
         result.map_err(|error| format!("a signaling listener failed: {error}"))?;
@@ -101,8 +114,19 @@ pub async fn serve(listeners: Vec<TcpListener>, options: Options) -> Result<(), 
     Ok(())
 }
 
-async fn accept(listener: TcpListener, router: Router, header_timeout: std::time::Duration) {
+/// Accepts connections on `listener` while `connections` has a permit for each, so clients
+/// beyond [`Limits::max_connections`] wait in the system's queue instead of in memory.
+async fn accept(
+    listener: TcpListener,
+    router: Router,
+    connections: Arc<Semaphore>,
+    limits: Limits,
+) {
     loop {
+        let Ok(permit) = Arc::clone(&connections).acquire_owned().await else {
+            // Only a closed semaphore refuses, and nothing closes it.
+            return;
+        };
         let (stream, remote) = match listener.accept().await {
             Ok(accepted) => accepted,
             Err(error) => {
@@ -115,16 +139,18 @@ async fn accept(listener: TcpListener, router: Router, header_timeout: std::time
         };
         let service =
             TowerToHyperService::new(router.clone().layer(axum::Extension(ConnectInfo(remote))));
+        let header_timeout = limits.header_timeout;
+        let io = TokioIo::new(stall::WriteDeadline::new(stream, limits.idle));
         tokio::spawn(async move {
             let mut builder = Builder::new(TokioExecutor::new());
             builder
                 .http1()
                 .timer(TokioTimer::new())
                 .header_read_timeout(header_timeout);
-            // A failed connection (a reset, slow headers) concerns that client only.
-            let _ = builder
-                .serve_connection_with_upgrades(TokioIo::new(stream), service)
-                .await;
+            // A failed connection (a reset, slow headers, a stalled reader) concerns that
+            // client only.
+            let _ = builder.serve_connection_with_upgrades(io, service).await;
+            drop(permit);
         });
     }
 }
