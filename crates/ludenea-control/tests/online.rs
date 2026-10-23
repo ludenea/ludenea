@@ -1152,3 +1152,52 @@ fn a_fork_during_the_adopted_resimulation_keeps_the_match_on_its_branch() {
     };
     assert_eq!((tick, got), (landed, hash));
 }
+
+/// An input whose encoding panics once armed, as a type's own code may.
+#[derive(Deserialize, Schema, Clone, Default, Debug, PartialEq)]
+struct Fragile(u8);
+
+impl Serialize for Fragile {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        assert!(!ARMED.with(|armed| armed.replace(false)), "the input broke");
+        serializer.serialize_newtype_struct("Fragile", &self.0)
+    }
+}
+
+fn fragile_app() -> App {
+    let mut app = App::new();
+    app.input::<Fragile>().input_mapping(|_, _| Fragile(1));
+    app
+}
+
+#[test]
+fn a_join_whose_default_input_fails_changes_nothing() {
+    let mut host = Host::new(fragile_app).unwrap();
+    host.handle(Command::SetPlayers {
+        players: 3,
+        claims: None,
+    })
+    .unwrap();
+    host.advance(0.0);
+    ARMED.with(|armed| armed.set(true));
+    let error = refusal(&mut host, join(0, &[0, 1]));
+    ARMED.with(|armed| armed.set(false));
+    assert_eq!(error.code, ErrorCode::SystemPanicked, "{}", error.message);
+    assert!(
+        error.message.contains("the input broke"),
+        "{}",
+        error.message
+    );
+    // Refused before anything changed: no recovery, no pause, the players stay.
+    let events = host.advance(0.0);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::Online { .. } | Event::Paused { .. })),
+        "{events:?}"
+    );
+    let Ok(Reply::Session { inputs, .. }) = host.handle(Command::ExportSession) else {
+        panic!("a session");
+    };
+    assert_eq!(InputLog::decode(&inputs.0).unwrap().players, 3);
+}

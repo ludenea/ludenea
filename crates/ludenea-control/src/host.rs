@@ -1575,15 +1575,18 @@ impl Host {
             timeouts: Timeouts::default(),
         };
         let invalid = |error: &dyn std::fmt::Display| invalid_command(error.to_string());
+        if sim.input_schema().is_none() {
+            return Err(invalid(&ExecuteError::NoInputType));
+        }
+        // The default input as each local player starts with it, guarded: a game whose
+        // mapping or input fails is refused here, before anything changes.
+        sim.map_player(0, None).map_err(|e| sim_error(&e))?;
         let input = sim
             .player_input_spec()
             .ok_or_else(|| invalid(&ExecuteError::NoInputType))?;
         // Checks the settings and the game's default input before anything changes; the
         // session is built again once the scene's hash is known.
         ludenea_net::Session::new(net_settings.clone(), input.clone()).map_err(|e| invalid(&e))?;
-        if let Err(error @ SimError::NoInputMapping) = sim.map_player(0, None) {
-            return Err(sim_error(&error));
-        }
         // Validated: at most `MAX_PLAYERS` players.
         let players = u16::try_from(settings.players.len()).unwrap_or(u16::MAX);
         let locals: Vec<u8> = locals
