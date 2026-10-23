@@ -1,6 +1,7 @@
 //! SyncTest on small test apps: a deterministic one passes, and state kept outside the world
 //! fails naming the tick, the entities or resources, and the fields that differ.
 
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use ludenea_app::divergence::DivergenceKind;
@@ -70,6 +71,22 @@ fn outside_in_resource() -> App {
     app
 }
 
+/// Every input a tick of `recording` played, in order, across both simulations. Only that
+/// app writes it, and only one test runs it.
+static SEEN: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+
+fn record_input(inputs: Runtime<Inputs<u8>>) {
+    SEEN.lock().unwrap().push(*inputs.player(0));
+}
+
+fn recording() -> App {
+    let mut app = App::new();
+    app.input::<u8>()
+        .component::<Counter>()
+        .system(Sim, record_input);
+    app
+}
+
 const SCENE: &str = concat!(
     r#"Scene(version: 1, resources: {}, entities: [{ "sync_test::Counter": (value: 0) }, "#,
     r#"{ "sync_test::Counter": (value: 7) }])"#,
@@ -121,6 +138,20 @@ fn a_deterministic_game_passes_synctest() {
         assert_eq!(sim.tick(), 30);
         assert_eq!(sim.hash(), other.hash(), "window {window}");
     }
+}
+
+#[test]
+fn each_tick_plays_straight_then_mispredicted_then_again() {
+    let (mut sim, mut other) = pair(recording);
+    let mut log = InputLog::new(1);
+    for input in [1u8, 1, 2, 3] {
+        log.record(&[input]);
+    }
+    sync_test(&mut sim, &mut other, &log, &EditLog::new(), 4, 1).unwrap();
+    // Each tick: the straight input, the mispredicted one, then the real one played again.
+    // The misprediction is the input of the tick before, or the default (0) at tick 0 and
+    // when the input of the tick before equals the real one (tick 1).
+    assert_eq!(*SEEN.lock().unwrap(), [1, 0, 1, 1, 0, 1, 2, 1, 2, 3, 2, 3]);
 }
 
 #[test]
