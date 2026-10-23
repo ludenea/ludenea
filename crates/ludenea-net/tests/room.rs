@@ -242,7 +242,7 @@ fn a_joiner_that_never_readies_is_passed_over() {
     assert!(idle.waiting() && second.waiting() && third.waiting());
     assert_eq!(
         host.room.view().describe(),
-        "4 of 3 peers here, 4 not ready"
+        "4 peers here for 3 places, 4 not ready"
     );
 
     second.room.set_ready(1).unwrap();

@@ -216,7 +216,12 @@ impl RoomView {
                 self.connected
             );
         }
-        let mut parts = vec![format!("{} of {peers} peers here", self.connected)];
+        let here = if self.connected > peers {
+            format!("{} peers here for {peers} places", self.connected)
+        } else {
+            format!("{} of {peers} peers here", self.connected)
+        };
+        let mut parts = vec![here];
         let not_ready = self.connected.saturating_sub(self.ready);
         if not_ready > 0 {
             parts.push(format!("{not_ready} not ready"));
