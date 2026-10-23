@@ -45,6 +45,7 @@ for any thread count. The guarantee rests on:
 | `crates/ludenea`         | Facade crate re-exporting the engine                      |
 | `crates/ludenea-project` | Projects, builds, and plugin bundling                     |
 | `crates/ludenea-serve`   | The `ludenea` tool: `new`, `serve`, `play`, `build`       |
+| `crates/ludenea-signal`  | Signaling listener of online matches, static files        |
 | `editor`                 | The editor: web and desktop applications                  |
 | `examples/boxes`         | Reference scenario, golden trace, and benchmark           |
 | `examples/swarm`         | Runtime test game: 10,000 sprites, 4 players              |

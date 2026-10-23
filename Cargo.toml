@@ -64,6 +64,9 @@ axum = { version = "0.8.9", features = ["ws"] }
 # The version axum's WebSocket uses, so the error of a message over the size limit downcasts
 # to it.
 tungstenite = "0.29.0"
+# The signaling messages of matchbox_socket, which the WebRTC link uses: the listener speaks
+# the client's own types. Exact, as the two must agree.
+matchbox_protocol = { version = "=0.14.0", features = ["json"] }
 ludenea-math = { path = "crates/ludenea-math" }
 ludenea-app = { path = "crates/ludenea-app" }
 ludenea-ecs = { path = "crates/ludenea-ecs" }

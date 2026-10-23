@@ -43,6 +43,21 @@ hash, those of the golden trace and replays included.
 
 ### Rust API
 
+- New crate `ludenea-signal`: the signaling listener of online matches, which speaks
+  matchbox's JSON messages (`matchbox_protocol` 0.14.0) as `matchbox_server` does in a full
+  mesh. `router(Options)` gives its axum routes and `serve(listeners, Options)` serves them
+  on every listener, each connection given `Limits::header_timeout` for its headers.
+  `GET /rooms/{code}?host=N` creates a room of N peers (2 to `MAX_PEERS`) and
+  `GET /rooms/{code}` joins one, both upgrading to a WebSocket; a refusal comes before the
+  upgrade, with its reason as the body: 400 for a code `RoomCode::parse` refuses or a bad
+  size, 403 for a foreign `Origin` (`Options::allowed_origins` adds others), 404 for a
+  missing room, 409 for a room in use or full, 410 for a room whose host left, 503 at
+  `Limits::max_rooms`, and 429 at `Limits::rooms_per_address` or after
+  `Limits::refused_joins_per_minute` refusals. A connection closes with 1009 for a message
+  over `Limits::max_message_bytes`, 1008 for one that is not a request, 1001 after
+  `Limits::idle` without a frame, and 1013 when more than `Limits::queue` messages wait for
+  it. Every other path serves `Options::page` read-only. `ludenea_signal::files` holds the
+  static file helpers `ludenea serve` uses too.
 - `ludenea_control::Session::adopt_inputs(sim, log)` replaces the inputs with the confirmed
   inputs of an online match and resimulates them from tick 0 in the background, at most
   `RESIMULATION_BUDGET` ticks per `Host::advance` whatever the log's length; until it gets
