@@ -158,6 +158,13 @@ impl Executor {
     /// first), and returns [`ExecuteError::Game`], which names a failure of either step too.
     /// The requests after it are not applied.
     ///
+    /// Any other error leaves the simulation where the session can no longer drive it, so it
+    /// ends the session through [`Session::fail`] too, before returning the error: every peer
+    /// ends with `EndReason::LocalFailure` rather than stall waiting for this one. The failed
+    /// tick is that of the request when the session ran it, otherwise the latest tick the
+    /// session ran. A session that ran no tick yet has none to fail and is left as it is, as
+    /// is an ended one.
+    ///
     /// # Errors
     ///
     /// The first request that cannot be applied stops the others: [`ExecuteError::OutOfStep`],
@@ -171,36 +178,77 @@ impl Executor {
         requests: Vec<Request>,
     ) -> Result<(), ExecuteError> {
         for request in requests {
-            match request {
-                Request::Save { tick, hash } => {
-                    in_step(simulation, tick)?;
-                    let was_kept = self.ring.save(simulation, tick, hash)?;
-                    if hash && let Err(error) = session.report_hash(tick, simulation.hash()) {
-                        // The session will send no `Release` for a hash it refused.
-                        if !was_kept {
-                            self.ring.unkeep(tick);
-                        }
-                        return Err(error.into());
-                    }
+            let tick = request_tick(&request);
+            match self.apply(simulation, session, request) {
+                Ok(()) => {}
+                Err(error @ ExecuteError::Game { .. }) => return Err(error),
+                Err(error) => {
+                    fail_latest(session, tick);
+                    return Err(error);
                 }
-                Request::Load { tick } => self.ring.load(simulation, tick)?,
-                Request::Advance { tick, inputs } => {
-                    in_step(simulation, tick)?;
-                    if let Err(error) = simulation.step_encoded(Some(&join_player_inputs(&inputs)))
-                    {
-                        let ended = session.fail(tick).map_err(ExecuteError::from);
-                        let restored = self.ring.load(simulation, tick);
-                        return Err(ExecuteError::Game {
-                            tick,
-                            error,
-                            recovery: ended.and(restored).err().map(Box::new),
-                        });
-                    }
-                }
-                Request::Release { tick } => self.ring.release(tick)?,
             }
         }
         Ok(())
+    }
+
+    /// Applies one request, as [`Executor::execute`] describes.
+    fn apply(
+        &mut self,
+        simulation: &mut Simulation,
+        session: &mut Session,
+        request: Request,
+    ) -> Result<(), ExecuteError> {
+        match request {
+            Request::Save { tick, hash } => {
+                in_step(simulation, tick)?;
+                let was_kept = self.ring.save(simulation, tick, hash)?;
+                if hash && let Err(error) = session.report_hash(tick, simulation.hash()) {
+                    // The session will send no `Release` for a hash it refused.
+                    if !was_kept {
+                        self.ring.unkeep(tick);
+                    }
+                    return Err(error.into());
+                }
+            }
+            Request::Load { tick } => self.ring.load(simulation, tick)?,
+            Request::Advance { tick, inputs } => {
+                in_step(simulation, tick)?;
+                if let Err(error) = simulation.step_encoded(Some(&join_player_inputs(&inputs))) {
+                    let ended = session.fail(tick).map_err(ExecuteError::from);
+                    let restored = self.ring.load(simulation, tick);
+                    return Err(ExecuteError::Game {
+                        tick,
+                        error,
+                        recovery: ended.and(restored).err().map(Box::new),
+                    });
+                }
+            }
+            Request::Release { tick } => self.ring.release(tick)?,
+        }
+        Ok(())
+    }
+}
+
+/// The tick `request` is about.
+fn request_tick(request: &Request) -> u64 {
+    match request {
+        Request::Save { tick, .. }
+        | Request::Load { tick }
+        | Request::Advance { tick, .. }
+        | Request::Release { tick } => *tick,
+    }
+}
+
+/// Ends `session` with a failure of `tick`, or of the latest tick it ran when it has not run
+/// `tick`. A session that ran no tick, or that is connecting, has nothing to fail; one that
+/// ended keeps its reason.
+fn fail_latest(session: &mut Session, tick: u64) {
+    if let Err(SessionError::TickNotRun { next, .. }) = session.fail(tick)
+        && let Some(latest) = next.checked_sub(1)
+    {
+        // `latest` is below the next tick, so the session takes it.
+        let failed = session.fail(latest);
+        debug_assert_eq!(failed, Ok(()));
     }
 }
 

@@ -250,6 +250,87 @@ fn a_hash_the_session_refuses_keeps_no_state() {
         matches!(release, Err(ExecuteError::NotKept { tick: 0 })),
         "{release:?}"
     );
+    // A session that ran no tick has no tick to fail: it keeps running.
+    assert_eq!(session.state(), SessionState::Running);
+}
+
+#[test]
+fn an_executor_error_ends_every_peer() {
+    let identity = test_identity(&[0, 1]);
+    let spec = test_simulation().player_input_spec().unwrap();
+    let pair = || {
+        let sessions = (0..2)
+            .map(|local| Session::new(settings(local, &identity), spec.clone()).unwrap())
+            .collect();
+        let mut sessions = handshake(sessions);
+        let remote = sessions.pop().unwrap();
+        (sessions.pop().unwrap(), remote)
+    };
+    let failure = |tick| {
+        SessionState::Ended(EndReason::LocalFailure {
+            peer: PeerId(0),
+            tick,
+        })
+    };
+    let tell = |session: &mut Session, remote: &mut Session| {
+        for (to, packet) in session.outgoing(0) {
+            assert_eq!(to, PeerId(1));
+            remote.receive(PeerId(0), &packet, 0);
+        }
+    };
+
+    // The requests of tick 0 applied twice: the second time, the simulation is at tick 1.
+    // The session ran tick 0, so it fails that tick.
+    let (mut session, mut remote) = pair();
+    let mut simulation = test_simulation();
+    let mut executor = Executor::new(&mut simulation, session.settings()).unwrap();
+    session.add_local_input(0, vec![1]).unwrap();
+    let requests = session.advance(0).unwrap();
+    executor
+        .execute(&mut simulation, &mut session, requests.clone())
+        .unwrap();
+    let error = executor
+        .execute(&mut simulation, &mut session, requests)
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            ExecuteError::OutOfStep {
+                expected: 0,
+                found: 1
+            }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(session.state(), failure(0));
+    tell(&mut session, &mut remote);
+    assert_eq!(remote.state(), failure(0));
+
+    // A load of a tick the session has not run: it fails the latest tick it ran.
+    let (mut session, mut remote) = pair();
+    let mut simulation = test_simulation();
+    let mut executor = Executor::new(&mut simulation, session.settings()).unwrap();
+    for _ in 0..2 {
+        session.add_local_input(0, vec![1]).unwrap();
+        let requests = session.advance(0).unwrap();
+        executor
+            .execute(&mut simulation, &mut session, requests)
+            .unwrap();
+    }
+    let error = executor
+        .execute(
+            &mut simulation,
+            &mut session,
+            vec![Request::Load { tick: 9 }],
+        )
+        .unwrap_err();
+    assert!(
+        matches!(error, ExecuteError::MissingState { tick: 9 }),
+        "{error:?}"
+    );
+    assert_eq!(session.state(), failure(1));
+    tell(&mut session, &mut remote);
+    assert_eq!(remote.state(), failure(1));
 }
 
 #[test]

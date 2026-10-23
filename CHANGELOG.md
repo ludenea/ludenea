@@ -213,7 +213,10 @@ hash, those of the golden trace and replays included.
   tick, it ends the session with `Session::fail` (a session that had ended already, whose
   landing failed, keeps its reason), loads that tick's state, and returns
   `ExecuteError::Game { tick, error, recovery }`, where `recovery` names the first of those
-  two steps that failed, if any.
+  two steps that failed, if any. Any other error ends the session through `Session::fail`
+  too, failing the request's tick when the session ran it and otherwise the latest tick it
+  ran, so the other peers end with `LocalFailure` instead of stalling; the error is returned
+  unchanged.
   `Session::fail(tick)` ends the session with `EndReason::LocalFailure { peer, tick }`, naming
   the local peer, whose end notice ends every other peer, and lands nothing (the next
   `advance` is `SessionError::NotRunning`); it refuses a tick the session has not run
