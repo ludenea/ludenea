@@ -385,3 +385,24 @@ fn a_newcomer_after_the_layout_is_refused_as_full() {
     assert_eq!(status, OnlineStatus::Failed(RoomError::Full.to_string()));
     assert!(newcomer.layout().is_none());
 }
+
+#[test]
+fn a_link_closed_after_a_refusal_keeps_the_refusal() {
+    let mesh = MemoryMesh::new();
+    let mut peers = room(&mesh, 2, clear());
+    let now = until_ready(&mut peers);
+    let (link, close) = ClosableLink::new(mesh.join());
+    let mut newcomer = OnlinePeer::new(link, RoomRole::Join, clear()).unwrap();
+    let full = OnlineStatus::Failed(RoomError::Full.to_string());
+    let mut status = newcomer.poll(now);
+    for step in 1..10 {
+        for peer in &mut peers {
+            peer.poll(now + step * STEP);
+        }
+        status = newcomer.poll(now + step * STEP);
+    }
+    assert_eq!(status, full);
+    *close.borrow_mut() = Some("the signaling server went away".to_owned());
+    assert_eq!(newcomer.poll(now + 10 * STEP), full);
+    assert_eq!(newcomer.closed(), None);
+}

@@ -92,10 +92,12 @@ impl<L: Link> OnlinePeer<L> {
                 LinkEvent::Connected(other) => self.room.connected(other),
                 LinkEvent::Disconnected(other) => self.room.disconnected(other),
                 LinkEvent::Closed(reason) if self.layout.is_some() => self.closed = Some(reason),
-                LinkEvent::Closed(reason) => {
+                // A room that already failed keeps its own reason.
+                LinkEvent::Closed(reason) if *self.room.state() == RoomState::Waiting => {
                     self.failure
                         .get_or_insert(format!("the connection to the room closed: {reason}"));
                 }
+                LinkEvent::Closed(_) => {}
             }
         }
         while let Some((from, bytes)) = link.receive(Channel::Room) {

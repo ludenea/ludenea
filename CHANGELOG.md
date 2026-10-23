@@ -138,12 +138,12 @@ hash, those of the golden trace and replays included.
   `OnlineError::Conditions`; all-zero conditions add nothing. `poll(now_micros)` feeds the
   link's events and every room message to the room, sends the room's messages, and gives an
   `OnlineStatus`: `Room(RoomView)`, `Ready(MatchLayout)`, which it stays, or
-  `Failed(String)`. A link that closes before the layout fails the room ("the connection to
-  the room closed: ..."); afterwards `closed()` keeps the reason. Once ready, `receive` and
-  `send` carry the match packets over the layout's links behind the conditions; before, they
-  carry nothing, and match packets that arrive are dropped. `set_ready(players)`, `layout()`,
-  `failed_sends()`, `strays()` and `room_drops()` (the room's dropped messages since the last
-  call) complete it.
+  `Failed(String)`. A link that closes while the room waits fails it ("the connection to the
+  room closed: ..."), a room that already failed keeps its own reason, and after the layout
+  `closed()` keeps the link's reason. Once ready, `receive` and `send` carry the match packets
+  over the layout's links behind the conditions; before, they carry nothing, and match packets
+  that arrive are dropped. `set_ready(players)`, `layout()`, `failed_sends()`, `strays()` and
+  `room_drops()` (the room's dropped messages since the last call) complete it.
 - `ludenea_net::wire` is the network protocol of the Formats section:
   `Packet { match_id, messages }` with `encode()`, `Packet::decode(bytes)` and
   `Packet::version_of(bytes)`, the `Message` and `EndNotice` it carries, and `WireError`
