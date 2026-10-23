@@ -1079,3 +1079,54 @@ fn a_panic_the_host_catches_while_running_ends_both_hosts() {
     })
     .unwrap();
 }
+
+#[test]
+fn a_fork_during_the_adopted_resimulation_keeps_the_match_on_its_branch() {
+    let mut game = Match::arena(&[0, 1], 1, None);
+    game.run_until_all_run();
+    game.leave_at(1, 600);
+    game.run_until_all_end();
+    let peer = &mut game.peers[0];
+    let landed = peer.end().unwrap().tick.unwrap() + 1;
+    let hash = landed_hash(peer, landed);
+    let host = &mut peer.host;
+    let Ok(Reply::Timeline(timeline)) = host.handle(Command::GetTimeline) else {
+        panic!("a timeline");
+    };
+    let root = timeline.branch;
+
+    // A take-over at tick 0 while the confirmed inputs resimulate forks a branch.
+    host.advance(0.0);
+    assert!(timeline_resimulating(host));
+    host.handle(Command::SetLiveInput {
+        devices: LiveDevices {
+            keys: BTreeSet::new(),
+            gamepads: vec![Some(RawGamepad {
+                buttons: vec![0.0],
+                axes: vec![1.0],
+            })],
+        },
+    })
+    .unwrap();
+    host.handle(Command::Play).unwrap();
+    // One tick due: the advance resimulates first, then the take-over runs tick 0.
+    host.advance(1.0 / 60.0);
+    assert_eq!(host.tick(), 1);
+    host.handle(Command::Pause).unwrap();
+    let Ok(Reply::Timeline(timeline)) = host.handle(Command::GetTimeline) else {
+        panic!("a timeline");
+    };
+    assert_ne!(timeline.branch, root);
+
+    // Back on the match's branch, it resimulates through its last confirmed tick.
+    host.handle(Command::SwitchBranch { branch: root }).unwrap();
+    resimulate(host);
+    host.handle(Command::Seek { tick: landed }).unwrap();
+    let Ok(Reply::Hash {
+        tick, hash: got, ..
+    }) = host.handle(Command::GetHash)
+    else {
+        panic!("a hash");
+    };
+    assert_eq!((tick, got), (landed, hash));
+}

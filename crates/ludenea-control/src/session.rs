@@ -284,10 +284,11 @@ pub struct Session {
     /// The tick the session was at when its scene changed: resimulation seeks back to it
     /// once it gets there, unless the session moves first.
     return_to: Option<u64>,
-    /// The tick the resimulation of adopted inputs reaches (`adopt_inputs`), one past the
-    /// head: the input of the last tick steps the run to the tick after it. Set until that
-    /// resimulation ends or the logs change.
-    adopted_end: Option<u64>,
+    /// The tick a stale run's resimulation reaches when its inputs go past its recorded
+    /// hashes, one past the head: the input of the last tick steps the run to the tick after
+    /// it. Set by `adopt_inputs`, and on entering a stale stored branch, such as one forked
+    /// while adopted inputs resimulated, until that resimulation ends or the logs change.
+    inputs_end: Option<u64>,
     diverged: bool,
     reports: VecDeque<Resimulation>,
     /// Records every tick run while the `Introspection` topic is subscribed.
@@ -356,7 +357,7 @@ impl Session {
             history: UndoHistory::default(),
             resimulating: None,
             return_to: None,
-            adopted_end: None,
+            inputs_end: None,
             diverged: false,
             reports: VecDeque::new(),
             introspection: None,
@@ -625,7 +626,7 @@ impl Session {
         // the run from tick 0 is stale, to come back to its end, which the head (the last
         // tick with an input) falls one short of.
         if end > 0 {
-            self.adopted_end = Some(end);
+            self.inputs_end = Some(end);
             self.resimulating = Some(0);
             self.return_to = Some(end);
         }
@@ -1574,7 +1575,7 @@ impl Session {
     /// to, when it was resimulating.
     fn end_resimulation(&mut self) -> Option<u64> {
         self.switching = None;
-        self.adopted_end = None;
+        self.inputs_end = None;
         let failed = self.resimulating.take()?;
         let kept = usize::try_from(failed + 1).expect("tick fits in memory");
         self.hashes.truncate(kept);
@@ -1650,7 +1651,7 @@ impl Session {
         }
         if up_to >= self.end() {
             self.resimulating = None;
-            self.adopted_end = None;
+            self.inputs_end = None;
         }
         let returned = self
             .return_to
@@ -1896,7 +1897,14 @@ impl Session {
         self.resimulating = None;
         self.return_to = None;
         match stale {
-            Some(from) => self.resimulate_from(sim, from, at),
+            Some(from) => {
+                // A stale run resimulates through its last input, which its stored hashes
+                // may stop short of.
+                self.inputs_end = None;
+                let inputs_end = self.inputs.ticks.len() as u64;
+                self.inputs_end = (inputs_end > self.end()).then_some(inputs_end);
+                self.resimulate_from(sim, from, at)
+            }
             None => {
                 self.replay_to(sim, at)?;
                 self.current = at;
@@ -2062,7 +2070,7 @@ impl Session {
     fn end(&self) -> u64 {
         self.head
             .max(self.simulated())
-            .max(self.adopted_end.unwrap_or(0))
+            .max(self.inputs_end.unwrap_or(0))
     }
 
     fn ensure_resimulated(&self) -> Result<(), SessionError> {
@@ -2250,7 +2258,7 @@ impl Session {
         self.edits.edits.retain(|edit| edit.tick <= tick);
         self.hashes.truncate(kept);
         self.checkpoints.truncate_after(tick);
-        self.adopted_end = None;
+        self.inputs_end = None;
         self.update_head();
         // A live take-over below the resimulated point discards the whole stale future.
         if self.resimulating.is_some_and(|up_to| up_to > tick) {
@@ -2414,7 +2422,7 @@ impl Session {
         // Tick 0 is common to every branch: when it does not restore, the tree and the
         // hashes stay as they were.
         self.restore_checkpoint(sim, 0)?;
-        self.adopted_end = None;
+        self.inputs_end = None;
         self.history
             .keep_on_root(&self.tree.path(self.tree.current()), &self.edits);
         self.tree = BranchTree::default();
@@ -2645,7 +2653,7 @@ impl Session {
         self.apply_edits_or_drop(sim, from);
         let stale = self.simulated() > from
             || self.edits.last_tick().is_some_and(|tick| tick > from)
-            || self.adopted_end.is_some_and(|end| end > from);
+            || self.inputs_end.is_some_and(|end| end > from);
         self.resimulating = stale.then_some(from);
         self.return_to = None;
         // The world is at `from` until it gets to `at`.
