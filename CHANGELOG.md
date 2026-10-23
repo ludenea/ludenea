@@ -200,8 +200,10 @@ hash, those of the golden trace and replays included.
   tick: `rollback_window + 2`, plus the reported states the hash lag bounds let a session
   keep until their `Release` (`ExecuteError::StatesExhausted` past that; a `Release` of a
   state held but not kept is `ExecuteError::NotKept`). When the game fails while stepping a
-  tick, it loads that tick's state, ends the session with `Session::fail`, and returns
-  `ExecuteError::Game { tick, error }`.
+  tick, it ends the session with `Session::fail` (a session that had ended already, whose
+  landing failed, keeps its reason), loads that tick's state, and returns
+  `ExecuteError::Game { tick, error, recovery }`, where `recovery` names the first of those
+  two steps that failed, if any.
   `Session::fail(tick)` ends the session with `EndReason::LocalFailure { tick }`, whose end
   notice ends every other peer, and lands nothing (the next `advance` is
   `SessionError::NotRunning`); it refuses a tick the session has not run

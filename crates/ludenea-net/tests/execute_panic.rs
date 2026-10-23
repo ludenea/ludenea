@@ -55,6 +55,7 @@ fn panic_during_resimulation_restores_and_ends() {
     let ExecuteError::Game {
         tick: 2,
         error: SimError::Panicked(panic),
+        recovery: None,
     } = &error
     else {
         panic!("{error:?}");

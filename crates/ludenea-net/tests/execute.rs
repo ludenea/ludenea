@@ -1,7 +1,10 @@
 mod support;
 
-use ludenea_app::{App, StateError, join_player_inputs};
-use ludenea_net::{ExecuteError, Executor, Request, Session, SessionError, SessionSettings};
+use ludenea_app::{App, SimError, StateError, join_player_inputs};
+use ludenea_net::{
+    EndReason, ExecuteError, Executor, Request, Session, SessionError, SessionSettings,
+    SessionState,
+};
 use support::{handshake, identity, settings, test_simulation};
 
 /// The settings of peer 0 in a match of the test app where player `i` is owned by
@@ -206,5 +209,48 @@ fn a_hash_the_session_refuses_keeps_no_state() {
     assert!(
         matches!(release, Err(ExecuteError::NotKept { tick: 0 })),
         "{release:?}"
+    );
+}
+
+#[test]
+fn a_game_failure_is_named_even_when_its_recovery_fails() {
+    // The session ran ticks 0 and 1; the simulation holds no saved state of tick 1, and the
+    // advance of tick 1 carries one input for two players, which the game refuses.
+    let mut simulation = test_simulation();
+    let mut session = running_session();
+    let mut executor = Executor::new(&mut simulation, session.settings()).unwrap();
+    session.add_local_input(0, vec![1]).unwrap();
+    let first = session.advance(0).unwrap();
+    session.add_local_input(0, vec![1]).unwrap();
+    session.advance(0).unwrap();
+    executor
+        .execute(&mut simulation, &mut session, first)
+        .unwrap();
+    let broken = Request::Advance {
+        tick: 1,
+        inputs: vec![vec![1]],
+    };
+    let error = executor
+        .execute(&mut simulation, &mut session, vec![broken])
+        .unwrap_err();
+    let ExecuteError::Game {
+        tick: 1,
+        error: SimError::InputDecode(_),
+        recovery: Some(recovery),
+    } = &error
+    else {
+        panic!("{error:?}");
+    };
+    assert!(
+        matches!(**recovery, ExecuteError::MissingState { tick: 1 }),
+        "{recovery:?}"
+    );
+    assert!(
+        error.to_string().contains("no saved state of tick 1"),
+        "{error}"
+    );
+    assert_eq!(
+        session.state(),
+        SessionState::Ended(EndReason::LocalFailure { tick: 1 })
     );
 }

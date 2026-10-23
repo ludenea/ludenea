@@ -42,10 +42,21 @@ pub enum ExecuteError {
     /// not run.
     #[error(transparent)]
     Session(#[from] SessionError),
-    /// The game failed while stepping `tick`. The simulation stands at the state of `tick`,
-    /// and the session ended with `EndReason::LocalFailure`.
-    #[error("the game failed while stepping tick {tick}: {error}")]
-    Game { tick: u64, error: SimError },
+    /// The game failed while stepping `tick`. A running or leaving session ended with
+    /// `EndReason::LocalFailure`, whose end notice tells the other peers; a session that had
+    /// ended already, whose landing failed, keeps its reason. With `recovery` `None`, the
+    /// simulation stands at the state of `tick`. Otherwise `recovery` is the first step of
+    /// the recovery that failed, ending the session or loading that state, and the
+    /// simulation is left halfway: the game failure takes precedence, as the cause.
+    #[error(
+        "the game failed while stepping tick {tick}: {error}{}",
+        recovery_failure(recovery)
+    )]
+    Game {
+        tick: u64,
+        error: SimError,
+        recovery: Option<Box<ExecuteError>>,
+    },
 }
 
 /// Applies the requests of a [`Session`] to a [`Simulation`], with the inputs of each tick
@@ -109,9 +120,10 @@ impl Executor {
     /// - `Advance` checks the tick, then steps the simulation with the joined inputs.
     /// - `Release` stops keeping the state of its tick.
     ///
-    /// When the game fails while stepping a tick, it loads the state of that tick (its `Save`
-    /// came first), ends the session with [`Session::fail`], and returns
-    /// [`ExecuteError::Game`]. The requests after it are not applied.
+    /// When the game fails while stepping a tick, it ends the session with [`Session::fail`]
+    /// (an ended session keeps its reason), loads the state of that tick (its `Save` came
+    /// first), and returns [`ExecuteError::Game`], which names a failure of either step too.
+    /// The requests after it are not applied.
     ///
     /// # Errors
     ///
@@ -143,10 +155,13 @@ impl Executor {
                     in_step(simulation, tick)?;
                     if let Err(error) = simulation.step_encoded(Some(&join_player_inputs(&inputs)))
                     {
-                        let failed = session.fail(tick);
-                        self.ring.load(simulation, tick)?;
-                        failed?;
-                        return Err(ExecuteError::Game { tick, error });
+                        let ended = session.fail(tick).map_err(ExecuteError::from);
+                        let restored = self.ring.load(simulation, tick);
+                        return Err(ExecuteError::Game {
+                            tick,
+                            error,
+                            recovery: ended.and(restored).err().map(Box::new),
+                        });
                     }
                 }
                 Request::Release { tick } => self.ring.release(tick)?,
@@ -154,6 +169,14 @@ impl Executor {
         }
         Ok(())
     }
+}
+
+/// The end of the message of [`ExecuteError::Game`] when its recovery failed.
+fn recovery_failure(recovery: &Option<Box<ExecuteError>>) -> String {
+    recovery
+        .as_ref()
+        .map(|failure| format!("; recovering from it failed too: {failure}"))
+        .unwrap_or_default()
 }
 
 fn in_step(simulation: &Simulation, tick: u64) -> Result<(), ExecuteError> {
