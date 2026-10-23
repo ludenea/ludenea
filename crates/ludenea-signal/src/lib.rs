@@ -33,7 +33,7 @@ use ludenea_net::{MAX_PEERS, RoomCode};
 use matchbox_protocol::JsonPeerRequest;
 use serde::Deserialize;
 use tokio::net::TcpListener;
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tungstenite::error::CapacityError;
 
 pub use limits::Limits;
@@ -140,8 +140,15 @@ async fn accept(
                 continue;
             }
         };
-        let service =
-            TowerToHyperService::new(router.clone().layer(axum::Extension(ConnectInfo(remote))));
+        // Shared with a WebSocket the connection upgrades to, which outlives hyper's own
+        // connection future: the permit goes back once both are done.
+        let permit = ConnectionPermit(Arc::new(permit));
+        let service = TowerToHyperService::new(
+            router
+                .clone()
+                .layer(axum::Extension(ConnectInfo(remote)))
+                .layer(axum::Extension(permit.clone())),
+        );
         let header_timeout = limits.header_timeout;
         let io = TokioIo::new(stall::WriteDeadline::new(stream, limits.idle));
         tokio::spawn(async move {
@@ -153,10 +160,15 @@ async fn accept(
             // A failed connection (a reset, slow headers, a stalled reader) concerns that
             // client only.
             let _ = builder.serve_connection_with_upgrades(io, service).await;
-            drop(permit);
         });
     }
 }
+
+/// The place of one connection among [`Limits::max_connections`].
+#[derive(Clone)]
+struct ConnectionPermit(
+    #[expect(dead_code, reason = "held, never read")] Arc<OwnedSemaphorePermit>,
+);
 
 #[derive(Deserialize)]
 struct RoomQuery {
@@ -170,6 +182,7 @@ async fn room(
     query: Result<Query<RoomQuery>, QueryRejection>,
     headers: HeaderMap,
     upgrade: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
+    permit: Option<axum::Extension<ConnectionPermit>>,
 ) -> Response {
     if let Err(origin) = check_origin(&headers, &app.allowed_origins) {
         let message =
@@ -206,7 +219,9 @@ async fn room(
         .max_message_size(limits.max_message_bytes)
         .max_frame_size(limits.max_message_bytes)
         .on_upgrade(move |mut socket| async move {
-            // The reservation moved here: dropped unused if the upgrade fails.
+            // The reservation moved here: dropped unused if the upgrade fails. The member
+            // holds its connection's permit until it ends.
+            let _permit = permit;
             match reservation.arrive() {
                 Some(membership) => member(socket, membership, remote, &limits).await,
                 None => {
@@ -298,7 +313,12 @@ async fn member(
             ending.code, ending.reason
         );
     }
-    if !send_close(&mut socket, ending.code, &ending.reason, limits).await {
+    close(&mut socket, &ending, limits).await;
+}
+
+/// Sends the close frame of `ending`, then gives it up to [`LINGER`] to arrive.
+async fn close(socket: &mut WebSocket, ending: &Ending, limits: &Limits) {
+    if !send_close(socket, ending.code, &ending.reason, limits).await {
         return;
     }
     if ending.code == close_code::SIZE {

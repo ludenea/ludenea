@@ -659,3 +659,32 @@ fn a_close_frame_is_given_time_to_arrive() {
     // The listener keeps the connection open a moment for the client's answer.
     assert!(unanswered(&mut stream, Duration::from_millis(300)));
 }
+
+#[test]
+fn room_members_hold_their_connections() {
+    let page = TempDir::new().unwrap();
+    fs::write(page.path().join("index.html"), "<p>game</p>").unwrap();
+    let address = start(Options {
+        page: Some(page.path().to_path_buf()),
+        limits: Limits {
+            max_connections: 2,
+            ..Limits::default()
+        },
+        ..Options::default()
+    });
+    let (mut host, _) = join(address, "/rooms/ABCDEF?host=2");
+    let (joiner, joiner_id) = join(address, "/rooms/ABCDEF");
+    assert_eq!(event(&mut host), JsonPeerEvent::NewPeer(joiner_id));
+    let mut waiting = TcpStream::connect(address).unwrap();
+    write!(
+        waiting,
+        "GET / HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    assert!(unanswered(&mut waiting, Duration::from_millis(500)));
+    // Once a member leaves, the waiting client is served.
+    drop(joiner);
+    let mut response = String::new();
+    waiting.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+}
