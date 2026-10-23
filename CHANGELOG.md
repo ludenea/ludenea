@@ -113,6 +113,24 @@ hash, those of the golden trace and replays included.
   is a `Transport` over the match channel where `PeerId(i)` is `links[i]`; it drops and counts
   (`strays()`) packets from other links. `TransportError` gains `Unreachable { peer }`, for a
   peer of the match whose link is not connected: the packet is lost.
+- `ludenea_net::room` is the sans-IO room where a host and its joiners agree on a match.
+  `Room::new(RoomRole, MatchRules)` takes `RoomRole::Host { peers, match_id }` (2 to 4 peers,
+  `RoomError::Peers` otherwise) or `RoomRole::Join`; the rules serve only to check the
+  layout. Its owner feeds it the link's events (`assigned`, `connected`, `disconnected`) and
+  the room channel's messages (`receive`), sends what `outgoing()` gives, and calls
+  `set_ready(players)` once with 1 to 4 local players (`RoomError::LocalPlayers`,
+  `AlreadyReady`). `state()` is `RoomState::Waiting`, `Ready(MatchLayout)` or
+  `Failed(RoomError)`. `MatchLayout { local, match_id, players, links }` gives this peer, the
+  owner of each player and the link of each peer, the host first; `local_players()` lists the
+  players this peer owns. The host announces itself to every link, picks ready joiners in
+  connection order that are connected to each other and whose players fit, checks the layout
+  with `SessionSettings::validate`, and refuses the others (`Full`, `TooManyPlayers`,
+  `Unplayable`). A joiner checks the layout it receives (`RoomError::InvalidLayout`, naming
+  the broken rule) and fails with `TwoHosts`, `HostLeft` or the host's refusal. A message that
+  breaks a rule is dropped and reported by `events()` as
+  `RoomEvent::Dropped { link, reason: RoomDrop }` (`Wire`, `Unexpected` or `Invalid`).
+  `view()` gives a `RoomView { host, peers, connected, ready, unmeshed, unfit, local_ready }`
+  whose `describe()` says what the room waits for, such as "2 of 3 peers here, 1 not ready".
 - `ludenea_net::wire` is the network protocol of the Formats section:
   `Packet { match_id, messages }` with `encode()`, `Packet::decode(bytes)` and
   `Packet::version_of(bytes)`, the `Message` and `EndNotice` it carries, and `WireError`
