@@ -471,14 +471,14 @@ pub fn synctest(app: fn() -> App, args: &SyncTestArgs, out: &mut dyn Write) -> O
             )?;
             Ok(0)
         }
-        Err(error @ SyncTestError::Mismatch { .. }) => {
-            say(out, &error)?;
+        Err(error) => {
             let SyncTestError::Mismatch {
                 tick, snapshots, ..
-            } = error
+            } = &error
             else {
-                unreachable!("matched as a mismatch");
+                return Err(error.to_string());
             };
+            say(out, &error)?;
             let mut paths = Vec::new();
             for (side, snapshot) in ["straight", "rollback"].into_iter().zip(snapshots.iter()) {
                 let path = dump_dir.join(format!("tick-{tick}-{side}.snap"));
@@ -488,7 +488,6 @@ pub fn synctest(app: fn() -> App, args: &SyncTestArgs, out: &mut dyn Write) -> O
             say(out, format_args!("wrote {}", paths.join(" and ")))?;
             Ok(1)
         }
-        Err(error) => Err(error.to_string()),
     }
 }
 
