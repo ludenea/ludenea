@@ -1,12 +1,11 @@
 //! The per-entity divergence report between two boxes simulations. An integration test:
 //! `boxes` links this crate, so its simulation type is this one only here.
 
-use std::collections::BTreeMap;
-
 use ludenea_app::Simulation;
-use ludenea_app::divergence::{Cause, DivergenceKind, EntityComparison, TickRecord, TickRecorder};
+use ludenea_app::divergence::{
+    Cause, ComparisonError, DivergenceKind, EntityComparison, TickRecord, TickRecorder,
+};
 use ludenea_app::pose::Pose;
-use ludenea_ecs::schema::TypeSchema;
 
 /// Two simulations of the same boxes scene, at tick 0.
 fn twins() -> [Simulation; 2] {
@@ -18,13 +17,6 @@ fn twins() -> [Simulation; 2] {
     })
 }
 
-/// The stable names of the app's events and its systems, in run order.
-fn context(sim: &Simulation) -> (BTreeMap<&'static str, TypeSchema>, Vec<&'static str>) {
-    let events = sim.world().event_schemas().into_iter().collect();
-    let systems = sim.systems().into_iter().map(|info| info.name).collect();
-    (events, systems)
-}
-
 /// Steps `sim` once with `input`, recording the tick.
 fn step(sim: &mut Simulation, input: &boxes::BoxesInput) -> TickRecord {
     let encoded = postcard::to_allocvec(&vec![input.clone()]).unwrap();
@@ -33,11 +25,24 @@ fn step(sim: &mut Simulation, input: &boxes::BoxesInput) -> TickRecord {
     recorder.into_record(sim.tick())
 }
 
+/// Two simulations one tick in, the first having spawned a crate, and their records.
+fn spawned_on_one_side() -> ([Simulation; 2], [TickRecord; 2]) {
+    let [mut current, mut compare] = twins();
+    let spawn = boxes::BoxesInput {
+        spawn: Some(0.0),
+        ..boxes::BoxesInput::default()
+    };
+    let records = [
+        step(&mut current, &spawn),
+        step(&mut compare, &boxes::BoxesInput::default()),
+    ];
+    ([current, compare], records)
+}
+
 #[test]
 fn a_moved_entity_is_changed_with_its_first_difference() {
     let [mut current, compare] = twins();
     let mut comparison = EntityComparison::new(&current);
-    let (events, systems) = context(&current);
     let moved = current
         .world()
         .entities()
@@ -50,7 +55,9 @@ fn a_moved_entity_is_changed_with_its_first_difference() {
         .position
         .x += 1.0;
 
-    let divergences = comparison.compare([&current, &compare], 0, [&[], &[]], 0, &events, &systems);
+    let divergences = comparison
+        .compare([&current, &compare], [&[], &[]], 0)
+        .unwrap();
 
     assert_eq!(divergences.len(), 1, "{divergences:?}");
     let divergence = &divergences[0];
@@ -65,58 +72,48 @@ fn a_moved_entity_is_changed_with_its_first_difference() {
     assert_eq!(comparison.take_warnings(), Vec::<String>::new());
 
     // An entity is reported once, at its first divergent tick.
-    let again = comparison.compare([&current, &compare], 0, [&[], &[]], 0, &events, &systems);
+    let again = comparison
+        .compare([&current, &compare], [&[], &[]], 0)
+        .unwrap();
     assert_eq!(again, []);
 }
 
 #[test]
 fn an_entity_spawned_on_one_side_only_is_caused_by_its_command() {
-    let [mut current, mut compare] = twins();
-    let mut comparison = EntityComparison::new(&current);
-    let (events, systems) = context(&current);
-    let spawn = boxes::BoxesInput {
-        spawn: Some(0.0),
-        ..boxes::BoxesInput::default()
-    };
-    let records = [
-        step(&mut current, &spawn),
-        step(&mut compare, &boxes::BoxesInput::default()),
-    ];
+    let ([current, compare], records) = spawned_on_one_side();
     let tick = current.tick();
     let records = [
         std::slice::from_ref(&records[0]),
         std::slice::from_ref(&records[1]),
     ];
+    let spawn = Cause::Command {
+        tick,
+        system: "boxes::apply_inputs".to_string(),
+        kind: "spawn".to_string(),
+    };
 
-    let divergences = comparison.compare([&current, &compare], tick, records, 0, &events, &systems);
-
-    let spawned = divergences
-        .iter()
-        .find(|divergence| divergence.kind == DivergenceKind::OnlyInCurrent)
-        .unwrap_or_else(|| panic!("no entity only in current: {divergences:?}"));
-    assert_eq!(spawned.first_tick, tick);
-    assert_eq!(spawned.first_difference, None);
-    assert!(
-        spawned.causes.contains(&Cause::Command {
-            tick,
-            system: "boxes::apply_inputs".to_string(),
-            kind: "spawn".to_string(),
-        }),
-        "{:?}",
-        spawned.causes
-    );
-    assert_eq!(comparison.first_divergent(), Some(tick));
+    // The divergence at `explains_from` itself is explained.
+    for explains_from in [0, tick] {
+        let mut comparison = EntityComparison::new(&current);
+        let divergences = comparison
+            .compare([&current, &compare], records, explains_from)
+            .unwrap();
+        let spawned = divergences
+            .iter()
+            .find(|divergence| divergence.kind == DivergenceKind::OnlyInCurrent)
+            .unwrap_or_else(|| panic!("no entity only in current: {divergences:?}"));
+        assert_eq!(spawned.first_tick, tick);
+        assert_eq!(spawned.first_difference, None);
+        assert!(spawned.causes.contains(&spawn), "{:?}", spawned.causes);
+        assert_eq!(comparison.first_divergent(), Some(tick));
+    }
 
     // A divergence before `explains_from` has no cause.
     let mut late = EntityComparison::new(&current);
-    let divergences = late.compare(
-        [&current, &compare],
-        tick,
-        records,
-        tick + 1,
-        &events,
-        &systems,
-    );
+    let divergences = late
+        .compare([&current, &compare], records, tick + 1)
+        .unwrap();
+    assert!(!divergences.is_empty());
     assert!(
         divergences
             .iter()
@@ -125,11 +122,49 @@ fn an_entity_spawned_on_one_side_only_is_caused_by_its_command() {
 }
 
 #[test]
+fn the_second_simulation_alone_is_only_in_compare() {
+    let ([current, compare], _) = spawned_on_one_side();
+    let mut comparison = EntityComparison::new(&current);
+    let divergences = comparison
+        .compare([&compare, &current], [&[], &[]], 0)
+        .unwrap();
+    assert!(
+        divergences
+            .iter()
+            .any(|divergence| divergence.kind == DivergenceKind::OnlyInCompare),
+        "{divergences:?}"
+    );
+}
+
+#[test]
+fn simulations_at_different_ticks_are_refused() {
+    let [mut current, compare] = twins();
+    current.step().unwrap();
+    let mut comparison = EntityComparison::new(&current);
+    let error = comparison
+        .compare([&current, &compare], [&[], &[]], 0)
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        ComparisonError::DifferentTicks {
+            first: 1,
+            second: 0
+        }
+    ));
+    assert_eq!(
+        error.to_string(),
+        "the simulations to compare stand at different ticks: 1 and 0"
+    );
+    assert_eq!(comparison.first_divergent(), None);
+}
+
+#[test]
 fn identical_simulations_do_not_diverge() {
     let [current, compare] = twins();
     let mut comparison = EntityComparison::new(&current);
-    let (events, systems) = context(&current);
-    let divergences = comparison.compare([&current, &compare], 0, [&[], &[]], 0, &events, &systems);
+    let divergences = comparison
+        .compare([&current, &compare], [&[], &[]], 0)
+        .unwrap();
     assert_eq!(divergences, []);
     assert_eq!(comparison.first_divergent(), None);
 }

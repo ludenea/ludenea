@@ -4,12 +4,9 @@
 //! first divergent tick, with its first differing field and the events and commands that
 //! may have caused it.
 
-use std::collections::BTreeMap;
-
 use ludenea_app::divergence::{EntityComparison, TickRecord, TickRecorder};
 use ludenea_app::{Edit, EntityRef, Simulation};
 use ludenea_ecs::Entity;
-use ludenea_ecs::schema::TypeSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::branches::BranchId;
@@ -62,8 +59,6 @@ const COMPARE: usize = 1;
 
 pub(crate) struct DivergenceRun {
     sims: [Simulation; 2],
-    event_schemas: BTreeMap<&'static str, TypeSchema>,
-    systems: Vec<&'static str>,
     /// The last tick asked for, or the default range.
     requested: Option<u64>,
     /// Whether the session may have changed the runs since they were composed.
@@ -92,14 +87,7 @@ struct Progress {
 
 impl DivergenceRun {
     pub fn new(current: Simulation, compare: Simulation) -> DivergenceRun {
-        let world = current.world();
         DivergenceRun {
-            event_schemas: world.event_schemas().into_iter().collect(),
-            systems: current
-                .systems()
-                .into_iter()
-                .map(|info| info.name)
-                .collect(),
             sims: [current, compare],
             requested: None,
             outdated: false,
@@ -202,13 +190,7 @@ impl DivergenceRun {
         if self.refresh(session).is_err() {
             return Ok((None, true));
         }
-        let Self {
-            sims,
-            event_schemas,
-            systems,
-            progress,
-            ..
-        } = self;
+        let Self { sims, progress, .. } = self;
         let progress = progress.as_mut().expect("refreshed");
         if progress.complete() {
             return Ok((None, true));
@@ -219,7 +201,7 @@ impl DivergenceRun {
                 let fork = progress.fork;
                 progress.start(sims, session)?;
                 progress.at = Some(fork);
-                progress.compare(sims, event_schemas, systems, fork);
+                progress.compare(sims)?;
                 fork
             }
         };
@@ -241,7 +223,7 @@ impl DivergenceRun {
             }
             now += 1;
             progress.at = Some(now);
-            progress.compare(sims, event_schemas, systems, now);
+            progress.compare(sims)?;
         }
         Ok((Some(now), progress.complete()))
     }
@@ -332,27 +314,23 @@ impl Progress {
         Ok(())
     }
 
-    /// Compares the simulations, both at `tick`, and reports the entities that diverge
-    /// there for the first time.
-    fn compare(
-        &mut self,
-        sims: &[Simulation; 2],
-        event_schemas: &BTreeMap<&'static str, TypeSchema>,
-        systems: &[&'static str],
-        tick: u64,
-    ) {
+    /// Compares the simulations, both at the tick compared, and reports the entities that
+    /// diverge there for the first time. Fails only if they stand at different ticks, which
+    /// `advance` never lets happen.
+    fn compare(&mut self, sims: &[Simulation; 2]) -> Result<(), String> {
         let comparison = self.comparison.as_mut().expect("started");
         let [current, compare] = &self.records;
         // The tick ending at the fork ran before the edits that part the branches: it
         // explains only later divergences.
-        self.entities.extend(comparison.compare(
-            [&sims[CURRENT], &sims[COMPARE]],
-            tick,
-            [current, compare],
-            self.fork.saturating_add(1),
-            event_schemas,
-            systems,
-        ));
+        let found = comparison
+            .compare(
+                [&sims[CURRENT], &sims[COMPARE]],
+                [current, compare],
+                self.fork.saturating_add(1),
+            )
+            .map_err(|error| error.to_string())?;
+        self.entities.extend(found);
+        Ok(())
     }
 }
 

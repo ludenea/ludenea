@@ -115,8 +115,19 @@ impl ScheduleObserver for TickRecorder {
 const CURRENT: usize = 0;
 const COMPARE: usize = 1;
 
+/// Why two simulations cannot be compared.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ComparisonError {
+    #[error("the simulations to compare stand at different ticks: {first} and {second}")]
+    DifferentTicks { first: u64, second: u64 },
+}
+
 /// Compares two simulations tick after tick and reports each divergent entity once.
 pub struct EntityComparison {
+    /// The schema of every event by its stable name, to find the entities it references.
+    event_schemas: BTreeMap<&'static str, TypeSchema>,
+    /// The stable name of every system, in run order, to name a command's issuer.
+    systems: Vec<&'static str>,
     /// Snapshot parts every entity diff shares: its components are empty.
     skeleton: Snapshot,
     first_divergent: Option<u64>,
@@ -134,6 +145,12 @@ impl EntityComparison {
             values.clear();
         }
         EntityComparison {
+            event_schemas: skeleton_from.world().event_schemas().into_iter().collect(),
+            systems: skeleton_from
+                .systems()
+                .into_iter()
+                .map(|info| info.name)
+                .collect(),
             skeleton,
             first_divergent: None,
             divergent: BTreeMap::new(),
@@ -151,23 +168,27 @@ impl EntityComparison {
         std::mem::take(&mut self.warnings)
     }
 
-    /// Compares `sims`, both at `tick`, and gives the entities that diverge there for the
-    /// first time, ordered by entity. `records` are the records of each simulation's recent
-    /// ticks: those of `tick` and the tick before explain a divergence at `tick`. A
-    /// divergence at a tick below `explains_from` has no cause, as the ticks recorded before
-    /// it ran before what parts the simulations.
+    /// Compares `sims`, which must stand at the same tick, and gives the entities that
+    /// diverge there for the first time, ordered by entity. `records` are the records of
+    /// each simulation's recent ticks: those of the tick compared and the tick before
+    /// explain a divergence. A divergence at a tick below `explains_from` has no cause, as
+    /// the ticks recorded before it ran before what parts the simulations.
     pub fn compare(
         &mut self,
         sims: [&Simulation; 2],
-        tick: u64,
         records: [&[TickRecord]; 2],
         explains_from: u64,
-        event_schemas: &BTreeMap<&'static str, TypeSchema>,
-        systems: &[&'static str],
-    ) -> Vec<EntityDivergence> {
+    ) -> Result<Vec<EntityDivergence>, ComparisonError> {
+        let tick = sims[CURRENT].tick();
+        if sims[COMPARE].tick() != tick {
+            return Err(ComparisonError::DifferentTicks {
+                first: tick,
+                second: sims[COMPARE].tick(),
+            });
+        }
         let trees = [sims[CURRENT].hash_tree(), sims[COMPARE].hash_tree()];
         if trees[CURRENT].root == trees[COMPARE].root {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         self.first_divergent.get_or_insert(tick);
         let mut sides: BTreeMap<Entity, [Option<&EntityHash>; 2]> = BTreeMap::new();
@@ -223,16 +244,16 @@ impl EntityComparison {
         } else {
             Vec::new()
         };
-        found
+        Ok(found
             .into_iter()
             .map(|(entity, kind)| EntityDivergence {
                 entity,
                 kind,
                 first_tick: tick,
                 first_difference: differences.remove(&entity),
-                causes: self.causes(entity, &explaining, event_schemas, systems),
+                causes: self.causes(entity, &explaining),
             })
-            .collect()
+            .collect())
     }
 
     /// The first difference of each of `entities`, through snapshots restricted to them.
@@ -275,13 +296,7 @@ impl EntityComparison {
     }
 
     /// The events and commands of `records` that explain why `entity` diverges.
-    fn causes(
-        &self,
-        entity: Entity,
-        records: &[&TickRecord],
-        event_schemas: &BTreeMap<&'static str, TypeSchema>,
-        systems: &[&'static str],
-    ) -> Vec<Cause> {
+    fn causes(&self, entity: Entity, records: &[&TickRecord]) -> Vec<Cause> {
         let mut causes = Vec::new();
         let mut add = |cause: Cause| {
             if !causes.contains(&cause) {
@@ -290,7 +305,7 @@ impl EntityComparison {
         };
         for record in records {
             for (name, value) in &record.events {
-                let Some(schema) = event_schemas.get(name) else {
+                let Some(schema) = self.event_schemas.get(name) else {
                     continue;
                 };
                 let refs = entity_refs(schema, value);
@@ -318,7 +333,8 @@ impl EntityComparison {
                 if command.entity == Some(entity) {
                     add(Cause::Command {
                         tick: record.tick,
-                        system: systems
+                        system: self
+                            .systems
                             .get(*index)
                             .map_or_else(|| format!("system {index}"), |name| name.to_string()),
                         kind: command_kind(command.kind).to_string(),
