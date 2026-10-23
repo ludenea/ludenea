@@ -178,13 +178,14 @@ hash, those of the golden trace and replays included.
   an `Ack`, and the leaver its `Goodbye`, at most once a tick for `END_LINGER_MICROS`. The
   leaver ends anyway `disconnect_after_micros` after `leave`. A `Goodbye` below the
   receiver's last confirmed tick is `ViolationRule::GoodbyeBehind`, one past the furthest
-  input an honest peer can have `ViolationRule::BeyondHorizon`. Whatever the ending, once the session ran, the next
-  `advance` (or the one that ended it) returns the requests that land the simulation on the
-  state the confirmed inputs give at the end tick: a `Load` of the latest tick built only
-  from confirmed inputs, then a `Save` (asking no hash) and an `Advance` of every confirmed
-  tick from it; no `Release` follows, and the caller may drop the states it keeps. Later
-  calls are `SessionError::NotRunning`. Every `Load` is of a tick at most `rollback_window`
-  before the current one. `Session::settings()` gives the settings a session was built with.
+  input an honest peer can have `ViolationRule::BeyondHorizon`. Whatever the ending, once the
+  session ran, the next `advance` (or the one that ended it) returns the requests that land
+  the simulation on the state the confirmed inputs give at the end tick: a `Load` of the
+  latest tick built only from confirmed inputs, then a `Save` (asking no hash) and an
+  `Advance` of every confirmed tick from it; no `Release` follows, and the caller may drop
+  the states it keeps. Later calls are `SessionError::NotRunning`. Every `Load` is of a
+  tick at most `rollback_window` before the current one. `Session::settings()` gives the
+  settings a session was built with.
 - `ludenea_render` answers without a GPU what the renderer draws: `atlas::frames_of(png,
   meta)` gives the `TextureFrames` (the image size and each `FrameRect`, row-major, with its
   pivot) a meta cuts a PNG into, the same cut `pack` makes, or a `FramesError` (`Decode`,
