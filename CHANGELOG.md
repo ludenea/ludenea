@@ -67,6 +67,43 @@ hash, those of the golden trace and replays included.
   input type): the encoding of one default input, and a `check` that accepts only the
   canonical postcard encoding of exactly one input (it decodes, encodes again and compares,
   so an overlong varint is refused with `SimError::InputDecode` naming both lengths).
+- New crate `ludenea-net`, also reachable as `ludenea::net`: rollback networking. It reads no
+  clock and uses no floating point: the caller passes the current time in monotonic
+  microseconds. The settings of one peer are
+  `SessionSettings { local, match_id, identity, timeouts }`: the `PeerId` it runs for (a `u8`,
+  shown as `peer N`), the identifier that tells this match's packets from any other's, the
+  `MatchIdentity { engine, fingerprint, scene_and_assets, tick_rate, players, rules }` every
+  peer must agree on (`players` names the owner of each player, in order), and the
+  `Timeouts { notice_after_micros, disconnect_after_micros }`, 750 ms and 3 s by default.
+  `MatchRules { input_delay, rollback_window, hash_interval }` defaults to 2, 8 and 30 ticks.
+  The limits are `MAX_PEERS` (4), `MAX_PLAYERS` (4), `MAX_INPUT_BYTES` (24 bytes per player
+  and tick), `MAX_PACKET_BYTES` (1200), `MAX_TICKS_PER_MESSAGE` (32),
+  `MAX_MESSAGES_PER_PACKET` (16) and `MAX_ENGINE_BYTES` (64). `SessionSettings::validate`
+  refuses settings with a `SettingsError` naming the field and its value: `EngineTooLong`,
+  `PlayerCount` (no player or more than 4), `PeerCount` (an owner past peer 3), `SinglePeer`,
+  `PeerWithoutPlayer` (the owners must be exactly the peers 0 to n), `LocalOutOfRange`,
+  `TickRate` (0), `RollbackWindow` (0), `WindowAndDelay` (`rollback_window + input_delay + 1`
+  over 32 ticks), `HashInterval` (0), `Timeouts` (unless `0 < notice < disconnect`),
+  `PacketTooLarge` and `PacketTooManyMessages`; `Session::new` adds `DefaultInputTooLarge` and
+  `DefaultInputRefused`.
+- `ludenea_net::transport` moves packets between peers. The `Transport` trait is a datagram
+  channel, unreliable and unordered by contract: `send(to, packet, now_micros)` refuses with a
+  `TransportError` (`UnknownPeer`, or `TooLarge` past `MAX_PACKET_BYTES`), and
+  `receive(now_micros)` gives the next packet arrived with its sender.
+  `MemoryNetwork::new(peers)` gives one `MemoryTransport` per peer of an in-process network
+  that delivers at once and in order. `Conditioned::new(inner, LinkConditions)` holds back
+  what is sent through a transport under seeded, deterministic impairments (`latency_micros`,
+  `jitter_micros`, `loss_per_mille`, `duplicate_per_mille`, `reorder_per_mille` with
+  `reorder_extra_micros`, and `seed`, each destination drawing from its own stream), and
+  refuses a chance above 1000 per mille (`ConditionsError::PerMilleTooLarge`, naming the
+  field) or a `jitter_micros` of `u32::MAX` (`ConditionsError::JitterTooLarge`). It releases
+  the packets due when `receive` is called; `failed_sends()` counts those the inner transport
+  refused, which are dropped, and `last_send_error()` gives the latest refusal.
+- `ludenea_net::wire` is the network protocol of the Formats section:
+  `Packet { match_id, messages }` with `encode()`, `Packet::decode(bytes)` and
+  `Packet::version_of(bytes)`, the `Message` and `EndNotice` it carries, and `WireError`
+  (`TooLarge`, `Version`, `Malformed`, `TooManyMessages`, `TooManyTicks`, `NoTicks`,
+  `InputTooLarge`, `TooManyPlayers`, `EngineTooLong`), whose `variant()` names the variant.
 - `ludenea_net::Session` is the sans-IO rollback session of one peer.
   `SessionSettings::validate` refuses a match where peer 0 owns every player
   (`SettingsError::SinglePeer`): a rollback session needs at least two peers, and a
@@ -83,7 +120,11 @@ hash, those of the golden trace and replays included.
   peer whose handshake is unfinished and that stays silent for `disconnect_after_micros`
   while connecting ends it with `EndReason::Unreachable`. A packet that is not one of this
   match from another of its peers is dropped, counted per sender and `DropReason` in
-  `Session::stats`, and reported as `SessionEvent::Dropped`.
+  `Session::stats` (`Wire`, naming the `WireError` variant, `WrongMatch`, `UnknownPeer`, or
+  `BeforeRunning` for more than the handshake before the match runs), and reported as
+  `SessionEvent::Dropped`. `Session::state()` gives the `SessionState` (`Connecting`,
+  `Running`, `Leaving`, `Ended` with its `EndReason`), and `Session::events()` the
+  `SessionEvent`s since the last call.
 - A running `ludenea_net::Session` predicts and rolls back. `add_local_input(player, input)`
   sets a local player's input for the next advanced tick (a second call replaces it), and
   refuses with a `SessionError` (`NotRunning`, `NotLocal`, `InputTooLarge`, `InvalidInput`).
