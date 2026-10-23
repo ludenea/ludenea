@@ -141,6 +141,13 @@ pub struct Conditioned<T: Transport> {
 }
 
 impl<T: Transport> Conditioned<T> {
+    /// Wraps `inner`, holding back each packet sent through it under `conditions`, with
+    /// nothing pending yet.
+    ///
+    /// # Errors
+    ///
+    /// [`ConditionsError::PerMilleTooLarge`] for a chance above 1000 per mille, naming the
+    /// field, and [`ConditionsError::JitterTooLarge`] for a `jitter_micros` of `u32::MAX`.
     pub fn new(inner: T, conditions: LinkConditions) -> Result<Self, ConditionsError> {
         for (field, value) in [
             ("loss_per_mille", conditions.loss_per_mille),
