@@ -115,12 +115,14 @@ pub enum EndReason {
         tick: Option<u64>,
         rule: ViolationRule,
     },
-    /// The state hashes of `tick` differ: `local` is this peer's, `remote` that of `peer`. A
-    /// peer that learned it from another's end notice holds the view of the peer that found
-    /// it, as the notice tells: `local` is the hash of the peer that found it, and `peer`,
-    /// with its hash `remote`, the peer whose hash differed from it, which may be this one.
+    /// The state hashes of `tick` differ, as `found_by` found: `local` is the hash of
+    /// `found_by`, and `remote` that of `peer`, whose hash differed from it. `found_by` is this
+    /// peer when it compared the hashes itself, and otherwise the sender of the end notice
+    /// that told it, which is the peer that found it, as a notice is never relayed twice;
+    /// `peer` may then be this one.
     Desync {
         tick: u64,
+        found_by: PeerId,
         peer: PeerId,
         local: u64,
         remote: u64,
@@ -135,9 +137,9 @@ pub enum EndReason {
     /// when a peer is silent that long. When several peers leave, the lowest `last_tick` wins,
     /// and `peer` is the lowest peer naming it, the same on every peer that heard them all.
     Left { peer: PeerId, last_tick: u64 },
-    /// A game failed while stepping `tick`, here ([`Session::fail`]) or, as its end notice
-    /// told, on the peer it ran on.
-    LocalFailure { tick: u64 },
+    /// The game of `peer` failed while stepping `tick`: this peer's ([`Session::fail`]), or
+    /// the sender's of the end notice that told it, as a notice is never relayed twice.
+    LocalFailure { peer: PeerId, tick: u64 },
 }
 
 /// A rule of the protocol no honest peer breaks, whatever the network does to its packets.
@@ -757,7 +759,7 @@ impl Session {
                 }
                 Message::End { reason } => {
                     match self.check_notice(from, reason) {
-                        Ok(()) => self.end_by_notice(now, reason),
+                        Ok(()) => self.end_by_notice(now, from, reason),
                         Err(refusal) => self.refuse(now, from, refusal),
                     }
                     return;
@@ -887,7 +889,8 @@ impl Session {
             });
         }
         let now = self.now_micros.unwrap_or(0);
-        self.end(now, EndReason::LocalFailure { tick });
+        let peer = self.settings.local;
+        self.end(now, EndReason::LocalFailure { peer, tick });
         self.land_due = false;
         Ok(())
     }
@@ -1674,6 +1677,7 @@ impl Session {
             if let Some((peer, remote)) = differing {
                 desync = Some(EndReason::Desync {
                     tick,
+                    found_by: self.settings.local,
                     peer,
                     local: report.hash,
                     remote,
@@ -2231,6 +2235,7 @@ impl Session {
                 peer,
                 local,
                 remote,
+                ..
             } => Some(EndNotice::Desync {
                 tick,
                 peer,
@@ -2238,7 +2243,7 @@ impl Session {
                 remote,
             }),
             EndReason::Lost { peer } => Some(EndNotice::Lost { peer }),
-            EndReason::LocalFailure { tick } => Some(EndNotice::LocalFailure { tick }),
+            EndReason::LocalFailure { tick, .. } => Some(EndNotice::LocalFailure { tick }),
             EndReason::Mismatch { .. }
             | EndReason::Unreachable { .. }
             | EndReason::Violation { .. }
@@ -2287,8 +2292,9 @@ impl Session {
         }
     }
 
-    /// Ends the session for the reason an end notice tells, which is not relayed again.
-    fn end_by_notice(&mut self, now: u64, notice: EndNotice) {
+    /// Ends the session for the reason the end notice of `from` tells, which is not relayed
+    /// again: `from` is the peer that decided the ending.
+    fn end_by_notice(&mut self, now: u64, from: PeerId, notice: EndNotice) {
         let reason = match notice {
             EndNotice::Desync {
                 tick,
@@ -2297,12 +2303,13 @@ impl Session {
                 remote,
             } => EndReason::Desync {
                 tick,
+                found_by: from,
                 peer,
                 local,
                 remote,
             },
             EndNotice::Lost { peer } => EndReason::Lost { peer },
-            EndNotice::LocalFailure { tick } => EndReason::LocalFailure { tick },
+            EndNotice::LocalFailure { tick } => EndReason::LocalFailure { peer: from, tick },
         };
         self.land_due = self.active();
         self.state = SessionState::Ended(reason);

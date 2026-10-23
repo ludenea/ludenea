@@ -934,7 +934,10 @@ fn failure_ends_every_peer_with_local_failure() {
     assert_eq!(session.state(), SessionState::Running);
 
     session.fail(last_run).unwrap();
-    let failure = ended(EndReason::LocalFailure { tick: last_run });
+    let failure = ended(EndReason::LocalFailure {
+        peer: PeerId(0),
+        tick: last_run,
+    });
     assert_eq!(session.state(), failure);
     // No landing: the game failed, so the simulation stays at the failed tick.
     assert_eq!(session.advance(NOW), Err(SessionError::NotRunning));
@@ -947,6 +950,27 @@ fn failure_ends_every_peer_with_local_failure() {
         remote.receive(PeerId(0), &packet, NOW);
     }
     assert_eq!(remote.state(), failure);
+}
+
+#[test]
+fn relayed_failure_names_the_peer_that_failed() {
+    // With three peers, a bystander learns of peer 1's failure only from its notice: the
+    // notice carries no peer, and its sender is the peer whose game failed.
+    let mut sessions = handshake(sessions(3));
+    sessions[1].add_local_input(1, vec![1]).unwrap();
+    sessions[1].advance(NOW).unwrap();
+    sessions[1].fail(0).unwrap();
+    let failure = ended(EndReason::LocalFailure {
+        peer: PeerId(1),
+        tick: 0,
+    });
+    assert_eq!(sessions[1].state(), failure);
+    for (to, packet) in sessions[1].outgoing(NOW) {
+        sessions[usize::from(to.0)].receive(PeerId(1), &packet, NOW);
+    }
+    for session in &sessions {
+        assert_eq!(session.state(), failure);
+    }
 }
 
 #[test]

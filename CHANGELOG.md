@@ -135,10 +135,10 @@ hash, those of the golden trace and replays included.
   report `Ack.hashes_through` does not cover yet (acknowledging a report never sent stays
   `ViolationRule::AckNeverSent`). When every peer's hash matches, the session emits
   `SessionEvent::HashMatched { tick }` and releases the states kept for earlier reports. A
-  difference ends it with `EndReason::Desync { tick, peer, local, remote }`, naming the peer
-  and both hashes. A received hash past the local horizon plus one is
-  `ViolationRule::HashBeyondHorizon`; one of tick 0 or off the interval
-  (`DropReason::HashOffInterval`), received already with another hash
+  difference ends it with `EndReason::Desync { tick, found_by, peer, local, remote }`, naming
+  the peer that found it (this one), the differing peer and both hashes. A received hash
+  past the local horizon plus one is `ViolationRule::HashBeyondHorizon`; one of tick 0 or off
+  the interval (`DropReason::HashOffInterval`), received already with another hash
   (`HashAlreadyReceived`; the same hash resent until acknowledged is ignored), or beyond the
   `(rollback_window + input_delay) / hash_interval + 2` reports kept waiting for a local
   hash answered late (`HashBacklog`), or after a report of that peer still missing
@@ -157,8 +157,10 @@ hash, those of the golden trace and replays included.
   decides alone that an end notice tells of sends that `End` notice, and nothing else, to
   every peer at most once a tick for `END_LINGER_MICROS` (500 ms); a received `End` ends the
   receiver with the same reason, the new `EndReason::Lost { peer }` and
-  `EndReason::LocalFailure { tick }` included, a desync with the view of the peer that found
-  it (its hash as `local`, the differing peer and that peer's hash). A notice no honest peer
+  `EndReason::LocalFailure { peer, tick }` included. A notice is never relayed twice, so its
+  sender is the peer that decided the ending: a relayed failure names it as the peer whose
+  game failed, and a relayed desync gives its view, `found_by` the sender, its hash as
+  `local`, the differing peer and that peer's hash. A notice no honest peer
   can send is `ViolationRule::ImplausibleEnd`: one naming a peer outside the match, a desync
   of a tick past the local horizon plus one, or a game failure past that plus
   `rollback_window - 1`. A mismatch found once running has no end notice and is not relayed.
@@ -204,9 +206,9 @@ hash, those of the golden trace and replays included.
   landing failed, keeps its reason), loads that tick's state, and returns
   `ExecuteError::Game { tick, error, recovery }`, where `recovery` names the first of those
   two steps that failed, if any.
-  `Session::fail(tick)` ends the session with `EndReason::LocalFailure { tick }`, whose end
-  notice ends every other peer, and lands nothing (the next `advance` is
-  `SessionError::NotRunning`); it refuses a tick the session has not run
+  `Session::fail(tick)` ends the session with `EndReason::LocalFailure { peer, tick }`, naming
+  the local peer, whose end notice ends every other peer, and lands nothing (the next
+  `advance` is `SessionError::NotRunning`); it refuses a tick the session has not run
   (`SessionError::TickNotRun`), which the other peers would find implausible, and
   `NotRunning` while connecting. `ludenea_app::join_player_inputs(&[Vec<u8>])` gives the
   postcard encoding of a `Vec` of inputs from the encoding of each.

@@ -352,16 +352,18 @@ fn diverging_hash_ends_every_peer_with_desync() {
         let flipped = harness.model(PeerId(0)).hash_at(tick).unwrap() ^ 1;
         let honest = harness.model(PeerId(1)).hash_at(tick).unwrap();
         // Peer 0 found it against the first honest report to arrive, and every other peer
-        // ends with peer 0's view of it, both hashes included.
+        // ends with peer 0's view of it, both hashes and the finder included.
         let found = harness.state(PeerId(0));
         match &found {
             SessionState::Ended(EndReason::Desync {
                 tick: at,
+                found_by,
                 peer,
                 local,
                 remote,
             }) => {
                 assert_eq!(*at, tick);
+                assert_eq!(*found_by, PeerId(0));
                 assert_ne!(*peer, PeerId(0));
                 assert_eq!((*local, *remote), (flipped, honest));
             }
@@ -828,6 +830,7 @@ fn desync_notice_lingers_then_stops() {
         driven.session.state(),
         SessionState::Ended(EndReason::Desync {
             tick: INTERVAL,
+            found_by: PeerId(0),
             peer: PeerId(1),
             local,
             remote: !local,
@@ -860,7 +863,11 @@ fn end_notice_ends_the_receiver_with_the_same_reason() {
         ),
         (
             EndNotice::LocalFailure { tick: 5 },
-            EndReason::LocalFailure { tick: 5 },
+            // The sender of the notice is the peer whose game failed.
+            EndReason::LocalFailure {
+                peer: PeerId(1),
+                tick: 5,
+            },
         ),
     ];
     for (notice, reason) in cases {
@@ -870,8 +877,8 @@ fn end_notice_ends_the_receiver_with_the_same_reason() {
         // A relayed ending is not relayed again.
         assert_eq!(driven.sent(), []);
     }
-    // A desync ends the receiver with the sender's view of it: the peer whose hash differed
-    // from the sender's, here this one, the sender's hash and that peer's.
+    // A desync ends the receiver with the sender's view of it: the sender found it, against
+    // the peer whose hash differed from its own, here this one, with both hashes.
     let mut driven = Driven::at(INTERVAL + 2);
     driven.receive(vec![Message::End {
         reason: EndNotice::Desync {
@@ -885,6 +892,7 @@ fn end_notice_ends_the_receiver_with_the_same_reason() {
         driven.session.state(),
         SessionState::Ended(EndReason::Desync {
             tick: INTERVAL,
+            found_by: PeerId(1),
             peer: PeerId(0),
             local: 7,
             remote: 8,

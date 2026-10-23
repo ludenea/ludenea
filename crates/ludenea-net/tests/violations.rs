@@ -589,11 +589,12 @@ fn fuzz_message(rng: &mut Rng, tick: u64, identity: &MatchIdentity) -> Message {
 /// request is dropped, and a report moves at most the skips. An `End` of this match ends it
 /// with the reason it tells, which it then returns as relayed; and a hash report of the sender,
 /// at its tick or one received earlier, with a desync against the sender with two different
-/// hashes. A goodbye waits for the inputs and acknowledgments through its last tick, so the
-/// session may end with `Left` naming the sender on a later packet.
+/// hashes, found by `local`. A goodbye waits for the inputs and acknowledgments through its
+/// last tick, so the session may end with `Left` naming the sender on a later packet.
 fn assert_allowed(
     before: &SessionState,
     after: &SessionState,
+    local: PeerId,
     from: PeerId,
     packet: &Packet,
 ) -> bool {
@@ -608,7 +609,7 @@ fn assert_allowed(
         });
     let relayed = |reason: &EndReason| {
         ours && packet.messages.iter().any(|message| match message {
-            Message::End { reason: notice } => *reason == told(*notice),
+            Message::End { reason: notice } => *reason == told(from, *notice),
             _ => false,
         })
     };
@@ -619,14 +620,16 @@ fn assert_allowed(
         (
             SessionState::Running,
             SessionState::Ended(EndReason::Desync {
+                found_by,
                 peer,
-                local,
+                local: local_hash,
                 remote,
                 ..
             }),
         ) if ours => {
+            assert_eq!(*found_by, local, "{packet:?}");
             assert_eq!(*peer, from, "{packet:?}");
-            assert_ne!(local, remote, "{packet:?}");
+            assert_ne!(local_hash, remote, "{packet:?}");
         }
         (SessionState::Running, SessionState::Ended(EndReason::Violation { peer, .. }))
         | (SessionState::Running, SessionState::Ended(EndReason::Left { peer, .. })) => {
@@ -642,8 +645,9 @@ fn assert_allowed(
     false
 }
 
-/// The reason an end notice ends its receiver with: the one it tells.
-fn told(notice: EndNotice) -> EndReason {
+/// The reason the end notice of `from` ends its receiver with: the one it tells, decided by
+/// `from`.
+fn told(from: PeerId, notice: EndNotice) -> EndReason {
     match notice {
         EndNotice::Desync {
             tick,
@@ -652,12 +656,13 @@ fn told(notice: EndNotice) -> EndReason {
             remote,
         } => EndReason::Desync {
             tick,
+            found_by: from,
             peer,
             local,
             remote,
         },
         EndNotice::Lost { peer } => EndReason::Lost { peer },
-        EndNotice::LocalFailure { tick } => EndReason::LocalFailure { tick },
+        EndNotice::LocalFailure { tick } => EndReason::LocalFailure { peer: from, tick },
     }
 }
 
@@ -666,7 +671,8 @@ fn told(notice: EndNotice) -> EndReason {
 fn deliver(session: &mut Session, from: PeerId, packet: &Packet, now: u64) -> bool {
     let before = session.state();
     session.receive(from, &packet.encode(), now);
-    let relayed = assert_allowed(&before, &session.state(), from, packet);
+    let local = session.settings().local;
+    let relayed = assert_allowed(&before, &session.state(), local, from, packet);
     session.events();
     relayed
 }

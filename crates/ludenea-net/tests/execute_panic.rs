@@ -67,7 +67,11 @@ fn panic_during_resimulation_restores_and_ends() {
     // landing: stepping on would run the failing code again.
     assert_eq!(simulation.tick(), 2);
     assert_eq!(Some(simulation.hash()), hash_at_two);
-    let failure = SessionState::Ended(EndReason::LocalFailure { tick: 2 });
+    // The other peer learns which peer failed: the sender of the notice.
+    let failure = SessionState::Ended(EndReason::LocalFailure {
+        peer: PeerId(0),
+        tick: 2,
+    });
     assert_eq!(session.state(), failure);
     assert_eq!(session.advance(NOW), Err(SessionError::NotRunning));
 

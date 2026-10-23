@@ -2,7 +2,7 @@ mod support;
 
 use ludenea_app::{App, SimError, StateError, join_player_inputs};
 use ludenea_net::{
-    EndReason, ExecuteError, Executor, Request, Session, SessionError, SessionSettings,
+    EndReason, ExecuteError, Executor, PeerId, Request, Session, SessionError, SessionSettings,
     SessionState,
 };
 use support::{handshake, identity, settings, test_simulation};
@@ -251,6 +251,9 @@ fn a_game_failure_is_named_even_when_its_recovery_fails() {
     );
     assert_eq!(
         session.state(),
-        SessionState::Ended(EndReason::LocalFailure { tick: 1 })
+        SessionState::Ended(EndReason::LocalFailure {
+            peer: PeerId(0),
+            tick: 1
+        })
     );
 }
