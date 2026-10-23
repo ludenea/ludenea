@@ -15,7 +15,7 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 
 use crate::Limits;
-use crate::limits::Refusals;
+use crate::limits::{Refusals, client_key};
 
 /// Why a request for a room is refused, before its WebSocket opens.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -144,6 +144,7 @@ impl Rooms {
         address: IpAddr,
         now: Instant,
     ) -> Result<(), Refusal> {
+        let address = client_key(address);
         if self.refusals.count(address, now) >= self.limits.refused_joins_per_minute {
             return Err(Refusal::TooManyRefused);
         }

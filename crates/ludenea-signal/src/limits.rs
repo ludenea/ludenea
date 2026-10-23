@@ -10,6 +10,7 @@ pub struct Limits {
     /// The rooms the listener holds at once; a host beyond them is refused with 503.
     pub max_rooms: usize,
     /// The rooms one client address may host at once; beyond them it is refused with 429.
+    /// An address is the TCP peer's: an IPv4 address, or an IPv6 address by its /64 network.
     pub rooms_per_address: usize,
     /// The refused joins (404, 409 and 410) after which an address is refused with 429 until
     /// a minute after its first refusal.
@@ -45,6 +46,22 @@ impl Default for Limits {
             header_timeout: Duration::from_secs(10),
             max_connections: 512,
         }
+    }
+}
+
+/// The address the per-address limits count a client under: an IPv4 address as is (also
+/// when mapped into IPv6), an IPv6 address by its /64 network, which one client usually owns
+/// whole.
+pub(crate) fn client_key(address: IpAddr) -> IpAddr {
+    match address {
+        IpAddr::V4(_) => address,
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => {
+                let network = u128::from(v6) & !((1u128 << 64) - 1);
+                IpAddr::V6(network.into())
+            }
+        },
     }
 }
 
@@ -99,6 +116,19 @@ impl Refusals {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_client_counts_by_its_ipv4_address_or_its_ipv6_network() {
+        let key = |text: &str| client_key(text.parse().unwrap());
+        assert_eq!(key("10.0.0.1"), key("::ffff:10.0.0.1"));
+        assert_ne!(key("10.0.0.1"), key("10.0.0.2"));
+        assert_eq!(key("2001:db8:1:2::1"), key("2001:db8:1:2:ffff::9"));
+        assert_eq!(
+            key("2001:db8:1:2::1"),
+            "2001:db8:1:2::".parse::<IpAddr>().unwrap()
+        );
+        assert_ne!(key("2001:db8:1:2::1"), key("2001:db8:1:3::1"));
+    }
 
     #[test]
     fn refusals_count_for_a_minute_from_the_first() {

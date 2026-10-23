@@ -353,7 +353,9 @@ may do: 64 rooms (`--max-rooms`), 4 hosted per client address, 30 refused joins 
 per address, messages of 16 KiB, 64 messages waiting per peer, 10 seconds for a request's
 headers, 512 connections at once (further clients wait), and 30 seconds of silence before a
 connection closes (`--idle-seconds`; matchbox_socket sends a keep-alive every 10 seconds),
-as does a client that stops reading for as long. Only pages served from the address in
+as does a client that stops reading for as long. The limits per address count the TCP peer:
+an IPv4 address, or an IPv6 address by its /64 network. Behind a reverse proxy every client
+shares the proxy's address, so they share its limits too. Only pages served from the address in
 the Host header may open rooms; a page served elsewhere needs `--allow-origin` with its
 origin (repeatable).
 
