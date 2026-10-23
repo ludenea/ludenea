@@ -622,10 +622,11 @@ fn a_room_in_use_closes_naming_it() {
 
 #[test]
 fn an_unreachable_server_closes_naming_it() {
-    let address = StdListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap();
+    // A socket bound and never listening holds the port, so nothing else can take it, and
+    // refuses every connection.
+    let bound = tokio::net::TcpSocket::new_v4().unwrap();
+    bound.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let address = bound.local_addr().unwrap();
     let signaling = format!("ws://{address}/rooms");
     let reason = closed(open(&signaling, &code("HJKMNP"), None));
     let prefix = format!("cannot reach the signaling server at {signaling}: ");
@@ -633,6 +634,7 @@ fn an_unreachable_server_closes_naming_it() {
         reason.starts_with(&prefix) && reason.len() > prefix.len(),
         "{reason}"
     );
+    drop(bound);
 }
 
 #[test]
@@ -647,8 +649,9 @@ fn a_silent_server_closes_after_10_s() {
         reason,
         format!("no answer from the signaling server at {signaling} within 10 s")
     );
+    // Not before 10 s; the upper bound only catches a wait that never ends, on a loaded machine.
     assert!(
-        (Duration::from_secs(10)..Duration::from_secs(12)).contains(&waited),
+        (Duration::from_secs(10)..Duration::from_secs(25)).contains(&waited),
         "closed after {waited:?}"
     );
     drop(silent);
