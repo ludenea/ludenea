@@ -1,3 +1,4 @@
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -6,6 +7,7 @@ use ludenea_project::Project;
 
 mod build;
 mod play;
+mod rooms;
 mod serve;
 
 #[derive(Parser)]
@@ -61,6 +63,35 @@ enum Command {
         #[arg(last = true)]
         args: Vec<String>,
     },
+    /// Run the signaling listener online matches meet through, and serve a web build beside
+    /// it. It must stay up for every match it serves.
+    Rooms {
+        /// A web build to serve read-only (the folder `ludenea build --web` wrote).
+        #[arg(long, value_name = "DIR")]
+        page: Option<PathBuf>,
+        /// The only address to listen on; by default this machine's network address and
+        /// 127.0.0.1. Anyone who can reach it can open rooms.
+        #[arg(long, value_name = "ADDRESS")]
+        listen: Option<IpAddr>,
+        /// The port, on every address; 0 picks a free one and needs --listen.
+        #[arg(long, default_value_t = 3536)]
+        port: u16,
+        /// Another origin whose pages may open rooms, such as another server of the web
+        /// build (`http://192.168.1.20:8000`; repeatable). By default only pages served from
+        /// the address in the Host header may.
+        #[arg(long = "allow-origin", value_name = "ORIGIN")]
+        allow_origin: Vec<String>,
+        /// How long a connection may stay silent before it is closed.
+        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..))]
+        idle_seconds: u64,
+        /// The rooms held at once.
+        #[arg(
+            long,
+            default_value_t = 64,
+            value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..)
+        )]
+        max_rooms: usize,
+    },
     /// Build the project as a standalone web page: a static folder any web server can serve.
     Build {
         project: PathBuf,
@@ -101,6 +132,25 @@ fn main() -> ExitCode {
             };
         }
         Command::New { dir, engine_path } => create(&dir, &engine_path),
+        Command::Rooms {
+            page,
+            listen,
+            port,
+            allow_origin,
+            idle_seconds,
+            max_rooms,
+        } => tokio::runtime::Runtime::new()
+            .map_err(|error| error.to_string())
+            .and_then(|runtime| {
+                runtime.block_on(rooms::run(rooms::Options {
+                    page,
+                    listen,
+                    port,
+                    allowed_origins: allow_origin,
+                    idle_seconds,
+                    max_rooms,
+                }))
+            }),
         Command::Serve {
             project,
             port,

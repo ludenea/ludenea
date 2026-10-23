@@ -29,28 +29,28 @@ for any thread count. The guarantee rests on:
 
 ## Workspace layout
 
-| Path                     | Purpose                                                   |
-| ------------------------ | --------------------------------------------------------- |
-| `crates/ludenea-math`    | Deterministic vectors, rotations, and functions           |
-| `crates/ludenea-ecs`     | World, queries, snapshots, and state hashing              |
-| `crates/ludenea-macros`  | Derive macros                                             |
-| `crates/ludenea-app`     | Simulation loop, scenes, and input logs                   |
-| `crates/ludenea-physics` | Rigid body physics                                        |
-| `crates/ludenea-draw`    | Render frame and debug draw data, GPU free                |
-| `crates/ludenea-render`  | Render components, extraction, wgpu renderer              |
-| `crates/ludenea-net`     | Rollback session, wire format, and transports             |
-| `crates/ludenea-control` | Versioned control protocol and host                       |
-| `crates/ludenea-cli`     | `run`, `verify`, `diff`, `render`, `play`, and `synctest` |
-| `crates/ludenea-runtime` | Game runner, native window, web page exports              |
-| `crates/ludenea`         | Facade crate re-exporting the engine                      |
-| `crates/ludenea-project` | Projects, builds, and plugin bundling                     |
-| `crates/ludenea-serve`   | The `ludenea` tool: `new`, `serve`, `play`, `build`       |
-| `crates/ludenea-signal`  | Signaling listener of online matches, static files        |
-| `editor`                 | The editor: web and desktop applications                  |
-| `examples/boxes`         | Reference scenario, golden trace, and benchmark           |
-| `examples/swarm`         | Runtime test game: 10,000 sprites, 4 players              |
-| `examples/arena`         | Platform arena: two fighters, run and jump                |
-| `golden`                 | Golden hash traces                                        |
+| Path                     | Purpose                                                      |
+| ------------------------ | ------------------------------------------------------------ |
+| `crates/ludenea-math`    | Deterministic vectors, rotations, and functions              |
+| `crates/ludenea-ecs`     | World, queries, snapshots, and state hashing                 |
+| `crates/ludenea-macros`  | Derive macros                                                |
+| `crates/ludenea-app`     | Simulation loop, scenes, and input logs                      |
+| `crates/ludenea-physics` | Rigid body physics                                           |
+| `crates/ludenea-draw`    | Render frame and debug draw data, GPU free                   |
+| `crates/ludenea-render`  | Render components, extraction, wgpu renderer                 |
+| `crates/ludenea-net`     | Rollback session, wire format, and transports                |
+| `crates/ludenea-control` | Versioned control protocol and host                          |
+| `crates/ludenea-cli`     | `run`, `verify`, `diff`, `render`, `play`, and `synctest`    |
+| `crates/ludenea-runtime` | Game runner, native window, web page exports                 |
+| `crates/ludenea`         | Facade crate re-exporting the engine                         |
+| `crates/ludenea-project` | Projects, builds, and plugin bundling                        |
+| `crates/ludenea-serve`   | The `ludenea` tool: `new`, `serve`, `play`, `build`, `rooms` |
+| `crates/ludenea-signal`  | Signaling listener of online matches, static files           |
+| `editor`                 | The editor: web and desktop applications                     |
+| `examples/boxes`         | Reference scenario, golden trace, and benchmark              |
+| `examples/swarm`         | Runtime test game: 10,000 sprites, 4 players                 |
+| `examples/arena`         | Platform arena: two fighters, run and jump                   |
+| `golden`                 | Golden hash traces                                           |
 
 ## Commands
 
@@ -331,6 +331,34 @@ A known limit of the page: the worker sends the render frame of every tick to th
 JSON text, about 2 MB per tick for 10,000 sprites, which the page then parses. A binary
 transfer of the frame is the planned follow-up. Until then the native window (`play`) is
 the reference for the performance target of 144 frames per second.
+
+Online matches meet through a signaling listener: `ludenea rooms` runs one, and serves a
+web build beside it with `--page` (the folder `ludenea build --web` wrote; one without
+`game.json` is refused). It listens on this machine's network address and on `127.0.0.1`,
+both on `--port` (3536 by default, matchbox's own), and prints one
+`signaling ws://ADDRESS:PORT/rooms` line per address, then one `page http://ADDRESS:PORT/`
+line each with a page. `--listen ADDRESS` listens there only; `--port 0` picks a free port
+and needs `--listen`. Without a network it listens on `127.0.0.1` only, and says so:
+
+```sh
+cargo run --locked -p ludenea-serve -- rooms --page ~/games/my_game-web
+```
+
+A room is `<signaling>/<code>`; the peer that creates it appends `?host=N`, N being its size
+(2 to 4). Peers stay connected to the listener for the whole match, so it must stay up for
+every match it serves: stopping it ends them. Anyone who can reach it can open rooms, and
+anyone who knows a room's code can join that room or disrupt it; there is no
+authentication, and it warns when it listens beyond this machine. It bounds what each client
+may do: 64 rooms (`--max-rooms`), 4 hosted per client address, 30 refused joins a minute
+per address, messages of 16 KiB, 64 messages waiting per peer, 10 seconds for a request's
+headers, and 30 seconds of silence before a connection closes (`--idle-seconds`;
+matchbox_socket sends a keep-alive every 10 seconds). Only pages served from the address in
+the Host header may open rooms; a page served elsewhere needs `--allow-origin` with its
+origin (repeatable).
+
+A stock `matchbox_server` works too: pass its root URL as `--signaling`
+(`ws://ADDRESS:3536`). It knows nothing of hosts, sizes, or limits, so it admits anyone to
+any room.
 
 Serve it with the editor and open `http://127.0.0.1:7878` in a browser; the editor is
 usable at once, and the game appears when its first build finishes:
