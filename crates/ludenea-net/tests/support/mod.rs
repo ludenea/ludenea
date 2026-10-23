@@ -663,3 +663,31 @@ fn carries_hash_of(packet: &[u8], tick: u64) -> bool {
 fn network(peers: usize) -> Vec<ludenea_net::MemoryTransport> {
     MemoryNetwork::new(u8::try_from(peers).unwrap())
 }
+
+/// The input byte the test app panics on, as broken game code would.
+pub const PANIC_BYTE: u8 = 0xFF;
+
+/// The state of the test app: every input it ran with, folded.
+#[derive(Clone, Debug, Default, ludenea_ecs::Resource, serde::Serialize, serde::Deserialize)]
+pub struct Folded(pub u64);
+
+fn fold_inputs(
+    inputs: ludenea_ecs::Runtime<ludenea_app::Inputs<u8>>,
+    mut folded: ludenea_ecs::ResMut<Folded>,
+) {
+    for player in 0..inputs.len() {
+        let byte = *inputs.player(player);
+        assert_ne!(byte, PANIC_BYTE, "player {player} sent the panic byte");
+        folded.0 = folded.0.wrapping_mul(31).wrapping_add(u64::from(byte) + 1);
+    }
+}
+
+/// A simulation of the test app: one `u8` per player, folded into [`Folded`] every tick,
+/// panicking on [`PANIC_BYTE`].
+pub fn test_simulation() -> ludenea_app::Simulation {
+    let mut app = ludenea_app::App::new();
+    app.input::<u8>()
+        .resource(Folded::default())
+        .system(ludenea_app::Sim, fold_inputs);
+    app.build().expect("the test app builds")
+}

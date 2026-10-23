@@ -135,6 +135,13 @@ jobs:
             cargo run --locked --release -p arena -- verify golden/arena.replay --threads $threads --dump-dir "$LUDENEA_DUMP_DIR/release/arena-replay-$threads-threads" || status=1
           done
           exit $status
+      # The arena's rollback property test over 32 seeds per peer and thread count, in release;
+      # the workspace tests above run it over 8 in debug.
+      - name: Test rollback on the arena over more seeds
+        if: ${{ runner.os == 'Linux' && !cancelled() && steps.tests.outcome != 'skipped' }}
+        run: cargo test --locked --release -p arena --test rollback
+        env:
+          LUDENEA_NET_SEEDS: 32
       # A crash or a hash that differs from the golden replay (arena) or the straight run
       # (swarm) fails the job; the timings are only recorded in the job summary, never gated.
       - name: Time a rollback frame

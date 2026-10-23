@@ -895,3 +895,63 @@ fn ended_session_lands_on_the_confirmed_state() {
         assert_landed(&harness, PeerId(0));
     }
 }
+
+#[test]
+fn failure_ends_every_peer_with_local_failure() {
+    // Peer 1 ran tick 0, so peer 0 holds its inputs through tick 2 and runs up to the
+    // rollback window past them: the last tick it runs is the furthest failing tick peer 1
+    // finds plausible.
+    let mut sessions = handshake(sessions(2));
+    let mut remote = sessions.pop().unwrap();
+    let mut session = sessions.pop().unwrap();
+    remote.add_local_input(1, vec![1]).unwrap();
+    remote.advance(NOW).unwrap();
+    for (_, packet) in remote.outgoing(NOW) {
+        session.receive(PeerId(1), &packet, NOW);
+    }
+    let mut last_run = None;
+    for _ in 0..20 {
+        let requests = step(&mut session, 2);
+        for request in requests {
+            if let Request::Advance { tick, .. } = request {
+                last_run = Some(tick);
+            }
+        }
+    }
+    let window = u64::from(MatchRules::default().rollback_window);
+    // Confirmed through tick 2, so tick 3 is the confirmed tick.
+    assert_eq!(last_run, Some(3 + window - 1));
+    let last_run = last_run.unwrap();
+
+    // A tick the session has not run is refused, and nothing changes.
+    assert_eq!(
+        session.fail(last_run + 1),
+        Err(SessionError::TickNotRun {
+            tick: last_run + 1,
+            next: last_run + 1,
+        })
+    );
+    assert_eq!(session.state(), SessionState::Running);
+
+    session.fail(last_run).unwrap();
+    let failure = ended(EndReason::LocalFailure { tick: last_run });
+    assert_eq!(session.state(), failure);
+    // No landing: the game failed, so the simulation stays at the failed tick.
+    assert_eq!(session.advance(NOW), Err(SessionError::NotRunning));
+    // An ended session ignores another failure.
+    assert_eq!(session.fail(0), Ok(()));
+    assert_eq!(session.state(), failure);
+
+    for (to, packet) in session.outgoing(NOW) {
+        assert_eq!(to, PeerId(1));
+        remote.receive(PeerId(0), &packet, NOW);
+    }
+    assert_eq!(remote.state(), failure);
+}
+
+#[test]
+fn failure_while_connecting_is_refused() {
+    let mut session = sessions(2).remove(0);
+    assert_eq!(session.fail(0), Err(SessionError::NotRunning));
+    assert_eq!(session.state(), SessionState::Connecting);
+}

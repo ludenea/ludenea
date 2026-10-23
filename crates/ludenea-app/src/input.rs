@@ -46,6 +46,18 @@ pub struct PlayerInputSpec {
     pub check: fn(&[u8]) -> Result<(), SimError>,
 }
 
+/// The postcard encoding of a `Vec` of inputs from the encoding of each, in player order:
+/// the bytes [`Simulation::step_encoded`](crate::Simulation::step_encoded) takes for a tick
+/// whose inputs a rollback session gives one per player, and an input log records.
+pub fn join_player_inputs(inputs: &[Vec<u8>]) -> Vec<u8> {
+    // A sequence's length is a postcard varint, as a `usize` is.
+    let mut joined = postcard::to_allocvec(&inputs.len()).expect("a length always encodes");
+    for input in inputs {
+        joined.extend_from_slice(input);
+    }
+    joined
+}
+
 /// The input type of an app, erased so `Simulation` needs no type parameter.
 pub(crate) struct InputType {
     pub(crate) id: TypeId,

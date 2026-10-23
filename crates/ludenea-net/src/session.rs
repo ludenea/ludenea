@@ -42,7 +42,8 @@
 //! [`Session::leave`]: its `Goodbye` names the last tick it has its own inputs for, and every
 //! peer, the leaver included, stops at that tick with the same confirmed inputs and ends with
 //! [`EndReason::Left`]. Whatever the ending, the next [`Session::advance`] lands the caller's
-//! simulation on the state the confirmed inputs give.
+//! simulation on the state the confirmed inputs give, unless the caller's game failed: then
+//! [`Session::fail`] ends the match for every peer with [`EndReason::LocalFailure`].
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -134,7 +135,8 @@ pub enum EndReason {
     /// when a peer is silent that long. When several peers leave, the lowest `last_tick` wins,
     /// and `peer` is the lowest peer naming it, the same on every peer that heard them all.
     Left { peer: PeerId, last_tick: u64 },
-    /// A game failed while stepping `tick`, as the end notice of the peer it ran on told.
+    /// A game failed while stepping `tick`, here ([`Session::fail`]) or, as its end notice
+    /// told, on the peer it ran on.
     LocalFailure { tick: u64 },
 }
 
@@ -277,6 +279,9 @@ pub enum SessionError {
     /// A hash reported for `tick` answers no `Save { tick, hash: true }` still unanswered.
     #[error("no Save {{ tick: {tick}, hash: true }} waits for a hash")]
     HashNotAsked { tick: u64 },
+    /// A failure reported for `tick`, which the session has not run: it runs `next` next.
+    #[error("tick {tick} has not run, the session runs tick {next} next")]
+    TickNotRun { tick: u64, next: u64 },
 }
 
 /// What a session counts about one sender.
@@ -855,6 +860,38 @@ impl Session {
         Ok(())
     }
 
+    /// Ends the session with [`EndReason::LocalFailure`] because the game failed while
+    /// stepping `tick`, an `Advance` the session returned: the end notice ends the other peers
+    /// for the same reason. No landing follows: the caller's simulation stays at the state of
+    /// the failed tick, since stepping on would run the failing code again, and the next
+    /// [`Session::advance`] is [`SessionError::NotRunning`]. An ended session ignores the call.
+    ///
+    /// Every tick an advance returns is below the next tick to run, which is at most
+    /// `rollback_window` past the confirmed tick: the other peers accept a failure of such a
+    /// tick as plausible, and only such a tick is accepted here.
+    ///
+    /// # Errors
+    ///
+    /// [`SessionError::NotRunning`] while connecting, and [`SessionError::TickNotRun`] for a
+    /// tick the session has not run. Nothing changed.
+    pub fn fail(&mut self, tick: u64) -> Result<(), SessionError> {
+        match self.state {
+            SessionState::Ended(_) => return Ok(()),
+            SessionState::Connecting => return Err(SessionError::NotRunning),
+            SessionState::Running | SessionState::Leaving => {}
+        }
+        if tick >= self.tick {
+            return Err(SessionError::TickNotRun {
+                tick,
+                next: self.tick,
+            });
+        }
+        let now = self.now_micros.unwrap_or(0);
+        self.end(now, EndReason::LocalFailure { tick });
+        self.land_due = false;
+        Ok(())
+    }
+
     /// Sets the input of local `player` for the next tick the session advances. A second
     /// call before that advance replaces it, so a caller that adds one input per frame never
     /// errs while the session stalls. The input applies `input_delay` ticks after the tick
@@ -905,7 +942,7 @@ impl Session {
     /// player's input is missing for, and at most the tick after the agreed last tick: for
     /// [`EndReason::Left`], the tick after `last_tick` unless a timeout ended it. The
     /// [`SessionEvent::Confirmed`] of every tick below it are emitted first. Later calls are
-    /// [`SessionError::NotRunning`].
+    /// [`SessionError::NotRunning`]. A session ended by [`Session::fail`] does not land.
     ///
     /// When the session is ahead of the other peers, a call that would run a tick skips it
     /// instead, keeping the pending local inputs: when the mean correction of the latest

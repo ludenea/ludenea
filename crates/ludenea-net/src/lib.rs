@@ -1,15 +1,18 @@
 //! Rollback networking for Ludenea: the settings every peer of a match agrees on, the wire
-//! format of their packets, and the sans-IO session built on them.
+//! format of their packets, the sans-IO session built on them, and the executor that applies
+//! a session's requests to a simulation.
 //!
 //! The crate reads no clock and uses no floating point: the caller passes the current time.
 #![deny(clippy::float_arithmetic)]
 
+pub mod execute;
 mod queue;
 pub mod session;
 pub mod settings;
 pub mod transport;
 pub mod wire;
 
+pub use execute::{ExecuteError, Executor};
 pub use session::{
     DropReason, END_LINGER_MICROS, EndReason, HANDSHAKE_RESEND_MICROS, PeerStats, QUALITY_HISTORY,
     QUALITY_INTERVAL_MICROS, Request, SYNC_MIN_REPORTS, Session, SessionError, SessionEvent,

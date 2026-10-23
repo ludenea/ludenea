@@ -188,6 +188,25 @@ hash, those of the golden trace and replays included.
   caller may drop the states it keeps. Later calls are `SessionError::NotRunning`. Every
   `Load` is of a tick at most `rollback_window` before the current one.
   `Session::settings()` gives the settings a session was built with.
+- `ludenea_net::Executor` drives a `Simulation` from a `Session`. `Executor::new(&mut
+  Simulation, &SessionSettings)` sets the simulation's player count to the match's and
+  refuses an app without an input type (`ExecuteError::NoInputType`). `execute(&mut
+  Simulation, &mut Session, Vec<Request>)` applies an advance's requests in order: it checks
+  that each `Save` and `Advance` is at the simulation's tick (`ExecuteError::OutOfStep`),
+  answers each `Save { hash: true }` through `Session::report_hash` at once, steps with the
+  inputs joined by `ludenea_app::join_player_inputs`, and loads the latest state saved for a
+  tick (`ExecuteError::MissingState` when none is held, `ExecuteError::State` when the
+  simulation refuses it). It holds at most `Executor::capacity()` states, tagged with their
+  tick: `rollback_window + 2`, plus the reported states the hash lag bounds let a session
+  keep until their `Release` (`ExecuteError::StatesExhausted` past that). When the game
+  fails while stepping a tick, it loads that tick's state, ends the session with
+  `Session::fail`, and returns `ExecuteError::Game { tick, error }`.
+  `Session::fail(tick)` ends the session with `EndReason::LocalFailure { tick }`, whose end
+  notice ends every other peer, and lands nothing (the next `advance` is
+  `SessionError::NotRunning`); it refuses a tick the session has not run
+  (`SessionError::TickNotRun`), which the other peers would find implausible, and
+  `NotRunning` while connecting. `ludenea_app::join_player_inputs(&[Vec<u8>])` gives the
+  postcard encoding of a `Vec` of inputs from the encoding of each.
 - `ludenea_render` answers without a GPU what the renderer draws: `atlas::frames_of(png,
   meta)` gives the `TextureFrames` (the image size and each `FrameRect`, row-major, with its
   pivot) a meta cuts a PNG into, the same cut `pack` makes, or a `FramesError` (`Decode`,

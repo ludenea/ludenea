@@ -25,7 +25,7 @@ pub mod trace;
 pub use app::{App, AppError, Plugin, Sim};
 pub use assets::{AssetSource, AssetTexts, NamedAssetTexts, NoAssets};
 pub use edit::{EDIT_LOG_VERSION, Edit, EditError, EditLog, EntityRef, TimedEdit, ValueKind};
-pub use input::{Input, Inputs, PlayerInputSpec};
+pub use input::{Input, Inputs, PlayerInputSpec, join_player_inputs};
 pub use input_log::{INPUT_LOG_VERSION, InputLog};
 pub use panic::{GamePanic, catch_panic};
 pub use parallel::{Parallel, ParallelError};
