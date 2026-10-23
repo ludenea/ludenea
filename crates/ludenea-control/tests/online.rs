@@ -1387,12 +1387,11 @@ fn dropped_packets_warn_once_per_reason() {
         1,
         "{warned:?}"
     );
-    assert_eq!(
+    assert!(
         warned
             .iter()
-            .filter(|w| w.starts_with("dropped a packet from peer 1: wire: "))
-            .count(),
-        warned.iter().filter(|w| w.contains("peer 1: ")).count(),
+            .filter(|w| w.contains("peer 1: "))
+            .all(|w| w.starts_with("dropped a packet from peer 1: wire: ")),
         "{warned:?}"
     );
     let reasons: BTreeSet<&String> = warned.iter().collect();

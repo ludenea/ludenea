@@ -637,8 +637,9 @@ pub enum MatchEndKind {
 pub struct NetStats {
     /// The next tick this peer plays: every tick below it has run.
     pub tick: u64,
-    /// The first tick some player lacks a confirmed input for; `u64::MAX` once every tick up
-    /// to the end of the match is confirmed.
+    /// The first tick some player lacks a confirmed input for; once the peers agreed on the
+    /// last tick, at most the tick after it; `u64::MAX` when none is agreed and every
+    /// player's inputs are confirmed as far as they go.
     pub confirmed: u64,
     /// The advances that skipped a tick so the other peers catch up.
     pub skips: u64,
