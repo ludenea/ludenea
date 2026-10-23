@@ -19,10 +19,15 @@ pub enum ExecuteError {
          simulation only through the executor of its session"
     )]
     OutOfStep { expected: u64, found: u64 },
-    /// No state saved for `tick` is held: never saved, overwritten by a later tick, or
-    /// released.
+    /// No state saved for `tick` is held: never saved, or overwritten by a later tick.
     #[error("no saved state of tick {tick} is held")]
     MissingState { tick: u64 },
+    /// A `Release` of `tick`, whose state is held but not kept for a hash report: it was never
+    /// saved with `hash: true`, or was released already.
+    #[error(
+        "the state of tick {tick} is not kept for a hash report, so there is nothing to release"
+    )]
+    NotKept { tick: u64 },
     /// Every state held is kept for a reported tick, so none is left for the save of `tick`:
     /// the session broke the bound the capacity is sized from.
     #[error(
@@ -108,8 +113,9 @@ impl Executor {
     /// # Errors
     ///
     /// The first request that cannot be applied stops the others: [`ExecuteError::OutOfStep`],
-    /// [`ExecuteError::MissingState`], [`ExecuteError::StatesExhausted`],
-    /// [`ExecuteError::State`], [`ExecuteError::Session`] and [`ExecuteError::Game`].
+    /// [`ExecuteError::MissingState`], [`ExecuteError::NotKept`],
+    /// [`ExecuteError::StatesExhausted`], [`ExecuteError::State`], [`ExecuteError::Session`]
+    /// and [`ExecuteError::Game`].
     pub fn execute(
         &mut self,
         simulation: &mut Simulation,
@@ -222,8 +228,11 @@ impl StateRing {
         let slot = self
             .slots
             .iter_mut()
-            .find(|slot| slot.tick == tick && slot.kept)
+            .find(|slot| slot.tick == tick)
             .ok_or(ExecuteError::MissingState { tick })?;
+        if !slot.kept {
+            return Err(ExecuteError::NotKept { tick });
+        }
         slot.kept = false;
         Ok(())
     }
@@ -270,12 +279,27 @@ mod tests {
         ring.release(0).unwrap();
         assert!(matches!(
             ring.release(0),
-            Err(ExecuteError::MissingState { tick: 0 })
+            Err(ExecuteError::NotKept { tick: 0 })
         ));
         ring.save(&simulation, 5, false).unwrap();
         assert!(matches!(
             ring.load(&mut simulation, 0),
             Err(ExecuteError::MissingState { tick: 0 })
+        ));
+    }
+
+    #[test]
+    fn a_release_names_whether_the_state_is_held() {
+        let simulation = simulation();
+        let mut ring = StateRing::new(2);
+        ring.save(&simulation, 0, false).unwrap();
+        assert!(matches!(
+            ring.release(0),
+            Err(ExecuteError::NotKept { tick: 0 })
+        ));
+        assert!(matches!(
+            ring.release(1),
+            Err(ExecuteError::MissingState { tick: 1 })
         ));
     }
 }

@@ -198,9 +198,10 @@ hash, those of the golden trace and replays included.
   tick (`ExecuteError::MissingState` when none is held, `ExecuteError::State` when the
   simulation refuses it). It holds at most `Executor::capacity()` states, tagged with their
   tick: `rollback_window + 2`, plus the reported states the hash lag bounds let a session
-  keep until their `Release` (`ExecuteError::StatesExhausted` past that). When the game
-  fails while stepping a tick, it loads that tick's state, ends the session with
-  `Session::fail`, and returns `ExecuteError::Game { tick, error }`.
+  keep until their `Release` (`ExecuteError::StatesExhausted` past that; a `Release` of a
+  state held but not kept is `ExecuteError::NotKept`). When the game fails while stepping a
+  tick, it loads that tick's state, ends the session with `Session::fail`, and returns
+  `ExecuteError::Game { tick, error }`.
   `Session::fail(tick)` ends the session with `EndReason::LocalFailure { tick }`, whose end
   notice ends every other peer, and lands nothing (the next `advance` is
   `SessionError::NotRunning`); it refuses a tick the session has not run
