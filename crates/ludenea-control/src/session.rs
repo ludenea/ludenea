@@ -1886,7 +1886,8 @@ impl Session {
         self.compose(&target, defaults.as_deref());
         self.enforce_checkpoint_budget();
         // The end of the previous branch's inputs is not this one's; a stale run sets its own.
-        self.inputs_end = None;
+        // A failed entry gives the previous branch its end back.
+        let previous_end = self.inputs_end.take();
         let at = if tick <= self.end() { tick } else { self.head };
         // The way to `at` starts from this checkpoint: when it does not restore, the
         // session switches back and stays where it was.
@@ -1894,6 +1895,7 @@ impl Session {
             let segment = self.current_segment();
             let (back, _) = self.tree.make_current(segment, stale, previous);
             self.compose(&back, defaults.as_deref());
+            self.inputs_end = previous_end;
             return Err(error);
         }
         self.resimulating = None;

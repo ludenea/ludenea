@@ -1492,3 +1492,58 @@ fn a_scene_change_that_does_not_load_changes_nothing() {
     assert!(!session.timeline().can_undo);
     assert_at(&session, &sim, 5);
 }
+
+/// Game code writing a zero rotation on the ticks a crate is dropped: only a branch whose
+/// input drops crates holds a checkpoint that does not restore.
+fn zero_rotation_on_drop(
+    inputs: Runtime<Inputs<BoxesInput>>,
+    mut poses: Query<&mut Pose, Without<Body>>,
+) {
+    if inputs.player(0).spawn.is_some() {
+        for pose in poses.iter_mut() {
+            pose.rotation = Rot { cos: 0.0, sin: 0.0 };
+        }
+    }
+}
+
+#[test]
+fn a_failed_switch_keeps_the_end_of_the_adopted_inputs() {
+    let mut app = boxes::app();
+    app.system(Sim, zero_rotation_on_drop);
+    let (mut sim, mut session) = marked(app);
+    let mut log = InputLog::new(1);
+    for _ in 0..40 {
+        log.record(&[BoxesInput::default()]);
+    }
+    session.adopt_inputs(&mut sim, log).unwrap();
+    session.resimulate(&mut sim, 20).unwrap();
+    assert!(session.timeline().resimulating);
+
+    // A take-over at tick 0 forks a child that drops crates, whose checkpoint of tick 16
+    // does not restore.
+    let drop = encode(BoxesInput {
+        spawn: Some(0.0),
+        ..BoxesInput::default()
+    });
+    for _ in 0..20 {
+        session.step(&mut sim, Some(&drop)).unwrap();
+    }
+    let child = session.timeline().branch;
+    assert_ne!(child, BranchId::ROOT);
+
+    // Back on the adopted run, which resimulates, a switch to the child fails.
+    session.switch_branch(&mut sim, BranchId::ROOT).unwrap();
+    assert!(session.timeline().resimulating);
+    let error = session.switch_branch(&mut sim, child).unwrap_err();
+    assert!(
+        matches!(error, SessionError::Checkpoint { tick: 16, .. }),
+        "{error:?}"
+    );
+    assert_eq!(session.timeline().branch, BranchId::ROOT);
+
+    // The adopted run still resimulates through its last input.
+    while session.timeline().resimulating {
+        session.resimulate(&mut sim, 240).unwrap();
+    }
+    assert_eq!(session.timeline().simulated, 40);
+}
