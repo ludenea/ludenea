@@ -17,7 +17,8 @@ use serde_json::Value;
 
 use crate::Simulation;
 
-/// One entity, matched across the branches by identifier, at its first divergent tick.
+/// One entity, matched across the two simulations by identifier, at its first divergent
+/// tick.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct EntityDivergence {
@@ -35,16 +36,19 @@ pub struct EntityDivergence {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum DivergenceKind {
+    /// Alive in both with the same component set and different values.
     Changed,
+    /// Alive only in the first simulation compared: the current branch in the editor.
     OnlyInCurrent,
+    /// Alive only in the second simulation compared: the compare branch in the editor.
     OnlyInCompare,
     /// Alive in both with different component sets: likely unrelated entities that got the
     /// same identifier.
     Replaced,
 }
 
-/// A cause candidate, in either branch, at the entity's first divergent tick or the tick
-/// before. Only events and commands are recorded, so interactions without either (a
+/// A cause candidate, in either simulation, at the entity's first divergent tick or the
+/// tick before. Only events and commands are recorded, so interactions without either (a
 /// persistent contact, a system reading another entity) leave no candidate.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -169,7 +173,8 @@ impl EntityComparison {
     }
 
     /// Compares `sims`, which must stand at the same tick, and gives the entities that
-    /// diverge there for the first time, ordered by entity. `records` are the records of
+    /// diverge there for the first time, ordered by entity. An entity alive only in
+    /// `sims[0]` is `OnlyInCurrent`, one alive only in `sims[1]` is `OnlyInCompare`. `records` are the records of
     /// each simulation's recent ticks: those of the tick compared and the tick before
     /// explain a divergence. A divergence at a tick below `explains_from` has no cause, as
     /// the ticks recorded before it ran before what parts the simulations.

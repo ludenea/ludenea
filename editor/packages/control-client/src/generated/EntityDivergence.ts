@@ -5,7 +5,8 @@ import type { DivergenceKind } from "./DivergenceKind";
 import type { Entity } from "./Entity";
 
 /**
- * One entity, matched across the branches by identifier, at its first divergent tick.
+ * One entity, matched across the two simulations by identifier, at its first divergent
+ * tick.
  */
 export type EntityDivergence = { entity: Entity, kind: DivergenceKind, first_tick: number, 
 /**

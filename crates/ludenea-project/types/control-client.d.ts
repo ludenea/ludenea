@@ -62,8 +62,8 @@ type CameraItem = {
 };
 
 /**
- * A cause candidate, in either branch, at the entity's first divergent tick or the tick
- * before. Only events and commands are recorded, so interactions without either (a
+ * A cause candidate, in either simulation, at the entity's first divergent tick or the
+ * tick before. Only events and commands are recorded, so interactions without either (a
  * persistent contact, a system reading another entity) leave no candidate.
  */
 type Cause = {
@@ -542,7 +542,8 @@ type Difference = {
 type DivergenceKind = "changed" | "only_in_current" | "only_in_compare" | "replaced";
 
 /**
- * One entity, matched across the branches by identifier, at its first divergent tick.
+ * One entity, matched across the two simulations by identifier, at its first divergent
+ * tick.
  */
 type EntityDivergence = {
     entity: Entity;
