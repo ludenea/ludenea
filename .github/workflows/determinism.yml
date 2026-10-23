@@ -30,15 +30,16 @@ jobs:
       # The desktop backend, outside the workspace with a lockfile of its own.
       - run: cargo fmt --manifest-path editor/apps/desktop/src-tauri/Cargo.toml --all --check
       - run: cargo doc --locked --no-deps --workspace
-      # The browser: the facade's entry, the Web Worker transport, and the renderer on WebGPU and
-      # WebGL2.
-      - run: cargo clippy --locked --target wasm32-unknown-unknown -p ludenea -p ludenea-control -p ludenea-net -p ludenea-runtime -p boxes -p swarm -p arena --lib -- -D warnings
+      # The browser: the facade's entry, the Web Worker transport, the WebRTC link, and the
+      # renderer on WebGPU and WebGL2.
+      - run: cargo clippy --locked --target wasm32-unknown-unknown -p ludenea -p ludenea-control -p ludenea-net -p ludenea-runtime -p ludenea-webrtc -p boxes -p swarm -p arena --lib -- -D warnings
       - run: cargo clippy --locked --target wasm32-unknown-unknown -p ludenea-render --features web --lib -- -D warnings
       - run: cargo clippy --locked --target wasm32-unknown-unknown -p ludenea-runtime --features web --lib -- -D warnings
       # WebAssembly outside the browser: the command line tools that verify the goldens.
       - run: cargo clippy --locked --target wasm32-wasip1 -p boxes -p arena --bins -- -D warnings
-      # The runner without a window, as a headless game build links it.
-      - run: cargo clippy --locked --target wasm32-wasip1 -p ludenea-runtime --lib -- -D warnings
+      # The runner without a window, as a headless game build links it, and the WebRTC link's
+      # settings, which build there without WebRTC.
+      - run: cargo clippy --locked --target wasm32-wasip1 -p ludenea-runtime -p ludenea-webrtc --lib -- -D warnings
       # The network crate, tests included: they run under wasmtime in the wasm job.
       - run: cargo clippy --locked --target wasm32-wasip1 -p ludenea-net --all-targets -- -D warnings
 

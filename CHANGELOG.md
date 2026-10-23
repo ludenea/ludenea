@@ -43,6 +43,23 @@ hash, those of the golden trace and replays included.
 
 ### Rust API
 
+- New crate `ludenea-webrtc`: `WebRtcLink`, a `ludenea_net::Link` over WebRTC data
+  channels through matchbox_socket 0.14.0 (patched in `vendor/matchbox_socket` so that
+  signaling and peer data it cannot use drop that peer's handshake instead of panicking, and
+  so that no STUN URL means no ICE server). Natively its message loop runs on a thread named
+  `ludenea-webrtc`, in the browser as a task of the page; on `wasm32-wasip1` the crate builds
+  its settings alone. `WebRtcLink::open(LinkSettings)` joins a room: channel 0, unreliable
+  and unordered, carries `Channel::Match`, and channel 1, reliable and ordered,
+  `Channel::Room`. A send to a peer not connected is refused with `LinkError::UnknownLink`.
+  `poll` reports `Assigned`, then `Connected` and `Disconnected`, and `Closed` with the
+  reason when the signaling server is lost (after a `Disconnected` for every connected
+  peer), refuses the room (natively the reason names the cause: no room, a room in use or
+  full, a host that left, a bad code, a foreign origin, too many rooms or attempts), cannot
+  be reached, or assigns no id within 10 s. `LinkSettings::new(signaling, code, host, stun)`
+  validates the signaling URL (`ws://` or `wss://` and a host) and each STUN URL (`stun:`
+  or `stuns:`, a host, an optional port), refusing with `LinkSettingsError`, and
+  `LinkSettings::room_url` gives the room's URL. `DEFAULT_STUN` is
+  `stun:stun.l.google.com:19302`.
 - New crate `ludenea-signal`: the signaling listener of online matches, which speaks
   matchbox's JSON messages (`matchbox_protocol` 0.14.0) as `matchbox_server` does in a full
   mesh. `router(Options)` gives its axum routes and `serve(listeners, Options)` serves them

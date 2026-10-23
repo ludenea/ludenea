@@ -37,16 +37,17 @@ const CHECKS: &[&str] = &[
     "clippy --locked -p ludenea-runtime --features native --all-targets -- -D warnings",
     // Warnings are denied through `RUSTDOCFLAGS`, which `check` sets.
     "doc --locked --no-deps --workspace",
-    // The browser: the facade's entry, the Web Worker transport, and the renderer on WebGPU and
-    // WebGL2.
-    "clippy --locked --target wasm32-unknown-unknown -p ludenea -p ludenea-control -p ludenea-net -p ludenea-runtime -p boxes -p swarm -p arena --lib -- -D warnings",
+    // The browser: the facade's entry, the Web Worker transport, the WebRTC link, and the
+    // renderer on WebGPU and WebGL2.
+    "clippy --locked --target wasm32-unknown-unknown -p ludenea -p ludenea-control -p ludenea-net -p ludenea-runtime -p ludenea-webrtc -p boxes -p swarm -p arena --lib -- -D warnings",
     "clippy --locked --target wasm32-unknown-unknown -p ludenea-render --features web --lib -- -D warnings",
     // The standalone web page's exports: the lobby, beside the renderer it links.
     "clippy --locked --target wasm32-unknown-unknown -p ludenea-runtime --features web --lib -- -D warnings",
     // WebAssembly outside the browser: the command line tools that verify the goldens.
     "clippy --locked --target wasm32-wasip1 -p boxes -p arena --bins -- -D warnings",
-    // The runner without a window, as a headless game build links it.
-    "clippy --locked --target wasm32-wasip1 -p ludenea-runtime --lib -- -D warnings",
+    // The runner without a window, as a headless game build links it, and the WebRTC link's
+    // settings, which build there without WebRTC.
+    "clippy --locked --target wasm32-wasip1 -p ludenea-runtime -p ludenea-webrtc --lib -- -D warnings",
     // The network crate, tests included: they run under wasmtime in CI.
     "clippy --locked --target wasm32-wasip1 -p ludenea-net --all-targets -- -D warnings",
 ];

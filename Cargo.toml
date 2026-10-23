@@ -46,6 +46,7 @@ wasm-bindgen = "=0.2.129"
 wasm-bindgen-cli-support = "=0.2.129"
 wasm-bindgen-futures = "0.4.79"
 web-sys = "0.3.106"
+js-sys = "0.3.106"
 wgpu = { version = "=30.0.1", default-features = false }
 png = "=0.18.1"
 pollster = "=1.0.1"
@@ -67,6 +68,15 @@ tungstenite = "0.29.0"
 # The signaling messages of matchbox_socket, which the WebRTC link uses: the listener speaks
 # the client's own types. Exact, as the two must agree.
 matchbox_protocol = { version = "=0.14.0", features = ["json"] }
+# The WebRTC link's socket, natively (webrtc-rs) and in the browser: one stack for both, so
+# native and browser peers meet in the same rooms. Exact, as `vendor/matchbox_socket` patches
+# this version.
+matchbox_socket = "=0.14.0"
+# The executor the native link runs matchbox_socket's message loop on, in a thread of its own.
+futures = { version = "=0.3.34", default-features = false, features = ["executor"] }
+# The WebSocket client matchbox_socket uses natively: the native link reads the HTTP status of
+# a refused room from its error. Exact, as the two must agree.
+async-tungstenite = { version = "=0.32.1", default-features = false }
 ludenea-math = { path = "crates/ludenea-math" }
 ludenea-app = { path = "crates/ludenea-app" }
 ludenea-ecs = { path = "crates/ludenea-ecs" }
@@ -82,6 +92,7 @@ ludenea-runtime = { path = "crates/ludenea-runtime" }
 ludenea = { path = "crates/ludenea" }
 ludenea-project = { path = "crates/ludenea-project" }
 ludenea-signal = { path = "crates/ludenea-signal" }
+ludenea-webrtc = { path = "crates/ludenea-webrtc" }
 
 # rolldown_common 1.2.14 from crates.io with its serde_json dependency no longer requesting the
 # `arbitrary_precision` feature. Cargo unifies features, so that feature reached every

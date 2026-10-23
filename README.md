@@ -46,6 +46,7 @@ for any thread count. The guarantee rests on:
 | `crates/ludenea-project` | Projects, builds, and plugin bundling                        |
 | `crates/ludenea-serve`   | The `ludenea` tool: `new`, `serve`, `play`, `build`, `rooms` |
 | `crates/ludenea-signal`  | Signaling listener of online matches, static files           |
+| `crates/ludenea-webrtc`  | WebRTC link between online peers, native and browser         |
 | `editor`                 | The editor: web and desktop applications                     |
 | `examples/boxes`         | Reference scenario, golden trace, and benchmark              |
 | `examples/swarm`         | Runtime test game: 10,000 sprites, 4 players                 |
@@ -366,6 +367,20 @@ guesses of room codes are rate-limited like everyone's.
 A stock `matchbox_server` works too: pass its root URL as `--signaling`
 (`ws://ADDRESS:3536`). It knows nothing of hosts, sizes, or limits, so it admits anyone to
 any room.
+
+Peers talk over WebRTC data channels (`ludenea-webrtc`, through matchbox_socket, patched in
+`vendor/matchbox_socket`): webrtc-rs natively, the browser's own WebRTC in a page, so native
+and browser peers meet in the same rooms. To find each other across a home router, peers ask
+a STUN server for their public address: `stun:stun.l.google.com:19302` by default, a public
+server of Google's. There is no TURN relay, so two peers that are both behind a strict NAT
+(symmetric, as some mobile and corporate networks are) cannot connect. A network that drops
+UDP to the STUN server stalls a browser's handshake for about 40 seconds before it falls
+back to local addresses; on a local network, `?stun=none` on the page skips STUN. Native
+peers need a network interface other than loopback, even to play on one machine: webrtc-rs
+leaves loopback out of its candidates. Native `wss://` signaling trusts the certificate
+roots of 2022 (webpki-roots 0.22, which matchbox_socket's TLS uses), so a server whose
+certificate chains to a newer root is refused natively; `ws://`, or a certificate from an
+older root, works.
 
 Serve it with the editor and open `http://127.0.0.1:7878` in a browser; the editor is
 usable at once, and the game appears when its first build finishes:

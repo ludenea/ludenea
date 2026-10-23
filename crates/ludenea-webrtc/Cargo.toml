@@ -1,0 +1,32 @@
+[package]
+name = "ludenea-webrtc"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+ludenea-net.workspace = true
+thiserror.workspace = true
+
+# The link itself, on every target but WebAssembly outside the browser, which builds the
+# settings alone and links no WebRTC.
+[target.'cfg(not(target_os = "wasi"))'.dependencies]
+matchbox_socket.workspace = true
+uuid.workspace = true
+
+# The native link's thread. Not in the browser: async-tungstenite's random numbers do not
+# build for `wasm32-unknown-unknown`, and matchbox_socket uses the browser's WebSocket there.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+async-tungstenite.workspace = true
+futures.workspace = true
+
+# The browser link's task and clock.
+[target.'cfg(all(target_arch = "wasm32", not(target_os = "wasi")))'.dependencies]
+js-sys.workspace = true
+wasm-bindgen-futures.workspace = true
+
+[dev-dependencies]
+ludenea-signal.workspace = true
+matchbox_protocol.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync"] }
+tungstenite.workspace = true
