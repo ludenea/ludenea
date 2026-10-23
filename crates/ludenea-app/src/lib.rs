@@ -3,6 +3,7 @@
 
 pub mod app;
 pub mod assets;
+pub mod divergence;
 pub mod edit;
 pub mod input;
 pub mod input_log;

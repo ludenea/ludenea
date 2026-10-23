@@ -210,6 +210,19 @@ hash, those of the golden trace and replays included.
   (`SessionError::TickNotRun`), which the other peers would find implausible, and
   `NotRunning` while connecting. `ludenea_app::join_player_inputs(&[Vec<u8>])` gives the
   postcard encoding of a `Vec` of inputs from the encoding of each.
+- The per-entity half of the divergence report moves to `ludenea_app::divergence`, so any
+  two simulations can be compared in the shape of the editor's branch report.
+  `EntityDivergence`, `DivergenceKind` and `Cause` move there unchanged and stay reachable
+  from `ludenea_control::divergence`; the control protocol and its TypeScript bindings do not
+  change. A `TickRecorder`, passed to `Simulation::step_observed`, gives the events and
+  commands of one tick as a `TickRecord` (`into_record(tick)`).
+  `EntityComparison::new(&Simulation)` starts a comparison of simulations of that app, and
+  `compare([&Simulation; 2], tick, records, explains_from, event_schemas, systems)` gives
+  the entities diverging for the first time at `tick`, each with its first difference and
+  the events and commands of `records` (one slice per simulation) at `tick` or the tick
+  before that may have caused it; a divergence before `explains_from` has no cause.
+  `first_divergent()` gives the first tick whose world hashes differ, and `take_warnings()`
+  the problems found since the last call, such as a value that failed to decode for a diff.
 - `ludenea_render` answers without a GPU what the renderer draws: `atlas::frames_of(png,
   meta)` gives the `TextureFrames` (the image size and each `FrameRect`, row-major, with its
   pivot) a meta cuts a PNG into, the same cut `pack` makes, or a `FramesError` (`Decode`,
