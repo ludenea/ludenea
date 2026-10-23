@@ -1201,3 +1201,38 @@ fn a_join_whose_default_input_fails_changes_nothing() {
     };
     assert_eq!(InputLog::decode(&inputs.0).unwrap().players, 3);
 }
+
+#[test]
+fn frames_are_pushed_while_the_match_plays_and_at_its_end() {
+    let mut game = Match::arena(&[0, 1], 1, None);
+    game.run_until_all_run();
+    game.peers[0].handle(Command::Subscribe {
+        topic: ludenea_control::Topic::RenderFrames,
+    });
+    game.leave_at(1, 120);
+    game.run_until_all_end();
+    let peer = &game.peers[0];
+    let landed = peer.end().unwrap().tick.unwrap() + 1;
+    let ended = peer
+        .events
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                Event::Online {
+                    state: OnlineState::Ended { .. }
+                }
+            )
+        })
+        .unwrap();
+    let pushed: Vec<u64> = peer.events[..ended]
+        .iter()
+        .filter_map(|event| match event {
+            Event::RenderFrames { frames, .. } => frames.last().map(|frame| frame.tick),
+            _ => None,
+        })
+        .collect();
+    assert!(pushed.len() > 100, "{} pushes", pushed.len());
+    // The landed state is drawn too.
+    assert_eq!(pushed.last(), Some(&landed), "{pushed:?}");
+}

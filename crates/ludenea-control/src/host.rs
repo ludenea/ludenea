@@ -1702,6 +1702,7 @@ impl Host {
                     }
                     Some(Advanced::Landed { .. }) => {
                         self.ticked();
+                        played = true;
                         landed = true;
                         break;
                     }
@@ -1724,6 +1725,10 @@ impl Host {
                 && let Some(Advanced::Landed { .. }) = online.session.last_advance()
             {
                 self.ticked();
+                if self.subscriptions.pushes_frames() {
+                    // The landed state, drawn as the last tick played.
+                    self.push_frames(Some(Vec::new()));
+                }
             }
         }
         let Some(online) = self.online.as_mut() else {
