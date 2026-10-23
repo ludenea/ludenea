@@ -93,24 +93,29 @@ impl Refusals {
     /// Counts one more refusal of `address` at `now`.
     pub(crate) fn add(&mut self, address: IpAddr, now: Instant) {
         let count = self.count(address, now);
-        if count == 0 {
-            if self.windows.len() >= MAX_ADDRESSES && !self.windows.contains_key(&address) {
-                self.windows
-                    .retain(|_, &mut (start, _)| now.saturating_duration_since(start) < WINDOW);
-            }
-            if self.windows.len() >= MAX_ADDRESSES
-                && let Some(oldest) = self
-                    .windows
-                    .iter()
-                    .min_by_key(|(_, (start, _))| *start)
-                    .map(|(address, _)| *address)
-            {
-                self.windows.remove(&oldest);
-            }
-            self.windows.insert(address, (now, 1));
-        } else if let Some(window) = self.windows.get_mut(&address) {
-            window.1 = count + 1;
+        if let Some(window) = self.windows.get_mut(&address) {
+            // A live window grows; an expired one starts again in place.
+            *window = if count > 0 {
+                (window.0, count + 1)
+            } else {
+                (now, 1)
+            };
+            return;
         }
+        if self.windows.len() >= MAX_ADDRESSES {
+            self.windows
+                .retain(|_, &mut (start, _)| now.saturating_duration_since(start) < WINDOW);
+        }
+        if self.windows.len() >= MAX_ADDRESSES
+            && let Some(oldest) = self
+                .windows
+                .iter()
+                .min_by_key(|(_, (start, _))| *start)
+                .map(|(address, _)| *address)
+        {
+            self.windows.remove(&oldest);
+        }
+        self.windows.insert(address, (now, 1));
     }
 }
 
@@ -159,5 +164,32 @@ mod tests {
         assert_eq!(refusals.count(IpAddr::from([0, 0, 0, 0]), start), 0);
         let newest = IpAddr::from(u32::try_from(MAX_ADDRESSES + 9).unwrap().to_be_bytes());
         assert_eq!(refusals.count(newest, start + WINDOW / 2), 1);
+    }
+
+    #[test]
+    fn an_expired_window_is_reused_without_evicting_a_live_one() {
+        let mut refusals = Refusals::default();
+        #[expect(clippy::disallowed_methods, reason = "a test of network pacing")]
+        let start = Instant::now();
+        let gone = IpAddr::from([10, 0, 0, 2]);
+        refusals.add(gone, start);
+        let returning = IpAddr::from([10, 0, 0, 1]);
+        refusals.add(returning, start + Duration::from_secs(1));
+        let later = start + WINDOW + Duration::from_secs(1);
+        for index in 2..MAX_ADDRESSES {
+            let address = IpAddr::from(u32::try_from(index).unwrap().to_be_bytes());
+            refusals.add(address, later);
+        }
+        assert_eq!(refusals.windows.len(), MAX_ADDRESSES);
+        // The returning address's own window expired: it starts again in place, and no
+        // other entry goes.
+        refusals.add(returning, later);
+        assert_eq!(refusals.windows.len(), MAX_ADDRESSES);
+        assert_eq!(refusals.count(returning, later), 1);
+        assert!(refusals.windows.contains_key(&gone));
+        for index in 2..MAX_ADDRESSES {
+            let address = IpAddr::from(u32::try_from(index).unwrap().to_be_bytes());
+            assert_eq!(refusals.count(address, later), 1, "{address}");
+        }
     }
 }
