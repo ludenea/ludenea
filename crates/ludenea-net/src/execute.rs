@@ -64,7 +64,9 @@ pub struct Executor {
 
 impl Executor {
     /// An executor for a session built with `settings`, which sets the simulation's player
-    /// count to the match's.
+    /// count to the match's. The session it executes for must be built from the same
+    /// settings: the capacity is sized from their rules, and requests of another session are
+    /// refused only as far as the checks of [`Executor::execute`] reach.
     ///
     /// # Errors
     ///
@@ -101,7 +103,8 @@ impl Executor {
     ///   `hash: true` answers the session with the state hash through
     ///   [`Session::report_hash`] at once. Calling this before the session's next
     ///   [`Session::outgoing`], with every request of an advance, is what the session's hash
-    ///   lag bounds rely on.
+    ///   lag bounds rely on. A hash the session refuses, which only a session that did not
+    ///   return that `Save` does, leaves the state not kept.
     /// - `Load` loads the latest state saved for its tick.
     /// - `Advance` checks the tick, then steps the simulation with the joined inputs.
     /// - `Release` stops keeping the state of its tick.
@@ -126,9 +129,13 @@ impl Executor {
             match request {
                 Request::Save { tick, hash } => {
                     in_step(simulation, tick)?;
-                    self.ring.save(simulation, tick, hash)?;
-                    if hash {
-                        session.report_hash(tick, simulation.hash())?;
+                    let was_kept = self.ring.save(simulation, tick, hash)?;
+                    if hash && let Err(error) = session.report_hash(tick, simulation.hash()) {
+                        // The session will send no `Release` for a hash it refused.
+                        if !was_kept {
+                            self.ring.unkeep(tick);
+                        }
+                        return Err(error.into());
                     }
                 }
                 Request::Load { tick } => self.ring.load(simulation, tick)?,
@@ -184,8 +191,13 @@ impl StateRing {
 
     /// Saves `simulation` as the state of `tick`: into the slot already holding `tick`, else
     /// a new slot, else the slot of the lowest tick not kept, as the latest ticks are those a
-    /// load needs.
-    fn save(&mut self, simulation: &Simulation, tick: u64, keep: bool) -> Result<(), ExecuteError> {
+    /// load needs. Returns whether the state of `tick` was kept before.
+    fn save(
+        &mut self,
+        simulation: &Simulation,
+        tick: u64,
+        keep: bool,
+    ) -> Result<bool, ExecuteError> {
         let index = match self.slots.iter().position(|slot| slot.tick == tick) {
             Some(index) => index,
             None if self.slots.len() < self.capacity => {
@@ -209,10 +221,18 @@ impl StateRing {
                 })?,
         };
         let slot = &mut self.slots[index];
+        let was_kept = slot.tick == tick && slot.kept;
         slot.tick = tick;
-        slot.kept |= keep;
+        slot.kept = was_kept || keep;
         simulation.save_state(&mut slot.state);
-        Ok(())
+        Ok(was_kept)
+    }
+
+    /// Stops keeping the state of `tick`, if it is held.
+    fn unkeep(&mut self, tick: u64) {
+        if let Some(slot) = self.slots.iter_mut().find(|slot| slot.tick == tick) {
+            slot.kept = false;
+        }
     }
 
     fn load(&self, simulation: &mut Simulation, tick: u64) -> Result<(), ExecuteError> {

@@ -1,7 +1,7 @@
 mod support;
 
 use ludenea_app::{App, StateError, join_player_inputs};
-use ludenea_net::{ExecuteError, Executor, Request, Session, SessionSettings};
+use ludenea_net::{ExecuteError, Executor, Request, Session, SessionError, SessionSettings};
 use support::{handshake, identity, settings, test_simulation};
 
 /// The settings of peer 0 in a match of the test app where player `i` is owned by
@@ -172,4 +172,39 @@ fn executor_capacity_follows_the_rules() {
             "window {window}, delay {delay}, interval {interval}"
         );
     }
+}
+
+#[test]
+fn a_hash_the_session_refuses_keeps_no_state() {
+    // A session that asked for no hash refuses one; the state saved for it is not kept, so
+    // it never pins a slot of the ring.
+    let mut simulation = test_simulation();
+    let mut session = running_session();
+    let mut executor = Executor::new(&mut simulation, session.settings()).unwrap();
+    let error = executor.execute(
+        &mut simulation,
+        &mut session,
+        vec![Request::Save {
+            tick: 0,
+            hash: true,
+        }],
+    );
+    assert!(
+        matches!(
+            error,
+            Err(ExecuteError::Session(SessionError::HashNotAsked {
+                tick: 0
+            }))
+        ),
+        "{error:?}"
+    );
+    let release = executor.execute(
+        &mut simulation,
+        &mut session,
+        vec![Request::Release { tick: 0 }],
+    );
+    assert!(
+        matches!(release, Err(ExecuteError::NotKept { tick: 0 })),
+        "{release:?}"
+    );
 }
