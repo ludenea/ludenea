@@ -655,6 +655,10 @@ type NetPacket = {
     packet: Bytes;
 };
 
+/**
+ * What ended an online match, as `MatchEnd::kind` names it; `MatchEnd::message` says it in
+ * words.
+ */
 type MatchEndKind = "left" | "lost" | "desync" | "violation" | "mismatch" | "unreachable" | "local_failure";
 
 /**

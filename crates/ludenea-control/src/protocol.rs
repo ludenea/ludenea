@@ -605,6 +605,8 @@ pub struct MatchEnd {
     pub tick: Option<u64>,
 }
 
+/// What ended an online match, as `MatchEnd::kind` names it; `MatchEnd::message` says it in
+/// words.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
