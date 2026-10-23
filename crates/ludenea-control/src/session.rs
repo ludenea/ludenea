@@ -1885,6 +1885,8 @@ impl Session {
         let (target, stale) = self.tree.make_current(segment, self.resimulating, id);
         self.compose(&target, defaults.as_deref());
         self.enforce_checkpoint_budget();
+        // The end of the previous branch's inputs is not this one's; a stale run sets its own.
+        self.inputs_end = None;
         let at = if tick <= self.end() { tick } else { self.head };
         // The way to `at` starts from this checkpoint: when it does not restore, the
         // session switches back and stays where it was.
@@ -1900,7 +1902,6 @@ impl Session {
             Some(from) => {
                 // A stale run resimulates through its last input, which its stored hashes
                 // may stop short of.
-                self.inputs_end = None;
                 let inputs_end = self.inputs.ticks.len() as u64;
                 self.inputs_end = (inputs_end > self.end()).then_some(inputs_end);
                 self.resimulate_from(sim, from, at)

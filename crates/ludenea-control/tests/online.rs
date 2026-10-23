@@ -1140,7 +1140,25 @@ fn a_fork_during_the_adopted_resimulation_keeps_the_match_on_its_branch() {
     };
     assert_ne!(timeline.branch, root);
 
-    // Back on the match's branch, it resimulates through its last confirmed tick.
+    let child = timeline.branch;
+
+    // Back on the match's branch, it resimulates through its last confirmed tick. On the way,
+    // the fresh child is entered again: its end is its own, so an edit at its head extends
+    // it instead of forking.
+    host.handle(Command::SwitchBranch { branch: root }).unwrap();
+    assert!(timeline_resimulating(host));
+    host.handle(Command::SwitchBranch { branch: child })
+        .unwrap();
+    assert_eq!(host.tick(), 1);
+    host.handle(Command::Spawn {
+        components: Default::default(),
+    })
+    .unwrap();
+    let Ok(Reply::Timeline(timeline)) = host.handle(Command::GetTimeline) else {
+        panic!("a timeline");
+    };
+    assert_eq!(timeline.branch, child);
+    assert_eq!(timeline.branches.len(), 2, "{:?}", timeline.branches);
     host.handle(Command::SwitchBranch { branch: root }).unwrap();
     resimulate(host);
     host.handle(Command::Seek { tick: landed }).unwrap();
