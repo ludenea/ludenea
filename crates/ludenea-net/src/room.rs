@@ -50,8 +50,9 @@
 //! - It checks the layout with [`SessionSettings::validate`], on settings built from it with
 //!   the room's rules, the default timeouts and placeholder identity values. With the default
 //!   rules every layout of at most [`MAX_PLAYERS`] players passes; the check guards other
-//!   rules. A refusal sends `Refuse { Unplayable }` to the picked joiners and fails the host
-//!   with [`RoomError::Unplayable`], naming the settings error.
+//!   rules. A refusal sends `Refuse { Unplayable }` to the picked joiners, `Refuse { Full }`
+//!   to every other connected joiner, and fails the host with [`RoomError::Unplayable`],
+//!   naming the settings error.
 //! - Otherwise it sends `Layout` to the picked joiners, `Refuse { Full }` to every other
 //!   connected joiner, and is [`RoomState::Ready`] as `PeerId(0)`.
 //!
@@ -617,33 +618,38 @@ impl Room {
             },
             timeouts: Timeouts::default(),
         };
-        if let Err(error) = settings.validate() {
-            for link in &links[1..] {
-                send(&mut self.outgoing, *link, &refuse(RoomRefusal::Unplayable));
-            }
-            return self.fail(RoomError::Unplayable {
-                reason: error.to_string(),
-            });
-        }
-        let layout = RoomMessage::Layout {
-            match_id: host.match_id,
-            links: links.clone(),
-            counts,
+        // The picked joiners get the layout or the refusal; every other joiner waiting in the
+        // room is refused as full either way.
+        let (verdict, state) = match settings.validate() {
+            Ok(()) => (
+                RoomMessage::Layout {
+                    match_id: host.match_id,
+                    links: links.clone(),
+                    counts,
+                },
+                RoomState::Ready(MatchLayout {
+                    local: PeerId(0),
+                    match_id: host.match_id,
+                    players,
+                    links,
+                }),
+            ),
+            Err(error) => (
+                refuse(RoomRefusal::Unplayable),
+                RoomState::Failed(RoomError::Unplayable {
+                    reason: error.to_string(),
+                }),
+            ),
         };
         for (index, joiner) in host.joiners.iter_mut().enumerate() {
             if picked.contains(&index) {
-                send(&mut self.outgoing, joiner.link, &layout);
+                send(&mut self.outgoing, joiner.link, &verdict);
             } else if !joiner.refused {
                 send(&mut self.outgoing, joiner.link, &refuse(RoomRefusal::Full));
                 joiner.refused = true;
             }
         }
-        self.state = RoomState::Ready(MatchLayout {
-            local: PeerId(0),
-            match_id: host.match_id,
-            players,
-            links,
-        });
+        self.state = state;
     }
 
     fn join_receive(&mut self, from: LinkId, message: RoomMessage) {

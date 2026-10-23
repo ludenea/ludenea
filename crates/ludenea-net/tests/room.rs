@@ -19,7 +19,8 @@ impl Member {
 
     fn with_rules(mut link: MemoryLink, role: RoomRole, rules: MatchRules) -> Self {
         let room = Room::new(role, rules).unwrap();
-        // The first event of a memory link is its assignment, left for `pump` to deliver.
+        // The first event of a memory link is its assignment; it and any connection already
+        // polled are applied here, so the room knows its own link before `pump` runs.
         let events = link.poll();
         let LinkEvent::Assigned(id) = events[0] else {
             panic!("assigned first: {events:?}");
@@ -358,10 +359,12 @@ fn an_unplayable_layout_fails_every_peer() {
         },
         rules,
     );
+    // Connected first and never ready: not picked, so refused as full.
+    let mut idle = Member::with_rules(mesh.join(), RoomRole::Join, rules);
     let mut joiner = Member::with_rules(mesh.join(), RoomRole::Join, rules);
     host.room.set_ready(1).unwrap();
     joiner.room.set_ready(3).unwrap();
-    pump(&mut [&mut host, &mut joiner]);
+    pump(&mut [&mut host, &mut idle, &mut joiner]);
     let RoomError::Unplayable { reason } = host.failure() else {
         panic!("unplayable: {:?}", host.failure());
     };
@@ -371,6 +374,7 @@ fn an_unplayable_layout_fails_every_peer() {
     );
     assert!(host.failure().to_string().contains(reason.as_str()));
     assert!(matches!(joiner.failure(), RoomError::Unplayable { .. }));
+    assert_eq!(idle.failure(), &RoomError::Full);
 }
 
 #[test]
