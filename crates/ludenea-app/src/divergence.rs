@@ -174,10 +174,11 @@ impl EntityComparison {
 
     /// Compares `sims`, which must stand at the same tick, and gives the entities that
     /// diverge there for the first time, ordered by entity. An entity alive only in
-    /// `sims[0]` is `OnlyInCurrent`, one alive only in `sims[1]` is `OnlyInCompare`. `records` are the records of
-    /// each simulation's recent ticks: those of the tick compared and the tick before
-    /// explain a divergence. A divergence at a tick below `explains_from` has no cause, as
-    /// the ticks recorded before it ran before what parts the simulations.
+    /// `sims[0]` is `OnlyInCurrent`, one alive only in `sims[1]` is `OnlyInCompare`.
+    /// `records` are the records of each simulation's recent ticks: those of the tick
+    /// compared and the tick before explain a divergence. A divergence at a tick below
+    /// `explains_from` has no cause, as the ticks recorded before it ran before what parts
+    /// the simulations.
     pub fn compare(
         &mut self,
         sims: [&Simulation; 2],
