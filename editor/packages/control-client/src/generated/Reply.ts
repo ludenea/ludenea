@@ -13,6 +13,7 @@ import type { EntityRow } from "./EntityRow";
 import type { Hash64 } from "./Hash64";
 import type { HashTree } from "./HashTree";
 import type { InstanceInfo } from "./InstanceInfo";
+import type { NetStats } from "./NetStats";
 import type { RecordedEvent } from "./RecordedEvent";
 import type { RenderFrame } from "./RenderFrame";
 import type { SyncPoint } from "./SyncPoint";
@@ -20,7 +21,7 @@ import type { SystemRow } from "./SystemRow";
 import type { Timeline } from "./Timeline";
 import type { TraceComparison } from "./TraceComparison";
 
-export type Reply = { "type": "done" } | { "type": "players", claims: Array<Claim>, devices: Array<string>, } | { "type": "stepped", tick: number, hashes: Array<Hash64>, } | { "type": "hash", tick: number, hash: Hash64, pending: boolean, } | { "type": "hash_tree", tick: number, tree: HashTree, } | { "type": "snapshot", tick: number, snapshot: Bytes, } | { "type": "differences", differences: Array<Difference>, } | { "type": "trace_comparison" } & TraceComparison | { "type": "entities", total: number, rows: Array<EntityRow>, } | { "type": "entity", entity: Entity, components: { [key in string]: ComponentValue }, } | { "type": "resources", resources: { [key in string]: ComponentValue }, } | { "type": "spawned", entity: Entity, } | { "type": "scene", ron: string, } | { "type": "timeline" } & Timeline | { "type": "session", scene: string, 
+export type Reply = { "type": "done" } | { "type": "players", claims: Array<Claim>, devices: Array<string>, } | { "type": "stepped", tick: number, hashes: Array<Hash64>, } | { "type": "hash", tick: number, hash: Hash64, pending: boolean, } | { "type": "hash_tree", tick: number, tree: HashTree, } | { "type": "snapshot", tick: number, snapshot: Bytes, } | { "type": "differences", differences: Array<Difference>, } | { "type": "trace_comparison" } & TraceComparison | { "type": "entities", total: number, rows: Array<EntityRow>, } | { "type": "entity", entity: Entity, components: { [key in string]: ComponentValue }, } | { "type": "resources", resources: { [key in string]: ComponentValue }, } | { "type": "spawned", entity: Entity, } | { "type": "scene", ron: string, } | { "type": "timeline" } & Timeline | { "type": "net_stats" } & NetStats | { "type": "session", scene: string, 
 /**
  * The scene as last saved, when `scene` holds unsaved edits.
  */

@@ -285,5 +285,6 @@ pub fn every_command() -> Vec<Command> {
             packet: bytes.clone(),
         },
         Command::LeaveMatch,
+        Command::GetNetStats,
     ]
 }

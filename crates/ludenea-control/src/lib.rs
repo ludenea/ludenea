@@ -29,10 +29,11 @@ pub use in_process::{InProcess, Transport};
 pub use json::{from_wire, to_wire, untyped_to_wire};
 pub use path::{PathSegment, set_at_path};
 pub use protocol::{
-    Bytes, ClientMessage, Command, ComponentValue, ConsoleLevel, EntityRow, ErrorCode, Event,
-    FieldTarget, GameInfo, Hash64, MatchEnd, MatchEndKind, NamedSchema, NetPacket, OnlineSettings,
-    OnlineState, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION, PauseReason, ProtocolError, RecordedEvent,
-    Reply, ServerMessage, SyncPoint, SystemRow, TileArea, Topic,
+    Bytes, ClientMessage, Command, ComponentValue, ConsoleLevel, DroppedPackets, EntityRow,
+    ErrorCode, Event, FieldTarget, GameInfo, Hash64, MatchEnd, MatchEndKind, NamedSchema,
+    NetPacket, NetStats, OnlineSettings, OnlineState, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION,
+    PauseReason, PeerNetStats, ProtocolError, RecordedEvent, Reply, ServerMessage, SyncPoint,
+    SystemRow, TileArea, Topic,
 };
 pub use session::{
     Document, Resimulation, SceneChange, Session, SessionError, SessionExport, Timeline,

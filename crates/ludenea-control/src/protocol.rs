@@ -29,7 +29,7 @@ pub const PROTOCOL_VERSION: u32 = 5;
 /// instead of misreading fields. A change the declarations do not show, such as a new serde
 /// default or another encoding of a type declared as a string, leaves it as it is.
 /// `tests/typescript.rs` pins it.
-pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0x331e_dce6_0b7c_4b4e);
+pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0x1014_a973_87b2_2bdd);
 
 /// Binary data, serialized as a standard base64 string.
 #[derive(Clone, Debug, PartialEq)]
@@ -561,6 +561,10 @@ pub enum Command {
     /// Leaves the online match: every peer ends at the last tick this one has inputs for.
     /// While it connects, the match is dropped here, and the others end `unreachable`.
     LeaveMatch,
+    /// The statistics of the online match: per peer, the ping and jitter, the rollbacks and
+    /// the packets dropped. They stay readable after the match ended, until another match or
+    /// session loads. Without a match: `invalid_command`.
+    GetNetStats,
 }
 
 /// The match a peer joins, the same on every peer but `local`.
@@ -627,6 +631,53 @@ pub enum MatchEndKind {
     LocalFailure,
 }
 
+/// What the online match counted, as `Command::GetNetStats` replies.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct NetStats {
+    /// The next tick this peer plays: every tick below it has run.
+    pub tick: u64,
+    /// The first tick some player lacks a confirmed input for; `u64::MAX` once every tick up
+    /// to the end of the match is confirmed.
+    pub confirmed: u64,
+    /// The advances that skipped a tick so the other peers catch up.
+    pub skips: u64,
+    /// Every other peer, by number.
+    pub peers: Vec<PeerNetStats>,
+}
+
+/// What the online match counted about one other peer.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct PeerNetStats {
+    pub peer: u8,
+    /// The mean of the latest round trips, in microseconds; `0` before the first.
+    pub ping_micros: u64,
+    /// The mean deviation of those round trips from the ping, in microseconds.
+    pub jitter_micros: u64,
+    /// How many ticks this peer is ahead of the other, negative when behind.
+    pub frame_advantage: i32,
+    /// The rollbacks this peer's inputs caused.
+    pub rollbacks: u64,
+    /// The most ticks one of those rollbacks ran again.
+    pub deepest_rollback: u64,
+    /// The inputs of this peer confirmed different from the input their tick ran with.
+    pub prediction_misses: u64,
+    /// The advances that stalled waiting for this peer's inputs.
+    pub stalls: u64,
+    /// The packets dropped from this peer, by reason.
+    pub dropped: Vec<DroppedPackets>,
+}
+
+/// Packets dropped for one reason.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct DroppedPackets {
+    /// The reason in words, such as `wire: TooLarge`.
+    pub reason: String,
+    pub count: u64,
+}
+
 /// One packet for peer `to`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -674,6 +725,7 @@ impl Command {
             Command::Pick { .. } => "picked",
             Command::GetGhostDraw { .. } => "ghost_draw",
             Command::GetDivergence { .. } => "divergence",
+            Command::GetNetStats => "net_stats",
             Command::LoadInputs { .. }
             | Command::LoadEdits { .. }
             | Command::SetThreads { .. }
@@ -788,6 +840,7 @@ pub enum Reply {
         ron: String,
     },
     Timeline(Timeline),
+    NetStats(NetStats),
     Session {
         scene: String,
         /// The scene as last saved, when `scene` holds unsaved edits.
@@ -1042,6 +1095,15 @@ pub enum Event {
     RolledBack {
         from: u64,
         to: u64,
+    },
+    /// No packet came from `peer` for `for_ms`, while the online match runs. Once per silence.
+    PeerSilent {
+        peer: u8,
+        for_ms: u64,
+    },
+    /// `peer`, announced silent, spoke again.
+    PeerBack {
+        peer: u8,
     },
 }
 

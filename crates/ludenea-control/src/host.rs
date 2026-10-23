@@ -1109,6 +1109,11 @@ impl Host {
                 Ok(Reply::Done)
             }
             Command::LeaveMatch => self.leave_match(),
+            Command::GetNetStats => self
+                .online
+                .as_ref()
+                .map(|online| Reply::NetStats(online.stats()))
+                .ok_or_else(|| invalid_command("no online match ran".to_string())),
             Command::Unsubscribe { topic } => {
                 if topic == Topic::Ghost {
                     self.ghost = false;
@@ -1628,6 +1633,7 @@ impl Host {
             clock: Clock::default(),
             dropped: None,
             finished: false,
+            warned: BTreeSet::new(),
         });
         self.events.push(Event::Online {
             state: OnlineState::Connecting,
@@ -1735,11 +1741,10 @@ impl Host {
                 }
             }
         }
-        let Some(online) = self.online.as_mut() else {
+        if self.online.is_none() {
             return;
-        };
-        let events = online.session.events();
-        if online.record(events) {
+        }
+        if self.record_online() {
             self.events.push(Event::Online {
                 state: OnlineState::Running,
             });
@@ -1880,11 +1885,13 @@ impl Host {
     /// session the confirmed inputs, which it resimulates in the background, with the
     /// automatic claims of the match's players. The match's session stays, lingering.
     fn finish_match(&mut self) {
-        let Some(online) = self.online.as_mut().filter(|online| !online.finished) else {
+        if self.online.as_ref().is_none_or(|online| online.finished) {
+            return;
+        }
+        self.record_online();
+        let Some(online) = self.online.as_mut() else {
             return;
         };
-        let events = online.session.events();
-        online.record(events);
         online.finished = true;
         let state = online.state();
         let players = online.confirmed.players;
@@ -1901,6 +1908,22 @@ impl Host {
         }
     }
 
+    /// Takes the online session's events: records the confirmed inputs, pushes the silences
+    /// and writes the first drop of each peer and reason to the console. Returns whether the
+    /// match started among them.
+    fn record_online(&mut self) -> bool {
+        let Some(online) = self.online.as_mut() else {
+            return false;
+        };
+        let events = online.session.events();
+        let recorded = online.record(events);
+        self.events.extend(recorded.events);
+        for warning in recorded.warnings {
+            self.console(ConsoleLevel::Warning, warning);
+        }
+        recorded.started
+    }
+
     /// Keeps a finished match's session telling the other peers why it ended, while its
     /// linger lasts.
     fn linger(&mut self, elapsed_seconds: f64) {
@@ -1910,6 +1933,7 @@ impl Host {
             .filter(|online| online.finished && online.dropped.is_none())
         {
             let now = online.clock.advance(elapsed_seconds);
+            self.record_online();
             self.send_packets(now);
         }
     }
@@ -2177,6 +2201,7 @@ fn changes_state(command: &Command) -> bool {
             | Command::Unsubscribe { .. }
             | Command::NetReceive { .. }
             | Command::LeaveMatch
+            | Command::GetNetStats
     )
 }
 

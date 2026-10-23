@@ -452,6 +452,7 @@ fn every_command_names_the_reply_it_gets() {
         from: 1,
         packet: Bytes(vec![0]),
     });
+    checked.run(Command::GetNetStats);
     checked.run(Command::LeaveMatch);
 
     let every_type: BTreeSet<String> = support::every_command().iter().map(type_of).collect();

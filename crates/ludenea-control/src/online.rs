@@ -3,11 +3,15 @@
 //! confirmed inputs the session's input log takes at the end, and the clock the session reads
 //! its time from.
 
+use std::collections::BTreeSet;
+
 use ludenea_app::players::Claim;
 use ludenea_app::{InputLog, join_player_inputs};
-use ludenea_net::{EndReason, Executor, PeerId, Session, SessionEvent, SessionState};
+use ludenea_net::{DropReason, EndReason, Executor, PeerId, Session, SessionEvent, SessionState};
 
-use crate::protocol::{MatchEnd, MatchEndKind, OnlineState};
+use crate::protocol::{
+    DroppedPackets, Event, MatchEnd, MatchEndKind, NetStats, OnlineState, PeerNetStats,
+};
 
 /// An online match the host plays, from `join_match` until another match or session loads.
 pub(crate) struct OnlineMatch {
@@ -28,6 +32,19 @@ pub(crate) struct OnlineMatch {
     /// Whether the host finished the match: the session's input log took the confirmed
     /// inputs. The session lingers, as long as its own linger lasts.
     pub finished: bool,
+    /// The peers and reasons of the drops the console told of already.
+    pub warned: BTreeSet<(PeerId, DropReason)>,
+}
+
+/// What the session's events changed for the host.
+#[derive(Default)]
+pub(crate) struct Recorded {
+    /// The match started among them.
+    pub started: bool,
+    /// The events to push, in order.
+    pub events: Vec<Event>,
+    /// The console warnings to write, in order.
+    pub warnings: Vec<String>,
 }
 
 impl OnlineMatch {
@@ -67,24 +84,87 @@ impl OnlineMatch {
         self.session.settings().local
     }
 
-    /// Records the confirmed inputs of `events`, the session's events in order; returns
-    /// whether the match started among them.
-    pub fn record(&mut self, events: Vec<SessionEvent>) -> bool {
-        let mut started = false;
+    /// Records the confirmed inputs of `events`, the session's events in order, and returns
+    /// what else they ask of the host.
+    pub fn record(&mut self, events: Vec<SessionEvent>) -> Recorded {
+        let mut recorded = Recorded::default();
         for event in events {
             match event {
-                SessionEvent::Started => started = true,
+                SessionEvent::Started => recorded.started = true,
                 SessionEvent::Confirmed { inputs, .. } => {
                     self.confirmed.ticks.push(join_player_inputs(&inputs));
                 }
-                // The drops and the silences are counted in the session's statistics.
-                SessionEvent::Dropped { .. }
-                | SessionEvent::HashMatched { .. }
-                | SessionEvent::PeerSilent { .. }
-                | SessionEvent::PeerBack { .. } => {}
+                SessionEvent::Dropped { peer, reason } => {
+                    // The statistics count every drop; the console tells of the first.
+                    if self.warned.insert((peer, reason)) {
+                        recorded.warnings.push(format!(
+                            "dropped a packet from peer {}: {}",
+                            peer.0,
+                            drop_words(reason)
+                        ));
+                    }
+                }
+                SessionEvent::PeerSilent { peer, for_micros } => {
+                    recorded.events.push(Event::PeerSilent {
+                        peer: peer.0,
+                        for_ms: for_micros / 1_000,
+                    });
+                }
+                SessionEvent::PeerBack { peer } => {
+                    recorded.events.push(Event::PeerBack { peer: peer.0 });
+                }
+                SessionEvent::HashMatched { .. } => {}
             }
         }
-        started
+        recorded
+    }
+
+    /// What the session counted so far.
+    pub fn stats(&self) -> NetStats {
+        let stats = self.session.stats();
+        NetStats {
+            tick: self.session.next_tick(),
+            confirmed: self.session.confirmed_tick(),
+            skips: stats.skips,
+            peers: stats
+                .peers
+                .iter()
+                .map(|(peer, stats)| PeerNetStats {
+                    peer: peer.0,
+                    ping_micros: stats.ping_micros,
+                    jitter_micros: stats.jitter_micros,
+                    frame_advantage: stats.frame_advantage,
+                    rollbacks: stats.rollbacks,
+                    deepest_rollback: stats.deepest_rollback,
+                    prediction_misses: stats.prediction_misses,
+                    stalls: stats.stalls,
+                    dropped: stats
+                        .dropped
+                        .iter()
+                        .map(|(&reason, &count)| DroppedPackets {
+                            reason: drop_words(reason),
+                            count,
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+}
+
+/// A drop reason in words: a wire error names its variant.
+fn drop_words(reason: DropReason) -> String {
+    match reason {
+        DropReason::Wire(variant) => format!("wire: {variant}"),
+        DropReason::WrongMatch => "wrong match".to_string(),
+        DropReason::UnknownPeer => "unknown peer".to_string(),
+        DropReason::BeforeRunning => "before running".to_string(),
+        DropReason::Gap => "gap in the inputs".to_string(),
+        DropReason::UnknownEcho => "unknown echo".to_string(),
+        DropReason::HashOffInterval => "hash off interval".to_string(),
+        DropReason::HashAlreadyReceived => "hash already received".to_string(),
+        DropReason::HashBacklog => "hash backlog".to_string(),
+        DropReason::HashGap => "hash gap".to_string(),
     }
 }
 

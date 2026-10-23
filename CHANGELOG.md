@@ -863,7 +863,7 @@ hash, those of the golden trace and replays included.
 
 ### Control protocol
 
-- Control protocol 5, fingerprint `331edce60b7c4b4e`. Breaking: `get_render_frame`
+- Control protocol 5, fingerprint `1014a97387b22bdd`. Breaking: `get_render_frame`
   (`debug_layers`) replaces `get_debug_draw` (`layers`), and its reply `render_frame`
   (`frame`) replaces `debug_draw` (`tick`, `frame`). The frame is the `RenderFrame` of the
   current tick: its tick, camera, render layers, sprites, tilemaps, the entities teleported
@@ -954,6 +954,19 @@ hash, those of the golden trace and replays included.
   end, play stops with `paused` and the new reason `match_ended`, the confirmed inputs
   become the session's input log, which resimulates in the background, and the claims go
   back to the automatic ones of the match's players.
+  New `get_net_stats` replies `net_stats`, the new `NetStats`: `tick`, the next tick this
+  peer plays; `confirmed`, the first tick some player lacks a confirmed input for
+  (`18446744073709551615` once every tick is confirmed); `skips`; and `peers`, one
+  `PeerNetStats` per other peer with `peer`, `ping_micros`, `jitter_micros`,
+  `frame_advantage`, `rollbacks`, `deepest_rollback`, `prediction_misses`, `stalls`, and
+  `dropped`, the packets dropped from it as `DroppedPackets` (`reason` in words, such as
+  `wire: TooLarge`, and `count`). It is accepted while a match runs and its statistics stay
+  readable once it ended, until another match or session loads; without a match it is
+  refused with `invalid_command` ("no online match ran"). New events `peer_silent` (`peer`,
+  `for_ms`), once when no packet came from a peer for 750 ms while the match runs, and
+  `peer_back` (`peer`) when it speaks again. The first packet dropped from each peer for
+  each reason in a match writes the console warning "dropped a packet from peer N:
+  {reason}"; later ones are only counted.
 - Over `host --stdio` and in a browser worker, the events a request causes come before its
   response, not after the response to a later request: a `load_session` sent right after
   `load_scene` answered could be followed by the scene's `timeline_changed` (head 0), which

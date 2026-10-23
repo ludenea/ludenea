@@ -475,6 +475,8 @@ type Command = {
     packet: Bytes;
 } | {
     "type": "leave_match";
+} | {
+    "type": "get_net_stats";
 };
 
 type ClientMessage = {
@@ -624,6 +626,17 @@ type DivergenceReport = {
      * Ordered by first divergent tick, then entity.
      */
     entities: Array<EntityDivergence>;
+};
+
+/**
+ * Packets dropped for one reason.
+ */
+type DroppedPackets = {
+    /**
+     * The reason in words, such as `wire: TooLarge`.
+     */
+    reason: string;
+    count: number;
 };
 
 type NamedHash = {
@@ -816,6 +829,13 @@ type Event = {
     "type": "rolled_back";
     from: number;
     to: number;
+} | {
+    "type": "peer_silent";
+    peer: number;
+    for_ms: number;
+} | {
+    "type": "peer_back";
+    peer: number;
 };
 
 type VariantFields = {
@@ -994,6 +1014,68 @@ type LayerInfo = {
      * the screen.
      */
     parallax: number;
+};
+
+/**
+ * What the online match counted about one other peer.
+ */
+type PeerNetStats = {
+    peer: number;
+    /**
+     * The mean of the latest round trips, in microseconds; `0` before the first.
+     */
+    ping_micros: number;
+    /**
+     * The mean deviation of those round trips from the ping, in microseconds.
+     */
+    jitter_micros: number;
+    /**
+     * How many ticks this peer is ahead of the other, negative when behind.
+     */
+    frame_advantage: number;
+    /**
+     * The rollbacks this peer's inputs caused.
+     */
+    rollbacks: number;
+    /**
+     * The most ticks one of those rollbacks ran again.
+     */
+    deepest_rollback: number;
+    /**
+     * The inputs of this peer confirmed different from the input their tick ran with.
+     */
+    prediction_misses: number;
+    /**
+     * The advances that stalled waiting for this peer's inputs.
+     */
+    stalls: number;
+    /**
+     * The packets dropped from this peer, by reason.
+     */
+    dropped: Array<DroppedPackets>;
+};
+
+/**
+ * What the online match counted, as `Command::GetNetStats` replies.
+ */
+type NetStats = {
+    /**
+     * The next tick this peer plays: every tick below it has run.
+     */
+    tick: number;
+    /**
+     * The first tick some player lacks a confirmed input for; `u64::MAX` once every tick up
+     * to the end of the match is confirmed.
+     */
+    confirmed: number;
+    /**
+     * The advances that skipped a tick so the other peers catch up.
+     */
+    skips: number;
+    /**
+     * Every other peer, by number.
+     */
+    peers: Array<PeerNetStats>;
 };
 
 type ProtocolError = {
@@ -1177,7 +1259,9 @@ type Reply = {
     ron: string;
 } | ({
     "type": "timeline";
-} & Timeline) | {
+} & Timeline) | ({
+    "type": "net_stats";
+} & NetStats) | {
     "type": "session";
     scene: string;
     /**
@@ -1275,7 +1359,7 @@ type ServerMessage = {
 /** The control protocol version this build speaks: a client and a host connect only when theirs are equal. */
 const PROTOCOL_VERSION = 5;
 /** The wire shape of `PROTOCOL_VERSION`, a hash of the protocol's types: a client and a host connect only when theirs are equal too. */
-const PROTOCOL_FINGERPRINT = "331edce60b7c4b4e";
+const PROTOCOL_FINGERPRINT = "1014a97387b22bdd";
 /** The `type` of the reply each command type gets when it succeeds. */
 type ReplyTypes = {
     apply_override: "done";
@@ -1297,6 +1381,7 @@ type ReplyTypes = {
     get_hash: "hash";
     get_hash_tree: "hash_tree";
     get_instances: "instances";
+    get_net_stats: "net_stats";
     get_render_frame: "render_frame";
     get_resources: "resources";
     get_schedule: "schedule";
@@ -1873,5 +1958,5 @@ function startWorkerGame(options: {
 }): WorkerGame;
 
 export { ControlClient, PROJECT_PROTOCOL_FINGERPRINT, PROJECT_PROTOCOL_VERSION, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION, ProjectClient, ProtocolFailure, RequestTracker, fakeTransport, fromBase64, handshake, parseFrame, postMessageTransport, startWorkerGame, tauriTransport, unwrap, webSocketTransport };
-export type { AssetId, AssetKind, AssetTexts, BranchId, BranchInfo, BuildEvent, Bytes, CameraItem, Cause, Claim, ClientEvent, ClientMessage, Color, Command, ComponentValue, ConsoleLevel, DebugDrawFrame, Diagnostic, Difference, DivergenceKind, DivergenceReport, Document, Entity, EntityDivergence, EntityHash, EntityRow, ErrorCode, Event, FailureCode, FieldSchema, FieldTarget, FileChange, FileEntry, Filter, GameInfo, GameOutput, Grid, Hash64, HashTree, InstanceInfo, Item, JsonValue, KeyboardPart, LayerInfo, LiveDevices, MatchEnd, MatchEndKind, MessageTransport, NamedHash, NamedSchema, NetPacket, OnlineSettings, OnlineState, Outcome, OutputStream, OverrideInfo, PathSegment, PauseReason, PluginBundle, PluginSource, Primitive, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo, ProjectOutcome, ProjectReply, ProjectReplyFor, ProjectReplyTypes, ProjectRequest, ProjectServerMessage, ProtocolError, ProtocolPeer, PushedFrames, RawGamepad, RecordedEvent, RenderFrame, RenderFramesEvent, Reply, ReplyFor, ReplyTypes, RootCause, RootCauseKind, Rot, ServerMessage, ServiceMode, SpriteItem, SyncPoint, SystemRow, TextureMeta, TileArea, TilemapItem, Timeline, Topic, TraceComparison, TypeSchema, VariantFields, VariantSchema, Vec2, WorkerCrash, WorkerGame };
+export type { AssetId, AssetKind, AssetTexts, BranchId, BranchInfo, BuildEvent, Bytes, CameraItem, Cause, Claim, ClientEvent, ClientMessage, Color, Command, ComponentValue, ConsoleLevel, DebugDrawFrame, Diagnostic, Difference, DivergenceKind, DivergenceReport, Document, DroppedPackets, Entity, EntityDivergence, EntityHash, EntityRow, ErrorCode, Event, FailureCode, FieldSchema, FieldTarget, FileChange, FileEntry, Filter, GameInfo, GameOutput, Grid, Hash64, HashTree, InstanceInfo, Item, JsonValue, KeyboardPart, LayerInfo, LiveDevices, MatchEnd, MatchEndKind, MessageTransport, NamedHash, NamedSchema, NetPacket, NetStats, OnlineSettings, OnlineState, Outcome, OutputStream, OverrideInfo, PathSegment, PauseReason, PeerNetStats, PluginBundle, PluginSource, Primitive, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo, ProjectOutcome, ProjectReply, ProjectReplyFor, ProjectReplyTypes, ProjectRequest, ProjectServerMessage, ProtocolError, ProtocolPeer, PushedFrames, RawGamepad, RecordedEvent, RenderFrame, RenderFramesEvent, Reply, ReplyFor, ReplyTypes, RootCause, RootCauseKind, Rot, ServerMessage, ServiceMode, SpriteItem, SyncPoint, SystemRow, TextureMeta, TileArea, TilemapItem, Timeline, Topic, TraceComparison, TypeSchema, VariantFields, VariantSchema, Vec2, WorkerCrash, WorkerGame };
 }

@@ -4,7 +4,7 @@
 export const PROTOCOL_VERSION = 5;
 
 /** The wire shape of `PROTOCOL_VERSION`, a hash of the protocol's types: a client and a host connect only when theirs are equal too. */
-export const PROTOCOL_FINGERPRINT = "331edce60b7c4b4e";
+export const PROTOCOL_FINGERPRINT = "1014a97387b22bdd";
 
 /** The `type` of the reply each command type gets when it succeeds. */
 export type ReplyTypes = {
@@ -27,6 +27,7 @@ export type ReplyTypes = {
   get_hash: "hash";
   get_hash_tree: "hash_tree";
   get_instances: "instances";
+  get_net_stats: "net_stats";
   get_render_frame: "render_frame";
   get_resources: "resources";
   get_schedule: "schedule";

@@ -13,11 +13,12 @@ use ludenea_app::replay::{Replay, ReplayOutcome, play_replay};
 use ludenea_app::{App, InputLog, Inputs, RawGamepad, Rng, Sim};
 use ludenea_control::host::RESIMULATION_BUDGET;
 use ludenea_control::{
-    Bytes, Command, Document, ErrorCode, Event, Hash64, Host, MatchEnd, MatchEndKind,
-    OnlineSettings, OnlineState, PauseReason, ProtocolError, Reply,
+    Bytes, Command, ConsoleLevel, Document, DroppedPackets, ErrorCode, Event, Hash64, Host,
+    MatchEnd, MatchEndKind, NetStats, OnlineSettings, OnlineState, PauseReason, ProtocolError,
+    Reply,
 };
 use ludenea_ecs::Runtime;
-use ludenea_net::{Conditioned, LinkConditions, MemoryNetwork, PeerId, Transport};
+use ludenea_net::{Conditioned, LinkConditions, MatchRules, MemoryNetwork, PeerId, Transport};
 use serde::{Deserialize, Serialize};
 
 /// The arena with a spawn point for each of four players.
@@ -1253,4 +1254,212 @@ fn frames_are_pushed_while_the_match_plays_and_at_its_end() {
     assert!(pushed.len() > 100, "{} pushes", pushed.len());
     // The landed state is drawn too.
     assert_eq!(pushed.last(), Some(&landed), "{pushed:?}");
+}
+
+fn net_stats(peer: &mut Peer) -> NetStats {
+    match peer.handle(Command::GetNetStats) {
+        Reply::NetStats(stats) => stats,
+        other => panic!("{other:?}"),
+    }
+}
+
+fn warnings(peer: &Peer, prefix: &str) -> Vec<String> {
+    peer.events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Console {
+                level: ConsoleLevel::Warning,
+                text,
+            } if text.starts_with(prefix) => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn net_stats_follow_the_match() {
+    let mut game = Match::arena(
+        &[0, 1],
+        1,
+        Some(LinkConditions {
+            loss_per_mille: 0,
+            ..lossy(5)
+        }),
+    );
+    game.run_until_all_run();
+    game.run_until("the match plays", |game| game.peers[0].host.tick() >= 240);
+    let input_delay = u64::from(MatchRules::default().input_delay);
+    let mut rollbacks = 0;
+    for (index, other) in [(0, 1), (1, 0)] {
+        let stats = net_stats(&mut game.peers[index]);
+        assert!(stats.tick >= 240 - 1, "{stats:?}");
+        assert!(stats.confirmed <= stats.tick + input_delay, "{stats:?}");
+        assert_eq!(stats.peers.len(), 1);
+        let peer = &stats.peers[0];
+        assert_eq!(peer.peer, other);
+        // Both directions wait 100 ms, plus the frames the exchange takes.
+        assert!(
+            (190_000..=260_000).contains(&peer.ping_micros),
+            "ping {}",
+            peer.ping_micros
+        );
+        assert!(peer.jitter_micros < 30_000, "jitter {}", peer.jitter_micros);
+        assert!(peer.deepest_rollback <= u64::from(MatchRules::default().rollback_window));
+        assert!(peer.rollbacks == 0 || peer.deepest_rollback > 0);
+        rollbacks += peer.rollbacks;
+    }
+    assert!(rollbacks > 0);
+
+    // The statistics outlive the match.
+    game.leave_at(1, 300);
+    game.run_until_all_end();
+    let after = net_stats(&mut game.peers[0]);
+    assert!(after.peers[0].ping_micros > 0);
+    assert!(after.tick >= 300);
+}
+
+#[test]
+fn a_silent_peer_is_announced_then_back() {
+    let mut game = Match::arena(&[0, 1], 1, None);
+    game.run_until_all_run();
+    game.run_until("the match plays", |game| game.peers[0].host.tick() >= 30);
+    game.peers[1].muted = true;
+    for _ in 0..FRAMES_PER_SECOND {
+        game.step();
+    }
+    game.peers[1].muted = false;
+    game.run_until("the peer is back", |game| {
+        game.peers[0]
+            .events
+            .iter()
+            .any(|event| matches!(event, Event::PeerBack { .. }))
+    });
+    let events: Vec<&Event> = game.peers[0]
+        .events
+        .iter()
+        .filter(|event| matches!(event, Event::PeerSilent { .. } | Event::PeerBack { .. }))
+        .collect();
+    match events.as_slice() {
+        [
+            Event::PeerSilent { peer: 1, for_ms },
+            Event::PeerBack { peer: 1 },
+        ] => {
+            assert!((750..=1_000).contains(for_ms), "{for_ms}");
+        }
+        other => panic!("{other:?}"),
+    }
+    // The other peer heard nothing wrong.
+    assert!(
+        !game.peers[1]
+            .events
+            .iter()
+            .any(|event| matches!(event, Event::PeerSilent { .. }))
+    );
+}
+
+#[test]
+fn dropped_packets_warn_once_per_reason() {
+    let mut game = Match::arena(&[0, 1], 1, None);
+    game.run_until_all_run();
+    let receive = |peer: &mut Peer, from: u8, packet: Vec<u8>| {
+        assert_eq!(
+            peer.handle(Command::NetReceive {
+                from,
+                packet: Bytes(packet)
+            }),
+            Reply::Done
+        );
+    };
+    // A packet of this network protocol, far longer than one may be.
+    let mut oversized = ludenea_net::NET_PROTOCOL_VERSION.to_le_bytes().to_vec();
+    oversized.resize(100_000, 0);
+    for _ in 0..3 {
+        receive(&mut game.peers[0], 1, oversized.clone());
+    }
+    receive(&mut game.peers[0], 1, vec![]);
+    for _ in 0..2 {
+        receive(&mut game.peers[0], 9, vec![1, 2, 3]);
+    }
+    game.step();
+    let warned = warnings(&game.peers[0], "dropped a packet from peer ");
+    assert_eq!(
+        warned.iter().filter(|w| w.contains("peer 9: ")).count(),
+        1,
+        "{warned:?}"
+    );
+    assert_eq!(
+        warned
+            .iter()
+            .filter(|w| w.starts_with("dropped a packet from peer 1: wire: "))
+            .count(),
+        warned.iter().filter(|w| w.contains("peer 1: ")).count(),
+        "{warned:?}"
+    );
+    let reasons: BTreeSet<&String> = warned.iter().collect();
+    assert_eq!(
+        reasons.len(),
+        warned.len(),
+        "a reason warns once: {warned:?}"
+    );
+    assert!(
+        warned.iter().any(|w| w.ends_with("peer 1: wire: TooLarge")),
+        "{warned:?}"
+    );
+
+    // Later ones are only counted.
+    for _ in 0..5 {
+        receive(&mut game.peers[0], 1, oversized.clone());
+    }
+    game.step();
+    assert_eq!(
+        warnings(&game.peers[0], "dropped a packet from peer ").len(),
+        warned.len()
+    );
+    let stats = net_stats(&mut game.peers[0]);
+    let too_large = stats
+        .peers
+        .iter()
+        .find(|peer| peer.peer == 1)
+        .unwrap()
+        .dropped
+        .iter()
+        .find(|dropped| dropped.reason == "wire: TooLarge")
+        .unwrap();
+    assert_eq!(too_large.count, 8);
+    let unknown = stats.peers.iter().find(|peer| peer.peer == 9).unwrap();
+    assert_eq!(
+        unknown.dropped,
+        vec![DroppedPackets {
+            reason: "unknown peer".into(),
+            count: 2
+        }]
+    );
+}
+
+#[test]
+fn net_stats_without_a_match_are_refused() {
+    let mut host = arena_host(SCENE);
+    let error = refusal(&mut host, Command::GetNetStats);
+    assert_eq!(error.code, ErrorCode::InvalidCommand);
+    assert_eq!(error.message, "no online match ran");
+}
+
+#[test]
+fn net_stats_are_accepted_while_a_match_runs_and_after_it() {
+    let mut game = Match::arena(&[0, 1], 1, None);
+    game.run_until_all_run();
+    net_stats(&mut game.peers[0]);
+    game.leave_at(1, 60);
+    game.run_until_all_end();
+    net_stats(&mut game.peers[0]);
+    // Loading a scene replaces the match's session.
+    let text = std::fs::read_to_string(SCENE).unwrap();
+    let assets = project_assets(Path::new(SCENE), None).unwrap();
+    game.peers[0].handle(Command::LoadScene {
+        scene: text,
+        assets: assets.texts.into_iter().collect(),
+        document: Document::Scene,
+    });
+    let error = refusal(&mut game.peers[0].host, Command::GetNetStats);
+    assert_eq!(error.message, "no online match ran");
 }
