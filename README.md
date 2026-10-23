@@ -358,8 +358,9 @@ an IPv4 address, or an IPv6 address by its /64 network. Behind a reverse proxy e
 shares the proxy's address, so they share its limits too. Only pages served from the address in
 the Host header may open rooms; a page served elsewhere needs `--allow-origin` with its
 origin (repeatable). The Host header itself is not checked, so a page proxied under any name
-(`wss://` through a reverse proxy) works: a page on a name rebound to the listener passes the
-origin check too, which gives it no more than anyone who reaches the listener has, and its
+(`wss://` through a reverse proxy) works. A page on a name rebound to the listener passes the
+origin check too: any remote site a person on the network opens can reach the listener
+through their browser, and open, join or disrupt rooms as anyone on the network can. Its
 guesses of room codes are rate-limited like everyone's.
 
 A stock `matchbox_server` works too: pass its root URL as `--signaling`
