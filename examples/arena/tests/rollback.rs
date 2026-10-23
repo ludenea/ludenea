@@ -287,6 +287,19 @@ fn play(peers: u8, threads: usize, seed: u64) -> (u64, u64) {
             .step_encoded(Some(&join_player_inputs(inputs)))
             .unwrap_or_else(|error| panic!("{case}: tick {tick}: {error}"));
         check(&offline, tick + 1);
+        if *tick == 0 {
+            // Every player acts: one fighter spawned at each player's spawn point.
+            let world = offline.world();
+            let fighters = world
+                .entities()
+                .filter(|entity| world.get::<arena::Fighter>(*entity).is_some())
+                .count();
+            assert_eq!(
+                fighters,
+                usize::from(peers),
+                "{case}: fighters after tick 0"
+            );
+        }
     }
     (rollbacks, misses)
 }
