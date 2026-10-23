@@ -16,9 +16,9 @@ pub mod wire;
 
 pub use execute::{ExecuteError, Executor};
 pub use session::{
-    DropReason, END_LINGER_MICROS, EndReason, HANDSHAKE_RESEND_MICROS, PeerStats, QUALITY_HISTORY,
-    QUALITY_INTERVAL_MICROS, Request, SYNC_MIN_REPORTS, Session, SessionError, SessionEvent,
-    SessionState, SessionStats, ViolationRule,
+    Advanced, DropReason, END_LINGER_MICROS, EndReason, HANDSHAKE_RESEND_MICROS, PeerStats,
+    QUALITY_HISTORY, QUALITY_INTERVAL_MICROS, Request, SYNC_MIN_REPORTS, Session, SessionError,
+    SessionEvent, SessionState, SessionStats, ViolationRule,
 };
 pub use settings::{
     MAX_ENGINE_BYTES, MAX_INPUT_BYTES, MAX_MESSAGES_PER_PACKET, MAX_PACKET_BYTES, MAX_PEERS,

@@ -1,8 +1,8 @@
 mod support;
 
 use ludenea_net::{
-    EndNotice, EndReason, LinkConditions, MatchRules, Message, Packet, PeerId, Request, Session,
-    SessionError, SessionEvent, SessionState, Timeouts, ViolationRule,
+    Advanced, EndNotice, EndReason, LinkConditions, MatchRules, Message, Packet, PeerId, Request,
+    Session, SessionError, SessionEvent, SessionState, Timeouts, ViolationRule,
 };
 use support::{Harness, handshake, identity, offline_hashes, sessions, sessions_of};
 
@@ -390,6 +390,177 @@ fn leave_at_tick_zero_stops_after_the_input_delay() {
         assert_eq!(session.state(), left(0, last_tick), "delay {delay}");
         assert_eq!(session.advance(NOW), Ok(Vec::new()), "delay {delay}");
         assert_eq!(session.advance(NOW), Err(SessionError::NotRunning));
+    }
+}
+
+#[test]
+fn last_advance_reports_the_end() {
+    // A leaver runs through its last tick, then waits for the others at it.
+    let mut session = handshake(sessions(2)).remove(0);
+    session.leave().unwrap();
+    for tick in 0..2 {
+        session.advance(NOW).unwrap();
+        assert_eq!(session.last_advance(), Some(Advanced::Ran { tick }));
+    }
+    for _ in 0..2 {
+        session.advance(NOW).unwrap();
+        assert_eq!(session.last_advance(), Some(Advanced::AtLastTick));
+    }
+    // The others catch up: the session ended, and the next advance lands it at the end tick.
+    session.outgoing(NOW);
+    deliver(&mut session, 1, vec![inputs(1, 0, &[0, 0]), ack(0, 2)]);
+    assert_eq!(session.state(), left(0, 1));
+    assert_eq!(session.advance(NOW), Ok(Vec::new()));
+    assert_eq!(session.last_advance(), Some(Advanced::Landed { tick: 2 }));
+    assert_eq!(session.next_tick(), 2);
+    assert_eq!(session.advance(NOW), Err(SessionError::NotRunning));
+    assert_eq!(session.last_advance(), Some(Advanced::Landed { tick: 2 }));
+
+    // A desync found by the exchange ends peers outside of an advance: the one advance after
+    // it lands each on its confirmed state.
+    let mut harness = Harness::new(sessions(2));
+    harness.flip_hash(PeerId(0), 90);
+    harness.lose_hash_reports(PeerId(0), 90);
+    let ended = |h: &Harness| {
+        h.peers()
+            .all(|peer| matches!(h.state(peer), SessionState::Ended(_)))
+    };
+    assert!(harness.run_until(10 * ONE_SECOND, ended));
+    let found_by_notice = harness.session(PeerId(1)).last_advance();
+    assert!(
+        matches!(found_by_notice, Some(Advanced::Landed { .. })),
+        "{found_by_notice:?}"
+    );
+
+    // A session that ended while connecting, or by `fail`, never lands.
+    let mut connecting = sessions(2).remove(0);
+    connecting.outgoing(NOW);
+    connecting.outgoing(NOW + Timeouts::default().disconnect_after_micros);
+    assert!(matches!(
+        connecting.state(),
+        SessionState::Ended(EndReason::Unreachable { .. })
+    ));
+    assert_eq!(connecting.advance(NOW), Err(SessionError::NotRunning));
+    assert_eq!(connecting.last_advance(), None);
+    let mut failed = handshake(sessions(2)).remove(0);
+    step(&mut failed, 1);
+    failed.fail(0).unwrap();
+    assert_eq!(failed.advance(NOW), Err(SessionError::NotRunning));
+    assert_eq!(failed.last_advance(), Some(Advanced::Ran { tick: 0 }));
+}
+
+#[test]
+fn end_reasons_name_the_peer_and_the_cause() {
+    let peer = PeerId(2);
+    let violation = |player, tick, rule| EndReason::Violation {
+        peer,
+        player,
+        tick,
+        rule,
+    };
+    let reasons = [
+        (
+            EndReason::Mismatch {
+                peer,
+                field: "tick_rate",
+                local: "60".into(),
+                remote: "30".into(),
+            },
+            "peer 2 plays another match: its tick_rate is 30, this peer's is 60",
+        ),
+        (
+            EndReason::Unreachable { peer },
+            "peer 2 never answered while the match was starting",
+        ),
+        (
+            violation(Some(1), Some(9), ViolationRule::NotOwner),
+            "peer 2 sent an input of a player it does not own (player 1, tick 9), so the match ended",
+        ),
+        (
+            violation(Some(1), None, ViolationRule::AckLagging),
+            "peer 2 fell too far behind acknowledging this peer's inputs (player 1), so the match ended",
+        ),
+        (
+            violation(None, Some(9), ViolationRule::HashLagging),
+            "peer 2 fell too far behind exchanging state hashes (tick 9), so the match ended",
+        ),
+        (
+            violation(None, None, ViolationRule::GoodbyeBehind),
+            "peer 2 left at a tick before one already confirmed, so the match ended",
+        ),
+        (
+            EndReason::Desync {
+                tick: 90,
+                found_by: PeerId(0),
+                peer,
+                local: 0xab,
+                remote: u64::MAX,
+            },
+            "the game states diverged at tick 90: peer 0 has 00000000000000ab, peer 2 has ffffffffffffffff",
+        ),
+        (
+            EndReason::Lost { peer },
+            "peer 2 stopped answering, so the match ended",
+        ),
+        (
+            EndReason::Left {
+                peer,
+                last_tick: 41,
+            },
+            "peer 2 left; the match ended at tick 41",
+        ),
+        (
+            EndReason::LocalFailure { peer, tick: 7 },
+            "the game of peer 2 failed at tick 7, so the match ended",
+        ),
+    ];
+    for (reason, message) in reasons {
+        assert_eq!(reason.to_string(), message);
+    }
+    let rules = [
+        (
+            ViolationRule::NotOwner,
+            "sent an input of a player it does not own",
+        ),
+        (
+            ViolationRule::ConflictingInput,
+            "sent two different inputs for one tick",
+        ),
+        (
+            ViolationRule::InvalidInput,
+            "sent an input the game cannot read",
+        ),
+        (
+            ViolationRule::BeyondHorizon,
+            "sent an input past the furthest tick it can have reached",
+        ),
+        (
+            ViolationRule::AckNeverSent,
+            "acknowledged an input or a hash this peer never sent",
+        ),
+        (
+            ViolationRule::AckLagging,
+            "fell too far behind acknowledging this peer's inputs",
+        ),
+        (
+            ViolationRule::HashBeyondHorizon,
+            "reported a state hash of a tick it cannot have confirmed",
+        ),
+        (
+            ViolationRule::HashLagging,
+            "fell too far behind exchanging state hashes",
+        ),
+        (
+            ViolationRule::ImplausibleEnd,
+            "announced an ending no honest peer can announce",
+        ),
+        (
+            ViolationRule::GoodbyeBehind,
+            "left at a tick before one already confirmed",
+        ),
+    ];
+    for (rule, phrase) in rules {
+        assert_eq!(rule.to_string(), phrase);
     }
 }
 

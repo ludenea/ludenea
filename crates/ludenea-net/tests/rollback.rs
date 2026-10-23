@@ -2,8 +2,8 @@ mod support;
 
 use ludenea_app::PlayerInputSpec;
 use ludenea_net::{
-    DropReason, LinkConditions, MAX_INPUT_BYTES, MAX_PACKET_BYTES, MatchRules, Message, Packet,
-    PeerId, Request, Session, SessionError, SessionEvent, SessionState,
+    Advanced, DropReason, LinkConditions, MAX_INPUT_BYTES, MAX_PACKET_BYTES, MatchRules, Message,
+    Packet, PeerId, Request, Session, SessionError, SessionEvent, SessionState,
 };
 use support::{
     Harness, handshake, identity, model_byte, offline_hashes, sessions, sessions_of, settings,
@@ -272,6 +272,39 @@ fn repredicted_tick_is_compared_with_its_new_prediction() {
     assert_eq!(stats.rollbacks, 2);
     assert_eq!(stats.deepest_rollback, 3);
     assert_eq!(stats.prediction_misses, 2);
+}
+
+#[test]
+fn last_advance_reports_ran_and_stalled() {
+    let mut session = peer_zero();
+    assert_eq!(session.last_advance(), None);
+    let window = u64::from(MatchRules::default().rollback_window);
+    for tick in 0..window {
+        step(&mut session, 1);
+        assert_eq!(session.last_advance(), Some(Advanced::Ran { tick }));
+    }
+    // The remote is silent: the window is full.
+    session.advance(NOW).unwrap();
+    assert_eq!(session.last_advance(), Some(Advanced::Stalled));
+    // A refused call changes nothing.
+    assert_eq!(session.advance(NOW), Ok(vec![]));
+    assert_eq!(session.last_advance(), Some(Advanced::Stalled));
+    remote_inputs(&mut session, 0, &[0; 11]);
+    step(&mut session, 1);
+    assert_eq!(session.last_advance(), Some(Advanced::Ran { tick: window }));
+}
+
+#[test]
+fn confirmed_and_next_ticks_follow_the_session() {
+    let mut session = peer_zero();
+    assert_eq!((session.confirmed_tick(), session.next_tick()), (0, 0));
+    step(&mut session, 1);
+    step(&mut session, 1);
+    assert_eq!((session.confirmed_tick(), session.next_tick()), (0, 2));
+    remote_inputs(&mut session, 0, &[0, 0, 0]);
+    assert_eq!(session.confirmed_tick(), 3);
+    step(&mut session, 1);
+    assert_eq!((session.confirmed_tick(), session.next_tick()), (3, 3));
 }
 
 #[test]

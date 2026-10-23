@@ -47,6 +47,7 @@
 //! [`Session::fail`] ends the match for every peer with [`EndReason::LocalFailure`].
 
 use std::collections::{BTreeMap, VecDeque};
+use std::fmt;
 
 use ludenea_app::PlayerInputSpec;
 
@@ -176,6 +177,94 @@ pub enum ViolationRule {
     /// A goodbye whose last tick is below the last tick this session confirmed: the sender
     /// sent an input past it, and an honest leaver's last tick is the last input it has.
     GoodbyeBehind,
+}
+
+impl fmt::Display for ViolationRule {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::NotOwner => "sent an input of a player it does not own",
+            Self::ConflictingInput => "sent two different inputs for one tick",
+            Self::InvalidInput => "sent an input the game cannot read",
+            Self::BeyondHorizon => "sent an input past the furthest tick it can have reached",
+            Self::AckNeverSent => "acknowledged an input or a hash this peer never sent",
+            Self::AckLagging => "fell too far behind acknowledging this peer's inputs",
+            Self::HashBeyondHorizon => "reported a state hash of a tick it cannot have confirmed",
+            Self::HashLagging => "fell too far behind exchanging state hashes",
+            Self::ImplausibleEnd => "announced an ending no honest peer can announce",
+            Self::GoodbyeBehind => "left at a tick before one already confirmed",
+        })
+    }
+}
+
+impl fmt::Display for EndReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Mismatch {
+                peer,
+                field,
+                local,
+                remote,
+            } => write!(
+                f,
+                "{peer} plays another match: its {field} is {remote}, this peer's is {local}"
+            ),
+            Self::Unreachable { peer } => {
+                write!(f, "{peer} never answered while the match was starting")
+            }
+            Self::Violation {
+                peer,
+                player,
+                tick,
+                rule,
+            } => {
+                write!(f, "{peer} {rule}")?;
+                match (player, tick) {
+                    (Some(player), Some(tick)) => write!(f, " (player {player}, tick {tick})")?,
+                    (Some(player), None) => write!(f, " (player {player})")?,
+                    (None, Some(tick)) => write!(f, " (tick {tick})")?,
+                    (None, None) => {}
+                }
+                f.write_str(", so the match ended")
+            }
+            Self::Desync {
+                tick,
+                found_by,
+                peer,
+                local,
+                remote,
+            } => write!(
+                f,
+                "the game states diverged at tick {tick}: {found_by} has {local:016x}, {peer} has {remote:016x}"
+            ),
+            Self::Lost { peer } => write!(f, "{peer} stopped answering, so the match ended"),
+            Self::Left { peer, last_tick } => {
+                write!(f, "{peer} left; the match ended at tick {last_tick}")
+            }
+            Self::LocalFailure { peer, tick } => {
+                write!(
+                    f,
+                    "the game of {peer} failed at tick {tick}, so the match ended"
+                )
+            }
+        }
+    }
+}
+
+/// What the latest [`Session::advance`] that returned `Ok` did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Advanced {
+    /// Its new `Advance` stepped `tick`, so the simulation then stands at `tick + 1`.
+    Ran { tick: u64 },
+    /// A stall at the window: the caller keeps the time it owes, the stalled tick included.
+    Stalled,
+    /// A time-sync skip: the time is spent.
+    Skipped,
+    /// A match ending on purpose ran every tick through its agreed last tick and waits for the
+    /// other peers.
+    AtLastTick,
+    /// The call landed an ended session at `tick`. A call that ran a tick and then landed
+    /// reports this.
+    Landed { tick: u64 },
 }
 
 /// Why a received packet, or one message of it, was dropped. Ordered, so the counts of
@@ -496,6 +585,8 @@ pub struct Session {
     land_due: bool,
     /// The latest time the caller passed, `None` before the first call.
     now_micros: Option<u64>,
+    /// The outcome of the latest `advance` that returned `Ok`.
+    last_advance: Option<Advanced>,
     events: Vec<SessionEvent>,
     stats: SessionStats,
 }
@@ -607,6 +698,7 @@ impl Session {
             waiting_micros: None,
             land_due: false,
             now_micros: None,
+            last_advance: None,
             events: Vec::new(),
             stats,
         })
@@ -615,6 +707,16 @@ impl Session {
     /// The settings the session was built with.
     pub fn settings(&self) -> &SessionSettings {
         &self.settings
+    }
+
+    /// What the latest [`Session::advance`] that returned `Ok` did; `None` before any.
+    pub fn last_advance(&self) -> Option<Advanced> {
+        self.last_advance
+    }
+
+    /// The next tick the session advances: every tick below it has run.
+    pub fn next_tick(&self) -> u64 {
+        self.tick
     }
 
     /// Where the session is in the life of the match.
@@ -975,7 +1077,7 @@ impl Session {
     pub fn advance(&mut self, now_micros: u64) -> Result<Vec<Request>, SessionError> {
         let now = self.observe(now_micros);
         if self.land_due {
-            return Ok(self.land());
+            return Ok(self.land_reported());
         }
         if !self.active() {
             return Err(SessionError::NotRunning);
@@ -1017,17 +1119,23 @@ impl Session {
             self.skipping = None;
             self.forget_reports();
         }
-        if at_end {
+        let outcome = if at_end {
             // The match runs no tick past the agreed end.
+            Advanced::AtLastTick
         } else if stall {
             self.count_stall(confirmed);
+            Advanced::Stalled
         } else if let Some((toward, left)) = planned {
             self.skipping = (left > 1).then(|| (toward, left - 1));
             self.stats.skips = self.stats.skips.saturating_add(1);
             self.forget_reports();
+            Advanced::Skipped
         } else {
+            let tick = self.tick;
             self.advance_tick(&mut requests, takes_input);
-        }
+            Advanced::Ran { tick }
+        };
+        self.last_advance = Some(outcome);
         for remote in &mut self.remotes {
             remote.inputs_due = true;
         }
@@ -1041,7 +1149,7 @@ impl Session {
                 .map(|tick| Request::Release { tick }),
         );
         if self.land_due {
-            requests.extend(self.land());
+            requests.extend(self.land_reported());
         }
         Ok(requests)
     }
@@ -1224,7 +1332,7 @@ impl Session {
     /// The first tick some player lacks a confirmed input for; `u64::MAX` once every player's
     /// last tick is confirmed. At most the tick after the agreed last tick: no tick past it is
     /// confirmed.
-    fn confirmed_tick(&self) -> u64 {
+    pub fn confirmed_tick(&self) -> u64 {
         let confirmed = self
             .queues
             .iter()
@@ -2289,6 +2397,13 @@ impl Session {
             requests.push(Request::Advance { tick, inputs });
         }
         self.tick = end;
+        requests
+    }
+
+    /// [`Session::land`], recording the landing as the latest advance.
+    fn land_reported(&mut self) -> Vec<Request> {
+        let requests = self.land();
+        self.last_advance = Some(Advanced::Landed { tick: self.tick });
         requests
     }
 

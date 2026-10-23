@@ -293,6 +293,18 @@ fn faster_peer_slows_down() {
 }
 
 #[test]
+fn skips_are_reported_as_skipped() {
+    let mut harness = Harness::conditioned(sessions(2), latency(50_000, 10_000, 3));
+    harness.set_frame_micros(PeerId(0), FRAME_MICROS * 98 / 100);
+    run_drifting(&mut harness);
+    for peer in harness.peers() {
+        let skips = harness.session(peer).stats().skips;
+        assert_eq!(harness.skipped(peer), skips, "{peer}");
+    }
+    assert!(harness.skipped(PeerId(0)) > 0);
+}
+
+#[test]
 fn three_peers_converge() {
     let mut harness = Harness::conditioned(sessions(3), latency(30_000, 10_000, 5));
     harness.set_frame_micros(PeerId(0), FRAME_MICROS * 98 / 100);

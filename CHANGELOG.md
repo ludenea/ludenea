@@ -801,6 +801,17 @@ hash, those of the golden trace and replays included.
 - New: `ludenea_control::protocol::unreadable_hello`, which reads the protocol version of a
   hello of any shape, so a text transport refuses a hello from an older protocol version
   as a version mismatch. The project service uses it instead of its own copy.
+- New: `ludenea_net::Session::last_advance` returns an `Advanced` telling what the latest
+  `advance` that returned `Ok` did: `Ran { tick }` (it stepped `tick`), `Stalled` (the
+  caller keeps the time it owes), `Skipped` (a time-sync skip, the time is spent),
+  `AtLastTick` (a match ending on purpose ran every tick through its agreed last tick and
+  waits for the other peers) or `Landed { tick }` (the call landed an ended session, also
+  when it ran a tick first). It is `None` before any. `Session::confirmed_tick` (the first
+  tick some player lacks a confirmed input for) and `Session::next_tick` (the next tick the
+  session advances) are now public.
+- New: `ludenea_net::EndReason` and `ViolationRule` implement `Display`, naming the peer and
+  the cause, such as "peer 1 sent two different inputs for one tick (player 1, tick 40), so
+  the match ended" or "the game states diverged at tick 90: peer 0 has ..., peer 1 has ...".
 
 ### Control protocol
 

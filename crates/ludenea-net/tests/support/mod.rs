@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ludenea_app::{PlayerInputSpec, SimError};
 use ludenea_net::{
-    Conditioned, LinkConditions, MAX_MESSAGES_PER_PACKET, MAX_PACKET_BYTES, MAX_PLAYERS,
+    Advanced, Conditioned, LinkConditions, MAX_MESSAGES_PER_PACKET, MAX_PACKET_BYTES, MAX_PLAYERS,
     MatchIdentity, MatchRules, MemoryNetwork, Message, Packet, PeerId, Request, Session,
     SessionError, SessionEvent, SessionSettings, SessionState, Timeouts, Transport,
 };
@@ -326,6 +326,8 @@ struct Peer {
     default_inputs: bool,
     /// The session ended and its simulation landed on the confirmed state.
     landed: bool,
+    /// The frames whose advance reported [`Advanced::Skipped`].
+    skipped: u64,
 }
 
 impl Peer {
@@ -348,6 +350,7 @@ impl Peer {
             .session
             .advance(now)
             .expect("a running session advances");
+        self.skipped += u64::from(self.session.last_advance() == Some(Advanced::Skipped));
         self.model.execute_for(&mut self.session, &requests);
         self.frames += 1;
         self.landed = matches!(self.session.state(), SessionState::Ended(_));
@@ -425,6 +428,7 @@ impl Harness {
                 goodbye: None,
                 default_inputs: false,
                 landed: false,
+                skipped: 0,
             })
             .collect();
         Self {
@@ -609,6 +613,11 @@ impl Harness {
     /// Every event `peer` emitted so far, in order.
     pub fn events(&self, peer: PeerId) -> &[SessionEvent] {
         &self.peers[usize::from(peer.0)].events
+    }
+
+    /// How many frames of `peer` the session answered with [`Advanced::Skipped`].
+    pub fn skipped(&self, peer: PeerId) -> u64 {
+        self.peers[usize::from(peer.0)].skipped
     }
 
     /// The model game of `peer`.
