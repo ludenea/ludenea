@@ -52,6 +52,14 @@ mod link {
         }
     }
 
+    /// The longest message each [`Channel`] carries.
+    fn limit(channel: Channel) -> usize {
+        match channel {
+            Channel::Match => MAX_PACKET_BYTES,
+            Channel::Room => MAX_ROOM_MESSAGE_BYTES,
+        }
+    }
+
     fn link_id(peer: PeerId) -> LinkId {
         LinkId(peer.0.into_bytes())
     }
@@ -76,6 +84,8 @@ mod link {
         closed: bool,
         /// What arrived on each socket channel and was not read yet.
         inboxes: [VecDeque<(LinkId, Vec<u8>)>; 2],
+        /// Messages dropped on arrival for exceeding their channel's limit.
+        oversized: u64,
     }
 
     impl WebRtcLink {
@@ -103,7 +113,16 @@ mod link {
                 connected: BTreeSet::new(),
                 closed: false,
                 inboxes: [VecDeque::new(), VecDeque::new()],
+                oversized: 0,
             }
+        }
+
+        /// How many messages arrived longer than their channel's limit
+        /// ([`MAX_PACKET_BYTES`] for [`Channel::Match`], [`MAX_ROOM_MESSAGE_BYTES`] for
+        /// [`Channel::Room`]). [`Link::receive`] drops them: only a peer that does not run
+        /// Ludenea's link sends one.
+        pub fn oversized(&self) -> u64 {
+            self.oversized
         }
 
         /// Why the link is gone, if it is: the loop ended, or no id came in time.
@@ -179,10 +198,7 @@ mod link {
             if !self.connected.contains(&to) {
                 return Err(LinkError::UnknownLink { link: to });
             }
-            let max = match channel {
-                Channel::Room => MAX_ROOM_MESSAGE_BYTES,
-                Channel::Match => MAX_PACKET_BYTES,
-            };
+            let max = limit(channel);
             if bytes.len() > max {
                 return Err(LinkError::TooLarge {
                     len: bytes.len(),
@@ -198,16 +214,18 @@ mod link {
 
         fn receive(&mut self, channel: Channel) -> Option<(LinkId, Vec<u8>)> {
             let index = index(channel);
+            let max = limit(channel);
             let inbox = &mut self.inboxes[index];
             if inbox.is_empty()
                 && let Ok(arrived) = self.socket.get_channel_mut(index)
             {
-                inbox.extend(
-                    arrived
-                        .receive()
-                        .into_iter()
-                        .map(|(peer, packet)| (link_id(peer), packet.into_vec())),
-                );
+                for (peer, packet) in arrived.receive() {
+                    if packet.len() > max {
+                        self.oversized += 1;
+                    } else {
+                        inbox.push_back((link_id(peer), packet.into_vec()));
+                    }
+                }
             }
             inbox.pop_front()
         }

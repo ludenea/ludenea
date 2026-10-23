@@ -10,8 +10,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use ludenea_net::{
-    Channel, Link, LinkConditions, LinkError, LinkEvent, LinkId, OnlinePeer, OnlineStatus,
-    RoomCode, RoomRole,
+    Channel, Link, LinkConditions, LinkError, LinkEvent, LinkId, MAX_PACKET_BYTES,
+    MAX_ROOM_MESSAGE_BYTES, OnlinePeer, OnlineStatus, RoomCode, RoomRole,
 };
 use ludenea_signal::{Options, serve};
 use ludenea_webrtc::{LinkSettings, WebRtcLink};
@@ -652,4 +652,64 @@ fn a_silent_server_closes_after_10_s() {
         "closed after {waited:?}"
     );
     drop(silent);
+}
+
+#[test]
+fn an_oversized_message_is_dropped_and_counted() {
+    let listener = Listener::start();
+    let room = code("QRSTUV");
+    let mut peers = vec![hosted(&listener, &room, 2)];
+    let host = peers[0].id();
+    // A peer that does not run Ludenea's link, so nothing bounds what it sends.
+    let (mut socket, message_loop) =
+        matchbox_socket::WebRtcSocketBuilder::new(format!("{}/{room}", listener.signaling()))
+            .ice_server(matchbox_socket::RtcIceServerConfig {
+                urls: Vec::new(),
+                username: None,
+                credential: None,
+            })
+            .add_channel(matchbox_socket::ChannelConfig::unreliable())
+            .add_channel(matchbox_socket::ChannelConfig::reliable())
+            .build();
+    let raw_loop = std::thread::spawn(move || futures::executor::block_on(message_loop));
+    let host_peer = matchbox_socket::PeerId(uuid::Uuid::from_bytes(host.0));
+    let connected = wait_until(&mut peers, |_| {
+        socket.update_peers();
+        socket.connected_peers().any(|peer| peer == host_peer)
+    });
+    assert!(connected, "the raw peer did not connect within 30 s");
+
+    let sends = [
+        (1, vec![1; MAX_ROOM_MESSAGE_BYTES + 1]),
+        (1, vec![2; MAX_ROOM_MESSAGE_BYTES]),
+        (0, vec![3; MAX_PACKET_BYTES + 1]),
+        (0, vec![4; MAX_PACKET_BYTES]),
+    ];
+    for (channel, bytes) in sends {
+        socket
+            .channel_mut(channel)
+            .send(bytes.into_boxed_slice(), host_peer);
+    }
+    let mut room_messages = Vec::new();
+    let mut match_packets = Vec::new();
+    let done = wait_until(&mut peers, |peers| {
+        while let Some((_, message)) = peers[0].link.receive(Channel::Room) {
+            room_messages.push(message[0]);
+        }
+        while let Some((_, packet)) = peers[0].link.receive(Channel::Match) {
+            match_packets.push(packet[0]);
+        }
+        peers[0].link.oversized() == 2 && room_messages.len() == 1 && match_packets.len() == 1
+    });
+    assert!(
+        done,
+        "within 30 s, {} oversized, room messages {room_messages:?}, match packets \
+         {match_packets:?}",
+        peers[0].link.oversized()
+    );
+    assert_eq!((room_messages, match_packets), (vec![2], vec![4]));
+
+    socket.close();
+    let ended = raw_loop.join().expect("the raw peer's loop does not panic");
+    assert!(ended.is_ok(), "{ended:?}");
 }

@@ -50,7 +50,9 @@ hash, those of the golden trace and replays included.
   `ludenea-webrtc`, in the browser as a task of the page; on `wasm32-wasip1` the crate builds
   its settings alone. `WebRtcLink::open(LinkSettings)` joins a room: channel 0, unreliable
   and unordered, carries `Channel::Match`, and channel 1, reliable and ordered,
-  `Channel::Room`. A send to a peer not connected is refused with `LinkError::UnknownLink`.
+  `Channel::Room`. A send to a peer not connected is refused with `LinkError::UnknownLink`,
+  and a message that arrives longer than its channel's limit is dropped and counted
+  (`WebRtcLink::oversized`).
   `poll` reports `Assigned`, then `Connected` and `Disconnected`, and `Closed` with the
   reason when the signaling server is lost (after a `Disconnected` for every connected
   peer), refuses the room (natively the reason names the cause: no room, a room in use or
