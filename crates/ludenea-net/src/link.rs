@@ -203,6 +203,9 @@ impl MemoryMesh {
 
 /// One member of a [`MemoryMesh`]. Delivery is immediate and in send order. Dropping it
 /// disconnects it from its peers.
+///
+/// Messages queued before a disconnect stay readable afterwards. Its inboxes are unbounded:
+/// it is a test helper, not a network.
 pub struct MemoryLink {
     id: LinkId,
     mesh: Rc<RefCell<Mesh>>,
@@ -269,6 +272,10 @@ impl Drop for MemoryLink {
 }
 
 /// The match channel of a [`Link`] as a [`Transport`]: `PeerId(i)` is `links[i]`.
+///
+/// A packet to a peer whose link is not connected, or to a closed link, is lost and reported as
+/// [`TransportError::Unreachable`]. The owner learns that the link closed through
+/// [`LinkEvent::Closed`] from `link_mut().poll()`; the transport never polls.
 pub struct LinkTransport<L: Link> {
     link: L,
     links: Vec<LinkId>,
@@ -277,6 +284,9 @@ pub struct LinkTransport<L: Link> {
 
 impl<L: Link> LinkTransport<L> {
     /// Wraps `link`; the peers of the match are `links`, in peer order.
+    ///
+    /// `links` must be distinct, as a validated layout gives: with a duplicate, packets are
+    /// attributed to the lowest peer holding that link.
     pub fn new(link: L, links: Vec<LinkId>) -> Self {
         Self {
             link,

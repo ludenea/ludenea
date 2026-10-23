@@ -3,10 +3,6 @@ use ludenea_net::{
     MAX_ROOM_MESSAGE_BYTES, MemoryMesh, PeerId, Transport, TransportError,
 };
 
-fn drain_events(link: &mut impl Link) -> Vec<LinkEvent> {
-    link.poll()
-}
-
 fn drain(link: &mut impl Link, channel: Channel) -> Vec<(LinkId, Vec<u8>)> {
     std::iter::from_fn(|| link.receive(channel)).collect()
 }
@@ -17,9 +13,9 @@ fn mesh_assigns_then_connects_every_member() {
     let mut a = mesh.join();
     let mut b = mesh.join();
     let mut c = mesh.join();
-    let events_a = drain_events(&mut a);
-    let events_b = drain_events(&mut b);
-    let events_c = drain_events(&mut c);
+    let events_a = a.poll();
+    let events_b = b.poll();
+    let events_c = c.poll();
     let LinkEvent::Assigned(id_a) = events_a[0] else {
         panic!("first event is the assignment: {events_a:?}");
     };
@@ -265,4 +261,16 @@ fn link_transport_reports_unreachable_peers() {
         ta.send(PeerId(1), vec![1], 0),
         Err(TransportError::Unreachable { peer: PeerId(1) })
     );
+}
+
+#[test]
+fn link_transport_works_over_a_boxed_link() {
+    let (a, b, _c, [id_a, id_b, _]) = three_links();
+    let boxed_a: Box<dyn Link> = Box::new(a);
+    let mut ta = LinkTransport::new(boxed_a, vec![id_a, id_b]);
+    let mut tb = LinkTransport::new(Box::new(b), vec![id_a, id_b]);
+    ta.send(PeerId(1), vec![8], 0).unwrap();
+    assert_eq!(tb.receive(0), Some((PeerId(0), vec![8])));
+    ta.link_mut().send(Channel::Room, id_b, vec![1]).unwrap();
+    assert_eq!(tb.link_mut().receive(Channel::Room), Some((id_a, vec![1])));
 }
