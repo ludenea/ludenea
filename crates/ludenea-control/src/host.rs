@@ -355,7 +355,11 @@ impl Host {
     /// session loads or a later recover succeeds.
     fn recover(&mut self, mut panic: Box<GamePanic>) -> ProtocolError {
         panic.tick = self.simulation.tick();
-        self.fail_match_on_panic();
+        // The match ends first, so the session the recovery reloads is parked at tick 0.
+        let online = self.online_active();
+        if online {
+            self.fail_latest_tick();
+        }
         self.compare = None;
         self.ghost_reported = None;
         self.divergence = None;
@@ -377,6 +381,11 @@ impl Host {
             tick: panic.tick,
             message: panic.detail(),
         });
+        // The confirmed inputs become the session's after the recovery, which would end
+        // their resimulation; an inconsistency it found stays.
+        if online {
+            self.finish_match();
+        }
         self.report_timeline();
         ProtocolError::new(ErrorCode::SystemPanicked, message)
     }
@@ -1831,7 +1840,12 @@ impl Host {
         );
         if going && next > 0 {
             // Running or leaving, and the tick ran: the session takes it.
-            let _ = online.session.fail(next - 1);
+            if let Err(error) = online.session.fail(next - 1) {
+                self.console(
+                    ConsoleLevel::Error,
+                    format!("the online match cannot fail at tick {}: {error}", next - 1),
+                );
+            }
         }
         self.drop_unless_ended();
     }
@@ -1870,16 +1884,6 @@ impl Host {
         self.reset_claims();
         if let Err(error) = adopted {
             self.fail_unattended(error);
-        }
-    }
-
-    /// When the game panicked where the host caught it while an online match is not
-    /// finished: the match fails at the latest tick it ran, or is dropped here while it was
-    /// starting, and the host finishes it before it recovers.
-    fn fail_match_on_panic(&mut self) {
-        if self.online_active() {
-            self.fail_latest_tick();
-            self.finish_match();
         }
     }
 

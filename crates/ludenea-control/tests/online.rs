@@ -971,3 +971,111 @@ fn live_input_after_the_end_uses_the_full_claims() {
         ]
     );
 }
+
+thread_local! {
+    /// The next serialization of a `Bomb` on this thread panics.
+    static ARMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A component whose serialization panics once armed, as a type's own code may: the host
+/// catches it where nothing reports it more precisely.
+#[derive(Clone, ludenea_ecs::Component, Deserialize)]
+struct Bomb(u32);
+
+impl Serialize for Bomb {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        assert!(
+            !ARMED.with(|armed| armed.replace(false)),
+            "the bomb went off"
+        );
+        serializer.serialize_newtype_struct("Bomb", &self.0)
+    }
+}
+
+fn bomb_app() -> App {
+    let mut app = App::new();
+    app.input::<u8>()
+        .input_mapping(|_, _| 1_u8)
+        .component::<Bomb>();
+    app
+}
+
+fn bomb_host(_: u8) -> Host {
+    let mut host = Host::new(bomb_app).unwrap();
+    host.handle(Command::LoadScene {
+        scene: r#"Scene(version: 1, resources: {}, entities: [{ "online::Bomb": (3) }])"#.into(),
+        assets: Vec::new(),
+        document: Document::Scene,
+    })
+    .unwrap();
+    host
+}
+
+/// Has peer 0 read its bomb, armed: the host catches the panic.
+fn set_off(game: &mut Match) {
+    let host = &mut game.peers[0].host;
+    let Ok(Reply::Entities { rows, .. }) = host.handle(Command::QueryEntities {
+        filter: String::new(),
+        offset: 0,
+        limit: 1,
+    }) else {
+        panic!("entities");
+    };
+    ARMED.with(|armed| armed.set(true));
+    let error = host
+        .handle(Command::GetEntity {
+            entity: rows[0].entity,
+        })
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::SystemPanicked, "{}", error.message);
+}
+
+#[test]
+fn a_panic_the_host_catches_while_starting_drops_the_match() {
+    let mut game = Match::of(&[0, 1], None, bomb_host);
+    set_off(&mut game);
+    game.step();
+    let end = game.peers[0].end().unwrap();
+    assert_eq!(end.kind, MatchEndKind::LocalFailure);
+    assert_eq!(
+        end.message,
+        "the game of peer 0 failed while the match was starting"
+    );
+    assert_eq!((end.peer, end.tick), (Some(0), None));
+}
+
+#[test]
+fn a_panic_the_host_catches_while_running_ends_both_hosts() {
+    let mut game = Match::of(&[0, 1], None, bomb_host);
+    game.run_until_all_run();
+    game.run_until("some ticks", |game| game.peers[0].host.tick() >= 40);
+    let last = game.peers[0].host.tick() - 1;
+    set_off(&mut game);
+    // The host finished the match after it recovered: the confirmed inputs resimulate.
+    assert!(timeline_resimulating(&mut game.peers[0].host));
+    game.run_until_all_end();
+
+    let end = game.peers[0].end().unwrap();
+    assert_eq!(end.kind, MatchEndKind::LocalFailure, "{end:?}");
+    assert_eq!((end.peer, end.tick), (Some(0), Some(last)));
+    let other = game.peers[1].end().unwrap();
+    assert_eq!(other.kind, MatchEndKind::LocalFailure, "{other:?}");
+    assert_eq!((other.peer, other.tick), (Some(0), Some(last)));
+
+    // The confirmed inputs resimulated to their end.
+    let host = &mut game.peers[0].host;
+    resimulate(host);
+    let Ok(Reply::Session { inputs, .. }) = host.handle(Command::ExportSession) else {
+        panic!("a session");
+    };
+    let confirmed = InputLog::decode(&inputs.0).unwrap().ticks.len() as u64;
+    assert!(confirmed > 0);
+    assert_eq!(host.tick(), confirmed);
+
+    host.handle(Command::LoadScene {
+        scene: r#"Scene(version: 1, resources: {}, entities: [])"#.into(),
+        assets: Vec::new(),
+        document: Document::Scene,
+    })
+    .unwrap();
+}
