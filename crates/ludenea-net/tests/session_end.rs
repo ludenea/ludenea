@@ -512,7 +512,9 @@ fn leaver_heard_out_is_not_silent() {
         vec![inputs(2, 0, &[0; 5]), Message::Goodbye { last_tick: 5 }],
     );
     let mut now = NOW;
-    while session.state() == SessionState::Running {
+    while session.state() == SessionState::Running
+        && now <= NOW + 2 * timeouts.disconnect_after_micros
+    {
         session.receive(PeerId(1), &peer_one.encode(), now);
         session.outgoing(now);
         now += 100_000;
