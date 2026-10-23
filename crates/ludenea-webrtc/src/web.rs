@@ -4,8 +4,16 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
 use matchbox_socket::{Error, MessageLoopFuture};
+use wasm_bindgen::prelude::wasm_bindgen;
 
 use crate::settings::LinkSettings;
+
+#[wasm_bindgen]
+extern "C" {
+    /// `performance.now()`: milliseconds on the page's or worker's monotonic clock.
+    #[wasm_bindgen(js_namespace = performance, js_name = now)]
+    fn performance_now() -> f64;
+}
 
 /// When the link opened, to bound the wait for its id. `std::time::Instant` is not available
 /// in the browser.
@@ -13,12 +21,12 @@ pub(crate) struct Clock(f64);
 
 impl Clock {
     pub(crate) fn start() -> Clock {
-        Clock(js_sys::Date::now())
+        Clock(performance_now())
     }
 
     pub(crate) fn elapsed(&self) -> Duration {
-        // A clock set back gives a negative difference, which the cast makes 0.
-        Duration::from_millis((js_sys::Date::now() - self.0) as u64)
+        // Monotonic, so the difference is never negative.
+        Duration::from_millis((performance_now() - self.0) as u64)
     }
 }
 

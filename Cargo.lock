@@ -2974,7 +2974,6 @@ version = "0.1.0"
 dependencies = [
  "async-tungstenite",
  "futures",
- "js-sys",
  "ludenea-net",
  "ludenea-signal",
  "matchbox_protocol",
@@ -2984,6 +2983,7 @@ dependencies = [
  "tokio",
  "tungstenite 0.29.0",
  "uuid",
+ "wasm-bindgen",
  "wasm-bindgen-futures",
 ]
 

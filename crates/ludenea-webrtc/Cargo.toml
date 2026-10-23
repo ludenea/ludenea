@@ -21,7 +21,7 @@ futures.workspace = true
 
 # The browser link's task and clock.
 [target.'cfg(all(target_arch = "wasm32", not(target_os = "wasi")))'.dependencies]
-js-sys.workspace = true
+wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
 
 [dev-dependencies]

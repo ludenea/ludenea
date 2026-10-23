@@ -46,7 +46,6 @@ wasm-bindgen = "=0.2.129"
 wasm-bindgen-cli-support = "=0.2.129"
 wasm-bindgen-futures = "0.4.79"
 web-sys = "0.3.106"
-js-sys = "0.3.106"
 wgpu = { version = "=30.0.1", default-features = false }
 png = "=0.18.1"
 pollster = "=1.0.1"
