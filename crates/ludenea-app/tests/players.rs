@@ -588,3 +588,28 @@ fn map_player_without_a_mapping_is_an_error() {
         Err(SimError::NoInputMapping)
     ));
 }
+
+#[derive(Serialize, Deserialize, Schema, Default, Clone)]
+struct Jump {
+    jump: bool,
+}
+
+fn panicking_map(_raw: &RawInput, _player: usize) -> Jump {
+    panic!("the mapping broke");
+}
+
+#[test]
+fn map_player_with_a_panicking_mapping_is_a_panic_error() {
+    let mut app = App::new();
+    app.input::<Jump>().input_mapping(panicking_map);
+    let simulation = app.build().unwrap();
+    assert!(matches!(
+        simulation.map_player(0, Some(&RawInput::default())),
+        Err(SimError::Panicked(_))
+    ));
+    assert!(matches!(
+        simulation.map_players(&[Some(RawInput::default())]),
+        Err(SimError::Panicked(_))
+    ));
+    assert!(simulation.map_player(0, None).is_ok());
+}

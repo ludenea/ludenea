@@ -24,8 +24,8 @@ rayon.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-boxes = { path = "../../examples/boxes" }
 arena = { path = "../../examples/arena" }
+boxes = { path = "../../examples/boxes" }
 ludenea.workspace = true
 ludenea-physics.workspace = true
 tempfile.workspace = true
