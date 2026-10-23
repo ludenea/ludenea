@@ -297,7 +297,7 @@ impl<L: Link> LinkTransport<L> {
 
     /// Makes `links` the peers of the match, in peer order, with the same rule as
     /// [`LinkTransport::new`].
-    pub fn set_links(&mut self, links: Vec<LinkId>) {
+    pub(crate) fn set_links(&mut self, links: Vec<LinkId>) {
         self.links = links;
     }
 

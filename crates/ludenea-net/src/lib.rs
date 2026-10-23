@@ -1,7 +1,8 @@
 //! Rollback networking for Ludenea: the settings every peer of a match agrees on, the wire
-//! format of their packets, the room where peers agree on who plays, one peer's room then match over one link, the sans-IO session built
-//! on them, the executor that applies a session's requests to a simulation, and SyncTest,
-//! which catches game code a rollback makes diverge.
+//! format of their packets, the room where peers agree on who plays, the peer that drives its
+//! room and then its match over one link, the sans-IO session built on them, the executor that
+//! applies a session's requests to a simulation, and SyncTest, which catches game code a
+//! rollback makes diverge.
 //!
 //! The crate reads no clock and uses no floating point: the caller passes the current time.
 #![deny(clippy::float_arithmetic)]

@@ -177,12 +177,12 @@ impl<T: Transport> Conditioned<T> {
     }
 
     /// The wrapped transport.
-    pub fn inner(&self) -> &T {
+    pub(crate) fn inner(&self) -> &T {
         &self.inner
     }
 
     /// The wrapped transport, to send through it without conditions or reach what it wraps.
-    pub fn inner_mut(&mut self) -> &mut T {
+    pub(crate) fn inner_mut(&mut self) -> &mut T {
         &mut self.inner
     }
 
