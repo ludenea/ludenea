@@ -67,7 +67,10 @@ struct App {
 }
 
 /// The listener's routes: the rooms under `/rooms/{code}`, the page on every other path.
-/// It reads the client's address from [`ConnectInfo<SocketAddr>`], which [`serve`] provides.
+///
+/// The rooms read the client's address from [`ConnectInfo<SocketAddr>`], for the limits per
+/// address: serve the router with it, as [`serve`] does, or every room request answers 500.
+/// Served on its own, it has none of the connection limits [`serve`] adds.
 pub fn router(options: Options) -> Router {
     let app = App {
         rooms: Arc::new(Mutex::new(Rooms::new(options.limits.clone()))),
