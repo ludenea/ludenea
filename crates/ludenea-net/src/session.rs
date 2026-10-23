@@ -1993,11 +1993,12 @@ impl Session {
     /// acknowledgments of the local players make no progress for `disconnect_after_micros`,
     /// counted from when this session first held every input through that tick, as this
     /// check sees it, then cannot hear this one: the session ends with [`EndReason::Lost`]
-    /// naming it, so the
-    /// wait is bounded and its end notice ends the other peers, that one included, the same
-    /// way. It raises no [`SessionEvent::PeerSilent`] before: the peer is heard, and the
-    /// notice says it is not. Otherwise the session ends with [`EndReason::Lost`] naming the
-    /// first silent peer.
+    /// naming it, so the wait is bounded. Its end notice ends the same way every peer still
+    /// running that hears it. On a true one-way link the deaf peer does not hear it: it ends
+    /// by its own silence timeout and may name another peer, and with four peers a third one
+    /// may have ended with `Left` already; the wait is bounded either way. It raises no
+    /// [`SessionEvent::PeerSilent`] before: the peer is heard, and the notice says it is not.
+    /// Otherwise the session ends with [`EndReason::Lost`] naming the first silent peer.
     ///
     /// A peer that said goodbye and whose inputs through the agreed last tick are all
     /// confirmed raises no notice and is never lost: it has nothing more to send, and ends
