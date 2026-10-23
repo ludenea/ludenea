@@ -22,9 +22,9 @@ ludenea-project.workspace = true
 ludenea-signal.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
-tungstenite.workspace = true
 
 [dev-dependencies]
 ludenea-project.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
+tungstenite.workspace = true

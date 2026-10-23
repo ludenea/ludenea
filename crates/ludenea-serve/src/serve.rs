@@ -4,7 +4,6 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
 
 use axum::Router;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade, close_code};
@@ -18,8 +17,8 @@ use ludenea_project::protocol::{
 };
 use ludenea_project::service::ProjectService;
 use ludenea_signal::files::{plain_name, relative_path, serve_file};
+use ludenea_signal::{LINGER, allowed_origins, check_origin, oversized};
 use tokio::sync::broadcast::error::RecvError;
-use tungstenite::error::CapacityError;
 
 #[cfg(feature = "embed-editor")]
 static EMBEDDED_EDITOR: include_dir::Dir<'_> =
@@ -33,13 +32,6 @@ static EMBEDDED_EDITOR: include_dir::Dir<'_> =
 /// 39 MB more for each further one, so six fit. A larger message is refused, then the
 /// connection closes.
 const MAX_MESSAGE_SIZE: usize = 256 << 20;
-
-/// How long a connection stays open after refusing a message, before it closes. The editor is
-/// usually still sending the rest of the message: closing at once resets the connection, and
-/// Chromium can then lose the refusal and the close frame before reading them.
-// ponytail: a fixed wait, since axum's WebSocket cannot read past the refused message; reading
-// and discarding the rest until the editor closes would need the raw connection.
-const LINGER: Duration = Duration::from_secs(1);
 
 pub struct Options {
     pub project: PathBuf,
@@ -122,7 +114,7 @@ async fn project_socket(
     upgrade: WebSocketUpgrade,
 ) -> Response {
     // Browsers let any page open a WebSocket to localhost: only the editor's own pages may.
-    if !same_origin(&headers, &app.allowed_origins) {
+    if check_origin(&headers, &app.allowed_origins).is_err() {
         return StatusCode::FORBIDDEN.into_response();
     }
     upgrade
@@ -175,34 +167,6 @@ fn host_allowed(headers: &HeaderMap, allowed: &[String]) -> bool {
         None => host.split(':').next().map(str::to_string),
     };
     name.is_some_and(|name| allowed.contains(&name.to_ascii_lowercase()))
-}
-
-/// The origins given with `--allow-origin`, in the form browsers send: lowercase, without a
-/// trailing slash.
-fn allowed_origins(origins: Vec<String>) -> Vec<String> {
-    origins
-        .into_iter()
-        .map(|origin| origin.trim_end_matches('/').to_ascii_lowercase())
-        .collect()
-}
-
-/// A connection without `Origin` is not from a browser; one with it must match `Host` or be
-/// one of `allowed`.
-fn same_origin(headers: &HeaderMap, allowed: &[String]) -> bool {
-    let Some(origin) = headers.get(header::ORIGIN) else {
-        return true;
-    };
-    let origin = origin.to_str().ok();
-    if origin.is_some_and(|origin| allowed.contains(&origin.to_ascii_lowercase())) {
-        return true;
-    }
-    let origin_host = origin
-        .and_then(|origin| origin.split_once("://"))
-        .map(|(_, host)| host);
-    let host = headers
-        .get(header::HOST)
-        .and_then(|host| host.to_str().ok());
-    origin_host.is_some() && origin_host == host
 }
 
 /// One editor, at `peer`: requests answered in order, and the project's events once it said
@@ -273,20 +237,9 @@ async fn send(socket: &mut WebSocket, message: &ProjectServerMessage) -> Result<
     socket.send(Message::Text(text.into())).await
 }
 
-/// The size and the limit of a message over [`MAX_MESSAGE_SIZE`], if `error` refuses one:
-/// the size received so far when it came in several frames.
-fn oversized(error: axum::Error) -> Option<(usize, usize)> {
-    match *error.into_inner().downcast::<tungstenite::Error>().ok()? {
-        tungstenite::Error::Capacity(CapacityError::MessageTooLong { size, max_size }) => {
-            Some((size, max_size))
-        }
-        _ => None,
-    }
-}
-
 /// Tells the editor at `peer` why its message of at least `size` bytes is refused, logs it
 /// with `peer`, and closes the connection, which cannot read past that message, after
-/// [`LINGER`].
+/// `LINGER`.
 async fn refuse_oversized(socket: &mut WebSocket, peer: SocketAddr, size: usize, limit: usize) {
     let mib = limit >> 20;
     eprintln!(
@@ -405,20 +358,6 @@ mod tests {
         ] {
             assert!(!host_allowed(&headers(host, None), &allowed), "{host}");
         }
-    }
-
-    #[test]
-    fn an_allowed_origin_may_differ_from_the_host() {
-        let proxied = headers("localhost:7878", Some("http://localhost:5173"));
-        assert!(!same_origin(&proxied, &[]));
-        let allowed = allowed_origins(vec!["HTTP://localhost:5173/".to_string()]);
-        assert!(same_origin(&proxied, &allowed));
-        let other = headers("localhost:7878", Some("http://localhost:5174"));
-        assert!(!same_origin(&other, &allowed));
-        assert!(same_origin(
-            &headers("localhost:7878", Some("http://localhost:7878")),
-            &[]
-        ));
     }
 
     #[test]

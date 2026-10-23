@@ -37,10 +37,13 @@ use tungstenite::error::CapacityError;
 pub use limits::Limits;
 use rooms::{Membership, Reservation, Rooms, Shared};
 
-/// How long a connection stays open after refusing an oversized message, before it closes:
-/// the client may still be sending the rest, and closing at once resets the connection,
-/// which can lose the close frame before the client reads it.
-const LINGER: std::time::Duration = std::time::Duration::from_secs(1);
+/// How long a WebSocket stays open after its close frame, before the connection closes. The
+/// client may still be sending (the rest of a refused message, for example): closing at once
+/// resets the connection, and the client, Chromium among them, can then lose the close frame
+/// and what came before it.
+// ponytail: a fixed wait after a refused message, since axum's WebSocket cannot read past it;
+// reading and discarding the rest until the client closes would need the raw connection.
+pub const LINGER: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// What the listener serves and how it bounds its clients.
 #[derive(Debug, Clone, Default)]
@@ -67,13 +70,7 @@ pub fn router(options: Options) -> Router {
     let app = App {
         rooms: Arc::new(Mutex::new(Rooms::new(options.limits.clone()))),
         limits: options.limits,
-        allowed_origins: Arc::new(
-            options
-                .allowed_origins
-                .into_iter()
-                .map(|origin| origin.trim_end_matches('/').to_ascii_lowercase())
-                .collect(),
-        ),
+        allowed_origins: Arc::new(allowed_origins(options.allowed_origins)),
     };
     let page = Arc::new(options.page);
     Router::new()
@@ -199,9 +196,23 @@ fn room_size(value: &str) -> Result<usize, String> {
         })
 }
 
-/// A request without `Origin` is not from a browser and passes; one with it must match
-/// `Host` or be one of `allowed`. The error is the refused origin.
-fn check_origin(headers: &HeaderMap, allowed: &[String]) -> Result<(), String> {
+/// Origins given on the command line (`--allow-origin`) in the form browsers send them:
+/// lowercase, without a trailing slash.
+pub fn allowed_origins(origins: Vec<String>) -> Vec<String> {
+    origins
+        .into_iter()
+        .map(|origin| origin.trim_end_matches('/').to_ascii_lowercase())
+        .collect()
+}
+
+/// Whether a browser page may open a WebSocket: a request without `Origin` is not from a
+/// browser and passes; one with it must match `Host` or be one of `allowed` (as
+/// [`allowed_origins`] writes them). The error is the refused origin.
+///
+/// # Errors
+///
+/// The `Origin` of a request from any other page.
+pub fn check_origin(headers: &HeaderMap, allowed: &[String]) -> Result<(), String> {
     let Some(origin) = headers.get(header::ORIGIN) else {
         return Ok(());
     };
@@ -270,7 +281,7 @@ async fn received(
         }
         Some(Ok(Message::Close(_))) | None => return false,
         Some(Err(error)) => {
-            if oversized(error) {
+            if oversized(error).is_some() {
                 let limit = limits.max_message_bytes;
                 let reason = format!("a message over the limit of {limit} bytes");
                 refuse(socket, remote, close_code::SIZE, &reason, limits).await;
@@ -337,17 +348,15 @@ async fn close(socket: &mut WebSocket, code: u16, reason: &str, limits: &Limits)
     let _ = tokio::time::timeout(limits.idle, socket.send(Message::Close(Some(frame)))).await;
 }
 
-/// Whether `error` refuses a message or a frame over the size limit.
-fn oversized(error: axum::Error) -> bool {
-    error
-        .into_inner()
-        .downcast::<tungstenite::Error>()
-        .is_ok_and(|error| {
-            matches!(
-                *error,
-                tungstenite::Error::Capacity(CapacityError::MessageTooLong { .. })
-            )
-        })
+/// The size and the limit of a message over a WebSocket's size limit, if `error` refuses
+/// one: the size received so far when it came in several frames.
+pub fn oversized(error: axum::Error) -> Option<(usize, usize)> {
+    match *error.into_inner().downcast::<tungstenite::Error>().ok()? {
+        tungstenite::Error::Capacity(CapacityError::MessageTooLong { size, max_size }) => {
+            Some((size, max_size))
+        }
+        _ => None,
+    }
 }
 
 /// A file of the page folder: GET and HEAD only.
@@ -365,5 +374,35 @@ async fn page_file(page: Arc<Option<PathBuf>>, method: Method, uri: Uri) -> Resp
             "no page here: pass the folder `ludenea build --web` wrote",
         )
             .into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn headers(host: &str, origin: Option<&str>) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, host.parse().unwrap());
+        if let Some(origin) = origin {
+            headers.insert(header::ORIGIN, origin.parse().unwrap());
+        }
+        headers
+    }
+
+    #[test]
+    fn an_allowed_origin_may_differ_from_the_host() {
+        let proxied = headers("localhost:7878", Some("http://localhost:5173"));
+        assert_eq!(
+            check_origin(&proxied, &[]),
+            Err("http://localhost:5173".to_string())
+        );
+        let allowed = allowed_origins(vec!["HTTP://localhost:5173/".to_string()]);
+        assert_eq!(check_origin(&proxied, &allowed), Ok(()));
+        let other = headers("localhost:7878", Some("http://localhost:5174"));
+        assert!(check_origin(&other, &allowed).is_err());
+        let own = headers("localhost:7878", Some("http://localhost:7878"));
+        assert_eq!(check_origin(&own, &[]), Ok(()));
+        assert_eq!(check_origin(&headers("localhost:7878", None), &[]), Ok(()));
     }
 }
