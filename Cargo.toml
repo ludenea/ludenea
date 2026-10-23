@@ -60,6 +60,10 @@ rolldown_common = "=1.2.14"
 rolldown_error = "=1.2.14"
 rolldown_plugin = "=1.2.14"
 tokio = { version = "1.53.3", features = ["rt"] }
+axum = { version = "0.8.9", features = ["ws"] }
+# The version axum's WebSocket uses, so the error of a message over the size limit downcasts
+# to it.
+tungstenite = "0.29.0"
 ludenea-math = { path = "crates/ludenea-math" }
 ludenea-app = { path = "crates/ludenea-app" }
 ludenea-ecs = { path = "crates/ludenea-ecs" }
@@ -74,6 +78,7 @@ ludenea-net = { path = "crates/ludenea-net" }
 ludenea-runtime = { path = "crates/ludenea-runtime" }
 ludenea = { path = "crates/ludenea" }
 ludenea-project = { path = "crates/ludenea-project" }
+ludenea-signal = { path = "crates/ludenea-signal" }
 
 # rolldown_common 1.2.14 from crates.io with its serde_json dependency no longer requesting the
 # `arbitrary_precision` feature. Cargo unifies features, so that feature reached every

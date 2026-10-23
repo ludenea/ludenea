@@ -17,6 +17,7 @@ use ludenea_project::protocol::{
     FailureCode, ProjectEvent, ProjectFailure, ProjectRequest, ProjectServerMessage, ServiceMode,
 };
 use ludenea_project::service::ProjectService;
+use ludenea_signal::files::{plain_name, relative_path, serve_file};
 use tokio::sync::broadcast::error::RecvError;
 use tungstenite::error::CapacityError;
 
@@ -344,21 +345,15 @@ async fn serve_from_project(app: &App, relative: &Path) -> Response {
 }
 
 async fn editor_file(State(app): State<App>, uri: Uri) -> Response {
-    let segments: Vec<&str> = uri.path().split('/').filter(|s| !s.is_empty()).collect();
-    if !segments.iter().all(|segment| plain_name(segment)) {
+    let Some(relative) = relative_path(uri.path()) else {
         return StatusCode::BAD_REQUEST.into_response();
-    }
-    let relative = if segments.is_empty() {
-        "index.html".to_string()
-    } else {
-        segments.join("/")
     };
     if let Some(directory) = &app.editor_dir {
         return serve_file(&directory.join(&relative)).await;
     }
     #[cfg(feature = "embed-editor")]
     if let Some(file) = EMBEDDED_EDITOR.get_file(&relative) {
-        let kind = content_type(Path::new(&relative));
+        let kind = ludenea_signal::files::content_type(Path::new(&relative));
         return ([(header::CONTENT_TYPE, kind)], file.contents()).into_response();
     }
     (
@@ -366,34 +361,6 @@ async fn editor_file(State(app): State<App>, uri: Uri) -> Response {
         "no editor here: pass --editor-dir <editor/apps/web/dist>",
     )
         .into_response()
-}
-
-async fn serve_file(path: &Path) -> Response {
-    match tokio::fs::read(path).await {
-        Ok(bytes) => ([(header::CONTENT_TYPE, content_type(path))], bytes).into_response(),
-        Err(_) => StatusCode::NOT_FOUND.into_response(),
-    }
-}
-
-/// A single file or directory name: nothing that could lead out of the directory it is
-/// looked up in.
-fn plain_name(name: &str) -> bool {
-    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', ':', '\0'])
-}
-
-fn content_type(path: &Path) -> &'static str {
-    match path.extension().and_then(|extension| extension.to_str()) {
-        Some("html") => "text/html; charset=utf-8",
-        Some("js" | "mjs") => "text/javascript",
-        Some("wasm") => "application/wasm",
-        Some("css") => "text/css",
-        Some("json" | "map") => "application/json",
-        Some("svg") => "image/svg+xml",
-        Some("png") => "image/png",
-        Some("ico") => "image/x-icon",
-        Some("woff2") => "font/woff2",
-        _ => "application/octet-stream",
-    }
 }
 
 fn lock(service: &Mutex<ProjectService>) -> MutexGuard<'_, ProjectService> {

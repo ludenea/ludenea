@@ -2185,10 +2185,19 @@ dependencies = [
  "clap",
  "include_dir",
  "ludenea-project",
+ "ludenea-signal",
  "serde_json",
  "tempfile",
  "tokio",
  "tungstenite",
+]
+
+[[package]]
+name = "ludenea-signal"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "tokio",
 ]
 
 [[package]]
