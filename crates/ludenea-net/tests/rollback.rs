@@ -286,7 +286,7 @@ fn last_advance_reports_ran_and_stalled() {
     // The remote is silent: the window is full.
     session.advance(NOW).unwrap();
     assert_eq!(session.last_advance(), Some(Advanced::Stalled));
-    // A refused call changes nothing.
+    // Another call at the window is another stall.
     assert_eq!(session.advance(NOW), Ok(vec![]));
     assert_eq!(session.last_advance(), Some(Advanced::Stalled));
     remote_inputs(&mut session, 0, &[0; 11]);

@@ -4,7 +4,7 @@ use ludenea_net::{
     Advanced, EndNotice, EndReason, LinkConditions, MatchRules, Message, Packet, PeerId, Request,
     Session, SessionError, SessionEvent, SessionState, Timeouts, ViolationRule,
 };
-use support::{Harness, handshake, identity, offline_hashes, sessions, sessions_of};
+use support::{Harness, Model, handshake, identity, offline_hashes, sessions, sessions_of};
 
 const ONE_SECOND: u64 = 1_000_000;
 const NOW: u64 = 1_000;
@@ -426,10 +426,10 @@ fn last_advance_reports_the_end() {
             .all(|peer| matches!(h.state(peer), SessionState::Ended(_)))
     };
     assert!(harness.run_until(10 * ONE_SECOND, ended));
-    let found_by_notice = harness.session(PeerId(1)).last_advance();
+    let peer_one_last_advance = harness.session(PeerId(1)).last_advance();
     assert!(
-        matches!(found_by_notice, Some(Advanced::Landed { .. })),
-        "{found_by_notice:?}"
+        matches!(peer_one_last_advance, Some(Advanced::Landed { .. })),
+        "{peer_one_last_advance:?}"
     );
 
     // A session that ended while connecting, or by `fail`, never lands.
@@ -447,6 +447,53 @@ fn last_advance_reports_the_end() {
     failed.fail(0).unwrap();
     assert_eq!(failed.advance(NOW), Err(SessionError::NotRunning));
     assert_eq!(failed.last_advance(), Some(Advanced::Ran { tick: 0 }));
+}
+
+#[test]
+fn a_hash_report_that_ends_the_session_is_landed_by_the_next_advance() {
+    // Peer 1 sends its inputs and acknowledges the local ones, but never reports a hash. The
+    // hash of a tick becomes final when the caller answers it, so the session ends inside
+    // `report_hash`, after the advance that asked for it returned.
+    let rules = MatchRules::default();
+    let mut identity = identity(&[0, 1]);
+    identity.rules = rules;
+    let mut session = handshake(sessions_of(&identity)).remove(0);
+    let mut model = Model::new(&rules);
+    for tick in 0..400u64 {
+        deliver(
+            &mut session,
+            1,
+            vec![inputs(1, tick, &[0]), ack(0, model.tick())],
+        );
+        session.add_local_input(0, vec![0]).unwrap();
+        let requests = session.advance(NOW).unwrap();
+        assert_eq!(session.state(), SessionState::Running, "tick {tick}");
+        assert_eq!(session.last_advance(), Some(Advanced::Ran { tick }));
+        model.execute_for(&mut session, &requests);
+        if matches!(session.state(), SessionState::Ended(_)) {
+            assert!(matches!(
+                session.state(),
+                SessionState::Ended(EndReason::Violation {
+                    rule: ViolationRule::HashLagging,
+                    ..
+                })
+            ));
+            // The report ended it: nothing landed yet, the next advance lands.
+            assert_eq!(session.last_advance(), Some(Advanced::Ran { tick }));
+            let landing = session.advance(NOW).unwrap();
+            assert!(landing.is_empty(), "{landing:?}");
+            assert_eq!(
+                session.last_advance(),
+                Some(Advanced::Landed {
+                    tick: session.next_tick()
+                })
+            );
+            assert_eq!(session.advance(NOW), Err(SessionError::NotRunning));
+            return;
+        }
+        session.outgoing(NOW);
+    }
+    panic!("the session never ended");
 }
 
 #[test]
