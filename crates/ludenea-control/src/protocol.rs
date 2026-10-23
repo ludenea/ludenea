@@ -29,7 +29,7 @@ pub const PROTOCOL_VERSION: u32 = 5;
 /// instead of misreading fields. A change the declarations do not show, such as a new serde
 /// default or another encoding of a type declared as a string, leaves it as it is.
 /// `tests/typescript.rs` pins it.
-pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0x6807_0833_9857_ba28);
+pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0x331e_dce6_0b7c_4b4e);
 
 /// Binary data, serialized as a standard base64 string.
 #[derive(Clone, Debug, PartialEq)]
@@ -1092,6 +1092,8 @@ pub enum PauseReason {
         tick: u64,
         message: String,
     },
+    /// The online match ended, as its `online` event says: play stops with it.
+    MatchEnded,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

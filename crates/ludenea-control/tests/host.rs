@@ -578,6 +578,9 @@ fn every_command_and_reply_round_trips_through_json() {
         Event::ResourcesChanged {
             resources: BTreeMap::new(),
         },
+        Event::Paused {
+            reason: PauseReason::MatchEnded,
+        },
         Event::Online {
             state: OnlineState::Connecting,
         },

@@ -1878,7 +1878,9 @@ impl Host {
         let players = online.confirmed.players;
         let log = std::mem::replace(&mut online.confirmed, InputLog::new(players));
         self.events.push(Event::Online { state });
-        self.playing = false;
+        if self.playing {
+            self.pause(PauseReason::MatchEnded);
+        }
         self.pacer.stop();
         let adopted = self.session.adopt_inputs(&mut self.simulation, log);
         self.reset_claims();

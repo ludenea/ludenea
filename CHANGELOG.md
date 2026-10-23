@@ -863,7 +863,7 @@ hash, those of the golden trace and replays included.
 
 ### Control protocol
 
-- Control protocol 5, fingerprint `680708339857ba28`. Breaking: `get_render_frame`
+- Control protocol 5, fingerprint `331edce60b7c4b4e`. Breaking: `get_render_frame`
   (`debug_layers`) replaces `get_debug_draw` (`layers`), and its reply `render_frame`
   (`frame`) replaces `debug_draw` (`tick`, `frame`). The frame is the `RenderFrame` of the
   current tick: its tick, camera, render layers, sprites, tilemaps, the entities teleported
@@ -951,7 +951,7 @@ hash, those of the golden trace and replays included.
   `get_tick_events`, `get_tick_commands`, `compare_traces`, `get_ghost_draw`,
   `get_divergence`, `export_replay`, `export_session`, `set_compare_branch`); the reads of
   the world stay allowed, and the ghost and the divergence report do not follow. At the
-  end, play stops, the confirmed inputs become the session's input log, which resimulates
+  end, play stops with `paused` and the new reason `match_ended`, the confirmed inputs become the session's input log, which resimulates
   in the background, and the claims go back to the automatic ones of the match's players.
 - Over `host --stdio` and in a browser worker, the events a request causes come before its
   response, not after the response to a later request: a `load_session` sent right after

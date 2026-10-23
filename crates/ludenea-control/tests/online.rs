@@ -380,6 +380,10 @@ fn play_and_leave(
         assert_eq!(end.tick, ends[0].tick);
     }
     let landed = ends[0].tick.unwrap() + 1;
+    // Play stopped with the match, as every stop says.
+    for peer in &game.peers {
+        assert_eq!(match_ended_pauses(peer), 1);
+    }
 
     // Lingering: each peer keeps sending.
     let ended_at: Vec<usize> = game.peers.iter().map(|peer| peer.events.len()).collect();
@@ -679,6 +683,24 @@ fn a_failing_game_ends_both_hosts() {
     assert_eq!(other.kind, MatchEndKind::LocalFailure, "{other:?}");
     assert_eq!(other.peer, Some(0));
     assert_eq!(other.tick, end.tick);
+    // The failure paused the failing host already; the other one stops as the match ends.
+    assert_eq!(match_ended_pauses(failing), 0);
+    assert_eq!(match_ended_pauses(&game.peers[1]), 1);
+}
+
+/// How many times `peer` paused because its match ended.
+fn match_ended_pauses(peer: &Peer) -> usize {
+    peer.events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::Paused {
+                    reason: PauseReason::MatchEnded
+                }
+            )
+        })
+        .count()
 }
 
 #[derive(Serialize, Deserialize, Schema, Default, Clone, Debug, PartialEq)]
