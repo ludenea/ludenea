@@ -1,6 +1,6 @@
-//! Handshakes that a room member abandons release what they hold. A member that joins, gets an
-//! offer, and leaves, again and again, must not grow the link's peer connections (their UDP
-//! sockets and tasks) without bound.
+//! Peer connections are released when their peer goes. A member that joins, gets an offer,
+//! and leaves, or connects and leaves, again and again, must not grow the link's peer
+//! connections (their UDP sockets and tasks) without bound.
 //!
 //! The count is this process's open file descriptors, so this binary holds one test: nothing
 //! else opens or closes descriptors meanwhile. Unix only: it lists them in `/dev/fd`, which
@@ -173,8 +173,8 @@ fn settle(host: &mut WebRtcLink, limit: usize) -> usize {
 fn abandoned_handshakes_release_their_connections() {
     let (address, _listener) = start_listener();
     let room = RoomCode::parse("MNPQRS").unwrap();
-    let settings =
-        LinkSettings::new(&format!("ws://{address}/rooms"), room.clone(), Some(2), &[]).unwrap();
+    let signaling = format!("ws://{address}/rooms");
+    let settings = LinkSettings::new(&signaling, room.clone(), Some(2), &[]).unwrap();
     let mut host = WebRtcLink::open(settings);
     let start = now();
     while !host
@@ -228,5 +228,47 @@ fn abandoned_handshakes_release_their_connections() {
         count <= baseline + SLACK,
         "{CYCLES} members that left after a refused candidate left {count} descriptors open, \
          from {baseline}"
+    );
+
+    // Links that connect to the host, then leave.
+    for _ in 0..CYCLES {
+        let settings = LinkSettings::new(&signaling, room.clone(), None, &[]).unwrap();
+        let mut joiner = WebRtcLink::open(settings);
+        let start = now();
+        let mut connected = [false, false];
+        while connected != [true, true] {
+            assert!(
+                now().duration_since(start) < TIMEOUT,
+                "the joiner and the host did not connect within 30 s: {connected:?}"
+            );
+            for (index, link) in [&mut host, &mut joiner].into_iter().enumerate() {
+                for event in link.poll() {
+                    match event {
+                        LinkEvent::Connected(_) => connected[index] = true,
+                        LinkEvent::Closed(reason) => panic!("a link closed: {reason}"),
+                        _ => {}
+                    }
+                }
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        drop(joiner);
+        let start = now();
+        while !host
+            .poll()
+            .iter()
+            .any(|event| matches!(event, LinkEvent::Disconnected(_)))
+        {
+            assert!(
+                now().duration_since(start) < TIMEOUT,
+                "the host did not see the joiner leave within 30 s"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    let count = settle(&mut host, baseline + SLACK);
+    assert!(
+        count <= baseline + SLACK,
+        "{CYCLES} links that connected and left left {count} descriptors open, from {baseline}"
     );
 }

@@ -109,13 +109,15 @@ ludenea-webrtc = { path = "crates/ludenea-webrtc" }
 # ICE server, natively and in the browser (`create_rtc_peer_connection` of `native.rs` and
 # `wasm.rs`), instead of one server without URLs, which Chromium refuses. And every `unwrap`
 # or `expect` that signaling or peer data could reach now drops that peer's handshake with a
-# `warn!` (`or_drop` in `mod.rs`), and the socket carries on with its other peers. A dropped
-# handshake closes its peer connection, in one place per stack (`offer_handshake` (131, 112)
-# and `accept_handshake` (216, 208) of `native.rs` and `wasm.rs` run their steps in an inner
-# block and close the connection when it yields none): neither webrtc-rs nor the browser frees
-# an abandoned one. Natively the close first waits up to 5 s for the candidates' gathering
-# (`close_dropped`), since webrtc-rs leaks the sockets of a gathering a close interrupts. The
-# sites, by their line in the 0.14.0 sources:
+# `warn!` (`or_drop` in `mod.rs`), and the socket carries on with its other peers. Every peer
+# connection is closed once its handshake is dropped, its peer loop ends, or the message loop
+# is dropped, since neither webrtc-rs nor the browser frees one left open: `offer_handshake`
+# (131, 112) and `accept_handshake` (216, 208) of `native.rs` and `wasm.rs` wrap it in a
+# `ClosingConnection`, whose drop closes it, and hand it to `peer_loop` (291, 313) through
+# `HandshakeMeta` (124, 110). Natively the close runs on async-compat's tokio runtime (so
+# `Cargo.toml` adds `tokio`, already a dependency of webrtc) and first waits up to 5 s for the
+# candidates' gathering, since webrtc-rs leaks the sockets of a gathering a close interrupts.
+# The sites, by their line in the 0.14.0 sources:
 # - `native.rs`: in `offer_handshake`, the peer connection (147), the local offer (163, 165),
 #   a signaling connection or peer lost before the answer (172), and a malformed or unusable
 #   answer (187, 191); in `accept_handshake`, the peer connection (232), a signaling
