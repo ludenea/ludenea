@@ -66,16 +66,21 @@ pub fn plain_name(name: &str) -> bool {
         && !device_name(name)
 }
 
-/// Whether Windows reads `name` as a device (`CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`,
-/// `LPT1` to `LPT9`): in any case, with any extension, and with trailing spaces before it.
+/// Whether Windows reads `name` as a device (`CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`
+/// and `COM¹` to `COM³`, the same for `LPT`): in any case, with any extension, and with
+/// trailing spaces before it.
 fn device_name(name: &str) -> bool {
     let stem = name.split('.').next().unwrap_or(name).trim_end_matches(' ');
     let stem = stem.to_ascii_uppercase();
-    match stem.as_bytes() {
-        b"CON" | b"PRN" | b"AUX" | b"NUL" => true,
-        [b'C', b'O', b'M', digit] | [b'L', b'P', b'T', digit] => (b'1'..=b'9').contains(digit),
-        _ => false,
-    }
+    let numbered = |prefix: &str| {
+        stem.strip_prefix(prefix).is_some_and(|number| {
+            matches!(
+                number,
+                "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+            )
+        })
+    };
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL") || numbered("COM") || numbered("LPT")
 }
 
 /// The content type of a served file, from its extension.
@@ -124,11 +129,17 @@ mod tests {
             "con.tar.gz",
             "AUX ",
             "COM1 .js",
+            "COM¹",
+            "com².txt",
+            "COM³",
+            "LPT¹",
+            "lpt²",
+            "LPT³.js",
         ] {
             assert!(!plain_name(name), "{name:?}");
         }
         for name in [
-            "CONSOLE", "icon.png", "COM", "COM10", "LPT0x", "null.js", "aux_data",
+            "CONSOLE", "icon.png", "COM", "COM10", "LPT0x", "null.js", "aux_data", "COM⁴",
         ] {
             assert!(plain_name(name), "{name:?}");
         }
