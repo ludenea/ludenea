@@ -20,8 +20,5 @@ tungstenite.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-matchbox_protocol.workspace = true
-serde_json.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
-tungstenite.workspace = true
