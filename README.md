@@ -29,26 +29,27 @@ for any thread count. The guarantee rests on:
 
 ## Workspace layout
 
-| Path                     | Purpose                                             |
-| ------------------------ | --------------------------------------------------- |
-| `crates/ludenea-math`    | Deterministic vectors, rotations, and functions     |
-| `crates/ludenea-ecs`     | World, queries, snapshots, and state hashing        |
-| `crates/ludenea-macros`  | Derive macros                                       |
-| `crates/ludenea-app`     | Simulation loop, scenes, and input logs             |
-| `crates/ludenea-physics` | Rigid body physics                                  |
-| `crates/ludenea-draw`    | Render frame and debug draw data, GPU free          |
-| `crates/ludenea-render`  | Render components, extraction, wgpu renderer        |
-| `crates/ludenea-control` | Versioned control protocol and host                 |
-| `crates/ludenea-cli`     | `run`, `verify`, `diff`, `render`, and `play`       |
-| `crates/ludenea-runtime` | Game runner, native window, web page exports        |
-| `crates/ludenea`         | Facade crate re-exporting the engine                |
-| `crates/ludenea-project` | Projects, builds, and plugin bundling               |
-| `crates/ludenea-serve`   | The `ludenea` tool: `new`, `serve`, `play`, `build` |
-| `editor`                 | The editor: web and desktop applications            |
-| `examples/boxes`         | Reference scenario, golden trace, and benchmark     |
-| `examples/swarm`         | Runtime test game: 10,000 sprites, 4 players        |
-| `examples/arena`         | Platform arena: two fighters, run and jump          |
-| `golden`                 | Golden hash traces                                  |
+| Path                     | Purpose                                                   |
+| ------------------------ | --------------------------------------------------------- |
+| `crates/ludenea-math`    | Deterministic vectors, rotations, and functions           |
+| `crates/ludenea-ecs`     | World, queries, snapshots, and state hashing              |
+| `crates/ludenea-macros`  | Derive macros                                             |
+| `crates/ludenea-app`     | Simulation loop, scenes, and input logs                   |
+| `crates/ludenea-physics` | Rigid body physics                                        |
+| `crates/ludenea-draw`    | Render frame and debug draw data, GPU free                |
+| `crates/ludenea-render`  | Render components, extraction, wgpu renderer              |
+| `crates/ludenea-net`     | Rollback session, wire format, and transports             |
+| `crates/ludenea-control` | Versioned control protocol and host                       |
+| `crates/ludenea-cli`     | `run`, `verify`, `diff`, `render`, `play`, and `synctest` |
+| `crates/ludenea-runtime` | Game runner, native window, web page exports              |
+| `crates/ludenea`         | Facade crate re-exporting the engine                      |
+| `crates/ludenea-project` | Projects, builds, and plugin bundling                     |
+| `crates/ludenea-serve`   | The `ludenea` tool: `new`, `serve`, `play`, `build`       |
+| `editor`                 | The editor: web and desktop applications                  |
+| `examples/boxes`         | Reference scenario, golden trace, and benchmark           |
+| `examples/swarm`         | Runtime test game: 10,000 sprites, 4 players              |
+| `examples/arena`         | Platform arena: two fighters, run and jump                |
+| `golden`                 | Golden hash traces                                        |
 
 ## Commands
 
@@ -71,6 +72,21 @@ native window's own tests run with its feature on:
 
 ```sh
 cargo test --locked -p ludenea-runtime --features native
+```
+
+Run the rollback networking tests under WebAssembly, as CI does (with `wasmtime` and the
+`wasm32-wasip1` target installed):
+
+```sh
+CARGO_TARGET_WASM32_WASIP1_RUNNER="wasmtime run --dir=." cargo test --locked --target wasm32-wasip1 -p ludenea-net
+```
+
+The arena's rollback test runs two, three, and four peers over a seeded lossy network, at 1 and
+8 threads, and checks that every peer matches an offline run. It draws 8 seeds of network
+conditions by default; CI runs 32 in release on Linux:
+
+```sh
+LUDENEA_NET_SEEDS=32 cargo test --locked --release -p arena --test rollback
 ```
 
 Run the lint checks CI runs: formatting (the engine and the desktop backend), clippy on the
