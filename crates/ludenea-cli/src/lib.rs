@@ -1,5 +1,5 @@
-//! The `ludenea` command line: `run`, `verify`, `diff`, `render`, `play`, and `host`. A game
-//! provides its own `main` and passes its app constructor to [`main`].
+//! The `ludenea` command line: `run`, `verify`, `synctest`, `diff`, `render`, `play`, and
+//! `host`. A game provides its own `main` and passes its app constructor to [`main`].
 
 mod commands;
 mod trace;
@@ -25,6 +25,9 @@ enum Cmd {
     Run(commands::RunArgs),
     /// Replay a run and compare its hashes with a golden trace, or verify a replay.
     Verify(commands::VerifyArgs),
+    /// Run a scene or replay next to a copy that mispredicts and rolls back every tick, and
+    /// report the first tick, entities, and fields where they differ.
+    Synctest(commands::SyncTestArgs),
     /// List the differences between two snapshots.
     Diff(commands::DiffArgs),
     /// Draw a tick of a scene or replay to a PNG, offscreen on a GPU adapter.
@@ -57,6 +60,7 @@ pub fn run<S: AsRef<str>>(app: fn() -> App, args: &[S], out: &mut dyn Write) -> 
     let outcome = match &cli.command {
         Cmd::Run(args) => commands::run(app, args, out),
         Cmd::Verify(args) => commands::verify(app, args, out),
+        Cmd::Synctest(args) => commands::synctest(app, args, out),
         Cmd::Diff(args) => commands::diff(app, args, out),
         #[cfg(not(target_family = "wasm"))]
         Cmd::Render(args) => commands::render(app, args, out),

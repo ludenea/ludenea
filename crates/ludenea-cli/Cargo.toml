@@ -8,6 +8,7 @@ clap.workspace = true
 ludenea-app.workspace = true
 ludenea-control.workspace = true
 ludenea-ecs.workspace = true
+ludenea-net.workspace = true
 
 # `render` draws offscreen with the wgpu renderer, and `play` opens the native window: WebAssembly
 # builds of a game leave both out and stay headless.

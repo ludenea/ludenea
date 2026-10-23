@@ -1976,6 +1976,7 @@ dependencies = [
  "ludenea-app",
  "ludenea-control",
  "ludenea-ecs",
+ "ludenea-net",
  "ludenea-render",
  "ludenea-runtime",
  "png",

@@ -135,6 +135,20 @@ jobs:
             cargo run --locked --release -p arena -- verify golden/arena.replay --threads $threads --dump-dir "$LUDENEA_DUMP_DIR/release/arena-replay-$threads-threads" || status=1
           done
           exit $status
+      # Each game runs next to a copy that mispredicts and rolls back every tick. A mismatch
+      # names the tick, the entities, components and fields that differ, and dumps both
+      # snapshots of that tick.
+      - name: SyncTest the games
+        if: ${{ !cancelled() && steps.tests.outcome != 'skipped' }}
+        shell: bash
+        run: |
+          status=0
+          for threads in 1 8; do
+            cargo run --locked --release -p arena -- synctest golden/arena.replay --threads $threads --dump-dir "$LUDENEA_DUMP_DIR/release/arena-synctest-$threads-threads" || status=1
+            cargo run --locked --release -p swarm -- synctest examples/swarm/assets/swarm.scene.ron --ticks 600 --random-inputs 1 --threads $threads --dump-dir "$LUDENEA_DUMP_DIR/release/swarm-synctest-$threads-threads" || status=1
+            cargo run --locked --release -p boxes -- synctest golden/spawner.replay --threads $threads --dump-dir "$LUDENEA_DUMP_DIR/release/boxes-synctest-$threads-threads" || status=1
+          done
+          exit $status
       # The arena's rollback property test over 32 seeds per peer and thread count, in release;
       # the workspace tests above run it over 8 in debug.
       - name: Test rollback on the arena over more seeds
@@ -240,6 +254,9 @@ jobs:
       - name: Verify the arena's golden replay
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: wasmtime run --dir=. target/wasm32-wasip1/release/arena.wasm verify golden/arena.replay --dump-dir dump/arena-replay-1-threads
+      - name: SyncTest the arena
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: wasmtime run --dir=. target/wasm32-wasip1/release/arena.wasm synctest golden/arena.replay --dump-dir dump/arena-synctest-1-threads
       - name: Upload the divergence dump
         if: failure()
         uses: actions/upload-artifact@v4

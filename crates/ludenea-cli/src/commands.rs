@@ -4,10 +4,16 @@ use std::num::{IntErrorKind, ParseIntError};
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use ludenea_app::replay::{Replay, ReplayError, ReplayOutcome, play_replay, record_replay};
+use ludenea_app::replay::{
+    Replay, ReplayError, ReplayOutcome, load_replay, play_replay, record_replay,
+};
 use ludenea_app::trace::{TRACE_VERSION, Trace, compare_traces, inputs_hash, scene_hash};
-use ludenea_app::{App, EditLog, InputLog, NamedAssetTexts, Parallel, SimError, Simulation};
+use ludenea_app::{
+    App, EditLog, InputLog, NamedAssetTexts, Parallel, RawGamepad, RawInput, Rng, SimError,
+    Simulation,
+};
 use ludenea_control::{Bytes, Command, Host, InProcess, PROTOCOL_VERSION, Reply, Transport};
+use ludenea_net::{SyncTestError, sync_test};
 
 use ludenea_app::project::project_assets;
 
@@ -265,6 +271,31 @@ pub struct VerifyArgs {
 }
 
 #[derive(Args)]
+pub struct SyncTestArgs {
+    /// A scene, run for `--ticks` ticks with `--inputs` or `--random-inputs`, or a `.replay`,
+    /// which holds its own run.
+    #[command(flatten)]
+    files: RunFiles,
+    #[arg(long)]
+    inputs: Option<PathBuf>,
+    /// Play seeded random inputs for one player, mapped by the game's own raw input mapping:
+    /// keys held from a set of common codes, and one gamepad with random axes and buttons.
+    #[arg(long, value_name = "SEED", conflicts_with = "inputs")]
+    random_inputs: Option<u64>,
+    /// The ticks to test: required for a scene, every recorded tick of a replay by default.
+    #[arg(long)]
+    ticks: Option<u64>,
+    /// The ticks each rollback plays again, from 1 to the ticks tested.
+    #[arg(long, default_value_t = 8)]
+    window: u32,
+    #[arg(long, value_parser = thread_count, help = threads_help())]
+    threads: Option<usize>,
+    /// Where to write the straight and the rolled back snapshots of the first mismatch.
+    #[arg(long, default_value = "dump")]
+    dump_dir: PathBuf,
+}
+
+#[derive(Args)]
 pub struct DiffArgs {
     snapshot_a: PathBuf,
     snapshot_b: PathBuf,
@@ -349,6 +380,146 @@ pub fn verify(app: fn() -> App, args: &VerifyArgs, out: &mut dyn Write) -> Outco
         )?;
     }
     Ok(1)
+}
+
+/// The key codes `--random-inputs` holds: the arrows, WASD, and the keys games commonly bind.
+const RANDOM_KEYS: [&str; 14] = [
+    "ArrowLeft",
+    "ArrowRight",
+    "ArrowUp",
+    "ArrowDown",
+    "KeyW",
+    "KeyA",
+    "KeyS",
+    "KeyD",
+    "Space",
+    "Enter",
+    "Escape",
+    "ShiftLeft",
+    "ControlLeft",
+    "Delete",
+];
+/// The buttons and axes of the gamepad `--random-inputs` plays, as the standard mapping has.
+const RANDOM_BUTTONS: usize = 17;
+const RANDOM_AXES: usize = 4;
+
+/// Runs the scene or replay straight next to a copy, built from `app` too, that mispredicts
+/// and rolls back every tick ([`sync_test`]). On the first mismatch, prints the report and
+/// writes both snapshots of that tick into `--dump-dir`.
+pub fn synctest(app: fn() -> App, args: &SyncTestArgs, out: &mut dyn Write) -> Outcome {
+    let SyncTestArgs {
+        files,
+        inputs,
+        random_inputs,
+        ticks,
+        window,
+        threads,
+        dump_dir,
+    } = args;
+    let mut other = simulation(app, *threads)?;
+    let (mut sim, inputs, edits, ticks) = if is_replay(&files.scene) {
+        if inputs.is_some()
+            || random_inputs.is_some()
+            || files.edits.is_some()
+            || files.project.is_some()
+        {
+            return Err(
+                "a replay holds its own inputs, edits, and assets; drop --inputs, --random-inputs, --edits, and --project"
+                    .into(),
+            );
+        }
+        let replay = Replay::decode(&read(&files.scene)?).map_err(|error| error.to_string())?;
+        let recorded = (replay.hashes.len() as u64).saturating_sub(1);
+        let ticks = match ticks {
+            Some(ticks) if *ticks > recorded => {
+                return Err(format!(
+                    "cannot test {ticks} ticks: the replay records {recorded}"
+                ));
+            }
+            Some(ticks) => *ticks,
+            None => recorded,
+        };
+        let mut sim = simulation(app, *threads)?;
+        let (inputs, edits) = load_replay(&mut sim, &replay).map_err(|error| error.to_string())?;
+        load_replay(&mut other, &replay).map_err(|error| error.to_string())?;
+        (sim, inputs, edits, ticks)
+    } else {
+        let Some(ticks) = *ticks else {
+            return Err("testing a scene needs --ticks".into());
+        };
+        let run = Run::read(app, files, inputs.as_deref(), *threads)?;
+        other
+            .load_scene_with(&run.scene, &run.assets)
+            .map_err(|error| format!("cannot load {}: {error}", files.scene.display()))?;
+        let inputs = match random_inputs {
+            Some(seed) => random_input_log(&run.sim, *seed, ticks)?,
+            None => run.inputs,
+        };
+        (run.sim, inputs, run.edits, ticks)
+    };
+    for sim in [&mut sim, &mut other] {
+        sim.set_players(usize::from(inputs.players));
+    }
+    match sync_test(&mut sim, &mut other, &inputs, &edits, ticks, *window) {
+        Ok(report) => {
+            say(
+                out,
+                format_args!(
+                    "synctest passed: {} ticks, {} rollbacks",
+                    report.ticks, report.rollbacks
+                ),
+            )?;
+            Ok(0)
+        }
+        Err(error @ SyncTestError::Mismatch { .. }) => {
+            say(out, &error)?;
+            let SyncTestError::Mismatch {
+                tick, snapshots, ..
+            } = error
+            else {
+                unreachable!("matched as a mismatch");
+            };
+            let mut paths = Vec::new();
+            for (side, snapshot) in ["straight", "rollback"].into_iter().zip(snapshots.iter()) {
+                let path = dump_dir.join(format!("tick-{tick}-{side}.snap"));
+                write(&path, &snapshot.encode())?;
+                paths.push(path.display().to_string());
+            }
+            say(out, format_args!("wrote {}", paths.join(" and ")))?;
+            Ok(1)
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// `ticks` ticks of seeded random raw input for one player, mapped by the game's mapping:
+/// each key of [`RANDOM_KEYS`] held one tick in four, and one gamepad with random buttons and
+/// axes.
+fn random_input_log(sim: &Simulation, seed: u64, ticks: u64) -> Result<InputLog, String> {
+    let mut rng = Rng::new(seed, 0);
+    let mut log = InputLog::new(1);
+    for tick in 0..ticks {
+        let keys = RANDOM_KEYS
+            .iter()
+            .filter(|_| rng.range_u32(0, 4) == 0)
+            .map(|key| key.to_string())
+            .collect();
+        let gamepad = RawGamepad {
+            buttons: (0..RANDOM_BUTTONS)
+                .map(|_| rng.range_f32(0.0, 1.0))
+                .collect(),
+            axes: (0..RANDOM_AXES).map(|_| rng.range_f32(-1.0, 1.0)).collect(),
+        };
+        let raw = RawInput {
+            keys,
+            gamepads: vec![gamepad],
+        };
+        let encoded = sim
+            .map_raw_input(&[raw])
+            .map_err(|error| format!("cannot map the random input of tick {tick}: {error}"))?;
+        log.ticks.push(encoded);
+    }
+    Ok(log)
 }
 
 pub fn diff(app: fn() -> App, args: &DiffArgs, out: &mut dyn Write) -> Outcome {

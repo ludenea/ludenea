@@ -148,6 +148,23 @@ wasmtime run --dir=. target/wasm32-wasip1/release/arena.wasm verify golden/arena
 cargo run --locked --release -p arena --bin record-replay -- golden/arena.replay
 ```
 
+Catch game code that a rollback makes diverge: `synctest` runs a scene or replay straight next to
+a copy that mispredicts and rolls back every tick (`--window` ticks back, 8 by default), and
+compares their hashes at every tick. A mismatch names the tick, the entities, components and
+fields that differ with their candidate causes, and the resources that differ; it writes both
+snapshots of that tick, `tick-K-straight.snap` and `tick-K-rollback.snap`, into `--dump-dir`
+(`dump` by default) and exits with code 1. A replay holds its own run; a scene needs `--ticks`,
+and takes `--inputs` or `--random-inputs SEED`, seeded keys and gamepad input mapped by the
+game's own input mapping. CI runs these at 1 and 8 threads, and the arena's under `wasmtime`:
+
+```sh
+cargo run --locked --release -p arena -- synctest golden/arena.replay --threads 8
+cargo run --locked --release -p swarm -- synctest examples/swarm/assets/swarm.scene.ron \
+  --ticks 600 --random-inputs 1 --threads 8
+cargo run --locked --release -p boxes -- synctest golden/spawner.replay --threads 8
+wasmtime run --dir=. target/wasm32-wasip1/release/arena.wasm synctest golden/arena.replay
+```
+
 Render a tick of a scene or replay to a PNG (1280 by 720 unless `--width` and `--height`
 say otherwise; repeat `--debug-layer` to draw debug layers over it). A scene runs with its
 `--inputs` and `--edits`; the textures are the project's PNGs with a texture meta, and one

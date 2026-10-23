@@ -705,6 +705,32 @@ hash, those of the golden trace and replays included.
   and exit with code 2, where Rust's panic text and code 101 named neither the tick nor
   the system; `verify` also writes the state the panicking tick ran from to
   `tick-3.snap` in `--dump-dir`.
+- New: `ludenea_net::sync_test(sim, other, inputs, edits, ticks, window)` catches game code a
+  rollback makes diverge. `other` runs the ticks straight; `sim` saves its state, plays each
+  tick once with a wrong input (the input of the tick before, or the default inputs when it
+  equals the real one), loads the state of `window` ticks back and plays them again,
+  comparing every hash with the straight run. It passes with a `SyncTestReport { ticks,
+  rollbacks }`, and refuses a window outside 1 to `ticks` (`SyncTestError::Window`) or two
+  simulations that do not start at tick 0 with the same state (`SyncTestError::Start`). The
+  first tick whose hashes differ is `SyncTestError::Mismatch { tick, straight, rollback,
+  entities, resources, warnings, snapshots }`: the per-entity divergence report, with the
+  straight simulation first, the first differing field of each resource, of the entity
+  allocator and of each asset that differs, and both snapshots of that tick. Its causes
+  come from playing the tick before again, so for game code that is not deterministic they
+  are candidates. Its message lists the first `LISTED_ENTITIES` (10) entities and counts
+  the others. A game failure is `SyncTestError::Game { tick, error }`, and a saved state
+  that does not load back `SyncTestError::State { tick, error }`.
+- New: `ludenea_app::replay::play_tick_observed(sim, inputs, edits, tick, observer)`, which
+  is `play_tick` reporting to a `ScheduleObserver` as `Simulation::step_observed` does.
+- New: the command line tool's `synctest <scene or .replay>` runs `sync_test` with
+  `--window` (8 by default) and `--threads`, building the second simulation from the same
+  app. A replay holds its own run (`--inputs`, `--random-inputs`, `--edits` and `--project`
+  are refused; `--ticks` tests fewer of its ticks). A scene needs `--ticks`, and takes
+  `--inputs` or `--random-inputs SEED`: seeded raw inputs for one player (keys from a set of
+  common codes and one gamepad) mapped by the game's own input mapping. It prints
+  `synctest passed: N ticks, R rollbacks` and exits with 0, or prints the mismatch, writes
+  `tick-K-straight.snap` and `tick-K-rollback.snap` into `--dump-dir` (`dump` by default) and
+  exits with 1.
 - Removed: `BranchesError::Tree`, which named no branch. A branch tree or a redo whose
   branches do not link up is refused with the new `BranchesError::MissingParent`,
   `YoungerParent`, `NoParent`, `Taken`, `NoRoot`, `NoCurrent`, or `NoSuchBranch`, each

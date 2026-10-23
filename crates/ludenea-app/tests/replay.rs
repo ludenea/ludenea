@@ -1,7 +1,7 @@
 use ludenea_app::edit::{Edit, EditLog, EntityRef, TimedEdit};
 use ludenea_app::replay::{
-    REPLAY_CHECKPOINT_INTERVAL, REPLAY_VERSION, Replay, ReplayError, ReplayOutcome, play_replay,
-    record_replay,
+    REPLAY_CHECKPOINT_INTERVAL, REPLAY_VERSION, Replay, ReplayError, ReplayOutcome, load_replay,
+    play_replay, play_tick_observed, record_replay,
 };
 use ludenea_app::{AssetTexts, InputLog};
 use ludenea_ecs::{AssetId, Snapshot};
@@ -620,4 +620,45 @@ fn inputs_and_edits_past_the_recorded_ticks_are_refused() {
         matches!(&error, ReplayError::Decode { what, .. } if what == "input of tick 10"),
         "{error:?}"
     );
+}
+
+/// Counts the systems and the tick ends it observes.
+#[derive(Default)]
+struct Counting {
+    systems: usize,
+    ticks: usize,
+}
+
+impl ludenea_ecs::ScheduleObserver for Counting {
+    fn before_system(&mut self, _: usize) {}
+
+    fn after_system(&mut self, _: usize, _: &[ludenea_ecs::CommandRecord]) {
+        self.systems += 1;
+    }
+
+    fn tick_end(&mut self, _: &ludenea_ecs::World) {
+        self.ticks += 1;
+    }
+}
+
+#[test]
+fn play_tick_observed_reports_each_tick_and_plays_the_recorded_hashes() {
+    let edits = EditLog {
+        edits: vec![TimedEdit {
+            tick: 4,
+            edit: Edit::Despawn {
+                entity: EntityRef::Loaded(vec![5, 1]),
+            },
+        }],
+        ..EditLog::new()
+    };
+    let replay = recorded(10, &edits);
+    let mut sim = game::simulation();
+    let (inputs, edits) = load_replay(&mut sim, &replay).unwrap();
+    let mut observer = Counting::default();
+    for tick in 0..10 {
+        play_tick_observed(&mut sim, &inputs, &edits, tick, &mut observer).unwrap();
+        assert_eq!(sim.hash(), replay.hashes[tick as usize + 1], "tick {tick}");
+    }
+    assert_eq!((observer.systems, observer.ticks), (10, 10));
 }

@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use ludenea_ecs::{AssetId, Snapshot};
+use ludenea_ecs::{AssetId, ScheduleObserver, Snapshot};
 use serde::{Deserialize, Serialize};
 
 use crate::assets::{AssetSource, AssetTexts, parse_asset_file};
@@ -268,7 +268,7 @@ fn play(
         if tick == total {
             break;
         }
-        if let Err(error) = step(sim, &inputs, &edits, tick) {
+        if let Err(error) = step(sim, &inputs, &edits, tick, None) {
             return Err(with_snapshot(error, sim, &held, &inputs, &edits));
         }
         tick += 1;
@@ -390,15 +390,29 @@ pub fn play_tick(
     edits: &EditLog,
     tick: u64,
 ) -> Result<(), ReplayError> {
-    guarded(sim, |sim| step(sim, inputs, edits, tick))
+    guarded(sim, |sim| step(sim, inputs, edits, tick, None))
 }
 
-/// Applies the edits of `tick`, then steps with its inputs.
+/// `play_tick`, reporting each system, its commands, and the events of the tick to
+/// `observer` as `Simulation::step_observed` does. Observing never changes the result.
+pub fn play_tick_observed(
+    sim: &mut Simulation,
+    inputs: &InputLog,
+    edits: &EditLog,
+    tick: u64,
+    observer: &mut dyn ScheduleObserver,
+) -> Result<(), ReplayError> {
+    guarded(sim, |sim| step(sim, inputs, edits, tick, Some(observer)))
+}
+
+/// Applies the edits of `tick`, then steps with its inputs, observed when `observer` is
+/// given.
 fn step(
     sim: &mut Simulation,
     inputs: &InputLog,
     edits: &EditLog,
     tick: u64,
+    observer: Option<&mut dyn ScheduleObserver>,
 ) -> Result<(), ReplayError> {
     for timed in edits.at(tick) {
         sim.apply_edit(&timed.edit).map_err(|error| match error {
@@ -417,8 +431,11 @@ fn step(
             EditError::Panicked(panic) => panicked(panic),
         })?;
     }
-    sim.step_encoded(inputs.tick(tick))
-        .map_err(sim_error(decode_error(&format!("input of tick {tick}"))))
+    let stepped = match observer {
+        Some(observer) => sim.step_observed(inputs.tick(tick), observer),
+        None => sim.step_encoded(inputs.tick(tick)),
+    };
+    stepped.map_err(sim_error(decode_error(&format!("input of tick {tick}"))))
 }
 
 /// The encoded snapshot of the tick before the current one, re-simulated from `held`;
