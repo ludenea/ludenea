@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use ludenea_app::RawGamepad;
 use ludenea_app::players::{Claim, KeyboardPart, LiveDevices};
 use ludenea_control::{
-    BranchId, Bytes, Command, ComponentValue, Document, FieldTarget, Hash64, PathSegment, TileArea,
-    Topic,
+    BranchId, Bytes, Command, ComponentValue, Document, FieldTarget, Hash64, OnlineSettings,
+    PathSegment, TileArea, Topic,
 };
 use ludenea_ecs::{AssetId, Entity};
 
@@ -263,5 +263,27 @@ pub fn every_command() -> Vec<Command> {
         },
         Command::GetDivergence { up_to: Some(30) },
         Command::GetDivergence { up_to: None },
+        Command::JoinMatch {
+            settings: OnlineSettings {
+                local: 1,
+                match_id: Hash64(0xfeed),
+                players: vec![0, 1, 1],
+            },
+            claims: vec![
+                Claim {
+                    keyboard: Some(KeyboardPart::Left),
+                    gamepad: None,
+                },
+                Claim {
+                    keyboard: None,
+                    gamepad: Some(1),
+                },
+            ],
+        },
+        Command::NetReceive {
+            from: 0,
+            packet: bytes.clone(),
+        },
+        Command::LeaveMatch,
     ]
 }

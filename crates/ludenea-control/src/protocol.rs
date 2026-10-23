@@ -29,7 +29,7 @@ pub const PROTOCOL_VERSION: u32 = 5;
 /// instead of misreading fields. A change the declarations do not show, such as a new serde
 /// default or another encoding of a type declared as a string, leaves it as it is.
 /// `tests/typescript.rs` pins it.
-pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0xcd1e_7581_0002_a446);
+pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0x6807_0833_9857_ba28);
 
 /// Binary data, serialized as a standard base64 string.
 #[derive(Clone, Debug, PartialEq)]
@@ -542,6 +542,95 @@ pub enum Command {
     Unsubscribe {
         topic: Topic,
     },
+    /// Joins an online match as `settings` describe it, `claims` holding the devices of each
+    /// local player, in the order of the match's players this peer owns. The session takes an
+    /// empty input log of the match's players at tick 0, and the match plays as `Host::advance`
+    /// passes time: the packets to send come as `NetSend`, and the state as `Online`. While the
+    /// match runs, the commands that would change this peer's game alone, or read the session
+    /// the match records at its end, are refused with `online_match`. At the end, the
+    /// confirmed inputs become the session's input log, which resimulates in the background.
+    JoinMatch {
+        settings: OnlineSettings,
+        claims: Vec<Claim>,
+    },
+    /// A packet peer `from` sent this peer; without a match it is dropped.
+    NetReceive {
+        from: u8,
+        packet: Bytes,
+    },
+    /// Leaves the online match: every peer ends at the last tick this one has inputs for.
+    /// While it connects, the match is dropped here, and the others end `unreachable`.
+    LeaveMatch,
+}
+
+/// The match a peer joins, the same on every peer but `local`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct OnlineSettings {
+    /// This peer.
+    pub local: u8,
+    /// Tells this match's packets from any other's.
+    pub match_id: Hash64,
+    /// The peer that owns each global player, in player order.
+    pub players: Vec<u8>,
+}
+
+/// Where an online match is, as `Event::Online` reports it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum OnlineState {
+    /// Greeting the other peers.
+    Connecting,
+    /// Every peer agreed: the match plays.
+    Running,
+    /// This peer left: the match plays up to the last tick it has inputs for.
+    Leaving,
+    /// The match is over for this peer.
+    Ended { end: MatchEnd },
+}
+
+/// Why an online match ended.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct MatchEnd {
+    pub kind: MatchEndKind,
+    /// The reason in words, naming the peers by number.
+    pub message: String,
+    /// The peer the reason names: the one that played another match, never answered, was
+    /// lost, broke the protocol, whose hash differed, left, or whose game failed.
+    pub peer: Option<u8>,
+    /// The tick the reason names: the tick of the broken rule or of the differing hashes,
+    /// the last tick of a match left, the tick a game failed at.
+    pub tick: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum MatchEndKind {
+    /// A peer left on purpose.
+    Left,
+    /// A peer stopped answering while the match ran.
+    Lost,
+    /// The game states of two peers differ.
+    Desync,
+    /// A peer broke a rule of the network protocol.
+    Violation,
+    /// A peer plays another match: another build, scene, or setting.
+    Mismatch,
+    /// A peer never answered while the match was starting.
+    Unreachable,
+    /// The game of a peer failed.
+    LocalFailure,
+}
+
+/// One packet for peer `to`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct NetPacket {
+    pub to: u8,
+    pub packet: Bytes,
 }
 
 impl Command {
@@ -612,7 +701,10 @@ impl Command {
             | Command::SetCompareBranch { .. }
             | Command::SetPushedLayers { .. }
             | Command::Subscribe { .. }
-            | Command::Unsubscribe { .. } => "done",
+            | Command::Unsubscribe { .. }
+            | Command::JoinMatch { .. }
+            | Command::NetReceive { .. }
+            | Command::LeaveMatch => "done",
         }
     }
 }
@@ -935,6 +1027,20 @@ pub enum Event {
         frames: Vec<RenderFrame>,
         progress: f64,
     },
+    /// The online match changed state.
+    Online {
+        state: OnlineState,
+    },
+    /// The packets to send to the other peers of the online match, after each advance that
+    /// has some, while the match plays and while it lingers once ended.
+    NetSend {
+        packets: Vec<NetPacket>,
+    },
+    /// The ticks from `from` up to `to`, excluded, ran again with corrected inputs.
+    RolledBack {
+        from: u64,
+        to: u64,
+    },
 }
 
 /// A render frame as the transports that carry bytes send it (postcard), and as JSON carries
@@ -1033,6 +1139,9 @@ pub enum ErrorCode {
     /// code. The message names the tick, the system, and the source location when known.
     SystemPanicked,
     InvalidFilter,
+    /// A command refused while an online match connects, runs, or is left, or a second match
+    /// joined meanwhile.
+    OnlineMatch,
 }
 
 impl ProtocolError {

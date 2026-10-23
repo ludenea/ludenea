@@ -578,6 +578,26 @@ fn every_command_and_reply_round_trips_through_json() {
         Event::ResourcesChanged {
             resources: BTreeMap::new(),
         },
+        Event::Online {
+            state: OnlineState::Connecting,
+        },
+        Event::Online {
+            state: OnlineState::Ended {
+                end: MatchEnd {
+                    kind: MatchEndKind::LocalFailure,
+                    message: "m".into(),
+                    peer: Some(1),
+                    tick: Some(40),
+                },
+            },
+        },
+        Event::NetSend {
+            packets: vec![NetPacket {
+                to: 2,
+                packet: bytes.clone(),
+            }],
+        },
+        Event::RolledBack { from: 3, to: 9 },
     ];
     for event in events {
         let message = ServerMessage::Event { event };
@@ -636,13 +656,14 @@ fn every_error_code() -> Vec<ErrorCode> {
         NoInputMapping,
         SystemPanicked,
         InvalidFilter,
+        OnlineMatch,
     ];
     for code in &all {
         match code {
             VersionMismatch | NotConnected | InvalidScene | InvalidInputs | InvalidSnapshot
             | InvalidReplay | NoSuchEntity | InvalidEdit | UnknownComponent | UnknownResource
             | InvalidPath | InvalidCommand | InvalidTick | Resimulating | NothingToUndo
-            | NothingToRedo | NoInputMapping | SystemPanicked | InvalidFilter => {}
+            | NothingToRedo | NoInputMapping | SystemPanicked | InvalidFilter | OnlineMatch => {}
         }
     }
     all

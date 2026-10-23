@@ -158,6 +158,24 @@ type LiveDevices = {
 };
 
 /**
+ * The match a peer joins, the same on every peer but `local`.
+ */
+type OnlineSettings = {
+    /**
+     * This peer.
+     */
+    local: number;
+    /**
+     * Tells this match's packets from any other's.
+     */
+    match_id: Hash64;
+    /**
+     * The peer that owns each global player, in player order.
+     */
+    players: Array<number>;
+};
+
+/**
  * One step into a value: a struct field, or a list, array, or tuple index. An enum
  * variant's content is the field named after the variant; a newtype variant's content
  * is that field's value directly, so `Collider.shape` as `{"Circle": {"radius": ..}}`
@@ -447,6 +465,16 @@ type Command = {
 } | {
     "type": "unsubscribe";
     topic: Topic;
+} | {
+    "type": "join_match";
+    settings: OnlineSettings;
+    claims: Array<Claim>;
+} | {
+    "type": "net_receive";
+    from: number;
+    packet: Bytes;
+} | {
+    "type": "leave_match";
 };
 
 type ClientMessage = {
@@ -617,7 +645,52 @@ type EntityRow = {
     hash: Hash64;
 };
 
-type ErrorCode = "version_mismatch" | "not_connected" | "invalid_scene" | "invalid_inputs" | "invalid_snapshot" | "invalid_replay" | "no_such_entity" | "invalid_edit" | "unknown_component" | "unknown_resource" | "invalid_path" | "invalid_command" | "invalid_tick" | "resimulating" | "nothing_to_undo" | "nothing_to_redo" | "no_input_mapping" | "system_panicked" | "invalid_filter";
+type ErrorCode = "version_mismatch" | "not_connected" | "invalid_scene" | "invalid_inputs" | "invalid_snapshot" | "invalid_replay" | "no_such_entity" | "invalid_edit" | "unknown_component" | "unknown_resource" | "invalid_path" | "invalid_command" | "invalid_tick" | "resimulating" | "nothing_to_undo" | "nothing_to_redo" | "no_input_mapping" | "system_panicked" | "invalid_filter" | "online_match";
+
+/**
+ * One packet for peer `to`.
+ */
+type NetPacket = {
+    to: number;
+    packet: Bytes;
+};
+
+type MatchEndKind = "left" | "lost" | "desync" | "violation" | "mismatch" | "unreachable" | "local_failure";
+
+/**
+ * Why an online match ended.
+ */
+type MatchEnd = {
+    kind: MatchEndKind;
+    /**
+     * The reason in words, naming the peers by number.
+     */
+    message: string;
+    /**
+     * The peer the reason names: the one that played another match, never answered, was
+     * lost, broke the protocol, whose hash differed, left, or whose game failed.
+     */
+    peer: number | null;
+    /**
+     * The tick the reason names: the tick of the broken rule or of the differing hashes,
+     * the last tick of a match left, the tick a game failed at.
+     */
+    tick: number | null;
+};
+
+/**
+ * Where an online match is, as `Event::Online` reports it.
+ */
+type OnlineState = {
+    "type": "connecting";
+} | {
+    "type": "running";
+} | {
+    "type": "leaving";
+} | {
+    "type": "ended";
+    end: MatchEnd;
+};
 
 type PauseReason = {
     "type": "user";
@@ -727,6 +800,16 @@ type Event = {
     "type": "render_frames";
     frames: Array<string>;
     progress: number;
+} | {
+    "type": "online";
+    state: OnlineState;
+} | {
+    "type": "net_send";
+    packets: Array<NetPacket>;
+} | {
+    "type": "rolled_back";
+    from: number;
+    to: number;
 };
 
 type VariantFields = {
@@ -1186,7 +1269,7 @@ type ServerMessage = {
 /** The control protocol version this build speaks: a client and a host connect only when theirs are equal. */
 const PROTOCOL_VERSION = 5;
 /** The wire shape of `PROTOCOL_VERSION`, a hash of the protocol's types: a client and a host connect only when theirs are equal too. */
-const PROTOCOL_FINGERPRINT = "cd1e75810002a446";
+const PROTOCOL_FINGERPRINT = "680708339857ba28";
 /** The `type` of the reply each command type gets when it succeeds. */
 type ReplyTypes = {
     apply_override: "done";
@@ -1215,6 +1298,8 @@ type ReplyTypes = {
     get_tick_events: "tick_events";
     get_timeline: "timeline";
     insert_component: "done";
+    join_match: "done";
+    leave_match: "done";
     load_edits: "done";
     load_inputs: "done";
     load_replay: "replay_loaded";
@@ -1222,6 +1307,7 @@ type ReplyTypes = {
     load_session: "loaded";
     mark_asset_saved: "done";
     mark_scene_saved: "done";
+    net_receive: "done";
     new_asset_value: "text";
     paint_tiles: "done";
     pause: "done";
@@ -1781,5 +1867,5 @@ function startWorkerGame(options: {
 }): WorkerGame;
 
 export { ControlClient, PROJECT_PROTOCOL_FINGERPRINT, PROJECT_PROTOCOL_VERSION, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION, ProjectClient, ProtocolFailure, RequestTracker, fakeTransport, fromBase64, handshake, parseFrame, postMessageTransport, startWorkerGame, tauriTransport, unwrap, webSocketTransport };
-export type { AssetId, AssetKind, AssetTexts, BranchId, BranchInfo, BuildEvent, Bytes, CameraItem, Cause, Claim, ClientEvent, ClientMessage, Color, Command, ComponentValue, ConsoleLevel, DebugDrawFrame, Diagnostic, Difference, DivergenceKind, DivergenceReport, Document, Entity, EntityDivergence, EntityHash, EntityRow, ErrorCode, Event, FailureCode, FieldSchema, FieldTarget, FileChange, FileEntry, Filter, GameInfo, GameOutput, Grid, Hash64, HashTree, InstanceInfo, Item, JsonValue, KeyboardPart, LayerInfo, LiveDevices, MessageTransport, NamedHash, NamedSchema, Outcome, OutputStream, OverrideInfo, PathSegment, PauseReason, PluginBundle, PluginSource, Primitive, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo, ProjectOutcome, ProjectReply, ProjectReplyFor, ProjectReplyTypes, ProjectRequest, ProjectServerMessage, ProtocolError, ProtocolPeer, PushedFrames, RawGamepad, RecordedEvent, RenderFrame, RenderFramesEvent, Reply, ReplyFor, ReplyTypes, RootCause, RootCauseKind, Rot, ServerMessage, ServiceMode, SpriteItem, SyncPoint, SystemRow, TextureMeta, TileArea, TilemapItem, Timeline, Topic, TraceComparison, TypeSchema, VariantFields, VariantSchema, Vec2, WorkerCrash, WorkerGame };
+export type { AssetId, AssetKind, AssetTexts, BranchId, BranchInfo, BuildEvent, Bytes, CameraItem, Cause, Claim, ClientEvent, ClientMessage, Color, Command, ComponentValue, ConsoleLevel, DebugDrawFrame, Diagnostic, Difference, DivergenceKind, DivergenceReport, Document, Entity, EntityDivergence, EntityHash, EntityRow, ErrorCode, Event, FailureCode, FieldSchema, FieldTarget, FileChange, FileEntry, Filter, GameInfo, GameOutput, Grid, Hash64, HashTree, InstanceInfo, Item, JsonValue, KeyboardPart, LayerInfo, LiveDevices, MatchEnd, MatchEndKind, MessageTransport, NamedHash, NamedSchema, NetPacket, OnlineSettings, OnlineState, Outcome, OutputStream, OverrideInfo, PathSegment, PauseReason, PluginBundle, PluginSource, Primitive, ProjectClientMessage, ProjectEvent, ProjectFailure, ProjectInfo, ProjectOutcome, ProjectReply, ProjectReplyFor, ProjectReplyTypes, ProjectRequest, ProjectServerMessage, ProtocolError, ProtocolPeer, PushedFrames, RawGamepad, RecordedEvent, RenderFrame, RenderFramesEvent, Reply, ReplyFor, ReplyTypes, RootCause, RootCauseKind, Rot, ServerMessage, ServiceMode, SpriteItem, SyncPoint, SystemRow, TextureMeta, TileArea, TilemapItem, Timeline, Topic, TraceComparison, TypeSchema, VariantFields, VariantSchema, Vec2, WorkerCrash, WorkerGame };
 }

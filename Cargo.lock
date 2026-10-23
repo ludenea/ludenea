@@ -1993,6 +1993,7 @@ dependencies = [
 name = "ludenea-control"
 version = "0.1.0"
 dependencies = [
+ "arena",
  "base64 0.23.1",
  "boxes",
  "ludenea",
@@ -2001,6 +2002,7 @@ dependencies = [
  "ludenea-draw",
  "ludenea-ecs",
  "ludenea-math",
+ "ludenea-net",
  "postcard",
  "serde",
  "serde_json",

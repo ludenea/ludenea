@@ -10,8 +10,8 @@ use ludenea::app::replay::{Replay, ReplayOutcome, play_replay};
 use ludenea::app::trace::{TRACE_VERSION, Trace, TraceComparison};
 use ludenea::control::{
     BranchId, Bytes, Command, ComponentValue, Document, ErrorCode, Event, FieldTarget, Hash64,
-    Host, InProcess, PROTOCOL_VERSION, PathSegment, ProtocolError, Reply, TileArea, Timeline,
-    Topic,
+    Host, InProcess, OnlineSettings, PROTOCOL_VERSION, PathSegment, ProtocolError, Reply, TileArea,
+    Timeline, Topic,
 };
 use ludenea::ecs::diff::Difference;
 use ludenea::ecs::{Asset, AssetId, Entity, Snapshot};
@@ -437,6 +437,22 @@ fn every_command_names_the_reply_it_gets() {
         },
         tile: Some(3),
     });
+
+    // An online match, left while it connects.
+    checked.host = Host::new(boxes::app).unwrap();
+    checked.run(Command::JoinMatch {
+        settings: OnlineSettings {
+            local: 0,
+            match_id: Hash64(1),
+            players: vec![0, 1],
+        },
+        claims: ludenea::app::players::automatic_claims(1),
+    });
+    checked.run(Command::NetReceive {
+        from: 1,
+        packet: Bytes(vec![0]),
+    });
+    checked.run(Command::LeaveMatch);
 
     let every_type: BTreeSet<String> = support::every_command().iter().map(type_of).collect();
     assert_eq!(checked.ran, every_type, "the commands this test runs");

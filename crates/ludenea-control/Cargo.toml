@@ -13,6 +13,7 @@ ludenea-app.workspace = true
 ludenea-ecs.workspace = true
 ludenea-draw.workspace = true
 ludenea-math.workspace = true
+ludenea-net.workspace = true
 base64.workspace = true
 serde.workspace = true
 postcard.workspace = true
@@ -25,6 +26,7 @@ wasm-bindgen.workspace = true
 web-sys.workspace = true
 
 [dev-dependencies]
+arena = { path = "../../examples/arena" }
 boxes = { path = "../../examples/boxes" }
 swarm = { path = "../../examples/swarm" }
 ludenea.workspace = true

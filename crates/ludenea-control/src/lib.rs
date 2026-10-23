@@ -8,6 +8,7 @@ pub mod divergence;
 pub mod host;
 pub mod in_process;
 pub mod json;
+mod online;
 pub mod pacer;
 pub mod path;
 pub mod protocol;
@@ -29,9 +30,9 @@ pub use json::{from_wire, to_wire, untyped_to_wire};
 pub use path::{PathSegment, set_at_path};
 pub use protocol::{
     Bytes, ClientMessage, Command, ComponentValue, ConsoleLevel, EntityRow, ErrorCode, Event,
-    FieldTarget, GameInfo, Hash64, NamedSchema, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION,
-    PauseReason, ProtocolError, RecordedEvent, Reply, ServerMessage, SyncPoint, SystemRow,
-    TileArea, Topic,
+    FieldTarget, GameInfo, Hash64, MatchEnd, MatchEndKind, NamedSchema, NetPacket, OnlineSettings,
+    OnlineState, PROTOCOL_FINGERPRINT, PROTOCOL_VERSION, PauseReason, ProtocolError, RecordedEvent,
+    Reply, ServerMessage, SyncPoint, SystemRow, TileArea, Topic,
 };
 pub use session::{
     Document, Resimulation, SceneChange, Session, SessionError, SessionExport, Timeline,

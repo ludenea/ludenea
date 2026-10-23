@@ -284,6 +284,10 @@ pub struct Session {
     /// The tick the session was at when its scene changed: resimulation seeks back to it
     /// once it gets there, unless the session moves first.
     return_to: Option<u64>,
+    /// The tick the resimulation of adopted inputs reaches (`adopt_inputs`), one past the
+    /// head: the input of the last tick steps the run to the tick after it. Set until that
+    /// resimulation ends or the logs change.
+    adopted_end: Option<u64>,
     diverged: bool,
     reports: VecDeque<Resimulation>,
     /// Records every tick run while the `Introspection` topic is subscribed.
@@ -352,6 +356,7 @@ impl Session {
             history: UndoHistory::default(),
             resimulating: None,
             return_to: None,
+            adopted_end: None,
             diverged: false,
             reports: VecDeque::new(),
             introspection: None,
@@ -603,6 +608,28 @@ impl Session {
         sim.set_players(usize::from(log.players));
         self.inputs = log;
         self.reset_future(sim)
+    }
+
+    /// Replaces the inputs with `log`, the confirmed inputs of an online match, and
+    /// resimulates them from tick 0 in the background, at most a resimulation budget per
+    /// `Host::advance` whatever the log's length. Until it gets back to tick
+    /// `log.ticks.len()`, it shows tick 0; there every tick has its recorded hash.
+    pub fn adopt_inputs(
+        &mut self,
+        sim: &mut Simulation,
+        log: InputLog,
+    ) -> Result<(), SessionError> {
+        let end = log.ticks.len() as u64;
+        self.load_inputs(sim, log)?;
+        // Loading inputs alone resimulates nothing: they replay as the session plays. Here
+        // the run from tick 0 is stale, to come back to its end, which the head (the last
+        // tick with an input) falls one short of.
+        if end > 0 {
+            self.adopted_end = Some(end);
+            self.resimulating = Some(0);
+            self.return_to = Some(end);
+        }
+        Ok(())
     }
 
     /// Replaces the recorded edits and seeks to tick 0. The edits are checked by
@@ -1547,6 +1574,7 @@ impl Session {
     /// to, when it was resimulating.
     fn end_resimulation(&mut self) -> Option<u64> {
         self.switching = None;
+        self.adopted_end = None;
         let failed = self.resimulating.take()?;
         let kept = usize::try_from(failed + 1).expect("tick fits in memory");
         self.hashes.truncate(kept);
@@ -1622,6 +1650,7 @@ impl Session {
         }
         if up_to >= self.end() {
             self.resimulating = None;
+            self.adopted_end = None;
         }
         let returned = self
             .return_to
@@ -2031,7 +2060,9 @@ impl Session {
 
     /// The last tick resimulation has to reach.
     fn end(&self) -> u64 {
-        self.head.max(self.simulated())
+        self.head
+            .max(self.simulated())
+            .max(self.adopted_end.unwrap_or(0))
     }
 
     fn ensure_resimulated(&self) -> Result<(), SessionError> {
@@ -2219,6 +2250,7 @@ impl Session {
         self.edits.edits.retain(|edit| edit.tick <= tick);
         self.hashes.truncate(kept);
         self.checkpoints.truncate_after(tick);
+        self.adopted_end = None;
         self.update_head();
         // A live take-over below the resimulated point discards the whole stale future.
         if self.resimulating.is_some_and(|up_to| up_to > tick) {
@@ -2382,6 +2414,7 @@ impl Session {
         // Tick 0 is common to every branch: when it does not restore, the tree and the
         // hashes stay as they were.
         self.restore_checkpoint(sim, 0)?;
+        self.adopted_end = None;
         self.history
             .keep_on_root(&self.tree.path(self.tree.current()), &self.edits);
         self.tree = BranchTree::default();
@@ -2610,8 +2643,9 @@ impl Session {
         self.replay_before_edits(sim, from)?;
         self.diverged = false;
         self.apply_edits_or_drop(sim, from);
-        let stale =
-            self.simulated() > from || self.edits.last_tick().is_some_and(|tick| tick > from);
+        let stale = self.simulated() > from
+            || self.edits.last_tick().is_some_and(|tick| tick > from)
+            || self.adopted_end.is_some_and(|end| end > from);
         self.resimulating = stale.then_some(from);
         self.return_to = None;
         // The world is at `from` until it gets to `at`.

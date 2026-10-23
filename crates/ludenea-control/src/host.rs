@@ -12,17 +12,22 @@ use ludenea_app::{
 use ludenea_draw::DebugDrawFrame;
 use ludenea_draw::frame::RenderFrame;
 use ludenea_ecs::{AssetId, Entity, EntityFilter, FilterError, Snapshot};
+use ludenea_net::{
+    Advanced, ExecuteError, Executor, MAX_INPUT_BYTES, MatchIdentity, MatchRules, PeerId, Request,
+    SessionSettings, SessionState, Timeouts,
+};
 use serde_json::Value as JsonValue;
 
 use crate::compare::{COMPARE_BUDGET_PAUSED, COMPARE_BUDGET_PLAYING, CompareRun};
 use crate::divergence::DivergenceRun;
 use crate::json::{from_wire, to_wire};
+use crate::online::{Clock, OnlineMatch};
 use crate::pacer::Pacer;
 use crate::path::{Path, PathSegment, set_at_path};
 use crate::protocol::{
     Bytes, Command, ComponentValue, ConsoleLevel, EntityRow, ErrorCode, Event, FieldTarget,
-    GameInfo, Hash64, NamedSchema, PauseReason, ProtocolError, Reply, SyncPoint, SystemRow,
-    TileArea, Topic,
+    GameInfo, Hash64, MatchEndKind, NamedSchema, NetPacket, OnlineSettings, OnlineState,
+    PauseReason, ProtocolError, Reply, SyncPoint, SystemRow, TileArea, Topic,
 };
 use crate::session::{
     Document, Resimulation, SceneChange, Session, SessionError, SessionExport, Timeline,
@@ -75,6 +80,9 @@ pub struct Host {
     /// until a new session loads or a later recover succeeds, commands that change the
     /// state are refused with it and time does not pass.
     inconsistent: Option<String>,
+    /// The online match, from `JoinMatch` until another match or session loads: its session
+    /// lingers after the end.
+    online: Option<OnlineMatch>,
 }
 
 impl Host {
@@ -111,6 +119,7 @@ impl Host {
             subscriptions: Subscriptions::default(),
             events: Vec::new(),
             inconsistent: None,
+            online: None,
         })
     }
 
@@ -168,6 +177,17 @@ impl Host {
         {
             return Err(ProtocolError::new(ErrorCode::SystemPanicked, reason));
         }
+        if self.online_active() && refused_online(&command) {
+            return Err(ProtocolError::new(
+                ErrorCode::OnlineMatch,
+                format!(
+                    "`{}` is refused while an online match runs: it would change this peer's \
+                     game alone or read the session the match records at its end; leave the \
+                     match first",
+                    command_name(&command)
+                ),
+            ));
+        }
         let tick = self.simulation.tick();
         catch_panic(tick, || self.handle_unguarded(command))
             .unwrap_or_else(|panic| Err(self.recover(panic)))
@@ -194,7 +214,8 @@ impl Host {
     /// Runs the ticks due after `elapsed_seconds` while playing, and a resimulation budget
     /// while the recorded future is stale. Returns the events since the last call. When game
     /// code panics where nothing reports it more precisely, play pauses and the session
-    /// comes back (see `recover`).
+    /// comes back (see `recover`). While an online match connects, runs or is left, it plays
+    /// the match instead, and the ghost and the divergence report do not follow.
     pub fn advance(&mut self, elapsed_seconds: f64) -> Vec<Event> {
         if self.inconsistent.is_none() {
             let tick = self.simulation.tick();
@@ -206,6 +227,12 @@ impl Host {
     }
 
     fn advance_unguarded(&mut self, elapsed_seconds: f64) {
+        if self.online_active() {
+            self.advance_online(elapsed_seconds);
+            self.report_changes();
+            self.report_timeline();
+            return;
+        }
         let resimulating = self.session.timeline().resimulating;
         if resimulating {
             // Resimulation changes the state shown only by moving to another tick (back
@@ -279,6 +306,7 @@ impl Host {
         }
         self.follow_compare();
         self.follow_divergence();
+        self.linger(elapsed_seconds);
         self.report_changes();
         self.report_timeline();
     }
@@ -327,6 +355,7 @@ impl Host {
     /// session loads or a later recover succeeds.
     fn recover(&mut self, mut panic: Box<GamePanic>) -> ProtocolError {
         panic.tick = self.simulation.tick();
+        self.fail_match_on_panic();
         self.compare = None;
         self.ghost_reported = None;
         self.divergence = None;
@@ -680,6 +709,10 @@ impl Host {
                 Ok(Reply::Done)
             }
             Command::SetLiveInput { devices } => {
+                if let Some(online) = self.online.as_mut().filter(|online| !online.finished) {
+                    online.inputs = map_local_inputs(sim, online, &devices)?;
+                    return Ok(Reply::Done);
+                }
                 let players = split(&devices, &self.claims);
                 let mapped = sim.map_players(&players).map_err(|e| sim_error(&e))?;
                 let idle = players
@@ -1050,6 +1083,19 @@ impl Host {
                     .map_err(|e| filter_error(&e))?;
                 Ok(Reply::Done)
             }
+            Command::JoinMatch { settings, claims } => self.join_match(settings, claims),
+            Command::NetReceive { from, packet } => {
+                if let Some(online) = self
+                    .online
+                    .as_mut()
+                    .filter(|online| online.dropped.is_none())
+                {
+                    let now = online.clock.now();
+                    online.session.receive(PeerId(from), &packet.0, now);
+                }
+                Ok(Reply::Done)
+            }
+            Command::LeaveMatch => self.leave_match(),
             Command::Unsubscribe { topic } => {
                 if topic == Topic::Ghost {
                     self.ghost = false;
@@ -1464,6 +1510,415 @@ impl Host {
             .map_err(|e| in_context(self.fail(e), context))
     }
 
+    /// Whether an online match connects, runs or is left: it is not finished yet.
+    fn online_active(&self) -> bool {
+        self.online.as_ref().is_some_and(|online| !online.finished)
+    }
+
+    /// Joins an online match: checks the claims, the session and the settings, then plays
+    /// the match from tick 0 of an empty input log of its players.
+    fn join_match(
+        &mut self,
+        settings: OnlineSettings,
+        claims: Vec<Claim>,
+    ) -> Result<Reply, ProtocolError> {
+        let local = PeerId(settings.local);
+        let locals: Vec<usize> = (0..settings.players.len())
+            .filter(|&player| settings.players[player] == settings.local)
+            .collect();
+        if claims.len() != locals.len() {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidInputs,
+                format!(
+                    "{} claims for {} local players: give one claim per local player",
+                    claims.len(),
+                    locals.len()
+                ),
+            ));
+        }
+        check_claims(&claims).map_err(|e| ProtocolError::new(ErrorCode::InvalidInputs, e))?;
+        if self
+            .session
+            .timeline()
+            .edit_ticks
+            .iter()
+            .any(|&tick| tick > 0)
+        {
+            return Err(invalid_command(
+                "the session holds edits after tick 0, which the other peers do not have; load \
+                 the scene without them"
+                    .to_string(),
+            ));
+        }
+        let sim = &mut self.simulation;
+        let mut net_settings = SessionSettings {
+            local,
+            match_id: settings.match_id.0,
+            identity: MatchIdentity {
+                engine: env!("CARGO_PKG_VERSION").to_string(),
+                fingerprint: sim.schema_fingerprint(),
+                // The state hash of tick 0, once the match's players are loaded.
+                scene_and_assets: 0,
+                tick_rate: sim.tick_rate(),
+                players: settings.players.iter().copied().map(PeerId).collect(),
+                rules: MatchRules::default(),
+            },
+            timeouts: Timeouts::default(),
+        };
+        let invalid = |error: &dyn std::fmt::Display| invalid_command(error.to_string());
+        let input = sim
+            .player_input_spec()
+            .ok_or_else(|| invalid(&ExecuteError::NoInputType))?;
+        // Checks the settings and the game's default input before anything changes; the
+        // session is built again once the scene's hash is known.
+        ludenea_net::Session::new(net_settings.clone(), input.clone()).map_err(|e| invalid(&e))?;
+        if let Err(error @ SimError::NoInputMapping) = sim.map_player(0, None) {
+            return Err(sim_error(&error));
+        }
+        // Validated: at most `MAX_PLAYERS` players.
+        let players = u16::try_from(settings.players.len()).unwrap_or(u16::MAX);
+        let locals: Vec<u8> = locals
+            .into_iter()
+            .map(|player| u8::try_from(player).unwrap_or(u8::MAX))
+            .collect();
+
+        if self.playing {
+            self.pause(PauseReason::User);
+        }
+        self.pacer.set_speed(1.0);
+        let loaded = self
+            .session
+            .load_inputs(&mut self.simulation, InputLog::new(players));
+        self.reset_claims();
+        loaded.map_err(|e| self.fail(e))?;
+        let sim = &mut self.simulation;
+        net_settings.identity.scene_and_assets = sim.hash();
+        let session =
+            ludenea_net::Session::new(net_settings.clone(), input).map_err(|e| invalid(&e))?;
+        let executor = Executor::new(sim, &net_settings).map_err(|e| invalid(&e))?;
+        let inputs = locals
+            .iter()
+            .map(|&player| sim.map_player(usize::from(player), None))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| sim_error(&e))?;
+        self.pacer.stop();
+        self.online = Some(OnlineMatch {
+            session,
+            executor,
+            locals,
+            claims,
+            inputs,
+            confirmed: InputLog::new(players),
+            clock: Clock::default(),
+            dropped: None,
+            finished: false,
+        });
+        self.events.push(Event::Online {
+            state: OnlineState::Connecting,
+        });
+        Ok(Reply::Done)
+    }
+
+    /// Leaves the online match: while it runs, every peer plays up to the last tick this one
+    /// has inputs for; while it connects, it is dropped here.
+    fn leave_match(&mut self) -> Result<Reply, ProtocolError> {
+        let Some(online) = self.online.as_mut() else {
+            return Err(invalid_command(
+                "there is no online match to leave".to_string(),
+            ));
+        };
+        if online.ended() {
+            return Err(invalid_command(
+                "the online match ended already; join another match to play again".to_string(),
+            ));
+        }
+        match online.session.state() {
+            SessionState::Running => {
+                online
+                    .session
+                    .leave()
+                    .map_err(|e| invalid_command(e.to_string()))?;
+                self.events.push(Event::Online {
+                    state: OnlineState::Leaving,
+                });
+            }
+            SessionState::Connecting => {
+                let message = format!("{} left before the match started", online.local());
+                online.drop_locally(MatchEndKind::Left, message);
+                self.finish_match();
+            }
+            SessionState::Leaving | SessionState::Ended(_) => {
+                return Err(invalid_command(
+                    "this peer is leaving the online match already".to_string(),
+                ));
+            }
+        }
+        Ok(Reply::Done)
+    }
+
+    /// Plays the online match for `elapsed_seconds`: the ticks the pacer owes while it runs
+    /// or is left, the landing once it ended, its events, the packets to send, and the end.
+    fn advance_online(&mut self, elapsed_seconds: f64) {
+        let Some(online) = self.online.as_mut() else {
+            return;
+        };
+        let now = online.clock.advance(elapsed_seconds);
+        let mut landed = false;
+        let going = matches!(
+            online.session.state(),
+            SessionState::Running | SessionState::Leaving
+        );
+        if self.playing && going {
+            self.subscriptions.played(elapsed_seconds);
+            let due = self.pacer.advance(elapsed_seconds);
+            // The frames of the last two ticks played, as local play pushes them.
+            let mut frames = Some(Vec::new());
+            let mut played = false;
+            for ran in 0..due {
+                match self.online_step(now) {
+                    Some(Advanced::Ran { .. }) => {
+                        self.ticked();
+                        played = true;
+                        if due >= 2 && ran == due - 2 {
+                            self.extract_frame(&mut frames);
+                        }
+                    }
+                    Some(Advanced::Skipped) => {}
+                    Some(Advanced::Stalled) => {
+                        self.pacer.not_run(due - ran);
+                        break;
+                    }
+                    Some(Advanced::Landed { .. }) => {
+                        self.ticked();
+                        landed = true;
+                        break;
+                    }
+                    Some(Advanced::AtLastTick) | None => break,
+                }
+            }
+            if played && self.subscriptions.pushes_frames() {
+                self.push_frames(frames);
+            }
+        }
+        let Some(online) = self.online.as_mut() else {
+            return;
+        };
+        if !landed && online.dropped.is_none() && online.ended() {
+            // The landing, unless the match ended while connecting or through a failure.
+            let from = self.simulation.tick();
+            if let Ok(requests) = online.session.advance(now)
+                && self.execute_requests(requests, from)
+                && let Some(online) = &self.online
+                && let Some(Advanced::Landed { .. }) = online.session.last_advance()
+            {
+                self.ticked();
+            }
+        }
+        let Some(online) = self.online.as_mut() else {
+            return;
+        };
+        let events = online.session.events();
+        if online.record(events) {
+            self.events.push(Event::Online {
+                state: OnlineState::Running,
+            });
+            self.playing = true;
+            self.pacer.stop();
+        }
+        self.send_packets(now);
+        if self.online.as_ref().is_some_and(OnlineMatch::ended) {
+            self.finish_match();
+        }
+    }
+
+    /// One tick the pacer owes: every local player's input while the match runs, then the
+    /// session's advance and its requests. Returns what the advance did, `None` when it did
+    /// not advance.
+    fn online_step(&mut self, now: u64) -> Option<Advanced> {
+        let online = self.online.as_mut()?;
+        if online.session.state() == SessionState::Running {
+            for (&player, input) in online.locals.iter().zip(&online.inputs) {
+                if let Err(error) = online.session.add_local_input(player, input.clone()) {
+                    self.online_bug(&error);
+                    return None;
+                }
+            }
+        }
+        let from = self.simulation.tick();
+        match online.session.advance(now) {
+            Ok(requests) => {
+                if !self.execute_requests(requests, from) {
+                    return None;
+                }
+                self.online.as_ref()?.session.last_advance()
+            }
+            // Ended: the landing follows.
+            Err(ludenea_net::SessionError::NotRunning) => None,
+            Err(error) => {
+                self.online_bug(&error);
+                None
+            }
+        }
+    }
+
+    /// Applies `requests` of the online session to the simulation, which stood at `from`
+    /// when the advance that returned them began. A first `Load` announces the rollback.
+    /// Returns whether every request applied.
+    fn execute_requests(&mut self, requests: Vec<Request>, from: u64) -> bool {
+        if let Some(&Request::Load { tick }) = requests.first() {
+            self.events.push(Event::RolledBack {
+                from: tick,
+                to: from,
+            });
+        }
+        let Some(online) = self.online.as_mut() else {
+            return false;
+        };
+        let executed = online
+            .executor
+            .execute(&mut self.simulation, &mut online.session, requests);
+        match executed {
+            Ok(()) => true,
+            Err(error) => {
+                self.executor_failed(error);
+                false
+            }
+        }
+    }
+
+    /// Reports why the executor stopped: a game failure pauses as local play does, any other
+    /// error goes to the console. The executor ended the session; when it could not, as
+    /// before the first tick, the match is dropped here.
+    fn executor_failed(&mut self, error: ExecuteError) {
+        let text = error.to_string();
+        self.console(ConsoleLevel::Error, text.clone());
+        if let ExecuteError::Game { tick, error, .. } = error {
+            let reason = match error {
+                SimError::Panicked(panic) => PauseReason::Panicked {
+                    tick,
+                    message: panic.detail(),
+                },
+                _ => PauseReason::Failed {
+                    tick,
+                    message: text,
+                },
+            };
+            self.pause(reason);
+        }
+        self.drop_unless_ended();
+    }
+
+    /// A refusal of the online session that only a host bug causes: written to the console,
+    /// then the match fails at the latest tick it ran.
+    fn online_bug(&mut self, error: &ludenea_net::SessionError) {
+        self.console(
+            ConsoleLevel::Error,
+            format!("the online match stops on a host error: {error}"),
+        );
+        self.fail_latest_tick();
+    }
+
+    /// Ends the online match as a failure of this peer's game at the latest tick it ran, or
+    /// drops it here when it ran none.
+    fn fail_latest_tick(&mut self) {
+        let Some(online) = self.online.as_mut() else {
+            return;
+        };
+        let next = online.session.next_tick();
+        let going = matches!(
+            online.session.state(),
+            SessionState::Running | SessionState::Leaving
+        );
+        if going && next > 0 {
+            // Running or leaving, and the tick ran: the session takes it.
+            let _ = online.session.fail(next - 1);
+        }
+        self.drop_unless_ended();
+    }
+
+    /// Drops the online match here as a failure of this peer's game while it was starting,
+    /// unless it ended already.
+    fn drop_unless_ended(&mut self) {
+        if let Some(online) = self.online.as_mut()
+            && !online.ended()
+        {
+            let message = format!(
+                "the game of {} failed while the match was starting",
+                online.local()
+            );
+            online.drop_locally(MatchEndKind::LocalFailure, message);
+        }
+    }
+
+    /// Finishes an online match that ended: announces the end, stops play, and gives the
+    /// session the confirmed inputs, which it resimulates in the background, with the
+    /// automatic claims of the match's players. The match's session stays, lingering.
+    fn finish_match(&mut self) {
+        let Some(online) = self.online.as_mut().filter(|online| !online.finished) else {
+            return;
+        };
+        let events = online.session.events();
+        online.record(events);
+        online.finished = true;
+        let state = online.state();
+        let players = online.confirmed.players;
+        let log = std::mem::replace(&mut online.confirmed, InputLog::new(players));
+        self.events.push(Event::Online { state });
+        self.playing = false;
+        self.pacer.stop();
+        let adopted = self.session.adopt_inputs(&mut self.simulation, log);
+        self.reset_claims();
+        if let Err(error) = adopted {
+            self.fail_unattended(error);
+        }
+    }
+
+    /// When the game panicked where the host caught it while an online match is not
+    /// finished: the match fails at the latest tick it ran, or is dropped here while it was
+    /// starting, and the host finishes it before it recovers.
+    fn fail_match_on_panic(&mut self) {
+        if self.online_active() {
+            self.fail_latest_tick();
+            self.finish_match();
+        }
+    }
+
+    /// Keeps a finished match's session telling the other peers why it ended, while its
+    /// linger lasts.
+    fn linger(&mut self, elapsed_seconds: f64) {
+        if let Some(online) = self
+            .online
+            .as_mut()
+            .filter(|online| online.finished && online.dropped.is_none())
+        {
+            let now = online.clock.advance(elapsed_seconds);
+            self.send_packets(now);
+        }
+    }
+
+    /// Emits `NetSend` with the packets the online session sends now, when it has some.
+    fn send_packets(&mut self, now: u64) {
+        let Some(online) = self
+            .online
+            .as_mut()
+            .filter(|online| online.dropped.is_none())
+        else {
+            return;
+        };
+        let packets: Vec<NetPacket> = online
+            .session
+            .outgoing(now)
+            .into_iter()
+            .map(|(to, packet)| NetPacket {
+                to: to.0,
+                packet: Bytes(packet),
+            })
+            .collect();
+        if !packets.is_empty() {
+            self.events.push(Event::NetSend { packets });
+        }
+    }
+
     /// Takes over a new session, paused.
     fn load(&mut self, mut session: Session) {
         self.subscriptions.forget_frame_failures();
@@ -1471,6 +1926,7 @@ impl Host {
         session.introspection = self.session.introspection.take();
         self.session = session;
         self.inconsistent = None;
+        self.online = None;
         if self.playing {
             self.pause(PauseReason::User);
         }
@@ -1701,7 +2157,73 @@ fn changes_state(command: &Command) -> bool {
             | Command::GetDivergence { .. }
             | Command::Subscribe { .. }
             | Command::Unsubscribe { .. }
+            | Command::NetReceive { .. }
+            | Command::LeaveMatch
     )
+}
+
+/// Whether the host refuses `command` while an online match connects, runs or is left: it
+/// changes the state, controls play, or reads the session's recorded run, which the match
+/// replaces at its end.
+fn refused_online(command: &Command) -> bool {
+    changes_state(command)
+        || matches!(
+            command,
+            Command::Play
+                | Command::Pause
+                | Command::Seek { .. }
+                | Command::SetSpeed { .. }
+                | Command::Step { .. }
+                | Command::GetTimeline
+                | Command::GetTickEvents { .. }
+                | Command::GetTickCommands { .. }
+                | Command::CompareTraces { .. }
+                | Command::GetGhostDraw { .. }
+                | Command::GetDivergence { .. }
+                | Command::ExportReplay { .. }
+                | Command::ExportSession
+                | Command::SetCompareBranch { .. }
+        )
+}
+
+/// The `type` of `command` on the wire, such as `load_scene`.
+fn command_name(command: &Command) -> String {
+    serde_json::to_value(command)
+        .ok()
+        .and_then(|value| value["type"].as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+
+/// The input of each local player of `online` for `devices`, split over the local claims and
+/// mapped at the player's global index. An input longer than a network match carries is
+/// refused, naming the player.
+fn map_local_inputs(
+    sim: &Simulation,
+    online: &OnlineMatch,
+    devices: &ludenea_app::players::LiveDevices,
+) -> Result<Vec<Vec<u8>>, ProtocolError> {
+    let raws = split(devices, &online.claims);
+    online
+        .locals
+        .iter()
+        .zip(&raws)
+        .map(|(&player, raw)| {
+            let input = sim
+                .map_player(usize::from(player), raw.as_ref())
+                .map_err(|e| sim_error(&e))?;
+            if input.len() > MAX_INPUT_BYTES {
+                return Err(ProtocolError::new(
+                    ErrorCode::InvalidInputs,
+                    format!(
+                        "player {player}'s input takes {} bytes, a network match carries at \
+                         most {MAX_INPUT_BYTES}",
+                        input.len()
+                    ),
+                ));
+            }
+            Ok(input)
+        })
+        .collect()
 }
 
 /// What an edit command changes, which its errors name; empty for any other command.

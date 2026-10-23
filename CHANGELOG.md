@@ -43,6 +43,11 @@ hash, those of the golden trace and replays included.
 
 ### Rust API
 
+- `ludenea_control::Session::adopt_inputs(sim, log)` replaces the inputs with the confirmed
+  inputs of an online match and resimulates them from tick 0 in the background, at most
+  `RESIMULATION_BUDGET` ticks per `Host::advance` whatever the log's length; until it gets
+  back to tick `log.ticks.len()` the session shows tick 0, and there every tick has its
+  recorded hash. `ludenea-control` depends on `ludenea-net`.
 - `Simulation::map_player(player, raw)` encodes the input of one global player, mapped with
   that index as `map_players` maps it (`None` encodes the default input). It refuses a
   player the game does not have with the new `SimError::NoSuchPlayer`.
@@ -858,7 +863,7 @@ hash, those of the golden trace and replays included.
 
 ### Control protocol
 
-- Control protocol 5, fingerprint `cd1e75810002a446`. Breaking: `get_render_frame`
+- Control protocol 5, fingerprint `680708339857ba28`. Breaking: `get_render_frame`
   (`debug_layers`) replaces `get_debug_draw` (`layers`), and its reply `render_frame`
   (`frame`) replaces `debug_draw` (`tick`, `frame`). The frame is the `RenderFrame` of the
   current tick: its tick, camera, render layers, sprites, tilemaps, the entities teleported
@@ -913,6 +918,41 @@ hash, those of the golden trace and replays included.
   the grid (`area x 30..34, y 0..2 is outside the 32 by 18 grid`; an area whose end
   overflows names its start, its size, and the grid). A tile past the tileset's frames is
   accepted.
+  New `join_match` (`settings`, `claims`) plays an online match through the host, which
+  owns its rollback session: `settings` is the new `OnlineSettings` (`local`, this peer;
+  `match_id`; `players`, the owner of each global player), and `claims` one claim per local
+  player, in player order. It stops play, sets the speed to 1, and replaces the session's
+  inputs with an empty log of the match's players at tick 0, as `set_players` does; the
+  match checks that every peer has the same engine version, schema fingerprint, state hash
+  at tick 0, tick rate, players and default match rules. It is refused with `online_match`
+  during another match, with `invalid_inputs` for a claim count other than the local players
+  or claims `set_players` refuses, with `invalid_command` when the session holds edits after
+  tick 0, for settings the network session refuses (each with its message, such as "local
+  peer 2 is not among the 2 peers of the match"), and for a game without an input type, and
+  with `no_input_mapping`. New `net_receive` (`from`, `packet`) hands the host a packet
+  another peer sent, dropped without a match. New `leave_match`: while the match runs,
+  every peer ends at the last tick this one has inputs for; while it connects, the match is
+  dropped here ("peer 0 left before the match started") and the others end `unreachable`;
+  without a match, or once it ended, it is refused with `invalid_command`. All three reply
+  `done`. New events: `online` (`state`, the new `OnlineState`: `connecting`, `running`,
+  `leaving`, or `ended` with `end`, the new `MatchEnd`: `kind`, one of `left`, `lost`,
+  `desync`, `violation`, `mismatch`, `unreachable` and `local_failure`, `message`, and the
+  `peer` and `tick` the reason names); `net_send` (`packets`, each a `NetPacket` with `to`
+  and `packet`), after each advance with packets to send, also while the ended match
+  lingers; and `rolled_back` (`from`, `to`): the ticks from `from` up to `to`, excluded, ran
+  again with corrected inputs. While the match runs, `ticked` reports each tick it runs and
+  `render_frames` pushes its frames as local play does; `set_live_input` maps each local
+  player's devices at its global index, and refuses with `invalid_inputs` an input longer
+  than a network match carries ("player 0's input takes 31 bytes, a network match carries
+  at most 24"), keeping the previous one. A game failure pauses as in local play and ends
+  the match for every peer. While a match connects, runs, or is left, the new error code
+  `online_match` refuses every command that changes the state, `play`, `pause`, `seek`,
+  `set_speed`, `step`, and the reads of the session's recorded run (`get_timeline`,
+  `get_tick_events`, `get_tick_commands`, `compare_traces`, `get_ghost_draw`,
+  `get_divergence`, `export_replay`, `export_session`, `set_compare_branch`); the reads of
+  the world stay allowed, and the ghost and the divergence report do not follow. At the
+  end, play stops, the confirmed inputs become the session's input log, which resimulates
+  in the background, and the claims go back to the automatic ones of the match's players.
 - Over `host --stdio` and in a browser worker, the events a request causes come before its
   response, not after the response to a later request: a `load_session` sent right after
   `load_scene` answered could be followed by the scene's `timeline_changed` (head 0), which
