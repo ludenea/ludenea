@@ -757,3 +757,109 @@ fn set_ready_refuses() {
         "a peer brings 1 to 4 local players, not 5"
     );
 }
+
+#[test]
+fn the_host_readying_checks_ready_joiners_again() {
+    let mesh = MemoryMesh::new();
+    let mut host = host(&mesh, 2);
+    let mut joiner = joiner(&mesh);
+    // Three of its own and one at least for the host fit while the host is not ready.
+    joiner.room.set_ready(3).unwrap();
+    pump(&mut [&mut host, &mut joiner]);
+    assert!(joiner.waiting());
+    host.room.set_ready(2).unwrap();
+    pump(&mut [&mut host, &mut joiner]);
+    assert_eq!(joiner.failure(), &RoomError::TooManyPlayers { total: 5 });
+    assert!(host.waiting());
+}
+
+#[test]
+fn a_refused_joiners_ready_is_dropped() {
+    let mut room = Room::new(
+        RoomRole::Host {
+            peers: 2,
+            match_id: 1,
+        },
+        MatchRules::default(),
+    )
+    .unwrap();
+    room.assigned(link(1));
+    room.connected(link(2));
+    room.set_ready(1).unwrap();
+    let ready = |players| {
+        encode(RoomMessage::Ready {
+            players,
+            connected: vec![],
+        })
+    };
+    room.receive(link(2), &ready(4));
+    let refusal = encode(RoomMessage::Refuse {
+        reason: RoomRefusal::TooManyPlayers { total: 5 },
+    });
+    assert_eq!(
+        room.outgoing(),
+        vec![
+            (link(2), encode(RoomMessage::Host { peers: 2 })),
+            (link(2), refusal)
+        ]
+    );
+    room.receive(link(2), &ready(1));
+    assert_eq!(
+        room.events(),
+        vec![dropped(link(2), RoomDrop::Unexpected("Ready"))]
+    );
+    assert!(room.outgoing().is_empty());
+    assert_eq!(room.state(), &RoomState::Waiting);
+}
+
+#[test]
+fn a_host_message_from_a_link_not_connected_is_dropped() {
+    let mut room = Room::new(RoomRole::Join, MatchRules::default()).unwrap();
+    room.receive(link(1), &encode(RoomMessage::Host { peers: 2 }));
+    assert_eq!(
+        room.events(),
+        vec![dropped(link(1), RoomDrop::Unexpected("Host"))]
+    );
+    assert_eq!(room.view().peers, None);
+    assert_eq!(room.state(), &RoomState::Waiting);
+}
+
+#[test]
+fn a_failed_host_still_answers_newcomers() {
+    let rules = MatchRules {
+        rollback_window: 24,
+        ..MatchRules::default()
+    };
+    let mesh = MemoryMesh::new();
+    let mut host = Member::with_rules(
+        mesh.join(),
+        RoomRole::Host {
+            peers: 2,
+            match_id: MATCH_ID,
+        },
+        rules,
+    );
+    let mut joiner = Member::with_rules(mesh.join(), RoomRole::Join, rules);
+    host.room.set_ready(1).unwrap();
+    joiner.room.set_ready(3).unwrap();
+    pump(&mut [&mut host, &mut joiner]);
+    assert!(matches!(host.failure(), RoomError::Unplayable { .. }));
+
+    let mut late = mesh.join();
+    host.step();
+    let _ = late.poll();
+    let received: Vec<(LinkId, Vec<u8>)> =
+        std::iter::from_fn(|| late.receive(Channel::Room)).collect();
+    assert_eq!(
+        received,
+        vec![
+            (host.id, encode(RoomMessage::Host { peers: 2 })),
+            (
+                host.id,
+                encode(RoomMessage::Refuse {
+                    reason: RoomRefusal::Full
+                })
+            ),
+        ]
+    );
+}
