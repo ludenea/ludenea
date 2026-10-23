@@ -3,7 +3,10 @@
 //! sockets and tasks) without bound.
 //!
 //! The count is this process's open file descriptors, so this binary holds one test: nothing
-//! else opens or closes descriptors meanwhile.
+//! else opens or closes descriptors meanwhile. Unix only: it lists them in `/dev/fd`, which
+//! Windows lacks, and the peer connections it checks are the same code on every platform.
+
+#![cfg(unix)]
 
 use std::net::{SocketAddr, TcpListener as StdListener, TcpStream};
 use std::thread::JoinHandle;
