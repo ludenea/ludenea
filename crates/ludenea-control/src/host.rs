@@ -352,7 +352,11 @@ impl Host {
     /// `Session::recover`). The compare and divergence simulations are built again on next
     /// use. Writes the error to the console, pauses with `Panicked`, and returns it. When the
     /// session cannot come back to a consistent tick, the host refuses to go on until a new
-    /// session loads or a later recover succeeds.
+    /// session loads or a later recover succeeds. During an online match that is not
+    /// finished, the match fails first (at the latest tick it ran, or is dropped here while it
+    /// was starting), so the session the recovery reloads is parked at tick 0; then the host
+    /// finishes the match, whatever the recovery found: the confirmed inputs become the
+    /// session's and resimulate, and an inconsistency the recovery found stays.
     fn recover(&mut self, mut panic: Box<GamePanic>) -> ProtocolError {
         panic.tick = self.simulation.tick();
         // The match ends first, so the session the recovery reloads is parked at tick 0.

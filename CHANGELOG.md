@@ -951,8 +951,9 @@ hash, those of the golden trace and replays included.
   `get_tick_events`, `get_tick_commands`, `compare_traces`, `get_ghost_draw`,
   `get_divergence`, `export_replay`, `export_session`, `set_compare_branch`); the reads of
   the world stay allowed, and the ghost and the divergence report do not follow. At the
-  end, play stops with `paused` and the new reason `match_ended`, the confirmed inputs become the session's input log, which resimulates
-  in the background, and the claims go back to the automatic ones of the match's players.
+  end, play stops with `paused` and the new reason `match_ended`, the confirmed inputs
+  become the session's input log, which resimulates in the background, and the claims go
+  back to the automatic ones of the match's players.
 - Over `host --stdio` and in a browser worker, the events a request causes come before its
   response, not after the response to a later request: a `load_session` sent right after
   `load_scene` answered could be followed by the scene's `timeline_changed` (head 0), which
