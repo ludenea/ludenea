@@ -243,8 +243,9 @@ other players; signaling at URL` once the room exists, and Enter (or `--players`
 room with the lobby's claims; the match starts once every peer is ready. The title names the
 room's state, then `online, peer P of N` and any peer silent, then `match ended:` and why.
 Closing the window during the match leaves it: the window goes, and the match plays on until
-it ended and the others were told (at most about 4 seconds), so they end it as left at the same
-tick and `--record` writes a complete replay. `--ticks N` leaves at tick N, and closes once the
+it ended and the others were told (at most 3.5 seconds: the silence that disconnects a peer,
+then the linger; past 4.5 seconds the session fails), so they end it as left at the same tick
+and `--record` writes a complete replay. `--ticks N` leaves at tick N, and closes once the
 match ended. A desync writes this peer's snapshot into `--dump-dir`, as `peer` does, and
 `--edits` is refused online. It exits with code 0 for a match ended because a peer left (or a
 window closed before any match), 1 for any other ending (the line `match ended:` says why),
