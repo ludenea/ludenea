@@ -739,7 +739,11 @@ folder. They open the arena's page too: its hash at tick 300 matches `arena run 
 a two-player match played with keys saves a replay that `arena verify` accepts. The arena's
 editor tests (`editor/e2e/arena.spec.ts`) play it in the editor to the hash of `arena run`,
 record a two-player match with keys whose saved replay verifies, and check the viewport draws
-the painted level.
+the painted level. The online tests (`editor/e2e/online.spec.ts`) start `ludenea rooms` on a free
+port: two arena pages play each other until one leaves, and save the same replay, which
+`arena verify` accepts; a native `arena peer` plays a page under 50 ms of latency, 10 ms of
+jitter and 5 percent of loss, and both save the same replay; an unknown room and bad
+parameters fail the page, naming them.
 
 The renderer's pixel tests (`editor/e2e/renderer.spec.ts`) draw a reference frame with the
 browser renderer (`ludenea-render` with its `web` feature) and run twice, once per backend,
