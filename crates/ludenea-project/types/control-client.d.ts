@@ -658,7 +658,7 @@ type EntityRow = {
     hash: Hash64;
 };
 
-type ErrorCode = "version_mismatch" | "not_connected" | "invalid_scene" | "invalid_inputs" | "invalid_snapshot" | "invalid_replay" | "no_such_entity" | "invalid_edit" | "unknown_component" | "unknown_resource" | "invalid_path" | "invalid_command" | "invalid_tick" | "resimulating" | "nothing_to_undo" | "nothing_to_redo" | "no_input_mapping" | "system_panicked" | "invalid_filter" | "online_match";
+type ErrorCode = "version_mismatch" | "not_connected" | "invalid_scene" | "invalid_inputs" | "invalid_snapshot" | "invalid_replay" | "no_such_entity" | "invalid_edit" | "unknown_component" | "unknown_resource" | "invalid_path" | "invalid_command" | "invalid_tick" | "resimulating" | "nothing_to_undo" | "nothing_to_redo" | "no_input_mapping" | "system_panicked" | "invalid_filter" | "online_match" | "input_too_large";
 
 /**
  * One packet for peer `to`.
@@ -1360,7 +1360,7 @@ type ServerMessage = {
 /** The control protocol version this build speaks: a client and a host connect only when theirs are equal. */
 const PROTOCOL_VERSION = 5;
 /** The wire shape of `PROTOCOL_VERSION`, a hash of the protocol's types: a client and a host connect only when theirs are equal too. */
-const PROTOCOL_FINGERPRINT = "1014a97387b22bdd";
+const PROTOCOL_FINGERPRINT = "356f24be46d17a42";
 /** The `type` of the reply each command type gets when it succeeds. */
 type ReplyTypes = {
     apply_override: "done";

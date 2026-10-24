@@ -723,8 +723,17 @@ impl Host {
             }
             Command::SetLiveInput { devices } => {
                 if let Some(online) = self.online.as_mut().filter(|online| !online.finished) {
-                    online.inputs = map_local_inputs(sim, online, &devices)?;
-                    return Ok(Reply::Done);
+                    return match map_local_inputs(sim, online, &devices) {
+                        Ok(inputs) => {
+                            online.inputs = inputs;
+                            Ok(Reply::Done)
+                        }
+                        Err(error) if error.code == ErrorCode::InputTooLarge => Err(error),
+                        Err(error) => {
+                            self.mapping_failed(&error);
+                            Err(error)
+                        }
+                    };
                 }
                 let players = split(&devices, &self.claims);
                 let mapped = sim.map_players(&players).map_err(|e| sim_error(&e))?;
@@ -1834,6 +1843,28 @@ impl Host {
         self.drop_unless_ended();
     }
 
+    /// The input mapping failed while an online match runs (it panicked, or built what the
+    /// game cannot read): this peer's game failed. Play stops on it, and the match ends as a
+    /// failure of this peer at the latest tick it ran, as for a panic the host catches.
+    fn mapping_failed(&mut self, error: &ProtocolError) {
+        let tick = self.simulation.tick();
+        self.console(
+            ConsoleLevel::Error,
+            format!(
+                "the input mapping failed during the online match: {}",
+                error.message
+            ),
+        );
+        self.fail_latest_tick();
+        let message = error.message.clone();
+        self.pause(if error.code == ErrorCode::SystemPanicked {
+            PauseReason::Panicked { tick, message }
+        } else {
+            PauseReason::Failed { tick, message }
+        });
+        self.finish_match();
+    }
+
     /// A refusal of the online session that only a host bug causes: written to the console,
     /// then the match fails at the latest tick it ran.
     fn online_bug(&mut self, error: &ludenea_net::SessionError) {
@@ -2256,7 +2287,7 @@ fn map_local_inputs(
                 .map_err(|e| sim_error(&e))?;
             if input.len() > MAX_INPUT_BYTES {
                 return Err(ProtocolError::new(
-                    ErrorCode::InvalidInputs,
+                    ErrorCode::InputTooLarge,
                     format!(
                         "player {player}'s input takes {} bytes, a network match carries at \
                          most {MAX_INPUT_BYTES}",

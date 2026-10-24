@@ -738,7 +738,7 @@ fn an_input_too_large_for_the_network_is_refused() {
     assert_eq!(
         error,
         ProtocolError {
-            code: ErrorCode::InvalidInputs,
+            code: ErrorCode::InputTooLarge,
             message: "player 0's input takes 31 bytes, a network match carries at most 24"
                 .to_string(),
         }
@@ -747,6 +747,53 @@ fn an_input_too_large_for_the_network_is_refused() {
     let tick = game.peers[0].host.tick();
     game.run_until("more ticks", |game| game.peers[0].host.tick() >= tick + 60);
     assert!(game.peers.iter().all(Peer::running));
+}
+
+/// `KeyP` makes the mapping panic.
+fn panicking_mapping_app() -> App {
+    let mut app = App::new();
+    app.input::<u8>().input_mapping(|raw, _| {
+        assert!(!raw.keys.contains("KeyP"), "the mapping broke");
+        1u8
+    });
+    app
+}
+
+#[test]
+fn a_mapping_that_fails_during_a_match_ends_it_as_this_peers_failure() {
+    let mut game = Match::of(&[0, 1], None, |_| Host::new(panicking_mapping_app).unwrap());
+    for peer in &mut game.peers {
+        peer.feeding = false;
+    }
+    game.run_until_all_run();
+    game.run_until("some ticks", |game| game.peers[0].host.tick() >= 30);
+    let error = game.peers[0]
+        .host
+        .handle(Command::SetLiveInput {
+            devices: LiveDevices {
+                keys: ["KeyP".to_string()].into(),
+                gamepads: Vec::new(),
+            },
+        })
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::SystemPanicked, "{error:?}");
+    let events = game.peers[0].host.advance(0.0);
+    game.peers[0].events.extend(events);
+    assert!(
+        game.peers[0].events.iter().any(|event| matches!(
+            event,
+            Event::Paused {
+                reason: PauseReason::Panicked { .. }
+            }
+        )),
+        "play stops on the failure"
+    );
+    game.run_until_all_end();
+    for peer in &game.peers {
+        let end = peer.end().unwrap();
+        assert_eq!(end.kind, MatchEndKind::LocalFailure, "{end:?}");
+        assert_eq!(end.peer, Some(0));
+    }
 }
 
 #[derive(Serialize, Deserialize, Schema, Clone, Debug, PartialEq)]

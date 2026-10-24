@@ -942,7 +942,7 @@ hash, those of the golden trace and replays included.
 
 ### Control protocol
 
-- Control protocol 5, fingerprint `1014a97387b22bdd`. Breaking: `get_render_frame`
+- Control protocol 5, fingerprint `356f24be46d17a42`. Breaking: `get_render_frame`
   (`debug_layers`) replaces `get_debug_draw` (`layers`), and its reply `render_frame`
   (`frame`) replaces `debug_draw` (`tick`, `frame`). The frame is the `RenderFrame` of the
   current tick: its tick, camera, render layers, sprites, tilemaps, the entities teleported
@@ -1021,10 +1021,11 @@ hash, those of the golden trace and replays included.
   lingers; and `rolled_back` (`from`, `to`): the ticks from `from` up to `to`, excluded, ran
   again with corrected inputs. While the match runs, `ticked` reports each tick it runs and
   `render_frames` pushes its frames as local play does; `set_live_input` maps each local
-  player's devices at its global index, and refuses with `invalid_inputs` an input longer
-  than a network match carries ("player 0's input takes 31 bytes, a network match carries
-  at most 24"), keeping the previous one. A game failure pauses as in local play and ends
-  the match for every peer. While a match connects, runs, or is left, the new error code
+  player's devices at its global index, and refuses with the new error code
+  `input_too_large` an input longer than a network match carries ("player 0's input takes
+  31 bytes, a network match carries at most 24"), keeping the previous one. A game failure
+  pauses as in local play and ends the match for every peer, a failing input mapping
+  included: `set_live_input` then refuses with its error (`system_panicked` for a panic). While a match connects, runs, or is left, the new error code
   `online_match` refuses every command that changes the state, `play`, `pause`, `seek`,
   `set_speed`, `step`, and the reads of the session's recorded run (`get_timeline`,
   `get_tick_events`, `get_tick_commands`, `compare_traces`, `get_ghost_draw`,

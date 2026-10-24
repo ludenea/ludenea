@@ -29,7 +29,7 @@ pub const PROTOCOL_VERSION: u32 = 5;
 /// instead of misreading fields. A change the declarations do not show, such as a new serde
 /// default or another encoding of a type declared as a string, leaves it as it is.
 /// `tests/typescript.rs` pins it.
-pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0x1014_a973_87b2_2bdd);
+pub const PROTOCOL_FINGERPRINT: Hash64 = Hash64(0x356f_24be_46d1_7a42);
 
 /// Binary data, serialized as a standard base64 string.
 #[derive(Clone, Debug, PartialEq)]
@@ -1209,6 +1209,9 @@ pub enum ErrorCode {
     /// A command refused while an online match connects, runs, or is left, or a second match
     /// joined meanwhile.
     OnlineMatch,
+    /// Live devices whose mapped input is longer than an online match carries: the match goes
+    /// on with the previous input.
+    InputTooLarge,
 }
 
 impl ProtocolError {

@@ -660,13 +660,15 @@ fn every_error_code() -> Vec<ErrorCode> {
         SystemPanicked,
         InvalidFilter,
         OnlineMatch,
+        InputTooLarge,
     ];
     for code in &all {
         match code {
             VersionMismatch | NotConnected | InvalidScene | InvalidInputs | InvalidSnapshot
             | InvalidReplay | NoSuchEntity | InvalidEdit | UnknownComponent | UnknownResource
             | InvalidPath | InvalidCommand | InvalidTick | Resimulating | NothingToUndo
-            | NothingToRedo | NoInputMapping | SystemPanicked | InvalidFilter | OnlineMatch => {}
+            | NothingToRedo | NoInputMapping | SystemPanicked | InvalidFilter | OnlineMatch
+            | InputTooLarge => {}
         }
     }
     all
