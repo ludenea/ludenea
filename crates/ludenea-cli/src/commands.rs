@@ -1281,7 +1281,8 @@ fn console(runner: &mut ludenea_runtime::Runner) {
     }
 }
 
-/// One line per other peer of the match's statistics, then the link's lost sends and strays.
+/// One line per other peer of the match's statistics, then the link's lost sends, strays and
+/// oversized messages.
 #[cfg(not(target_family = "wasm"))]
 fn report_net_stats(
     runner: &mut ludenea_runtime::Runner,
@@ -1319,9 +1320,11 @@ fn report_net_stats(
     say(
         out,
         format_args!(
-            "link: {} sends lost, {} packets from outside the match",
+            "link: {} sends lost, {} packets from outside the match, {} oversized messages \
+             dropped",
             online.failed_sends(),
-            online.strays()
+            online.strays(),
+            online.oversized()
         ),
     )
 }

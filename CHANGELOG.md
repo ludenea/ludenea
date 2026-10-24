@@ -53,7 +53,7 @@ hash, those of the golden trace and replays included.
   and unordered, carries `Channel::Match`, and channel 1, reliable and ordered,
   `Channel::Room`. A send to a peer not connected is refused with `LinkError::UnknownLink`,
   and a message that arrives longer than its channel's limit is dropped and counted
-  (`WebRtcLink::oversized`).
+  (`Link::oversized`).
   `poll` reports `Assigned`, then `Connected` and `Disconnected`, and `Closed` with the
   reason when the signaling server is lost (after a `Disconnected` for every connected
   peer), refuses the room (natively the reason names the cause: no room, a room in use or
@@ -150,12 +150,15 @@ hash, those of the golden trace and replays included.
   `MAX_ROOM_MESSAGE_BYTES`, 512) and an unreliable `Channel::Match` (at most
   `MAX_PACKET_BYTES`): `poll()` gives `LinkEvent`s (`Assigned`, `Connected`, `Disconnected`,
   `Closed`), `send(channel, to, bytes)` refuses with a `LinkError` (`UnknownLink` for a peer
-  not connected, `TooLarge`, `Closed`) and `receive(channel)` gives the next message with its
-  sender. `MemoryMesh` joins `MemoryLink`s in process for tests (`join`, `join_with`,
-  `connect`, `disconnect`; dropping a link disconnects it). `LinkTransport::new(link, links)`
-  is a `Transport` over the match channel where `PeerId(i)` is `links[i]`; it drops and counts
-  (`strays()`) packets from other links. `TransportError` gains `Unreachable { peer }`, for a
-  peer of the match whose link is not connected: the packet is lost.
+  not connected, `TooLarge`, `Closed`), `receive(channel)` gives the next message with its
+  sender, and `oversized()` counts the messages dropped on arrival for exceeding their
+  channel's limit (0 unless the link overrides it). `MemoryMesh` joins `MemoryLink`s in
+  process for tests (`join`, `join_with`, `connect`, `disconnect`; dropping a link
+  disconnects it). `LinkTransport::new(link, links)` is a `Transport` over the match channel
+  where `PeerId(i)` is `links[i]`; it drops and counts (`strays()`) packets from other
+  links, and `link()` and `link_mut()` give the link. `TransportError` gains
+  `Unreachable { peer }`, for a peer of the match whose link is not connected: the packet
+  is lost.
 - `ludenea_net::room` is the sans-IO room where a host and its joiners agree on a match.
   `Room::new(RoomRole, MatchRules)` takes `RoomRole::Host { peers, match_id }` (2 to 4 peers,
   `RoomError::Peers` otherwise) or `RoomRole::Join`; the rules serve only to check the
@@ -183,8 +186,9 @@ hash, those of the golden trace and replays included.
   room closed: ..."), a room that already failed keeps its own reason, and after the layout
   `closed()` keeps the link's reason. Once ready, `receive` and `send` carry the match packets
   over the layout's links behind the conditions; before, they carry nothing, and match packets
-  that arrive are dropped. `set_ready(players)`, `layout()`, `failed_sends()`, `strays()` and
-  `room_drops()` (the room's dropped messages since the last call) complete it.
+  that arrive are dropped. `set_ready(players)`, `layout()`, `failed_sends()`, `strays()`,
+  `oversized()` and `room_drops()` (the room's dropped messages since the last call)
+  complete it.
 - `ludenea_net::wire` is the network protocol of the Formats section:
   `Packet { match_id, messages }` with `encode()`, `Packet::decode(bytes)` and
   `Packet::version_of(bytes)`, the `Message` and `EndNotice` it carries, and `WireError`
@@ -916,7 +920,7 @@ hash, those of the golden trace and replays included.
   `leave(runner)` leaves, `lingering(now_micros)` is true for `END_LINGER_MICROS` after
   the end was seen, and `messages()` gives a warning per link and reason of the room's
   dropped messages and the reason the link closed, which a `lost` ending's message ends
-  with. `code()`, `layout()`, `failed_sends()` and `strays()` complete it, and
+  with. `code()`, `layout()`, `failed_sends()`, `strays()` and `oversized()` complete it, and
   `online::settings(&layout)` gives the `OnlineSettings` of a layout.
   `online::write_desync_snapshot(runner, &end, local, dump_dir)` writes this peer's
   snapshot of a desync's tick as `desync-tick-T-peer-P.snap`. `ludenea-runtime` depends on

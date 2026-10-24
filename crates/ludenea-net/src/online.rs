@@ -197,6 +197,12 @@ impl<L: Link> OnlinePeer<L> {
         self.transport.inner().strays()
     }
 
+    /// How many messages the link dropped on arrival for exceeding their channel's limit
+    /// ([`Link::oversized`]).
+    pub fn oversized(&self) -> u64 {
+        self.transport.inner().link().oversized()
+    }
+
     /// The room messages dropped since the last call, oldest first. They pile up until taken:
     /// take them on every poll.
     pub fn room_drops(&mut self) -> Vec<RoomEvent> {

@@ -486,6 +486,11 @@ impl OnlineMatch {
         self.peer.strays()
     }
 
+    /// The messages the link dropped on arrival for exceeding their channel's limit.
+    pub fn oversized(&self) -> u64 {
+        self.peer.oversized()
+    }
+
     /// `end`, with the reason the link closed when the match was lost.
     fn with_closed(&self, mut end: MatchEnd) -> MatchEnd {
         if end.kind == MatchEndKind::Lost

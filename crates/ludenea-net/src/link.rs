@@ -93,6 +93,13 @@ pub trait Link {
 
     /// The next message that arrived on `channel`, with its sender.
     fn receive(&mut self, channel: Channel) -> Option<(LinkId, Vec<u8>)>;
+
+    /// How many messages arrived longer than their channel allows and were dropped: only a
+    /// peer that does not run Ludenea's link sends one. A link that cannot receive one (such
+    /// as [`MemoryLink`], whose sends refuse it) reports 0.
+    fn oversized(&self) -> u64 {
+        0
+    }
 }
 
 impl<L: Link + ?Sized> Link for Box<L> {
@@ -106,6 +113,10 @@ impl<L: Link + ?Sized> Link for Box<L> {
 
     fn receive(&mut self, channel: Channel) -> Option<(LinkId, Vec<u8>)> {
         (**self).receive(channel)
+    }
+
+    fn oversized(&self) -> u64 {
+        (**self).oversized()
     }
 }
 
@@ -304,6 +315,11 @@ impl<L: Link> LinkTransport<L> {
     /// How many packets from links outside the match were dropped.
     pub fn strays(&self) -> u64 {
         self.strays
+    }
+
+    /// The underlying link, to read its counts.
+    pub fn link(&self) -> &L {
+        &self.link
     }
 
     /// The underlying link, to poll its events or use its room channel.

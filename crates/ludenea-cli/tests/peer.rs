@@ -243,6 +243,9 @@ fn a_peer_whose_game_fails_exits_2_and_the_other_1() {
         host_out.contains("error: the game failed at tick "),
         "{host_out}"
     );
+    for out in [&host_out, &joined.1] {
+        assert!(out.contains(", 0 oversized messages dropped\n"), "{out}");
+    }
     assert_eq!(joined.0, 1, "{}", joined.1);
     assert!(
         joined.1.contains(": the game of peer 0 failed at tick "),

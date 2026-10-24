@@ -418,3 +418,40 @@ fn a_link_closed_after_a_refusal_keeps_the_refusal() {
     assert_eq!(newcomer.poll(now + 10 * STEP), full);
     assert_eq!(newcomer.closed(), None);
 }
+
+/// A [`MemoryLink`] that says it dropped `oversized` messages, as a WebRTC link counts them.
+struct OversizedLink {
+    inner: MemoryLink,
+    oversized: u64,
+}
+
+impl Link for OversizedLink {
+    fn poll(&mut self) -> Vec<LinkEvent> {
+        self.inner.poll()
+    }
+
+    fn send(&mut self, channel: Channel, to: LinkId, bytes: Vec<u8>) -> Result<(), LinkError> {
+        self.inner.send(channel, to, bytes)
+    }
+
+    fn receive(&mut self, channel: Channel) -> Option<(LinkId, Vec<u8>)> {
+        self.inner.receive(channel)
+    }
+
+    fn oversized(&self) -> u64 {
+        self.oversized
+    }
+}
+
+#[test]
+fn the_oversized_messages_of_the_link_are_reported() {
+    let mesh = MemoryMesh::new();
+    let memory = OnlinePeer::new(mesh.join(), host(2), clear()).unwrap();
+    assert_eq!(memory.oversized(), 0, "a memory link drops none");
+    let link: Box<dyn Link> = Box::new(OversizedLink {
+        inner: mesh.join(),
+        oversized: 3,
+    });
+    let boxed = OnlinePeer::new(link, RoomRole::Join, clear()).unwrap();
+    assert_eq!(boxed.oversized(), 3, "a boxed link forwards its count");
+}

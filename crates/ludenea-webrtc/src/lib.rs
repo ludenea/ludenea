@@ -118,14 +118,6 @@ mod link {
             }
         }
 
-        /// How many messages arrived longer than their channel's limit
-        /// ([`MAX_PACKET_BYTES`] for [`Channel::Match`], [`MAX_ROOM_MESSAGE_BYTES`] for
-        /// [`Channel::Room`]). [`Link::receive`] drops them: only a peer that does not run
-        /// Ludenea's link sends one.
-        pub fn oversized(&self) -> u64 {
-            self.oversized
-        }
-
         /// Why the link is gone, if it is: the loop ended, or no id came in time.
         fn end(&mut self) -> Option<String> {
             let signaling = self.settings.signaling();
@@ -229,6 +221,13 @@ mod link {
                 }
             }
             inbox.pop_front()
+        }
+
+        /// The messages that arrived longer than their channel's limit
+        /// ([`MAX_PACKET_BYTES`] for [`Channel::Match`], [`MAX_ROOM_MESSAGE_BYTES`] for
+        /// [`Channel::Room`]), which [`Link::receive`] dropped.
+        fn oversized(&self) -> u64 {
+            self.oversized
         }
     }
 }
