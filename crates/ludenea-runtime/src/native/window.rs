@@ -1464,6 +1464,101 @@ mod tests {
         assert_eq!(replay.hashes.len() as u64, last + 2, "ticks 0 to the end's");
     }
 
+    #[test]
+    fn a_window_closed_mid_match_plays_it_to_its_end_before_finishing() {
+        let folder = tempfile::tempdir().unwrap();
+        let records = [
+            folder.path().join("host.replay"),
+            folder.path().join("join.replay"),
+        ];
+        let recording = |record: &PathBuf| PlayOptions {
+            record: Some(record.clone()),
+            ..test_options()
+        };
+        let (mut host_out, mut join_out) = (Vec::new(), Vec::new());
+        let mut sessions = pair(
+            (&mut host_out, &mut join_out),
+            recording(&records[0]),
+            recording(&records[1]),
+        );
+        ready(&mut sessions);
+        // On the real clock, as `finish` pumps on it.
+        for _ in 0..PATIENCE {
+            if sessions.iter().all(|session| session.runner.tick() >= 30) {
+                break;
+            }
+            std::thread::sleep(HIDDEN_FRAME);
+            for session in &mut sessions {
+                session.frame_at(now()).unwrap();
+            }
+        }
+        assert!(sessions.iter().all(|session| session.runner.tick() >= 30));
+        let [mut host, joiner] = sessions;
+        // The joiner's window closes while the host is not stepped: it leaves, then plays on
+        // until its own match ended and it told the host, within the bound.
+        let closed = now();
+        let outcome = joiner.finish(Ok(())).unwrap();
+        let bound =
+            Duration::from_micros(Timeouts::default().disconnect_after_micros + END_LINGER_MICROS)
+                + CLOSE_MARGIN;
+        assert!(closed.elapsed() < bound, "{:?}", closed.elapsed());
+        let ended = outcome.ended.unwrap();
+        assert_eq!(ended.kind, MatchEndKind::Left, "{ended:?}");
+        assert_eq!(ended.peer, Some(1));
+        assert!(records[1].is_file(), "the joiner's replay is written");
+        for _ in 0..PATIENCE {
+            if host.over() {
+                break;
+            }
+            std::thread::sleep(HIDDEN_FRAME);
+            host.frame_at(now()).unwrap();
+        }
+        assert!(host.over(), "the host ends");
+        assert_eq!(end(&host), Some(ended));
+        host.finish(Ok(())).unwrap();
+        let replays = records.map(|record| std::fs::read(record).unwrap());
+        assert!(replays[0] == replays[1], "the replays differ");
+    }
+
+    #[test]
+    fn a_room_that_fails_ends_the_window_naming_the_reason() {
+        let (mut host_out, mut join_out) = (Vec::new(), Vec::new());
+        let mut sessions = pair(
+            (&mut host_out, &mut join_out),
+            test_options(),
+            test_options(),
+        );
+        let mut at = now();
+        // Neither is ready: the room waits, and the joiner learns its host.
+        run_until(
+            &mut sessions,
+            &mut at,
+            "the joiner knows its host",
+            |sessions| {
+                sessions[1]
+                    .online
+                    .as_ref()
+                    .unwrap()
+                    .view
+                    .is_some_and(|view| view.peers.is_some())
+            },
+        );
+        let [host, mut joiner] = sessions;
+        // The host goes before the room agreed: its link closes with its session.
+        drop(host);
+        for _ in 0..PATIENCE {
+            at += FRAME;
+            if let Err(error) = joiner.frame_at(at) {
+                assert_eq!(
+                    error.to_string(),
+                    "the online match cannot go on: the host left the room"
+                );
+                return;
+            }
+        }
+        panic!("the joiner's room never failed");
+    }
+
     /// A component both desync apps register; only their systems differ.
     #[derive(Clone, ludenea::prelude::Component, serde::Serialize, serde::Deserialize)]
     #[component(name = "window::Mover")]
