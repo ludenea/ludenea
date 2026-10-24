@@ -1057,8 +1057,8 @@ hash, those of the golden trace and replays included.
   New `get_net_stats` replies `net_stats`, the new `NetStats`: `tick`, the next tick this
   peer plays; `confirmed`, the first tick some player lacks a confirmed input for
   (once the peers agreed on the last tick, at most the tick after it; `18446744073709551615`
-  when none is agreed and every player's inputs are confirmed as far as they go); `skips`; and `peers`, one
-  `PeerNetStats` per other peer with `peer`, `ping_micros`, `jitter_micros`,
+  when none is agreed and every player's inputs are confirmed as far as they go); `skips`;
+  and `peers`, one `PeerNetStats` per other peer with `peer`, `ping_micros`, `jitter_micros`,
   `frame_advantage`, `rollbacks`, `deepest_rollback`, `prediction_misses`, `stalls`, and
   `dropped`, the packets dropped from it as `DroppedPackets` (`reason` in words, such as
   `wire: TooLarge`, and `count`). It is accepted while a match runs and its statistics stay
