@@ -418,10 +418,10 @@ server of Google's. There is no TURN relay, so two peers that are both behind a 
 UDP to the STUN server stalls a browser's handshake for about 40 seconds before it falls
 back to local addresses; on a local network, `?stun=none` on the page and `--no-stun` of a
 native peer skip STUN. Native peers need a network interface other than loopback, even to
-play on one machine: webrtc-rs leaves loopback out of its candidates. Native `wss://` signaling trusts the certificate
-roots of 2022 (webpki-roots 0.22, which matchbox_socket's TLS uses), so a server whose
-certificate chains to a newer root is refused natively; `ws://`, or a certificate from an
-older root, works.
+play on one machine: webrtc-rs leaves loopback out of its candidates. Native `wss://`
+signaling trusts the certificate roots of 2022 (webpki-roots 0.22, which matchbox_socket's
+TLS uses), so a server whose certificate chains to a newer root is refused natively;
+`ws://`, or a certificate from an older root, works.
 
 Serve it with the editor and open `http://127.0.0.1:7878` in a browser; the editor is
 usable at once, and the game appears when its first build finishes:
