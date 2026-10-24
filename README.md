@@ -774,10 +774,11 @@ cargo run --locked -p boxes --bin divergence-fixtures editor/e2e/fixtures/diverg
 ```
 
 The timing and memory budgets (switching branches, the divergence report, checkpoints of 20
-branches) are `#[ignore]`d tests, run in release:
+branches) are `#[ignore]`d tests, run in release. They report the times; `PERF_STRICT=1` also
+asserts the timing budgets, which hold on the reference machine (an Apple M-series):
 
 ```sh
-cargo test --locked --release -p ludenea-control --test branches --test divergence -- --ignored --nocapture
+PERF_STRICT=1 cargo test --locked --release -p ludenea-control --test branches --test divergence -- --ignored --nocapture
 ```
 
 After changing protocol types, regenerate the TypeScript bindings and the declarations

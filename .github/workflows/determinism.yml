@@ -384,8 +384,8 @@ jobs:
 
   timing:
     runs-on: macos-14
-    # Shared runners measure noisily: the timing and memory budgets are reported, not enforced.
-    continue-on-error: true
+    # Shared runners measure noisily: the timing budgets are only reported here (they assert on
+    # the reference machine, PERF_STRICT=1), while the results and the memory budget are enforced.
     # A cold release build plus the tests, with room to spare: a hang is cut off.
     timeout-minutes: 90
     steps:
