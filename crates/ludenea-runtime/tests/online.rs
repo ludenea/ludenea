@@ -20,7 +20,7 @@ use ludenea::prelude::*;
 use ludenea_runtime::online::{
     OnlineMatch, OnlineOptions, OnlinePhase, OnlineRole, write_desync_snapshot,
 };
-use ludenea_runtime::{GameFiles, Runner};
+use ludenea_runtime::{GameFiles, Runner, RuntimeError};
 use serde::{Deserialize, Serialize};
 
 /// The arena with a spawn point for each of four players.
@@ -584,6 +584,55 @@ fn an_input_too_long_for_the_network_warns_and_the_match_goes_on() {
                 .to_string()
         ]
     );
+}
+
+/// `KeyP` makes the mapping panic.
+fn panicking_mapping_app() -> App {
+    let mut app = App::new();
+    app.input::<u8>().input_mapping(|raw, _| {
+        assert!(!raw.keys.contains("KeyP"), "the mapping broke");
+        1u8
+    });
+    app
+}
+
+#[test]
+fn a_mapping_that_panics_online_fails_the_game_and_ends_the_match() {
+    let mesh = MemoryMesh::new();
+    let files = GameFiles {
+        scene: "Scene(version: 2, next_id: 0, resources: {}, entities: [])".to_string(),
+        assets: Vec::new(),
+        edits: None,
+    };
+    let mut sides = pair(&mesh, &files, panicking_mapping_app, panicking_mapping_app);
+    let mut frame = 0;
+    run_until(&mut sides, &mut frame, "both run some ticks", |sides, _| {
+        sides.iter().all(|side| {
+            matches!(side.runner.online(), Some(OnlineState::Running)) && side.runner.tick() >= 30
+        })
+    });
+    let pressed = LiveDevices {
+        keys: ["KeyP".to_string()].into(),
+        gamepads: Vec::new(),
+    };
+    let host = &mut sides[0];
+    let error = host.runner.frame(FRAME, &pressed).unwrap_err();
+    assert!(
+        matches!(&error, RuntimeError::Game { message, .. } if message.contains("the mapping broke")),
+        "{error:?}"
+    );
+    // The frames after it end the match as this peer's failure, and keep telling the other.
+    for side in &mut sides {
+        side.held = Some(LiveDevices::default());
+    }
+    run_until(&mut sides, &mut frame, "both end", |sides, now| {
+        sides.iter().all(|side| side.done(now))
+    });
+    for side in &sides {
+        let end = side.end().unwrap();
+        assert_eq!(end.kind, MatchEndKind::LocalFailure, "{end:?}");
+        assert_eq!(end.peer, Some(0));
+    }
 }
 
 /// A component both desync apps register; only their systems differ.

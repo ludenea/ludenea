@@ -255,8 +255,9 @@ impl Runner {
     /// ticks due, at most its cap per frame however long the frame took. A game that fails
     /// or panics is a `Game` error naming the tick. During an online match it keeps the
     /// packets to send and the match's state; the end of the match is not an error, and
-    /// devices the host refuses are a warning in `take_messages`: the match goes on with the
-    /// previous input. Once the
+    /// devices whose input is longer than the match carries are a warning in
+    /// `take_messages`: the match goes on with the previous input. A mapping that fails is a
+    /// `Game` error, after the advance that ends the match on it. Once the
     /// match ended, `devices` are no longer sent, and the frames stay the last ones fetched
     /// while the match ran, as the session resimulates the match in the background from
     /// tick 0 (which `FrameUpdate::tick` then reports).
@@ -265,15 +266,17 @@ impl Runner {
         elapsed_seconds: f64,
         devices: &LiveDevices,
     ) -> Result<FrameUpdate, RuntimeError> {
+        // A refusal during an online match is reported after the advance, so the match's
+        // end and its packets still flow.
+        let mut refused = None;
         if !self.match_ended()
             && let Some(command) = self.live_input(devices)
         {
             match self.host.handle(command) {
                 Ok(_) => self.refused_input = None,
-                // Online, the match must go on, as the host goes on with the previous input:
-                // a refusal (such as an input longer than a network match carries) is a
-                // warning, written once until the devices are taken again.
-                Err(error) if self.online.is_some() => {
+                // The host goes on with the previous input: the match goes on too, with a
+                // warning written once until the devices are taken again.
+                Err(error) if self.online.is_some() && error.code == ErrorCode::InputTooLarge => {
                     if self.refused_input.as_ref() != Some(&error.message) {
                         self.messages.push((
                             ConsoleLevel::Warning,
@@ -285,6 +288,8 @@ impl Runner {
                         self.refused_input = Some(error.message);
                     }
                 }
+                // The mapping failed: the game failed, and online the match ends on it.
+                Err(error) if self.online.is_some() => refused = Some(self.game_error(error)),
                 Err(error) => return Err(self.game_error(error)),
             }
         }
@@ -304,7 +309,7 @@ impl Runner {
             _ => None,
         });
         self.keep_messages(events);
-        if let Some(failure) = failure {
+        if let Some(failure) = refused.or(failure) {
             // The frames are not fetched for the ticks that ran before the failure: they are
             // stale by those ticks, which is harmless as the match ends here.
             return Err(failure);
