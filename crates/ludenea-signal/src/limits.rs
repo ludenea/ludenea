@@ -93,9 +93,6 @@ impl Connections {
         let mut held = connections.lock();
         let count = held.entry(key).or_insert(0);
         if *count >= limit {
-            if *count == 0 {
-                held.remove(&key);
-            }
             return None;
         }
         *count += 1;
