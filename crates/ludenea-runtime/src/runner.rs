@@ -14,8 +14,8 @@ use ludenea_app::players::{Claim, LiveDevices};
 use ludenea_control::host::RESIMULATION_BUDGET;
 use ludenea_control::pacer::MAX_TICKS_PER_FRAME;
 use ludenea_control::{
-    Bytes, Command, ConsoleLevel, Document, Event, Host, NetStats, OnlineSettings, OnlineState,
-    PauseReason, ProtocolError, Reply,
+    Bytes, Command, ConsoleLevel, Document, ErrorCode, Event, Host, NetStats, OnlineSettings,
+    OnlineState, PauseReason, ProtocolError, Reply,
 };
 use ludenea_draw::frame::RenderFrame;
 use ludenea_ecs::AssetId;
@@ -98,6 +98,8 @@ pub struct Runner {
     silent: BTreeMap<u8, u64>,
     /// The packets the host sent since the last `take_net_packets`, with their peer.
     net_packets: Vec<(u8, Vec<u8>)>,
+    /// The host's refusal of the live devices last warned about during an online match.
+    refused_input: Option<String>,
 }
 
 impl Runner {
@@ -123,6 +125,7 @@ impl Runner {
             online: None,
             silent: BTreeMap::new(),
             net_packets: Vec::new(),
+            refused_input: None,
         };
         runner.setup(Command::LoadScene {
             scene: files.scene.clone(),
@@ -251,7 +254,9 @@ impl Runner {
     /// Lets `elapsed_seconds` of play pass with `devices` held: the host's pacer runs the
     /// ticks due, at most its cap per frame however long the frame took. A game that fails
     /// or panics is a `Game` error naming the tick. During an online match it keeps the
-    /// packets to send and the match's state; the end of the match is not an error. Once the
+    /// packets to send and the match's state; the end of the match is not an error, and
+    /// devices the host refuses are a warning in `take_messages`: the match goes on with the
+    /// previous input. Once the
     /// match ended, `devices` are no longer sent, and the frames stay the last ones fetched
     /// while the match ran, as the session resimulates the match in the background from
     /// tick 0 (which `FrameUpdate::tick` then reports).
@@ -263,9 +268,25 @@ impl Runner {
         if !self.match_ended()
             && let Some(command) = self.live_input(devices)
         {
-            self.host
-                .handle(command)
-                .map_err(|error| self.game_error(error))?;
+            match self.host.handle(command) {
+                Ok(_) => self.refused_input = None,
+                // Online, the match must go on, as the host goes on with the previous input:
+                // a refusal (such as an input longer than a network match carries) is a
+                // warning, written once until the devices are taken again.
+                Err(error) if self.online.is_some() => {
+                    if self.refused_input.as_ref() != Some(&error.message) {
+                        self.messages.push((
+                            ConsoleLevel::Warning,
+                            format!(
+                                "the devices held are not played, the previous input stays: {}",
+                                error.message
+                            ),
+                        ));
+                        self.refused_input = Some(error.message);
+                    }
+                }
+                Err(error) => return Err(self.game_error(error)),
+            }
         }
         let events = self.advance(elapsed_seconds);
         self.keep_online(&events);
@@ -383,12 +404,21 @@ impl Runner {
     /// `ticks / RESIMULATION_BUDGET + 2` times, `ticks` being the session's length: each
     /// advance resimulates up to `RESIMULATION_BUDGET` ticks. Past that bound it is a `Record`
     /// error naming the tick reached. While a match runs the host refuses the timeline, and
-    /// the command that follows reports why.
+    /// the command that follows reports why; any other refusal is a `Record` error.
     fn settle(&mut self) -> Result<(), RuntimeError> {
         let mut advances = 0;
         loop {
-            let Ok(Reply::Timeline(timeline)) = self.host.handle(Command::GetTimeline) else {
-                return Ok(());
+            let timeline = match self.host.handle(Command::GetTimeline) {
+                Ok(Reply::Timeline(timeline)) => timeline,
+                Ok(other) => unreachable!("GetTimeline answers Timeline, not {other:?}"),
+                // The command that follows reports the running match itself.
+                Err(error) if error.code == ErrorCode::OnlineMatch => return Ok(()),
+                Err(error) => {
+                    return Err(RuntimeError::Record(format!(
+                        "cannot read the timeline: {}",
+                        error.message
+                    )));
+                }
             };
             if !timeline.resimulating {
                 return Ok(());

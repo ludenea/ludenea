@@ -10,7 +10,9 @@ use ludenea::app::players::{LiveDevices, automatic_claims};
 use ludenea::app::project::project_assets;
 use ludenea::app::replay::{Replay, ReplayOutcome, play_replay};
 use ludenea::app::{RawGamepad, Rng};
-use ludenea::control::{Bytes, Command, Host, MatchEnd, MatchEndKind, OnlineState, Reply};
+use ludenea::control::{
+    Bytes, Command, ConsoleLevel, Host, MatchEnd, MatchEndKind, OnlineState, Reply,
+};
 use ludenea::net::{
     Channel, Link, LinkConditions, LinkError, LinkEvent, LinkId, MemoryMesh, RoomCode, RoomRole,
 };
@@ -64,6 +66,8 @@ struct Side {
     online: OnlineMatch,
     phases: Vec<OnlinePhase>,
     devices: Rng,
+    /// What the players hold, in place of the random devices.
+    held: Option<LiveDevices>,
 }
 
 impl Side {
@@ -82,6 +86,7 @@ impl Side {
             online,
             phases: Vec::new(),
             devices: Rng::new(5, 0),
+            held: None,
         }
     }
 
@@ -100,6 +105,9 @@ impl Side {
     }
 
     fn next_devices(&mut self) -> LiveDevices {
+        if let Some(held) = &self.held {
+            return held.clone();
+        }
         let stick = [-1.0, 0.0, 1.0][self.devices.range_u32(0, 3) as usize];
         LiveDevices {
             keys: BTreeSet::new(),
@@ -511,6 +519,71 @@ fn a_silent_peer_is_announced_then_back() {
         sides[0].runner.silent_peers().is_empty()
     });
     assert!(sides.iter().all(|side| side.end().is_none()));
+}
+
+#[derive(Serialize, Deserialize, Schema, Default, Clone)]
+struct Big {
+    bytes: Vec<u8>,
+}
+
+/// `KeyB` gives an input of 31 bytes, more than a network match carries.
+fn big_app() -> App {
+    let mut app = App::new();
+    app.input::<Big>().input_mapping(|raw, _| Big {
+        bytes: if raw.keys.contains("KeyB") {
+            vec![7; 30]
+        } else {
+            Vec::new()
+        },
+    });
+    app
+}
+
+#[test]
+fn an_input_too_long_for_the_network_warns_and_the_match_goes_on() {
+    let mesh = MemoryMesh::new();
+    let files = GameFiles {
+        scene: "Scene(version: 2, next_id: 0, resources: {}, entities: [])".to_string(),
+        assets: Vec::new(),
+        edits: None,
+    };
+    let mut sides = pair(&mesh, &files, big_app, big_app);
+    let mut frame = 0;
+    run_until(&mut sides, &mut frame, "both play", |sides, _| {
+        sides.iter().all(Side::playing)
+    });
+    sides[0].held = Some(LiveDevices {
+        keys: ["KeyB".to_string()].into(),
+        gamepads: Vec::new(),
+    });
+    let tick = sides[0].runner.tick();
+    // Past the 3 s after which a silent peer is lost: the host still sends.
+    run_until(
+        &mut sides,
+        &mut frame,
+        "five more seconds of ticks",
+        |sides, _| sides[0].runner.tick() >= tick + 300,
+    );
+    assert!(
+        sides.iter().all(Side::playing),
+        "{:?}",
+        sides[1].phases.last()
+    );
+    let warnings: Vec<String> = sides[0]
+        .runner
+        .take_messages()
+        .into_iter()
+        .filter(|(level, _)| *level == ConsoleLevel::Warning)
+        .map(|(_, text)| text)
+        .collect();
+    assert_eq!(
+        warnings,
+        vec![
+            "the devices held are not played, the previous input stays: player 0's input \
+             takes 31 bytes, a network match carries at most 24"
+                .to_string()
+        ]
+    );
 }
 
 /// A component both desync apps register; only their systems differ.

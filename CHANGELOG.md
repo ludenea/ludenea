@@ -926,7 +926,9 @@ hash, those of the golden trace and replays included.
   `take_net_packets()`, `leave_match()`, `online()` (the latest `OnlineState`),
   `silent_peers()` (the peers silent and the silence announced, in ms), `net_stats()` and
   `snapshot_at(tick)`. `Runner::frame` keeps the packets to send and the match's state; an
-  ended match is not an error, and once it ended the frame sends no live input and keeps
+  ended match is not an error, devices the host refuses during a match (such as an input
+  longer than a network match carries) are a warning in `take_messages` while the match goes
+  on with the previous input, and once it ended the frame sends no live input and keeps
   the frames of the match. `export_replay` and `snapshot_at` first advance by zero while the
   session resimulates the match, at most `ticks / RESIMULATION_BUDGET + 2` times, else
   refuse with a `RuntimeError::Record` naming the tick reached.
