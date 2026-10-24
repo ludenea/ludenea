@@ -1073,31 +1073,31 @@ hash, those of the golden trace and replays included.
   another peer sent, dropped without a match; the session receives it at the next advance,
   with the time that advance reaches, so a ping counts the frame it waited. New
   `leave_match`: while the match runs, every peer ends at the last tick this one has inputs
-  for; while it connects, the match is dropped here ("peer 0 left before the match started") and the others end `unreachable`;
-  without a match, or once it ended, it is refused with `invalid_command`. All three reply
-  `done`. New events: `online` (`state`, the new `OnlineState`: `connecting`, `running`,
-  `leaving`, or `ended` with `end`, the new `MatchEnd`: `kind`, one of `left`, `lost`,
-  `desync`, `violation`, `mismatch`, `unreachable` and `local_failure`, `message`, and the
-  `peer` and `tick` the reason names); `net_send` (`packets`, each a `NetPacket` with `to`
-  and `packet`), after each advance with packets to send, also while the ended match
-  lingers; and `rolled_back` (`from`, `to`): the ticks from `from` up to `to`, excluded, ran
-  again with corrected inputs. While the match runs, `ticked` reports each tick it runs and
-  `render_frames` pushes its frames as local play does; `set_live_input` maps each local
-  player's devices at its global index, and refuses with the new error code
-  `input_too_large` an input longer than a network match carries ("player 0's input takes
-  31 bytes, a network match carries at most 24"), keeping the previous one; every local
-  player is mapped first, so a failing mapping is reported before another player's input too
-  long. A game failure pauses as in local play and ends the match for every peer, a failing
-  input mapping included: `set_live_input` then refuses with its error (`system_panicked`
-  for a panic). While a match connects, runs, or is left, the new error code
-  `online_match` refuses every command that changes the state, `play`, `pause`, `seek`,
-  `set_speed`, `step`, and the reads of the session's recorded run (`get_timeline`,
-  `get_tick_events`, `get_tick_commands`, `compare_traces`, `get_ghost_draw`,
-  `get_divergence`, `export_replay`, `export_session`, `set_compare_branch`); the reads of
-  the world stay allowed, and the ghost and the divergence report do not follow. At the
-  end, play stops with `paused` and the new reason `match_ended`, the confirmed inputs
-  become the session's input log, which resimulates in the background, and the claims go
-  back to the automatic ones of the match's players.
+  for; while it connects, the match is dropped here ("peer 0 left before the match started")
+  and the others end `unreachable`; without a match, or once it ended, it is refused with
+  `invalid_command`. All three reply `done`. New events: `online` (`state`, the new
+  `OnlineState`: `connecting`, `running`, `leaving`, or `ended` with `end`, the new
+  `MatchEnd`: `kind`, one of `left`, `lost`, `desync`, `violation`, `mismatch`,
+  `unreachable` and `local_failure`, `message`, and the `peer` and `tick` the reason names);
+  `net_send` (`packets`, each a `NetPacket` with `to` and `packet`), after each advance with
+  packets to send, also while the ended match lingers; and `rolled_back` (`from`, `to`): the
+  ticks from `from` up to `to`, excluded, ran again with corrected inputs. While the match
+  runs, `ticked` reports each tick it runs and `render_frames` pushes its frames as local
+  play does; `set_live_input` maps each local player's devices at its global index, and
+  refuses with the new error code `input_too_large` an input longer than a network match
+  carries ("player 0's input takes 31 bytes, a network match carries at most 24"), keeping
+  the previous one; every local player is mapped first, so a failing mapping is reported
+  before another player's input too long. A game failure pauses as in local play and ends
+  the match for every peer, a failing input mapping included: `set_live_input` then refuses
+  with its error (`system_panicked` for a panic). While a match connects, runs, or is left,
+  the new error code `online_match` refuses every command that changes the state, `play`,
+  `pause`, `seek`, `set_speed`, `step`, and the reads of the session's recorded run
+  (`get_timeline`, `get_tick_events`, `get_tick_commands`, `compare_traces`,
+  `get_ghost_draw`, `get_divergence`, `export_replay`, `export_session`,
+  `set_compare_branch`); the reads of the world stay allowed, and the ghost and the
+  divergence report do not follow. At the end, play stops with `paused` and the new reason
+  `match_ended`, the confirmed inputs become the session's input log, which resimulates in
+  the background, and the claims go back to the automatic ones of the match's players.
   New `get_net_stats` replies `net_stats`, the new `NetStats`: `tick`, the next tick this
   peer plays; `confirmed`, the first tick some player lacks a confirmed input for
   (once the peers agreed on the last tick, at most the tick after it; `18446744073709551615`
