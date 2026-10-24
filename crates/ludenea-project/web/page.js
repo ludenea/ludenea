@@ -294,7 +294,8 @@ function setOnline(state) {
   leaveButton.disabled = !(onlineState === "connecting" || onlineState === "running");
   if (onlineState === "ended") {
     end = state.end;
-    endedAt = performance.now();
+    // The worker tells every state it reports: the linger counts from the first end.
+    endedAt ??= performance.now();
     document.body.dataset.end = end.kind;
     playing = false;
     silent.clear();
