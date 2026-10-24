@@ -20,13 +20,19 @@ native = [
     "dep:uuid",
     "ludenea-webrtc/link",
 ]
-# The standalone web page's exports (the lobby, and the browser renderer it links), in the
-# browser only: the renderer's `web` feature and wasm-bindgen are declared for
+# The standalone web page's exports (the lobby, the online room, and the browser renderer it
+# links), in the browser only: the renderer's `web` feature and wasm-bindgen are declared for
 # `wasm32-unknown-unknown` alone. Cargo cannot limit a feature to a target, so on any other
 # target the feature still enables the renderer as the native window has it (`gpu`: wgpu on the
 # native backends). Only a game's browser build turns it on (`ludenea build --web`), as
 # `ludenea-render`'s own `web` feature does.
-web = ["dep:ludenea-render", "dep:wasm-bindgen", "dep:serde_json", "ludenea-webrtc/link"]
+web = [
+    "dep:ludenea-render",
+    "dep:wasm-bindgen",
+    "dep:web-sys",
+    "dep:serde_json",
+    "ludenea-webrtc/link",
+]
 
 [dependencies]
 ludenea-app.workspace = true
@@ -38,6 +44,8 @@ ludenea-net.workspace = true
 # Its settings on every target (`OnlinePlan` holds them); the link itself (feature `link`)
 # only with `native` or `web`, so a build without them links no WebRTC.
 ludenea-webrtc.workspace = true
+# The JSON of the web page's exports; the online options it reads are checked on every target.
+serde_json = { workspace = true, optional = true }
 thiserror.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
@@ -54,8 +62,8 @@ xxhash-rust = { workspace = true, optional = true }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 ludenea-render = { workspace = true, optional = true, features = ["web"] }
-serde_json = { workspace = true, optional = true }
 wasm-bindgen = { workspace = true, optional = true }
+web-sys = { workspace = true, optional = true }
 
 [dev-dependencies]
 arena = { path = "../../examples/arena" }
@@ -63,5 +71,6 @@ ludenea.workspace = true
 png.workspace = true
 postcard.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 swarm = { path = "../../examples/swarm" }
 tempfile.workspace = true

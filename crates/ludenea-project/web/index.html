@@ -17,13 +17,16 @@
         <li>Free</li>
         <li>Free</li>
       </ol>
-      <p>
+      <p id="lobby-help">
         Press a key of a keyboard half or a gamepad button to join. Escape or Select leaves;
         Enter or Start begins the match.
       </p>
+      <p id="room" hidden></p>
     </section>
     <footer id="bar">
       <button id="save" type="button" disabled>Save replay</button>
+      <button id="snapshot" type="button" hidden>Save desync snapshot</button>
+      <button id="leave" type="button" hidden disabled>Leave</button>
       <output id="status" role="status">Loading the game...</output>
     </footer>
     <script>

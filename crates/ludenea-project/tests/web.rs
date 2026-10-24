@@ -109,13 +109,15 @@ fn web_build_writes_a_complete_page() {
         atlas.contains("00000000000000000000000000005b01"),
         "{atlas}"
     );
-    // The game's glue exports the worker's host, the renderer, and the lobby.
+    // The game's glue exports the worker's host, the renderer, the lobby, and the room.
     let glue = fs::read_to_string(out.join("game.js")).unwrap();
     for export in [
         "createHost",
         "WebRenderer",
         "WebLobby",
         "automaticClaimsJson",
+        "WebOnline",
+        "defaultStun",
     ] {
         assert!(glue.contains(export), "game.js does not export {export}");
     }

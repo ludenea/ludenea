@@ -113,6 +113,200 @@ pub fn settings(layout: &MatchLayout) -> OnlineSettings {
     }
 }
 
+/// The options and the room's status as the standalone web page exchanges them with
+/// `web::WebOnline`, in JSON. Checked on every target, so their tests run natively.
+#[cfg(any(test, feature = "web"))]
+mod page {
+    use ludenea_net::{LinkConditions, MAX_PEERS, OnlineStatus, RoomCode};
+    use ludenea_webrtc::{LinkSettings, LinkSettingsError};
+    use serde_json::{Map, Value, json};
+
+    use super::{OnlineOptions, OnlineRole, settings};
+
+    impl OnlineOptions {
+        /// The options of their JSON text, as the web page gives them:
+        /// `{ "role": { "host": peers } | { "join": code }, "signaling": url, "stun": [urls],
+        /// "conditions": { "latency_ms", "jitter_ms", "loss_percent" } }`, every field
+        /// required, in the ranges of the native command line: 2 to 4 peers, 0 to 65535 ms,
+        /// and 0 to 100 percent. The URLs are checked as `plan` checks them.
+        ///
+        /// # Errors
+        ///
+        /// A refusal starts with the path of the field it names, such as `role.host: a room
+        /// holds 2 to 4 peers, not 9`, or `options:` for the text as a whole.
+        pub fn from_json(text: &str) -> Result<OnlineOptions, String> {
+            let value: Value = serde_json::from_str(text)
+                .map_err(|error| format!("options: not JSON: {error}"))?;
+            let options = object(
+                &value,
+                "options",
+                "",
+                &["role", "signaling", "stun", "conditions"],
+            )?;
+            let role = role(field(options, "", "role")?)?;
+            let signaling = string(field(options, "", "signaling")?, "signaling")?.to_owned();
+            let stun = match field(options, "", "stun")? {
+                Value::Array(urls) => urls
+                    .iter()
+                    .map(|url| string(url, "stun").map(str::to_owned))
+                    .collect::<Result<Vec<_>, _>>()?,
+                _ => return Err("stun: must be an array of URLs".to_owned()),
+            };
+            // The code does not matter: only the URLs are checked.
+            LinkSettings::new(&signaling, RoomCode::from_entropy(0), None, &stun).map_err(
+                |error| match error {
+                    LinkSettingsError::Signaling { .. } => format!("signaling: {error}"),
+                    LinkSettingsError::Stun { .. } => format!("stun: {error}"),
+                },
+            )?;
+            let conditions = field(options, "", "conditions")?;
+            let conditions = object(
+                conditions,
+                "conditions",
+                "conditions.",
+                &["latency_ms", "jitter_ms", "loss_percent"],
+            )?;
+            let milliseconds = |name: &str, what: &str| -> Result<u32, String> {
+                let path = format!("conditions.{name}");
+                let value = number(field(conditions, "conditions.", name)?, &path)?;
+                match u16::try_from(value) {
+                    Ok(value) => Ok(u32::from(value) * 1_000),
+                    Err(_) => Err(format!(
+                        "{path}: a peer {what} its packets by 0 to {} ms, not {value}",
+                        u16::MAX
+                    )),
+                }
+            };
+            let latency_micros = milliseconds("latency_ms", "delays")?;
+            let jitter_micros = milliseconds("jitter_ms", "jitters")?;
+            let loss = number(
+                field(conditions, "conditions.", "loss_percent")?,
+                "conditions.loss_percent",
+            )?;
+            let loss_per_mille = match u16::try_from(loss) {
+                Ok(loss) if loss <= 100 => loss * 10,
+                _ => {
+                    return Err(format!(
+                        "conditions.loss_percent: a peer loses 0 to 100 percent of its packets, \
+                         not {loss}"
+                    ));
+                }
+            };
+            Ok(OnlineOptions {
+                role,
+                signaling,
+                stun,
+                conditions: LinkConditions {
+                    latency_micros,
+                    jitter_micros,
+                    loss_per_mille,
+                    duplicate_per_mille: 0,
+                    reorder_per_mille: 0,
+                    reorder_extra_micros: 0,
+                    // `plan` draws it.
+                    seed: 0,
+                },
+            })
+        }
+    }
+
+    /// The JSON of `status`, `assigned` telling whether the room exists on the listener yet:
+    /// `{ "state": "room", "assigned", "describe", "view" }`, `{ "state": "ready", "settings",
+    /// "local" }` or `{ "state": "failed", "message" }`.
+    pub fn status_json(status: &OnlineStatus, assigned: bool) -> String {
+        match status {
+            OnlineStatus::Room(view) => json!({
+                "state": "room",
+                "assigned": assigned,
+                "describe": view.describe(),
+                "view": {
+                    "host": view.host,
+                    "peers": view.peers,
+                    "connected": view.connected,
+                    "ready": view.ready,
+                    "unmeshed": view.unmeshed,
+                    "unfit": view.unfit,
+                    "local_ready": view.local_ready,
+                },
+            }),
+            OnlineStatus::Ready(layout) => json!({
+                "state": "ready",
+                "settings": settings(layout),
+                "local": layout.local.0,
+            }),
+            OnlineStatus::Failed(message) => json!({ "state": "failed", "message": message }),
+        }
+        .to_string()
+    }
+
+    /// The role of `value`: `{ "host": peers }` or `{ "join": code }`.
+    fn role(value: &Value) -> Result<OnlineRole, String> {
+        let shape = || r#"role: must be { "host": peers } or { "join": code }"#.to_owned();
+        let Some(role) = value.as_object().filter(|role| role.len() == 1) else {
+            return Err(shape());
+        };
+        if let Some(peers) = role.get("host") {
+            let peers = number(peers, "role.host")?;
+            return match u8::try_from(peers) {
+                Ok(peers) if (2..=MAX_PEERS).contains(&usize::from(peers)) => {
+                    Ok(OnlineRole::Host { peers, code: None })
+                }
+                _ => Err(format!(
+                    "role.host: a room holds 2 to {MAX_PEERS} peers, not {peers}"
+                )),
+            };
+        }
+        if let Some(code) = role.get("join") {
+            let code = RoomCode::parse(string(code, "role.join")?)
+                .map_err(|error| format!("role.join: {error}"))?;
+            return Ok(OnlineRole::Join { code });
+        }
+        Err(shape())
+    }
+
+    /// `value` as an object at `path` (its fields named `prefix` and theirs) that holds no
+    /// field but `known`.
+    fn object<'a>(
+        value: &'a Value,
+        path: &str,
+        prefix: &str,
+        known: &[&str],
+    ) -> Result<&'a Map<String, Value>, String> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| format!("{path}: must be a JSON object"))?;
+        match object.keys().find(|key| !known.contains(&key.as_str())) {
+            Some(key) => Err(format!("{prefix}{key}: is not an option")),
+            None => Ok(object),
+        }
+    }
+
+    fn field<'a>(
+        object: &'a Map<String, Value>,
+        prefix: &str,
+        name: &str,
+    ) -> Result<&'a Value, String> {
+        object
+            .get(name)
+            .ok_or_else(|| format!("{prefix}{name}: is missing"))
+    }
+
+    fn string<'a>(value: &'a Value, path: &str) -> Result<&'a str, String> {
+        value
+            .as_str()
+            .ok_or_else(|| format!("{path}: must be a string"))
+    }
+
+    fn number(value: &Value, path: &str) -> Result<u64, String> {
+        value
+            .as_u64()
+            .ok_or_else(|| format!("{path}: must be a whole number"))
+    }
+}
+
+#[cfg(any(test, feature = "web"))]
+pub use page::status_json;
+
 /// The most links and reasons of dropped room messages `OnlineMatch::messages` warns about:
 /// a hostile signaling server can rotate through any number of links.
 const MAX_WARNED: usize = 64;
@@ -147,12 +341,7 @@ pub struct OnlineMatch {
     failure: Option<String>,
     /// When the end was first seen.
     ended_at: Option<u64>,
-    /// The links and reasons of the room's drops already warned about.
-    warned: BTreeSet<(LinkId, String)>,
-    /// The messages not taken yet.
-    messages: Vec<String>,
-    /// The link's `Closed` reason was given to the messages.
-    closed_said: bool,
+    warnings: PeerWarnings,
 }
 
 impl OnlineMatch {
@@ -173,9 +362,7 @@ impl OnlineMatch {
             joined: false,
             failure: None,
             ended_at: None,
-            warned: BTreeSet::new(),
-            messages: Vec::new(),
-            closed_said: false,
+            warnings: PeerWarnings::default(),
         })
     }
 
@@ -208,7 +395,7 @@ impl OnlineMatch {
     /// it the packets received.
     pub fn before_frame(&mut self, runner: &mut Runner, now_micros: u64) -> OnlinePhase {
         let status = self.peer.poll(now_micros);
-        self.take_room_drops();
+        self.warnings.take_room_drops(&mut self.peer);
         if let Some(failure) = &self.failure {
             return OnlinePhase::Failed(failure.clone());
         }
@@ -271,7 +458,7 @@ impl OnlineMatch {
             return;
         }
         if let Err(error) = runner.leave_match() {
-            self.messages.push(error.to_string());
+            self.warnings.messages.push(error.to_string());
         }
     }
 
@@ -285,13 +472,7 @@ impl OnlineMatch {
     /// The messages since the last call: a warning for the room's dropped messages, once per
     /// link and reason for the first 64 of them, and the reason the link closed.
     pub fn messages(&mut self) -> Vec<String> {
-        if !self.closed_said
-            && let Some(reason) = self.peer.closed()
-        {
-            self.closed_said = true;
-            self.messages.push(format!("the link closed: {reason}"));
-        }
-        std::mem::take(&mut self.messages)
+        self.warnings.take(&self.peer)
     }
 
     /// The sends the link lost: match packets refused at once or when due, and room messages
@@ -305,10 +486,35 @@ impl OnlineMatch {
         self.peer.strays()
     }
 
+    /// `end`, with the reason the link closed when the match was lost.
+    fn with_closed(&self, mut end: MatchEnd) -> MatchEnd {
+        if end.kind == MatchEndKind::Lost
+            && let Some(reason) = self.peer.closed()
+        {
+            end.message = format!("{}; {reason}", end.message);
+        }
+        end
+    }
+}
+
+/// The warnings of one peer's room and link, as every runtime gives them: one per link and
+/// reason of the room's dropped messages, for the first 64 of them, and the reason the link
+/// closed, once.
+#[derive(Default)]
+pub(crate) struct PeerWarnings {
+    /// The links and reasons of the room's drops already warned about.
+    warned: BTreeSet<(LinkId, String)>,
+    /// The messages not taken yet.
+    messages: Vec<String>,
+    /// The link's `Closed` reason was given to the messages.
+    closed_said: bool,
+}
+
+impl PeerWarnings {
     /// Turns the room's drops into warnings, once per link and reason. Taken on every poll:
     /// the peer keeps them until taken.
-    fn take_room_drops(&mut self) {
-        for RoomEvent::Dropped { link, reason } in self.peer.room_drops() {
+    pub(crate) fn take_room_drops(&mut self, peer: &mut OnlinePeer<Box<dyn Link>>) {
+        for RoomEvent::Dropped { link, reason } in peer.room_drops() {
             let words = drop_words(reason);
             let key = (link, words);
             if self.warned.len() >= MAX_WARNED || self.warned.contains(&key) {
@@ -326,14 +532,15 @@ impl OnlineMatch {
         }
     }
 
-    /// `end`, with the reason the link closed when the match was lost.
-    fn with_closed(&self, mut end: MatchEnd) -> MatchEnd {
-        if end.kind == MatchEndKind::Lost
-            && let Some(reason) = self.peer.closed()
+    /// The messages since the last call, the reason `peer`'s link closed included once.
+    pub(crate) fn take(&mut self, peer: &OnlinePeer<Box<dyn Link>>) -> Vec<String> {
+        if !self.closed_said
+            && let Some(reason) = peer.closed()
         {
-            end.message = format!("{}; {reason}", end.message);
+            self.closed_said = true;
+            self.messages.push(format!("the link closed: {reason}"));
         }
-        end
+        std::mem::take(&mut self.messages)
     }
 }
 
@@ -416,6 +623,179 @@ mod tests {
         .unwrap()
     }
 
+    /// The options JSON of a page that hosts a room of 2 with `stun` and `conditions`.
+    fn page_options(role: serde_json::Value, stun: &[&str], loss: u64) -> String {
+        serde_json::json!({
+            "role": role,
+            "signaling": "ws://127.0.0.1:3536/rooms",
+            "stun": stun,
+            "conditions": { "latency_ms": 50, "jitter_ms": 10, "loss_percent": loss },
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn the_page_options_read_every_field() {
+        let options =
+            OnlineOptions::from_json(&page_options(serde_json::json!({ "host": 3 }), &[], 5))
+                .unwrap();
+        assert_eq!(
+            options,
+            OnlineOptions {
+                role: OnlineRole::Host {
+                    peers: 3,
+                    code: None
+                },
+                signaling: "ws://127.0.0.1:3536/rooms".to_string(),
+                stun: Vec::new(),
+                conditions: LinkConditions {
+                    latency_micros: 50_000,
+                    jitter_micros: 10_000,
+                    loss_per_mille: 50,
+                    duplicate_per_mille: 0,
+                    reorder_per_mille: 0,
+                    reorder_extra_micros: 0,
+                    seed: 0,
+                },
+            }
+        );
+        let joined = OnlineOptions::from_json(&page_options(
+            serde_json::json!({ "join": " abc234 " }),
+            &["stun:stun.l.google.com:19302"],
+            0,
+        ))
+        .unwrap();
+        assert_eq!(
+            joined.role,
+            OnlineRole::Join {
+                code: RoomCode::parse("ABC234").unwrap()
+            }
+        );
+        assert_eq!(joined.stun, ["stun:stun.l.google.com:19302"]);
+    }
+
+    #[test]
+    fn bad_page_options_are_refused_naming_the_field() {
+        let host = || serde_json::json!({ "host": 2 });
+        let mut unknown: serde_json::Value =
+            serde_json::from_str(&page_options(host(), &[], 0)).unwrap();
+        unknown["speed"] = serde_json::json!(2);
+        let mut missing: serde_json::Value =
+            serde_json::from_str(&page_options(host(), &[], 0)).unwrap();
+        missing["conditions"]
+            .as_object_mut()
+            .unwrap()
+            .remove("jitter_ms");
+        let mut signaling: serde_json::Value =
+            serde_json::from_str(&page_options(host(), &[], 0)).unwrap();
+        signaling["signaling"] = serde_json::json!("http://127.0.0.1/rooms");
+        let mut latency: serde_json::Value =
+            serde_json::from_str(&page_options(host(), &[], 0)).unwrap();
+        latency["conditions"]["latency_ms"] = serde_json::json!(70_000);
+        let mut fraction: serde_json::Value =
+            serde_json::from_str(&page_options(host(), &[], 0)).unwrap();
+        fraction["conditions"]["jitter_ms"] = serde_json::json!(2.5);
+        for (text, refusal) in [
+            ("[]".to_string(), "options: must be a JSON object"),
+            ("{".to_string(), "options: not JSON: "),
+            (unknown.to_string(), "speed: is not an option"),
+            (missing.to_string(), "conditions.jitter_ms: is missing"),
+            (
+                page_options(serde_json::json!({ "host": 9 }), &[], 0),
+                "role.host: a room holds 2 to 4 peers, not 9",
+            ),
+            (
+                page_options(serde_json::json!({ "host": 2, "join": "ABC234" }), &[], 0),
+                "role: must be { \"host\": peers } or { \"join\": code }",
+            ),
+            (
+                page_options(serde_json::json!({ "join": "0O0O0O" }), &[], 0),
+                "role.join: '0' (character 1) is not in a room code",
+            ),
+            (
+                page_options(serde_json::json!({ "join": 7 }), &[], 0),
+                "role.join: must be a string",
+            ),
+            (
+                signaling.to_string(),
+                "signaling: the signaling URL 'http://127.0.0.1/rooms' must start with ws:// or \
+                 wss://",
+            ),
+            (
+                page_options(host(), &["http://x"], 0),
+                "stun: the STUN URL 'http://x' must start with stun: or stuns:",
+            ),
+            (
+                page_options(host(), &[], 150),
+                "conditions.loss_percent: a peer loses 0 to 100 percent of its packets, not 150",
+            ),
+            (
+                latency.to_string(),
+                "conditions.latency_ms: a peer delays its packets by 0 to 65535 ms, not 70000",
+            ),
+            (
+                fraction.to_string(),
+                "conditions.jitter_ms: must be a whole number",
+            ),
+        ] {
+            let refused = OnlineOptions::from_json(&text).unwrap_err();
+            assert!(refused.starts_with(refusal), "{text}: {refused}");
+        }
+    }
+
+    #[test]
+    fn the_page_status_says_where_the_room_stands() {
+        let view = RoomView {
+            host: true,
+            peers: Some(2),
+            connected: 1,
+            ready: 1,
+            unmeshed: 0,
+            unfit: 0,
+            local_ready: true,
+        };
+        let room: serde_json::Value =
+            serde_json::from_str(&status_json(&OnlineStatus::Room(view), true)).unwrap();
+        assert_eq!(
+            room,
+            serde_json::json!({
+                "state": "room",
+                "assigned": true,
+                "describe": "1 of 2 peers here",
+                "view": {
+                    "host": true,
+                    "peers": 2,
+                    "connected": 1,
+                    "ready": 1,
+                    "unmeshed": 0,
+                    "unfit": 0,
+                    "local_ready": true,
+                },
+            })
+        );
+        let layout = MatchLayout {
+            local: PeerId(1),
+            match_id: 0x5eed,
+            players: vec![PeerId(0), PeerId(1)],
+            links: Vec::new(),
+        };
+        let ready: serde_json::Value =
+            serde_json::from_str(&status_json(&OnlineStatus::Ready(layout.clone()), true)).unwrap();
+        assert_eq!(ready["state"], "ready");
+        assert_eq!(ready["local"], 1);
+        let settings: OnlineSettings = serde_json::from_value(ready["settings"].clone()).unwrap();
+        assert_eq!(settings, super::settings(&layout));
+        let failed: serde_json::Value = serde_json::from_str(&status_json(
+            &OnlineStatus::Failed("the host left the room".to_string()),
+            false,
+        ))
+        .unwrap();
+        assert_eq!(
+            failed,
+            serde_json::json!({ "state": "failed", "message": "the host left the room" })
+        );
+    }
+
     #[test]
     fn a_room_flood_warns_once_per_link_and_reason_and_never_piles_up() {
         let mesh = MemoryMesh::new();
@@ -446,7 +826,7 @@ mod tests {
                 assert!(messages.is_empty(), "{messages:?}");
             }
         }
-        assert_eq!(online.warned.len(), 1);
+        assert_eq!(online.warnings.warned.len(), 1);
     }
 
     #[test]
@@ -472,7 +852,7 @@ mod tests {
             online.before_frame(&mut runner, frame * 1_000);
             messages.extend(online.messages());
         }
-        assert_eq!(online.warned.len(), MAX_WARNED);
+        assert_eq!(online.warnings.warned.len(), MAX_WARNED);
         assert_eq!(messages.len(), MAX_WARNED + 1, "{messages:?}");
         assert_eq!(
             messages[MAX_WARNED],

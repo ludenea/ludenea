@@ -106,11 +106,11 @@ fn version_mismatch(protocol_version: u32) -> ProtocolError {
 pub(crate) mod text {
     use super::{handshake, version_mismatch};
     use crate::host::Host;
+    #[cfg(any(test, all(target_arch = "wasm32", target_os = "unknown")))]
+    use crate::protocol::{Bytes, Command, Reply};
     use crate::protocol::{
         ClientMessage, ErrorCode, PROTOCOL_VERSION, ProtocolError, ServerMessage, unreadable_hello,
     };
-    #[cfg(any(test, all(target_arch = "wasm32", target_os = "unknown")))]
-    use crate::protocol::{Command, Reply};
 
     /// Answers one protocol line of a text transport: the handshake until `connected`, then
     /// requests. A line that is not a message gets a `Refused` or an error response. The
@@ -182,10 +182,7 @@ pub(crate) mod text {
             debug_layers: Vec<String>,
         ) -> Result<String, ProtocolError> {
             if !self.connected {
-                return Err(ProtocolError::new(
-                    ErrorCode::NotConnected,
-                    "send Hello before any request",
-                ));
+                return Err(not_connected());
             }
             match self.host.handle(Command::GetRenderFrame { debug_layers })? {
                 Reply::RenderFrame { frame } => {
@@ -194,6 +191,30 @@ pub(crate) mod text {
                 other => unreachable!("GetRenderFrame answers RenderFrame, not {other:?}"),
             }
         }
+
+        /// Runs `net_receive` as a request would, refused before the hello as `answer`
+        /// refuses a request (`NotConnected`), without the packet's JSON text. Its events stay
+        /// queued for the next `handle` or `advance`.
+        pub(crate) fn net_receive(
+            &mut self,
+            from: u8,
+            packet: Vec<u8>,
+        ) -> Result<(), ProtocolError> {
+            if !self.connected {
+                return Err(not_connected());
+            }
+            self.host
+                .handle(Command::NetReceive {
+                    from,
+                    packet: Bytes(packet),
+                })
+                .map(|_| ())
+        }
+    }
+
+    #[cfg(any(test, all(target_arch = "wasm32", target_os = "unknown")))]
+    fn not_connected() -> ProtocolError {
+        ProtocolError::new(ErrorCode::NotConnected, "send Hello before any request")
     }
 
     fn malformed(connected: bool, line: &str, error: &serde_json::Error) -> ServerMessage {
@@ -441,5 +462,83 @@ mod tests {
             })
         ));
         assert!(text.advance(0.0).is_empty());
+    }
+
+    #[test]
+    fn a_raw_packet_is_refused_before_the_hello_as_a_request_is() {
+        let mut text = TextHost::new(Host::new(boxes::app).unwrap());
+        let refused = text.net_receive(1, vec![1, 2, 3]).unwrap_err();
+        assert_eq!(refused.code, crate::protocol::ErrorCode::NotConnected);
+        text.handle(&hello());
+        // Without a match the host drops it.
+        assert_eq!(text.net_receive(1, vec![1, 2, 3]), Ok(()));
+    }
+
+    /// The arena's own level in a text host, past the hello, joined as `local` of a match of
+    /// two peers with one player each.
+    fn arena_peer(local: u8) -> TextHost {
+        let scene = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../examples/arena/assets/arena.scene.ron"
+        );
+        let assets = ludenea_app::project::project_assets(std::path::Path::new(scene), None)
+            .unwrap()
+            .texts
+            .into_iter()
+            .collect();
+        let mut text = TextHost::new(Host::new(arena::app).unwrap());
+        text.handle(&hello());
+        text.host
+            .handle(Command::LoadScene {
+                scene: std::fs::read_to_string(scene).unwrap(),
+                assets,
+                document: Document::Scene,
+            })
+            .unwrap();
+        text.host
+            .handle(Command::JoinMatch {
+                settings: crate::protocol::OnlineSettings {
+                    local,
+                    match_id: crate::protocol::Hash64(0x5eed),
+                    players: vec![0, 1],
+                },
+                claims: ludenea_app::players::automatic_claims(1),
+            })
+            .unwrap();
+        text
+    }
+
+    #[test]
+    fn raw_packets_carry_a_match_between_two_text_hosts() {
+        let mut peers = [arena_peer(0), arena_peer(1)];
+        let mut running = [false, false];
+        for _ in 0..1_200 {
+            let mut sends = Vec::new();
+            for (from, peer) in (0u8..).zip(&mut peers) {
+                for message in peer.advance(1.0 / 120.0) {
+                    match message {
+                        ServerMessage::Event {
+                            event: Event::NetSend { packets },
+                        } => sends.extend(packets.into_iter().map(|sent| (from, sent))),
+                        ServerMessage::Event {
+                            event:
+                                Event::Online {
+                                    state: crate::protocol::OnlineState::Running,
+                                },
+                        } => running[usize::from(from)] = true,
+                        _ => {}
+                    }
+                }
+            }
+            for (from, sent) in sends {
+                peers[usize::from(sent.to)]
+                    .net_receive(from, sent.packet.0)
+                    .unwrap();
+            }
+            if running == [true, true] {
+                return;
+            }
+        }
+        panic!("the match never ran on both peers: {running:?}");
     }
 }

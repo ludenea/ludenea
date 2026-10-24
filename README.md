@@ -412,6 +412,28 @@ cargo run --locked -p ludenea-serve -- play ~/games/my_game -- --join CODE \
   --signaling ws://ADDRESS:3536/rooms
 ```
 
+The web page plays online too. `?host=N` (2 to 4 peers) opens a room and `?join=CODE` joins
+one, through `?signaling=URL` (by default `ws://` or `wss://` on the page's own host, `/rooms`,
+where `ludenea rooms --page` serves it), with the STUN servers of `?stun=URL` (repeatable,
+`?stun=none` for none) and `?latency=MS&jitter=MS&loss=PERCENT` on this page's own sends; a
+bad parameter fails the page, naming it. The lobby shows the room, its code once the room
+exists, and what it waits for; Enter (or `?players=N`) readies the room instead of starting a
+match, which starts once every peer is ready. The status names any peer silent, and how the
+match ended. The Leave button leaves the match, which every peer ends as left at the same
+tick; after the end, "Save replay" saves the match, and a desync also offers "Save desync
+snapshot" (`desync-tick-T-peer-P.snap`, to compare with the other peer's using `<game>
+diff`). A hidden tab keeps its match going. Closing the tab leaves the match on a best-effort
+basis only: the page and its link go at once, so the others usually end the match as lost
+after 3 seconds of silence, and the closed tab keeps no replay. Leave first to keep both.
+A page and a native peer play in the same rooms:
+
+```sh
+cargo run --locked -p ludenea-serve -- rooms --page ~/games/my_game-web
+cargo run --locked -p ludenea-serve -- play ~/games/my_game -- --host \
+  --signaling ws://ADDRESS:3536/rooms
+# then open http://ADDRESS:3536/?join=CODE in a browser
+```
+
 A room is `<signaling>/<code>`; the peer that creates it appends `?host=N`, N being its size
 (2 to 4). Peers stay connected to the listener for the whole match, so it must stay up for
 every match it serves: stopping it ends them. Anyone who can reach it can open rooms, and

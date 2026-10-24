@@ -2929,6 +2929,7 @@ dependencies = [
  "thiserror 2.0.21",
  "uuid",
  "wasm-bindgen",
+ "web-sys",
  "wgpu",
  "winit",
  "xxhash-rust",

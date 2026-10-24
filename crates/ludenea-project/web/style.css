@@ -25,7 +25,8 @@ body {
   background: rgb(18 18 20 / 80%);
 }
 
-#lobby[hidden] {
+#lobby[hidden],
+#lobby [hidden] {
   display: none;
 }
 
@@ -52,6 +53,11 @@ body {
 
 #slots li[data-claimed] {
   border-color: #60a0ff;
+}
+
+#room {
+  margin: 0;
+  font-size: 18px;
 }
 
 #bar {

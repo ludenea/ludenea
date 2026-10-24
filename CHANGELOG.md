@@ -934,6 +934,21 @@ hash, those of the golden trace and replays included.
   session resimulates the match, at most `ticks / RESIMULATION_BUDGET + 2` times, else
   refuse with a `RuntimeError::Record` naming the tick reached.
 - New: `ludenea_net::OnlinePeer::id()`, this peer's own link once the link reported it.
+- New: `ludenea_runtime::web::WebOnline` (feature `web`, in the browser), the standalone web
+  page's room and link, over `OnlineOptions::plan`, `online::open_link` and `OnlinePeer`:
+  `new WebOnline(options, entropy)` takes the options as JSON (`{ role: { host: peers } |
+  { join: code }, signaling, stun: [urls], conditions: { latency_ms, jitter_ms, loss_percent
+  } }`, read by the new `OnlineOptions::from_json`, which refuses a bad field with a message
+  that starts with its path, such as `role.host:`) and four 32-bit words of entropy; `code`,
+  `poll(now_ms)` (JSON: `{ state: "room", assigned, describe, view }`, `{ state: "ready",
+  settings, local }` or `{ state: "failed", message }`, as the new `online::status_json`
+  writes it), `setReady(players)`, `receive(now_ms)` (`[{ from, packet: ArrayBuffer }]`),
+  `send(to, packet, now_ms)` and `messages()` (the warnings `OnlineMatch::messages` gives)
+  complete it. `defaultStun()` gives `ludenea_webrtc::DEFAULT_STUN`.
+- New: `WorkerHost::netReceive(from, packet)` gives the online match a packet without its
+  JSON text, refused before the hello as a request is, and `WorkerHost::takeNetPackets()`
+  hands out the packets of the `net_send` events once, as `[{ to, packet: ArrayBuffer }]`
+  (`undefined` when there are none): `handle` and `advance` no longer return those events.
 - New: the command line tool's `peer <scene>` plays a match online without a window, hosting
   (`--host`, with `--peers` and `--room`) or joining (`--join CODE`) a room of
   `--signaling`, with `--stun` or `--no-stun`, `--latency-ms`, `--jitter-ms`,
