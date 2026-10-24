@@ -7,22 +7,23 @@
 //! [`Channel::Room`](ludenea_net::Channel::Room). What the server and the other members
 //! send is untrusted: a handshake matchbox cannot use is dropped, never a panic.
 //!
-//! On WebAssembly outside the browser (`wasm32-wasip1`) the crate builds its settings alone
+//! The link needs the `link` feature. Without it, and always on WebAssembly outside the
+//! browser (`wasm32-wasip1`), the crate builds its settings alone
 //! and links no WebRTC.
 
 mod settings;
 
 pub use settings::{DEFAULT_STUN, LinkSettings, LinkSettingsError};
 
-#[cfg(not(target_os = "wasi"))]
+#[cfg(all(feature = "link", not(target_os = "wasi")))]
 pub use link::WebRtcLink;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "link", not(target_arch = "wasm32")))]
 mod native;
-#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+#[cfg(all(feature = "link", target_arch = "wasm32", not(target_os = "wasi")))]
 mod web;
 
-#[cfg(not(target_os = "wasi"))]
+#[cfg(all(feature = "link", not(target_os = "wasi")))]
 mod link {
     use std::collections::{BTreeSet, VecDeque};
     use std::sync::mpsc::{Receiver, TryRecvError};

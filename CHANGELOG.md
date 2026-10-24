@@ -47,8 +47,9 @@ hash, those of the golden trace and replays included.
   channels through matchbox_socket 0.14.0 (patched in `vendor/matchbox_socket` so that
   signaling and peer data it cannot use drop that peer's handshake instead of panicking, and
   so that no STUN URL means no ICE server). Natively its message loop runs on a thread named
-  `ludenea-webrtc`, in the browser as a task of the page; on `wasm32-wasip1` the crate builds
-  its settings alone. `WebRtcLink::open(LinkSettings)` joins a room: channel 0, unreliable
+  `ludenea-webrtc`, in the browser as a task of the page. The link needs the crate's `link`
+  feature, off by default: without it, and always on `wasm32-wasip1`, the crate builds its
+  settings alone. `WebRtcLink::open(LinkSettings)` joins a room: channel 0, unreliable
   and unordered, carries `Channel::Match`, and channel 1, reliable and ordered,
   `Channel::Room`. A send to a peer not connected is refused with `LinkError::UnknownLink`,
   and a message that arrives longer than its channel's limit is dropped and counted
@@ -919,8 +920,8 @@ hash, those of the golden trace and replays included.
   `online::settings(&layout)` gives the `OnlineSettings` of a layout.
   `online::write_desync_snapshot(runner, &end, local, dump_dir)` writes this peer's
   snapshot of a desync's tick as `desync-tick-T-peer-P.snap`. `ludenea-runtime` depends on
-  `ludenea-net` and `ludenea-webrtc`, which builds its settings alone on `wasm32-wasip1`, so
-  that build links no WebRTC.
+  `ludenea-net` and `ludenea-webrtc`, whose link only the runtime's `native` and `web`
+  features turn on, so a build without them links no WebRTC.
 - New: `Runner::join_match(settings, claims)`, `net_receive(from, packet)`,
   `take_net_packets()`, `leave_match()`, `online()` (the latest `OnlineState`),
   `silent_peers()` (the peers silent and the silence announced, in ms), `net_stats()` and

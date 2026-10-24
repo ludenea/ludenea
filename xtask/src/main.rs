@@ -35,12 +35,17 @@ const CHECKS: &[&str] = &[
     // The native window on its own: the workspace build turns it on only through the command
     // line tool, which leaves the runtime's own tests without their feature.
     "clippy --locked -p ludenea-runtime --features native --all-targets -- -D warnings",
+    // The WebRTC link on its own, tests included: the workspace build turns it on only through
+    // the runtime's `native` feature.
+    "clippy --locked -p ludenea-webrtc --features link --all-targets -- -D warnings",
     // Warnings are denied through `RUSTDOCFLAGS`, which `check` sets.
     "doc --locked --no-deps --workspace",
-    // The browser: the facade's entry, the Web Worker transport, the WebRTC link, and the
-    // renderer on WebGPU and WebGL2.
+    // The browser: the facade's entry, the Web Worker transport, the WebRTC link's settings,
+    // and the renderer on WebGPU and WebGL2.
     "clippy --locked --target wasm32-unknown-unknown -p ludenea -p ludenea-control -p ludenea-net -p ludenea-runtime -p ludenea-webrtc -p boxes -p swarm -p arena --lib -- -D warnings",
     "clippy --locked --target wasm32-unknown-unknown -p ludenea-render --features web --lib -- -D warnings",
+    // The browser's WebRTC link, which the line above leaves out with its feature.
+    "clippy --locked --target wasm32-unknown-unknown -p ludenea-webrtc --features link --lib -- -D warnings",
     // The standalone web page's exports: the lobby, beside the renderer it links.
     "clippy --locked --target wasm32-unknown-unknown -p ludenea-runtime --features web --lib -- -D warnings",
     // WebAssembly outside the browser: the command line tools that verify the goldens.
@@ -178,7 +183,7 @@ fn target_dir() -> Result<PathBuf, Box<dyn Error>> {
 mod tests {
     const WORKFLOW: &str = include_str!("../../.github/workflows/determinism.yml");
 
-    /// CI runs each check as a step of its own (the host clippy in the native jobs, the
+    /// CI runs each check as a step of its own (the host clippies in the native jobs, the
     /// renderer's clippy in the render jobs, the rest once in the lint job), so a check added
     /// here must be added there too.
     #[test]
@@ -255,7 +260,8 @@ mod tests {
         for command in super::CHECKS {
             let job = match *command {
                 "clippy --locked --workspace --all-targets -- -D warnings"
-                | "clippy --locked -p ludenea-runtime --features native --all-targets -- -D warnings" => {
+                | "clippy --locked -p ludenea-runtime --features native --all-targets -- -D warnings"
+                | "clippy --locked -p ludenea-webrtc --features link --all-targets -- -D warnings" => {
                     "native"
                 }
                 "clippy --locked -p ludenea-render --features gpu --all-targets -- -D warnings" => {

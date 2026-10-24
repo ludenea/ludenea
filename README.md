@@ -76,6 +76,13 @@ native window's own tests run with its feature on:
 cargo test --locked -p ludenea-runtime --features native
 ```
 
+The WebRTC link's own tests need its feature too (the workspace tests turn it on through the
+native window's):
+
+```sh
+cargo test --locked -p ludenea-webrtc --features link
+```
+
 Run the rollback networking tests under WebAssembly, as CI does (with `wasmtime` and the
 `wasm32-wasip1` target installed):
 

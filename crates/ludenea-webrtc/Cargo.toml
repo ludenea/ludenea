@@ -3,26 +3,41 @@ name = "ludenea-webrtc"
 version = "0.1.0"
 edition.workspace = true
 
+[features]
+# The link itself (`WebRtcLink`), natively and in the browser. Without it the crate builds its
+# settings alone and links no WebRTC, as it always does on WebAssembly outside the browser.
+link = [
+    "dep:matchbox_socket",
+    "dep:uuid",
+    "dep:async-tungstenite",
+    "dep:futures",
+    "dep:wasm-bindgen",
+    "dep:wasm-bindgen-futures",
+]
+
 [dependencies]
 ludenea-net.workspace = true
 thiserror.workspace = true
 
-# The link itself, on every target but WebAssembly outside the browser, which builds the
-# settings alone and links no WebRTC.
+# The link, on every target but WebAssembly outside the browser.
 [target.'cfg(not(target_os = "wasi"))'.dependencies]
-matchbox_socket.workspace = true
-uuid.workspace = true
+matchbox_socket = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
 
 # The native link's thread. Not in the browser: async-tungstenite's random numbers do not
 # build for `wasm32-unknown-unknown`, and matchbox_socket uses the browser's WebSocket there.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-async-tungstenite.workspace = true
-futures.workspace = true
+async-tungstenite = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
 
 # The browser link's task and clock.
 [target.'cfg(all(target_arch = "wasm32", not(target_os = "wasi")))'.dependencies]
-wasm-bindgen.workspace = true
-wasm-bindgen-futures.workspace = true
+wasm-bindgen = { workspace = true, optional = true }
+wasm-bindgen-futures = { workspace = true, optional = true }
+
+[[test]]
+name = "webrtc"
+required-features = ["link"]
 
 [dev-dependencies]
 ludenea-signal.workspace = true

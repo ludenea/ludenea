@@ -18,6 +18,7 @@ native = [
     "dep:notify-debouncer-full",
     "dep:xxhash-rust",
     "dep:uuid",
+    "ludenea-webrtc/link",
 ]
 # The standalone web page's exports (the lobby, and the browser renderer it links), in the
 # browser only: the renderer's `web` feature and wasm-bindgen are declared for
@@ -25,7 +26,7 @@ native = [
 # target the feature still enables the renderer as the native window has it (`gpu`: wgpu on the
 # native backends). Only a game's browser build turns it on (`ludenea build --web`), as
 # `ludenea-render`'s own `web` feature does.
-web = ["dep:ludenea-render", "dep:wasm-bindgen", "dep:serde_json"]
+web = ["dep:ludenea-render", "dep:wasm-bindgen", "dep:serde_json", "ludenea-webrtc/link"]
 
 [dependencies]
 ludenea-app.workspace = true
@@ -34,8 +35,8 @@ ludenea-draw.workspace = true
 ludenea-ecs.workspace = true
 ludenea-math.workspace = true
 ludenea-net.workspace = true
-# Its settings on every target (`OnlinePlan` holds them); the link itself only where it
-# exists: on `wasm32-wasip1` the crate builds its settings alone and links no WebRTC.
+# Its settings on every target (`OnlinePlan` holds them); the link itself (feature `link`)
+# only with `native` or `web`, so a build without them links no WebRTC.
 ludenea-webrtc.workspace = true
 thiserror.workspace = true
 
