@@ -253,6 +253,8 @@ function pump() {
     if (room.state === "failed") return fail(room.message);
     if (room.state === "room") showRoom(room);
     else joinMatch(room);
+    // A page that could not join closed its link.
+    if (!pumping) return;
   }
   const packets = online.receive(now);
   if (packets.length > 0) {
@@ -271,8 +273,8 @@ function showRoom({ assigned, describe }) {
 
 /** The room agreed on the match: the worker joins it. */
 function joinMatch({ settings, local: peer }) {
-  joined = true;
   if (readyClaims === undefined) return fail("the room agreed on a match before this page was ready");
+  joined = true;
   local = peer;
   lobbyView.hidden = true;
   holdNothing();
