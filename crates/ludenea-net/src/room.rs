@@ -434,6 +434,11 @@ impl Room {
         std::mem::take(&mut self.outgoing)
     }
 
+    /// This peer's own link, once assigned.
+    pub(crate) fn me(&self) -> Option<LinkId> {
+        self.me
+    }
+
     /// Where the room stands.
     pub fn state(&self) -> &RoomState {
         &self.state

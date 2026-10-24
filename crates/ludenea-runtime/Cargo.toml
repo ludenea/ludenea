@@ -5,8 +5,9 @@ edition.workspace = true
 
 [features]
 # The native window: winit, gilrs, the wgpu renderer, and the texture watcher (notify), on
-# native targets only. Without it the runtime depends on no window, gamepad, GPU, or file
-# watcher crate.
+# native targets only, and the WebRTC link of native peers (`online::open_link`), with the
+# entropy of their plans (uuid). Without it the runtime depends on no window, gamepad, GPU,
+# or file watcher crate.
 native = [
     "dep:winit",
     "dep:gilrs",
@@ -16,6 +17,7 @@ native = [
     "dep:notify",
     "dep:notify-debouncer-full",
     "dep:xxhash-rust",
+    "dep:uuid",
 ]
 # The standalone web page's exports (the lobby, and the browser renderer it links), in the
 # browser only: the renderer's `web` feature and wasm-bindgen are declared for
@@ -31,6 +33,10 @@ ludenea-control.workspace = true
 ludenea-draw.workspace = true
 ludenea-ecs.workspace = true
 ludenea-math.workspace = true
+ludenea-net.workspace = true
+# Its settings on every target (`OnlinePlan` holds them); the link itself only where it
+# exists: on `wasm32-wasip1` the crate builds its settings alone and links no WebRTC.
+ludenea-webrtc.workspace = true
 thiserror.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
@@ -39,6 +45,8 @@ ludenea-render = { workspace = true, optional = true, features = ["gpu"] }
 notify = { workspace = true, optional = true }
 notify-debouncer-full = { workspace = true, optional = true }
 pollster = { workspace = true, optional = true }
+# The entropy of a native peer's plan; the web page passes its own.
+uuid = { workspace = true, optional = true }
 wgpu = { workspace = true, optional = true }
 winit = { workspace = true, optional = true }
 xxhash-rust = { workspace = true, optional = true }
@@ -49,6 +57,7 @@ serde_json = { workspace = true, optional = true }
 wasm-bindgen = { workspace = true, optional = true }
 
 [dev-dependencies]
+arena = { path = "../../examples/arena" }
 ludenea.workspace = true
 png.workspace = true
 postcard.workspace = true

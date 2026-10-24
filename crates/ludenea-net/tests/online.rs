@@ -240,6 +240,18 @@ fn clear_conditions_add_nothing() {
 }
 
 #[test]
+fn the_id_is_known_once_the_link_assigns_it() {
+    let mesh = MemoryMesh::new();
+    let link = mesh.join();
+    let mut peer = OnlinePeer::new(link, host(2), clear()).unwrap();
+    assert_eq!(peer.id(), None, "not before the link's events are read");
+    peer.poll(0);
+    let id = peer.id().expect("assigned at the first poll");
+    peer.poll(STEP);
+    assert_eq!(peer.id(), Some(id));
+}
+
+#[test]
 fn conditions_out_of_range_are_refused() {
     let mesh = MemoryMesh::new();
     let lossy = LinkConditions {

@@ -897,7 +897,39 @@ hash, those of the golden trace and replays included.
 - New: `ludenea_net::EndReason` and `ViolationRule` implement `Display`, naming the peer and
   the cause, such as "peer 1 sent two different inputs for one tick (player 1, tick 40), so
   the match ended" or "the game states diverged at tick 90: peer 0 has ..., peer 1 has ...".
-
+- New: `ludenea_runtime::online` drives an online match from a runtime. `OnlineOptions {
+  role, signaling, stun, conditions }`, the role being `OnlineRole::Host { peers, code }` or
+  `OnlineRole::Join { code }`, give `OnlineOptions::plan(entropy)` an `OnlinePlan { role,
+  code, link, conditions }`: bits 0 to 63 of the 128-bit entropy draw the room code (unless
+  the host gave one) and the conditions' seed, bits 64 to 127 the match identifier, and the
+  URLs are checked by `LinkSettings::new` (refused with the new
+  `RuntimeError::Online(String)`, "the online match cannot go on: ..."). Native runtimes
+  pass `online::entropy()` (feature `native`), a random UUID. `online::open_link(settings)`
+  (features `native` and `web`) opens a `WebRtcLink`, and `DEFAULT_SIGNALING` is
+  `ws://127.0.0.1:3536/rooms`. `OnlineMatch::new(link, &plan)` carries a `Runner`'s match
+  over any `Link`: `ready(claims)` readies the room (frozen from then on), and each frame
+  `before_frame(runner, now_micros)` polls the room, joins the runner once it agreed, gives
+  it the packets received, and returns an `OnlinePhase` (`Room(RoomView)`, `Assigned` once
+  when the link has its id, `Playing`, `Ended(MatchEnd)`, `Failed(reason)`), then
+  `after_frame(runner, now_micros)` sends the runner's packets, also after the end.
+  `leave(runner)` leaves, `lingering(now_micros)` is true for `END_LINGER_MICROS` after
+  the end was seen, and `messages()` gives a warning per link and reason of the room's
+  dropped messages and the reason the link closed, which a `lost` ending's message ends
+  with. `code()`, `layout()`, `failed_sends()` and `strays()` complete it, and
+  `online::settings(&layout)` gives the `OnlineSettings` of a layout.
+  `online::write_desync_snapshot(runner, &end, local, dump_dir)` writes this peer's
+  snapshot of a desync's tick as `desync-tick-T-peer-P.snap`. `ludenea-runtime` depends on
+  `ludenea-net` and `ludenea-webrtc`, which builds its settings alone on `wasm32-wasip1`, so
+  that build links no WebRTC.
+- New: `Runner::join_match(settings, claims)`, `net_receive(from, packet)`,
+  `take_net_packets()`, `leave_match()`, `online()` (the latest `OnlineState`),
+  `silent_peers()` (the peers silent and the silence announced, in ms), `net_stats()` and
+  `snapshot_at(tick)`. `Runner::frame` keeps the packets to send and the match's state; an
+  ended match is not an error, and once it ended the frame sends no live input and keeps
+  the frames of the match. `export_replay` and `snapshot_at` first advance by zero while the
+  session resimulates the match, at most `ticks / RESIMULATION_BUDGET + 2` times, else
+  refuse with a `RuntimeError::Record` naming the tick reached.
+- New: `ludenea_net::OnlinePeer::id()`, this peer's own link once the link reported it.
 ### Control protocol
 
 - Control protocol 5, fingerprint `1014a97387b22bdd`. Breaking: `get_render_frame`

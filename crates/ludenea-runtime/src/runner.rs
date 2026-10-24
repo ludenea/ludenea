@@ -2,14 +2,20 @@
 //! native window. It loads the game, starts the match with its players' claims, and per
 //! displayed frame sends the live devices, lets the host's pacer run the ticks due, and fetches
 //! the render frame of the newest tick. Every step goes through host commands, so a played
-//! match records the same session as the editor. The web page does not use it: its worker
-//! sends the same commands to the browser's `WorkerHost`.
+//! match records the same session as the editor. An online match goes through the host's
+//! commands too: `join_match`, `net_receive`, and the packets each frame keeps for
+//! `take_net_packets` (`online::OnlineMatch` carries them over a link). The web page does not
+//! use it: its worker sends the same commands to the browser's `WorkerHost`.
+
+use std::collections::BTreeMap;
 
 use ludenea_app::App;
 use ludenea_app::players::{Claim, LiveDevices};
+use ludenea_control::host::RESIMULATION_BUDGET;
 use ludenea_control::pacer::MAX_TICKS_PER_FRAME;
 use ludenea_control::{
-    Bytes, Command, ConsoleLevel, Document, Event, Host, PauseReason, ProtocolError, Reply,
+    Bytes, Command, ConsoleLevel, Document, Event, Host, NetStats, OnlineSettings, OnlineState,
+    PauseReason, ProtocolError, Reply,
 };
 use ludenea_draw::frame::RenderFrame;
 use ludenea_ecs::AssetId;
@@ -66,6 +72,10 @@ pub enum RuntimeError {
     /// The project's textures cannot be watched for changes, with the cause.
     #[error("cannot watch the textures: {0}")]
     Watch(String),
+    /// The online match cannot start or go on: its settings, its room, or a command the host
+    /// refused, with the cause.
+    #[error("the online match cannot go on: {0}")]
+    Online(String),
 }
 
 /// A game played through its control host.
@@ -82,6 +92,12 @@ pub struct Runner {
     stop_at: Option<u64>,
     /// The game's ticks per second.
     tick_rate: u32,
+    /// The latest state of the online match, `None` before one is joined.
+    online: Option<OnlineState>,
+    /// The peers announced silent and not back yet, with the silence announced, in ms.
+    silent: BTreeMap<u8, u64>,
+    /// The packets the host sent since the last `take_net_packets`, with their peer.
+    net_packets: Vec<(u8, Vec<u8>)>,
 }
 
 impl Runner {
@@ -104,6 +120,9 @@ impl Runner {
             messages: Vec::new(),
             stop_at: None,
             tick_rate,
+            online: None,
+            silent: BTreeMap::new(),
+            net_packets: Vec::new(),
         };
         runner.setup(Command::LoadScene {
             scene: files.scene.clone(),
@@ -149,20 +168,107 @@ impl Runner {
         Ok(())
     }
 
+    /// Joins the online match `settings` describe, `claims` holding the devices of each local
+    /// player, and fetches the frame of its first tick. The match then plays as frames pass
+    /// time; its packets wait for `take_net_packets`.
+    pub fn join_match(
+        &mut self,
+        settings: OnlineSettings,
+        claims: Vec<Claim>,
+    ) -> Result<(), RuntimeError> {
+        self.host
+            .handle(Command::JoinMatch { settings, claims })
+            .map_err(|error| RuntimeError::Online(error.message))?;
+        self.sent = None;
+        let frame = self.render_frame().map_err(|error| {
+            RuntimeError::Online(format!("cannot draw the first tick: {}", error.message))
+        })?;
+        self.current = Some(frame);
+        self.previous = None;
+        let events = self.host.drain_events();
+        self.keep_online(&events);
+        self.keep_messages(events);
+        Ok(())
+    }
+
+    /// Gives the host a packet peer `from` sent. A packet the host cannot take is dropped
+    /// there, and counted in its statistics; a refusal goes to the messages.
+    pub fn net_receive(&mut self, from: u8, packet: Vec<u8>) {
+        let received = self.host.handle(Command::NetReceive {
+            from,
+            packet: Bytes(packet),
+        });
+        if let Err(error) = received {
+            self.messages.push((
+                ConsoleLevel::Error,
+                format!("a packet from peer {from} was refused: {}", error.message),
+            ));
+        }
+    }
+
+    /// The packets to send since the last call, oldest first, each with the peer it goes to.
+    pub fn take_net_packets(&mut self) -> Vec<(u8, Vec<u8>)> {
+        std::mem::take(&mut self.net_packets)
+    }
+
+    /// Leaves the online match: every peer ends at the last tick this one has inputs for.
+    pub fn leave_match(&mut self) -> Result<(), RuntimeError> {
+        self.host
+            .handle(Command::LeaveMatch)
+            .map(|_| ())
+            .map_err(|error| RuntimeError::Online(error.message))?;
+        let events = self.host.drain_events();
+        self.keep_online(&events);
+        self.keep_messages(events);
+        Ok(())
+    }
+
+    /// The latest state of the online match, `None` before one is joined.
+    pub fn online(&self) -> Option<&OnlineState> {
+        self.online.as_ref()
+    }
+
+    /// The peers announced silent and not back yet, each with the silence the announcement
+    /// gave, in milliseconds. Empty once the match ended.
+    pub fn silent_peers(&self) -> &BTreeMap<u8, u64> {
+        &self.silent
+    }
+
+    /// The statistics of the online match, readable after its end too.
+    pub fn net_stats(&mut self) -> Result<NetStats, RuntimeError> {
+        match self.host.handle(Command::GetNetStats) {
+            Ok(Reply::NetStats(stats)) => Ok(stats),
+            Ok(other) => unreachable!("GetNetStats answers NetStats, not {other:?}"),
+            Err(error) => Err(RuntimeError::Online(error.message)),
+        }
+    }
+
+    /// Whether the online match ended.
+    fn match_ended(&self) -> bool {
+        matches!(self.online, Some(OnlineState::Ended { .. }))
+    }
+
     /// Lets `elapsed_seconds` of play pass with `devices` held: the host's pacer runs the
     /// ticks due, at most its cap per frame however long the frame took. A game that fails
-    /// or panics is a `Game` error naming the tick.
+    /// or panics is a `Game` error naming the tick. During an online match it keeps the
+    /// packets to send and the match's state; the end of the match is not an error. Once the
+    /// match ended, `devices` are no longer sent, and the frames stay the last ones fetched
+    /// while the match ran, as the session resimulates the match in the background from
+    /// tick 0 (which `FrameUpdate::tick` then reports).
     pub fn frame(
         &mut self,
         elapsed_seconds: f64,
         devices: &LiveDevices,
     ) -> Result<FrameUpdate, RuntimeError> {
-        if let Some(command) = self.live_input(devices) {
+        if !self.match_ended()
+            && let Some(command) = self.live_input(devices)
+        {
             self.host
                 .handle(command)
                 .map_err(|error| self.game_error(error))?;
         }
         let events = self.advance(elapsed_seconds);
+        self.keep_online(&events);
         let ticked = events
             .iter()
             .any(|event| matches!(event, Event::Ticked { .. }));
@@ -182,6 +288,9 @@ impl Runner {
             // stale by those ticks, which is harmless as the match ends here.
             return Err(failure);
         }
+        // Once the match ended, the session shows its resimulation, from tick 0: the frames
+        // stay those of the match.
+        let ticked = ticked && !self.match_ended();
         if ticked {
             let frame = self
                 .render_frame()
@@ -234,15 +343,66 @@ impl Runner {
         (self.previous.as_ref(), self.current.as_ref())
     }
 
-    /// The encoded replay of the match up to the current tick, after a failure too.
+    /// The encoded replay of the match up to the current tick, after a failure too. After an
+    /// online match, it first waits for the session to resimulate the match.
     pub fn export_replay(&mut self) -> Result<Vec<u8>, RuntimeError> {
+        self.settle()?;
         let exported = self.host.handle(Command::ExportReplay { branch: None });
         let events = self.host.drain_events();
+        self.keep_online(&events);
         self.keep_messages(events);
         match exported {
             Ok(Reply::Replay { replay }) => Ok(replay.0),
             Ok(other) => unreachable!("ExportReplay answers Replay, not {other:?}"),
             Err(error) => Err(self.game_error(error)),
+        }
+    }
+
+    /// The snapshot of the session's state at `tick`, which the session seeks to. After an
+    /// online match, it first waits for the session to resimulate the match.
+    pub fn snapshot_at(&mut self, tick: u64) -> Result<Vec<u8>, RuntimeError> {
+        self.settle()?;
+        self.host.handle(Command::Seek { tick }).map_err(|error| {
+            RuntimeError::Record(format!("cannot seek to tick {tick}: {}", error.message))
+        })?;
+        let taken = self.host.handle(Command::TakeSnapshot);
+        let events = self.host.drain_events();
+        self.keep_online(&events);
+        self.keep_messages(events);
+        match taken {
+            Ok(Reply::Snapshot { snapshot, .. }) => Ok(snapshot.0),
+            Ok(other) => unreachable!("TakeSnapshot answers Snapshot, not {other:?}"),
+            Err(error) => Err(RuntimeError::Record(format!(
+                "cannot take the snapshot of tick {tick}: {}",
+                error.message
+            ))),
+        }
+    }
+
+    /// Advances by zero while the session resimulates, as after an online match, at most
+    /// `ticks / RESIMULATION_BUDGET + 2` times, `ticks` being the session's length: each
+    /// advance resimulates up to `RESIMULATION_BUDGET` ticks. Past that bound it is a `Record`
+    /// error naming the tick reached. While a match runs the host refuses the timeline, and
+    /// the command that follows reports why.
+    fn settle(&mut self) -> Result<(), RuntimeError> {
+        let mut advances = 0;
+        loop {
+            let Ok(Reply::Timeline(timeline)) = self.host.handle(Command::GetTimeline) else {
+                return Ok(());
+            };
+            if !timeline.resimulating {
+                return Ok(());
+            }
+            if advances >= timeline.head / u64::from(RESIMULATION_BUDGET) + 2 {
+                return Err(RuntimeError::Record(format!(
+                    "the session is still resimulating the match at tick {} of {}",
+                    timeline.simulated, timeline.head
+                )));
+            }
+            let events = self.host.advance(0.0);
+            self.keep_online(&events);
+            self.keep_messages(events);
+            advances += 1;
         }
     }
 
@@ -267,6 +427,32 @@ impl Runner {
                 Event::Console { level, text } => Some((level, text)),
                 _ => None,
             }));
+    }
+
+    /// Keeps the online match's packets, state and silences of `events`.
+    fn keep_online(&mut self, events: &[Event]) {
+        for event in events {
+            match event {
+                Event::NetSend { packets } => self.net_packets.extend(
+                    packets
+                        .iter()
+                        .map(|packet| (packet.to, packet.packet.0.clone())),
+                ),
+                Event::Online { state } => {
+                    if matches!(state, OnlineState::Ended { .. }) {
+                        self.silent.clear();
+                    }
+                    self.online = Some(state.clone());
+                }
+                Event::PeerSilent { peer, for_ms } if !self.match_ended() => {
+                    self.silent.insert(*peer, *for_ms);
+                }
+                Event::PeerBack { peer } => {
+                    self.silent.remove(peer);
+                }
+                _ => {}
+            }
+        }
     }
 
     /// The `SetLiveInput` command for `devices`, or `None` when they are the ones last sent.

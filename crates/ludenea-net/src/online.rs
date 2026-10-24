@@ -8,7 +8,7 @@
 
 use thiserror::Error;
 
-use crate::link::{Channel, Link, LinkEvent, LinkTransport};
+use crate::link::{Channel, Link, LinkEvent, LinkId, LinkTransport};
 use crate::room::{MatchLayout, Room, RoomError, RoomEvent, RoomRole, RoomState, RoomView};
 use crate::settings::{MatchRules, PeerId};
 use crate::transport::{Conditioned, ConditionsError, LinkConditions, Transport};
@@ -141,6 +141,12 @@ impl<L: Link> OnlinePeer<L> {
     /// As [`Room::set_ready`].
     pub fn set_ready(&mut self, players: u8) -> Result<(), RoomError> {
         self.room.set_ready(players)
+    }
+
+    /// This peer's own link, once the link reported it: from then on the room exists where
+    /// the link meets the others.
+    pub fn id(&self) -> Option<LinkId> {
+        self.room.me()
     }
 
     /// The match the room agreed on, once [`OnlineStatus::Ready`].
