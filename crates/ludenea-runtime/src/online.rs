@@ -314,7 +314,8 @@ impl OnlineMatch {
             self.warned.insert(key);
             if self.warned.len() == MAX_WARNED {
                 self.messages.push(format!(
-                    "{MAX_WARNED} links and reasons of dropped room messages were warned                      about: further drops are not"
+                    "{MAX_WARNED} links and reasons of dropped room messages were warned about: \
+                     further drops are not"
                 ));
             }
         }
@@ -468,10 +469,10 @@ mod tests {
         }
         assert_eq!(online.warned.len(), MAX_WARNED);
         assert_eq!(messages.len(), MAX_WARNED + 1, "{messages:?}");
-        assert!(
-            messages[MAX_WARNED].ends_with("further drops are not"),
-            "{}",
-            messages[MAX_WARNED]
+        assert_eq!(
+            messages[MAX_WARNED],
+            "64 links and reasons of dropped room messages were warned about: further drops \
+             are not"
         );
     }
 }
