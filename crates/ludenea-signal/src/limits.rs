@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::net::IpAddr;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 /// The bounds the listener holds every client to.
@@ -30,12 +31,17 @@ pub struct Limits {
     /// The connections served at once, page loads and room members together, at least 1;
     /// further clients wait to be accepted until one ends.
     pub max_connections: usize,
+    /// The connections one client address may hold at once, at least 1, page loads and room
+    /// members together, counted by address as [`Limits::rooms_per_address`] counts; a connection
+    /// beyond them is closed at once, so one address never holds every connection.
+    pub connections_per_address: usize,
 }
 
 impl Default for Limits {
     /// 64 rooms, 4 per address, 30 refused joins a minute, 30 seconds idle, messages of
-    /// 16 KiB, 64 queued messages, 10 seconds for headers, and 512 connections: enough for
-    /// every member of 64 full rooms and as many page loads.
+    /// 16 KiB, 64 queued messages, 10 seconds for headers, and 512 connections (enough for
+    /// every member of 64 full rooms and as many page loads), 32 per address: the members
+    /// of 4 full rooms and the page loads of their browsers.
     fn default() -> Limits {
         Limits {
             max_rooms: 64,
@@ -46,6 +52,7 @@ impl Default for Limits {
             queue: 64,
             header_timeout: Duration::from_secs(10),
             max_connections: 512,
+            connections_per_address: 32,
         }
     }
 }
@@ -63,6 +70,71 @@ pub(crate) fn client_key(address: IpAddr) -> IpAddr {
                 IpAddr::V6(network.into())
             }
         },
+    }
+}
+
+/// The connections each client address holds, shared by every listener.
+#[derive(Debug, Default)]
+pub(crate) struct Connections {
+    held: Mutex<BTreeMap<IpAddr, usize>>,
+}
+
+impl Connections {
+    /// A place for one more connection of `address`, unless it holds `limit` already. The
+    /// place goes back when dropped. The connection that fills the address's places is
+    /// warned about, once until a place frees: not each one refused after it.
+    pub(crate) fn take(
+        connections: &Arc<Connections>,
+        address: IpAddr,
+        limit: usize,
+    ) -> Option<ConnectionSlot> {
+        let key = client_key(address);
+        let limit = limit.max(1);
+        let mut held = connections.lock();
+        let count = held.entry(key).or_insert(0);
+        if *count >= limit {
+            if *count == 0 {
+                held.remove(&key);
+            }
+            return None;
+        }
+        *count += 1;
+        if *count == limit {
+            eprintln!(
+                "warning: {key} holds {limit} signaling connections, the most one address may \
+                 hold: its further connections are closed until one ends"
+            );
+        }
+        Some(ConnectionSlot {
+            key,
+            connections: Arc::clone(connections),
+        })
+    }
+
+    fn lock(&self) -> MutexGuard<'_, BTreeMap<IpAddr, usize>> {
+        // Nothing under the lock panics; a poisoned lock still holds consistent counts.
+        self.held
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+/// One connection of an address, counted until dropped.
+#[derive(Debug)]
+pub(crate) struct ConnectionSlot {
+    key: IpAddr,
+    connections: Arc<Connections>,
+}
+
+impl Drop for ConnectionSlot {
+    fn drop(&mut self) {
+        let mut held = self.connections.lock();
+        if let Some(count) = held.get_mut(&self.key) {
+            *count -= 1;
+            if *count == 0 {
+                held.remove(&self.key);
+            }
+        }
     }
 }
 
@@ -134,6 +206,23 @@ mod tests {
             "2001:db8:1:2::".parse::<IpAddr>().unwrap()
         );
         assert_ne!(key("2001:db8:1:2::1"), key("2001:db8:1:3::1"));
+    }
+
+    #[test]
+    fn the_places_of_an_address_go_back_when_dropped() {
+        let connections = Arc::new(Connections::default());
+        let ipv6 = |text: &str| text.parse::<IpAddr>().unwrap();
+        let first = Connections::take(&connections, ipv6("2001:db8::1"), 2).unwrap();
+        let second = Connections::take(&connections, ipv6("2001:db8::2"), 2).unwrap();
+        assert!(
+            Connections::take(&connections, ipv6("2001:db8::3"), 2).is_none(),
+            "the same /64 network"
+        );
+        assert!(Connections::take(&connections, ipv6("2001:db9::1"), 2).is_some());
+        drop(first);
+        let third = Connections::take(&connections, ipv6("2001:db8::3"), 2).unwrap();
+        drop((second, third));
+        assert!(connections.lock().is_empty(), "no address is remembered");
     }
 
     #[test]

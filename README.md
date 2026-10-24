@@ -444,9 +444,10 @@ anyone who knows a room's code can join that room or disrupt it; there is no
 authentication, and it warns when it listens beyond this machine. It bounds what each client
 may do: 64 rooms (`--max-rooms`), 4 hosted per client address, 30 refused joins a minute
 per address, messages of 16 KiB, 64 messages waiting per peer, 10 seconds for a request's
-headers, 512 connections at once (further clients wait), and 30 seconds of silence before a
-connection closes (`--idle-seconds`; matchbox_socket sends a keep-alive every 10 seconds),
-as does a client that stops reading for as long. The limits per address count the TCP peer:
+headers, 512 connections at once (further clients wait), 32 of them per client address
+(further ones are closed at once, so one address never holds them all), and 30 seconds of
+silence before a connection closes (`--idle-seconds`; matchbox_socket sends a keep-alive
+every 10 seconds), as does a client that stops reading for as long. The limits per address count the TCP peer:
 an IPv4 address, or an IPv6 address by its /64 network. Behind a reverse proxy every client
 shares the proxy's address, so they share its limits too. Only pages served from the address in
 the Host header may open rooms; a page served elsewhere needs `--allow-origin` with its

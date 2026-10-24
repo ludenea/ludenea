@@ -688,3 +688,50 @@ fn room_members_hold_their_connections() {
     waiting.read_to_string(&mut response).unwrap();
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
 }
+
+/// Whether the listener closed `stream` without answering.
+fn closed_at_once(stream: &mut TcpStream) -> bool {
+    stream.set_read_timeout(Some(TIMEOUT)).unwrap();
+    let mut byte = [0];
+    match stream.read(&mut byte) {
+        Ok(0) => true,
+        Err(error) => !matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut),
+        Ok(_) => false,
+    }
+}
+
+#[test]
+fn an_address_holds_a_bounded_number_of_connections() {
+    let page = TempDir::new().unwrap();
+    fs::write(page.path().join("index.html"), "<p>game</p>").unwrap();
+    let address = start(Options {
+        page: Some(page.path().to_path_buf()),
+        limits: Limits {
+            connections_per_address: 3,
+            header_timeout: Duration::from_secs(30),
+            ..Limits::default()
+        },
+        ..Options::default()
+    });
+    // Two room members and an idle client hold every connection of this address, the
+    // members for as long as they stay in their room.
+    let (mut host, _) = join(address, "/rooms/ABCDEF?host=2");
+    let (joiner, joiner_id) = join(address, "/rooms/ABCDEF");
+    assert_eq!(event(&mut host), JsonPeerEvent::NewPeer(joiner_id));
+    let idle = TcpStream::connect(address).unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    let mut refused = TcpStream::connect(address).unwrap();
+    assert!(
+        closed_at_once(&mut refused),
+        "a fourth connection is closed"
+    );
+    // Once a member leaves, and once the idle client goes, the address may connect again.
+    drop(joiner);
+    assert_eq!(event(&mut host), JsonPeerEvent::PeerLeft(joiner_id));
+    std::thread::sleep(Duration::from_millis(200));
+    let (status, _, body) = http(address, "GET", "/");
+    assert_eq!((status, body.as_str()), (200, "<p>game</p>"));
+    drop(idle);
+    std::thread::sleep(Duration::from_millis(200));
+    let _again = join(address, "/rooms/ABCDEF");
+}

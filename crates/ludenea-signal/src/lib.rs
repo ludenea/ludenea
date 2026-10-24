@@ -37,6 +37,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tungstenite::error::CapacityError;
 
 pub use limits::Limits;
+use limits::{ConnectionSlot, Connections};
 use rooms::{Membership, Reservation, Rooms, Shared};
 
 /// How long a WebSocket stays open after its close frame, before the connection closes. The
@@ -101,13 +102,14 @@ pub async fn serve(listeners: Vec<TcpListener>, options: Options) -> Result<(), 
     let connections = Arc::new(Semaphore::new(
         limits.max_connections.clamp(1, Semaphore::MAX_PERMITS),
     ));
+    let per_address = Arc::new(Connections::default());
     let mut tasks = tokio::task::JoinSet::new();
     for listener in listeners {
-        let connections = Arc::clone(&connections);
         tasks.spawn(accept(
             listener,
             router.clone(),
-            connections,
+            Arc::clone(&connections),
+            Arc::clone(&per_address),
             limits.clone(),
         ));
     }
@@ -118,11 +120,13 @@ pub async fn serve(listeners: Vec<TcpListener>, options: Options) -> Result<(), 
 }
 
 /// Accepts connections on `listener` while `connections` has a permit for each, so clients
-/// beyond [`Limits::max_connections`] wait in the system's queue instead of in memory.
+/// beyond [`Limits::max_connections`] wait in the system's queue instead of in memory. A
+/// connection beyond [`Limits::connections_per_address`] of its address is closed at once.
 async fn accept(
     listener: TcpListener,
     router: Router,
     connections: Arc<Semaphore>,
+    per_address: Arc<Connections>,
     limits: Limits,
 ) {
     loop {
@@ -140,9 +144,14 @@ async fn accept(
                 continue;
             }
         };
+        let Some(slot) =
+            Connections::take(&per_address, remote.ip(), limits.connections_per_address)
+        else {
+            continue;
+        };
         // Shared with a WebSocket the connection upgrades to, which outlives hyper's own
-        // connection future: the permit goes back once both are done.
-        let permit = ConnectionPermit(Arc::new(permit));
+        // connection future: the permit and the slot go back once both are done.
+        let permit = ConnectionPermit(Arc::new((permit, slot)));
         let service = TowerToHyperService::new(
             router
                 .clone()
@@ -164,10 +173,11 @@ async fn accept(
     }
 }
 
-/// The place of one connection among [`Limits::max_connections`].
+/// The place of one connection among [`Limits::max_connections`] and among the
+/// [`Limits::connections_per_address`] of its address.
 #[derive(Clone)]
 struct ConnectionPermit(
-    #[expect(dead_code, reason = "held, never read")] Arc<OwnedSemaphorePermit>,
+    #[expect(dead_code, reason = "held, never read")] Arc<(OwnedSemaphorePermit, ConnectionSlot)>,
 );
 
 #[derive(Deserialize)]

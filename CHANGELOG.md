@@ -67,8 +67,10 @@ hash, those of the golden trace and replays included.
 - New crate `ludenea-signal`: the signaling listener of online matches, which speaks
   matchbox's JSON messages (`matchbox_protocol` 0.14.0) as `matchbox_server` does in a full
   mesh. `router(Options)` gives its axum routes and `serve(listeners, Options)` serves them
-  on every listener: at most `Limits::max_connections` at once, each given
-  `Limits::header_timeout` for its headers and ended by a write blocked for `Limits::idle`.
+  on every listener: at most `Limits::max_connections` at once, and at most
+  `Limits::connections_per_address` (32) per client address, room members included, beyond
+  which a connection is closed at once; each is given `Limits::header_timeout` for its
+  headers and ended by a write blocked for `Limits::idle`.
   `GET /rooms/{code}?host=N` creates a room of N peers (2 to `MAX_PEERS`) and
   `GET /rooms/{code}` joins one, both upgrading to a WebSocket; a refusal comes before the
   upgrade, with its reason as the body: 400 for a code `RoomCode::parse` refuses or a bad
