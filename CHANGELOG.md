@@ -1031,9 +1031,10 @@ hash, those of the golden trace and replays included.
   tick 0, for settings the network session refuses (each with its message, such as "local
   peer 2 is not among the 2 peers of the match"), and for a game without an input type, and
   with `no_input_mapping`. New `net_receive` (`from`, `packet`) hands the host a packet
-  another peer sent, dropped without a match. New `leave_match`: while the match runs,
-  every peer ends at the last tick this one has inputs for; while it connects, the match is
-  dropped here ("peer 0 left before the match started") and the others end `unreachable`;
+  another peer sent, dropped without a match; the session receives it at the next advance,
+  with the time that advance reaches, so a ping counts the frame it waited. New
+  `leave_match`: while the match runs, every peer ends at the last tick this one has inputs
+  for; while it connects, the match is dropped here ("peer 0 left before the match started") and the others end `unreachable`;
   without a match, or once it ended, it is refused with `invalid_command`. All three reply
   `done`. New events: `online` (`state`, the new `OnlineState`: `connecting`, `running`,
   `leaving`, or `ended` with `end`, the new `MatchEnd`: `kind`, one of `left`, `lost`,

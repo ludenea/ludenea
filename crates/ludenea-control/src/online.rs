@@ -7,7 +7,9 @@ use std::collections::BTreeSet;
 
 use ludenea_app::players::Claim;
 use ludenea_app::{InputLog, join_player_inputs};
-use ludenea_net::{DropReason, EndReason, Executor, PeerId, Session, SessionEvent, SessionState};
+use ludenea_net::{
+    DropReason, EndReason, Executor, MAX_PACKET_BYTES, PeerId, Session, SessionEvent, SessionState,
+};
 
 use crate::protocol::{
     DroppedPackets, Event, MatchEnd, MatchEndKind, NetStats, OnlineState, PeerNetStats,
@@ -26,6 +28,9 @@ pub(crate) struct OnlineMatch {
     /// The confirmed inputs, the players' inputs of each tick joined, from tick 0.
     pub confirmed: InputLog,
     pub clock: Clock,
+    /// The packets handed over since the last advance, oldest first: they arrived during the
+    /// frame that advance lets pass, so the session receives them at its end.
+    pub inbox: Vec<(PeerId, Vec<u8>)>,
     /// Why the match ended here alone, without its session: it was dropped while it was
     /// starting. The session is no longer driven then: it would go on greeting the others.
     pub dropped: Option<MatchEnd>,
@@ -47,7 +52,33 @@ pub(crate) struct Recorded {
     pub warnings: Vec<String>,
 }
 
+/// The packets the inbox holds at most until the next advance; beyond them, a packet is
+/// received at once, with the time of the last advance.
+const MAX_WAITING_PACKETS: usize = 1024;
+
 impl OnlineMatch {
+    /// Keeps `packet` from `from` for the next advance, which gives it to the session with the
+    /// time it reaches. A packet longer than any the session takes, or one beyond
+    /// [`MAX_WAITING_PACKETS`], is given at once, so the inbox stays bounded.
+    pub fn receive(&mut self, from: PeerId, packet: Vec<u8>) {
+        if packet.len() > MAX_PACKET_BYTES || self.inbox.len() >= MAX_WAITING_PACKETS {
+            let now = self.clock.now();
+            self.session.receive(from, &packet, now);
+        } else {
+            self.inbox.push((from, packet));
+        }
+    }
+
+    /// Lets `seconds` pass on the clock, then gives the session the packets kept since the
+    /// last advance, with the new time. Returns it.
+    pub fn advance_clock(&mut self, seconds: f64) -> u64 {
+        let now = self.clock.advance(seconds);
+        for (from, packet) in std::mem::take(&mut self.inbox) {
+            self.session.receive(from, &packet, now);
+        }
+        now
+    }
+
     /// The state `Event::Online` reports.
     pub fn state(&self) -> OnlineState {
         if let Some(end) = &self.dropped {

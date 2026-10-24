@@ -1112,8 +1112,7 @@ impl Host {
                     .as_mut()
                     .filter(|online| online.dropped.is_none())
                 {
-                    let now = online.clock.now();
-                    online.session.receive(PeerId(from), &packet.0, now);
+                    online.receive(PeerId(from), packet.0);
                 }
                 Ok(Reply::Done)
             }
@@ -1640,6 +1639,7 @@ impl Host {
             inputs,
             confirmed: InputLog::new(players),
             clock: Clock::default(),
+            inbox: Vec::new(),
             dropped: None,
             finished: false,
             warned: BTreeSet::new(),
@@ -1693,7 +1693,7 @@ impl Host {
         let Some(online) = self.online.as_mut() else {
             return;
         };
-        let now = online.clock.advance(elapsed_seconds);
+        let now = online.advance_clock(elapsed_seconds);
         let mut landed = false;
         let going = matches!(
             online.session.state(),
@@ -1963,7 +1963,7 @@ impl Host {
             .as_mut()
             .filter(|online| online.finished && online.dropped.is_none())
         {
-            let now = online.clock.advance(elapsed_seconds);
+            let now = online.advance_clock(elapsed_seconds);
             self.record_online();
             self.send_packets(now);
         }

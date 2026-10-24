@@ -1528,6 +1528,25 @@ fn dropped_packets_warn_once_per_reason() {
 }
 
 #[test]
+fn the_ping_counts_the_frame_a_packet_waited_for() {
+    // Over a link that delivers at once, a request and its reply each wait in the network
+    // until the next frame of the peer they reach, as a real network makes them wait: the
+    // round trip lasts at least a frame. A packet stamped with the time before that frame
+    // made it shorter.
+    let mut game = Match::arena(&[0, 1], 1, None);
+    game.run_until_all_run();
+    game.run_until("the match plays", |game| game.peers[0].host.tick() >= 240);
+    for index in 0..2 {
+        let stats = net_stats(&mut game.peers[index]);
+        let ping = stats.peers[0].ping_micros;
+        assert!(
+            ping >= 1_000_000 / FRAMES_PER_SECOND,
+            "peer {index}: ping {ping}"
+        );
+    }
+}
+
+#[test]
 fn net_stats_without_a_match_are_refused() {
     let mut host = arena_host(SCENE);
     let error = refusal(&mut host, Command::GetNetStats);

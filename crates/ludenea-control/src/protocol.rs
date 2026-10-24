@@ -553,7 +553,9 @@ pub enum Command {
         settings: OnlineSettings,
         claims: Vec<Claim>,
     },
-    /// A packet peer `from` sent this peer; without a match it is dropped.
+    /// A packet peer `from` sent this peer; without a match it is dropped. The session
+    /// receives it at the next `Host::advance`, with the time that advance reaches: it
+    /// arrived during the frame the advance lets pass.
     NetReceive {
         from: u8,
         packet: Bytes,
