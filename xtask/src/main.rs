@@ -1,8 +1,9 @@
 //! Workspace tasks, run with `cargo xtask <task>`.
 //!
-//! `check` runs the lint checks CI runs: formatting (the engine and the desktop backend),
-//! clippy on the host (with and without the wgpu renderer and the native window) and on
-//! WebAssembly, and the API documentation, with warnings denied. It stops at the first that fails.
+//! `check` runs the lint checks CI runs: formatting (the engine and the desktop backend), the
+//! desktop backend's lockfile, clippy on the host (with and without the wgpu renderer and the
+//! native window) and on WebAssembly, and the API documentation, with warnings denied. It stops
+//! at the first that fails.
 //!
 //! `wasm-game <package> <out-dir>` builds a game library for the browser and writes its
 //! JavaScript glue (`game.js`) and module (`game_bg.wasm`) to `<out-dir>`.
@@ -29,6 +30,8 @@ const CHECKS: &[&str] = &[
     "fmt --all --check",
     // The desktop backend, outside the workspace with a lockfile of its own.
     "fmt --manifest-path editor/apps/desktop/src-tauri/Cargo.toml --all --check",
+    // Its lockfile follows the engine crates it builds: a new engine dependency must land in it.
+    "fetch --manifest-path editor/apps/desktop/src-tauri/Cargo.toml --locked",
     "clippy --locked --workspace --all-targets -- -D warnings",
     // The wgpu renderer on its own, with its tests' feature.
     "clippy --locked -p ludenea-render --features gpu --all-targets -- -D warnings",

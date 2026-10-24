@@ -29,6 +29,8 @@ jobs:
       - run: cargo fmt --all --check
       # The desktop backend, outside the workspace with a lockfile of its own.
       - run: cargo fmt --manifest-path editor/apps/desktop/src-tauri/Cargo.toml --all --check
+      # Its lockfile follows the engine crates it builds: a new engine dependency must land in it.
+      - run: cargo fetch --manifest-path editor/apps/desktop/src-tauri/Cargo.toml --locked
       - run: cargo doc --locked --no-deps --workspace
       # The browser: the facade's entry, the Web Worker transport, the WebRTC link's settings,
       # and the renderer on WebGPU and WebGL2.
