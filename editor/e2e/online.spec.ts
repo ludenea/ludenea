@@ -151,12 +151,35 @@ test("two pages play the arena and save the same replay", async ({ browser }) =>
   const joined = await saveReplay(joiner.page);
   expect(readFileSync(joined).equals(readFileSync(hosted)), "the two replays differ").toBe(true);
   for (const file of [hosted, joined]) expect(arena(["verify", file])).toContain("hashes match");
+  // "Save desync snapshot", offered for a desync only, saves the session's state at the end's
+  // tick, named after it and each page's peer: the same state on both pages. The end names
+  // the last tick played, the tick before the state the page shows.
+  const endTick = Number(tick) - 1;
+  const snapshots: Buffer[] = [];
+  for (const [peer, { page }] of [host, joiner].entries()) {
+    await page.evaluate(() => {
+      document.getElementById("snapshot")!.hidden = false;
+    });
+    const downloaded = page.waitForEvent("download");
+    await page.getByRole("button", { name: "Save desync snapshot" }).click();
+    const download = await downloaded;
+    expect(download.suggestedFilename()).toBe(`desync-tick-${endTick}-peer-${peer}.snap`);
+    const file = join(mkdtempSync(join(tmpdir(), "ludenea-online-")), download.suggestedFilename());
+    await download.saveAs(file);
+    snapshots.push(readFileSync(file));
+  }
+  expect(snapshots[1]!.equals(snapshots[0]!), "the two snapshots differ").toBe(true);
   // Once the others were told, each page closes its link, and the room leaves the listener.
   for (const { page } of [host, joiner]) await expect(page.locator("body")).toHaveAttribute("data-link", "closed");
   const late = await open(browser, `?join=${room}&players=1&stun=none&signaling=${signaling}`);
   await expect(late.page.locator("body")).toHaveAttribute("data-failed", "true", { timeout: MEET_MS });
   await expect(late.page.locator("#status")).toContainText(`cannot join room ${room}`);
-  for (const { errors } of [host, joiner]) expect(errors).toEqual([]);
+  // The host's keys reached the match: an idle match of two players is elsewhere at that tick.
+  const idle = await open(browser, `?players=2&ticks=${tick}`);
+  await reach(idle.page, Number(tick));
+  await expect(idle.page.locator("body")).toHaveAttribute("data-tick", tick!);
+  expect(await idle.page.locator("body").getAttribute("data-hash")).not.toBe(hash);
+  for (const { errors } of [host, joiner, idle]) expect(errors).toEqual([]);
 });
 
 test("a native peer and a page play under bad conditions", async ({ browser }) => {
