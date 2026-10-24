@@ -28,9 +28,6 @@ const HELLO = "__LUDENEA_HELLO__";
 const STEP_MS = 4;
 /** The `game.json` version this page reads. */
 const GAME_VERSION = 1;
-/** The ticks the session resimulates per advance after an online match (the host's
- * `RESIMULATION_BUDGET`). */
-const RESIMULATION_BUDGET = 240;
 
 let host;
 let nextId = 1;
@@ -257,10 +254,10 @@ function stop() {
 }
 
 /** Runs `call` again while the host answers `resimulating`, as after an online match, letting
- * no time pass between the tries: each advance resimulates up to `RESIMULATION_BUDGET` ticks,
- * so at most `tick / RESIMULATION_BUDGET + 2` advances are needed. */
+ * no time pass between the tries: each advance resimulates up to the host's resimulation
+ * budget of ticks, so at most `tick / budget + 2` advances are needed. */
 function settled(call) {
-  const advances = Math.floor(tick / RESIMULATION_BUDGET) + 2;
+  const advances = Math.floor(tick / host.resimulationBudget()) + 2;
   for (let tries = 0; ; tries++) {
     try {
       return call();

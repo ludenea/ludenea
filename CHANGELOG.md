@@ -949,6 +949,7 @@ hash, those of the golden trace and replays included.
   JSON text, refused before the hello as a request is, and `WorkerHost::takeNetPackets()`
   hands out the packets of the `net_send` events once, as `[{ to, packet: ArrayBuffer }]`
   (`undefined` when there are none): `handle` and `advance` no longer return those events.
+  `WorkerHost::resimulationBudget()` gives `RESIMULATION_BUDGET`.
 - New: the command line tool's `peer <scene>` plays a match online without a window, hosting
   (`--host`, with `--peers` and `--room`) or joining (`--join CODE`) a room of
   `--signaling`, with `--stun` or `--no-stun`, `--latency-ms`, `--jitter-ms`,

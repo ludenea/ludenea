@@ -182,6 +182,13 @@ impl WorkerHost {
     pub fn tick_progress(&self) -> f64 {
         self.text.host.tick_progress()
     }
+
+    /// The most ticks one advance resimulates in the background, as after an online match
+    /// (`RESIMULATION_BUDGET`): what bounds the advances a page waits for a resimulation.
+    #[wasm_bindgen(js_name = resimulationBudget)]
+    pub fn resimulation_budget(&self) -> u32 {
+        crate::host::RESIMULATION_BUDGET
+    }
 }
 
 /// The `render_frames` message of `frames`, each in a buffer of its own.
