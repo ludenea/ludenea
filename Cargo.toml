@@ -134,10 +134,11 @@ ludenea-webrtc = { path = "crates/ludenea-webrtc" }
 #   158), a signaling connection or peer lost before the answer (167), and an unusable answer
 #   (187 to 190); in `accept_handshake`, the peer connection (217), a signaling connection or
 #   peer lost before the offer (239), an unusable offer (261 to 263), and the local answer
-#   (267 to 286, 294); an ICE candidate the browser refuses (413, through
-#   `complete_handshake`), and signals that end before the data channels open (365); the
-#   peer connection's configuration (431, 432); a data channel that opens once its handshake
-#   was dropped (526, in `create_data_channel`).
+#   (267 to 286, 294); in `complete_handshake`, signals that end before the data channels
+#   open (365); in `try_add_rtc_ice_candidate`, a candidate the browser refuses is skipped
+#   with a `warn!`, as natively, instead of panicking (413); the peer connection's
+#   configuration (431, 432); a data channel that opens once its handshake was dropped (526,
+#   in `create_data_channel`).
 # - `mod.rs`, `message_loop`: a second `IdAssigned` is ignored (224), a packet for a peer
 #   without that data channel is dropped (277 to 280), a dropped handshake is skipped, and a
 #   peer that leaves (`PeerLeft`) ends the handshake still waiting for its signals.

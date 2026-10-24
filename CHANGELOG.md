@@ -45,8 +45,9 @@ hash, those of the golden trace and replays included.
 
 - New crate `ludenea-webrtc`: `WebRtcLink`, a `ludenea_net::Link` over WebRTC data
   channels through matchbox_socket 0.14.0 (patched in `vendor/matchbox_socket` so that
-  signaling and peer data it cannot use drop that peer's handshake instead of panicking, and
-  so that no STUN URL means no ICE server). Natively its message loop runs on a thread named
+  signaling and peer data it cannot use drop that peer's handshake instead of panicking, an
+  ICE candidate webrtc-rs or the browser refuses is skipped, and no STUN URL means no ICE
+  server). Natively its message loop runs on a thread named
   `ludenea-webrtc`, in the browser as a task of the page. The link needs the crate's `link`
   feature, off by default: without it, and always on `wasm32-wasip1`, the crate builds its
   settings alone. `WebRtcLink::open(LinkSettings)` joins a room: channel 0, unreliable

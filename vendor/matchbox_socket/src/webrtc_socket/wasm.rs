@@ -398,11 +398,7 @@ async fn complete_handshake(
     // handle pending ICE candidates
     for candidate in received_candidates {
         debug!("adding ice candidate {candidate:?}");
-        or_drop(
-            try_add_rtc_ice_candidate(&conn, &candidate).await,
-            peer,
-            "unusable ICE candidate",
-        )?;
+        try_add_rtc_ice_candidate(&conn, &candidate).await;
     }
 
     // select for data channels ready or ice candidates
@@ -416,11 +412,7 @@ async fn complete_handshake(
             msg = peer_signal_rx.next() => {
                 match msg {
                     Some(PeerSignal::IceCandidate(candidate)) => {
-                        or_drop(
-                            try_add_rtc_ice_candidate(&conn, &candidate).await,
-                            peer,
-                            "unusable ICE candidate",
-                        )?;
+                        try_add_rtc_ice_candidate(&conn, &candidate).await;
                     }
                     Some(_) => {}
                     // The signals end when the peer leaves or the signaling loop ends: the
@@ -463,17 +455,14 @@ fn sdp_of(description: &JsValue) -> Result<String, String> {
         .ok_or_else(|| "its sdp is not text".to_string())
 }
 
-/// Adds a remote candidate; one that is not JSON is ignored, one the browser refuses is an
-/// error.
-async fn try_add_rtc_ice_candidate(
-    connection: &RtcPeerConnection,
-    candidate_string: &str,
-) -> Result<(), super::error::JsError> {
+/// Adds a remote candidate; one that is not JSON, or that the browser refuses, is skipped
+/// with a `warn!`, as natively: the other candidates may still connect the peer.
+async fn try_add_rtc_ice_candidate(connection: &RtcPeerConnection, candidate_string: &str) {
     let parsed_candidate = match js_sys::JSON::parse(candidate_string) {
         Ok(c) => c,
         Err(err) => {
             warn!("failed to parse ice candidate json, ignoring: {err:?}");
-            return Ok(());
+            return;
         }
     };
 
@@ -486,12 +475,14 @@ async fn try_add_rtc_ice_candidate(
         Some(candidate)
     };
 
-    JsFuture::from(
+    if let Err(error) = JsFuture::from(
         connection.add_ice_candidate_with_opt_rtc_ice_candidate_init(candidate_init.as_ref()),
     )
     .await
     .efix()
-    .map(|_| ())
+    {
+        warn!("ignoring an ICE candidate the browser refuses: {error:?}");
+    }
 }
 
 fn create_rtc_peer_connection(
