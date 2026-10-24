@@ -964,6 +964,42 @@ hash, those of the golden trace and replays included.
   `--loss-percent`, `--players`, `--random-inputs SEED`, `--ticks`, `--record`,
   `--dump-dir`, `--room-timeout` and `--threads`. It exits with 0 for a match ended because
   a peer left, 1 for any other ending, and 2 for a failure of this peer.
+- New: `ludenea_runtime::native::play` plays online when `PlayOptions::online` is
+  `Some(OnlineOptions)`: the window opens on the room (a host prints its code to `out` once
+  the room exists), Enter or `PlayOptions::players` readies it, and the match starts once
+  the room agreed. Closing the window leaves the match, which plays on without the window
+  until it ended and the others were told; `PlayOptions::ticks` leaves it at that tick.
+  Breaking: `PlayOptions` gains the public fields `online`, `dump_dir` (where a desync
+  writes this peer's snapshot of the divergent tick) and `program` (the program whose
+  `diff` the desync message names); it has no `Default`, so a struct literal must give
+  them. `PlayOutcome` gains `ended` (how the online match ended, `None` without one) and
+  `local` (this peer's number, once the room laid the match out); online, its `ticks` is
+  the tick the match reached.
+- New: the command line tool's `play` hosts (`--host`, with `--peers` and `--room`) or
+  joins (`--join CODE`) an online match in its window, through `--signaling`, with `--stun`
+  or `--no-stun`, `--latency-ms`, `--jitter-ms` and `--loss-percent` on this peer's own
+  sends, and `--dump-dir` for a desync's snapshot. Online it exits as `peer` does: 0 for a
+  match ended because a peer left (or a window closed before any match), 1 for any other
+  ending, and 2 for a failure of this peer.
+- New: `ludenea rooms` runs the signaling listener of `ludenea-signal` on this machine's
+  network address and on `127.0.0.1` (`--listen ADDRESS` for one address only), on
+  `--port` (3536 by default; 0 picks a free one and needs `--listen`), and prints one
+  `signaling ws://ADDRESS:PORT/rooms` line per address. `--page DIR` serves a web build
+  beside it (refused without `game.json`) and prints a `page http://ADDRESS:PORT/` line
+  each; `--allow-origin ORIGIN` (repeatable) lets another origin's pages open rooms,
+  `--idle-seconds` (30) closes a silent connection, and `--max-rooms` (64) bounds the rooms.
+  It warns when it listens beyond this machine, and its matches end when it stops.
+- New: the standalone web page plays online. `?host=N` (2 to 4 peers) opens a room and
+  `?join=CODE` joins one, through `?signaling=URL` (by default `ws://` or `wss://` on the
+  page's own host, `/rooms`), with the STUN servers of `?stun=URL` (repeatable, `?stun=none`
+  for none) and `?latency=MS`, `?jitter=MS` and `?loss=PERCENT` on the page's own sends;
+  `?players=N` readies the room, and `?ticks=N` leaves the match at that tick. A bad
+  parameter, or an online one without a room, fails the page, naming it. The lobby shows
+  the room and its code; the status names the peers silent and how the match ended, a lost
+  match with why its link closed. The new Leave button leaves the match; after the end,
+  "Save replay" saves it, and a desync also offers the new "Save desync snapshot"
+  (`desync-tick-T-peer-P.snap`). Once the end lingered, the page closes its link; a closed
+  tab leaves the match on a best-effort basis.
 
 ### Control protocol
 
