@@ -94,6 +94,14 @@ pub fn default_stun() -> String {
     ludenea_webrtc::DEFAULT_STUN.to_owned()
 }
 
+/// How long a peer whose match ended keeps telling the others why, in milliseconds
+/// (`ludenea_net::END_LINGER_MICROS`): after it, the page closes its link.
+#[wasm_bindgen(js_name = endLingerMs)]
+pub fn end_linger_ms() -> f64 {
+    // Exact: a whole number of microseconds far below 2^53.
+    ludenea_net::END_LINGER_MICROS as f64 / 1_000.0
+}
+
 /// One peer's room, then its match's packets, over the browser's WebRTC: the page side of an
 /// online match, whose game runs in the page's worker. A thin binding over
 /// `OnlineOptions::plan`, `online::open_link` and `ludenea_net::OnlinePeer`. The page polls

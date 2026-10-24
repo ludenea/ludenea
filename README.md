@@ -422,9 +422,12 @@ match, which starts once every peer is ready. The status names any peer silent, 
 match ended. The Leave button leaves the match, which every peer ends as left at the same
 tick; after the end, "Save replay" saves the match, and a desync also offers "Save desync
 snapshot" (`desync-tick-T-peer-P.snap`, to compare with the other peer's using `<game>
-diff`). A hidden tab keeps its match going. Closing the tab leaves the match on a best-effort
-basis only: the page and its link go at once, so the others usually end the match as lost
-after 3 seconds of silence, and the closed tab keeps no replay. Leave first to keep both.
+diff`). A hidden tab keeps its match going. Half a second after the match ended, the time
+it keeps telling the others why, the page closes its link: its room leaves the listener and
+no longer counts against the listener's limits. Closing the tab leaves the match on a
+best-effort basis only: the page and its link go at once, so the others usually end the
+match as lost after 3 seconds of silence, and the closed tab keeps no replay. Leave first to
+keep both.
 A page and a native peer play in the same rooms:
 
 ```sh

@@ -944,7 +944,8 @@ hash, those of the golden trace and replays included.
   settings, local }` or `{ state: "failed", message }`, as the new `online::status_json`
   writes it), `setReady(players)`, `receive(now_ms)` (`[{ from, packet: ArrayBuffer }]`),
   `send(to, packet, now_ms)` and `messages()` (the warnings `OnlineMatch::messages` gives)
-  complete it. `defaultStun()` gives `ludenea_webrtc::DEFAULT_STUN`.
+  complete it. `defaultStun()` gives `ludenea_webrtc::DEFAULT_STUN`, and `endLingerMs()`
+  `END_LINGER_MICROS` in milliseconds, after which the page closes its link.
 - New: `WorkerHost::netReceive(from, packet)` gives the online match a packet without its
   JSON text, refused before the hello as a request is, and `WorkerHost::takeNetPackets()`
   hands out the packets of the `net_send` events once, as `[{ to, packet: ArrayBuffer }]`

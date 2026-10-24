@@ -144,14 +144,19 @@ test("two pages play the arena and save the same replay", async ({ browser }) =>
   }
   // Both ended at the same tick, in the same state.
   const ended = async (page: Page) => [await page.locator("body").getAttribute("data-tick"), await page.locator("body").getAttribute("data-hash")];
-  expect(await ended(joiner.page)).toEqual(await ended(host.page));
-  expect(Number((await ended(host.page))[0])).toBeGreaterThanOrEqual(300);
+  const [tick, hash] = await ended(host.page);
+  expect(await ended(joiner.page)).toEqual([tick, hash]);
+  expect(Number(tick)).toBeGreaterThanOrEqual(300);
   const hosted = await saveReplay(host.page);
   const joined = await saveReplay(joiner.page);
   expect(readFileSync(joined).equals(readFileSync(hosted)), "the two replays differ").toBe(true);
   for (const file of [hosted, joined]) expect(arena(["verify", file])).toContain("hashes match");
-  expect(host.errors).toEqual([]);
-  expect(joiner.errors).toEqual([]);
+  // Once the others were told, each page closes its link, and the room leaves the listener.
+  for (const { page } of [host, joiner]) await expect(page.locator("body")).toHaveAttribute("data-link", "closed");
+  const late = await open(browser, `?join=${room}&players=1&stun=none&signaling=${signaling}`);
+  await expect(late.page.locator("body")).toHaveAttribute("data-failed", "true", { timeout: MEET_MS });
+  await expect(late.page.locator("#status")).toContainText(`cannot join room ${room}`);
+  for (const { errors } of [host, joiner]) expect(errors).toEqual([]);
 });
 
 test("a native peer and a page play under bad conditions", async ({ browser }) => {

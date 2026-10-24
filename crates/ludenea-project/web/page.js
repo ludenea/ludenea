@@ -13,7 +13,7 @@
 // keeps its match going. Runtime code: it reads the clock to draw and to pace the link, and
 // changes the game only through the worker's host commands.
 
-import init, { WebLobby, WebOnline, WebRenderer, automaticClaimsJson, defaultStun } from "./game.js";
+import init, { WebLobby, WebOnline, WebRenderer, automaticClaimsJson, defaultStun, endLingerMs } from "./game.js";
 
 const canvas = document.getElementById("game");
 const status = document.getElementById("status");
@@ -100,6 +100,8 @@ let joined = false;
 let local;
 let onlineState = "room";
 let end;
+/** When the page heard of the end, on its monotonic clock. */
+let endedAt;
 const silent = new Map();
 
 function say(message) {
@@ -240,6 +242,7 @@ function closeLink() {
   online?.free();
   online = undefined;
   leaveButton.disabled = true;
+  document.body.dataset.link = "closed";
 }
 
 /** Polls the room, starts the match once it agreed, and passes the packets received on to
@@ -263,6 +266,9 @@ function pump() {
       packets.map((received) => received.packet),
     );
   }
+  // Once the others were told how the match ended, as the host lingers to tell them, the
+  // link closes: the room leaves the listener, and counts no more against its limits.
+  if (endedAt !== undefined && now - endedAt >= endLingerMs()) closeLink();
 }
 
 /** Shows the room's code once it exists on the listener, and what it waits for. */
@@ -288,6 +294,7 @@ function setOnline(state) {
   leaveButton.disabled = !(onlineState === "connecting" || onlineState === "running");
   if (onlineState === "ended") {
     end = state.end;
+    endedAt = performance.now();
     document.body.dataset.end = end.kind;
     playing = false;
     silent.clear();
