@@ -96,6 +96,7 @@ jobs:
           trap 'kill $rooms' EXIT
           for _ in $(seq 300); do
             grep -q '^signaling ' play/rooms.log && break
+            kill -0 $rooms 2> /dev/null || break
             sleep 0.1
           done
           grep -q '^signaling ' play/rooms.log || { cat play/rooms.log; exit 1; }
@@ -109,7 +110,7 @@ jobs:
               kill -0 $host 2> /dev/null || break
               sleep 0.1
             done
-            grep -q "^room 23456A" play/online-host.log || { cat play/online-host.log; exit 1; }
+            grep -q "^room 23456A" play/online-host.log || { kill $host 2> /dev/null; cat play/online-host.log; exit 1; }
             $play --join 23456A --record play/online-join.replay &
             join=$!
             status=0
