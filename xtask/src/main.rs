@@ -86,7 +86,7 @@ fn render_features(test_hooks: bool) -> &'static str {
 fn check() -> Result<(), Box<dyn Error>> {
     for command in CHECKS {
         eprintln!("xtask: cargo {command}");
-        let status = run(Command::new(cargo())
+        let status = run(cargo()
             .args(command.split_whitespace())
             .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/.."))
             .env("RUSTDOCFLAGS", "-D warnings"))?;
@@ -134,7 +134,7 @@ fn wasm_render(test_hooks: bool, out_dir: &str) -> Result<(), Box<dyn Error>> {
 /// Runs `cargo <command>` on `package`'s library for the browser with `profile` and returns the
 /// module path.
 fn build(package: &str, command: &[&str], profile: &str) -> Result<PathBuf, Box<dyn Error>> {
-    let status = run(Command::new(cargo())
+    let status = run(cargo()
         .args(command)
         .args(["--locked", "--profile", profile, "--target", TARGET])
         .args(["-p", package, "--lib"]))?;
@@ -164,9 +164,23 @@ fn run(command: &mut Command) -> Result<ExitStatus, Box<dyn Error>> {
     })
 }
 
-/// The cargo that runs this task, so that every run uses the same toolchain.
-fn cargo() -> String {
-    std::env::var("CARGO").unwrap_or_else(|_| "cargo".into())
+/// A command running the cargo that runs this task, so that every run uses the same toolchain.
+///
+/// `cargo run` describes this package to the task (`CARGO_MANIFEST_DIR`, `CARGO_MANIFEST_PATH`,
+/// `CARGO_PKG_*`), and none of it reaches that cargo: a build script that watches one of these
+/// variables, as ring's does, would otherwise rerun at every switch between a task and a plain
+/// cargo command, and rebuild every crate above it.
+fn cargo() -> Command {
+    let mut command = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    for (name, _) in std::env::vars_os() {
+        let describes_this_package = name.to_str().is_some_and(|name| {
+            name.starts_with("CARGO_MANIFEST_") || name.starts_with("CARGO_PKG_")
+        });
+        if describes_this_package {
+            command.env_remove(name);
+        }
+    }
+    command
 }
 
 /// Where cargo puts the workspace's builds, as configured (`CARGO_TARGET_DIR`,
@@ -304,6 +318,33 @@ mod tests {
             directory.display()
         );
         assert!(error.to_string().starts_with(&expected), "{error}");
+    }
+
+    /// The test runner describes this package to this test as `cargo run` describes it to a
+    /// task; none of it reaches the cargo a task runs, while the path of the cargo itself does.
+    /// Every runner sets `CARGO_MANIFEST_DIR`, the variable ring's build script watches; the
+    /// others are checked where the runner sets them (nextest leaves `CARGO_MANIFEST_PATH` out).
+    #[test]
+    fn the_cargo_a_task_runs_is_not_told_about_this_package() {
+        let command = super::cargo();
+        let removed: Vec<&str> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .filter_map(|(name, _)| name.to_str())
+            .collect();
+        assert!(
+            removed.contains(&"CARGO_MANIFEST_DIR"),
+            "CARGO_MANIFEST_DIR is passed on"
+        );
+        for name in ["CARGO_MANIFEST_PATH", "CARGO_PKG_NAME", "CARGO_PKG_VERSION"] {
+            if std::env::var_os(name).is_some() {
+                assert!(removed.contains(&name), "{name} is passed on");
+            }
+        }
+        assert!(
+            !removed.contains(&"CARGO"),
+            "the path of the cargo is removed"
+        );
     }
 
     #[test]
