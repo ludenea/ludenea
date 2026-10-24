@@ -1,5 +1,5 @@
-//! The `ludenea` command line: `run`, `verify`, `synctest`, `diff`, `render`, `play`, and
-//! `host`. A game provides its own `main` and passes its app constructor to [`main`].
+//! The `ludenea` command line: `run`, `verify`, `synctest`, `diff`, `render`, `play`,
+//! `host`, and `peer`. A game provides its own `main` and passes its app constructor to [`main`].
 
 mod commands;
 mod trace;
@@ -40,6 +40,22 @@ enum Cmd {
     /// Serve the game to the editor over stdin and stdout.
     #[cfg(not(target_family = "wasm"))]
     Host(commands::HostArgs),
+    /// Play a match online without a window: host or join a room of a signaling listener
+    /// (`ludenea rooms`), then play it in real time with no input or seeded random input.
+    #[cfg(not(target_family = "wasm"))]
+    Peer(commands::PeerArgs),
+}
+
+/// The name the game's command line runs under, as its messages name it: the file stem of
+/// the first argument.
+#[cfg(not(target_family = "wasm"))]
+fn program_name<S: AsRef<str>>(args: &[S]) -> String {
+    args.first()
+        .and_then(|program| std::path::Path::new(program.as_ref()).file_stem())
+        .map_or_else(
+            || "game".to_string(),
+            |stem| stem.to_string_lossy().into_owned(),
+        )
 }
 
 pub fn main(app: fn() -> App) -> ExitCode {
@@ -68,6 +84,8 @@ pub fn run<S: AsRef<str>>(app: fn() -> App, args: &[S], out: &mut dyn Write) -> 
         Cmd::Play(args) => commands::play(app, args, out),
         #[cfg(not(target_family = "wasm"))]
         Cmd::Host(args) => commands::host(app, args),
+        #[cfg(not(target_family = "wasm"))]
+        Cmd::Peer(peer) => commands::peer(app, peer, &program_name(args), out),
     };
     outcome.unwrap_or_else(|message| {
         let _ = writeln!(out, "error: {message}");

@@ -491,6 +491,28 @@ pub fn synctest(app: fn() -> App, args: &SyncTestArgs, out: &mut dyn Write) -> O
     }
 }
 
+/// Seeded random devices drawn from `rng`: each key of [`RANDOM_KEYS`] held one draw in four,
+/// and `gamepads` gamepads with random buttons and axes.
+fn random_devices(
+    rng: &mut Rng,
+    gamepads: usize,
+) -> (std::collections::BTreeSet<String>, Vec<RawGamepad>) {
+    let keys = RANDOM_KEYS
+        .iter()
+        .filter(|_| rng.range_u32(0, 4) == 0)
+        .map(|key| key.to_string())
+        .collect();
+    let gamepads = (0..gamepads)
+        .map(|_| RawGamepad {
+            buttons: (0..RANDOM_BUTTONS)
+                .map(|_| rng.range_f32(0.0, 1.0))
+                .collect(),
+            axes: (0..RANDOM_AXES).map(|_| rng.range_f32(-1.0, 1.0)).collect(),
+        })
+        .collect();
+    (keys, gamepads)
+}
+
 /// `ticks` ticks of seeded random raw input for one player, mapped by the game's mapping:
 /// each key of [`RANDOM_KEYS`] held one tick in four, and one gamepad with random buttons and
 /// axes.
@@ -498,21 +520,8 @@ fn random_input_log(sim: &Simulation, seed: u64, ticks: u64) -> Result<InputLog,
     let mut rng = Rng::new(seed, 0);
     let mut log = InputLog::new(1);
     for tick in 0..ticks {
-        let keys = RANDOM_KEYS
-            .iter()
-            .filter(|_| rng.range_u32(0, 4) == 0)
-            .map(|key| key.to_string())
-            .collect();
-        let gamepad = RawGamepad {
-            buttons: (0..RANDOM_BUTTONS)
-                .map(|_| rng.range_f32(0.0, 1.0))
-                .collect(),
-            axes: (0..RANDOM_AXES).map(|_| rng.range_f32(-1.0, 1.0)).collect(),
-        };
-        let raw = RawInput {
-            keys,
-            gamepads: vec![gamepad],
-        };
+        let (keys, gamepads) = random_devices(&mut rng, 1);
+        let raw = RawInput { keys, gamepads };
         let encoded = sim
             .map_raw_input(&[raw])
             .map_err(|error| format!("cannot map the random input of tick {tick}: {error}"))?;
@@ -763,7 +772,6 @@ pub struct PlayArgs {
 /// once.
 #[cfg(not(target_family = "wasm"))]
 pub fn play(app: fn() -> App, args: &PlayArgs, out: &mut dyn Write) -> Outcome {
-    use ludenea_runtime::GameFiles;
     use ludenea_runtime::native::PlayOptions;
 
     let files = &args.files;
@@ -773,10 +781,11 @@ pub fn play(app: fn() -> App, args: &PlayArgs, out: &mut dyn Write) -> Outcome {
             files.scene.display()
         ));
     }
-    let scene = String::from_utf8(read(&files.scene)?)
-        .map_err(|_| format!("{} is not valid UTF-8", files.scene.display()))?;
-    let assets = project_assets(&files.scene, files.project.as_deref())?;
-    let edits = files.edits.as_deref().map(read).transpose()?;
+    let game = game_files(
+        &files.scene,
+        files.project.as_deref(),
+        files.edits.as_deref(),
+    )?;
     let sim = simulation(app, None)?;
     let debug_layers = known_debug_layers(&sim, &args.debug_layers)?;
     let textures = ludenea_app::project::project_textures(&files.scene, files.project.as_deref())?;
@@ -791,11 +800,7 @@ pub fn play(app: fn() -> App, args: &PlayArgs, out: &mut dyn Write) -> Outcome {
         .file_name()
         .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
     let options = PlayOptions {
-        files: GameFiles {
-            scene,
-            assets: assets.texts.into_iter().collect(),
-            edits,
-        },
+        files: game,
         textures: textures.textures,
         watch: (!args.no_watch).then(|| (files.scene.clone(), files.project.clone())),
         players: args.players,
@@ -815,6 +820,24 @@ pub fn play(app: fn() -> App, args: &PlayArgs, out: &mut dyn Write) -> Outcome {
         say(out, format_args!("ticks {}, {stats}", outcome.ticks))?;
     }
     Ok(0)
+}
+
+/// The files a runtime plays: the scene's text, its project's prefab and data asset texts, and
+/// the edit log at `edits`, if any.
+#[cfg(not(target_family = "wasm"))]
+fn game_files(
+    scene: &Path,
+    project: Option<&Path>,
+    edits: Option<&Path>,
+) -> Result<ludenea_runtime::GameFiles, String> {
+    let text = String::from_utf8(read(scene)?)
+        .map_err(|_| format!("{} is not valid UTF-8", scene.display()))?;
+    let assets = project_assets(scene, project)?;
+    Ok(ludenea_runtime::GameFiles {
+        scene: text,
+        assets: assets.texts.into_iter().collect(),
+        edits: edits.map(read).transpose()?,
+    })
 }
 
 /// A renderer on a headless device with `textures` packed into its atlas, warning about
@@ -884,4 +907,382 @@ fn encode_png(size: ludenea_render::gpu::Size, rgba: &[u8]) -> Result<Vec<u8>, S
     writer.write_image_data(rgba).map_err(fail)?;
     writer.finish().map_err(fail)?;
     Ok(bytes)
+}
+
+/// How a runtime goes online: hosting or joining a room through a signaling listener, the STUN
+/// servers, and the conditions this peer's own sends go through.
+#[cfg(not(target_family = "wasm"))]
+#[derive(Args)]
+pub struct OnlineArgs {
+    /// Host a room and print its code for the others to join.
+    #[arg(long, group = "role")]
+    host: bool,
+    /// The peers of the hosted room, this one included, from 2 to 4 [default: 2].
+    #[arg(long, conflicts_with = "join", value_parser = clap::value_parser!(u8).range(2..=4))]
+    peers: Option<u8>,
+    /// Host the room under this code instead of a random one.
+    #[arg(long, value_name = "CODE", conflicts_with = "join", value_parser = room_code)]
+    room: Option<ludenea_net::RoomCode>,
+    /// Join the room of this code.
+    #[arg(long, value_name = "CODE", group = "role", value_parser = room_code)]
+    join: Option<ludenea_net::RoomCode>,
+    /// The signaling listener's URL, such as `ludenea rooms` prints it.
+    #[arg(long, value_name = "URL", default_value = ludenea_runtime::online::DEFAULT_SIGNALING)]
+    signaling: String,
+    /// A STUN server that tells this peer its public address; repeat it for several. The
+    /// default is a public server of Google's.
+    #[arg(long = "stun", value_name = "URL", default_value = ludenea_webrtc::DEFAULT_STUN, conflicts_with = "no_stun")]
+    stun: Vec<String>,
+    /// Use no STUN server, as on a local network.
+    #[arg(long)]
+    no_stun: bool,
+    /// Delay every packet this peer sends by this many milliseconds.
+    #[arg(long, default_value_t = 0)]
+    latency_ms: u16,
+    /// Delay every packet this peer sends by up to this many more milliseconds, drawn at random.
+    #[arg(long, default_value_t = 0)]
+    jitter_ms: u16,
+    /// Lose this percentage of the packets this peer sends, drawn at random.
+    #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u16).range(0..=100))]
+    loss_percent: u16,
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl OnlineArgs {
+    /// The options these arguments give, or `None` when they neither host nor join.
+    fn options(&self) -> Option<ludenea_runtime::online::OnlineOptions> {
+        use ludenea_runtime::online::{OnlineOptions, OnlineRole};
+
+        let role = match (&self.join, self.host) {
+            (Some(code), _) => OnlineRole::Join { code: code.clone() },
+            (None, true) => OnlineRole::Host {
+                peers: self.peers.unwrap_or(2),
+                code: self.room.clone(),
+            },
+            (None, false) => return None,
+        };
+        Some(OnlineOptions {
+            role,
+            signaling: self.signaling.clone(),
+            stun: if self.no_stun {
+                Vec::new()
+            } else {
+                self.stun.clone()
+            },
+            conditions: ludenea_net::LinkConditions {
+                latency_micros: u32::from(self.latency_ms) * 1_000,
+                jitter_micros: u32::from(self.jitter_ms) * 1_000,
+                loss_per_mille: self.loss_percent * 10,
+                duplicate_per_mille: 0,
+                reorder_per_mille: 0,
+                reorder_extra_micros: 0,
+                // `plan` draws it.
+                seed: 0,
+            },
+        })
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn room_code(text: &str) -> Result<ludenea_net::RoomCode, ludenea_net::RoomCodeError> {
+    ludenea_net::RoomCode::parse(text)
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[derive(Args)]
+#[command(group = clap::ArgGroup::new("role").required(true).multiple(false))]
+pub struct PeerArgs {
+    /// The scene to play; prefabs and data assets come from the project folder.
+    scene: PathBuf,
+    /// The project folder whose prefabs and data assets the scene loads; defaults to the
+    /// nearest folder above the scene holding `ludenea.toml`, else the scene's folder.
+    #[arg(long)]
+    project: Option<PathBuf>,
+    #[arg(long, value_parser = thread_count, help = threads_help())]
+    threads: Option<usize>,
+    #[arg(
+        long,
+        default_value_t = 1,
+        help = format!(
+            "The local players of this peer, from 1 to {}, with the devices `play --players` \
+             gives them",
+            ludenea_app::players::MAX_LOCAL_PLAYERS
+        ),
+        value_parser = clap::value_parser!(u8).range(1..=ludenea_app::players::MAX_LOCAL_PLAYERS as i64)
+    )]
+    players: u8,
+    /// Play seeded random devices: keys held from a set of common codes, and one gamepad per
+    /// local player with random axes and buttons. Without it, the players hold nothing.
+    #[arg(long, value_name = "SEED")]
+    random_inputs: Option<u64>,
+    /// Leave the match once it reaches this tick.
+    #[arg(long)]
+    ticks: Option<u64>,
+    /// Write the match as a replay to this file once it ended.
+    #[arg(long)]
+    record: Option<PathBuf>,
+    /// Where to write this peer's snapshot of the divergent tick when the match desyncs.
+    #[arg(long, default_value = "dump")]
+    dump_dir: PathBuf,
+    /// Give up when the room is not ready within this many seconds.
+    #[arg(long, value_name = "SECONDS", default_value_t = 60)]
+    room_timeout: u64,
+    #[command(flatten)]
+    online: OnlineArgs,
+}
+
+/// The time between two frames of the headless peer.
+#[cfg(not(target_family = "wasm"))]
+const PEER_STEP: std::time::Duration = std::time::Duration::from_millis(4);
+
+#[cfg(not(target_family = "wasm"))]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "network pacing, never feeds the simulation"
+)]
+fn monotonic_now() -> std::time::Instant {
+    std::time::Instant::now()
+}
+
+/// Plays a match online, headless and in real time: hosts or joins the room, readies it with
+/// `--players` local players, then plays a frame every 4 ms until the match ended and stopped
+/// telling the others why. Exits 0 when the match ended as left, 1 for any other ending, and
+/// with an error for a failure of this peer: its game, its files, or its room.
+#[cfg(not(target_family = "wasm"))]
+pub fn peer(app: fn() -> App, args: &PeerArgs, game: &str, out: &mut dyn Write) -> Outcome {
+    use ludenea_app::players::{LiveDevices, automatic_claims};
+    use ludenea_control::MatchEndKind;
+    use ludenea_runtime::Runner;
+    use ludenea_runtime::online::{
+        OnlineMatch, OnlinePhase, entropy, open_link, write_desync_snapshot,
+    };
+
+    let Some(options) = args.online.options() else {
+        return Err("give --host or --join".into());
+    };
+    let hosting = args.online.host;
+    let plan = options.plan(entropy()).map_err(|error| error.to_string())?;
+    let files = game_files(&args.scene, args.project.as_deref(), None)?;
+    let mut runner =
+        Runner::load(app, &files, args.threads, Vec::new()).map_err(|error| error.to_string())?;
+    let mut online =
+        OnlineMatch::new(open_link(plan.link.clone()), &plan).map_err(|error| error.to_string())?;
+    let players = usize::from(args.players);
+    online
+        .ready(automatic_claims(players))
+        .map_err(|error| error.to_string())?;
+    let code = online.code().clone();
+    let mut rng = args.random_inputs.map(|seed| Rng::new(seed, 0));
+
+    let start = monotonic_now();
+    let mut last = start;
+    let mut described = "the room has not answered yet".to_string();
+    let mut started = false;
+    let mut left = false;
+    let mut end = None;
+    let mut failure = None;
+    let mut silent = std::collections::BTreeMap::new();
+    loop {
+        std::thread::sleep(PEER_STEP);
+        let now = monotonic_now();
+        let elapsed = now.duration_since(last).as_secs_f64();
+        last = now;
+        let micros = u64::try_from(now.duration_since(start).as_micros()).unwrap_or(u64::MAX);
+        let phase = online.before_frame(&mut runner, micros);
+        console(&mut runner);
+        for message in online.messages() {
+            say(out, format_args!("warning: {message}"))?;
+        }
+        match phase {
+            OnlinePhase::Room(view) => {
+                let description = view.describe();
+                if description != described {
+                    say(out, &description)?;
+                    described = description;
+                }
+            }
+            OnlinePhase::Assigned => {
+                if hosting {
+                    say(out, format_args!("room {code}"))?;
+                    out.flush().map_err(|error| error.to_string())?;
+                }
+            }
+            OnlinePhase::Failed(reason) => return Err(reason),
+            OnlinePhase::Playing => {
+                if !started {
+                    started = true;
+                    if let Some(layout) = online.layout() {
+                        say(
+                            out,
+                            format_args!(
+                                "match started: peer {} of {}, local players {:?}",
+                                layout.local.0,
+                                layout.links.len(),
+                                layout.local_players()
+                            ),
+                        )?;
+                    }
+                }
+            }
+            OnlinePhase::Ended(ending) => {
+                if end.is_none() {
+                    let stats = runner.net_stats().map_err(|error| error.to_string())?;
+                    let tick = ending.tick.unwrap_or(stats.tick);
+                    say(
+                        out,
+                        format_args!("match ended at tick {tick}: {}", ending.message),
+                    )?;
+                    end = Some(ending);
+                }
+            }
+        }
+        if !started && end.is_none() && now.duration_since(start).as_secs() >= args.room_timeout {
+            return Err(format!(
+                "room {code} was not ready within {} s: {described}",
+                args.room_timeout
+            ));
+        }
+        if started || end.is_some() {
+            let devices = match &mut rng {
+                Some(rng) => {
+                    let (keys, gamepads) = random_devices(rng, players);
+                    LiveDevices {
+                        keys,
+                        gamepads: gamepads.into_iter().map(Some).collect(),
+                    }
+                }
+                None => LiveDevices::default(),
+            };
+            if let Err(error) = runner.frame(elapsed, &devices) {
+                // The match ended on this failure; the others are told while it lingers.
+                failure.get_or_insert(error);
+            }
+            for (&peer, &for_ms) in runner.silent_peers() {
+                if silent.insert(peer, for_ms) != Some(for_ms) {
+                    say(
+                        out,
+                        format_args!("peer {peer} silent for {} s", for_ms as f64 / 1000.0),
+                    )?;
+                }
+            }
+            let back: Vec<u8> = silent
+                .keys()
+                .filter(|peer| !runner.silent_peers().contains_key(*peer))
+                .copied()
+                .collect();
+            for peer in back {
+                silent.remove(&peer);
+                if end.is_none() {
+                    say(out, format_args!("peer {peer} is back"))?;
+                }
+            }
+            if let Some(ticks) = args.ticks
+                && !left
+                && runner.tick() >= ticks
+                && end.is_none()
+            {
+                left = true;
+                online.leave(&mut runner);
+            }
+        }
+        online.after_frame(&mut runner, micros);
+        if end.is_some() && !online.lingering(micros) {
+            break;
+        }
+    }
+    let Some(end) = end else {
+        unreachable!("the loop ends only once the match ended");
+    };
+    for message in online.messages() {
+        say(out, format_args!("warning: {message}"))?;
+    }
+    report_net_stats(&mut runner, &online, out)?;
+    if let Some(path) = &args.record {
+        let replay = runner.export_replay().map_err(|error| error.to_string())?;
+        write(path, &replay)?;
+        say(out, format_args!("wrote {}", path.display()))?;
+    }
+    if end.kind == MatchEndKind::Desync
+        && let Some(layout) = online.layout()
+    {
+        let path = write_desync_snapshot(&mut runner, &end, layout.local.0, &args.dump_dir)
+            .map_err(|error| error.to_string())?;
+        say(
+            out,
+            format_args!(
+                "wrote {}: compare it with the other peer's snapshot using `{game} diff`",
+                path.display()
+            ),
+        )?;
+    }
+    console(&mut runner);
+    if let Some(failure) = failure {
+        return Err(failure.to_string());
+    }
+    let local = online.layout().map(|layout| layout.local.0);
+    if end.kind == MatchEndKind::LocalFailure && end.peer.is_some() && end.peer == local {
+        // This peer's game failed where no frame reported it, such as a host error.
+        return Err(end.message);
+    }
+    Ok(if end.kind == MatchEndKind::Left { 0 } else { 1 })
+}
+
+/// Writes the host's console messages to the standard error, as the native window does: the
+/// standard output keeps the peer's own lines.
+#[cfg(not(target_family = "wasm"))]
+fn console(runner: &mut ludenea_runtime::Runner) {
+    use ludenea_control::ConsoleLevel;
+
+    for (level, text) in runner.take_messages() {
+        match level {
+            ConsoleLevel::Info => eprintln!("{text}"),
+            ConsoleLevel::Warning => eprintln!("warning: {text}"),
+            ConsoleLevel::Error => eprintln!("error: {text}"),
+        }
+    }
+}
+
+/// One line per other peer of the match's statistics, then the link's lost sends and strays.
+#[cfg(not(target_family = "wasm"))]
+fn report_net_stats(
+    runner: &mut ludenea_runtime::Runner,
+    online: &ludenea_runtime::online::OnlineMatch,
+    out: &mut dyn Write,
+) -> Result<(), String> {
+    let stats = runner.net_stats().map_err(|error| error.to_string())?;
+    let milliseconds = |micros: u64| micros as f64 / 1000.0;
+    for peer in &stats.peers {
+        let dropped = if peer.dropped.is_empty() {
+            "none".to_string()
+        } else {
+            peer.dropped
+                .iter()
+                .map(|dropped| format!("{} {}", dropped.count, dropped.reason))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        say(
+            out,
+            format_args!(
+                "peer {}: ping {:.1} ms, jitter {:.1} ms, frame advantage {}, rollbacks {} \
+                 (deepest {} ticks), prediction misses {}, stalls {}, packets dropped: {dropped}",
+                peer.peer,
+                milliseconds(peer.ping_micros),
+                milliseconds(peer.jitter_micros),
+                peer.frame_advantage,
+                peer.rollbacks,
+                peer.deepest_rollback,
+                peer.prediction_misses,
+                peer.stalls,
+            ),
+        )?;
+    }
+    say(
+        out,
+        format_args!(
+            "link: {} sends lost, {} packets from outside the match",
+            online.failed_sends(),
+            online.strays()
+        ),
+    )
 }

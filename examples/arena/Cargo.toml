@@ -36,7 +36,9 @@ serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+ludenea-signal.workspace = true
 png.workspace = true
 postcard.workspace = true
 ron.workspace = true
 tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync"] }

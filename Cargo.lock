@@ -203,12 +203,14 @@ name = "arena"
 version = "0.1.0"
 dependencies = [
  "ludenea",
+ "ludenea-signal",
  "png",
  "postcard",
  "ron",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -2738,11 +2740,14 @@ dependencies = [
  "ludenea-net",
  "ludenea-render",
  "ludenea-runtime",
+ "ludenea-signal",
+ "ludenea-webrtc",
  "png",
  "pollster",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
  "wgpu",
  "xxhash-rust",
 ]

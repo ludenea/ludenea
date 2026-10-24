@@ -229,6 +229,40 @@ cargo run --locked --release -p swarm -- play examples/swarm/assets/swarm.scene.
 
 On an Apple M5 laptop the 95th percentile is about 5 ms (4.76 and 5.24 ms over two runs).
 
+Play a match online without a window: `peer` hosts (`--host`) or joins (`--join CODE`) a room
+of a signaling listener (`ludenea rooms`, see the editor section below), readies it with
+`--players` local players (1 by default, with the devices `play --players` gives them), and
+plays in real time, a frame every 4 ms. The players hold nothing, or seeded random devices
+with `--random-inputs SEED`: the keys `synctest` draws from, held one frame in four, and one
+gamepad per local player with random buttons and axes. The host's room holds `--peers` peers
+(2 to 4, 2 by default) under a random code, or `--room CODE`; it prints `room CODE` once the
+room exists on the listener. `--signaling` gives the listener's URL
+(`ws://127.0.0.1:3536/rooms` by default), `--stun` a STUN server (repeatable,
+`stun:stun.l.google.com:19302` by default) and `--no-stun` none, as on a local network.
+`--latency-ms`, `--jitter-ms` and `--loss-percent` impair this peer's own sends. Each
+change of the room's state prints a line, then `match started: peer P of N, local players
+[..]`, a line when a peer falls silent or is back, `match ended at tick T:` and why, and the
+statistics of each other peer and of the link. `--ticks N` leaves the match at tick N; the
+peer stops once the match ended and it told the others why. `--record` writes the replay,
+and a desync writes this peer's snapshot of the divergent tick into `--dump-dir` (`dump` by
+default) as `desync-tick-T-peer-P.snap`: compare it with the other peer's using `diff`. It
+exits with code 0 for a match ended because a peer left, 1 for any other ending, and 2 for a
+failure of this peer: its game, its files, its room (such as an unknown code), or a room not
+ready within `--room-timeout` seconds (60 by default). Ctrl-C ends the process at once: the
+other peers end the match as lost after 3 seconds without its packets. One terminal per
+command, on one machine (which needs a network interface besides loopback, as below):
+
+```sh
+cargo run --locked -p ludenea-serve -- rooms --listen 127.0.0.1
+cargo run --locked --release -p arena -- peer examples/arena/assets/arena.scene.ron \
+  --host --room 23456A --no-stun --random-inputs 1 --ticks 600 --record host.replay
+cargo run --locked --release -p arena -- peer examples/arena/assets/arena.scene.ron \
+  --join 23456A --no-stun --random-inputs 2 --record join.replay
+cargo run --locked --release -p arena -- verify host.replay
+```
+
+Both replays are byte-identical: a replay holds the confirmed inputs only.
+
 Run the benchmark:
 
 ```sh
@@ -375,9 +409,9 @@ a STUN server for their public address: `stun:stun.l.google.com:19302` by defaul
 server of Google's. There is no TURN relay, so two peers that are both behind a strict NAT
 (symmetric, as some mobile and corporate networks are) cannot connect. A network that drops
 UDP to the STUN server stalls a browser's handshake for about 40 seconds before it falls
-back to local addresses; on a local network, `?stun=none` on the page skips STUN. Native
-peers need a network interface other than loopback, even to play on one machine: webrtc-rs
-leaves loopback out of its candidates. Native `wss://` signaling trusts the certificate
+back to local addresses; on a local network, `?stun=none` on the page and `--no-stun` of a
+native peer skip STUN. Native peers need a network interface other than loopback, even to
+play on one machine: webrtc-rs leaves loopback out of its candidates. Native `wss://` signaling trusts the certificate
 roots of 2022 (webpki-roots 0.22, which matchbox_socket's TLS uses), so a server whose
 certificate chains to a newer root is refused natively; `ws://`, or a certificate from an
 older root, works.

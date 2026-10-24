@@ -930,6 +930,13 @@ hash, those of the golden trace and replays included.
   session resimulates the match, at most `ticks / RESIMULATION_BUDGET + 2` times, else
   refuse with a `RuntimeError::Record` naming the tick reached.
 - New: `ludenea_net::OnlinePeer::id()`, this peer's own link once the link reported it.
+- New: the command line tool's `peer <scene>` plays a match online without a window, hosting
+  (`--host`, with `--peers` and `--room`) or joining (`--join CODE`) a room of
+  `--signaling`, with `--stun` or `--no-stun`, `--latency-ms`, `--jitter-ms`,
+  `--loss-percent`, `--players`, `--random-inputs SEED`, `--ticks`, `--record`,
+  `--dump-dir`, `--room-timeout` and `--threads`. It exits with 0 for a match ended because
+  a peer left, 1 for any other ending, and 2 for a failure of this peer.
+
 ### Control protocol
 
 - Control protocol 5, fingerprint `1014a97387b22bdd`. Breaking: `get_render_frame`
