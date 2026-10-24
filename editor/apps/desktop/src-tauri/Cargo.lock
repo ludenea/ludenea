@@ -2293,6 +2293,7 @@ dependencies = [
  "ludenea-draw",
  "ludenea-ecs",
  "ludenea-math",
+ "ludenea-net",
  "postcard",
  "serde",
  "serde_json",
@@ -2351,6 +2352,17 @@ version = "0.1.0"
 dependencies = [
  "ludenea-schema",
  "serde",
+]
+
+[[package]]
+name = "ludenea-net"
+version = "0.1.0"
+dependencies = [
+ "ludenea-app",
+ "ludenea-ecs",
+ "postcard",
+ "serde",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
