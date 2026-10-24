@@ -87,7 +87,7 @@ pub struct PlayOptions {
 /// How a played session ended.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlayOutcome {
-    /// The tick the match reached.
+    /// The tick the match reached: online, the one after the last tick the match played.
     pub ticks: u64,
     /// The frame time summary (`FrameStats::summary`), when `PlayOptions::stats` asked.
     pub stats: Option<String>,
@@ -394,8 +394,25 @@ impl<'out> Session<'out> {
                 }
             }
         }
+        // Once an online match ended, the session resimulates it from tick 0: the tick the
+        // match reached is the one its statistics keep.
+        let ticks = match &end {
+            Some(_) => self.runner.net_stats().map(|stats| stats.tick),
+            None => Ok(self.runner.tick()),
+        };
+        let ticks = match (ticks, &result) {
+            (Ok(ticks), _) => ticks,
+            (Err(error), Ok(())) => {
+                result = Err(error);
+                self.runner.tick()
+            }
+            (Err(error), Err(_)) => {
+                let _ = writeln!(self.out, "error: {error}");
+                self.runner.tick()
+            }
+        };
         result.map(|()| PlayOutcome {
-            ticks: self.runner.tick(),
+            ticks,
             stats: self.options.stats.then(|| self.stats.summary()),
             ended: end,
             local,
@@ -1367,6 +1384,38 @@ mod tests {
         assert_eq!(ending.peer, Some(1));
         assert!(ending.tick.unwrap() >= left_at, "{ending:?}");
         assert_eq!(end(&sessions[0]), Some(ending));
+    }
+
+    #[test]
+    fn the_outcome_of_an_online_match_reports_the_tick_it_reached() {
+        let (mut host_out, mut join_out) = (Vec::new(), Vec::new());
+        let mut sessions = pair(
+            (&mut host_out, &mut join_out),
+            test_options(),
+            test_options(),
+        );
+        ready(&mut sessions);
+        let mut at = now();
+        run_until(&mut sessions, &mut at, "both reach tick 600", |sessions| {
+            sessions.iter().all(|session| session.runner.tick() >= 600)
+        });
+        sessions[1].leave_online();
+        run_until(&mut sessions, &mut at, "both see the end", |sessions| {
+            sessions.iter().all(|session| end(session).is_some())
+        });
+        // One long frame ends the linger before the session resimulated the match from
+        // tick 0: the outcome still reports the tick the match reached, the one after the
+        // last tick it played.
+        at += Duration::from_secs(1);
+        for session in &mut sessions {
+            session.frame_at(at).unwrap();
+            assert!(session.over());
+        }
+        let ending = end(&sessions[0]).unwrap();
+        for session in sessions {
+            let outcome = session.finish(Ok(())).unwrap();
+            assert_eq!(outcome.ticks, ending.tick.unwrap() + 1, "{outcome:?}");
+        }
     }
 
     #[test]
