@@ -273,11 +273,10 @@ fn io_error(path: &Path, source: io::Error) -> ProjectError {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
     #[test]
     fn open_unfollowed_refuses_a_symbolic_link() {
         let dir = tempfile::TempDir::new().unwrap();
