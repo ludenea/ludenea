@@ -80,8 +80,8 @@ pub struct PlayOptions {
     pub online: Option<OnlineOptions>,
     /// Where an online match that desyncs writes this peer's snapshot of the divergent tick.
     pub dump_dir: PathBuf,
-    /// The game's command line name, as the desync message names its `diff`.
-    pub game: String,
+    /// The game's command line program name, as the desync message names its `diff`.
+    pub program: String,
 }
 
 /// How a played session ended.
@@ -385,7 +385,7 @@ impl<'out> Session<'out> {
                         self.out,
                         "wrote {}: compare it with the other peer's snapshot using `{} diff`",
                         path.display(),
-                        self.options.game
+                        self.options.program
                     );
                 }
                 (Err(error), Ok(())) => result = Err(error),
@@ -982,7 +982,7 @@ mod tests {
             title: "test".to_string(),
             online: None,
             dump_dir: PathBuf::from("dump"),
-            game: "test".to_string(),
+            program: "test".to_string(),
         }
     }
 
@@ -1518,7 +1518,7 @@ mod tests {
                 edits: None,
             },
             dump_dir: dump.path().to_path_buf(),
-            game: "walker".to_string(),
+            program: "walker".to_string(),
             ..test_options()
         };
         let (mut host_out, mut join_out) = (Vec::new(), Vec::new());

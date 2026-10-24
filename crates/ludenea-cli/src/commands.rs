@@ -832,7 +832,7 @@ pub fn play(app: fn() -> App, args: &PlayArgs, program: &str, out: &mut dyn Writ
         title,
         online,
         dump_dir: args.dump_dir.clone(),
-        game: program.to_string(),
+        program: program.to_string(),
     };
     let outcome =
         ludenea_runtime::native::play(app, options, out).map_err(|error| error.to_string())?;
