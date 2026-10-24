@@ -1023,9 +1023,11 @@ hash, those of the golden trace and replays included.
   `render_frames` pushes its frames as local play does; `set_live_input` maps each local
   player's devices at its global index, and refuses with the new error code
   `input_too_large` an input longer than a network match carries ("player 0's input takes
-  31 bytes, a network match carries at most 24"), keeping the previous one. A game failure
-  pauses as in local play and ends the match for every peer, a failing input mapping
-  included: `set_live_input` then refuses with its error (`system_panicked` for a panic). While a match connects, runs, or is left, the new error code
+  31 bytes, a network match carries at most 24"), keeping the previous one; every local
+  player is mapped first, so a failing mapping is reported before another player's input too
+  long. A game failure pauses as in local play and ends the match for every peer, a failing
+  input mapping included: `set_live_input` then refuses with its error (`system_panicked`
+  for a panic). While a match connects, runs, or is left, the new error code
   `online_match` refuses every command that changes the state, `play`, `pause`, `seek`,
   `set_speed`, `step`, and the reads of the session's recorded run (`get_timeline`,
   `get_tick_events`, `get_tick_commands`, `compare_traces`, `get_ghost_draw`,

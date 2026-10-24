@@ -796,6 +796,51 @@ fn a_mapping_that_fails_during_a_match_ends_it_as_this_peers_failure() {
     }
 }
 
+/// A key held makes player 0's input too long for the network and player 1's mapping panic.
+fn big_then_broken_app() -> App {
+    let mut app = App::new();
+    app.input::<Big>().input_mapping(|raw, player| {
+        assert!(player != 1 || raw.keys.is_empty(), "the mapping broke");
+        Big {
+            bytes: if raw.keys.is_empty() {
+                Vec::new()
+            } else {
+                vec![7; 30]
+            },
+        }
+    });
+    app
+}
+
+#[test]
+fn a_mapping_failure_is_reported_before_another_players_input_too_large() {
+    let mut game = Match::of(&[0, 0, 1], None, |_| {
+        Host::new(big_then_broken_app).unwrap()
+    });
+    for peer in &mut game.peers {
+        peer.feeding = false;
+    }
+    game.run_until_all_run();
+    game.run_until("some ticks", |game| game.peers[0].host.tick() >= 30);
+    // `KeyA` is the left half's (player 0), `KeyL` the right half's (player 1).
+    let error = game.peers[0]
+        .host
+        .handle(Command::SetLiveInput {
+            devices: LiveDevices {
+                keys: ["KeyA".to_string(), "KeyL".to_string()].into(),
+                gamepads: Vec::new(),
+            },
+        })
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::SystemPanicked, "{error:?}");
+    game.run_until_all_end();
+    for peer in &game.peers {
+        let end = peer.end().unwrap();
+        assert_eq!(end.kind, MatchEndKind::LocalFailure, "{end:?}");
+        assert_eq!(end.peer, Some(0));
+    }
+}
+
 #[derive(Serialize, Deserialize, Schema, Clone, Debug, PartialEq)]
 struct Wide {
     a: u64,

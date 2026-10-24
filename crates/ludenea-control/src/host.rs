@@ -2269,35 +2269,39 @@ fn command_name(command: &Command) -> String {
 }
 
 /// The input of each local player of `online` for `devices`, split over the local claims and
-/// mapped at the player's global index. An input longer than a network match carries is
-/// refused, naming the player.
+/// mapped at the player's global index. Every local player is mapped first, so a failing
+/// mapping is reported before another player's input too long for a network match, which is
+/// refused with `InputTooLarge`, naming the player.
 fn map_local_inputs(
     sim: &Simulation,
     online: &OnlineMatch,
     devices: &ludenea_app::players::LiveDevices,
 ) -> Result<Vec<Vec<u8>>, ProtocolError> {
     let raws = split(devices, &online.claims);
-    online
+    let inputs = online
         .locals
         .iter()
         .zip(&raws)
         .map(|(&player, raw)| {
-            let input = sim
-                .map_player(usize::from(player), raw.as_ref())
-                .map_err(|e| sim_error(&e))?;
-            if input.len() > MAX_INPUT_BYTES {
-                return Err(ProtocolError::new(
-                    ErrorCode::InputTooLarge,
-                    format!(
-                        "player {player}'s input takes {} bytes, a network match carries at \
-                         most {MAX_INPUT_BYTES}",
-                        input.len()
-                    ),
-                ));
-            }
-            Ok(input)
+            sim.map_player(usize::from(player), raw.as_ref())
+                .map(|input| (player, input))
+                .map_err(|e| sim_error(&e))
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    if let Some((player, input)) = inputs
+        .iter()
+        .find(|(_, input)| input.len() > MAX_INPUT_BYTES)
+    {
+        return Err(ProtocolError::new(
+            ErrorCode::InputTooLarge,
+            format!(
+                "player {player}'s input takes {} bytes, a network match carries at most \
+                 {MAX_INPUT_BYTES}",
+                input.len()
+            ),
+        ));
+    }
+    Ok(inputs.into_iter().map(|(_, input)| input).collect())
 }
 
 /// What an edit command changes, which its errors name; empty for any other command.
