@@ -68,11 +68,13 @@ test.afterEach(async () => {
   for (const context of contexts.splice(0)) await context.close();
 });
 
-/** Opens the arena's page in a context of its own with `query`, collecting its errors. */
-async function open(browser: Browser, query: string): Promise<{ page: Page; errors: string[] }> {
+/** Opens the arena's page in a context of its own with `query`, collecting its errors; `init`
+ * runs in the page before its own scripts. */
+async function open(browser: Browser, query: string, init?: () => void): Promise<{ page: Page; errors: string[] }> {
   expect(existsSync(join(ARENA_PAGE, "game.json")), `${ARENA_PAGE} is missing: run ${BUILD}`).toBe(true);
   const context = await browser.newContext({ acceptDownloads: true });
   contexts.push(context);
+  if (init !== undefined) await context.addInitScript(init);
   const page = await context.newPage();
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -232,4 +234,22 @@ test("bad parameters fail the page naming them", async ({ browser }) => {
     await expect(page.locator("body")).toHaveAttribute("data-failed", "true");
     await expect(page.locator("#status")).toContainText(named);
   }
+});
+
+test("a join the game refuses leaves the room", async ({ browser }) => {
+  const host = await open(browser, `?host=2&players=1&stun=none&signaling=${signaling}`);
+  const room = await attribute(host.page, "data-room");
+  // The joiner's page hands its worker one claim too many, which the game refuses.
+  const joiner = await open(browser, `?join=${room}&players=1&stun=none&signaling=${signaling}`, () => {
+    const post = Worker.prototype.postMessage;
+    Worker.prototype.postMessage = function (this: Worker, message: { type?: string; claims?: unknown[] }, ...rest: unknown[]) {
+      const sent = message?.type === "join" ? { ...message, claims: [...message.claims!, ...message.claims!] } : message;
+      return Reflect.apply(post, this, [sent, ...rest]);
+    };
+  });
+  await expect(joiner.page.locator("body")).toHaveAttribute("data-failed", "true", { timeout: MEET_MS });
+  await expect(joiner.page.locator("#status")).toContainText("the game refused join_match: 2 claims for 1 local players");
+  // The page left the room: it no longer pumps a link the match never used.
+  await expect(joiner.page.locator("body")).toHaveAttribute("data-link", "closed");
+  expect(joiner.errors).toEqual([]);
 });

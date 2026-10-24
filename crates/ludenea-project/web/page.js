@@ -92,9 +92,9 @@ let lobbyButtons = [];
 let online;
 let pumpTimer;
 let pumping = false;
-/** The claims the room was readied with, once it was; whether the worker joined the match;
- * this peer's number in it; the match's state, its end, and the peers silent, with the
- * silence announced in milliseconds. */
+/** The claims the room was readied with, once it was; whether the page asked the worker to
+ * join the match (it joined once it reports a state); this peer's number in it; the match's
+ * state, its end, and the peers silent, with the silence announced in milliseconds. */
 let readyClaims;
 let joined = false;
 let local;
@@ -118,9 +118,10 @@ function fail(message, { keepWorker = false } = {}) {
   playing = false;
   status.textContent = message;
   document.body.dataset.failed = "true";
-  // Without its worker the match cannot go on, and before the match the page leaves the room;
-  // a match that started goes on until every peer ends it at the same tick.
-  if (!keepWorker || !joined) closeLink();
+  // Without its worker the match cannot go on, and before the worker joined the match (a
+  // join it refused included) the page leaves the room; a match that started goes on until
+  // every peer ends it at the same tick.
+  if (!keepWorker || onlineState === "room") closeLink();
   if (!keepWorker) {
     worker?.terminate();
     save.disabled = true;
