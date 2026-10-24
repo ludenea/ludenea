@@ -253,3 +253,27 @@ test("a join the game refuses leaves the room", async ({ browser }) => {
   await expect(joiner.page.locator("body")).toHaveAttribute("data-link", "closed");
   expect(joiner.errors).toEqual([]);
 });
+
+test("a match lost with the listener names why the link closed", async ({ browser, baseURL }) => {
+  // A listener of this test's own, stopped in the middle of the match.
+  const own = spawn(LUDENEA, ["rooms", "--listen", "127.0.0.1", "--port", "0", "--allow-origin", new URL(baseURL!).origin]);
+  echoErrors(own, "own rooms");
+  try {
+    const url = (await lineOf(own, /^signaling (\S+)$/, "own rooms"))[1]!;
+    const host = await open(browser, `?host=2&players=1&stun=none&signaling=${url}`);
+    const room = await attribute(host.page, "data-room");
+    const joiner = await open(browser, `?join=${room}&players=1&stun=none&signaling=${url}`);
+    await reachState(host.page, "running");
+    await reachState(joiner.page, "running");
+    own.kill();
+    for (const { page } of [host, joiner]) {
+      await reachState(page, "ended");
+      await expect(page.locator("body")).toHaveAttribute("data-end", "lost");
+      await expect(page.locator("#status")).toContainText(`the signaling server at ${url}`);
+      await expect(page.locator("#status")).toHaveText(/^The match ended: .+; .*the signaling server at /);
+    }
+    for (const { errors } of [host, joiner]) expect(errors).toEqual([]);
+  } finally {
+    own.kill();
+  }
+});

@@ -746,9 +746,9 @@ record a two-player match with keys whose saved replay verifies, and check the v
 the painted level. The online tests (`editor/e2e/online.spec.ts`) start `ludenea rooms` on a free
 port: two arena pages play each other until one leaves, and save the same replay, which
 `arena verify` accepts; a native `arena peer` plays a page under 50 ms of latency, 10 ms of
-jitter and 5 percent of loss, and both save the same replay; a join the game refuses fails
-the page, which leaves the room; an unknown room and bad parameters fail the page, naming
-them.
+jitter and 5 percent of loss, and both save the same replay; a match that loses its listener
+ends on both pages naming why the link closed; a join the game refuses fails the page, which
+leaves the room; an unknown room and bad parameters fail the page, naming them.
 
 The renderer's pixel tests (`editor/e2e/renderer.spec.ts`) draw a reference frame with the
 browser renderer (`ludenea-render` with its `web` feature) and run twice, once per backend,

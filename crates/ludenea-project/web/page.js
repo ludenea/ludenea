@@ -57,6 +57,8 @@ const PARAMETER_OF = {
   "conditions.jitter_ms": "jitter",
   "conditions.loss_percent": "loss",
 };
+/** How the link's warnings (`WebOnline.messages`) begin the reason it closed. */
+const LINK_CLOSED = "the link closed: ";
 /** What the status says in each state of the online match. */
 const ONLINE_WORDS = {
   room: () => "Waiting for the room",
@@ -102,6 +104,8 @@ let onlineState = "room";
 let end;
 /** When the page heard of the end, on its monotonic clock. */
 let endedAt;
+/** Why the link closed, once it did after the room agreed: a lost match's end names it. */
+let closedReason;
 const silent = new Map();
 
 function say(message) {
@@ -252,7 +256,13 @@ function pump() {
   if (!pumping) return;
   const now = performance.now();
   const room = JSON.parse(online.poll(now));
-  for (const message of online.messages()) console.warn(message);
+  for (const message of online.messages()) {
+    console.warn(message);
+    if (message.startsWith(LINK_CLOSED)) {
+      closedReason = message.slice(LINK_CLOSED.length);
+      showOnline();
+    }
+  }
   if (!joined) {
     if (room.state === "failed") return fail(room.message);
     if (room.state === "room") showRoom(room);
@@ -308,7 +318,11 @@ function setOnline(state) {
 
 /** Says where the online match stands: the peers silent while it plays, its end after it. */
 function showOnline() {
-  if (end !== undefined) return say(`The match ended: ${end.message}`);
+  if (end !== undefined) {
+    // A lost match ends with why the link closed, as the native window's ending does.
+    const closed = end.kind === "lost" && closedReason !== undefined ? `; ${closedReason}` : "";
+    return say(`The match ended: ${end.message}${closed}`);
+  }
   const silences = [...silent].map(([peer, ms]) => `peer ${peer} silent for ${ms / 1000} s`);
   say(silences.length > 0 ? silences.join(", ") : ONLINE_WORDS[onlineState]());
 }
