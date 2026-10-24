@@ -276,8 +276,9 @@ fn a_peer_that_disappears_ends_the_other_lost() {
     assert!(
         lines
             .iter()
+            // The words of a `lost` ending, and of no other kind.
             .any(|line| line.starts_with("match ended at tick ")
-                && line.contains("stopped answering")),
+                && line.ends_with(": peer 1 stopped answering, so the match ended")),
         "{lines:?}"
     );
     verified(&host_replay);

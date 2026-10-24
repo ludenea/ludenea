@@ -6,9 +6,9 @@ use std::net::{SocketAddr, TcpListener as StdListener};
 use std::path::PathBuf;
 use std::thread::JoinHandle;
 
-use ludenea_app::{App, Sim};
+use ludenea_app::{App, Sim, Time};
 use ludenea_cli::run;
-use ludenea_ecs::{Component, Query};
+use ludenea_ecs::{Component, Query, Res};
 use ludenea_signal::{Options, serve};
 use serde::{Deserialize, Serialize};
 
@@ -45,13 +45,35 @@ fn scene(test: &str) -> PathBuf {
     scene
 }
 
-/// Runs the command line with `args` after the program name; returns the exit code and the
-/// output.
-fn cli(args: &[&str]) -> (i32, String) {
+fn count_then_fail(time: Res<Time>, mut counters: Query<&mut Counter>) {
+    assert!(time.tick != 30, "the game broke");
+    for counter in counters.iter_mut() {
+        counter.0 += 1;
+    }
+}
+
+/// The types of [`app`], so the peers agree on the match, with a system that panics at tick
+/// 30: only the peer running it fails.
+fn failing_app() -> App {
+    let mut app = App::new();
+    app.input::<u8>()
+        .input_mapping(|raw, _| u8::from(!raw.keys.is_empty()))
+        .component::<Counter>()
+        .system(Sim, count_then_fail);
+    app
+}
+
+/// Runs the command line of `app` with `args` after the program name; returns the exit code
+/// and the output.
+fn cli_of(app: fn() -> App, args: &[&str]) -> (i32, String) {
     let mut out = Vec::new();
     let all: Vec<&str> = ["game"].iter().chain(args).copied().collect();
     let code = run(app, &all, &mut out);
     (code, String::from_utf8(out).unwrap())
+}
+
+fn cli(args: &[&str]) -> (i32, String) {
+    cli_of(app, args)
 }
 
 /// A signaling listener on a port of `127.0.0.1` the system picks, stopped when dropped.
@@ -104,13 +126,17 @@ impl Drop for Listener {
 fn peer_refuses_bad_options() {
     let scene = scene("options");
     let scene = scene.to_str().unwrap();
-    let refusals: [(&[&str], &str); 6] = [
+    let refusals: [(&[&str], &str); 7] = [
         (&[], "--host"),
         (&["--host", "--join", "23456A"], "cannot be used with"),
         (&["--host", "--peers", "5"], "5 is not in 2..=4"),
         (
             &["--join", "23456A", "--peers", "3"],
             "the argument '--join <CODE>' cannot be used with '--peers <PEERS>'",
+        ),
+        (
+            &["--join", "23456A", "--room", "23456B"],
+            "the argument '--join <CODE>' cannot be used with '--room <CODE>'",
         ),
         (
             &["--join", "0O0O0O"],
@@ -175,5 +201,52 @@ fn peer_gives_up_on_an_empty_room() {
     assert!(
         out.contains("error: room 23456C was not ready within 1 s: 1 of 2 peers here"),
         "{out}"
+    );
+}
+
+#[test]
+fn a_peer_whose_game_fails_exits_2_and_the_other_1() {
+    let listener = Listener::start();
+    let signaling = listener.signaling();
+    let scene = scene("fails");
+    let scene = scene.to_str().unwrap().to_string();
+    let common = |role: &[&str]| -> Vec<String> {
+        ["peer", &scene, "--signaling", &signaling, "--no-stun"]
+            .iter()
+            .chain(role)
+            .map(|arg| arg.to_string())
+            .collect()
+    };
+    // A bound in case the failure goes unnoticed: a peer that reaches it exits 0.
+    let host_args = common(&["--host", "--room", "23456D", "--ticks", "600"]);
+    let join_args = common(&["--join", "23456D", "--ticks", "600"]);
+    let host = std::thread::spawn(move || {
+        let args: Vec<&str> = host_args.iter().map(String::as_str).collect();
+        cli_of(failing_app, &args)
+    });
+    // The joiner needs the room: it retries until the host made it.
+    let mut attempts = 0;
+    let joined = loop {
+        let args: Vec<&str> = join_args.iter().map(String::as_str).collect();
+        let (code, out) = cli_of(app, &args);
+        attempts += 1;
+        assert!(attempts < 100, "the joiner never found the room: {out}");
+        if !out.contains("no room 23456D") {
+            break (code, out);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    let (host_code, host_out) = host.join().unwrap();
+    assert_eq!(host_code, 2, "{host_out}");
+    assert!(host_out.contains("match ended at tick "), "{host_out}");
+    assert!(
+        host_out.contains("error: the game failed at tick "),
+        "{host_out}"
+    );
+    assert_eq!(joined.0, 1, "{}", joined.1);
+    assert!(
+        joined.1.contains(": the game of peer 0 failed at tick "),
+        "{}",
+        joined.1
     );
 }

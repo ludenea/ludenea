@@ -1154,7 +1154,8 @@ pub fn peer(app: fn() -> App, args: &PeerArgs, game: &str, out: &mut dyn Write) 
                 None => LiveDevices::default(),
             };
             if let Err(error) = runner.frame(elapsed, &devices) {
-                // The match ended on this failure; the others are told while it lingers.
+                // This peer's game failed, which ends the match: the others are told while it
+                // lingers.
                 failure.get_or_insert(error);
             }
             for (&peer, &for_ms) in runner.silent_peers() {
@@ -1216,13 +1217,26 @@ pub fn peer(app: fn() -> App, args: &PeerArgs, game: &str, out: &mut dyn Write) 
         )?;
     }
     console(&mut runner);
-    if let Some(failure) = failure {
-        return Err(failure.to_string());
-    }
     let local = online.layout().map(|layout| layout.local.0);
+    peer_exit(&end, local, failure.map(|failure| failure.to_string()))
+}
+
+/// How a peer exits after `end`, as peer `local` whose game failed with `failure`, if it did:
+/// 0 for a match a peer left, 1 for any other ending, and an error for this peer's failure,
+/// reported by a frame or only by an ending naming this peer (such as a host error).
+#[cfg(not(target_family = "wasm"))]
+fn peer_exit(
+    end: &ludenea_control::MatchEnd,
+    local: Option<u8>,
+    failure: Option<String>,
+) -> Outcome {
+    use ludenea_control::MatchEndKind;
+
+    if let Some(failure) = failure {
+        return Err(failure);
+    }
     if end.kind == MatchEndKind::LocalFailure && end.peer.is_some() && end.peer == local {
-        // This peer's game failed where no frame reported it, such as a host error.
-        return Err(end.message);
+        return Err(end.message.clone());
     }
     Ok(if end.kind == MatchEndKind::Left { 0 } else { 1 })
 }
@@ -1285,4 +1299,54 @@ fn report_net_stats(
             online.strays()
         ),
     )
+}
+
+#[cfg(all(test, not(target_family = "wasm")))]
+mod tests {
+    use ludenea_control::{MatchEnd, MatchEndKind};
+
+    use super::*;
+
+    fn end(kind: MatchEndKind, peer: u8) -> MatchEnd {
+        MatchEnd {
+            kind,
+            message: format!("{kind:?} of peer {peer}"),
+            peer: Some(peer),
+            tick: Some(7),
+        }
+    }
+
+    #[test]
+    fn a_peer_exits_by_its_ending() {
+        assert_eq!(peer_exit(&end(MatchEndKind::Left, 1), Some(0), None), Ok(0));
+        assert_eq!(peer_exit(&end(MatchEndKind::Left, 0), Some(0), None), Ok(0));
+        for kind in [
+            MatchEndKind::Lost,
+            MatchEndKind::Desync,
+            MatchEndKind::Violation,
+            MatchEndKind::Mismatch,
+            MatchEndKind::Unreachable,
+        ] {
+            assert_eq!(peer_exit(&end(kind, 0), Some(0), None), Ok(1), "{kind:?}");
+        }
+        // Another peer's game failed.
+        assert_eq!(
+            peer_exit(&end(MatchEndKind::LocalFailure, 1), Some(0), None),
+            Ok(1)
+        );
+        // This peer's game failed, as only the ending says.
+        assert_eq!(
+            peer_exit(&end(MatchEndKind::LocalFailure, 0), Some(0), None),
+            Err("LocalFailure of peer 0".to_string())
+        );
+        // This peer's game failed, as a frame said: whatever the ending.
+        assert_eq!(
+            peer_exit(
+                &end(MatchEndKind::Left, 1),
+                Some(0),
+                Some("the game failed at tick 9: boom".to_string())
+            ),
+            Err("the game failed at tick 9: boom".to_string())
+        );
+    }
 }
