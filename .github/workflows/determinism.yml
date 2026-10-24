@@ -362,7 +362,8 @@ jobs:
       - run: cargo build --locked -p ludenea-serve
       # The standalone page's tests (standalone.spec.ts) open the swarm and the arena built as
       # web pages and check them against each game's own command line tool, which the arena's
-      # editor tests (arena.spec.ts) run too.
+      # editor tests (arena.spec.ts) run too. The online tests (online.spec.ts) play the arena's
+      # page against itself and against `arena peer`, through `target/debug/ludenea rooms`.
       - run: cargo build --locked -p swarm -p arena
       - run: cargo run --locked -p ludenea-serve -- build examples/swarm --web --out editor/e2e/fixtures/standalone
       - run: cargo run --locked -p ludenea-serve -- build examples/arena --web --out editor/e2e/fixtures/arena
