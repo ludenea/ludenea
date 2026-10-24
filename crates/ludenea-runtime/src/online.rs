@@ -113,6 +113,10 @@ pub fn settings(layout: &MatchLayout) -> OnlineSettings {
     }
 }
 
+/// The most links and reasons of dropped room messages `OnlineMatch::messages` warns about:
+/// a hostile signaling server can rotate through any number of links.
+const MAX_WARNED: usize = 64;
+
 /// Where an online match stands, as `OnlineMatch::before_frame` reports it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum OnlinePhase {
@@ -274,7 +278,7 @@ impl OnlineMatch {
     }
 
     /// The messages since the last call: a warning for the room's dropped messages, once per
-    /// link and reason, and the reason the link closed.
+    /// link and reason for the first 64 of them, and the reason the link closed.
     pub fn messages(&mut self) -> Vec<String> {
         if !self.closed_said
             && let Some(reason) = self.peer.closed()
@@ -301,9 +305,17 @@ impl OnlineMatch {
     fn take_room_drops(&mut self) {
         for RoomEvent::Dropped { link, reason } in self.peer.room_drops() {
             let words = drop_words(reason);
-            if self.warned.insert((link, words.clone())) {
-                self.messages
-                    .push(format!("dropped a room message from {link}: {words}"));
+            let key = (link, words);
+            if self.warned.len() >= MAX_WARNED || self.warned.contains(&key) {
+                continue;
+            }
+            self.messages
+                .push(format!("dropped a room message from {}: {}", key.0, key.1));
+            self.warned.insert(key);
+            if self.warned.len() == MAX_WARNED {
+                self.messages.push(format!(
+                    "{MAX_WARNED} links and reasons of dropped room messages were warned                      about: further drops are not"
+                ));
             }
         }
     }
@@ -429,5 +441,37 @@ mod tests {
             }
         }
         assert_eq!(online.warned.len(), 1);
+    }
+
+    #[test]
+    fn warnings_stop_at_a_bound_however_many_links_flood() {
+        let mesh = MemoryMesh::new();
+        let mut online = OnlineMatch::new(Box::new(mesh.join()), &host_plan()).unwrap();
+        online.ready(automatic_claims(1)).unwrap();
+        let mut runner = runner();
+        online.before_frame(&mut runner, 0);
+        let mut messages = Vec::new();
+        for frame in 1..=(MAX_WARNED as u64 + 10) {
+            // A new link each frame, as a hostile signaling server can make up, then gone.
+            let mut hostile = mesh.join();
+            let host = hostile
+                .poll()
+                .into_iter()
+                .find_map(|event| match event {
+                    LinkEvent::Connected(host) => Some(host),
+                    _ => None,
+                })
+                .expect("a mesh connects its members at once");
+            hostile.send(Channel::Room, host, vec![0xff; 8]).unwrap();
+            online.before_frame(&mut runner, frame * 1_000);
+            messages.extend(online.messages());
+        }
+        assert_eq!(online.warned.len(), MAX_WARNED);
+        assert_eq!(messages.len(), MAX_WARNED + 1, "{messages:?}");
+        assert!(
+            messages[MAX_WARNED].ends_with("further drops are not"),
+            "{}",
+            messages[MAX_WARNED]
+        );
     }
 }
