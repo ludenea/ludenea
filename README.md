@@ -236,6 +236,20 @@ cargo run --locked --release -p swarm -- play examples/swarm/assets/swarm.scene.
 
 On an Apple M5 laptop the 95th percentile is about 5 ms (4.76 and 5.24 ms over two runs).
 
+Play online in the window: `play` takes the online options of `peer` below (`--host` with
+`--peers` and `--room`, or `--join CODE`, `--signaling`, `--stun` or `--no-stun`, and the link
+conditions). The window opens on the room: a host prints `room CODE: give this code to the
+other players; signaling at URL` once the room exists, and Enter (or `--players`) readies the
+room with the lobby's claims; the match starts once every peer is ready. The title names the
+room's state, then `online, peer P of N` and any peer silent, then `match ended:` and why.
+Closing the window during the match leaves it: the window goes, and the match plays on until
+it ended and the others were told (at most about 4 seconds), so they end it as left at the same
+tick and `--record` writes a complete replay. `--ticks N` leaves at tick N, and closes once the
+match ended. A desync writes this peer's snapshot into `--dump-dir`, as `peer` does, and
+`--edits` is refused online. It exits with code 0 for a match ended because a peer left (or a
+window closed before any match), 1 for any other ending (the line `match ended:` says why),
+and 2 for a failure of this peer: its game, its files, or its room.
+
 Play a match online without a window: `peer` hosts (`--host`) or joins (`--join CODE`) a room
 of a signaling listener (`ludenea rooms`, see the editor section below), readies it with
 `--players` local players (1 by default, with the devices `play --players` gives them), and
@@ -384,6 +398,17 @@ and needs `--listen`. Without a network it listens on `127.0.0.1` only, and says
 
 ```sh
 cargo run --locked -p ludenea-serve -- rooms --page ~/games/my_game-web
+```
+
+Play a game online in two windows: run `ludenea rooms`, host from one terminal, and join with
+the code the host printed from another, or from another machine with the `signaling` line the
+listener printed for its network address:
+
+```sh
+cargo run --locked -p ludenea-serve -- rooms
+cargo run --locked -p ludenea-serve -- play ~/games/my_game -- --host
+cargo run --locked -p ludenea-serve -- play ~/games/my_game -- --join CODE \
+  --signaling ws://ADDRESS:3536/rooms
 ```
 
 A room is `<signaling>/<code>`; the peer that creates it appends `?host=N`, N being its size

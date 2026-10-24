@@ -781,8 +781,31 @@ fn play_help_lists_its_flags() {
         "--height",
         "--project",
         "--edits",
+        "--host",
+        "--join",
+        "--signaling",
+        "--no-stun",
+        "--dump-dir",
     ] {
         assert!(out.contains(flag), "{flag} missing from:\n{out}");
+    }
+}
+
+#[test]
+fn play_refuses_edits_online() {
+    let dir = dir("play-edits-online");
+    for role in [&["--host"][..], &["--join", "23456A"]] {
+        let mut args = vec!["play", "{}/scene.ron", "--edits", "{}/scene.edits"];
+        args.extend(role);
+        // Refused before anything is read, connected or opened.
+        let (code, out) = cli(&dir, &args);
+        assert_eq!(code, 2, "{out}");
+        assert_eq!(
+            out,
+            "error: --edits plays a recorded edit log, which an online match cannot: leave it \
+             out with --host or --join\n",
+            "{role:?}"
+        );
     }
 }
 

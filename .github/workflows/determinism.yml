@@ -78,14 +78,49 @@ jobs:
         run: cargo test --locked --workspace
       - run: cargo test --locked -p ludenea-runtime --features native
       # The native window end to end, on a virtual display and lavapipe: short matches played
-      # and recorded, whose replays must verify.
+      # and recorded, whose replays must verify. Then an online match between two windows
+      # through a local signaling listener: both leave at tick 600 and exit 0, and their
+      # replays verify and are byte-identical.
       - name: Play and verify a match in the native window
         if: runner.os == 'Linux'
+        shell: bash
         run: |
           xvfb-run --auto-servernum cargo run --locked --release -p swarm -- play examples/swarm/assets/swarm.scene.ron --players 1 --ticks 120 --record play/swarm.replay
           cargo run --locked --release -p swarm -- verify play/swarm.replay
           xvfb-run --auto-servernum cargo run --locked --release -p arena -- play examples/arena/assets/arena.scene.ron --players 2 --ticks 600 --record play/arena-native.replay
           cargo run --locked --release -p arena -- verify play/arena-native.replay
+          cargo build --locked --release -p ludenea-serve -p arena
+          mkdir -p play
+          target/release/ludenea rooms --listen 127.0.0.1 > play/rooms.log 2>&1 &
+          rooms=$!
+          trap 'kill $rooms' EXIT
+          for _ in $(seq 300); do
+            grep -q '^signaling ' play/rooms.log && break
+            sleep 0.1
+          done
+          grep -q '^signaling ' play/rooms.log || { cat play/rooms.log; exit 1; }
+          xvfb-run -a bash -c '
+            # A window waits in its room for as long as it stays open: bound each one.
+            play="timeout 300 target/release/arena play examples/arena/assets/arena.scene.ron --players 1 --ticks 600 --no-stun --signaling ws://127.0.0.1:3536/rooms"
+            $play --host --room 23456A --record play/online-host.replay > play/online-host.log &
+            host=$!
+            for _ in $(seq 300); do
+              grep -q "^room 23456A" play/online-host.log && break
+              kill -0 $host 2> /dev/null || break
+              sleep 0.1
+            done
+            grep -q "^room 23456A" play/online-host.log || { cat play/online-host.log; exit 1; }
+            $play --join 23456A --record play/online-join.replay &
+            join=$!
+            status=0
+            wait $host || status=1
+            wait $join || status=1
+            cat play/online-host.log
+            exit $status
+          '
+          target/release/arena verify play/online-host.replay
+          target/release/arena verify play/online-join.replay
+          cmp play/online-host.replay play/online-join.replay
       # A tick of the arena's golden replay drawn offscreen, to look at. The textures come from
       # the arena's project folder; a warning (a texture left out, drawn as a placeholder)
       # fails the step.

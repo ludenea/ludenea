@@ -129,7 +129,8 @@ pub enum OnlinePhase {
     Playing,
     /// The match ended, as each call after reports.
     Ended(MatchEnd),
-    /// The room cannot give this peer a match, or the runner cannot join it, with the reason.
+    /// The room cannot give this peer a match, or the runner cannot join it, with the reason
+    /// (without the words of `RuntimeError::Online`, which a runtime may wrap it in).
     Failed(String),
 }
 
@@ -231,7 +232,11 @@ impl OnlineMatch {
                 )),
             };
             if let Err(error) = joined {
-                let failure = error.to_string();
+                // The reason alone, as the room's own failures give it: each runtime words it.
+                let failure = match error {
+                    RuntimeError::Online(reason) => reason,
+                    other => other.to_string(),
+                };
                 self.failure = Some(failure.clone());
                 return OnlinePhase::Failed(failure);
             }

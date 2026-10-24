@@ -719,6 +719,7 @@ fn known_debug_layers(
 
 #[cfg(not(target_family = "wasm"))]
 #[derive(Args)]
+#[command(group = clap::ArgGroup::new("role").multiple(false))]
 pub struct PlayArgs {
     /// The scene to play; prefabs, data assets and textures come from the project folder.
     #[command(flatten)]
@@ -733,12 +734,16 @@ pub struct PlayArgs {
         value_parser = clap::value_parser!(u8).range(1..=ludenea_app::players::MAX_LOCAL_PLAYERS as i64)
     )]
     players: Option<u8>,
-    /// Close the window once the match reaches this tick.
+    /// Close the window once the match reaches this tick; online, leave the match there and
+    /// close once it ended.
     #[arg(long)]
     ticks: Option<u64>,
     /// Write the match as a replay to this file when the window closes, after a failure too.
     #[arg(long)]
     record: Option<PathBuf>,
+    /// Where to write this peer's snapshot of the divergent tick when an online match desyncs.
+    #[arg(long, default_value = "dump")]
+    dump_dir: PathBuf,
     /// Open borderless fullscreen; F11 toggles it while playing.
     #[arg(long)]
     fullscreen: bool,
@@ -764,17 +769,29 @@ pub struct PlayArgs {
     /// The window's height in logical pixels.
     #[arg(long, default_value_t = 720, value_parser = clap::value_parser!(u32).range(1..))]
     height: u32,
+    #[command(flatten)]
+    online: OnlineArgs,
 }
 
 /// Loads the scene with its project's assets, textures (texture warnings as in `render`) and
 /// edits, then plays it in a window, repacking the textures that change unless `--no-watch`.
 /// Everything is read and the game loaded before the window opens, so bad files fail at
-/// once.
+/// once. Online (`--host` or `--join`), it exits as `peer` does: 0 for a match ended as left
+/// (or a window closed before any match), 1 for any other ending, and with an error for this
+/// peer's failure.
 #[cfg(not(target_family = "wasm"))]
-pub fn play(app: fn() -> App, args: &PlayArgs, out: &mut dyn Write) -> Outcome {
+pub fn play(app: fn() -> App, args: &PlayArgs, program: &str, out: &mut dyn Write) -> Outcome {
     use ludenea_runtime::native::PlayOptions;
 
     let files = &args.files;
+    let online = args.online.options();
+    if online.is_some() && files.edits.is_some() {
+        return Err(
+            "--edits plays a recorded edit log, which an online match cannot: leave it \
+                    out with --host or --join"
+                .into(),
+        );
+    }
     if is_replay(&files.scene) {
         return Err(format!(
             "{} is a replay; play runs a scene (`verify` checks a replay, `render` draws one)",
@@ -813,13 +830,21 @@ pub fn play(app: fn() -> App, args: &PlayArgs, out: &mut dyn Write) -> Outcome {
         debug_layers: debug_layers.into_iter().collect(),
         size: (args.width, args.height),
         title,
+        online,
+        dump_dir: args.dump_dir.clone(),
+        game: program.to_string(),
     };
     let outcome =
         ludenea_runtime::native::play(app, options, out).map_err(|error| error.to_string())?;
-    if let Some(stats) = outcome.stats {
+    if let Some(stats) = &outcome.stats {
         say(out, format_args!("ticks {}, {stats}", outcome.ticks))?;
     }
-    Ok(0)
+    let Some(end) = &outcome.ended else {
+        return Ok(0);
+    };
+    let code = peer_exit(end, outcome.local, None)?;
+    say(out, format_args!("match ended: {}", end.message))?;
+    Ok(code)
 }
 
 /// The files a runtime plays: the scene's text, its project's prefab and data asset texts, and

@@ -81,7 +81,7 @@ pub fn run<S: AsRef<str>>(app: fn() -> App, args: &[S], out: &mut dyn Write) -> 
         #[cfg(not(target_family = "wasm"))]
         Cmd::Render(args) => commands::render(app, args, out),
         #[cfg(not(target_family = "wasm"))]
-        Cmd::Play(args) => commands::play(app, args, out),
+        Cmd::Play(play) => commands::play(app, play, &program_name(args), out),
         #[cfg(not(target_family = "wasm"))]
         Cmd::Host(args) => commands::host(app, args),
         #[cfg(not(target_family = "wasm"))]
