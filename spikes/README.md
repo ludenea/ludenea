@@ -5,7 +5,7 @@ Throwaway experiments of the Ludenea research program. A spike answers one engin
 ## Layout
 
 - `<slug>/`: one spike, named after what it measures. Each spike has a README stating the research subject it serves, its hypothesis, its method, its environment and its result.
-- `reference-workload/`: the specification of the synthetic simulation that the spikes of several research subjects measure against, so that their numbers are comparable.
+- `reference-workload/`: the specification of the synthetic simulation that the spikes of several research subjects measure against, so that their numbers are comparable, with its sequential reference implementation, the one crate other spikes build on, and the reference hashes measured on the cells.
 - `ci/run-spike.sh`: builds one spike and runs it. The research CI calls it; it runs the same way on a developer machine. `ci/summarize.sh` prints the Markdown summary of a run's measurements across cells.
 - `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`: the Cargo workspace of the Rust spikes and its pinned toolchain. A spike that studies a C library is a C program with its own `CMakeLists.txt`, built with the platform's default C compiler, since the library under study is compiled that way too. Spikes share nothing else.
 
@@ -65,3 +65,4 @@ The script installs the pinned toolchain if needed (Rust spikes), builds the spi
 | --------------------------------------- | ------------------------------ | -------------------------------------------------------------------------------------------------------- | -------------------------------------- |
 | [`platform-facts`](platform-facts/)     | Cross-platform compatibility   | Which floating-point results are bit-identical across the five cells of the boundary, and which differ? | Measured on 2026-11-02, see its README |
 | [`box2d-worker-sweep`](box2d-worker-sweep/) | Physics (the Box2D v3 study) | Does Box2D v3.2.0, driven through its task interface by an external scheduler, give identical state at 1, 2, 4 and 8 workers and across the five cells? | Measured on 2026-11-02, see its README |
+| [`reference-workload`](reference-workload/) | Deterministic simulation (the fixture of several research subjects) | Does the sequential reference implementation of the reference workload give identical hashes on the five cells, with and without the platform math library, in release and unoptimized builds? | Built on 2026-11-02, see its README and `reference-hashes.md` |

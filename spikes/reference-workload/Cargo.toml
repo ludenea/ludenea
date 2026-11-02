@@ -1,0 +1,9 @@
+[package]
+name = "reference-workload"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike fixture: the sequential reference implementation of the reference workload"
+license = "MIT OR Apache-2.0"
+
+[dependencies]

@@ -164,9 +164,11 @@ The run hash `H` is FNV-1a 64 over `h_0` to `h_T`, each as 8 little-endian bytes
 - The wall time of the `T` ticks after 10 warm-up ticks, as ticks per second, and per-system times when the spike's question needs them.
 - The toolchain and the cell, which the research CI records in `environment.txt`.
 
-## Reference values
+## Reference implementation and reference values
 
-The sequential reference implementation (Rust, standard library only) lives in this directory once the first spike that needs the workload writes it. The hashes it produces on the five cells of the research CI are then recorded in `reference-hashes.md`, per workload version and toolchain version. Until then, a spike compares its own runs with one another (worker counts, cells), which is the comparison the tracks need.
+The sequential reference implementation (Rust, standard library only) lives in this directory. `src/lib.rs` holds the primitives (the SplitMix64 stream, the state and its hash, the run hash, the per-slot kernel of each system, the report writer) and the sequential systems, timed one by one; `src/main.rs` runs it on the three sizes with the wander system off and on and prints the JSON report the research CI publishes. Other spikes build on this crate instead of copying it: it is the only code shared between spikes. `oracle.py` is an independent implementation of this specification in Python, written to cross-check the Rust one; the crate's self-checks (`cargo test -p reference-workload`) assert the hashes the script prints for the small and default sizes with the wander system off.
+
+Run it as a spike with `ci/run-spike.sh reference-workload <cell>`; the large size runs 100 ticks there so that a cell finishes in seconds. The hashes measured on the five cells of the research CI are recorded in [`reference-hashes.md`](reference-hashes.md), per workload version and toolchain version. A spike compares its runs with those values and with one another (worker counts, cells).
 
 ## Versioning
 
