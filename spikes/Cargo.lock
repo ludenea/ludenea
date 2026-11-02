@@ -9,3 +9,10 @@ version = "0.1.0"
 [[package]]
 name = "reference-workload"
 version = "0.1.0"
+
+[[package]]
+name = "workload-worker-sweep"
+version = "0.1.0"
+dependencies = [
+ "reference-workload",
+]
