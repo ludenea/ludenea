@@ -356,12 +356,16 @@ fn alternate_dispatch() -> Option<AlternateDispatch> {
         .output()
         .ok()?;
     let probes = parse_probe_lines(&String::from_utf8_lossy(&child.stdout));
-    let evidence = vec![
+    let mut evidence = vec![
         ("glibc_tunables", TUNABLES.to_string()),
         ("child_exit_status", child.status.to_string()),
-        ("loader_active_features_default", loader_active_features(None)),
-        ("loader_active_features_with_tunable", loader_active_features(Some(TUNABLES))),
     ];
+    let (avx2, fma) = loader_active_features(None);
+    evidence.push(("loader_avx2_active_default", avx2));
+    evidence.push(("loader_fma_active_default", fma));
+    let (avx2, fma) = loader_active_features(Some(TUNABLES));
+    evidence.push(("loader_avx2_active_with_tunable", avx2));
+    evidence.push(("loader_fma_active_with_tunable", fma));
     Some(AlternateDispatch {
         method: "child process with GLIBC_TUNABLES masking AVX2 and FMA",
         evidence,
@@ -369,17 +373,19 @@ fn alternate_dispatch() -> Option<AlternateDispatch> {
     })
 }
 
-/// The `active` CPU feature masks the dynamic loader reports (`ld.so
-/// --list-diagnostics`, glibc 2.33 or later), with and without the tunable:
-/// bit 5 of the `ebx` word of leaf 7 is AVX2 and bit 12 of the `ecx` word of
-/// leaf 1 is FMA, so the two readings show whether the mask took effect.
+/// Whether AVX2 and FMA are active for the dynamic loader (`ld.so
+/// --list-diagnostics`, glibc 2.33 or later), with or without the tunable, so
+/// that the two readings show whether the mask took effect. The loader prints
+/// `x86.cpu_features.features[<leaf>].active[<register>]=<word>`; AVX2 is bit
+/// 5 of the `ebx` word (register 1) of leaf 7 and FMA is bit 12 of the `ecx`
+/// word (register 2) of leaf 1. Returns "true", "false" or a reason.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-fn loader_active_features(tunables: Option<&str>) -> String {
+fn loader_active_features(tunables: Option<&str>) -> (String, String) {
     let loader = ["/lib64/ld-linux-x86-64.so.2", "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"]
         .into_iter()
         .find(|path| std::path::Path::new(path).exists());
     let Some(loader) = loader else {
-        return "loader not found".to_string();
+        return ("loader not found".to_string(), "loader not found".to_string());
     };
     let mut command = std::process::Command::new(loader);
     command.arg("--list-diagnostics");
@@ -389,36 +395,50 @@ fn loader_active_features(tunables: Option<&str>) -> String {
     match command.output() {
         Ok(output) => {
             let text = String::from_utf8_lossy(&output.stdout);
-            let lines: Vec<&str> = text
-                .lines()
-                .filter(|line| line.contains(".active."))
-                .take(16)
-                .collect();
-            if lines.is_empty() {
-                format!("no active feature line in the diagnostics ({})", output.status)
-            } else {
-                lines.join("; ")
-            }
+            (
+                active_bit(&text, "x86.cpu_features.features[0x7].active[0x1]=", 5),
+                active_bit(&text, "x86.cpu_features.features[0x1].active[0x2]=", 12),
+            )
         }
-        Err(error) => format!("could not run the loader: {error}"),
+        Err(error) => {
+            let reason = format!("could not run the loader: {error}");
+            (reason.clone(), reason)
+        }
+    }
+}
+
+/// Reads one bit of a labeled hexadecimal word in the loader's diagnostics.
+#[cfg(any(test, all(target_os = "linux", target_arch = "x86_64")))]
+fn active_bit(diagnostics: &str, label: &str, bit: u32) -> String {
+    let Some(line) = diagnostics.lines().find(|line| line.starts_with(label)) else {
+        return format!("no line {label} in the diagnostics");
+    };
+    match u64::from_str_radix(line[label.len()..].trim().trim_start_matches("0x"), 16) {
+        Ok(word) => (word >> bit & 1 == 1).to_string(),
+        Err(_) => format!("unreadable word in {line}"),
     }
 }
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64", target_env = "msvc"))]
 fn alternate_dispatch() -> Option<AlternateDispatch> {
     unsafe extern "C" {
+        fn _get_FMA3_enable() -> i32;
         fn _set_FMA3_enable(flag: i32) -> i32;
     }
-    // SAFETY: a documented Universal C Runtime function without preconditions;
-    // it only toggles the library's selection of its FMA3 implementations and
-    // returns the previous setting.
-    let previous = unsafe { _set_FMA3_enable(0) };
+    // SAFETY: documented Universal C Runtime functions without preconditions;
+    // they read and toggle the library's selection of its FMA3 implementations
+    // and return the state in force after the call.
+    let at_startup = unsafe { _get_FMA3_enable() };
+    let after_disabling = unsafe { _set_FMA3_enable(0) };
     let probes = libm_probes();
-    // SAFETY: as above; restores the setting the runtime chose at startup.
-    unsafe { _set_FMA3_enable(previous) };
+    // SAFETY: as above; restores the state the runtime chose at startup.
+    unsafe { _set_FMA3_enable(at_startup) };
     Some(AlternateDispatch {
         method: "in-process _set_FMA3_enable(0) before the probes run again",
-        evidence: vec![("fma3_previously_enabled", previous.to_string())],
+        evidence: vec![
+            ("fma3_enabled_at_startup", (at_startup != 0).to_string()),
+            ("fma3_enabled_during_probes", (after_disabling != 0).to_string()),
+        ],
         probes,
     })
 }
@@ -627,6 +647,17 @@ mod tests {
             out.finish(),
             r#"{"a":"x\"y\\z","b":{"c":1,"d":false},"e":"0x00000000000000ff","f":["g","h"]}"#
         );
+    }
+
+    #[test]
+    fn loader_active_bits_are_decoded() {
+        let diagnostics = "x86.cpu_features.features[0x7].cpuid[0x1]=0x219c97a9\n\
+                           x86.cpu_features.features[0x7].active[0x1]=0x219c97a9\n\
+                           x86.cpu_features.features[0x1].active[0x2]=0x7ed8320b\n";
+        assert_eq!(active_bit(diagnostics, "x86.cpu_features.features[0x7].active[0x1]=", 5), "true");
+        assert_eq!(active_bit(diagnostics, "x86.cpu_features.features[0x1].active[0x2]=", 12), "true");
+        assert_eq!(active_bit(diagnostics, "x86.cpu_features.features[0x1].active[0x2]=", 14), "false");
+        assert!(active_bit(diagnostics, "x86.cpu_features.features[0x0].active[0x0]=", 0).starts_with("no line"));
     }
 
     #[test]
