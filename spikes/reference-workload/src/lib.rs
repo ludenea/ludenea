@@ -616,6 +616,14 @@ impl Json {
         self.string(key, &format!("0x{bits:016x}"));
     }
 
+    /// A value already encoded as JSON (for example a child process's
+    /// report), inserted as is.
+    pub fn raw(&mut self, key: &str, json: &str) {
+        self.key(key);
+        self.buf.push_str(json.trim());
+        self.needs_comma = true;
+    }
+
     fn separator(&mut self) {
         if self.needs_comma {
             self.buf.push(',');
@@ -857,10 +865,11 @@ mod tests {
         out.object_end();
         out.array_end();
         out.hex("g", 0xff);
+        out.raw("h", " {\"i\":[1,2]}\n");
         out.object_end();
         assert_eq!(
             out.finish(),
-            r#"{"a":"x\"y\\z","b":[{"c":1,"d":false,"e":-1,"f":2.500}],"g":"0x00000000000000ff"}"#
+            r#"{"a":"x\"y\\z","b":[{"c":1,"d":false,"e":-1,"f":2.500}],"g":"0x00000000000000ff","h":{"i":[1,2]}}"#
         );
     }
 }
