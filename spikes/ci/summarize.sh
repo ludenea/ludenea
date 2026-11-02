@@ -34,6 +34,12 @@ case "$spike" in
       distinct="$(jq -r ".hashes.$group" "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
       echo "- \`$group\`: $distinct distinct hash value(s) across ${#facts[@]} cell(s)."
     done
+    echo
+    echo "Platform math library on the alternate dispatch path of the same machine (x86_64 cells only):"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: \(.alternate_dispatch.method // "not measured"); libm hash \(.alternate_dispatch.libm // "n/a"); probes that differ from the default path: \(.alternate_dispatch.differs_from_default // [] | if length == 0 then "none" else join(", ") end)."' "$file"
+    done
     ;;
   box2d-worker-sweep)
     echo "| Cell | SIMD width | Scheduler | Scene | Workers | Final hash | Steps | ms per step (median) | First divergent step |"

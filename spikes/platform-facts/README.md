@@ -10,6 +10,7 @@ On the five cells of the desktop boundary (Windows, macOS and Linux on x86_64 an
 2. The compiler neither contracts `a * b + c` into a fused multiply-add nor reassociates sums, on any cell, even where the hardware has fused multiply-add instructions.
 3. The transcendental functions served by the platform math library (`sin`, `cos`, `exp`, `ln`, `powf` and the others) are not bit-identical across cells.
 4. The bit pattern of the NaN produced by an invalid operation differs between x86_64 and ARM64.
+5. On x86_64, the platform math library gives different results on the same machine when its dispatch path changes (the SSE2 variants instead of the variants that use fused multiply-add and AVX2), on some of the dispatched functions; the other groups are unchanged.
 
 An instrumental hypothesis comes first: standard GitHub-hosted runners, ARM64 Linux and Windows included, build and run the spike in a public repository at no cost.
 
@@ -18,6 +19,8 @@ An instrumental hypothesis comes first: standard GitHub-hosted runners, ARM64 Li
 The program prints one JSON fact sheet: platform and build facts, then the bit patterns of a fixed set of floating-point probes grouped as `exact`, `codegen`, `libm` and `nan`, each group hashed (FNV-1a 64) so that cells compare at a glance. Every probe input passes through `std::hint::black_box`, otherwise the compiler would fold the probe at build time with the build machine's math library and hide the runtime fact. A fixed arithmetic loop is timed five times to document the noise of the machine. The script `ci/run-spike.sh` records the environment (operating system, CPU, C library, compiler versions) next to the facts.
 
 `f32` values are printed as their 32-bit pattern, zero-extended to 64 bits. Integer results of casts are printed as their two's complement 64-bit pattern.
+
+On the x86_64 cells the probe also measures the platform math library on the alternate dispatch path of the same machine (hypothesis 5), since glibc and the Universal C Runtime select the implementation of some functions at load time or at startup by CPU feature. On Linux, the probe runs itself again as a child process with `GLIBC_TUNABLES=glibc.cpu.hwcaps=-AVX2,-FMA`, which makes the loader pick the SSE2 variants, and records the `active` feature masks the loader reports (`ld.so --list-diagnostics`) with and without the tunable as evidence that the mask took effect. On Windows, the probe calls `_set_FMA3_enable(0)` and runs the `libm` probes again in process. The report carries the alternate `libm` hash and the list of probes whose bits differ from the default path.
 
 ## Environment
 

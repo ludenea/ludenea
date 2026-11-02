@@ -33,9 +33,16 @@ struct Probe {
 }
 
 fn main() {
-    let cell = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "unspecified".to_string());
+    let mut arguments = std::env::args().skip(1);
+    let cell = arguments.next().unwrap_or_else(|| "unspecified".to_string());
+    if arguments.next().as_deref() == Some("--libm-only") {
+        // The child process of the alternate dispatch measurement prints the
+        // platform math library probes alone, one per line, and nothing else.
+        for probe in libm_probes() {
+            println!("{}=0x{:016x}", probe.name, probe.bits);
+        }
+        return;
+    }
     let groups: [(&str, Vec<Probe>); 4] = [
         ("exact", exact_probes()),
         ("codegen", codegen_probes()),
@@ -66,6 +73,7 @@ fn main() {
         out.object_end();
     }
     out.object_end();
+    write_alternate_dispatch(&mut out, &groups[2].1);
     write_timing(&mut out);
     out.object_end();
     println!("{}", out.finish());
@@ -290,6 +298,151 @@ fn nan_probes() -> Vec<Probe> {
     ]
 }
 
+/// The platform math library on the other dispatch path of the same machine.
+/// glibc on x86_64 and the Universal C Runtime on x64 select the implementation
+/// of some functions at run time by CPU feature, and every runner measured so
+/// far took the path with fused multiply-add. On Linux x86_64 a child process
+/// of this probe runs with the glibc tunable that masks AVX2 and FMA, so that
+/// the loader picks the SSE2 variants; on Windows x86_64 the FMA3
+/// implementations are disabled in process with `_set_FMA3_enable(0)` before
+/// the probes run again. The other cells have no documented alternate path.
+struct AlternateDispatch {
+    method: &'static str,
+    evidence: Vec<(&'static str, String)>,
+    probes: Vec<Probe>,
+}
+
+fn write_alternate_dispatch(out: &mut Json, default_libm: &[Probe]) {
+    out.key("alternate_dispatch");
+    out.object_start();
+    match alternate_dispatch() {
+        None => out.string("method", "none"),
+        Some(alternate) => {
+            out.string("method", alternate.method);
+            out.key("evidence");
+            out.object_start();
+            for (key, value) in &alternate.evidence {
+                out.string(key, value);
+            }
+            out.object_end();
+            out.hex("libm", group_hash(&alternate.probes));
+            out.key("probes");
+            out.object_start();
+            for probe in &alternate.probes {
+                out.hex(probe.name, probe.bits);
+            }
+            out.object_end();
+            out.key("differs_from_default");
+            out.array_start();
+            for probe in &alternate.probes {
+                let default = default_libm.iter().find(|p| p.name == probe.name);
+                if default.is_none_or(|p| p.bits != probe.bits) {
+                    out.array_string(probe.name);
+                }
+            }
+            out.array_end();
+        }
+    }
+    out.object_end();
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn alternate_dispatch() -> Option<AlternateDispatch> {
+    const TUNABLES: &str = "glibc.cpu.hwcaps=-AVX2,-FMA";
+    let exe = std::env::current_exe().ok()?;
+    let child = std::process::Command::new(exe)
+        .args(["child", "--libm-only"])
+        .env("GLIBC_TUNABLES", TUNABLES)
+        .output()
+        .ok()?;
+    let probes = parse_probe_lines(&String::from_utf8_lossy(&child.stdout));
+    let evidence = vec![
+        ("glibc_tunables", TUNABLES.to_string()),
+        ("child_exit_status", child.status.to_string()),
+        ("loader_active_features_default", loader_active_features(None)),
+        ("loader_active_features_with_tunable", loader_active_features(Some(TUNABLES))),
+    ];
+    Some(AlternateDispatch {
+        method: "child process with GLIBC_TUNABLES masking AVX2 and FMA",
+        evidence,
+        probes,
+    })
+}
+
+/// The `active` CPU feature masks the dynamic loader reports (`ld.so
+/// --list-diagnostics`, glibc 2.33 or later), with and without the tunable:
+/// bit 5 of the `ebx` word of leaf 7 is AVX2 and bit 12 of the `ecx` word of
+/// leaf 1 is FMA, so the two readings show whether the mask took effect.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn loader_active_features(tunables: Option<&str>) -> String {
+    let loader = ["/lib64/ld-linux-x86-64.so.2", "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"]
+        .into_iter()
+        .find(|path| std::path::Path::new(path).exists());
+    let Some(loader) = loader else {
+        return "loader not found".to_string();
+    };
+    let mut command = std::process::Command::new(loader);
+    command.arg("--list-diagnostics");
+    if let Some(tunables) = tunables {
+        command.env("GLIBC_TUNABLES", tunables);
+    }
+    match command.output() {
+        Ok(output) => {
+            let text = String::from_utf8_lossy(&output.stdout);
+            let lines: Vec<&str> = text
+                .lines()
+                .filter(|line| line.contains(".active."))
+                .take(16)
+                .collect();
+            if lines.is_empty() {
+                format!("no active feature line in the diagnostics ({})", output.status)
+            } else {
+                lines.join("; ")
+            }
+        }
+        Err(error) => format!("could not run the loader: {error}"),
+    }
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", target_env = "msvc"))]
+fn alternate_dispatch() -> Option<AlternateDispatch> {
+    unsafe extern "C" {
+        fn _set_FMA3_enable(flag: i32) -> i32;
+    }
+    // SAFETY: a documented Universal C Runtime function without preconditions;
+    // it only toggles the library's selection of its FMA3 implementations and
+    // returns the previous setting.
+    let previous = unsafe { _set_FMA3_enable(0) };
+    let probes = libm_probes();
+    // SAFETY: as above; restores the setting the runtime chose at startup.
+    unsafe { _set_FMA3_enable(previous) };
+    Some(AlternateDispatch {
+        method: "in-process _set_FMA3_enable(0) before the probes run again",
+        evidence: vec![("fma3_previously_enabled", previous.to_string())],
+        probes,
+    })
+}
+
+#[cfg(not(any(
+    all(target_os = "linux", target_arch = "x86_64"),
+    all(target_os = "windows", target_arch = "x86_64", target_env = "msvc")
+)))]
+fn alternate_dispatch() -> Option<AlternateDispatch> {
+    None
+}
+
+/// Parses the `name=0x...` lines the child process prints.
+#[cfg(any(test, all(target_os = "linux", target_arch = "x86_64")))]
+fn parse_probe_lines(text: &str) -> Vec<Probe> {
+    text.lines()
+        .filter_map(|line| {
+            let (name, bits) = line.split_once('=')?;
+            let bits = u64::from_str_radix(bits.trim().strip_prefix("0x")?, 16).ok()?;
+            Some(Probe { name: Box::leak(name.trim().to_string().into_boxed_str()), bits })
+        })
+        .collect()
+}
+
 fn group_hash(probes: &[Probe]) -> u64 {
     let mut bytes = Vec::with_capacity(probes.len() * 8);
     for probe in probes {
@@ -355,6 +508,23 @@ impl Json {
 
     fn object_end(&mut self) {
         self.buf.push('}');
+        self.needs_comma = true;
+    }
+
+    fn array_start(&mut self) {
+        self.separator();
+        self.buf.push('[');
+        self.needs_comma = false;
+    }
+
+    fn array_end(&mut self) {
+        self.buf.push(']');
+        self.needs_comma = true;
+    }
+
+    fn array_string(&mut self, value: &str) {
+        self.separator();
+        self.quoted(value);
         self.needs_comma = true;
     }
 
@@ -447,10 +617,30 @@ mod tests {
         out.bool("d", false);
         out.object_end();
         out.hex("e", 0xff);
+        out.key("f");
+        out.array_start();
+        out.array_string("g");
+        out.array_string("h");
+        out.array_end();
         out.object_end();
         assert_eq!(
             out.finish(),
-            r#"{"a":"x\"y\\z","b":{"c":1,"d":false},"e":"0x00000000000000ff"}"#
+            r#"{"a":"x\"y\\z","b":{"c":1,"d":false},"e":"0x00000000000000ff","f":["g","h"]}"#
         );
+    }
+
+    #[test]
+    fn child_probe_lines_round_trip() {
+        let probes = libm_probes();
+        let text: String = probes
+            .iter()
+            .map(|probe| format!("{}=0x{:016x}\n", probe.name, probe.bits))
+            .collect();
+        let parsed = parse_probe_lines(&format!("{text}not a probe line\n"));
+        assert_eq!(parsed.len(), probes.len());
+        for (expected, actual) in probes.iter().zip(&parsed) {
+            assert_eq!(expected.name, actual.name);
+            assert_eq!(expected.bits, actual.bits);
+        }
     }
 }
