@@ -1,0 +1,10 @@
+[package]
+name = "workload-frame-allocator"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: the reference workload under four allocation modes, a counting global allocator and table growth, for the memory research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }

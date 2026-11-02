@@ -258,6 +258,45 @@ case "$spike" in
       jq -r '"- `\(.cell)`: built configuration \(.built_configuration), \(.platform.available_parallelism) CPUs, DISPLAY set \(.headless.display_set), WAYLAND_DISPLAY set \(.headless.wayland_display_set); \(.headless.platform_libraries)."' "$file"
     done
     ;;
+  workload-frame-allocator)
+    echo "| Cell | Mode | Workers | Run hash | Matches the cell's sequential run | First divergent tick | Event hash | Ticks per second | Steady-state heap allocations per tick (mean, max) | Steady-state heap bytes per tick (mean) | First ten ticks allocations | Last tick with an allocation | Heap net blocks after destruction | Scratch high water (bytes) | Scratch fallback blocks | Leak free |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .runs[] | "| \($cell) | \(.mode) | \(.workers) | \(.run_hash) | \(.matches_sequential) | \(.first_divergent_tick) | \(.event_hash // "n/a") | \(.ticks_per_second) | \(.heap.steady_state_allocations_per_tick_mean // "n/a"), \(.heap.steady_state_allocations_per_tick_max // "n/a") | \(.heap.steady_state_bytes_per_tick_mean // "n/a") | \(.heap.first_ten_ticks_allocations // "n/a") | \(.heap.last_tick_with_allocation // "n/a") | \(.heap.net_blocks_after_destruction // "not counted") | \(.scratch.high_water_bytes // "n/a") | \(.scratch.fallback_blocks // "n/a") | \(.leak_free // "n/a") |"' "$file"
+    done
+    echo
+    distinct="$(jq -r '.runs[].run_hash' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+    echo "- Distinct run hashes across every cell, mode and worker count (1 means identical everywhere): $distinct."
+    events="$(jq -r '.runs[] | select(.mode != "sequential") | .event_hash' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+    echo "- Distinct event hashes across every cell, mode and worker count (1 means identical everywhere): $events."
+    echo
+    echo "Growth runs (the grow variant against the preallocated one; hashes compare across variants and worker counts, not with the reference):"
+    echo
+    echo "| Cell | Variant | Rate | Workers | Ticks | Run hash | Event hash | Ticks per second | Final population | Final capacity | Table bytes | Growth events | Growth ms | Growth share of the run | Steady-state heap allocations per tick (mean) | Leak free |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .growth_runs[] | "| \($cell) | \(.variant) | \(.rate) | \(.workers) | \(.tick_count) | \(.run_hash) | \(.event_hash) | \(.ticks_per_second) | \(.tables.final_population) | \(.tables.final_capacity) | \(.tables.bytes) | \(.tables.growth_events) | \(.tables.growth_ms) | \(.tables.growth_share_of_run) | \(.heap.steady_state_allocations_per_tick_mean) | \(.leak_free) |"' "$file"
+    done
+    echo
+    for config in $(jq -r '.growth_runs[] | "\(.rate)"' "${facts[@]}" | sort -u); do
+      distinct="$(jq -r --arg rate "$config" '.growth_runs[] | select((.rate | tostring) == $rate) | "\(.run_hash)/\(.event_hash)"' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+      echo "- Rate $config: $distinct distinct (run hash, event hash) pair(s) across every cell, variant and worker count (1 means growth changed nothing)."
+    done
+    echo
+    echo "Leak run (one pre-sized event buffer forgotten on purpose) and the tags at destruction:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: leak free \(.leak_run.leak_free); tags: \(.leak_run.tags_at_destruction | to_entries | map("\(.key) \(.value.bytes) bytes") | join(", ")); heap net blocks \(.leak_run.heap.net_blocks_after_destruction // "not counted"), bytes \(.leak_run.heap.net_bytes_after_destruction // "not counted")."' "$file"
+    done
+    echo
+    echo "Allocator microbenchmark, nanoseconds per allocation and free pair of 1 KB (median of three rounds, minimum):"
+    echo
+    echo "| Cell | Path | Threads | Median ns | Min ns |"
+    echo "| --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .allocator_microbenchmark[] | "| \($cell) | \(.path) | \(.threads) | \(.nanoseconds_per_pair_median) | \(.nanoseconds_per_pair_min) |"' "$file"
+    done
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;

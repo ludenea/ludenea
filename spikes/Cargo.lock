@@ -45,6 +45,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "workload-frame-allocator"
+version = "0.1.0"
+dependencies = [
+ "reference-workload",
+]
+
+[[package]]
 name = "workload-scheduling-overhead"
 version = "0.1.0"
 dependencies = [
