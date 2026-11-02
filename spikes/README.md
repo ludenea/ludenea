@@ -21,7 +21,7 @@ The workflow [`research-ci.yml`](../.github/workflows/research-ci.yml) builds an
 | `windows-arm64`  | `windows-11-arm`   | Windows 11, ARM64         |
 | `macos-arm64`    | `macos-15`         | macOS 15, Apple silicon   |
 
-The workflow runs on pushes and pull requests that touch `spikes/` or the workflow, and on demand. Each cell is independent: one failing cell never cancels the others, because every cell is a measurement, and a later run never cancels an earlier one for the same reason.
+The workflow runs on pushes and pull requests that touch `spikes/` (Markdown files excepted: a README edit is not a measurement) or the workflow, and on demand. Each cell is independent: one failing cell never cancels the others, because every cell is a measurement, and a later run never cancels an earlier one for the same reason.
 
 On demand (`workflow_dispatch`), a run can pick another spike, pass extra `RUSTFLAGS` to a Rust spike, build a Rust spike with another Cargo profile (`dev` for an unoptimized build with debug assertions), and run on another set of cells given as a JSON list. Three uses of the cross-platform compatibility and determinism research:
 
@@ -65,6 +65,6 @@ The script installs the pinned toolchain if needed (Rust spikes), builds the spi
 | --------------------------------------- | ------------------------------ | -------------------------------------------------------------------------------------------------------- | -------------------------------------- |
 | [`platform-facts`](platform-facts/)     | Cross-platform compatibility   | Which floating-point results are bit-identical across the five cells of the boundary, and which differ? | Measured on 2026-11-02, see its README |
 | [`box2d-worker-sweep`](box2d-worker-sweep/) | Physics (the Box2D v3 study) | Does Box2D v3.2.0, driven through its task interface by an external scheduler, give identical state at 1, 2, 4 and 8 workers and across the five cells? | Measured on 2026-11-02, see its README |
-| [`box2d-snapshot-continuation`](box2d-snapshot-continuation/) | Physics (the Box2D v3 study) | Does a Box2D v3.2.0 world restored from one of its snapshots, in place or as a new world at the same or another worker count, step exactly like the uninterrupted world, on the five cells? | Built on 2026-11-02, see its README |
+| [`box2d-snapshot-continuation`](box2d-snapshot-continuation/) | Physics (the Box2D v3 study) | Does a Box2D v3.2.0 world restored from one of its snapshots, in place or as a new world at the same or another worker count, step exactly like the uninterrupted world, on the five cells? | Measured on 2026-11-02, see its README |
 | [`reference-workload`](reference-workload/) | Deterministic simulation (the fixture of several research subjects) | Does the sequential reference implementation of the reference workload give identical hashes on the five cells, with and without the platform math library, in release and unoptimized builds? | Measured on 2026-11-02, see `reference-hashes.md` |
 | [`workload-worker-sweep`](workload-worker-sweep/) | Deterministic simulation | Do deterministic-by-construction parallel constructs give the sequential hashes of the reference workload at 1, 2, 4 and 8 workers on the five cells, and what do they cost against a free-running reduction? | Measured on 2026-11-02, see its README |
