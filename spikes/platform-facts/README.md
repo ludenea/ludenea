@@ -25,4 +25,21 @@ Research CI, workflow `research-ci.yml`, five cells (see [`spikes/README.md`](..
 
 ## Result
 
-Pending: the first run of the research CI records the per-cell facts here.
+First [run of the research CI](https://github.com/ludenea/ludenea/actions/runs/41419772718) on 2026-11-02, rustc 1.99.1 with LLVM 23.1.1 on every cell:
+
+| Cell             | Machine                      | Operating system                           | `exact`              | `codegen`            | `libm`               | `nan`                |
+| ---------------- | ---------------------------- | ------------------------------------------ | -------------------- | -------------------- | -------------------- | -------------------- |
+| `linux-x86_64`   | AMD EPYC 7763                | Ubuntu 24.04.5, glibc 2.39                 | `0x4b06bfeb1b00c754` | `0x4035b998dcfeb02c` | `0x1b0e6a4442b20501` | `0xd8a41e3e092f1770` |
+| `linux-arm64`    | Arm Neoverse N2              | Ubuntu 24.04.5, glibc 2.39                 | `0x4b06bfeb1b00c754` | `0x4035b998dcfeb02c` | `0x1b0e6a4442b20501` | `0xd4890260925bddf0` |
+| `windows-x86_64` | AMD EPYC 7763                | Windows Server 2025 Datacenter, 10.0.26100 | `0x4b06bfeb1b00c754` | `0x4035b998dcfeb02c` | `0x82807dc9a3b78b2d` | `0xd8a41e3e092f1770` |
+| `windows-arm64`  | Microsoft Cobalt 100         | Windows 11 Enterprise, 10.0.26200          | `0x4b06bfeb1b00c754` | `0x4035b998dcfeb02c` | `0x82807dc9a3b78b2d` | `0xd4890260925bddf0` |
+| `macos-arm64`    | Apple M1 (virtual)           | macOS 15.8.2                               | `0x4b06bfeb1b00c754` | `0x4035b998dcfeb02c` | `0x68255a5365fd7eb2` | `0xd4890260925bddf0` |
+
+- Exact operations (hypothesis 1) hold: the `exact` group is bit-identical on the five cells.
+- No contraction (hypothesis 2) holds: the `codegen` group is bit-identical and every contraction probe is zero, although every machine has fused multiply-add hardware.
+- Math library variance (hypothesis 3) holds with a nuance: the `libm` group differs per operating system family only, never per architecture (Linux x86_64 equals Linux ARM64, Windows x86_64 equals Windows ARM64). Of 31 probes, 5 differ by one unit in the last place: `acos`, `asin` and `tan` on macOS; `cbrt` and `ln_1p` on Windows. The other 26, the eight `f32` probes included, agree everywhere.
+- NaN sign (hypothesis 4) holds: a generated NaN is `0xfff8000000000000` on x86_64 and `0x7ff8000000000000` on ARM64 (`0xffc00000` against `0x7fc00000` in `f32`), whatever the operating system; an existing NaN payload propagates identically everywhere.
+- Runner availability (the instrumental hypothesis) holds: all five cells ran on standard runners at no cost.
+- Timing of the scalar loop, median nanoseconds per iteration: 8.32 (Linux x86_64), 8.40 (Windows x86_64), 6.50 (Linux ARM64), 6.48 (Windows ARM64), 7.39 (macOS ARM64); within-run spread under 2 percent on four cells and 7 percent on macOS.
+
+The raw facts and the environment of each cell are the artifacts of the run. The result holds for this toolchain and these runner images; a toolchain bump re-runs the spike.
