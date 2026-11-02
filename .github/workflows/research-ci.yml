@@ -1,0 +1,93 @@
+# Research CI: builds and runs the throwaway spikes under spikes/ on every
+# platform and architecture of the engine's first compatibility boundary, and
+# publishes their measurements as artifacts. It is distinct from any future
+# product CI and may be discarded with the spikes. The logic lives in
+# spikes/ci/run-spike.sh so that it does not depend on GitHub Actions.
+name: Research CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "spikes/**"
+      - ".github/workflows/research-ci.yml"
+  pull_request:
+    paths:
+      - "spikes/**"
+      - ".github/workflows/research-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SPIKE: platform-facts
+
+jobs:
+  spike:
+    name: ${{ matrix.cell }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # Every cell is a measurement: one failing cell must not cancel the others.
+      fail-fast: false
+      matrix:
+        include:
+          - { cell: linux-x86_64, runner: ubuntu-24.04 }
+          - { cell: linux-arm64, runner: ubuntu-24.04-arm }
+          - { cell: windows-x86_64, runner: windows-2025 }
+          - { cell: windows-arm64, runner: windows-11-arm }
+          - { cell: macos-arm64, runner: macos-15 }
+    env:
+      CELL: ${{ matrix.cell }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build and run the spike
+        shell: bash
+        run: bash spikes/ci/run-spike.sh "$SPIKE" "$CELL"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.SPIKE }}-${{ matrix.cell }}
+          path: spikes/out/
+          if-no-files-found: error
+
+  compare:
+    name: compare cells
+    needs: spike
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: ${{ env.SPIKE }}-*
+          path: out
+          merge-multiple: true
+      - name: Summarize the measurements per cell
+        shell: bash
+        run: |
+          shopt -s nullglob
+          facts=(out/*/facts.json)
+          {
+            echo "## $SPIKE"
+            echo
+            echo "${#facts[@]} cell(s) reported."
+            echo
+            echo "| Cell | exact | codegen | libm | nan | ps per iteration (median) |"
+            echo "| --- | --- | --- | --- | --- | --- |"
+            for file in "${facts[@]}"; do
+              jq -r '"| \(.cell) | \(.hashes.exact) | \(.hashes.codegen) | \(.hashes.libm) | \(.hashes.nan) | \(.timing.picoseconds_per_iteration_median) |"' "$file"
+            done
+            echo
+            for group in exact codegen libm nan; do
+              distinct="$(jq -r ".hashes.$group" "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+              echo "- \`$group\`: $distinct distinct hash value(s) across ${#facts[@]} cell(s)."
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.SPIKE }}-all-cells
+          path: out/
+          if-no-files-found: error
