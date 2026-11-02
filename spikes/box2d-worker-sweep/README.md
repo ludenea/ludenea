@@ -32,4 +32,20 @@ Research CI, workflow `research-ci.yml`, five cells (see [`spikes/README.md`](..
 
 ## Result
 
-Local run on 2026-11-02, Apple M5 (10 cores, macOS, Apple Clang 21, NEON path, no AVX2 so one SIMD width), full step counts: the seven scenes give one final hash each across the 8 combinations of scheduler and worker count, no run diverges from its reference at any step, and the falling hinges give the upstream hash `0x465f3df4` at sleep step 299 in every combination. Step time at 1, 2, 4 and 8 workers (external scheduler, total milliseconds): `large_pyramid` 492, 272, 170, 254; `joint_grid` 1067, 581, 384, 379; `rain` 2987, 1777, 1311, 1343; 8 workers is slower than 4 on this machine, which mixes performance and efficiency cores. The research CI result on the five cells is recorded below when the run completes.
+Research CI [run](https://github.com/ludenea/ludenea/actions/runs/41434748466) of 2026-11-02 on the five cells, plus a local run the same day on an Apple M5 (10 cores, macOS, Apple Clang 21) outside the matrix:
+
+| Cell | Machine | Compiler | SIMD widths | Final hashes per scene across 8 or 16 combinations | Falling hinges |
+| --- | --- | --- | --- | --- | --- |
+| `linux-x86_64` | AMD EPYC 7763, 4 vCPU | GCC 13.3 | 8 (AVX2 dispatched) and 4 (SSE2 fallback) | one per scene | `0x465f3df4` at step 299, every combination |
+| `linux-arm64` | Neoverse N2, 4 vCPU | GCC 13.3 | 4 (NEON) | one per scene | same |
+| `windows-x86_64` | AMD EPYC 9V74, 4 vCPU | MSVC 19.51 | 8 and 4 | one per scene | same |
+| `windows-arm64` | Cobalt 100, 4 vCPU | MSVC 19.51 | 4 (NEON) | one per scene | same |
+| `macos-arm64` | Apple M1 (virtual), 3 vCPU | Apple Clang 17 | 4 (NEON) | one per scene | same |
+| local | Apple M5, 10 cores | Apple Clang 21 | 4 (NEON) | one per scene | same |
+
+- Hypothesis 1 holds: every scene has one final hash across the external and native schedulers at 1, 2, 4 and 8 workers, and no run diverges from its single-worker reference at any step.
+- Hypothesis 2 holds: the hash of each scene is the same on the six machines, across the three compilers, between the AVX2 path and the SSE2 fallback, and between x86_64 and ARM64: `joint_grid` `0x9c1e03dad6409a09`, `large_pyramid` `0xc3af4b9fd4b96e77`, `many_pyramids` `0xb1c91fd6de0df6d9`, `rain` `0x07e3c76d31f4bc47`, `smash` `0x752022fc74c9c592`, `spinner` `0xc43a20d0bfd4107d`, `tumbler` `0x67b938db701c26ce`. Every body was hashed except one body without a shape in `tumbler` (2026 of 2027), identically everywhere.
+- Hypothesis 3 holds: the falling hinges reproduce the upstream hash and sleep step on every cell in every combination.
+- Step times, total milliseconds with the external scheduler at 1, 2, 4 and 8 workers (the native scheduler is within a few percent): `large_pyramid` 1075, 600, 528, 655 on Linux x86_64 with AVX2 (1269, 730, 622, 761 with SSE2), 1138, 684, 606, 753 on Windows x86_64, 1414, 882, 527, 628 on Linux ARM64, 1508, 896, 535, 780 on Windows ARM64, 1321, 1199, 1035, 1670 on the macOS runner, 492, 272, 170, 254 on the local M5; `joint_grid` 3037, 1609, 1381, 1476 on Linux x86_64, 3440, 1870, 1040, 1174 on Linux ARM64, 3179, 4921, 4820, 5934 on the macOS runner. The ARM64 runners scale by about 3 from 1 to 4 workers, the x86_64 runners by about 2; 8 workers on 4 virtual CPUs cost 10 to 25 percent over 4 and never deadlock; the hosted macOS runner does not scale at all, unlike the local M5, which says something about that runner and nothing about the library. Box2D enqueued between 3 and 6 tasks per step at 1 worker and up to 41 per step at 8 workers, below the 256 it promises as a ceiling.
+
+The raw measurements, environments and configure outputs of each cell are the artifacts of the run. The result holds for Box2D v3.2.0 built with these compilers on these images.
