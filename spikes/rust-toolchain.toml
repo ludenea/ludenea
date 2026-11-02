@@ -1,0 +1,7 @@
+# Pinned so that every cell of the research CI and every local run compile the
+# spikes with the same compiler: floating-point facts are only comparable at a
+# fixed toolchain version. Bump deliberately and record the bump in the
+# findings that depend on it.
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"
