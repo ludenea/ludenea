@@ -30,14 +30,22 @@ Research CI, workflow `research-ci.yml`, five cells (see [`spikes/README.md`](..
 
 ## Result
 
-Local run of 2026-11-02 on the Apple M5, release profile:
+Research CI [run](https://github.com/ludenea/ludenea/actions/runs/41492150925) of 2026-11-02 on the five cells, the [rebuild](https://github.com/ludenea/ludenea/actions/runs/41492168053) with `-C target-cpu=x86-64-v3` on the two x86_64 cells, the [unoptimized build](https://github.com/ludenea/ludenea/actions/runs/41492203328) on Linux x86_64, and a local run the same day on an Apple M5 (10 cores, macOS 26) outside the matrix. Ticks per second of the default size with the wander system off (the wander-on figures are 5 to 15 percent lower):
 
-| Mode | Workers | Wander off: run hash | Wander on: run hash | Matches the sequential run | Ticks per second, wander off |
-| --- | --- | --- | --- | --- | --- |
-| sequential | 1 | `0x9f50cc4763ae733c` | `0xd4f14b2dd11228d1` | reference | 1 033 |
-| deterministic | 1, 2, 4, 8 | `0x9f50cc4763ae733c` | `0xd4f14b2dd11228d1` | yes, at every worker count | 986, 1 481, 1 918, 2 007 |
-| free-running | 1, 2, 4, 8 | four distinct values | four distinct values | no: the energy diverges at tick 1 | 974, 1 476, 1 883, 1 959 |
+| Cell | Machine | Sequential | Deterministic at 1, 2, 4, 8 workers | Free-running at 1, 2, 4, 8 workers |
+| --- | --- | --- | --- | --- |
+| `linux-x86_64` | AMD EPYC 9V74, 4 vCPU | 495 | 473, 671, 806, 729 | 468, 680, 800, 705 |
+| `linux-arm64` | Neoverse N2, 4 vCPU | 756 | 711, 1 100, 1 508, 1 344 | 710, 1 105, 1 502, 1 336 |
+| `windows-x86_64` | AMD EPYC 9V74, 4 vCPU | 585 | 566, 831, 937, 799 | 570, 821, 926, 799 |
+| `windows-arm64` | Cobalt 100, 4 vCPU | 751 | 707, 1 096, 1 274, 1 410 | 706, 1 097, 1 503, 1 406 |
+| `macos-arm64` | Apple M1 virtual, 3 vCPU | 567 | 476, 695, 856, 874 | 542, 828, 884, 954 |
+| local | Apple M5, 10 cores | 1 033 | 986, 1 481, 1 918, 2 007 | 974, 1 476, 1 883, 1 959 |
 
-The deterministic constructs cost nothing measurable against the free-running reduction (the two modes are within 2 percent at every worker count). The scaling is bounded by the sequential phases: at 10 000 entities the per-tick hash of the whole state (210 KB through FNV-1a, 0.22 ms) costs as much as 30 percent of the sequential tick and more than the parallel repulsion pass at 8 workers (0.18 ms), with the spatial hashing, the copy back and the structural changes adding 0.05 ms.
+- Hypothesis 1 holds: with the wander system off, the sequential run hash is `0x9f50cc4763ae733c` on the five cells, on the x86-64-v3 rebuilds, on the unoptimized build and on the local machine. The other sizes are in [`reference-hashes.md`](../reference-workload/reference-hashes.md).
+- Hypothesis 2 holds: every deterministic run reproduces the sequential run of its cell at every tick, at 1, 2, 4 and 8 workers, with the wander system off and on: 40 of 40 runs on the five cells, 16 of 16 on the x86-64-v3 rebuilds, 8 of 8 on the unoptimized build, 8 of 8 on the local machine. With the wander system off, all of them share the single hash above.
+- Hypothesis 3 settles with a surprise: with the wander system on, the hashes split three ways, not two. Linux x86_64, Linux ARM64 and Windows ARM64 agree (`0x756937193f1eb200`); macOS differs (`0xd4f14b2dd11228d1`, which the local Apple M5 reproduces); Windows x86_64 differs from both (`0x66f88ba45f145858`), Windows ARM64 included. Over the 4 096 distinct arguments the wander system feeds to the `f32` cosine and sine, the platform math library differs per architecture within Windows, which the eight `f32` probes of the platform facts spike had not shown.
+- Hypothesis 4 holds: the x86-64-v3 rebuild and the unoptimized build reproduce every hash of the default release build of their cell, wander on included.
+- Hypothesis 5 does not hold as stated: the deterministic reduction costs nothing measurable. Deterministic and free-running runs are within the runners' timing noise of each other at every worker count (the macOS runner, the noisiest, shows the free-running runs faster by up to 9 percent; the Windows ARM64 runner shows one free-running run slower by half). The free-running runs never match the sequential run: their energy diverges at tick 1, and the 20 runs per wander setting give 16 and 18 distinct hashes (the single-worker free-running runs are deterministic, with one hash per math library class).
+- Scaling is bounded by the sequential phases. The repulsion pass scales by 3.3 from 1 to 4 workers on the ARM64 Linux cell, by 2.4 to 2.7 on the x86_64 and Windows ARM64 cells and by 2.1 on the 3-vCPU macOS cell, while the per-tick hash of the whole state (210 KB through FNV-1a) costs 224 ms per 1 000 ticks on the ARM64 cells, 275 to 320 ms on the x86_64 cells and 410 ms on the macOS cell: 30 to 40 percent of the deterministic run at 4 workers. The spatial hashing costs 164 to 190 ms on Linux x86_64 against 28 to 32 ms on the ARM64 cells and 95 ms on Windows x86_64, a difference the spike does not explain. Eight workers on 4 virtual CPUs cost up to 11 percent against 4 workers on three cells and nothing on the two others; unlike the spin-waiting workers of the Box2D worker sweep, this pool sleeps at its barrier, and the hosted macOS runner scales with it.
 
-The research CI result on the five cells is recorded below once the run completes; the raw measurements and the environment of each cell are the artifacts of the run.
+The raw measurements and the environment of each cell are the artifacts of the runs. The result holds for the reference workload version 1 at this toolchain and on these images.
