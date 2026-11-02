@@ -2,7 +2,13 @@
 # platform and architecture of the engine's first compatibility boundary, and
 # publishes their measurements as artifacts. It is distinct from any future
 # product CI and may be discarded with the spikes. The logic lives in
-# spikes/ci/run-spike.sh so that it does not depend on GitHub Actions.
+# spikes/ci/run-spike.sh and spikes/ci/summarize.sh so that it does not depend
+# on GitHub Actions.
+#
+# Every run is a measurement, so runs are never cancelled by later runs.
+# On demand, a run can pick another spike, extra Rust flags (for example a
+# raised instruction set baseline) and another set of cells (for example the
+# oldest runner images the engine's baseline must support).
 name: Research CI
 
 on:
@@ -16,16 +22,26 @@ on:
       - "spikes/**"
       - ".github/workflows/research-ci.yml"
   workflow_dispatch:
+    inputs:
+      spike:
+        description: "Spike directory under spikes/ to build and run"
+        type: string
+        default: platform-facts
+      rustflags:
+        description: "Extra RUSTFLAGS for Rust spikes, for example -C target-cpu=x86-64-v3; recorded next to the measurements"
+        type: string
+        default: ""
+      cells:
+        description: 'Cells to run as a JSON list of {"cell": label, "runner": runner label}; empty runs the five cells of the boundary'
+        type: string
+        default: ""
 
 permissions:
   contents: read
 
-concurrency:
-  group: research-ci-${{ github.ref }}
-  cancel-in-progress: true
-
 env:
-  SPIKE: platform-facts
+  SPIKE: ${{ inputs.spike || 'platform-facts' }}
+  RUSTFLAGS: ${{ inputs.rustflags }}
 
 jobs:
   spike:
@@ -35,12 +51,7 @@ jobs:
       # Every cell is a measurement: one failing cell must not cancel the others.
       fail-fast: false
       matrix:
-        include:
-          - { cell: linux-x86_64, runner: ubuntu-24.04 }
-          - { cell: linux-arm64, runner: ubuntu-24.04-arm }
-          - { cell: windows-x86_64, runner: windows-2025 }
-          - { cell: windows-arm64, runner: windows-11-arm }
-          - { cell: macos-arm64, runner: macos-15 }
+        include: ${{ fromJSON(inputs.cells || '[{"cell":"linux-x86_64","runner":"ubuntu-24.04"},{"cell":"linux-arm64","runner":"ubuntu-24.04-arm"},{"cell":"windows-x86_64","runner":"windows-2025"},{"cell":"windows-arm64","runner":"windows-11-arm"},{"cell":"macos-arm64","runner":"macos-15"}]') }}
     env:
       CELL: ${{ matrix.cell }}
     steps:
@@ -60,6 +71,7 @@ jobs:
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           pattern: ${{ env.SPIKE }}-*
@@ -67,25 +79,7 @@ jobs:
           merge-multiple: true
       - name: Summarize the measurements per cell
         shell: bash
-        run: |
-          shopt -s nullglob
-          facts=(out/*/facts.json)
-          {
-            echo "## $SPIKE"
-            echo
-            echo "${#facts[@]} cell(s) reported."
-            echo
-            echo "| Cell | exact | codegen | libm | nan | ps per iteration (median) |"
-            echo "| --- | --- | --- | --- | --- | --- |"
-            for file in "${facts[@]}"; do
-              jq -r '"| \(.cell) | \(.hashes.exact) | \(.hashes.codegen) | \(.hashes.libm) | \(.hashes.nan) | \(.timing.picoseconds_per_iteration_median) |"' "$file"
-            done
-            echo
-            for group in exact codegen libm nan; do
-              distinct="$(jq -r ".hashes.$group" "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
-              echo "- \`$group\`: $distinct distinct hash value(s) across ${#facts[@]} cell(s)."
-            done
-          } >> "$GITHUB_STEP_SUMMARY"
+        run: bash spikes/ci/summarize.sh "$SPIKE" out >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ env.SPIKE }}-all-cells

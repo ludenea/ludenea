@@ -6,8 +6,8 @@ Throwaway experiments of the Ludenea research program. A spike answers one engin
 
 - `<slug>/`: one spike, named after what it measures. Each spike has a README stating the research subject it serves, its hypothesis, its method, its environment and its result.
 - `reference-workload/`: the specification of the synthetic simulation that the spikes of several research subjects measure against, so that their numbers are comparable.
-- `ci/run-spike.sh`: builds one spike and runs it. The research CI calls it; it runs the same way on a developer machine.
-- `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`: the spikes' Cargo workspace and its pinned toolchain. Spikes share nothing else.
+- `ci/run-spike.sh`: builds one spike and runs it. The research CI calls it; it runs the same way on a developer machine. `ci/summarize.sh` prints the Markdown summary of a run's measurements across cells.
+- `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`: the Cargo workspace of the Rust spikes and its pinned toolchain. A spike that studies a C library is a C program with its own `CMakeLists.txt`, built with the platform's default C compiler, since the library under study is compiled that way too. Spikes share nothing else.
 
 ## Research CI
 
@@ -21,7 +21,21 @@ The workflow [`research-ci.yml`](../.github/workflows/research-ci.yml) builds an
 | `windows-arm64`  | `windows-11-arm`   | Windows 11, ARM64         |
 | `macos-arm64`    | `macos-15`         | macOS 15, Apple silicon   |
 
-The workflow runs on pushes and pull requests that touch `spikes/` or the workflow, and on demand. Each cell is independent: one failing cell never cancels the others, because every cell is a measurement.
+The workflow runs on pushes and pull requests that touch `spikes/` or the workflow, and on demand. Each cell is independent: one failing cell never cancels the others, because every cell is a measurement, and a later run never cancels an earlier one for the same reason.
+
+On demand (`workflow_dispatch`), a run can pick another spike, pass extra `RUSTFLAGS` to a Rust spike, and run on another set of cells given as a JSON list. Two uses of the cross-platform compatibility research:
+
+```bash
+# Rebuild the platform facts with a raised x86-64 instruction set baseline on the two x86_64 cells.
+gh workflow run research-ci.yml -f rustflags='-C target-cpu=x86-64-v3' \
+  -f cells='[{"cell":"linux-x86_64","runner":"ubuntu-24.04"},{"cell":"windows-x86_64","runner":"windows-2025"}]'
+
+# Run on the oldest runner images that match the engine's proposed operating system baseline.
+gh workflow run research-ci.yml \
+  -f cells='[{"cell":"linux-x86_64-ubuntu-22.04","runner":"ubuntu-22.04"},{"cell":"linux-arm64-ubuntu-22.04","runner":"ubuntu-22.04-arm"},{"cell":"macos-arm64-macos-14","runner":"macos-14"}]'
+```
+
+The cell label is free text that names the artifact and the output directory; the environment file records the machine and the image the run landed on.
 
 ## Running locally
 
@@ -30,7 +44,7 @@ cd spikes
 ci/run-spike.sh platform-facts my-machine
 ```
 
-The script installs the pinned toolchain if needed, builds the spike in release mode, runs it, and writes `out/my-machine/facts.json` and `out/my-machine/environment.txt`. `cargo test` runs the spikes' self-checks.
+The script installs the pinned toolchain if needed (Rust spikes), builds the spike in release mode, runs it, and writes `out/my-machine/facts.json` and `out/my-machine/environment.txt` (plus `configure.txt` for a C spike). `cargo test` runs the Rust spikes' self-checks; a C spike runs its self-check when invoked with `--self-check`. `ci/summarize.sh <spike> out` prints the summary table.
 
 ## Rules
 
