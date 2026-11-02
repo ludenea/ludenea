@@ -17,10 +17,12 @@ on:
     branches: [main]
     paths:
       - "spikes/**"
+      - "!spikes/**/*.md"
       - ".github/workflows/research-ci.yml"
   pull_request:
     paths:
       - "spikes/**"
+      - "!spikes/**/*.md"
       - ".github/workflows/research-ci.yml"
   workflow_dispatch:
     inputs:
