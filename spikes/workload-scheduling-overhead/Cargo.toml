@@ -1,0 +1,10 @@
+[package]
+name = "workload-scheduling-overhead"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: four schedulers on the reference workload for the multithreading research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }
