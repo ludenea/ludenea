@@ -1,0 +1,9 @@
+[package]
+name = "platform-threading-constraints"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: which platform work is bound to the main thread, for the cross-platform compatibility research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]

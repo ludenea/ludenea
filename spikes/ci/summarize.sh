@@ -41,6 +41,25 @@ case "$spike" in
       jq -r '"- `\(.cell)`: \(.alternate_dispatch.method // "not measured"); libm hash \(.alternate_dispatch.libm // "n/a"); probes that differ from the default path: \(.alternate_dispatch.differs_from_default // [] | if length == 0 then "none" else join(", ") end)."' "$file"
     done
     ;;
+  platform-threading-constraints)
+    echo "| Cell | Probe | Outcome | Exit | Duration ms | Details |"
+    echo "| --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .probes[] | "| \($cell) | \(.name) | \(.outcome) | \(.exit) | \(.duration_ms) | \(.details | to_entries | map("\(.key)=\(.value)") | join("; ") | gsub("\\|"; "\\\\|")) |"' "$file"
+    done
+    echo
+    echo "Session facts per cell:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: \(.session | to_entries | map("\(.key)=\(.value)") | join("; "))"' "$file"
+    done
+    echo
+    echo "Standard error tails of the probes that did not succeed:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .probes[] | select(.outcome != "succeeded") | "- `\($cell)` `\(.name)` (\(.outcome)): \(.stderr_tail | gsub("\n"; " ") | .[0:300])"' "$file"
+    done
+    ;;
   box2d-worker-sweep)
     echo "| Cell | SIMD width | Scheduler | Scene | Workers | Final hash | Steps | ms per step (median) | First divergent step |"
     echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
