@@ -15,6 +15,36 @@ name = "reference-workload"
 version = "0.1.0"
 
 [[package]]
+name = "runtime-skeleton"
+version = "0.1.0"
+dependencies = [
+ "reference-workload",
+ "skeleton-facade",
+]
+
+[[package]]
+name = "skeleton-core"
+version = "0.1.0"
+dependencies = [
+ "reference-workload",
+]
+
+[[package]]
+name = "skeleton-facade"
+version = "0.1.0"
+dependencies = [
+ "skeleton-core",
+ "skeleton-presentation",
+]
+
+[[package]]
+name = "skeleton-presentation"
+version = "0.1.0"
+dependencies = [
+ "skeleton-core",
+]
+
+[[package]]
 name = "workload-scheduling-overhead"
 version = "0.1.0"
 dependencies = [

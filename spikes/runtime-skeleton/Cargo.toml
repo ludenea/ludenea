@@ -1,0 +1,15 @@
+[package]
+name = "runtime-skeleton"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: a minimal three-layer crate set stepping the reference workload under time control, with and without a presentation capability, for the runtime architecture research"
+license = "MIT OR Apache-2.0"
+
+[features]
+# A host selects the capabilities of its build through the facade's flags.
+presentation = ["skeleton-facade/presentation"]
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }
+skeleton-facade = { path = "facade" }

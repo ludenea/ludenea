@@ -1,0 +1,16 @@
+[package]
+name = "skeleton-facade"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike crate: the facade of the runtime skeleton, the one place where a feature flag selects the presence of a capability crate, for the runtime architecture research"
+license = "MIT OR Apache-2.0"
+
+[features]
+# The presentation capability is present when the flag is on: the crate is a
+# dependency and is linked; off, the binary has no dependency on it at all.
+presentation = ["dep:skeleton-presentation"]
+
+[dependencies]
+skeleton-core = { path = "../core" }
+skeleton-presentation = { path = "../presentation", optional = true }

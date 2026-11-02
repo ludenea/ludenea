@@ -1,0 +1,10 @@
+[package]
+name = "skeleton-presentation"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike crate: the presentation capability of the runtime skeleton (a stub extraction node), for the runtime architecture research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+skeleton-core = { path = "../core" }
