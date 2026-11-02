@@ -360,12 +360,14 @@ fn alternate_dispatch() -> Option<AlternateDispatch> {
         ("glibc_tunables", TUNABLES.to_string()),
         ("child_exit_status", child.status.to_string()),
     ];
-    let (avx2, fma) = loader_active_features(None);
+    let (avx2, fma, words) = loader_active_features(None);
     evidence.push(("loader_avx2_active_default", avx2));
     evidence.push(("loader_fma_active_default", fma));
-    let (avx2, fma) = loader_active_features(Some(TUNABLES));
+    evidence.push(("loader_active_words_default", words));
+    let (avx2, fma, words) = loader_active_features(Some(TUNABLES));
     evidence.push(("loader_avx2_active_with_tunable", avx2));
     evidence.push(("loader_fma_active_with_tunable", fma));
+    evidence.push(("loader_active_words_with_tunable", words));
     Some(AlternateDispatch {
         method: "child process with GLIBC_TUNABLES masking AVX2 and FMA",
         evidence,
@@ -376,16 +378,20 @@ fn alternate_dispatch() -> Option<AlternateDispatch> {
 /// Whether AVX2 and FMA are active for the dynamic loader (`ld.so
 /// --list-diagnostics`, glibc 2.33 or later), with or without the tunable, so
 /// that the two readings show whether the mask took effect. The loader prints
-/// `x86.cpu_features.features[<leaf>].active[<register>]=<word>`; AVX2 is bit
-/// 5 of the `ebx` word (register 1) of leaf 7 and FMA is bit 12 of the `ecx`
-/// word (register 2) of leaf 1. Returns "true", "false" or a reason.
+/// `x86.cpu_features.features[<index>].active[<register>]=<word>`, where the
+/// index is glibc's own numbering of the cpuid leaves (0 is leaf 1, 1 is leaf
+/// 7) and the register is 0 for `eax` to 3 for `edx`; AVX2 is bit 5 of the
+/// `ebx` word of leaf 7 and FMA is bit 12 of the `ecx` word of leaf 1. Returns
+/// the two readings ("true", "false" or a reason) and the raw words of the two
+/// leaves, so that a reader can decode them without trusting the mapping.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-fn loader_active_features(tunables: Option<&str>) -> (String, String) {
+fn loader_active_features(tunables: Option<&str>) -> (String, String, String) {
     let loader = ["/lib64/ld-linux-x86-64.so.2", "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"]
         .into_iter()
         .find(|path| std::path::Path::new(path).exists());
     let Some(loader) = loader else {
-        return ("loader not found".to_string(), "loader not found".to_string());
+        let reason = "loader not found".to_string();
+        return (reason.clone(), reason.clone(), reason);
     };
     let mut command = std::process::Command::new(loader);
     command.arg("--list-diagnostics");
@@ -395,14 +401,22 @@ fn loader_active_features(tunables: Option<&str>) -> (String, String) {
     match command.output() {
         Ok(output) => {
             let text = String::from_utf8_lossy(&output.stdout);
+            let words: Vec<&str> = text
+                .lines()
+                .filter(|line| {
+                    line.starts_with("x86.cpu_features.features[0x0].active[")
+                        || line.starts_with("x86.cpu_features.features[0x1].active[")
+                })
+                .collect();
             (
-                active_bit(&text, "x86.cpu_features.features[0x7].active[0x1]=", 5),
-                active_bit(&text, "x86.cpu_features.features[0x1].active[0x2]=", 12),
+                active_bit(&text, "x86.cpu_features.features[0x1].active[0x1]=", 5),
+                active_bit(&text, "x86.cpu_features.features[0x0].active[0x2]=", 12),
+                if words.is_empty() { format!("no active word in the diagnostics ({})", output.status) } else { words.join("; ") },
             )
         }
         Err(error) => {
             let reason = format!("could not run the loader: {error}");
-            (reason.clone(), reason)
+            (reason.clone(), reason.clone(), reason)
         }
     }
 }
@@ -651,13 +665,13 @@ mod tests {
 
     #[test]
     fn loader_active_bits_are_decoded() {
-        let diagnostics = "x86.cpu_features.features[0x7].cpuid[0x1]=0x219c97a9\n\
-                           x86.cpu_features.features[0x7].active[0x1]=0x219c97a9\n\
-                           x86.cpu_features.features[0x1].active[0x2]=0x7ed8320b\n";
-        assert_eq!(active_bit(diagnostics, "x86.cpu_features.features[0x7].active[0x1]=", 5), "true");
-        assert_eq!(active_bit(diagnostics, "x86.cpu_features.features[0x1].active[0x2]=", 12), "true");
-        assert_eq!(active_bit(diagnostics, "x86.cpu_features.features[0x1].active[0x2]=", 14), "false");
-        assert!(active_bit(diagnostics, "x86.cpu_features.features[0x0].active[0x0]=", 0).starts_with("no line"));
+        let diagnostics = "x86.cpu_features.features[0x1].cpuid[0x1]=0x219c97a9\n\
+                           x86.cpu_features.features[0x1].active[0x1]=0x219c97a9\n\
+                           x86.cpu_features.features[0x0].active[0x2]=0x7ed8320b\n";
+        assert_eq!(active_bit(diagnostics, "x86.cpu_features.features[0x1].active[0x1]=", 5), "true");
+        assert_eq!(active_bit(diagnostics, "x86.cpu_features.features[0x0].active[0x2]=", 12), "true");
+        assert_eq!(active_bit(diagnostics, "x86.cpu_features.features[0x0].active[0x2]=", 14), "false");
+        assert!(active_bit(diagnostics, "x86.cpu_features.features[0x5].active[0x0]=", 0).starts_with("no line"));
     }
 
     #[test]
