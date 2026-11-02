@@ -1,0 +1,10 @@
+[package]
+name = "workload-structural-changes"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: deferred structural changes on three storage layouts of the reference workload for the ECS research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }

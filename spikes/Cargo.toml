@@ -2,7 +2,7 @@
 # workspace, the pinned toolchain and the reference workload (see README.md).
 [workspace]
 resolver = "3"
-members = ["platform-facts", "reference-workload", "workload-worker-sweep", "workload-scheduling-overhead", "workload-storage-layouts"]
+members = ["platform-facts", "reference-workload", "workload-worker-sweep", "workload-scheduling-overhead", "workload-storage-layouts", "workload-structural-changes"]
 
 [profile.release]
 debug = 1
