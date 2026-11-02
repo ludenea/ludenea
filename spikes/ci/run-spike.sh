@@ -8,8 +8,9 @@
 #
 # A Rust spike is a member of the Cargo workspace (Cargo.toml in its directory)
 # and is built with the pinned toolchain; RUSTFLAGS, when set, is passed to the
-# compiler by Cargo and recorded in the environment file. A C spike has a
-# CMakeLists.txt in its directory and is built in release mode with the
+# compiler by Cargo and recorded in the environment file, and SPIKE_PROFILE
+# selects the Cargo profile (release by default; dev for an unoptimized build).
+# A C spike has a CMakeLists.txt in its directory and is built in release mode with the
 # platform's default compiler; its executable is named after the CMake project.
 # Either way the spike prints one JSON document on standard output, which is
 # saved as facts.json.
@@ -20,6 +21,7 @@ set -euo pipefail
 
 spike="${1:?usage: run-spike.sh <spike directory> <cell>}"
 cell="${2:?usage: run-spike.sh <spike directory> <cell>}"
+profile="${SPIKE_PROFILE:-release}"
 
 cd "$(dirname "$0")/.."
 out="out/$cell"
@@ -63,6 +65,7 @@ fi
   echo "image_os=${ImageOS:-}"
   echo "image_version=${ImageVersion:-}"
   echo "rustflags=${RUSTFLAGS:-}"
+  echo "profile=$profile"
   case "$(uname -s)" in
     Linux*)
       echo "os_release=$(. /etc/os-release && echo "$PRETTY_NAME")"
@@ -92,8 +95,8 @@ fi
 } > "$out/environment.txt"
 
 if [ "$kind" = rust ]; then
-  cargo build --release --locked --package "$package"
-  cargo run --quiet --release --locked --package "$package" -- "$cell" > "$out/facts.json"
+  cargo build --profile "$profile" --locked --package "$package"
+  cargo run --quiet --profile "$profile" --locked --package "$package" -- "$cell" > "$out/facts.json"
 else
   build="build/$spike"
   # The configure output names the compiler and the options the spike's

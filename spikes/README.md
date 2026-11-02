@@ -23,7 +23,7 @@ The workflow [`research-ci.yml`](../.github/workflows/research-ci.yml) builds an
 
 The workflow runs on pushes and pull requests that touch `spikes/` or the workflow, and on demand. Each cell is independent: one failing cell never cancels the others, because every cell is a measurement, and a later run never cancels an earlier one for the same reason.
 
-On demand (`workflow_dispatch`), a run can pick another spike, pass extra `RUSTFLAGS` to a Rust spike, and run on another set of cells given as a JSON list. Two uses of the cross-platform compatibility research:
+On demand (`workflow_dispatch`), a run can pick another spike, pass extra `RUSTFLAGS` to a Rust spike, build a Rust spike with another Cargo profile (`dev` for an unoptimized build with debug assertions), and run on another set of cells given as a JSON list. Three uses of the cross-platform compatibility and determinism research:
 
 ```bash
 # Rebuild the platform facts with a raised x86-64 instruction set baseline on the two x86_64 cells.
@@ -33,6 +33,10 @@ gh workflow run research-ci.yml -f rustflags='-C target-cpu=x86-64-v3' \
 # Run on the oldest runner images that match the engine's proposed operating system baseline.
 gh workflow run research-ci.yml \
   -f cells='[{"cell":"linux-x86_64-ubuntu-22.04","runner":"ubuntu-22.04"},{"cell":"linux-arm64-ubuntu-22.04","runner":"ubuntu-22.04-arm"},{"cell":"macos-arm64-macos-14","runner":"macos-14"}]'
+
+# Check that an unoptimized build of the reference workload gives the same hashes as the release build.
+gh workflow run research-ci.yml -f spike=reference-workload -f profile=dev \
+  -f cells='[{"cell":"linux-x86_64-dev","runner":"ubuntu-24.04"}]'
 ```
 
 The cell label is free text that names the artifact and the output directory; the environment file records the machine and the image the run landed on.
@@ -44,7 +48,7 @@ cd spikes
 ci/run-spike.sh platform-facts my-machine
 ```
 
-The script installs the pinned toolchain if needed (Rust spikes), builds the spike in release mode, runs it, and writes `out/my-machine/facts.json` and `out/my-machine/environment.txt` (plus `configure.txt` for a C spike). `cargo test` runs the Rust spikes' self-checks; a C spike runs its self-check when invoked with `--self-check`. `ci/summarize.sh <spike> out` prints the summary table.
+The script installs the pinned toolchain if needed (Rust spikes), builds the spike in release mode (or in the Cargo profile named by `SPIKE_PROFILE`), runs it, and writes `out/my-machine/facts.json` and `out/my-machine/environment.txt` (plus `configure.txt` for a C spike). `cargo test` runs the Rust spikes' self-checks; a C spike runs its self-check when invoked with `--self-check`. `ci/summarize.sh <spike> out` prints the summary table.
 
 ## Rules
 

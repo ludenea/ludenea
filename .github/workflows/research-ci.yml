@@ -7,8 +7,9 @@
 #
 # Every run is a measurement, so runs are never cancelled by later runs.
 # On demand, a run can pick another spike, extra Rust flags (for example a
-# raised instruction set baseline) and another set of cells (for example the
-# oldest runner images the engine's baseline must support).
+# raised instruction set baseline), a Cargo profile (an unoptimized build) and
+# another set of cells (for example the oldest runner images the engine's
+# baseline must support).
 name: Research CI
 
 on:
@@ -35,6 +36,10 @@ on:
         description: 'Cells to run as a JSON list of {"cell": label, "runner": runner label}; empty runs the five cells of the boundary'
         type: string
         default: ""
+      profile:
+        description: "Cargo profile for Rust spikes: release (default) or dev for an unoptimized build with debug assertions"
+        type: string
+        default: release
 
 permissions:
   contents: read
@@ -42,6 +47,7 @@ permissions:
 env:
   SPIKE: ${{ inputs.spike || 'platform-facts' }}
   RUSTFLAGS: ${{ inputs.rustflags }}
+  SPIKE_PROFILE: ${{ inputs.profile || 'release' }}
 
 jobs:
   spike:
