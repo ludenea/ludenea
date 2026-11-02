@@ -883,7 +883,8 @@ impl Graph {
         3 + 2 * self.nodes[NODE_REPULSION].chunks as u64
     }
 
-    /// The scheduler's state in one line, for a watchdog.
+    /// The scheduler's state in one line, for the watchdog of the self-checks.
+    #[cfg(test)]
     fn describe(&self) -> String {
         let nodes: Vec<String> = self
             .nodes
