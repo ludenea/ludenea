@@ -20,6 +20,7 @@ members = [
     "workload-history-capture",
     "headless-modes",
     "workload-test-harness",
+    "workload-lockstep",
 ]
 
 [profile.release]

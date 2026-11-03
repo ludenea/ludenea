@@ -439,6 +439,33 @@ case "$spike" in
       jq -r '"- `\(.cell)`: the sequential reference runs at \([.many_worlds.sequential_reference_ticks_per_second[].ticks_per_second] | map(tostring) | join(", ")) ticks per second (one run per seed)."' "$file"
     done
     ;;
+  workload-lockstep)
+    echo "Two peers in lockstep over the simulated link, every delay, link setting and worker count:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: \(.platform.available_parallelism) CPUs; \(.lockstep | length) lockstep runs, \([.lockstep[] | select(.hashes_identical)] | length) with identical hashes at every tick, \([.lockstep[] | select(.matches_oracle)] | length) matching the oracle, \([.lockstep[] | select(.divergence_detected)] | length) divergence detected; delay 2 run hash \(.lockstep[0].run_hash), delay 4 run hash \([.lockstep[] | select(.delay == 4)][0].run_hash // "n/a")."' "$file"
+    done
+    echo
+    echo "| Cell | Workers | Delay | Latency | Jitter | Loss | Identical | Oracle | Stall frames peer 0 | Stall frames peer 1 | Frames | Dropped | Bytes per tick per peer | Ticks per second, both worlds |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .lockstep[] | "| \($cell) | \(.workers) | \(.delay) | \(.latency) | \(.jitter_max) | \(.loss) | \(.hashes_identical) | \(.matches_oracle) | \(.stall_frames_peer0) | \(.stall_frames_peer1) | \(.frames) | \(.messages_dropped) | \(.bytes_per_tick_per_peer) | \(.ticks_per_second_both_worlds) |"' "$file"
+    done
+    echo
+    echo "The injected desync (a kick peer 1 applies and never sends) and the same run without it:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .divergence | "- `\($cell)`: injected at tick \(.injected_tick), \(.workers) workers, delay \(.delay), latency \(.latency): detected \(.with_injection.detected) at tick \(.with_injection.detected_tick // "n/a") on frame \(.with_injection.detected_at_frame // "n/a") by \(.with_injection.detected_by // "nobody"); first divergent group \(.with_injection.first_divergent_group // "n/a"); snapshots of the tick identical \(if .with_injection.snapshots_identical == null then "n/a" else .with_injection.snapshots_identical end), first differing byte \(.with_injection.first_differing_byte // "n/a"), \(.with_injection.snapshot_bytes_peer0 // "n/a") bytes each, \(.with_injection.snapshot_us_each) us per snapshot; without injection: detected \(.without_injection.detected), hashes identical \(.without_injection.hashes_identical), matches the oracle \(.without_injection.matches_oracle)."' "$file"
+    done
+    echo
+    echo "The rollback variant on peer 1 (ring of 8 ticks past the confirmed tick), delay 2:"
+    echo
+    echo "| Cell | Workers | Latency | Jitter | Loss | Rollbacks | Predicted ticks | Mispredicted ticks | Re-simulated per rollback, mean | Max | Rollback ms mean | Max | Total | Stall frames peer 0 | Peer 1 | Confirmed hashes match | Oracle | Snapshot us each | Frames | Elapsed ms |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .rollback[] | "| \($cell) | \(.workers) | \(.latency) | \(.jitter_max) | \(.loss) | \(.rollbacks) | \(.predicted_ticks) | \(.mispredicted_ticks) | \(.resimulated_ticks_mean) | \(.resimulated_ticks_max) | \(.rollback_ms_mean) | \(.rollback_ms_max) | \(.rollback_ms_total) | \(.stall_frames_peer0) | \(.stall_frames_peer1) | \(.confirmed_hashes_match) | \(.matches_oracle) | \(.snapshot_us_each) | \(.frames) | \(.elapsed_ms) |"' "$file"
+    done
+    ;;
   workload-test-harness)
     echo "The suite of sixteen tests per run (every test two worlds from one fixture; the armed run expects one failure); the suite's wall time less the fixture's setup against the solo run, the two ideals and the longest solo test:"
     echo
