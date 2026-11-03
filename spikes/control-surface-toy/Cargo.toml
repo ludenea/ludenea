@@ -1,0 +1,10 @@
+[package]
+name = "control-surface-toy"
+version = "0.1.0"
+publish = false
+edition = "2024"
+description = "Throwaway spike: one command, one query and one event subscription over the reference workload, served in process and over local sockets to a scripted agent that discovers the contract, with a reconnection and one compatible schema change, for the control surface research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }

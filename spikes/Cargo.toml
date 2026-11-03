@@ -16,6 +16,7 @@ members = [
     "runtime-skeleton/facade",
     "workload-frame-allocator",
     "workload-schema",
+    "control-surface-toy",
 ]
 
 [profile.release]

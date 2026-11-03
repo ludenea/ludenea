@@ -318,6 +318,49 @@ case "$spike" in
       jq -r '"- `\(.cell)`: rejected \(.new_script_against_old_description.rejected): \(.new_script_against_old_description.error // "")."' "$file"
     done
     ;;
+  control-surface-toy)
+    echo "Paths per worker count (the agent's announced hashes against the sequential oracle; the input log replayed on a fresh world):"
+    echo
+    echo "| Cell | Workers | Path | Transport | Matches the oracle | First divergent tick | Ticks per second | Direct ticks per second | Step us per call | Events | Contiguous | Duplicates | Step hashes match events | Applied | Stale | Reconnected | Retried key alike | Bytes sent | Bytes received | Log bytes per tick | Replay matches |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .runs[] | .workers as $w | .direct.ticks_per_second as $direct | .paths[] | "| \($cell) | \($w) | \(.path) | \(.transport) | \(.matches_oracle) | \(.first_divergent_tick) | \(.ticks_per_second) | \($direct) | \(.step_us_per_call) | \(.events_received) | \(.events_contiguous) | \(.duplicate_events) | \(.step_hashes_match_events) | \(.outcomes_applied) | \(.outcomes_stale) | \(.reconnected) | \(.retried_key_answered_alike) | \(.bytes_sent) | \(.bytes_received) | \(.log_bytes_per_tick) | \(.replay_matches) |"' "$file"
+    done
+    echo
+    echo "Per cell: the direct run against the oracle, and the paths that match it:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: \(.platform.available_parallelism) CPUs; direct matches the oracle at every worker count: \([.runs[].direct.matches_oracle] | all); \([.runs[].paths[] | select(.matches_oracle and .replay_matches)] | length) of \([.runs[].paths[]] | length) paths match the oracle and replay."' "$file"
+    done
+    echo
+    echo "Round trips (one-tick steps with a query, and empty polls):"
+    echo
+    echo "| Cell | Workers | Transport | Step us per call | World step us per call | Surface and transport us per step | Empty round trip us | Matches the oracle |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .runs[] | .workers as $w | .round_trips[] | "| \($cell) | \($w) | \(.transport) | \(.step_us_per_call) | \(.world_step_us_per_call) | \(.surface_and_transport_us_per_step) | \(.empty_round_trip_us) | \(.matches_oracle) |"' "$file"
+    done
+    echo
+    echo "The paced session over the loopback socket (the host steps; the agent polls, kicks, disconnects once and resumes):"
+    echo
+    echo "| Cell | Workers | Host steps | Host ticks per second | Events | Contiguous | Duplicates | Every tick announced once | Announced hashes match the world | Commands | Applied | Reconnected | Replay matches |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .paced | "| \($cell) | \(.workers) | \(.host_steps) | \(.host_ticks_per_second) | \(.events_received) | \(.events_contiguous) | \(.duplicate_events) | \(.every_tick_announced_once) | \(.announced_hashes_match_the_world) | \(.commands_sent) | \(.outcomes_applied) | \(.reconnected) | \(.replay_matches) |"' "$file"
+    done
+    echo
+    echo "The compatible change (a field added to the kick command with a default):"
+    echo
+    echo "| Cell | Run | Transport | Matches its oracle | Replay matches | Commands |"
+    echo "| --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .compatibility.runs[] | "| \($cell) | \(.path) | \(.transport) | \(.matches_oracle) | \(.replay_matches) | \(.commands_sent) |"' "$file"
+    done
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: scale changes the hashes \(.compatibility.scale_changes_the_hashes); the new script against the old server is rejected \(.compatibility.new_script_old_server.rejected) (\(.compatibility.new_script_old_server.error)); probes: \([.compatibility.probes[] | "\(.code) (\(.message))"] | join("; ")); the probed run stayed intact \(.compatibility.probes_left_the_run_intact)."' "$file"
+    done
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;
