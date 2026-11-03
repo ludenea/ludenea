@@ -361,6 +361,43 @@ case "$spike" in
       jq -r '"- `\(.cell)`: scale changes the hashes \(.compatibility.scale_changes_the_hashes); the new script against the old server is rejected \(.compatibility.new_script_old_server.rejected) (\(.compatibility.new_script_old_server.error)); probes: \([.compatibility.probes[] | "\(.code) (\(.message))"] | join("; ")); the probed run stayed intact \(.compatibility.probes_left_the_run_intact)."' "$file"
     done
     ;;
+  workload-history-capture)
+    echo "The live run (cadence 60) and the replays from every snapshot to the next at 1, 2, 4 and 8 workers:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: \(.platform.available_parallelism) CPUs, live at \(.live_workers) workers, run hash \(.live.run_hash), \(.live.kicks) kicks, \(.live.events) events, \(.live.snapshots) snapshots; \(.replay_summary.replays_matching) of \(.replay_summary.replays) replays match (hashes and events), every replay matches \(.replay_summary.every_replay_matches); memory \(.memory.total_bytes) bytes against \(.memory.predicted_bytes) predicted (ratio \(.memory.measured_over_predicted), within 10 percent \(.memory.within_10_percent)), \(.memory.ten_minutes_at_60_per_second_megabytes) MB for ten minutes at 60 ticks per second."' "$file"
+    done
+    echo
+    echo "The always-on cost per cadence (0 captures the log and the events only):"
+    echo
+    echo "| Cell | Workers | Cadence | Batch | Ticks per second | Capture share of the run | Capture us per tick | Snapshot us each | Log bytes per tick | Event bytes per tick |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .cost[] | "| \($cell) | \(.workers) | \(.cadence) | \(.batch) | \(.ticks_per_second) | \(.capture_share_of_run) | \(.capture_us_per_tick) | \(.snapshot_us_each) | \(.log_bytes_per_tick) | \(.event_bytes_per_tick) |"' "$file"
+    done
+    echo
+    echo "Causal queries by instrumented replay on the completed capture (20 queries spread over the run):"
+    echo
+    echo "| Cell | Harness workers | Answered | Hashes matching | Latency ms min | Latency ms mean | Latency ms max | Restore ms mean | Replayed ticks mean | Replayed ticks max | Example: kicks, neighbor ticks, component changes |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .causal_queries[] | "| \($cell) | \(.workers) | \(.answered) | \(.hashes_matching) | \(.latency_ms_min) | \(.latency_ms_mean) | \(.latency_ms_max) | \(.restore_ms_mean) | \(.replayed_ticks_mean) | \(.replayed_ticks_max) | \(.example.kicks_on_the_entity // "n/a"), \(.example.ticks_with_neighbors // "n/a"), \(.example.component_changes // "n/a") |"' "$file"
+    done
+    echo
+    echo "The live world stepped by a paced host (one tick per millisecond) while queries run on harness worlds:"
+    echo
+    echo "| Cell | Workers | Alone matches direct | Host step us alone | Harness workers | Queried matches direct | Host step us queried | Host wall ms | Queries | Hashes matching | Latency ms mean | Latency ms max |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .live_under_queries as $l | $l.queried[] | "| \($cell) | \($l.workers) | \($l.alone_matches_direct) | \($l.host_step_us_alone) | \(.query_workers) | \(.queried_matches_direct) | \(.host_step_us) | \(.host_wall_ms) | \(.queries_answered) | \(.queries_hashes_matching) | \(.query_latency_ms_mean) | \(.query_latency_ms_max) |"' "$file"
+    done
+    echo
+    echo "Retention at the end of the paced run:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.live_under_queries.retention | "- `\(.cell // "")`\(.retention_ticks) ticks of retention at cadence \(.cadence): \(.snapshots_retained) snapshots retained, oldest answerable tick \(.oldest_answerable_tick), tick \(.inside_tick) answered \(.inside_answered), tick \(.outside_tick) rejected \(.outside_rejected) with \(.outside_code // "no error") (\(.outside_message // "")); \(.retained_bytes) bytes retained."' "$file" | sed "s/^- \`\`/- /"
+    done
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;

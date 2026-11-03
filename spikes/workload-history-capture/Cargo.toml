@@ -1,0 +1,10 @@
+[package]
+name = "workload-history-capture"
+version = "0.1.0"
+publish = false
+edition = "2024"
+description = "Throwaway spike: the input log, snapshots on a cadence, the event log and causal queries by instrumented replay over the reference workload with kicks, for the control surface research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }

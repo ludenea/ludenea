@@ -17,6 +17,7 @@ members = [
     "workload-frame-allocator",
     "workload-schema",
     "control-surface-toy",
+    "workload-history-capture",
 ]
 
 [profile.release]
