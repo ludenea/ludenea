@@ -395,7 +395,7 @@ case "$spike" in
     echo "Retention at the end of the paced run:"
     echo
     for file in "${facts[@]}"; do
-      jq -r '.live_under_queries.retention | "- `\(.cell // "")`\(.retention_ticks) ticks of retention at cadence \(.cadence): \(.snapshots_retained) snapshots retained, oldest answerable tick \(.oldest_answerable_tick), tick \(.inside_tick) answered \(.inside_answered), tick \(.outside_tick) rejected \(.outside_rejected) with \(.outside_code // "no error") (\(.outside_message // "")); \(.retained_bytes) bytes retained."' "$file" | sed "s/^- \`\`/- /"
+      jq -r '.cell as $cell | .live_under_queries.retention | "- `\($cell)`: \(.retention_ticks) ticks of retention at cadence \(.cadence): \(.snapshots_retained) snapshots retained, oldest answerable tick \(.oldest_answerable_tick), tick \(.inside_tick) answered \(.inside_answered), tick \(.outside_tick) rejected \(.outside_rejected) with \(.outside_code // "no error") (\(.outside_message // "")); \(.retained_bytes) bytes retained."' "$file"
     done
     ;;
   *)
