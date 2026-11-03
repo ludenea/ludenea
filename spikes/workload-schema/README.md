@@ -29,4 +29,20 @@ Research CI, workflow `research-ci.yml`, five cells (see [`spikes/README.md`](..
 
 ## Result
 
-To be recorded from the research CI run.
+Research CI [run](https://github.com/ludenea/ludenea/actions/runs/41692282727) of 2026-11-03 on four cells (AMD EPYC 9V45 on Linux x86_64, Neoverse N2 on Linux ARM64, AMD EPYC 7763 on Windows x86_64, Cobalt 100 on Windows ARM64), the macOS cell cancelled by the platform for capacity and re-run on demand the same day ([run](https://github.com/ludenea/ludenea/actions/runs/41695541304), a virtual Apple M1 with 3 CPUs), and a local run the same day on an Apple M5 (10 cores, macOS 26) outside the matrix. Every check holds on every cell. Mean microseconds per tick boundary over 1 000 ticks of the default size, wander system off, for the three readings (schema version 1 read by script 1, version 2 read by script 1, version 2 read by script 2):
+
+| Cell | Machine | Encode the state | Client read with its hash | Storage hash | Sequential tick |
+| --- | --- | --- | --- | --- | --- |
+| `linux-x86_64` | AMD EPYC 9V45 | 47 to 53 | 458 to 476 | 229 to 234 | 1 230 to 1 250 |
+| `linux-arm64` | Neoverse N2 | 60 to 67 | 593 to 617 | 224 to 225 | 1 116 to 1 126 |
+| `windows-x86_64` | AMD EPYC 7763 | 91 to 108 | 735 to 892 | 313 | 1 606 to 1 612 |
+| `windows-arm64` | Cobalt 100 | 116 to 127 | 698 to 737 | 225 | 1 118 to 1 130 |
+| `macos-arm64` | Apple M1 virtual, 3 CPUs | 71 to 87 | 922 to 1 000 | 411 to 429 | 1 583 to 1 631 |
+| local | Apple M5 | 36 to 40 | 380 to 402 | 224 to 228 | 757 to 772 |
+
+- Hypothesis 1 holds: at every one of the 1 001 tick boundaries of every reading on every cell, the hash the client recomputes from the described values equals the storage's hash (zero mismatching ticks), every entity's handle matches its identifier slot (zero inconsistent ticks), and the client's run hash equals the sequential reference's `0x9f50cc4763ae733c`. The `world_state` weighs 330 024 bytes for 10 000 entities under version 1 (33 bytes per entity: 5 for the identifier slot, 8 for the handle, 20 for the three components) and 370 024 under version 2; the description weighs 1 206 and 1 287 bytes.
+- Hypothesis 2 holds: the version 1 script reads the version 2 server with the same hashes, skipping `spin` by its described type; the version 2 script reads `spin` and its hash of the column equals the storage's on every tick; the version 1 save at tick 500 loads under version 2 with the default in the added field (the hash at load equals the saved and the reference, the column is all zeros), and both scripts then read the loaded server to tick 1 000 with the reference's hashes on every cell.
+- Hypothesis 3 holds: the version 2 script against the version 1 description is refused with "field `spin` is not in `velocity`" on every cell; the self-check refuses a field of another type naming the field and both types.
+- Hypothesis 4 holds: encoding the whole state costs 47 to 127 microseconds on the cells (4 to 8 percent of a sequential tick), the client's read with its hash 458 to 1 000 microseconds (37 to 61 percent of a sequential tick, 1.6 to 3.1 times the storage's own hash, since the client decodes 330 KB and hashes 210 KB of them through a plan resolved by name), both under one tick on every cell; the version 2 rows cost the version 1 script 2 to 6 percent more to skip.
+
+The raw measurements and the environment of each cell are the artifacts of the runs. The result holds for the reference workload version 1 at this toolchain and on these images.
