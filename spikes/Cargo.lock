@@ -101,6 +101,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "workload-test-harness"
+version = "0.1.0"
+dependencies = [
+ "reference-workload",
+]
+
+[[package]]
 name = "workload-worker-sweep"
 version = "0.1.0"
 dependencies = [

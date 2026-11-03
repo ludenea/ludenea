@@ -1,0 +1,15 @@
+[package]
+name = "workload-test-harness"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: the reference workload as tests of the standard harness in isolated worlds of one process, with divergence reports between worker counts, for the game testing research"
+license = "MIT OR Apache-2.0"
+
+[features]
+# The presentation capability as a stub extraction node registered by the
+# fixture: the same tests run on both builds.
+presentation = []
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }

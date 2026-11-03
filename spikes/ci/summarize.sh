@@ -439,6 +439,41 @@ case "$spike" in
       jq -r '"- `\(.cell)`: the sequential reference runs at \([.many_worlds.sequential_reference_ticks_per_second[].ticks_per_second] | map(tostring) | join(", ")) ticks per second (one run per seed)."' "$file"
     done
     ;;
+  workload-test-harness)
+    echo "The suite of sixteen tests per run (every test two worlds from one fixture; the armed run expects one failure); the suite's wall time less the fixture's setup against the solo run, the two ideals and the longest solo test:"
+    echo
+    echo "| Cell | Configuration | Run | Test threads | Panic armed | Passed | Failed | Suite wall ms | Setup ms | Speedup over solo | Ratio to the wall ideal | Ratio to the worker time ideal | Ratio to the longest solo test | Restore us mean | Restore us max | Under 2 ms |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.runs // []) as $runs | (.fixture // []) as $fixture | (.parallelism.suites // [])[] | .label as $label | .configuration as $configuration | ($runs[] | select(.label == $label and .configuration == $configuration)) as $run | ($fixture[] | select(.label == $label and .configuration == $configuration)) as $f | "| \($cell) | \(.configuration) | \(.label) | \(.test_threads) | \(.panic_armed) | \($run.passed) | \($run.failed) | \(.suite_wall_ms) | \(.setup_ms) | \(.speedup_over_solo) | \(.ratio_to_wall_ideal) | \(.ratio_to_worker_time_ideal) | \(.ratio_to_longest_solo) | \($f.restore_us_mean) | \($f.restore_us_max) | \($f.under_2_ms) |"' "$file"
+    done
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: \(.platform.available_parallelism) CPUs, size \(.size), \(.ticks) ticks, profile \(.profile); every run passed except the armed one: \(.every_run_passed_except_the_armed_one); hashes identical across runs and builds: \(.hashes_identical_across_runs); longest solo test \(.parallelism.longest_solo_test_ms) ms (\(.parallelism.longest_solo_test)), sum of the solo tests \(.parallelism.sum_of_solo_tests_ms) ms, worker time estimate \(.parallelism.worker_time_estimate_ms) ms; builds \([.builds[] | "\(.configuration) \(.seconds) s succeeded \(.succeeded)"] | join(", "))."' "$file"
+    done
+    echo
+    echo "Divergence reports of the seven injected tests, per run:"
+    echo
+    echo "| Cell | Configuration | Run | Injected tests | Divergence found | Reported tick equals injected | Energy first | Only energy differs | Snapshots differ | Largest lag in ticks |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.divergence // [])[] | "| \($cell) | \(.configuration) | \(.label) | \(.injected_tests) | \(.divergence_found) | \(.reported_tick_equals_injected) | \(.energy_first) | \(.only_energy_differs) | \(.snapshots_differ) | \(.max_lag_ticks) |"' "$file"
+    done
+    echo
+    echo "The injected tests of the solo run (injected and reported ticks, the first divergent group and system, the snapshots of that tick):"
+    echo
+    echo "| Cell | Test | Injected tick | Reported tick | First divergent group | System | Groups differing | Snapshot bytes | First differing byte |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.divergence // [])[] | select(.label == "solo") | .tests[] | "| \($cell) | \(.name) | \(.injected_tick) | \(.reported_tick) | \(.first_divergent_group) | \(.first_divergent_system) | \(.groups_differing) | \(.snapshot_bytes) | \(.first_differing_byte) |"' "$file"
+    done
+    echo
+    echo "The armed run (a panic injected in a system of one test's second world):"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .panic_run | "- `\($cell)`: ran \(.ran), exit failure \(.exit_failure // "n/a"), \(.passed // "n/a") passed and \(.failed // "n/a") failed, failed tests: \(.failed_tests // "none"), failed alone \(.failed_alone // "n/a"); failure reported at tick \(.failure_tick // "n/a") in \(.failure_node // "n/a") chunk \(.failure_chunk // "n/a") on worker \(.failure_worker // "n/a"), world A matching the reference \(.world_a_matches_reference // "n/a"); message: \(.message // "")."' "$file"
+    done
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;

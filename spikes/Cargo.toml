@@ -19,6 +19,7 @@ members = [
     "control-surface-toy",
     "workload-history-capture",
     "headless-modes",
+    "workload-test-harness",
 ]
 
 [profile.release]
