@@ -30,4 +30,32 @@ Research CI, workflow `research-ci.yml`, five cells (see [`spikes/README.md`](..
 
 ## Result
 
-Not yet measured: the research CI run and the local run fill this section.
+Research CI [run](https://github.com/ludenea/ludenea/actions/runs/41708468135) of 2026-11-03 on the five cells (AMD EPYC 9V74 on Linux x86_64, Intel Xeon Platinum 8573C on Windows x86_64, Neoverse N2 on Linux ARM64, Cobalt 100 on Windows ARM64, a virtual Apple M1 with 3 CPUs on macOS), and a local run the same day on an Apple M5 (10 cores, macOS 26) outside the matrix. Every lockstep run on every cell (20 per cell at 1 and 4 workers, 30 on the macOS cell and locally with the machine's parallelism added) gives identical hashes at every tick between the two peers and the sequential oracle's hashes for the merged records, with one run hash per input delay on every cell and every link (`0xc8092250df659e22` for a delay of 2, `0x90cd714ece51a8dc` for a delay of 4), 7 993 of the 8 000 kicks applied and 7 stale in each world at a delay of 2. The stall frames, the frames used and the bytes per tick are the same on every cell, since the link's draws are seeded: per link setting (latency, jitter, loss), at a delay of 2 then 4:
+
+| Link | Stall frames per peer, delay 2 | Frames, delay 2 | Stall frames per peer, delay 4 | Frames, delay 4 | Messages dropped, delay 2 | Bytes per tick per peer |
+| --- | --- | --- | --- | --- | --- | --- |
+| (0, 0, 0) | 0 | 1 001 | 0 | 1 001 | 0 | 88 |
+| (1, 0, 0) | 0 | 1 001 | 0 | 1 001 | 0 | 157 |
+| (2, 1, 2 %) | 390 | 1 391 | 4 | 1 005 | 64 | 367 to 375 |
+| (4, 1, 10 %) | 1 392 to 1 395 | 2 396 | 271 to 272 | 1 273 | 479 | 663 to 684 |
+| (6, 2, 10 %) | 2 576 | 3 577 | 859 | 1 860 | 737 | 1 006 to 1 032 |
+
+Per cell, the throughput of both worlds together (one step call per tick, the latency 1 link) and the rollback variant's cost per rollback:
+
+| Cell | Machine | Ticks per second, 1 worker | Ticks per second, 4 workers | Rollback ms mean and max, latency 3 (4.5 ticks re-simulated) | Rollback ms mean and max, latency 5 with 5 % loss (7.4 ticks) | Ring snapshot us |
+| --- | --- | --- | --- | --- | --- | --- |
+| `linux-x86_64` | AMD EPYC 9V74 | 553 | 928 | 5.6, 7.2 | 8.9, 11.5 | 72 |
+| `linux-arm64` | Neoverse N2 | 735 | 1 481 | 4.0, 5.1 | 6.4, 8.6 | 118 |
+| `windows-x86_64` | Intel Xeon 8573C | 446 | 701 | 8.0, 11.1 | 12.5, 16.6 | 161 to 184 |
+| `windows-arm64` | Cobalt 100 | 728 | 1 229 | 4.8, 6.2 | 7.7, 9.5 | 147 to 156 |
+| `macos-arm64`, 3 workers | Apple M1 virtual | 616 | 1 114 | 5.3, 12.1 | 8.4, 30.1 | 91 to 95 |
+| local | Apple M5 | 974 | 1 681 (1 788 at 10) | 3.3, 15.6 | 4.7, 17.4 | 50 to 53 |
+
+- Hypothesis 1 holds: 130 of 130 lockstep runs across the cells and the local machine give identical per-tick hashes between the peers and the oracle's hashes, for both delays, the five link settings and every worker count, and the run hash of a delay is the same on every cell, which is the cross-platform level of the determinism contract seen from two peers (the merged records are the same values whatever the link and the worker count, so the oracle is one per delay).
+- Hypothesis 2 holds: the kick peer 1 applies at tick 500 without sending it is detected at tick 500 on frame 501 by both peers from the exchanged hashes, the first divergent group is the velocities (the input fixed point's and the repulsion's), the positions and the energy differ too and the structural columns do not, and the two snapshots of tick 500 (250 041 bytes each) differ from byte 35, the kicked entity's position, on every cell.
+- Hypothesis 3 holds: the same run without the injection and the 130 lockstep runs report no divergence.
+- Hypothesis 4 holds: with a latency at or below the delay and no loss, no peer stalls (the first inputs' travel is absorbed by the exchange of frame 0); with a latency above the delay every tick waits for the link: at a delay of 2 the (2, 1, 2 %) link, whose jitter pushes the latency to 3, stalls 390 frames over 1 000 ticks, the (4, 1, 10 %) link 1 392 to 1 395 and the (6, 2, 10 %) link 2 576 (3 577 frames for 1 000 ticks); a delay of 4 absorbs the first (4 stall frames, from the 2 percent loss) and brings the others to 271 to 272 and 859. The redundancy costs bytes rather than stalls: 88 bytes per tick per peer with no latency, 157 at a latency of 1, 367 to 375 at 2, 663 to 684 at 4 and 1 006 to 1 032 at 6, every input eventually delivered under a loss of 10 percent (479 and 737 messages dropped).
+- Hypothesis 5 holds: with a latency of 1 under a delay of 2 the rollback peer never predicts and never rolls back; with a latency of 3 and a jitter of 1 it predicts every tick, mispredicts every one (the kicks change every tick) and rolls back 999 times, re-simulating 4.5 ticks per rollback (5 at most), at 4.0 to 8.0 ms per rollback on average on the cells (3.3 locally); with a latency of 5, a jitter of 1 and 5 percent loss it rolls back 939 times, re-simulating 7.4 ticks per rollback (8 at most, the window) at 6.4 to 12.5 ms on average (4.7 locally), stalling 37 frames when the window is exhausted while the lockstep peer stalls 42; in all three runs the confirmed ticks' hashes equal the lockstep peer's and the oracle's. The arithmetic of the networking findings (a rollback of 8 ticks at 4 to 8 ms at 4 workers on the runners) holds on the ARM64 cells and is exceeded on the x86_64 cells, where each re-simulated tick is one step call whose worker threads are spawned per step (0.3 to 0.5 ms each, the skeleton spike's measurement), a cost the runtime proposal's persistent pool removes.
+- Beyond the hypotheses: the per-tick snapshot ring costs 72 to 184 microseconds per snapshot on the cells (50 to 53 locally), the history capture spike's measurement at cadence one repeated; the throughput of both worlds at 4 workers is 1.6 to 2.0 times the 1-worker throughput only, because every tick is one step call (the per-step spawn and join), where the headless host stepping 1 000 ticks in one call reaches 2.3 to 3.5 times (the headless modes spike, the same day).
+
+The raw measurements and the environment of each cell are the artifacts of the run. The result holds for the reference workload version 1 at this toolchain and on these images.
