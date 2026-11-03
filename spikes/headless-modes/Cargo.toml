@@ -1,0 +1,16 @@
+[package]
+name = "headless-modes"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: the reference workload's headless and harness hosts in a minimal container, the binary's platform imports, non-interactive runs, many worlds per process and the self-description of absent capabilities, for the headless execution research"
+license = "MIT OR Apache-2.0"
+
+[features]
+# The presentation capability: a stub extraction node plus one platform
+# windowing library linked for the discovery of a display or window server
+# session, the positive control of the import check.
+presentation = []
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }

@@ -10,6 +10,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "headless-modes"
+version = "0.1.0"
+dependencies = [
+ "reference-workload",
+]
+
+[[package]]
 name = "platform-facts"
 version = "0.1.0"
 

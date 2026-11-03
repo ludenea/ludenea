@@ -398,6 +398,47 @@ case "$spike" in
       jq -r '.cell as $cell | .live_under_queries.retention | "- `\($cell)`: \(.retention_ticks) ticks of retention at cadence \(.cadence): \(.snapshots_retained) snapshots retained, oldest answerable tick \(.oldest_answerable_tick), tick \(.inside_tick) answered \(.inside_answered), tick \(.outside_tick) rejected \(.outside_rejected) with \(.outside_code // "no error") (\(.outside_message // "")); \(.retained_bytes) bytes retained."' "$file"
     done
     ;;
+  headless-modes)
+    echo "The headless and harness hosts per worker count, compared with the sequential reference (the binary without the presentation capability; the configuration with it at one worker, when it built):"
+    echo
+    echo "| Cell | Configuration | Workers | Headless matches | Ticks per second | Harness matches | Ticks per second while stepping | Paused ms | Extracted ticks |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .configuration as $configuration | .hosts[] | "| \($cell) | \($configuration) | \(.workers) | \(.headless.matches_reference) | \(.headless.ticks_per_second) | \(.harness.matches_reference) | \(.harness.ticks_per_second_while_stepping) | \(.harness.paused_ms) | \(.headless.extracted_ticks) |"' "$file"
+      jq -r '.cell as $cell | (.other_configuration.child_hosts // {}) | .configuration as $configuration | (.hosts // [])[] | "| \($cell) | \($configuration) | \(.workers) | \(.headless.matches_reference) | \(.headless.ticks_per_second) | \(.harness.matches_reference) | \(.harness.ticks_per_second_while_stepping) | \(.harness.paused_ms) | \(.headless.extracted_ticks) |"' "$file"
+    done
+    echo
+    echo "Dynamic imports of each configuration's binary (windowing, graphics and audio libraries flagged):"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | "- `\($cell)` \(.configuration): \(.imports.format // "unreadable") imports \([.imports.libraries[]?.name] | join(", ")); windowing, graphics or audio library imported: \(if .imports.error then .imports.error else .imports.imports_a_windowing_graphics_or_audio_library end) (\([.imports.denied[]?.name] | join(", "))). Other configuration (\(.other_configuration.build.configuration)) built \(.other_configuration.build.succeeded) in \(.other_configuration.build.seconds) s\(if .other_configuration.imports then ": \(.other_configuration.imports.format) imports \([.other_configuration.imports.libraries[]?.name] | join(", ")); flagged: \(.other_configuration.imports.imports_a_windowing_graphics_or_audio_library) (\([.other_configuration.imports.denied[]?.name] | join(", ")))" else "; stderr tail: \(.other_configuration.build.stderr_tail // "")" end)."' "$file"
+    done
+    echo
+    echo "Self-descriptions (not built; discovered by the other configuration; requested absent by the other configuration):"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .descriptions | "- `\($cell)`: this build \(.this_build | tostring); other build discovered \(.other_build_discovered | tostring) (discovery found \(.other_build_discovery_found)); other build requested absent \(.other_build_requested_absent | tostring); requested absent equals this build \(.requested_absent_equals_this_build); discovered equals this build \(.discovered_equals_this_build)."' "$file"
+    done
+    echo
+    echo "Session facts of the binary and of the non-interactive child (the child's hosts at one worker):"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | "- `\($cell)` binary: \(.session | tostring). Discovery of the other configuration: \(.other_configuration.describe.discovery | tostring)."' "$file"
+      jq -r '.cell as $cell | .non_interactive | if type == "object" then "- `\($cell)` non-interactive child (\(.context)): \(.child.session // .child.error | tostring); hosts match \([.child.hosts[]?.headless.matches_reference, .child.hosts[]?.harness.matches_reference] | tostring)." else "- `\($cell)` non-interactive child: \(.)" end' "$file"
+    done
+    echo
+    echo "Many worlds: N worlds at one worker on N threads (world-level parallelism), and one world at N workers (intra-world) for contrast:"
+    echo
+    echo "| Cell | CPUs | Worlds | Workers per world | Every world matches | Total ticks per second | Per-world ticks per second mean | Ratio to N times single world | Within 15 percent | One world at N workers: ticks per second |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .platform.available_parallelism as $cpus | .many_worlds as $m | $m.world_level[] | .worlds as $n | "| \($cell) | \($cpus) | \(.worlds) | \(.workers_per_world) | \(.every_world_matches) | \(.total_ticks_per_second) | \(.per_world_ticks_per_second_mean) | \(.ratio_to_n_times_single_world) | \(.within_15_percent) | \([$m.intra_world[] | select(.workers_per_world == $n) | .ticks_per_second] | first // "n/a") |"' "$file"
+    done
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: the sequential reference runs at \([.many_worlds.sequential_reference_ticks_per_second[].ticks_per_second] | map(tostring) | join(", ")) ticks per second (one run per seed)."' "$file"
+    done
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;
