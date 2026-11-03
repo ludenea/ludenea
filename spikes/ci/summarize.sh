@@ -297,6 +297,27 @@ case "$spike" in
       jq -r '.cell as $cell | .allocator_microbenchmark[] | "| \($cell) | \(.path) | \(.threads) | \(.nanoseconds_per_pair_median) | \(.nanoseconds_per_pair_min) |"' "$file"
     done
     ;;
+  workload-schema)
+    echo "| Cell | Server schema | Client script | Ticks read | Client hashes match the storage | First mismatching tick | Client matches the reference | Handles inconsistent at | Spin matches | State bytes | Description bytes | Encode us | Client read us | Storage hash us | Tick us |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .readings[] | "| \($cell) | \(.server_schema_version) | \(.client_script) | \(.ticks_read) | \(.client_hashes_match_storage) | \(.first_mismatching_tick) | \(.client_matches_reference) | \(.inconsistent_ticks) | \(.spin_matches_storage // "not read") | \(.state_bytes) | \(.description_bytes) | \(.encode_us_per_read) | \(.client_read_us_per_read) | \(.storage_hash_us_per_read) | \(.tick_us) |"' "$file"
+    done
+    echo
+    echo "A state saved under schema version 1 at the save tick and loaded under version 2, then read by both scripts:"
+    echo
+    echo "| Cell | Save tick | Loaded | Hash at load matches the save | Spin is the default at load | Script | Client hashes match the storage | Client matches the reference | Spin matches |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .saved_under_v1_loaded_under_v2 as $l | $l.by_script[]? | "| \($cell) | \($l.save_tick) | \($l.loaded) | \($l.hash_at_load_matches_saved) | \($l.spin_is_the_default_at_load) | \(.client_script) | \(.client_hashes_match_storage) | \(.client_matches_reference) | \(.spin_matches_storage // "not read") |"' "$file"
+    done
+    echo
+    echo "The breaking direction (the new script against the old description), per cell:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: rejected \(.new_script_against_old_description.rejected): \(.new_script_against_old_description.error // "")."' "$file"
+    done
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;

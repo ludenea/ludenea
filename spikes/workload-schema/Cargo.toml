@@ -1,0 +1,10 @@
+[package]
+name = "workload-schema"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: the reference workload's components described by a schema served as data, read by a client that knows nothing of the storage, with one compatible schema change, for the ECS research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }

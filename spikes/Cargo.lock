@@ -59,6 +59,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "workload-schema"
+version = "0.1.0"
+dependencies = [
+ "reference-workload",
+]
+
+[[package]]
 name = "workload-storage-layouts"
 version = "0.1.0"
 dependencies = [
