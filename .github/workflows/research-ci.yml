@@ -9,7 +9,7 @@
 # On demand, a run can pick another spike, extra Rust flags (for example a
 # raised instruction set baseline), a Cargo profile (an unoptimized build) and
 # another set of cells (for example the oldest runner images the engine's
-# baseline must support).
+# baseline must support, or a Linux cell inside a minimal container image).
 name: Research CI
 
 on:
@@ -35,7 +35,7 @@ on:
         type: string
         default: ""
       cells:
-        description: 'Cells to run as a JSON list of {"cell": label, "runner": runner label}; empty runs the five cells of the boundary'
+        description: 'Cells to run as a JSON list of {"cell": label, "runner": runner label, "container": optional image for a Linux runner}; empty runs the five cells of the boundary'
         type: string
         default: ""
       profile:
@@ -55,6 +55,11 @@ jobs:
   spike:
     name: ${{ matrix.cell }}
     runs-on: ${{ matrix.runner }}
+    # A Linux cell may name a container image: the job then runs inside it
+    # (a minimal image without display, GPU or audio libraries is the headless
+    # research's reproducible environment). Without one, the job runs on the
+    # runner directly.
+    container: ${{ matrix.container }}
     strategy:
       # Every cell is a measurement: one failing cell must not cancel the others.
       fail-fast: false
