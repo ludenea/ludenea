@@ -39,6 +39,14 @@ gh workflow run research-ci.yml -f spike=reference-workload -f profile=dev \
   -f cells='[{"cell":"linux-x86_64-dev","runner":"ubuntu-24.04"}]'
 ```
 
+A Linux cell may also name a container image (`container`): the job then runs inside it, which is how the headless execution research runs a spike in a minimal image without display, GPU or audio libraries:
+
+```bash
+# Run the headless modes spike inside a minimal container on the two Linux cells.
+gh workflow run research-ci.yml -f spike=headless-modes \
+  -f cells='[{"cell":"linux-x86_64-container","runner":"ubuntu-24.04","container":"rust:1.99.1-slim-bookworm"},{"cell":"linux-arm64-container","runner":"ubuntu-24.04-arm","container":"rust:1.99.1-slim-bookworm"}]'
+```
+
 The cell label is free text that names the artifact and the output directory; the environment file records the machine and the image the run landed on.
 
 ## Running locally
