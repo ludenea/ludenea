@@ -289,6 +289,10 @@ pub fn oracle(parameters: &Parameters, schedule: &[(u32, RepulsionTable)]) -> Ve
 pub enum Mode {
     /// The skeleton's kernel with the specification's constants: no asset at all, the cost baseline.
     Plain,
+    /// The parameterized kernel with no asset at all: the table is a runtime
+    /// value the world holds, read per chunk, and the fixed point does nothing.
+    /// Separates what the kernel's parameterization costs from what the fence costs.
+    Parameterized,
     /// The fence: the table is domain state, changed at the input fixed point only.
     Fenced,
     /// The control: the pass reads the shared slot the loader writes directly.
@@ -319,6 +323,10 @@ impl WorldConfig {
             mode: Mode::Plain,
             required: false,
         }
+    }
+
+    pub fn parameterized(self) -> WorldConfig {
+        WorldConfig { mode: Mode::Parameterized, required: false, ..self }
     }
 
     pub fn fenced(self, required: bool) -> WorldConfig {
@@ -528,6 +536,10 @@ struct Graph {
     parked: Vec<AtomicBool>,
     threads: OnceLock<Vec<Thread>>,
     // --- the asset ---
+    /// The parameterized mode's table: version 1 passed through a black box at
+    /// creation, so that the compiler treats it as the runtime value a data-driven
+    /// engine would hold and folds nothing of it into the kernel.
+    parameters: RepulsionTable,
     assets: UnsafeCell<Assets>,
     script: UnsafeCell<Script>,
     log: UnsafeCell<InputLog>,
@@ -579,6 +591,7 @@ impl Graph {
             tick_hashes: vec![AtomicU64::new(initial_hash)],
             parked: (0..config.workers).map(|_| AtomicBool::new(false)).collect(),
             threads: OnceLock::new(),
+            parameters: std::hint::black_box(RepulsionTable::VERSION_1),
             assets: UnsafeCell::new(Assets { availability: Availability::Unavailable, table: RepulsionTable::DEFAULT }),
             script: UnsafeCell::new(Script { entries: script, next: 0 }),
             log: UnsafeCell::new(InputLog::default()),
@@ -658,11 +671,13 @@ impl Graph {
     }
 
     /// The table a repulsion chunk reads: none in the plain mode (the
-    /// reference kernel's constants), the domain state in the fenced mode,
-    /// the shared slot's current value in the control.
+    /// reference kernel's constants), the world's runtime value in the
+    /// parameterized mode, the domain state in the fenced mode, the shared
+    /// slot's current value in the control.
     fn table_for_chunk(&self) -> Option<RepulsionTable> {
         match self.config.mode {
             Mode::Plain => None,
+            Mode::Parameterized => Some(self.parameters),
             // SAFETY: written at the fixed point only, which never overlaps a pass.
             Mode::Fenced => Some(unsafe { (*self.assets.get()).table }),
             Mode::FenceRemoved => {
@@ -1296,6 +1311,17 @@ mod tests {
         assert_equal_histories(&world.hashes(), &oracle(&parameters(), &[]), "the slot holds the default");
         assert_eq!(world.first_observed_tick(), None);
         assert_eq!(RepulsionTable::unpacked(RepulsionTable::VERSION_2.packed()), RepulsionTable::VERSION_2);
+    }
+
+    #[test]
+    fn the_parameterized_mode_reproduces_the_reference_with_no_asset() {
+        let reference = run_sequential(&parameters());
+        let mut world = World::new(WorldConfig::new(Size::Small, 3).parameterized(), Vec::new());
+        assert!(!world.loading());
+        step_in_batches(&mut world, 9, Duration::ZERO);
+        assert_equal_histories(&world.hashes(), &reference.tick_hashes, "parameterized");
+        assert!(world.log().transitions.is_empty());
+        assert_eq!(world.availability(), Availability::Unavailable);
     }
 
     #[test]

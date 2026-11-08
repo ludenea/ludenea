@@ -612,12 +612,12 @@ case "$spike" in
     distinct="$(jq -r '.hot_reload[].run_hash' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
     echo "- Distinct hot reload run hashes across every cell and worker count (1 means identical everywhere): $distinct."
     echo
-    echo "The cost of the fence (the fenced world, the table read per chunk and the queue drained at every fixed point, against the plain world with no asset machinery):"
+    echo "The cost of the fence in two steps: the plain world (the kernel with the constants inlined, no asset), the parameterized world (the same kernel reading its table from a runtime value, no asset) and the fenced world (the table read from the domain state per chunk, the queue drained at every fixed point); parameterized against plain is the kernel's parameterization, fenced against parameterized is the fence:"
     echo
-    echo "| Cell | Workers | Rounds | Plain ticks per second (best) | Fenced ticks per second (best) | Ratio | Every run matches the reference | Rounds (plain, fenced) |"
-    echo "| --- | --- | --- | --- | --- | --- | --- | --- |"
+    echo "| Cell | Workers | Rounds | Plain (best) | Parameterized (best) | Fenced (best) | Fenced to plain | Parameterized to plain | Fenced to parameterized | Every run matches | Rounds (plain, parameterized, fenced) |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
     for file in "${facts[@]}"; do
-      jq -r '.cell as $cell | .cost[] | "| \($cell) | \(.workers) | \(.rounds) | \(.plain_ticks_per_second) | \(.fenced_ticks_per_second) | \(.ratio) | \(.every_run_matches_reference) | \([.rounds_ticks_per_second[] | "\(.plain), \(.fenced)"] | join("; ")) |"' "$file"
+      jq -r '.cell as $cell | .cost[] | "| \($cell) | \(.workers) | \(.rounds) | \(.plain_ticks_per_second) | \(.parameterized_ticks_per_second // "n/a") | \(.fenced_ticks_per_second) | \(.ratio) | \(.ratio_parameterized_to_plain // "n/a") | \(.ratio_fenced_to_parameterized // "n/a") | \(.every_run_matches_reference) | \([.rounds_ticks_per_second[] | "\(.plain), \(.parameterized // "n/a"), \(.fenced)"] | join("; ")) |"' "$file"
     done
     echo
     echo "Failed transitions (an unknown asset, a payload of the wrong length and a payload with a wrong content hash, then a good payload):"

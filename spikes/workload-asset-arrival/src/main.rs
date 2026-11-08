@@ -319,44 +319,62 @@ fn hot_reload(out: &mut Json, scenario: &Scenario, workers: usize, oracle_hashes
     log_bytes
 }
 
-/// The fence's cost: a fenced world (the table read per chunk, the queue
-/// drained at every fixed point, version 1 scripted at tick 1) against a plain
-/// world with no asset machinery, after a warm-up of each, in alternating
-/// rounds; the best round of each is the figure, the one least disturbed by
-/// whatever else the machine was doing.
+/// The fence's cost, in two steps: a plain world (the kernel with the
+/// specification's constants inlined, no asset machinery), a parameterized
+/// world (the same kernel reading its table from a runtime value the world
+/// holds, no asset machinery) and a fenced world (the table read per chunk
+/// from the domain state, the queue drained at every fixed point, version 1
+/// scripted at tick 1), after a warm-up of each, in alternating rounds; the
+/// best round of each is the figure, the one least disturbed by whatever else
+/// the machine was doing. The parameterized world against the plain one is
+/// what the kernel's parameterization costs; the fenced world against the
+/// parameterized one is what the fence costs.
 fn cost(out: &mut Json, scenario: &Scenario, workers: usize, reference: &Run) {
     let warm_up_ticks = 10;
     let script = vec![(1, RepulsionTable::VERSION_1.arrival(1))];
-    let mut warm_plain = World::new(WorldConfig::new(scenario.size, workers), Vec::new());
-    warm_plain.step(warm_up_ticks).expect("the warm-up steps");
-    let mut warm_fenced = World::new(WorldConfig::new(scenario.size, workers).fenced(false), script.clone());
-    warm_fenced.step(warm_up_ticks).expect("the warm-up steps");
+    let plain_config = WorldConfig::new(scenario.size, workers);
+    let parameterized_config = WorldConfig::new(scenario.size, workers).parameterized();
+    let fenced_config = WorldConfig::new(scenario.size, workers).fenced(false);
+    for config in [plain_config, parameterized_config, fenced_config] {
+        let mut warm = World::new(config, script.clone());
+        warm.step(warm_up_ticks).expect("the warm-up steps");
+    }
     let mut plain_rates = Vec::new();
+    let mut parameterized_rates = Vec::new();
     let mut fenced_rates = Vec::new();
     let mut every_run_matches = true;
     for _ in 0..COST_ROUNDS {
-        let mut plain = World::new(WorldConfig::new(scenario.size, workers), Vec::new());
+        let mut plain = World::new(plain_config, Vec::new());
         plain.step(scenario.ticks).expect("the plain world steps");
-        let mut fenced = World::new(WorldConfig::new(scenario.size, workers).fenced(false), script.clone());
+        let mut parameterized = World::new(parameterized_config, Vec::new());
+        parameterized.step(scenario.ticks).expect("the parameterized world steps");
+        let mut fenced = World::new(fenced_config, script.clone());
         fenced.step(scenario.ticks).expect("the fenced world steps");
         plain_rates.push(ticks_per_second(scenario.ticks, plain.stepping()));
+        parameterized_rates.push(ticks_per_second(scenario.ticks, parameterized.stepping()));
         fenced_rates.push(ticks_per_second(scenario.ticks, fenced.stepping()));
         every_run_matches &= first_divergent_tick(&plain.hashes(), &reference.tick_hashes).is_none()
+            && first_divergent_tick(&parameterized.hashes(), &reference.tick_hashes).is_none()
             && first_divergent_tick(&fenced.hashes(), &reference.tick_hashes).is_none();
     }
     let best = |rates: &[f64]| rates.iter().copied().fold(0.0_f64, f64::max);
-    let (plain_rate, fenced_rate) = (best(&plain_rates), best(&fenced_rates));
+    let ratio = |numerator: f64, denominator: f64| if denominator > 0.0 { numerator / denominator } else { 0.0 };
+    let (plain_rate, parameterized_rate, fenced_rate) = (best(&plain_rates), best(&parameterized_rates), best(&fenced_rates));
     out.object_start();
     out.u64("workers", workers as u64);
     out.u64("rounds", COST_ROUNDS);
     out.decimal("plain_ticks_per_second", plain_rate);
+    out.decimal("parameterized_ticks_per_second", parameterized_rate);
     out.decimal("fenced_ticks_per_second", fenced_rate);
-    out.decimal("ratio", if plain_rate > 0.0 { fenced_rate / plain_rate } else { 0.0 });
+    out.decimal("ratio", ratio(fenced_rate, plain_rate));
+    out.decimal("ratio_parameterized_to_plain", ratio(parameterized_rate, plain_rate));
+    out.decimal("ratio_fenced_to_parameterized", ratio(fenced_rate, parameterized_rate));
     out.key("rounds_ticks_per_second");
     out.array_start();
-    for (plain, fenced) in plain_rates.iter().zip(&fenced_rates) {
+    for ((plain, parameterized), fenced) in plain_rates.iter().zip(&parameterized_rates).zip(&fenced_rates) {
         out.object_start();
         out.decimal("plain", *plain);
+        out.decimal("parameterized", *parameterized);
         out.decimal("fenced", *fenced);
         out.object_end();
     }
