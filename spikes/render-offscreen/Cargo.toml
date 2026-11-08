@@ -1,0 +1,10 @@
+[package]
+name = "render-offscreen"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: a fixed scene from the reference workload rendered offscreen through a software Vulkan device on Linux, the WARP device on Windows and the Metal device on macOS, read back and hashed, for the rendering research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }

@@ -1,0 +1,51 @@
+# Offscreen rendering
+
+Throwaway spike of the rendering research. It renders a fixed scene offscreen, with no window and no display server, through whatever graphics API the machine offers at run time, reads the image back and hashes it, and measures instead of assuming: that a software Vulkan device installs and renders on the Linux research CI runners, which have no GPU driver; that the same scene renders on the Windows runners' WARP software device and on the macOS runner's Metal device; whether an image is byte-identical across two renders on one cell, across the two Linux cells (two processor architectures running the same software rasterizer) and across the three APIs; and that the binary doing all this imports no graphics library, since every API is reached through the system loader at run time.
+
+## Layout
+
+- `src/scene.rs`: the scene and the frame. The scene is what an extraction hands a renderer: the [reference workload](../reference-workload/README.md)'s small population stepped 100 ticks by the sequential systems, then one triangle per alive entity at the entity's position (six pixels of radius in a 256 by 256 image), colored by its mass (red, green, blue for 1, 2, 4). The state hash of tick 100 is a reference value, so the vertex buffer (3 000 vertices, 60 000 bytes) is the same bytes on every cell by construction. A frame is hashed as a whole (FNV-1a over its RGBA bytes), per 32-pixel block (an 8 by 8 map of where two frames differ) and counted for lit pixels; it is written as a PNG with stored deflate blocks (no compressor, a pure function of the pixels).
+- `src/loader.rs`: `dlopen` and `LoadLibraryW`, the one way the spike reaches a graphics library.
+- `src/vulkan.rs`: the Vulkan path. The loader (`libvulkan.so.1`, `vulkan-1.dll`, or a MoltenVK or Vulkan loader library on macOS) is opened at run time, every entry point fetched through `vkGetInstanceProcAddr` and `vkGetDeviceProcAddr`, the structures declared in the field order of `vulkan_core.h`, no header and no binding crate. A device of type CPU is preferred when several exist. One color image, one render pass, one pipeline with no culling, no blending and no depth, one draw, a barrier, a copy into a host-visible buffer. The SPIR-V is produced at run time by glslang from `shaders/scene.vert` and `shaders/scene.frag`; the vertex shader flips y so that the three APIs share one image orientation.
+- `src/d3d11.rs` (Windows): the Direct3D 11 path. `d3d11.dll` and `d3dcompiler_47.dll` are loaded at run time, the COM interfaces called through their virtual tables by slot index. The scene is rendered on the WARP software device and, when the machine has one, on the hardware adapter, with a rasterizer state that culls nothing, read back through a staging texture. The HLSL (`shaders/scene.hlsl`) is compiled at run time by `D3DCompile`. The adapter's name comes from DXGI.
+- `src/metal.rs` (macOS): the Metal path. The Metal and Foundation frameworks are loaded by path at run time and driven through the Objective-C runtime, as the platform threading constraints spike drove AppKit; a shared texture as the render target, read back with `getBytes`. The Metal shading language source (`shaders/scene.metal`) is compiled at run time by the system's compiler through `newLibraryWithSource`.
+- `src/imports.rs`: the dynamic imports of the binary read from its own file (a copy of the headless modes spike's reader), applied to the rendering binary itself.
+- `setup.sh`: what the Linux cells need installed (`libvulkan1`, `mesa-vulkan-drivers` for lavapipe, `glslang-tools`); nothing on Windows and macOS. The research CI's run script runs it before the build.
+- `src/main.rs`: the scenarios and the report. Each API renders the scene twice from scratch (instance or device, pipeline, frame, readback, everything destroyed in between). The report carries, per API, the device's name and type, the driver, the shader compiler, the timings of device creation, pipeline creation, rendering and readback, the hash of every frame, the block hashes of the first, and the path of its PNG under `out/<cell>/`; plus the session facts (display variables, the sockets the process holds before and after rendering on Linux, the Vulkan driver manifests found, the GLSL compiler) and the imports.
+
+## Hypotheses
+
+With the reference workload, version 1, small size, 100 sequential ticks, compiled by one pinned Rust toolchain at default target features:
+
+1. Mesa's software Vulkan device (lavapipe) installs on the Ubuntu runners from the distribution's packages; a Vulkan instance and device are created with no display and no window; the Linux x86_64 and ARM64 cells both render the scene through it, and the process holds no socket (no display server connection) before or after rendering.
+2. The image is byte-identical across the two renders on one cell, and across the two Linux cells: pixel exactness of the software rasterizer across two processor architectures is measured, not assumed, since its arithmetic (LLVM-generated vector code) may differ between x86_64 and ARM64.
+3. On Windows the same scene renders offscreen on the WARP software device through Direct3D 11, and on the hardware adapter the runner exposes when one exists; on macOS on the paravirtual Metal device of the runner; every image is read back, and the hashes and block hashes of the images across the APIs and cells are the first data of the rendering determinism level question (frame content given a render state: which part of it is reproducible across software rasterizers, GPUs and APIs).
+4. The binary imports no windowing, graphics or audio library on any cell, although it renders: every API is loaded at run time, so the renderer's presence costs no static dependency and its absence is a discovered fact (the reason recorded per API), the shape the capability model needs for a rendering capability that discovers its device at startup.
+5. The three APIs each need their own shader source (GLSL, HLSL, the Metal shading language) compiled by a different tool at run time: the fact that motivates the shader pipeline question (one source, several targets), recorded rather than solved here.
+
+## Method
+
+The research CI builds and runs the binary on the five cells after `setup.sh`; locally it runs the same way (`ci/run-spike.sh render-offscreen <cell>`), and on a developer machine without a Vulkan loader the Vulkan path reports itself unavailable with the loader's reason. The two Linux cells are also comparable with a run inside the `rust:1.99.1-slim-bookworm` container, where `setup.sh` installs Debian 12's Mesa (22.3, LLVM 15) instead of Ubuntu 24.04's. The images are published as artifacts next to the measurements; the summary counts the distinct image hashes per API across cells and across every API and cell, and checks that the vertex buffer's hash is one value everywhere.
+
+The self-checks (`cargo test -p render-offscreen`) verify that the scene is a pure function of the reference workload and matches its sequential reference hash, that frames hash per block and count lit pixels as expected, that the PNG writer produces well-formed chunks (CRC and Adler-32 test vectors included), that a missing library is reported with every name tried, that the test binary imports no graphics library, and that the platform's own API (Metal on macOS, Direct3D 11 on Windows, Vulkan where a loader exists) renders two identical frames of opaque black and primary colors with a plausible number of lit pixels.
+
+## Environment
+
+Research CI, workflow `research-ci.yml`, five cells (see [`spikes/README.md`](../README.md)), run on demand with `-f spike=render-offscreen`; Rust toolchain pinned in [`rust-toolchain.toml`](../rust-toolchain.toml), release profile, default target features of each target. The Linux cells install the packages of `setup.sh` at run time (Ubuntu 24.04's `mesa-vulkan-drivers`). Plus two runs outside the matrix on 2026-11-03: the founder's Apple M5 (10 cores, macOS 26) for the Metal path, and the `rust:1.99.1-slim-bookworm` container on the same machine (Debian 12, Mesa 22.3.6, LLVM 15.0.6, glslang 12.0.0, ARM64) for the Vulkan path.
+
+## Result
+
+Measured on 2026-11-03 outside the matrix, the research CI run on the five cells following:
+
+| Machine | API | Device | Frames identical | Image hash | Lit pixels | Device creation | Pipeline | Render (first, second) | Readback |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Debian 12 container, ARM64 (Apple M5) | Vulkan | llvmpipe (LLVM 15.0.6, 128 bits), type cpu, Vulkan 1.3.230 | yes | `0x5afca8b6e3a3d972` | 33 861 | 4.8 ms | 0.14 ms | 31.0 ms, 2.6 ms | 0.1 ms |
+| Apple M5, macOS 26 | Metal | Apple M5 | yes | `0x5afca8b6e3a3d972` | 33 861 | 0.17 ms | 0.47 ms | 3.1 ms, 2.2 ms | 0.2 ms |
+
+- Hypothesis 1 holds in the container: the Debian packages bring the loader, four driver manifests (lavapipe among them) and glslang; the instance and device are created with no display variable set; the process holds zero sockets before and after rendering; the SPIR-V compiles in 78 ms (two glslang invocations). The Ubuntu runners' packages are the research CI's measurement.
+- Hypothesis 2 holds across the two renders on each machine. The comparison across the two Linux cells is the research CI's measurement.
+- Hypothesis 3, first data: the Metal device of the Apple M5 and the software rasterizer on ARM64 produce byte-identical images (one hash, 0 of 64 blocks differing). With flat colors, no blending, no depth and one sample per pixel, the two implementations agree on every pixel of 1 000 triangles. The WARP, hardware Direct3D 11 and paravirtual Metal images of the runners are the research CI's measurement.
+- Hypothesis 4 holds on both machines: the container binary imports `libgcc_s.so.1`, `libm.so.6` and `libc.so.6`; the macOS binary `libobjc.A.dylib` and `libSystem.B.dylib`; neither a graphics library. On the Mac without a Vulkan loader the Vulkan path reports "no Vulkan loader" with the loader's reason and the Metal path renders.
+- Hypothesis 5 is recorded by construction: three shader sources, three compilers (glslang, `D3DCompile`, the Metal compiler), one scene.
+
+The raw measurements and the images are the artifacts of the run. The result holds for the reference workload version 1 at this toolchain and on these images.

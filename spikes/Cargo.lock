@@ -29,6 +29,13 @@ name = "reference-workload"
 version = "0.1.0"
 
 [[package]]
+name = "render-offscreen"
+version = "0.1.0"
+dependencies = [
+ "reference-workload",
+]
+
+[[package]]
 name = "runtime-skeleton"
 version = "0.1.0"
 dependencies = [

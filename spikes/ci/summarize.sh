@@ -523,6 +523,33 @@ case "$spike" in
       jq -r '"- `\(.cell)`: debug assertions \(.build.debug_assertions), \(.platform.available_parallelism) CPUs, \([.runs[] | select(.matches_reference // .matches_one_worker)] | length) of \(.runs | length) runs match; the sequential reference runs at \(.reference_ticks_per_second) ticks per second."' "$file"
     done
     ;;
+  render-offscreen)
+    echo "The scene (one triangle per alive entity of the small population after 100 ticks) rendered twice from scratch by every graphics API the machine offers at run time:"
+    echo
+    echo "| Cell | API | Available | Device | Type | Driver | Shader compiler | Frames identical | Image hash | Lit pixels | Device us | Pipeline us | Render us (first, second) | Readback us | Reason when unavailable |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .renderers[] | "| \($cell) | \(.api) | \(.available) | \(.device_name) | \(.device_type) | \(.driver) | \(.shader_compiler) | \(.frames_identical) | \(.image_hash) | \(.lit_pixels // "n/a") | \(.device_us) | \(.pipeline_us) | \([.frames[].render_us] | map(tostring) | join(", ")) | \([.frames[].readback_us] | map(tostring) | join(", ")) | \(.reason // "") |"' "$file"
+    done
+    echo
+    echo "Distinct image hashes per API across every cell (1 means pixel-identical everywhere), and across every API and cell:"
+    echo
+    for api in $(jq -r '.renderers[] | select(.available) | .api' "${facts[@]}" | sort -u); do
+      distinct="$(jq -r --arg api "$api" '.renderers[] | select(.available and .api == $api) | .image_hash' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+      cells="$(jq -r --arg api "$api" '.renderers[] | select(.available and .api == $api) | .api' "${facts[@]}" | wc -l | tr -d ' ')"
+      echo "- \`$api\`: $distinct distinct image hash value(s) across $cells cell(s)."
+    done
+    all="$(jq -r '.renderers[] | select(.available) | .image_hash' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+    echo "- every available API on every cell: $all distinct image hash value(s)."
+    scene="$(jq -r '.scene.vertex_buffer_hash' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+    echo "- the vertex buffer: $scene distinct hash value(s) across every cell (the scene is the same bytes everywhere)."
+    echo
+    echo "Session and imports per cell:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: \(.platform.available_parallelism) CPUs; DISPLAY set \(.session.display_set), WAYLAND_DISPLAY set \(.session.wayland_display_set); open sockets before and after rendering: \(.session.open_sockets_before_rendering), \(.session.open_sockets_after_rendering); Vulkan ICD files: \([.session.vulkan_icd_files[].file] | join(", ")); GLSL compiler: \(.session.glsl_compiler); the binary (\(.imports.format)) imports \([.imports.libraries[]?.name] | join(", ")); a windowing, graphics or audio library imported: \(if .imports.error then .imports.error else .imports.imports_a_windowing_graphics_or_audio_library end)."' "$file"
+    done
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;
