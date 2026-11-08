@@ -523,6 +523,66 @@ case "$spike" in
       jq -r '"- `\(.cell)`: debug assertions \(.build.debug_assertions), \(.platform.available_parallelism) CPUs, \([.runs[] | select(.matches_reference // .matches_one_worker)] | length) of \(.runs | length) runs match; the sequential reference runs at \(.reference_ticks_per_second) ticks per second."' "$file"
     done
     ;;
+  workload-asset-arrival)
+    echo "The loading gate: a world that requires the asset waits for the loader (a real delay that differs between runs) and then steps; the hashes must be the reference's whatever the delay:"
+    echo
+    echo "| Cell | Workers | Delay | Requested ms | Loader ms | Gate wait ms | Step while loading | Arrival tick | Gate opened at | Run hash | Matches the reference | First divergent tick | Ticks per second |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .gate[] | "| \($cell) | \(.workers) | \(.delay) | \(.delay_ms_requested) | \(.delay_ms_measured) | \(.gate_wait_ms) | \(.step_while_loading) | \(.arrival_tick) | \(.gate_opened_at) | \(.run_hash) | \(.matches_reference) | \(.first_divergent_tick) | \(.ticks_per_second) |"' "$file"
+    done
+    echo
+    distinct="$(jq -r '.gate[].run_hash' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+    echo "- Distinct gate run hashes across every cell, delay and worker count (1 means identical everywhere): $distinct."
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: \(.platform.available_parallelism) CPUs; the oracle with version 1 equals the reference \(.oracle_with_version_1_equals_reference); \([.gate[] | select(.matches_reference)] | length) of \(.gate | length) gated runs match the reference; version 1 content hash \(.tables.version_1_content_hash), version 2 \(.tables.version_2_content_hash)."' "$file"
+    done
+    echo
+    echo "The declared default and the replay (the host steps at once; the arrival takes effect at a tick the real delay decides; that tick is an input, so the recorded log replays the run at every worker count and the sequential oracle switched at that tick agrees):"
+    echo
+    echo "| Cell | Workers | Delay ms | Arrival tick | Live run hash | Live matches the oracle | First divergent tick from the reference | Replay matches live (every worker count) | Replay run hash | Log bytes | Ticks per second |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .default_and_replay[] | "| \($cell) | \(.workers) | \(.delay_ms) | \(.arrival_tick) | \(.live_run_hash) | \(.live_matches_oracle) | \(.first_divergent_tick_from_reference) | \(.replay_matches_live) (\([.replay_workers[] | select(.matches_live)] | length) of \(.replay_workers | length)) | \(.replay_run_hash) | \(.log_bytes) | \(.ticks_per_second) |"' "$file"
+    done
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: the two default runs land at different ticks \(.default_runs_compared.arrival_ticks_differ) and give different run hashes \(.default_runs_compared.run_hashes_differ); every replay matches its live run \(.default_runs_compared.every_replay_matches_its_live_run)."' "$file"
+    done
+    echo
+    echo "The fence removed (the control: the pass reads the table the moment the loader stores it; two runs per worker count, each against the oracle switched at the tick during which the new value was first read, then against each other):"
+    echo
+    echo "| Cell | Workers | Delay ms | Tick first observed | Run hash | Matches the oracle at that tick | First divergent tick | Matches the oracle one tick later | First divergent tick | Runs identical | First divergent tick between runs | Ticks per second |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .fence_removed[] | "| \($cell) | \(.workers) | \(.delay_ms) | \(.arrival_tick_observed) | \(.run_hash) | \(.matches_oracle) | \(.first_divergent_tick_from_oracle) | \(.matches_oracle_one_tick_later) | \(.first_divergent_tick_from_oracle_one_tick_later) | \(.runs_identical) | \(.first_divergent_tick_between_runs) | \(.ticks_per_second) |"' "$file"
+    done
+    echo
+    echo "The hot reload (the gate mode with version 2 of the table applied at the fixed point of a scripted tick, the oracle switched there, the recorded log replayed):"
+    echo
+    echo "| Cell | Workers | Delay ms | Gate wait ms | Switch tick | Run hash | Matches the oracle | First divergent tick | Replay matches | Availability at the end | Log bytes | Ticks per second |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .hot_reload[] | "| \($cell) | \(.workers) | \(.delay_ms) | \(.gate_wait_ms) | \(.switch_tick) | \(.run_hash) | \(.matches_oracle) | \(.first_divergent_tick_from_oracle) | \(.replay_matches) | \(.availability_at_the_end | gsub("\\|"; "\\\\|")) | \(.log_bytes) | \(.ticks_per_second) |"' "$file"
+    done
+    echo
+    distinct="$(jq -r '.hot_reload[].run_hash' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+    echo "- Distinct hot reload run hashes across every cell and worker count (1 means identical everywhere): $distinct."
+    echo
+    echo "The cost of the fence (the fenced world, the table read per chunk and the queue drained at every fixed point, against the plain world with no asset machinery):"
+    echo
+    echo "| Cell | Workers | Rounds | Plain ticks per second (best) | Fenced ticks per second (best) | Ratio | Every run matches the reference | Rounds (plain, fenced) |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .cost[] | "| \($cell) | \(.workers) | \(.rounds) | \(.plain_ticks_per_second) | \(.fenced_ticks_per_second) | \(.ratio) | \(.every_run_matches_reference) | \([.rounds_ticks_per_second[] | "\(.plain), \(.fenced)"] | join("; ")) |"' "$file"
+    done
+    echo
+    echo "Failed transitions (an unknown asset, a payload of the wrong length and a payload with a wrong content hash, then a good payload):"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .failed_transitions | "- `\($cell)`: \(.transitions_logged) transitions logged, \(.transitions_failed) failed (\([.reasons[] | select(.failed) | "tick \(.tick): \(.reason)"] | join("; "))); availability before the good payload \(.availability_before_the_good_payload); available at the end \(.available_at_the_end); matches the oracle switched at the tick of the good payload \(.matches_oracle)."' "$file"
+    done
+    ;;
   render-offscreen)
     echo "The scene (one triangle per alive entity of the small population after 100 ticks) rendered twice from scratch by every graphics API the machine offers at run time:"
     echo

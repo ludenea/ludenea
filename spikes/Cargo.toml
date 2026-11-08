@@ -23,6 +23,7 @@ members = [
     "workload-lockstep",
     "render-offscreen",
     "workload-render-extraction",
+    "workload-asset-arrival",
 ]
 
 [profile.release]

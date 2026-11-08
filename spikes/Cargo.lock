@@ -66,6 +66,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "workload-asset-arrival"
+version = "0.1.0"
+dependencies = [
+ "reference-workload",
+]
+
+[[package]]
 name = "workload-frame-allocator"
 version = "0.1.0"
 dependencies = [

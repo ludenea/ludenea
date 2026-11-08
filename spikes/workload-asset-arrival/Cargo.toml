@@ -1,0 +1,10 @@
+[package]
+name = "workload-asset-arrival"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: the reference workload depending on a domain data asset that a loader thread delivers late, made domain state at the input fixed point, with a loading gate, a declared default, replay from the input log, a hot reload and the fence removed as the control, for the assets research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }
