@@ -24,6 +24,10 @@ members = [
     "render-offscreen",
     "workload-render-extraction",
     "workload-asset-arrival",
+    "plugin-tiers",
+    "plugin-tiers/motion-crate",
+    "plugin-tiers/motion-module",
+    "plugin-tiers/motion-native",
 ]
 
 [profile.release]

@@ -1,0 +1,13 @@
+[package]
+name = "motion-native"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike crate: the motion pass of motion-crate exported through a C ABI from a dynamic library, built at run time by the plugin tiers spike, for the plugin architecture research"
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+motion-crate = { path = "../motion-crate" }

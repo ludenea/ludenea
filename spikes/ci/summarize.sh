@@ -523,6 +523,49 @@ case "$spike" in
       jq -r '"- `\(.cell)`: debug assertions \(.build.debug_assertions), \(.platform.available_parallelism) CPUs, \([.runs[] | select(.matches_reference // .matches_one_worker)] | length) of \(.runs | length) runs match; the sequential reference runs at \(.reference_ticks_per_second) ticks per second."' "$file"
     done
     ;;
+  plugin-tiers)
+    echo "The motion pass through each tier, per worker count, against the sequential reference (the built-in pass is the kernel inlined in the world):"
+    echo
+    echo "| Cell | Tier | Form | Available | Workers | Matches | First divergent tick | Ticks per second | Motion us per tick | Motion us per chunk | Ratio to built-in | Copy us per tick (module) |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .tiers[] | "| \($cell) | \(.tier) | \(.form) | \(.available) | \(.workers // "n/a") | \(.matches_reference // "n/a") | \(.first_divergent_tick // "n/a") | \(.ticks_per_second // "n/a") | \(.motion_us_per_tick // "n/a") | \(.motion_us_per_chunk // "n/a") | \(.ratio_to_builtin // "n/a") | \(.copy_us_per_tick // "n/a") |"' "$file"
+    done
+    echo
+    echo "Distinct run hashes per tier and form across every cell and worker count (1 means identical everywhere; the reference run hash is listed first):"
+    echo
+    echo "- reference: $(jq -r '.reference_run_hash' "${facts[@]}" | sort -u | wc -l | tr -d ' ') distinct value(s)."
+    for config in $(jq -r '.tiers[] | select(.available) | "\(.tier)/\(.form)"' "${facts[@]}" | tr ' ' '_' | sort -u); do
+      distinct="$(jq -r --arg config "$config" '.tiers[] | select(.available) | select(("\(.tier)/\(.form)" | gsub(" "; "_")) == $config) | .run_hash' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+      matching="$(jq -r --arg config "$config" '.tiers[] | select(.available) | select(("\(.tier)/\(.form)" | gsub(" "; "_")) == $config) | select(.matches_reference) | .run_hash' "${facts[@]}" | wc -l | tr -d ' ')"
+      total="$(jq -r --arg config "$config" '.tiers[] | select(.available) | select(("\(.tier)/\(.form)" | gsub(" "; "_")) == $config) | .run_hash' "${facts[@]}" | wc -l | tr -d ' ')"
+      echo "- \`$(echo "$config" | tr '_' ' ')\`: $distinct distinct run hash value(s), $matching of $total runs match the reference."
+    done
+    echo
+    echo "Reloads between two steps (the module instantiated again from its file; a library unloaded and loaded again):"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .reloads[] | "- `\($cell)` \(.tier) (\(.form)) at \(.workers) workers: reloaded \(.reloaded) in \(.reload_ms // "n/a") ms at tick \(.reload_tick); matches the reference \(.matches_reference); the reload changes the hash: \(.reload_changes_hash // "n/a")\(if .failure then "; failure: \(.failure)" else "" end)."' "$file"
+    done
+    echo
+    echo "Run-time builds per cell:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .builds[] | "- `\($cell)` \(.what): succeeded \(.succeeded) in \(.seconds) s; compiler \(.compiler); flags \(.flags)\(if .succeeded then "" else "; \(.stderr_tail | gsub("\n"; " ") | .[0:300])" end)."' "$file"
+    done
+    echo
+    echo "Tiers unavailable on a cell, with the reason:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .tiers[] | select(.available | not) | "- `\($cell)` \(.tier) (\(.form)): \(.reason | gsub("\n"; " ") | .[0:300])"' "$file"
+    done
+    echo
+    echo "The out-of-process importer (spawn plus round trip, five samples):"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: \(.importer.payload_bytes) bytes, content hash \(.importer.content_hash), every sample matches \(.importer.matches_expected); spawn and round trip us: \([.importer.round_trips[] | .spawn_and_round_trip_us // "error"] | map(tostring) | join(", "))."' "$file"
+    done
+    ;;
   workload-asset-arrival)
     echo "The loading gate: a world that requires the asset waits for the loader (a real delay that differs between runs) and then steps; the hashes must be the reference's whatever the delay:"
     echo

@@ -1,0 +1,10 @@
+[package]
+name = "motion-crate"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike crate: the reference workload's motion pass as a plugin, one Rust implementation linked statically, compiled to WebAssembly or built as a dynamic library by the plugin tiers spike, for the plugin architecture research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../../reference-workload" }

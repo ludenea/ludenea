@@ -1,0 +1,15 @@
+[package]
+name = "plugin-tiers"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: the reference workload's motion pass loaded through each candidate plugin tier (a compile-time crate, a WebAssembly module under Wasmtime, a dynamic library with a C ABI in Rust and in C, an out-of-process importer), with the reference hashes and the cost per chunk of each tier, for the plugin architecture research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }
+motion-crate = { path = "motion-crate" }
+# The subject of the sandboxed tier's measurement, never a dependency of the
+# engine: Wasmtime 50.0.1, Apache 2.0 with the LLVM exception, with the
+# features the spike needs and nothing else (no async, no component model).
+wasmtime = { version = "=50.0.1", default-features = false, features = ["runtime", "cranelift", "std"] }
