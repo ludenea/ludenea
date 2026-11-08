@@ -501,6 +501,28 @@ case "$spike" in
       jq -r '.cell as $cell | .panic_run | "- `\($cell)`: ran \(.ran), exit failure \(.exit_failure // "n/a"), \(.passed // "n/a") passed and \(.failed // "n/a") failed, failed tests: \(.failed_tests // "none"), failed alone \(.failed_alone // "n/a"); failure reported at tick \(.failure_tick // "n/a") in \(.failure_node // "n/a") chunk \(.failure_chunk // "n/a") on worker \(.failure_worker // "n/a"), world A matching the reference \(.world_a_matches_reference // "n/a"); message: \(.message // "")."' "$file"
     done
     ;;
+  workload-render-extraction)
+    echo "Every run (the normal variant against the sequential reference; the static-half variant against itself at one worker without extraction):"
+    echo
+    echo "| Cell | Variant | Mode | Workers | Matches | First divergent tick | Render run hash | Ticks per second | Ratio to baseline | Extraction us per tick | Share of the tick | Chunks gathered per tick | Chunks copied per tick |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .runs[] | "| \($cell) | \(.variant) | \(.mode) | \(.workers) | \(.matches_reference // .matches_one_worker) | \(.first_divergent_tick) | \(.render_run_hash) | \(.ticks_per_second) | \(.ratio_to_baseline) | \(.extraction_us_per_tick) | \(.extraction_share_of_tick) | \(.chunks_gathered_per_tick) | \(.chunks_copied_per_tick) |"' "$file"
+    done
+    echo
+    echo "Distinct render state run hashes per variant across every cell, mode and worker count (1 means identical everywhere):"
+    echo
+    for variant in $(jq -r '.runs[].variant' "${facts[@]}" | sort -u); do
+      distinct="$(jq -r --arg variant "$variant" '.runs[] | select(.variant == $variant and .mode != "off") | .render_run_hash' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+      echo "- \`$variant\`: $distinct distinct render run hash value(s)."
+    done
+    echo
+    echo "Per cell: debug assertions, available CPUs, and the runs that match:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: debug assertions \(.build.debug_assertions), \(.platform.available_parallelism) CPUs, \([.runs[] | select(.matches_reference // .matches_one_worker)] | length) of \(.runs | length) runs match; the sequential reference runs at \(.reference_ticks_per_second) ticks per second."' "$file"
+    done
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;

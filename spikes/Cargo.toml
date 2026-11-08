@@ -21,6 +21,7 @@ members = [
     "headless-modes",
     "workload-test-harness",
     "workload-lockstep",
+    "workload-render-extraction",
 ]
 
 [profile.release]

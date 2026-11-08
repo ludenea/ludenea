@@ -1,0 +1,10 @@
+[package]
+name = "workload-render-extraction"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: a chunked extraction of positions and sprite handles into a double-buffered render state after every tick of the reference workload, with and without a per-chunk change detection skip, for the rendering research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }
