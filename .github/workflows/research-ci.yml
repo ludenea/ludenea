@@ -52,8 +52,33 @@ env:
   SPIKE_PROFILE: ${{ inputs.profile || 'release' }}
 
 jobs:
+  resolve:
+    # Resolves every container image the cells name to the digests of its
+    # manifest index and of its per-platform manifests, so that a run inside a
+    # container is identified by digest and not by a tag that moves; the spike
+    # job records the result in its environment file. Nothing to resolve when
+    # no cell names a container.
+    name: resolve container images
+    runs-on: ubuntu-24.04
+    outputs:
+      manifests: ${{ steps.resolve.outputs.manifests }}
+    steps:
+      - name: Resolve the container images named by the cells
+        id: resolve
+        shell: bash
+        env:
+          CELLS: ${{ inputs.cells }}
+        run: |
+          manifests='{}'
+          for image in $(jq -r '[.[] | .container // empty] | unique | .[]' <<<"${CELLS:-[]}"); do
+            index="$(docker buildx imagetools inspect "$image" --format '{{json .Manifest}}')"
+            manifests="$(jq -c --arg image "$image" --argjson index "$index" '. + {($image): ($index | tojson)}' <<<"$manifests")"
+          done
+          echo "manifests=$manifests" >> "$GITHUB_OUTPUT"
+
   spike:
     name: ${{ matrix.cell }}
+    needs: resolve
     runs-on: ${{ matrix.runner }}
     # A Linux cell may name a container image: the job then runs inside it
     # (a minimal image without display, GPU or audio libraries is the headless
@@ -67,6 +92,10 @@ jobs:
         include: ${{ fromJSON(inputs.cells || '[{"cell":"linux-x86_64","runner":"ubuntu-24.04"},{"cell":"linux-arm64","runner":"ubuntu-24.04-arm"},{"cell":"windows-x86_64","runner":"windows-2025"},{"cell":"windows-arm64","runner":"windows-11-arm"},{"cell":"macos-arm64","runner":"macos-15"}]') }}
     env:
       CELL: ${{ matrix.cell }}
+      # Empty outside a container; otherwise the image as named and the JSON of
+      # its manifest index with its digests, resolved by the job above.
+      SPIKE_CONTAINER_IMAGE: ${{ matrix.container }}
+      SPIKE_CONTAINER_MANIFEST: ${{ matrix.container && fromJSON(needs.resolve.outputs.manifests)[matrix.container] || '' }}
     steps:
       - uses: actions/checkout@v7
       - name: Build and run the spike

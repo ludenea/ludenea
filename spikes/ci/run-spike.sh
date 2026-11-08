@@ -10,6 +10,10 @@
 # and is built with the pinned toolchain; RUSTFLAGS, when set, is passed to the
 # compiler by Cargo and recorded in the environment file, and SPIKE_PROFILE
 # selects the Cargo profile (release by default; dev for an unoptimized build).
+# SPIKE_CONTAINER_IMAGE and SPIKE_CONTAINER_MANIFEST, set by the research CI
+# for a cell that runs inside a container image, are recorded as well: the
+# image as named and the JSON of its manifest index resolved at the start of
+# the run, whose digests identify the image, per platform, better than a tag.
 # A C spike has a CMakeLists.txt in its directory and is built in release mode with the
 # platform's default compiler; its executable is named after the CMake project.
 # Either way the spike prints one JSON document on standard output, which is
@@ -74,6 +78,8 @@ fi
   echo "image_version=${ImageVersion:-}"
   echo "rustflags=${RUSTFLAGS:-}"
   echo "profile=$profile"
+  echo "container_image=${SPIKE_CONTAINER_IMAGE:-}"
+  echo "container_manifest=${SPIKE_CONTAINER_MANIFEST:-}"
   case "$(uname -s)" in
     Linux*)
       echo "os_release=$(. /etc/os-release && echo "$PRETTY_NAME")"

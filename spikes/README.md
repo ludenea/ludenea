@@ -47,7 +47,7 @@ gh workflow run research-ci.yml -f spike=headless-modes \
   -f cells='[{"cell":"linux-x86_64-container","runner":"ubuntu-24.04","container":"rust:1.99.1-slim-bookworm"},{"cell":"linux-arm64-container","runner":"ubuntu-24.04-arm","container":"rust:1.99.1-slim-bookworm"}]'
 ```
 
-The cell label is free text that names the artifact and the output directory; the environment file records the machine and the image the run landed on.
+The cell label is free text that names the artifact and the output directory; the environment file records the machine and the image the run landed on, and, for a cell inside a container, the image as named with the digests of its manifest index and of its per-platform manifests, resolved at the start of the run so that the environment is identified by digest and not by a tag that moves.
 
 ## Running locally
 
