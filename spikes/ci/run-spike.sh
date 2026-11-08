@@ -53,6 +53,14 @@ if [ "$kind" = rust ]; then
   rustup toolchain install --profile minimal >/dev/null
 fi
 
+# A spike may ship a setup script for what its measurement needs installed on
+# the machine (for example a software Vulkan device on a Linux runner). It runs
+# before the build, on every platform, and decides itself what applies; its
+# output is kept with the measurements.
+if [ -f "$spike/setup.sh" ]; then
+  bash "$spike/setup.sh" 2>&1 | tee "$out/setup.txt"
+fi
+
 {
   echo "cell=$cell"
   echo "spike=$spike"
