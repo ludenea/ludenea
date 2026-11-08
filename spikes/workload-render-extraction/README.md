@@ -28,19 +28,28 @@ Research CI, workflow `research-ci.yml`, five cells (see [`spikes/README.md`](..
 
 ## Result
 
-Local validation run of 2026-11-03 on the founder's machine (Apple M5, 10 cores, macOS 26), taken while other builds ran on the machine, so that the throughput ratios carry that noise and the processor time per tick is the steadier number. Every world matches: the normal variant reproduces the sequential reference at every tick in every mode at 1, 2, 4, 8 and 10 workers (hypothesis 1), the static-half variant reproduces its one-worker baseline everywhere, and the render state run hash is one value per variant across every worker count and both skip settings (hypothesis 2: `0x2bb3dba263d87df3` normal, `0x94aa02d647c77acc` static half).
+Measured on 2026-11-08 by the research CI on the five cells (run 42518321484, the raw measurements and the environment of each cell in its artifacts), after a local validation run on 2026-11-03 on the founder's machine (Apple M5, 10 cores, macOS 26, taken while other builds ran). Every world matches on every cell: the normal variant reproduces the sequential reference at every tick in every mode at 1, 2, 4 and 8 workers (and 3 on the macOS runner), 24 of 24 runs per cell and 30 of 30 on macOS (hypothesis 1); the static-half variant reproduces its one-worker baseline everywhere; and the render state run hash is one value per variant across the five cells, every worker count and both skip settings (hypothesis 2: `0x2bb3dba263d87df3` normal, `0x94aa02d647c77acc` static half, the values of the local run).
 
-| Variant | Workers | Baseline ticks per second | Extraction on: processor us per tick, share of the tick, ratio to baseline | Skip: processor us per tick, chunks copied per tick, ratio to baseline |
-| --- | --- | --- | --- | --- |
-| normal | 1 | 1 010 | 10.2 us, 1.0 percent, 0.99 | 14.5 us, 0, 0.98 |
-| normal | 2 | 1 882 | 11.1 us, 2.1 percent, 0.98 | 11.1 us, 0, 0.98 |
-| normal | 4 | 3 167 | 15.2 us, 5.2 percent, 1.07 | 15.3 us, 0, 1.07 |
-| normal | 8 | 3 796 | 29.5 us, 11.3 percent, 1.01 | 30.8 us, 0, 0.89 |
-| static half | 1 | 1 583 | 10.6 us, 1.6 percent, 0.96 | 7.3 us, 16.4 of 20 static chunks, 0.99 |
-| static half | 4 | 3 846 | 18.4 us, 7.2 percent, 1.03 | 14.6 us, 16.4, 1.03 |
-| static half | 8 | 3 933 | 31.1 us, 12.2 percent, 1.00 | 25.9 us, 16.4, 1.00 |
+| Cell | Variant | Workers | Baseline ticks per second | Extraction on: processor us per tick, share of the tick, ratio to baseline | Skip: processor us per tick, chunks copied per tick, ratio to baseline |
+| --- | --- | --- | --- | --- | --- |
+| linux-x86_64 | normal | 1 | 553 | 21.8 us, 1.2 percent, 0.98 | 21.3 us, 0, 0.99 |
+| linux-x86_64 | normal | 4 | 1 324 | 58.2 us, 7.7 percent, 1.00 | 58.6 us, 0, 1.00 |
+| linux-arm64 | normal | 1 | 741 | 23.7 us, 1.7 percent, 0.98 | 23.7 us, 0, 0.98 |
+| linux-arm64 | normal | 4 | 2 213 | 29.6 us, 7.3 percent, 1.11 | 28.7 us, 0, 1.15 |
+| windows-x86_64 | normal | 1 | 591 | 20.9 us, 1.2 percent, 0.98 | 20.8 us, 0, 0.98 |
+| windows-x86_64 | normal | 4 | 1 464 | 55.2 us, 8.0 percent, 0.99 | 53.8 us, 0, 0.99 |
+| windows-arm64 | normal | 1 | 730 | 23.5 us, 1.7 percent, 0.99 | 23.6 us, 0, 0.99 |
+| windows-arm64 | normal | 4 | 2 532 | 29.0 us, 7.3 percent, 1.00 | 29.0 us, 0, 1.00 |
+| macos-arm64 | normal | 1 | 601 | 19.6 us, 1.2 percent, 0.99 | 19.8 us, 0, 0.98 |
+| macos-arm64 | normal | 3 | 1 668 | 21.8 us, 3.3 percent, 0.92 | 22.1 us, 0, 0.92 |
+| linux-x86_64 | static half | 1 | 876 | 21.1 us, 1.8 percent, 0.98 | 14.7 us, 16.4 of 20 static chunks, 0.98 |
+| linux-x86_64 | static half | 4 | 1 912 | 57.2 us, 10.8 percent, 0.99 | 39.6 us, 16.4, 0.99 |
+| linux-arm64 | static half | 1 | 1 201 | 23.8 us, 2.8 percent, 0.97 | 16.2 us, 16.4, 0.98 |
+| linux-arm64 | static half | 4 | 3 984 | 28.4 us, 11.3 percent, 1.00 | 23.5 us, 16.4, 1.00 |
+| windows-arm64 | static half | 1 | 1 190 | 23.4 us, 2.7 percent, 0.97 | 16.1 us, 16.4, 0.98 |
+| windows-x86_64 | static half | 4 | 2 214 | 54.2 us, 11.5 percent, 0.96 | 37.0 us, 16.4, 0.98 |
 
-- Hypothesis 3 holds on this machine as processor time: the extraction of 10 000 entities costs 10 to 15 microseconds of processor time per tick at 1 to 4 workers (1 percent of the 1 ms tick at 1 worker; 5 percent of the 0.3 ms tick at 4 workers, where the tick is shorter and the forty chunks are spread over four workers), and the throughput with the extraction is within the noise of the baseline (0.98 to 1.07). At 8 and 10 workers the chunks' processor time doubles (28 to 34 microseconds), the forty small tasks landing on more cores, efficiency cores included; the throughput stays within noise but one run (skip at 8 workers, 0.89) shows the machine's noise that day.
-- Hypothesis 4 holds: in the static-half variant with the skip, 16.4 of the 20 static chunks are copied per tick on average (the 16 kills and spawns of a tick touch 3.6 static chunks on average, which are gathered that tick), and the extraction's processor time falls from 10.6 to 7.3 microseconds per tick at 1 worker and from 18.4 to 14.6 at 4 workers, about 30 percent less for half of the chunks skipped: the copy of a chunk's 3 KB render slice is not free but costs about a third of its gather. In the normal variant the skip copies nothing and costs nothing measurable beyond the flag read.
+- Hypothesis 3 holds as throughput and not as the share stated: the world with the extraction runs within the noise of the baseline on every cell (ratios 0.98 to 1.15 on the Linux and Windows cells at 1 to 8 workers; the macOS runner's ratios spread from 0.47 to 1.53 across its runs, its known variance, 3 CPUs oversubscribed by 8 workers included). The extraction's processor time per tick is 20 to 24 microseconds at 1 and 2 workers on every cell (1.2 to 1.7 percent of the tick at 1 worker, 2.3 to 3.4 at 2), and 29 to 30 microseconds at 4 workers on the ARM64 cells (7.3 percent of a 0.4 ms tick) against 55 to 58 on the x86_64 cells (7.7 to 8.0 percent of a 0.7 ms tick), where the forty chunks spread over the two cores' hyperthreads cost 2.6 times their single-worker processor time. At 4 workers on the 4-CPU runners the share of processor time is above the 5 percent the hypothesis stated, while the throughput cost stays inside the noise because the extraction overlaps the next tick's passes. On the founder's 10-core machine the share was 5.2 percent at 4 workers.
+- Hypothesis 4 holds on every cell: in the static-half variant with the skip, 16.4 of the 20 static chunks are copied per tick on average (the tick's kills and spawns touch 3.6 static chunks on average), and the extraction's processor time falls by about 30 percent (from 21 to 24 microseconds to 15 to 16 at 1 worker; from 57 to 40 at 4 workers on the x86_64 cells, from 28 to 24 on the ARM64 cells). The copy of a chunk's 3 KB render slice costs about a third of its gather. In the normal variant the skip copies nothing and costs nothing measurable beyond the flag read.
 
-The research CI run on the five cells follows; its artifacts hold the raw measurements and the environment of each cell. The result holds for the reference workload version 1 at this toolchain.
+The result holds for the reference workload version 1 at this toolchain, on these runner images and the founder's machine.
