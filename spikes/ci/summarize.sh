@@ -873,6 +873,83 @@ case "$spike" in
       echo "- \`$config\`: $distinct distinct final hash value(s)."
     done
     ;;
+  control-surface-data-plane)
+    echo "Verdicts per cell, computed by the spike:"
+    echo
+    echo "| Cell | Hypothesis | Verdict | Refuted by its threshold | Figure |"
+    echo "| --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .hypotheses[] | "| \($cell) | \(.hypothesis) | \(.verdict) | \(.refuted_by_its_threshold) | \(.figure) |"' "$file"
+    done
+    echo
+    echo "The ring's client cost against the full-state read through the socket, and the world's throughput (best of the repetitions, over the time spent stepping):"
+    echo
+    echo "| Cell | Workers | Ring client us per state frame | Socket read us (median) | Socket | Ratio | Direct ticks per second | Lossless ring loss percent | Extraction only loss percent | Stalled latest-wins loss percent |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .runs[] | "| \($cell) | \(.workers) | \(.ring_client.us_per_state_frame) | \(.ring_client.socket_read_median_us) | \(.ring_client.socket_read_transport) | \(.ring_client.ratio_to_the_socket_read) | \(.direct.ticks_per_second) | \(.ring_client.lossless_throughput_loss_percent) | \(.ring_client.extraction_only_throughput_loss_percent) | \(.ring_client.stalled_latest_wins_throughput_loss_percent) |"' "$file"
+    done
+    echo
+    echo "Ways of stepping the world through a stepped session in batches of ten ticks (the first six repeated, the last two run once):"
+    echo
+    echo "| Cell | Workers | Way | Transport | Ticks per second | Ratio to direct | Agent ticks per second | Matches the oracle | First divergent tick | State frames | State ticks not delivered | Client us per state frame | Endpoint copy us per state frame | Extraction us per tick | Frames overwritten | Ticks skipped | A stream ended |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .runs[] | .workers as $w | (.throughput + .single_runs)[] | "| \($cell) | \($w) | \(.way) | \(.transport) | \(.ticks_per_second) | \(.ratio_to_direct) | \(.agent_ticks_per_second) | \(.matches_oracle) | \(.first_divergent_tick) | \(.state_frames) | \(.state_frames_missing) | \(.client_us_per_state_frame) | \(.endpoint_copy_us_per_state_frame) | \(.extraction_us_per_tick) | \(.frames_overwritten) | \(.ticks_skipped) | \(.a_stream_ended) |"' "$file"
+    done
+    echo
+    echo "The full state read through the socket:"
+    echo
+    echo "| Cell | Workers | Transport | Reads | State bytes | Median us | Mean us | Client hash us |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .runs[] | .workers as $w | .socket_reads[] | "| \($cell) | \($w) | \(.transport) | \(.reads) | \(.state_bytes) | \(.median_us) | \(.mean_us) | \(.client_hash_us) |"' "$file"
+    done
+    echo
+    echo "Clients that stop reading a lossless stream, then resume by cursor (stepped sessions per worker count, and the paced session):"
+    echo
+    echo "| Cell | Workers | Session | Data plane | Stalled at | Ended at | Ended with | Resumed at | State frames | Missing | Duplicated | Every frame once | Content mismatches | Matches the oracle | Holds |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | ((.runs[] | .workers as $w | .stalled_lossless_clients[] | . + {workers: $w, session: "stepped"}), (.paced + {session: "paced"})) | "| \($cell) | \(.workers) | \(.session) | \(.data_plane) | \(.client_stalled_at) | \(.streams_ended_at) | \(.ended_with) | \(.resumed_at) | \(.state_frames) | \(.state_frames_missing) | \(.state_frames_duplicated) | \(.every_frame_once) | \(.content_mismatches) | \(.matches_oracle) | \(.holds) |"' "$file"
+    done
+    echo
+    echo "Transactions per size (five kinds each: field sets, component adds and removes, despawns, spawns, mixed):"
+    echo
+    echo "| Cell | Workers | Data plane | Size | Kinds atomic | One refused element: verdicts per kind | Refusals listed of planted under full evaluation | Inverse restores the full hash | Inverse restores the component data and labels | Original applies again |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .runs[] | .workers as $w | .commands[] | .data_plane.data_plane as $plane | (.transactions | group_by(.size))[] | "| \($cell) | \($w) | \($plane) | \(.[0].size) | \([.[] | select(.atomic)] | length) of \(length) | \([.[].one_refused_verdicts] | unique | join("; ")) | \([.[].refusals_listed] | add) of \([.[].refusals_planted] | add) | \([.[] | select(.inverse_restores_the_full_hash)] | length) of \(length) | \([.[] | select(.inverse_restores_the_component_data and .inverse_restores_the_labels)] | length) of \(length) | \([.[] | select(.original_applies_again)] | length) of \(length) |"' "$file"
+    done
+    echo
+    echo "The kinds and sizes whose inverse does not restore the full hash, per cell:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: \([.runs[].commands[].transactions[] | select(.inverse_restores_the_full_hash | not) | "\(.kind) of \(.size)"] | unique | if length == 0 then "none" else join(", ") end)."' "$file"
+    done
+    echo
+    echo "The scripted agent's commands and the per-session sequence:"
+    echo
+    echo "| Cell | Workers | Data plane | Matches the oracle | First divergent tick | Commands sent | In the input log | Outcome mismatches | Digest mismatches | Every frame once | Retries answered alike | Gaps refused | Altered retries refused by name | Retry outside retention refused | Sequence holds |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .runs[] | .workers as $w | .commands[] | "| \($cell) | \($w) | \(.data_plane.data_plane) | \(.matches_oracle) | \(.first_divergent_tick) | \(.commands_sent) | \(.commands_in_the_input_log) | \(.outcome_mismatches) | \(.digest_mismatches) | \(.data_plane.every_frame_once) | \(.sequence.retries_answered_alike) of \(.sequence.retries_sent) | \(.sequence.gaps_refused) of \(.sequence.gaps_sent) | \(.sequence.altered_retries_refused_by_name) of \(.sequence.altered_retries_sent) | \(.sequence.retry_outside_retention_refused) | \(.sequence.holds) |"' "$file"
+    done
+    echo
+    echo "The paced session (the host steps one tick per millisecond; every command's result is asked for by retrying its sequence):"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: \(.paced.workers) workers, \(.paced.host_ticks_per_second) host ticks per second, matches the oracle \(.paced.matches_oracle), \(.paced.commands_sent) commands sent and \(.paced.commands_in_the_input_log) in the input log, \(.paced.results_answered_from_the_log) results answered from the log, \(.paced.commands_never_applied) never applied."' "$file"
+    done
+    echo
+    echo "The inverse's cost, in process (median nanoseconds per transaction):"
+    echo
+    echo "| Cell | Kind | Size | Apply ns | Apply with inverse ns | Inverse percent of apply |"
+    echo "| --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .inverse_cost[] | "| \($cell) | \(.kind) | \(.size) | \(.apply_ns) | \(.apply_with_inverse_ns) | \(.inverse_percent_of_apply) |"' "$file"
+    done
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;

@@ -1,0 +1,10 @@
+[package]
+name = "control-surface-data-plane"
+version = "0.1.0"
+publish = false
+edition = "2024"
+description = "Throwaway spike: a shared memory ring and a second-stream fallback as the local data plane, transactions with their inverse, and the per-session command sequence over the reference workload, for the control surface research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }
