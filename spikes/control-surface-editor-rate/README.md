@@ -64,7 +64,7 @@ Research CI, workflow `research-ci.yml`, five cells (see [`spikes/README.md`](..
 
 ## Result
 
-Local run of 2026-11-09 on an AMD Ryzen 9 9950X3D (16 cores, 32 threads, Windows 11, native MSVC), outside the matrix. The results of the five cells are to be recorded here after the research CI run. Every check passes: the 9 session runs, the 12 paced runs without session and the 24 world runs of the interference rounds match their oracles at every tick, every command's outcome and every transaction's inverse equal the oracle's, and the client's copy of the watched component equals the host's.
+Local run of 2026-11-09 on an AMD Ryzen 9 9950X3D (16 cores, 32 threads, Windows 11, native MSVC), outside the matrix. The results of the five cells follow under "Result on the five cells". Every check passes: the 9 session runs, the 12 paced runs without session and the 24 world runs of the interference rounds match their oracles at every tick, every command's outcome and every transaction's inverse equal the oracle's, and the client's copy of the watched component equals the host's.
 
 The stepping thread, medians in microseconds over the ticks of a run (loopback socket; the in-process runs at 4 workers are within 0.5 microsecond for the session's part):
 
@@ -83,4 +83,13 @@ The stepping thread, medians in microseconds over the ticks of a run (loopback s
 - **Interned names.** With canonical rows the names are in the header: interning saves 124 bytes of a change set whatever its size (0.05 percent at 100 percent). It pays where a name travels per value: a live-value message of 100 fields is 2 439 bytes with string names and 1 429 with integers, a `set` command 64 and 35 bytes. Were the rows name-tagged, as a control plane message is, the change set at 100 percent would be 1 320 054 bytes with strings and 320 030 with integers, both above the canonical 240 162, and the full-state read 2 460 073 and 630 032.
 - **Interference: holds.** At 1 worker the agent steps 852 ticks per second alone and 834 beside the editor session, a loss of 2.2 percent. At 4 workers, 2 209 alone, 2 211 beside the editor session on one shared pool and 2 209 with one pool per world: no loss. On the shared pool the editor world pays instead: its tick takes 1 355 microseconds beside the agent against 798 alone (765 with its own pool), 8 percent of its period, because the agent's batches hold the helpers. This machine has four times the cores the two worlds, the I/O executor and the client need; a hosted runner does not, and the cells' figures will say what the cores cost.
 
-The raw measurements of the local run are not published; the cells' will be the artifacts of the research CI run. The result holds for the reference workload version 1 at this toolchain, on this machine, for the arrangement described above.
+The raw measurements of the local run are not published; the cells' are the artifacts of the research CI run named below. The result holds for the reference workload version 1 at this toolchain, on this machine, for the arrangement described above.
+
+## Result on the five cells
+
+Research CI [run of 2026-11-09](https://github.com/ludenea/ludenea/actions/runs/42694659908). Every world matches its oracle and every delivery check passes on every cell.
+
+- **The stepping thread's time on behalf of the session: holds on every cell.** 4 to 27 microseconds per tick, 0.2 to 2.7 percent of the tick's compute time, the highest at a fraction of 100 percent; the extraction adds 12 to 49 microseconds.
+- **A set command to its live value: holds on four cells, fails on `macos-arm64`.** One tick on the Linux and Windows cells (16.6 to 16.7 milliseconds at the median, 17.3 at the 99th percentile, 22.1 at most). On the macOS runner 42 to 53 milliseconds at the median and up to 156, at 1 worker as at 4: the host keeps 60 ticks per second there, but the thread standing for the I/O executor delivers 215 to 246 times in ten seconds instead of 600, its period timer overshooting, each delivery coalescing up to 10 ticks.
+- **The change set's size: holds on every cell.** 2 562, 24 162 and 240 162 bytes per period at 1, 10 and 100 percent, constant over the run, against 410 278 for the full-state read.
+- **The agent's loss beside the editor session: holds on the two Windows cells, fails on the two Linux cells and the macOS runner.** 1.4 and 4.4 percent on `windows-arm64` and `windows-x86_64` at 4 workers; 8.2 and 6.1 percent on `linux-arm64` and `linux-x86_64` at 4 workers (under 1 percent at 1 worker); 8.3 percent on `macos-arm64` at 1 worker. With one pool per world the loss stays (0.9 to 6.8 percent): the shared resource is the processor's cores.

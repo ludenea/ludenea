@@ -60,7 +60,7 @@ A network transport; the named pipe on Windows (the loopback socket stands in, a
 
 ## Result
 
-Local run of 2026-11-09 on an AMD Ryzen 9 9950X3D (16 cores, 32 threads, Windows 11, native MSVC), outside the matrix, under the cell label `local-data-plane`. The results of the five cells are to be recorded here after the research CI run. On Windows the loopback socket is the only transport, so the descriptor's hand-over and the two Unix structure layouts have not run yet.
+Local run of 2026-11-09 on an AMD Ryzen 9 9950X3D (16 cores, 32 threads, Windows 11, native MSVC), outside the matrix, under the cell label `local-data-plane`. The results of the five cells follow under "Result on the five cells". On Windows the loopback socket is the only transport, so the descriptor's hand-over and the two Unix structure layouts have not run yet.
 
 Every hash, outcome and digest equals the oracle's in every run. Best of three repetitions, ticks per second over the time spent stepping:
 
@@ -77,3 +77,15 @@ Every hash, outcome and digest equals the oracle's in every run. Best of three r
 - **The command sequence is the idempotency window: holds.** In every run the three retries are answered from the log with the first answer, the three sequences that skip one are refused with `sequence_gap` naming the expected sequence, the three retries with other bytes are refused with `altered_retry`, none of them moves the digests, and the retry of the first command, older than the retained log, is refused with `outside_retention`. The log holds each command once (1 679 sent, 1 679 logged, 111 bytes per tick). Under the paced host the 1 568 commands wait in the log for the next tick boundary and each result is answered from the log by a retry of its sequence.
 
 The raw measurements and the environment of the run are in `out/` after `ci/run-spike.sh control-surface-data-plane <cell>`. The result holds for the reference workload version 1 at this toolchain on this machine.
+
+## Result on the five cells
+
+Research CI [run of 2026-11-09](https://github.com/ludenea/ludenea/actions/runs/42696226834) (an [earlier run](https://github.com/ludenea/ludenea/actions/runs/42694650699) of the same day used a stalled client that resumed once only). Every hash equals the sequential oracle's on every cell in every configuration.
+
+- **The ring as the local data plane: fails by its throughput threshold on every cell.** The client reads a state frame from the ring in 4 to 37 microseconds against 66 to 566 for the socket read (a ratio of 0.02 to 0.10, the 0.10 on `windows-x86_64` at 4 workers). The world loses 3.0 to 9.7 percent of its throughput under the lossless stream on the Linux and Windows cells (5.1 and 18.1 on the macOS runner); the extraction alone, with no stream, already loses 3.0 to 6.7 percent (37 to 81 microseconds per tick on the stepping thread). The stream's own share is 0 to 1 point at 1 worker and 0.5 to 4.8 points at 4 workers on 4 virtual CPUs.
+- **Flow control never reaches the world: holds on three cells, fails on two for the resume.** Hashes are unchanged under every stalled client and a stalled latest-wins client costs the world nothing measurable. A stalled lossless stream ends at its budget with `unacknowledged_budget_exceeded` and resumes by cursor with every frame once in 23 of 25 configurations. On `macos-arm64` and `windows-x86_64`, at 4 workers on the ring, the stepped client's reader was already about a hundred ticks behind the world before the scripted stall; its cursor had left the stream's retention and each of its 69 resume attempts was refused with `outside_retention`, nothing lost or duplicated among the frames received. A lossless consumer slower than the world cannot resume by cursor alone.
+- **Transactions are atomic: holds**, 60 of 60 on every cell, every planted refusal listed under full evaluation.
+- **The inverse as the undo base: fails by its thresholds on every cell, in the same way.** Component data and labels are restored in 60 of 60 cases, the full hash in 48 of 60: undoing a spawn leaves the slot's generation advanced. Computing the inverse adds up to 0.7 microsecond to a transaction, which is 0 to 329 percent of applying it and at or above 10 percent for 10 to 13 of the 15 kinds and sizes.
+- **The command sequence: holds** on every cell, under the paced session too.
+
+The second stream's lossless client reads a state frame in 18 to 191 microseconds on the Linux and Windows cells and in 1.9 to 4.8 milliseconds on the macOS runner.
