@@ -605,6 +605,67 @@ case "$spike" in
       jq -r '"- `\(.cell)`: \(.importer.payload_bytes) bytes, content hash \(.importer.content_hash), every sample matches \(.importer.matches_expected); spawn and round trip us: \([.importer.round_trips[] | .spawn_and_round_trip_us // "error"] | map(tostring) | join(", "))."' "$file"
     done
     ;;
+  scripting-runtime)
+    echo "Every gameplay system of the tick through the native baseline, the compiling runtime and the interpreter (a run with the cosine and sine compiled into the module has no platform reference):"
+    echo
+    echo "| Cell | Runtime | Workers | Wander | Ran | Matches the reference | First divergent tick | Run hash | ms per tick | Systems us per tick (summed over workers) | Copies us per tick | Serial us per tick | Fuel hash | Largest chunk call fuel |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.runs // [])[] | "| \($cell) | \(.runtime) | \(.workers) | \(.wander) | \(.ran) | \(.matches_reference | if . == null then "n/a" else . end) | \(.first_divergent_tick | if . == null then "n/a" else . end) | \(.run_hash | if . == null then "n/a" else . end) | \(.ms_per_tick | if . == null then "n/a" else . end) | \(.call_us_per_tick | if . == null then "n/a" else . end) | \(.copy_us_per_tick | if . == null then "n/a" else . end) | \(.serial_us_per_tick | if . == null then "n/a" else . end) | \(.fuel_hash | if . == null then "n/a" else . end) | \(.largest_chunk_call_fuel | if . == null then "n/a" else . end) |\(if .failure then " \(.failure | gsub("\n"; " ") | .[0:200])" else "" end)"' "$file"
+    done
+    echo
+    echo "Distinct values across every cell (1 means identical everywhere):"
+    echo
+    echo "- reference run hash, wander off: $(jq -r '.reference_run_hash_wander_off' "${facts[@]}" | sort -u | wc -l | tr -d ' '); wander on (the platform's cosine and sine): $(jq -r '.reference_run_hash_wander_on' "${facts[@]}" | sort -u | wc -l | tr -d ' ')."
+    for wander in "off" "compiled into the module" "host functions"; do
+      echo "- wander $wander, run hash over the module runs of both runtimes and every worker count: $(jq -r --arg wander "$wander" '(.runs // [])[] | select(.ran and .wander == $wander and .runtime != "native") | .run_hash' "${facts[@]}" | sort -u | wc -l | tr -d ' ')."
+      for runtime in "wasmtime, fuel on" "wasmi, fuel on"; do
+        echo "- wander $wander, fuel hash of \`$runtime\` over every worker count: $(jq -r --arg wander "$wander" --arg runtime "$runtime" '(.runs // [])[] | select(.ran and .wander == $wander and .runtime == $runtime) | .fuel_hash' "${facts[@]}" | sort -u | wc -l | tr -d ' ')."
+      done
+      echo "- wander $wander, fuel hash over both runtimes: $(jq -r --arg wander "$wander" '(.runs // [])[] | select(.ran and .wander == $wander and .metered) | .fuel_hash' "${facts[@]}" | sort -u | wc -l | tr -d ' ')."
+    done
+    echo "- module content hashes: first $(jq -r '.builds[0].content_hash // "none"' "${facts[@]}" | sort -u | wc -l | tr -d ' '), second $(jq -r '.builds[1].content_hash // "none"' "${facts[@]}" | sort -u | wc -l | tr -d ' ')."
+    echo "- reload run hash over every runtime and worker count: $(jq -r '(.reloads // [])[] | select(.ran) | .run_hash' "${facts[@]}" | sort -u | wc -l | tr -d ' ')."
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: \(.platform.available_parallelism) CPUs; \([(.runs // [])[] | select(.matches_reference == true)] | length) of \([(.runs // [])[] | select(.matches_reference != null)] | length) runs with a reference match it, \([(.runs // [])[] | select(.ran | not)] | length) did not run; the sequential reference runs at \(.reference_ticks_per_second_wander_off) ticks per second; module builds: \([.builds[] | "\(.succeeded) in \(.seconds) s"] | join(", "))\(if .runtimes_failure then "; runtimes failure: \(.runtimes_failure)" else "" end)."' "$file"
+    done
+    echo
+    echo "Invalid floating-point results (bit patterns):"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.invalid_results // [])[] | "- `\($cell)` \(.runtime): \(.zero_over_zero // .failure), \(.infinity_minus_infinity // ""), \(.square_root_of_negative // ""), \(.zero_times_infinity // "")."' "$file"
+    done
+    echo
+    echo "Injected faults (chunk 17 of tick 300 at 4 workers):"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.injected_faults // [])[] | "- `\($cell)` \(.runtime), \(.fault): failed \(.failed // .failure) at tick \(.failure_tick | if . == null then "n/a" else . end) in chunk \(.failure_chunk | if . == null then "n/a" else . end) with \(.trap | if . == null then "n/a" else . end), fuel consumed by the failing call \(.fuel_consumed_by_the_failing_call | if . == null then "n/a" else . end); last completed tick \(.last_completed_tick | if . == null then "n/a" else . end), hashes match up to there \(.hashes_match_reference_up_to_there | if . == null then "n/a" else . end), state is that tick \(.state_is_the_last_completed_tick | if . == null then "n/a" else . end), further step refused \(.further_step_refused | if . == null then "n/a" else . end)."' "$file"
+    done
+    echo
+    echo "Fuel exhaustion on the first tick, and the fuel of a first and a second world on one runtime:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.fuel_exhaustion // [])[] | "- `\($cell)` \(.runtime): the largest chunk call consumes \(.largest_chunk_call_fuel_of_tick_1 // .failure); the smallest budget that completes the tick is \(.smallest_budget_that_completes_tick_1 | if . == null then "n/a" else . end) and gives the reference tick \(.that_budget_gives_the_reference_tick | if . == null then "n/a" else . end); one unit less stops the tick \(.one_unit_less_stops_the_tick | if . == null then "n/a" else . end) with \(.trap | if . == null then "n/a" else . end) in chunk \(.failure_chunk | if . == null then "n/a" else . end) after \(.fuel_consumed_by_the_failing_call | if . == null then "n/a" else . end), state untouched \(.state_untouched_after_the_stop | if . == null then "n/a" else . end)."' "$file"
+      jq -r '.cell as $cell | (.fuel_of_a_first_and_a_second_world // [])[] | "- `\($cell)` \(.runtime // "not created"): first world \(.first_world_fuel_of_tick_1 // .failure), second world \(.second_world_fuel_of_tick_1 | if . == null then "n/a" else . end), equal \(.equal | if . == null then "n/a" else . end)."' "$file"
+    done
+    echo
+    echo "Recursion, host calls and instantiation:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.recursion // [])[] | "- `\($cell)` \(.runtime): the deepest recursion that returns is \(.deepest_recursion_that_returns // .failure) levels (\(.fuel_at_that_depth | if . == null then "n/a" else . end) fuel), stopped by \(.trap // "the search cap"); \(.fuel_per_level | if . == null then "n/a" else . end) fuel per level."' "$file"
+      jq -r '.cell as $cell | (.host_calls // [])[] | "- `\($cell)` \(.runtime): \(.ns_per_call_and_loop_iteration // .failure) ns and \(.fuel_per_call_and_loop_iteration | if . == null then "n/a" else . end) fuel per host call with its loop iteration."' "$file"
+      jq -r '.cell as $cell | (.instantiation // [])[] | "- `\($cell)` \(.runtime): module compiled or translated in \(.module_compilation_ms // .failure) ms; an instance in \(.median_us | if . == null then "n/a" else . end) us (median), \(.mean_us | if . == null then "n/a" else . end) (mean), \(.slowest_us | if . == null then "n/a" else . end) (slowest of \(.instantiations | if . == null then "n/a" else . end)); memory \(.memory_bytes | if . == null then "n/a" else . end) bytes."' "$file"
+    done
+    echo
+    echo "The second module loaded before tick 500:"
+    echo
+    echo "| Cell | Runtime | Workers | Ran | Run hash | First divergent tick from the reference | Matches the native oracle | Replay from the load record matches | Reload ms |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.reloads // [])[] | "| \($cell) | \(.runtime) | \(.workers | if . == null then "n/a" else . end) | \(.ran) | \(.run_hash | if . == null then "n/a" else . end) | \(.first_divergent_tick_from_the_reference | if . == null then "n/a" else . end) | \(.matches_the_native_oracle | if . == null then "n/a" else . end) | \(.replay_from_the_load_record_matches | if . == null then "n/a" else . end) | \(.reload_ms | if . == null then "n/a" else . end) |\(if .failure then " \(.failure | gsub("\n"; " ") | .[0:200])" else "" end)"' "$file"
+    done
+    ;;
   workload-asset-arrival)
     echo "The loading gate: a world that requires the asset waits for the loader (a real delay that differs between runs) and then steps; the hashes must be the reference's whatever the delay:"
     echo

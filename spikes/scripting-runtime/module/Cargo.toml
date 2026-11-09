@@ -1,0 +1,18 @@
+[package]
+name = "tick-module"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike crate: the systems of tick-systems exported as a WebAssembly module with its columns in static arenas, built for wasm32-unknown-unknown at run time by the scripting runtime spike, for the scripting and gameplay model research"
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+# The second module: the same systems with another damping constant.
+variant = []
+
+[dependencies]
+tick-systems = { path = "../systems" }
+reference-workload = { path = "../../reference-workload" }

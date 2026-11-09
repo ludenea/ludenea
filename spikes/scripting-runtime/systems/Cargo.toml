@@ -1,0 +1,10 @@
+[package]
+name = "tick-systems"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike crate: every gameplay system of the reference workload's tick over plain columns, linked into the host as the native baseline and exported as a WebAssembly module by tick-module, for the scripting and gameplay model research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../../reference-workload" }

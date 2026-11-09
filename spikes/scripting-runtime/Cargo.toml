@@ -1,0 +1,17 @@
+[package]
+name = "scripting-runtime"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: every gameplay system of the reference workload's tick run as a WebAssembly module under a compiling runtime (Wasmtime) and an interpreter (wasmi), with the reference hashes, the fuel consumed, the faults, the costs and a reload that changes code, for the scripting and gameplay model research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }
+tick-systems = { path = "systems" }
+# The two subjects of the measurement, never dependencies of the engine.
+# Wasmtime 50.0.1, Apache 2.0 with the LLVM exception: the compiling runtime,
+# with the features the spike needs and nothing else (no async, no component
+# model). wasmi 2.0.0, MIT or Apache 2.0: the interpreter.
+wasmtime = { version = "=50.0.1", default-features = false, features = ["runtime", "cranelift", "std", "pooling-allocator"] }
+wasmi = { version = "=2.0.0", default-features = false, features = ["std", "validate", "deterministic"] }
