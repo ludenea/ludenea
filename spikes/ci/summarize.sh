@@ -716,6 +716,62 @@ case "$spike" in
       jq -r '.cell as $cell | .fault_isolation.runs[] | "- `\($cell)` at \(.workers) workers: failure at tick \(.failure_tick) (injected \(.injected_tick)) in \(.failure_node) chunk \(.failure_chunk) on worker \(.failure_worker); the healthy world matches the reference \(.healthy_matches); the failed world stopped at tick \(.failed_tick_done) with its history matching \(.failed_history_matches), refuses a further step \(.failed_refuses_step); the pool serves a fresh world afterwards \(.pool_serves_after); holds \(.holds)."' "$file"
     done
     ;;
+  asset-import-parallel)
+    echo "Byte-identical across runs and worker counts: three imports per worker count, each from an empty cache; the manifest of a kind is the sorted list of asset identifier and content hash, hashed as a whole:"
+    echo
+    echo "| Cell | Workers | Runs | Distinct manifests across the runs (plain, geometric, control) | Manifest of every asset (run 1) | Wall ms (runs) |"
+    echo "| --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .identical_across_runs_and_workers.per_worker_count[] | "| \($cell) | \(.workers) | \(.runs | length) | \([.runs[].manifest_plain] | unique | length), \([.runs[].manifest_geometric] | unique | length), \([.runs[].manifest_control] | unique | length) | \(.runs[0].manifest_all) | \([.runs[].wall_ms] | map(tostring) | join(", ")) |"' "$file"
+    done
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: \(.platform.available_parallelism) CPUs; \(.set.total) assets (\(.set.plain) plain, \(.set.geometric) geometric, \(.set.control) control), \(.set.source_bytes) source bytes, \(.output_bytes) output bytes; distinct manifests across every run and worker count: plain \(.identical_across_runs_and_workers.distinct_plain), geometric \(.identical_across_runs_and_workers.distinct_geometric), control \(.identical_across_runs_and_workers.distinct_control); failed actions \(.identical_across_runs_and_workers.failures); holds \(.identical_across_runs_and_workers.holds)."' "$file"
+    done
+    echo
+    echo "Byte-identical across cells (the plain and geometric kinds must give one value; the control kind, normalized with the platform math library, is reported for information):"
+    echo
+    echo "| Cell | Plain manifest | Geometric manifest | Control manifest |"
+    echo "| --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '"| \(.cell) | \(.manifest_plain) | \(.manifest_geometric) | \(.manifest_control) |"' "$file"
+    done
+    echo
+    for kind in plain geometric control; do
+      distinct="$(jq -r ".manifest_$kind" "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+      echo "- \`$kind\`: $distinct distinct manifest hash value(s) across ${#facts[@]} cell(s)."
+    done
+    echo
+    echo "Incremental re-import (a cache mirrored on disk; after the full import, each re-import must import exactly the expected actions and leave the untouched assets' content hashes unchanged):"
+    echo
+    echo "| Cell | Change | Expected actions | Actions imported | Exactly those | Memory hits | Disk hits | Untouched unchanged | Elapsed ms | Ratio to the full import | Holds |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .incremental.re_imports[] | "| \($cell) | \(.change) | \(.expected_actions) | \(.actions_imported) | \(.exactly_the_expected_actions) | \(.cache_memory_hits) | \(.cache_disk_hits) | \(.untouched_hashes_unchanged) | \(.elapsed_ms) | \(.ratio_to_full_import) | \(.holds) |"' "$file"
+    done
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: the full import at \(.incremental.workers) workers imported \(.incremental.full_import_actions) actions in \(.incremental.full_import_ms) ms and mirrored \(.incremental.disk_mirror_files) files (\(.incremental.disk_mirror_bytes) bytes) on disk; holds \(.incremental.holds)."' "$file"
+    done
+    echo
+    echo "Throughput against the workers (the full import from an empty cache, best of alternating rounds after a warm-up; the idle share is the time the workers spent waiting for a ready action over their wall time):"
+    echo
+    echo "| Cell | Workers | Best ms | Assets per second | Speedup over 1 worker | Idle share | Rounds ms |"
+    echo "| --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .throughput.per_worker_count[] | "| \($cell) | \(.workers) | \(.best_ms) | \(.assets_per_second) | \(.speedup) | \(.idle_share) | \([.rounds[].wall_ms] | map(tostring) | join(", ")) |"' "$file"
+    done
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: \(.throughput.rounds) rounds, warm-up \(.throughput.warm_up_ms) ms, every timed import gave the identity scenario'"'"'s manifests \(.throughput.every_manifest_identical). Refuting thresholds: below 1.6 at 4 workers on the x86_64 runner cells, below 3.0 at 4 workers on the ARM64 runner cells, below 10 at 16 workers on the founder'"'"'s machine."' "$file"
+    done
+    echo
+    echo "The claiming order is not the output order (runs at the same worker count must complete in different sequences while the manifest stays the same):"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: \(.claiming_order.runs_needed) run(s) at \(.claiming_order.workers) workers, completion sequence hashes \([.claiming_order.runs[].completion_order_hash] | join(", ")); the sequences differ \(.claiming_order.orders_differ); the manifests are identical \(.claiming_order.manifests_identical); holds \(.claiming_order.holds)."' "$file"
+    done
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;

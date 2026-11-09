@@ -29,6 +29,7 @@ members = [
     "plugin-tiers/motion-module",
     "plugin-tiers/motion-native",
     "workload-persistent-pool",
+    "asset-import-parallel",
 ]
 
 [profile.release]
