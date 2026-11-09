@@ -28,6 +28,7 @@ members = [
     "plugin-tiers/motion-crate",
     "plugin-tiers/motion-module",
     "plugin-tiers/motion-native",
+    "workload-persistent-pool",
 ]
 
 [profile.release]

@@ -653,6 +653,69 @@ case "$spike" in
       jq -r '"- `\(.cell)`: \(.platform.available_parallelism) CPUs; DISPLAY set \(.session.display_set), WAYLAND_DISPLAY set \(.session.wayland_display_set); open sockets before and after rendering: \(.session.open_sockets_before_rendering), \(.session.open_sockets_after_rendering); Vulkan ICD files: \([.session.vulkan_icd_files[].file] | join(", ")); GLSL compiler: \(.session.glsl_compiler); the binary (\(.imports.format)) imports \([.imports.libraries[]?.name] | join(", ")); a windowing, graphics or audio library imported: \(if .imports.error then .imports.error else .imports.imports_a_windowing_graphics_or_audio_library end)."' "$file"
     done
     ;;
+  workload-persistent-pool)
+    echo "The cost of a one-tick step on both pools, per worker count (the wall time of 1 000 calls of step(1) minus one call of step(1000), per step; the best of the rounds):"
+    echo
+    echo "| Cell | Pool | Workers | 1 000 calls ms | One batch ms | Overhead us per step | Ticks per second |"
+    echo "| --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.throughput.runs // []) as $rates | .step_cost.runs[] | .pool as $pool | .workers as $workers | ($rates[] | select(.pool == $pool and .workers == $workers)) as $rate | "| \($cell) | \(.pool) | \(.workers) | \(.thousand_calls_ms) | \(.one_batch_ms) | \(.overhead_us_per_step) | \($rate.ticks_per_second) |"' "$file"
+    done
+    echo
+    echo "| Cell | Workers | Step-scoped overhead us | Persistent overhead us | Ratio step-scoped over persistent | Throughput ratio persistent over step-scoped | Within 3 percent |"
+    echo "| --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.throughput.comparisons // []) as $rates | .step_cost.ratios[] | .workers as $workers | ($rates[] | select(.workers == $workers)) as $rate | "| \($cell) | \(.workers) | \(.step_scoped_us) | \(.persistent_us) | \(.ratio_step_scoped_over_persistent) | \($rate.ratio_persistent_over_step_scoped) | \($rate.within_3_percent) |"' "$file"
+    done
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: \(.platform.available_parallelism) CPUs, size \(.size), \(.ticks) ticks, profile \(.profile), \(.rounds) rounds, spin bound \(.spin_bound_us) us, one hash of the state \(.step_cost.state_hash_us) us (the serial task a one-tick step cannot overlap); at 4 workers (measured \(.step_cost.at_four_workers.measured)) the persistent overhead is \(.step_cost.at_four_workers.persistent_us) us against \(.step_cost.at_four_workers.step_scoped_us) us step-scoped, under 50 us \(.step_cost.at_four_workers.under_50_us), under a fifth of the step-scoped \(.step_cost.at_four_workers.under_fifth_of_step_scoped): the step cost hypothesis holds \(.step_cost.holds); the throughput hypothesis holds \(.throughput.holds); the sequential reference runs at \(.reference_ticks_per_second) ticks per second."' "$file"
+    done
+    echo
+    echo "The hashes on the persistent pool (every world against the sequential reference of its seed):"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: \([.hashes.batches[] | select(.matches_reference)] | length) of \(.hashes.batches | length) batch runs match (worker counts \([.hashes.batches[].workers] | unique | map(tostring) | join(", ")); batches \([.hashes.batches[].batch] | unique | map(tostring) | join(", "))); two worlds alternating: \([.hashes.two_worlds[] | select(.first_matches and .second_matches)] | length) of \(.hashes.two_worlds | length) runs match both; sixteen worlds from sixteen threads: \([.hashes.sixteen_worlds[] | select(.all_match)] | length) of \(.hashes.sixteen_worlds | length) runs match every world; the hypothesis holds \(.hashes.holds)."' "$file"
+    done
+    echo
+    echo "The step after a pause (1 000 one-tick steps, each after the pause; the step's own wall time; the best round by the mean):"
+    echo
+    echo "| Cell | Pool | Workers | Pause ms | Step us mean | Step us max | Batch us per tick | Excess us mean |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .wake_after_pause.runs[] | "| \($cell) | \(.pool) | \(.workers) | \(.pause_ms) | \(.step_us_mean) | \(.step_us_max) | \(.batch_us_per_tick) | \(.excess_us_mean) |"' "$file"
+    done
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: the persistent pool is cheaper after every pause at every worker count \(.wake_after_pause.persistent_cheaper_everywhere); its excess over the batch per tick at 4 workers is under 100 us \(.wake_after_pause.excess_under_100_us_at_4_workers) (\([.wake_after_pause.comparisons[] | select(.workers == 4) | "\(.persistent_excess_us) us after \(.pause_ms) ms"] | join(", "))); the hypothesis holds \(.wake_after_pause.holds)."' "$file"
+    done
+    echo
+    echo "The idle pool after a step (one second; the spin and the parks of every persistent worker over the second):"
+    echo
+    echo "| Cell | Workers | Max spin us per worker | Max parks per worker | Workers already parked when the step returned | Every worker parked at the end | Holds |"
+    echo "| --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .idle.runs[] | "| \($cell) | \(.workers) | \(.max_spin_us) | \(.max_parks) | \(.workers_parked_at_step_end) of \(.workers_stats | length) | \(.every_worker_parked_at_end) | \(.holds) |"' "$file"
+    done
+    echo
+    echo "The harness pattern (sixteen worlds of one seed, each stepped 1 000 ticks one per call by its own thread):"
+    echo
+    echo "| Cell | Run | Pool | Pools | Workers per pool | Wall ms | Worlds matching |"
+    echo "| --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .harness_pattern.worlds as $worlds | .harness_pattern.runs[] | "| \($cell) | \(.label) | \(.pool) | \(.pools) | \(.workers) | \(.wall_ms) | \(.matching) of \($worlds) |"' "$file"
+    done
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: the shared pool of the parallelism takes \(.harness_pattern.ratio_shared_over_step_scoped) times the wall time of the sixteen step-scoped pools (not slower by more than 10 percent: \(.harness_pattern.shared_not_slower_by_10_percent)); the hypothesis holds \(.harness_pattern.holds); the processor time is \(.harness_pattern.processor_time)."' "$file"
+    done
+    echo
+    echo "The fault isolation on a shared pool (two worlds alternating, a panic injected in the second world's repulsion pass):"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .fault_isolation.runs[] | "- `\($cell)` at \(.workers) workers: failure at tick \(.failure_tick) (injected \(.injected_tick)) in \(.failure_node) chunk \(.failure_chunk) on worker \(.failure_worker); the healthy world matches the reference \(.healthy_matches); the failed world stopped at tick \(.failed_tick_done) with its history matching \(.failed_history_matches), refuses a further step \(.failed_refuses_step); the pool serves a fresh world afterwards \(.pool_serves_after); holds \(.holds)."' "$file"
+    done
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;

@@ -1123,6 +1123,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "workload-persistent-pool"
+version = "0.1.0"
+dependencies = [
+ "reference-workload",
+]
+
+[[package]]
 name = "workload-render-extraction"
 version = "0.1.0"
 dependencies = [

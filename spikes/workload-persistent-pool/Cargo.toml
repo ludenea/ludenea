@@ -1,0 +1,10 @@
+[package]
+name = "workload-persistent-pool"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway prototype: the reference workload stepped by the harness host on a worker pool owned by the runtime instance and persistent across steps, against the step-scoped pool, for the fundamental architecture's concurrency model"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }
