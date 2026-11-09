@@ -947,10 +947,10 @@ case "$spike" in
     echo
     echo "Clients that stop reading a lossless stream, then resume by cursor (stepped sessions per worker count, and the paced session):"
     echo
-    echo "| Cell | Workers | Session | Data plane | Stalled at | Ended at | Ended with | Resumed at | State frames | Missing | Duplicated | Every frame once | Content mismatches | Matches the oracle | Holds |"
-    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    echo "| Cell | Workers | Session | Data plane | Stalled at | Ended at | Ended with | Resumed at | Ends | State frames | Missing | Duplicated | Every frame once | Content mismatches | Matches the oracle | Holds |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
     for file in "${facts[@]}"; do
-      jq -r '.cell as $cell | ((.runs[] | .workers as $w | .stalled_lossless_clients[] | . + {workers: $w, session: "stepped"}), (.paced + {session: "paced"})) | "| \($cell) | \(.workers) | \(.session) | \(.data_plane) | \(.client_stalled_at) | \(.streams_ended_at) | \(.ended_with) | \(.resumed_at) | \(.state_frames) | \(.state_frames_missing) | \(.state_frames_duplicated) | \(.every_frame_once) | \(.content_mismatches) | \(.matches_oracle) | \(.holds) |"' "$file"
+      jq -r '.cell as $cell | ((.runs[] | .workers as $w | .stalled_lossless_clients[] | . + {workers: $w, session: "stepped"}), (.paced + {session: "paced"})) | "| \($cell) | \(.workers) | \(.session) | \(.data_plane) | \(.client_stalled_at) | \(.streams_ended_at) | \(.ended_with) | \(.resumed_at) | \(.state_stream_ends) state, \(.frame_stream_ends) frame | \(.state_frames) | \(.state_frames_missing) | \(.state_frames_duplicated) | \(.every_frame_once) | \(.content_mismatches) | \(.matches_oracle) | \(.holds) |"' "$file"
     done
     echo
     echo "Transactions per size (five kinds each: field sets, component adds and removes, despawns, spawns, mixed):"

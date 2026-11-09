@@ -218,6 +218,9 @@ fn write_reception(out: &mut Json, spec: &PlaneSpec, reception: &Reception, tick
     optional(out, "streams_ended_at", reception.ended_at);
     out.string("ended_with", &reception.ended_codes.join(", "));
     optional(out, "resumed_at", reception.resumed_at);
+    out.u64("state_stream_ends", u64::from(reception.ends[STATE_STREAM as usize]));
+    out.u64("frame_stream_ends", u64::from(reception.ends[FRAME_STREAM as usize]));
+    out.bool("cursors_equal_on_every_resume", reception.resumes.iter().all(|resume| resume.1 == resume.2));
     out.key("resumes");
     out.array_start();
     for (stream, cursor, server_cursor, result) in &reception.resumes {
@@ -791,6 +794,24 @@ mod tests {
         let paced = Paced { run, spec, workers: 2, replay: paced_replay, first_divergent_tick, ticks: scale.ticks };
         assert!(paced.holds(), "{:?} {:?} {:?}", paced.first_divergent_tick, paced.replay.outcome_mismatches, paced.run.reception);
         assert!(paced.run.kicks_applied > 0 && paced.run.statistics.retries_answered >= paced.run.commands_sent);
+    }
+
+    /// Two scripted stalls force two ends: the client resumes after each and
+    /// still holds every frame once.
+    #[test]
+    fn a_client_whose_lossless_stream_ends_twice_resumes_twice_with_every_frame_once() {
+        let scale = small_scale();
+        let mut plain = Oracle::new(scale.size);
+        plain.step_to(scale.ticks);
+        for second_stream in [false, true] {
+            let spec = plane(second_stream, Policy::Lossless, true, Stall::UntilEndedTwice(40, 120));
+            let run = run_plain(&scale, 2, Some(spec)).unwrap();
+            let reception = run.reception.unwrap();
+            assert_eq!(divergence(&run.hashes, &plain.hashes), None);
+            assert!(reception.ends[STATE_STREAM as usize] >= 2 && reception.ends[FRAME_STREAM as usize] >= 2, "{}: {:?}", spec.mode(), reception.ends);
+            assert!(reception.ended_with_the_budget_error() && reception.resumed(), "{}: {:?}", spec.mode(), reception.resumes);
+            assert!(reception.lossless_complete(&spec, scale.ticks) && reception.content_mismatches == 0, "{}: {:?}", spec.mode(), reception.report.streams);
+        }
     }
 
     #[test]

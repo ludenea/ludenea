@@ -83,8 +83,12 @@ pub enum Stall {
     Never,
     /// From this tick on, for the rest of the run.
     Forever(u32),
-    /// From this tick until the streams have ended, then resume by cursor.
+    /// From this tick until the streams have ended; the client then resumes by
+    /// cursor, as it does after every later end.
     UntilEnded(u32),
+    /// The same with a second scripted stall, for the self-checks.
+    #[cfg(test)]
+    UntilEndedTwice(u32, u32),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -117,6 +121,8 @@ pub struct Reception {
     pub ended_at: Option<u32>,
     pub ended_codes: Vec<String>,
     pub resumed_at: Option<u32>,
+    /// Per stream identifier, the times the stream ended and was resumed.
+    pub ends: [u32; 3],
     /// Per resumed stream: its identifier, the client's cursor, the server's
     /// cursor before the resume and the result.
     pub resumes: Vec<(u32, u32, u32, String)>,
@@ -136,7 +142,7 @@ impl Reception {
     }
 
     pub fn resumed(&self) -> bool {
-        !self.resumes.is_empty() && self.resumes.iter().all(|resume| resume.3 == "resumed")
+        !self.resumes.is_empty() && self.resumes.iter().all(|resume| resume.3 == "resumed" && resume.1 == resume.2)
     }
 }
 
@@ -145,6 +151,10 @@ struct Reading {
     control: Arc<ReaderControl>,
     thread: thread::JoinHandle<ReaderReport>,
     reception: Reception,
+    /// The scripted stalls begun so far.
+    stalls_begun: usize,
+    /// The tick the client saw its streams ended at during a scripted stall.
+    stalled_end_seen: Option<u32>,
 }
 
 fn wait_until(limit: Duration, mut reached: impl FnMut() -> bool) -> bool {
@@ -163,34 +173,55 @@ impl Reading {
         let source = if spec.second_stream { client.open_second_stream(spec.state, spec.frame)? } else { client.open_ring(spec.state, spec.frame)? };
         let control = Arc::new(ReaderControl::default());
         let thread = spawn_reader(source, control.clone(), spec.verify);
-        Ok(Reading { spec, control, thread, reception: Reception::default() })
+        Ok(Reading { spec, control, thread, reception: Reception::default(), stalls_begun: 0, stalled_end_seen: None })
     }
 
     /// What the client does about its reader at a tick it observes.
     fn at_tick(&mut self, client: &mut Client, tick: u32, ended_streams: u32) -> Fallible<()> {
         self.follow(tick, ended_streams);
-        let at = match self.spec.stall {
+        let scripted = match self.spec.stall {
             Stall::Never => return Ok(()),
-            Stall::Forever(at) | Stall::UntilEnded(at) => at,
+            Stall::Forever(at) => {
+                if self.reception.stalled_at.is_none() && tick >= at {
+                    self.control.stall.store(true, Ordering::SeqCst);
+                    self.reception.stalled_at = Some(tick);
+                }
+                return Ok(());
+            }
+            Stall::UntilEnded(at) => [Some(at), None],
+            #[cfg(test)]
+            Stall::UntilEndedTwice(first, second) => [Some(first), Some(second)],
         };
-        if self.reception.stalled_at.is_none() && tick >= at {
+        let next = scripted.get(self.stalls_begun).copied().flatten();
+        if self.stalled_end_seen.is_none() && !self.control.stall.load(Ordering::SeqCst) && next.is_some_and(|at| tick >= at) {
             self.control.stall.store(true, Ordering::SeqCst);
-            self.reception.stalled_at = Some(tick);
+            self.stalls_begun += 1;
+            self.reception.stalled_at.get_or_insert(tick);
         }
-        if self.spec.stall == Stall::Forever(at) {
+        if ended_streams == 0 {
             return Ok(());
         }
-        if self.reception.ended_at.is_none() && ended_streams != 0 {
-            self.reception.ended_at = Some(tick);
+        self.reception.ended_at.get_or_insert(tick);
+        if self.control.stall.load(Ordering::SeqCst) {
+            // The scripted stall: the client reads again ten ticks after it saw the end.
+            let seen = *self.stalled_end_seen.get_or_insert(tick);
+            if tick < seen + BATCH {
+                return Ok(());
+            }
+            self.stalled_end_seen = None;
         }
-        let Some(ended_at) = self.reception.ended_at else { return Ok(()) };
-        if self.reception.resumed_at.is_some() || tick < ended_at + BATCH {
-            return Ok(());
-        }
-        // The client reads again: first what the sink still holds, then it
-        // resumes each ended stream at the sequence after the last it received.
+        // Otherwise the machine ended the stream (the reader was not scheduled
+        // for the budget's worth of ticks): the client resumes at once.
+        self.resume_ended(client, tick)
+    }
+
+    /// The client reads again: first what the sink still holds, then it
+    /// resumes each ended stream at the sequence after the last it received.
+    fn resume_ended(&mut self, client: &mut Client, tick: u32) -> Fallible<()> {
         let ended: Vec<StreamView> = client.stream_status()?.into_iter().filter(|stream| !stream.ended.is_empty()).collect();
-        self.reception.ended_codes = ended.iter().map(|stream| stream.ended.clone()).collect();
+        if ended.is_empty() {
+            return Ok(());
+        }
         self.control.stall.store(false, Ordering::SeqCst);
         let seen = self.control.empty_polls.load(Ordering::SeqCst);
         wait_until(Duration::from_secs(20), || self.control.empty_polls.load(Ordering::SeqCst) >= seen + 3);
@@ -200,9 +231,13 @@ impl Reading {
                 Ok(()) => "resumed".to_string(),
                 Err(error) => error.code().to_string(),
             };
+            self.reception.ends[stream.id as usize] += 1;
+            if !self.reception.ended_codes.contains(&stream.ended) {
+                self.reception.ended_codes.push(stream.ended.clone());
+            }
             self.reception.resumes.push((stream.id, cursor, stream.cursor, result));
         }
-        self.reception.resumed_at = Some(tick);
+        self.reception.resumed_at.get_or_insert(tick);
         Ok(())
     }
 
@@ -227,6 +262,9 @@ impl Reading {
             // The last frames of the streams still running; an ended stream sends no more.
             let deadline = Instant::now() + Duration::from_secs(20);
             loop {
+                if !matches!(self.spec.stall, Stall::Never | Stall::Forever(_)) {
+                    self.resume_ended(client, ticks as u32)?;
+                }
                 let running = client.stream_status()?.into_iter().filter(|stream| stream.ended.is_empty());
                 let behind = running.filter(|stream| self.control.last_sequence[stream.id as usize].load(Ordering::SeqCst) < ticks).count();
                 if behind == 0 || Instant::now() >= deadline {
