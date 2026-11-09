@@ -31,6 +31,7 @@ members = [
     "workload-persistent-pool",
     "asset-import-parallel",
     "workload-scene-streaming",
+    "rapier-snapshot-continuation",
 ]
 
 [profile.release]

@@ -1,0 +1,21 @@
+[package]
+name = "rapier-snapshot-continuation"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: Rapier 2D and 3D worlds serialized after a number of steps and restored, stepped against the uninterrupted run, with a handed-in thread pool against the sequential step, for the physics research"
+license = "MIT OR Apache-2.0"
+
+[features]
+# On by default, so that the research CI measures the parallel build; a build
+# with --no-default-features is the sequential reference of the pool sharing
+# question (the library steps on the calling thread, no thread pool at all).
+default = ["parallel"]
+parallel = ["rapier2d/parallel", "rapier3d/parallel", "dep:rayon"]
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }
+rapier2d = { version = "=0.36.1", features = ["enhanced-determinism", "serde-serialize"] }
+rapier3d = { version = "=0.36.1", features = ["enhanced-determinism", "serde-serialize"] }
+bincode = "=1.3.3"
+rayon = { version = "1", optional = true }
