@@ -807,6 +807,72 @@ case "$spike" in
       jq -r '"- `\(.cell)` two worlds: holds \(.two_worlds.holds); \(.two_worlds.first_scenario) and \(.two_worlds.second_scenario) at \(.two_worlds.workers) workers on one store and one loader: the first matches its oracle \(.two_worlds.first_matches_oracle) (\(.two_worlds.first_loads) loads), the second \(.two_worlds.second_matches_oracle) (\(.two_worlds.second_loads) loads), \(.two_worlds.payloads_in_store) payloads in the store for \(.two_worlds.imports) imports and \(.two_worlds.requests_served) requests served."' "$file"
     done
     ;;
+  box2d-pool-sharing)
+    echo "| Cell | Scene | Scheduler | Team | Library workers | Final hash | Matches the worker sweep | First divergent step | Step ms total | Cost over native (same team) | Cost over native (same library workers) | Worker parks | Finish parks | Synthetic chunks per step |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .runs[] | "| \($cell) | \(.scene) | \(.scheduler) | \(.team_workers) | \(.library_workers) | \(.final_hash) | \(.matches_worker_sweep) | \(.first_divergent_step) | \(.step_ms_total) | \(.cost_over_native) | \(.cost_over_native_same_library_workers) | \(.worker_parks) | \(.finish_parks) | \(.synthetic_chunks_per_step) |"' "$file"
+    done
+    echo
+    echo "Distinct final hashes per scene across every cell, scheduler and team (1 means identical everywhere):"
+    echo
+    for scene in $(jq -r '.runs[].scene' "${facts[@]}" | sort -u); do
+      distinct="$(jq -r --arg scene "$scene" '.runs[] | select(.scene == $scene) | .final_hash' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+      echo "- \`$scene\`: $distinct distinct final hash value(s)."
+    done
+    echo
+    echo "Per cell: runs that match the worker sweep's hashes, whole-team runs within the 10 percent threshold over the native scheduler, and the worst costs:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)` (\(.platform.cores) logical processors, quick \(.quick)): \([.runs[] | select(.matches_worker_sweep)] | length) of \(.runs | length) runs match the worker sweep; whole team within 1.10 of native: \([.runs[] | select(.scheduler == "engine_whole_team" and .cost_over_native <= 1.10)] | length) of \([.runs[] | select(.scheduler == "engine_whole_team")] | length) runs, worst \([.runs[] | select(.scheduler == "engine_whole_team") | .cost_over_native] | max) (\([.runs[] | select(.scheduler == "engine_whole_team")] | max_by(.cost_over_native) | "\(.scene) at \(.team_workers) workers")); dedicated subset over native at the same library worker count: worst \([.runs[] | select(.scheduler == "engine_dedicated_subset") | .cost_over_native_same_library_workers] | max)."' "$file"
+    done
+    ;;
+  rapier-snapshot-continuation)
+    echo "| Cell | Dimension | Scene | Pool threads | Bodies hashed | Snapshot bytes | Bytes per body | Serialize ms | Second world bytes identical | Path | Path threads | Restore succeeded | Hash at restore matches | First divergent step | Restore ms |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .runs[] | . as $run | .paths[] | "| \($cell) | \($run.dimension) | \($run.scene) | \($run.pool_threads) | \($run.hashed_body_count) of \($run.body_count) | \($run.snapshot_bytes) | \($run.bytes_per_body) | \($run.serialize_ms) | \($run.second_world_bytes_identical) | \(.path) | \(.pool_threads) | \(.restore_succeeded) | \(.hash_at_restore_matches) | \(.first_divergent_step) | \(.restore_ms) |"' "$file"
+    done
+    echo
+    echo "Paths that reproduce the uninterrupted run at every step after the snapshot, per cell:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)` (parallel feature \(.rapier.parallel_feature)): \([.runs[].paths[] | select(.restore_succeeded and .hash_at_restore_matches and .first_divergent_step == -1)] | length) of \([.runs[].paths[]] | length) paths; second serializations identical in \([.runs[] | select(.second_world_bytes_identical)] | length) of \(.runs | length) runs."' "$file"
+    done
+    echo
+    echo "Distinct uninterrupted final hashes per dimension, scene and pool size across every cell (1 means identical everywhere):"
+    echo
+    for config in $(jq -r '.runs[] | "\(.dimension)/\(.scene)/\(.pool_threads)"' "${facts[@]}" | sort -u); do
+      distinct="$(jq -r --arg config "$config" '.runs[] | select("\(.dimension)/\(.scene)/\(.pool_threads)" == $config) | .uninterrupted_final_hash' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+      echo "- \`$config\`: $distinct distinct final hash value(s)."
+    done
+    echo
+    echo "| Cell | Dimension | Scene | Mode | Threads | Final hash | Matches the baseline | Step ms total | Step ms median |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .pool_sharing[] | "| \($cell) | \(.dimension) | \(.scene) | \(.mode) | \(.threads) | \(.final_hash) | \(.matches_baseline) | \(.step_ms_total) | \(.step_ms_median) |"' "$file"
+    done
+    ;;
+  jolt-snapshot-continuation)
+    echo "| Cell | Scene | Threads | Bodies hashed | State bytes | Bytes per body | Save ms | Second world state identical | Update errors | Path | Path threads | Restore succeeded | Hash at restore matches | First divergent step | Restore ms |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .runs[] | . as $run | .paths[] | "| \($cell) | \($run.scene) | \($run.threads) | \($run.hashed_body_count) of \($run.body_count) | \($run.state_bytes) | \($run.bytes_per_body) | \($run.save_ms) | \($run.second_world_state_identical) | \($run.uninterrupted_update_errors) | \(.path) | \(.threads) | \(.restore_succeeded) | \(.hash_at_restore_matches) | \(.first_divergent_step) | \(.restore_ms) |"' "$file"
+    done
+    echo
+    echo "Paths that reproduce the uninterrupted run at every step after the save, per cell:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)` (\(.jolt.configuration)): \([.runs[].paths[] | select(.restore_succeeded and .hash_at_restore_matches and .first_divergent_step == -1)] | length) of \([.runs[].paths[]] | length) paths; second saves identical in \([.runs[] | select(.second_world_state_identical)] | length) of \(.runs | length) runs."' "$file"
+    done
+    echo
+    echo "Distinct uninterrupted final hashes per scene and thread count across every cell (1 means identical everywhere):"
+    echo
+    for config in $(jq -r '.runs[] | "\(.scene)/\(.threads)"' "${facts[@]}" | sort -u); do
+      distinct="$(jq -r --arg config "$config" '.runs[] | select("\(.scene)/\(.threads)" == $config) | .uninterrupted_final_hash' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+      echo "- \`$config\`: $distinct distinct final hash value(s)."
+    done
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;
