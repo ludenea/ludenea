@@ -195,6 +195,8 @@ pub extern "C" fn call_nop(times: u32) {
 /// Writes four invalid results into the first written column, computed at run
 /// time from the arguments: zero over zero, infinity minus infinity, the
 /// square root of a negative number and zero times infinity.
+// The operands are equal on purpose: the results must be invalid.
+#[allow(clippy::eq_op)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn make_nans(zero: f32, infinity: f32, negative: f32) {
     // SAFETY: four entries of a 256-entry arena.

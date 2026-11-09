@@ -49,7 +49,7 @@ The five cells of the research CI and the developer's machine. The report carrie
 
 ## Result
 
-Measured on 2026-11-09 by the research CI on the five cells (Linux, macOS and Windows on ARM64, Linux and Windows on x86_64; 3 or 4 CPUs each) and on the developer's machine under WSL 2 (an AMD Ryzen 9 9950X3D, Linux in a virtual machine, not native Windows: the machine's application control policy refuses the build scripts of a native build). Rust 1.99.1, release profile, default target features, Wasmtime 50.0.1, wasmi 2.0.0. The raw measurements are the run's artifacts.
+Measured on 2026-11-09 by the research CI on the five cells (Linux, macOS and Windows on ARM64, Linux and Windows on x86_64; 3 or 4 CPUs each) and on the developer's machine (an AMD Ryzen 9 9950X3D, 16 cores), first under WSL 2 while the machine's application control policy refused the build scripts of a native build, then natively under Windows 11 with the MSVC toolchain once that policy was turned off. Rust 1.99.1, release profile, default target features, Wasmtime 50.0.1, wasmi 2.0.0. The raw measurements are the run's artifacts.
 
 1. **Tick hashes, wander off**: every module run under both runtimes gives the sequential reference's hashes at 1, 4 and 8 workers on every cell, one run hash everywhere. **Wander on with the host's functions**: the module runs give the cell's own reference on four cells. On the macOS cell they give another hash, the same under both runtimes and at every worker count, diverging from the reference at tick 1, while the native baseline gives the reference there: the host functions call the platform's cosine and sine separately, where the reference and the baseline compute both for one angle in one function.
 2. **Wander on with the cosine and sine compiled into the module**: one run hash under both runtimes, at every worker count, on the five cells and under WSL. It differs from the reference of four cells and equals the macOS cell's.
@@ -62,4 +62,6 @@ Measured on 2026-11-09 by the research CI on the five cells (Linux, macOS and Wi
 
 Also observed: the module's bytes are not the same on every build host (four content hashes and three sizes over the five cells, the two Linux cells alike), while every result computed from them is.
 
-Not measured: a native Windows run on the developer's machine, mobile targets, a debugger attached to a module, a module from an untrusted source, the lint pass (the linter is not installed for the pinned toolchain where the spike was developed).
+On the developer's machine natively: 28 of 28 runs with a reference match it, the run hashes, the fuel hashes, the fault ticks and chunks, the exhaustion budgets and the reload hash are the cells'; the module's content hash is a fifth one; a recursion returns down to 10 916 levels under Wasmtime; the tick at 4 workers with the wander system off takes 0.51 ms through the native baseline, 0.70 ms under Wasmtime with fuel on and 2.37 ms under wasmi; a host call costs 1.6 ns under Wasmtime and 17 ns under wasmi; an instance costs 6 microseconds under Wasmtime, with or without the pooling allocator, and 138 under wasmi.
+
+Not measured: mobile targets, a debugger attached to a module, a module from an untrusted source.

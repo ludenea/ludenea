@@ -175,6 +175,8 @@ impl Instance for NativeInstance {
         Ok(())
     }
 
+    // The operands are equal on purpose: the results must be invalid.
+    #[allow(clippy::eq_op)]
     fn make_nans(&mut self) -> Result<[u32; 4], Fault> {
         let (zero, infinity, negative) = (std::hint::black_box(0.0_f32), std::hint::black_box(f32::INFINITY), std::hint::black_box(-1.0_f32));
         Ok([(zero / zero).to_bits(), (infinity - infinity).to_bits(), negative.sqrt().to_bits(), (zero * infinity).to_bits()])
