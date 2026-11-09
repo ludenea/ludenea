@@ -1438,6 +1438,27 @@ fn write_injection_run(out: &mut Json, config: Config, outcome: &Outcome, refere
     out.object_end();
 }
 
+/// Reads a comma-separated list of worker counts from the environment
+/// variable, sorted and without duplicates; `None` when the variable is
+/// absent or empty. A value that is not a positive integer is a usage error
+/// and stops the run with the offending value named.
+fn worker_counts_from_env(variable: &str) -> Option<Vec<usize>> {
+    let value = std::env::var(variable).ok()?;
+    if value.trim().is_empty() {
+        return None;
+    }
+    let mut counts: Vec<usize> = value
+        .split(',')
+        .map(|item| match item.trim().parse::<usize>() {
+            Ok(count) if count > 0 => count,
+            _ => panic!("{variable} holds {item:?}, not a positive worker count"),
+        })
+        .collect();
+    counts.sort_unstable();
+    counts.dedup();
+    Some(counts)
+}
+
 fn main() {
     let cell = std::env::args().nth(1).unwrap_or_else(|| "unspecified".to_string());
     let available = thread::available_parallelism().map_or(1, |n| n.get());
@@ -1450,6 +1471,11 @@ fn main() {
     if available > BASE_WORKER_COUNTS[BASE_WORKER_COUNTS.len() - 1] {
         sweep_workers.push(available);
     }
+    // A machine outside the matrix may measure the scaling curve at every
+    // worker count of a range (for example 1 to 16 on a 16-core machine)
+    // instead of the base counts plus its own parallelism.
+    let worker_counts = worker_counts_from_env("SPIKE_WORKER_COUNTS").unwrap_or(worker_counts);
+    let sweep_workers = worker_counts_from_env("SPIKE_SWEEP_WORKERS").unwrap_or(sweep_workers);
     let default_waiting = Waiting::SpinThenPark(DEFAULT_SPIN_BOUND);
     let parameters = Parameters::new(Size::Default, DEFAULT_TICK_COUNT, false);
     let reference = run_sequential(&parameters);
@@ -1538,6 +1564,26 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_counts_from_the_environment_are_sorted_and_distinct() {
+        // SAFETY: the tests of this module that read the environment run on
+        // one variable each, named after the test, so no other thread reads
+        // or writes it.
+        unsafe { std::env::set_var("SPIKE_TEST_WORKER_COUNTS", " 8, 1,16,1, 4 ") };
+        assert_eq!(worker_counts_from_env("SPIKE_TEST_WORKER_COUNTS"), Some(vec![1, 4, 8, 16]));
+        unsafe { std::env::set_var("SPIKE_TEST_WORKER_COUNTS_EMPTY", "  ") };
+        assert_eq!(worker_counts_from_env("SPIKE_TEST_WORKER_COUNTS_EMPTY"), None);
+        assert_eq!(worker_counts_from_env("SPIKE_TEST_WORKER_COUNTS_ABSENT"), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "not a positive worker count")]
+    fn a_worker_count_that_is_not_a_positive_integer_is_refused() {
+        // SAFETY: see the test above.
+        unsafe { std::env::set_var("SPIKE_TEST_WORKER_COUNTS_BAD", "1,0,4") };
+        worker_counts_from_env("SPIKE_TEST_WORKER_COUNTS_BAD");
+    }
 
     fn small(wander: bool) -> Parameters {
         Parameters::new(Size::Small, 40, wander)
