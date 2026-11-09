@@ -14,8 +14,12 @@
 # for a cell that runs inside a container image, are recorded as well: the
 # image as named and the JSON of its manifest index resolved at the start of
 # the run, whose digests identify the image, per platform, better than a tag.
-# A C spike has a CMakeLists.txt in its directory and is built in release mode with the
-# platform's default compiler; its executable is named after the CMake project.
+# A C or C++ spike has a CMakeLists.txt in its directory and is built in release
+# mode with the platform's default compiler, or with the compiler named by CC
+# and CXX (for example clang-cl or clang++), which CMake reads itself and which
+# are recorded in the environment file; on Windows a chosen compiler builds with
+# the Ninja generator, because the Visual Studio generator ignores CC and CXX.
+# Its executable is named after the CMake project.
 # Either way the spike prints one JSON document on standard output, which is
 # saved as facts.json.
 #
@@ -78,6 +82,8 @@ fi
   echo "image_version=${ImageVersion:-}"
   echo "rustflags=${RUSTFLAGS:-}"
   echo "profile=$profile"
+  echo "cc=${CC:-}"
+  echo "cxx=${CXX:-}"
   echo "container_image=${SPIKE_CONTAINER_IMAGE:-}"
   echo "container_manifest=${SPIKE_CONTAINER_MANIFEST:-}"
   case "$(uname -s)" in
@@ -113,14 +119,21 @@ if [ "$kind" = rust ]; then
   cargo run --quiet --profile "$profile" --locked --package "$package" -- "$cell" > "$out/facts.json"
 else
   build="build/$spike"
+  # The Visual Studio generator, CMake's default on Windows, builds with its
+  # own toolset whatever CC and CXX say; a chosen compiler on Windows builds
+  # with Ninja, which the Windows images ship.
+  generator=()
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) if [ -n "${CXX:-}" ]; then generator=(-G Ninja); fi ;;
+  esac
   # The configure output names the compiler and the options the spike's
   # dependencies selected; it is kept with the measurements.
-  cmake -S "$spike" -B "$build" -DCMAKE_BUILD_TYPE=Release 2>&1 | tee "$out/configure.txt"
+  cmake -S "$spike" -B "$build" "${generator[@]}" -DCMAKE_BUILD_TYPE=Release 2>&1 | tee "$out/configure.txt"
   cmake --build "$build" --config Release --parallel
   cmake --install "$build" --config Release --prefix "$build/install" >/dev/null
   {
     echo "--- compiler"
-    grep -h -E '^set\(CMAKE_C_COMPILER(_ID|_VERSION)? ' "$build"/CMakeFiles/*/CMakeCCompiler.cmake || true
+    grep -h -E '^set\(CMAKE_C(XX)?_COMPILER(_ID|_VERSION|_FRONTEND_VARIANT)? ' "$build"/CMakeFiles/*/CMakeC*Compiler.cmake || true
   } >> "$out/environment.txt"
   exe="$build/install/bin/$package"
   if [ ! -x "$exe" ] && [ -x "$exe.exe" ]; then

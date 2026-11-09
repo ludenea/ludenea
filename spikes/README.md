@@ -7,7 +7,7 @@ Throwaway experiments of the Ludenea research program. A spike answers one engin
 - `<slug>/`: one spike, named after what it measures. Each spike has a README stating the research subject it serves, its hypothesis, its method, its environment and its result.
 - `reference-workload/`: the specification of the synthetic simulation that the spikes of several research subjects measure against, so that their numbers are comparable, with its sequential reference implementation, the one crate other spikes build on, and the reference hashes measured on the cells.
 - `ci/run-spike.sh`: builds one spike and runs it. The research CI calls it; it runs the same way on a developer machine. `ci/summarize.sh` prints the Markdown summary of a run's measurements across cells.
-- `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`: the Cargo workspace of the Rust spikes and its pinned toolchain. A spike that studies a C library is a C program with its own `CMakeLists.txt`, built with the platform's default C compiler, since the library under study is compiled that way too. Spikes share nothing else.
+- `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`: the Cargo workspace of the Rust spikes and its pinned toolchain. A spike that studies a C or C++ library is a C or C++ program with its own `CMakeLists.txt`, built with the platform's default compiler, since the library under study is compiled that way too, or with the compiler a run names on demand. Spikes share nothing else.
 
 ## Research CI
 
@@ -23,7 +23,7 @@ The workflow [`research-ci.yml`](../.github/workflows/research-ci.yml) builds an
 
 The workflow runs on pushes and pull requests that touch `spikes/` (Markdown files excepted: a README edit is not a measurement) or the workflow, and on demand. Each cell is independent: one failing cell never cancels the others, because every cell is a measurement, and a later run never cancels an earlier one for the same reason.
 
-On demand (`workflow_dispatch`), a run can pick another spike, pass extra `RUSTFLAGS` to a Rust spike, build a Rust spike with another Cargo profile (`dev` for an unoptimized build with debug assertions), and run on another set of cells given as a JSON list. Three uses of the cross-platform compatibility and determinism research:
+On demand (`workflow_dispatch`), a run can pick another spike, pass extra `RUSTFLAGS` to a Rust spike, build a Rust spike with another Cargo profile (`dev` for an unoptimized build with debug assertions), build a C or C++ spike with another compiler (`cxx`, exported as `CC` and `CXX`; empty keeps the platform's default), and run on another set of cells given as a JSON list. Four uses of the cross-platform compatibility, determinism and physics research:
 
 ```bash
 # Rebuild the platform facts with a raised x86-64 instruction set baseline on the two x86_64 cells.
@@ -37,7 +37,13 @@ gh workflow run research-ci.yml \
 # Check that an unoptimized build of the reference workload gives the same hashes as the release build.
 gh workflow run research-ci.yml -f spike=reference-workload -f profile=dev \
   -f cells='[{"cell":"linux-x86_64-dev","runner":"ubuntu-24.04"}]'
+
+# Build the Jolt continuation spike with Clang instead of MSVC on the Windows ARM64 cell, to separate the compiler from the platform.
+gh workflow run research-ci.yml -f spike=jolt-snapshot-continuation -f cxx=clang-cl \
+  -f cells='[{"cell":"windows-arm64-clang","runner":"windows-11-arm"}]'
 ```
+
+The compiler name is resolved on the runner (`clang-cl` is the LLVM release the Windows images install; `clang++` on a Linux or macOS image); CMake reads `CC` and `CXX` itself, and on Windows the run script then builds with the Ninja generator, since the Visual Studio generator keeps its own toolset. The environment file records the compiler asked for and the one CMake found.
 
 A Linux cell may also name a container image (`container`): the job then runs inside it, which is how the headless execution research runs a spike in a minimal image without display, GPU or audio libraries:
 
@@ -56,7 +62,7 @@ cd spikes
 ci/run-spike.sh platform-facts my-machine
 ```
 
-The script installs the pinned toolchain if needed (Rust spikes), builds the spike in release mode (or in the Cargo profile named by `SPIKE_PROFILE`), runs it, and writes `out/my-machine/facts.json` and `out/my-machine/environment.txt` (plus `configure.txt` for a C spike). `cargo test` runs the Rust spikes' self-checks; a C spike runs its self-check when invoked with `--self-check`. `ci/summarize.sh <spike> out` prints the summary table.
+The script installs the pinned toolchain if needed (Rust spikes), builds the spike in release mode (or in the Cargo profile named by `SPIKE_PROFILE`; a C or C++ spike with the compiler named by `CC` and `CXX` when set), runs it, and writes `out/my-machine/facts.json` and `out/my-machine/environment.txt` (plus `configure.txt` for a C spike). `cargo test` runs the Rust spikes' self-checks; a C spike runs its self-check when invoked with `--self-check`. `ci/summarize.sh <spike> out` prints the summary table.
 
 ## Rules
 
