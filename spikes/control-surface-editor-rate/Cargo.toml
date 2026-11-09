@@ -1,0 +1,10 @@
+[package]
+name = "control-surface-editor-rate"
+version = "0.1.0"
+publish = false
+edition = "2024"
+description = "Throwaway spike: a paced editor session with coalesced change sets, live values and a scripted drag over the reference workload at 60 ticks per second, beside a stepped agent session, for the control surface research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }

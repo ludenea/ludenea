@@ -19,6 +19,7 @@ members = [
     "control-surface-toy",
     "workload-history-capture",
     "control-surface-data-plane",
+    "control-surface-editor-rate",
     "headless-modes",
     "workload-test-harness",
     "workload-lockstep",

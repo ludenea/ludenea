@@ -152,6 +152,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "control-surface-editor-rate"
+version = "0.1.0"
+dependencies = [
+ "reference-workload",
+]
+
+[[package]]
 name = "control-surface-toy"
 version = "0.1.0"
 dependencies = [

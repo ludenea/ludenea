@@ -361,6 +361,45 @@ case "$spike" in
       jq -r '"- `\(.cell)`: scale changes the hashes \(.compatibility.scale_changes_the_hashes); the new script against the old server is rejected \(.compatibility.new_script_old_server.rejected) (\(.compatibility.new_script_old_server.error)); probes: \([.compatibility.probes[] | "\(.code) (\(.message))"] | join("; ")); the probed run stayed intact \(.compatibility.probes_left_the_run_intact)."' "$file"
     done
     ;;
+  control-surface-editor-rate)
+    echo "Verdicts per cell (computed by the program; a timing verdict is a measurement, the checks are the hashes against the oracle and the deliveries):"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.hypotheses as $h | "- `\(.cell)`: \(.platform.available_parallelism) CPUs, \(.entity_count) entities at \(.tick_rate) ticks per second; every world matches its oracle and every delivery check passes: \(.every_check_passes). Stepping thread on behalf of the session under \($h.stepping_thread_share.threshold_percent) percent of the tick: \(if $h.stepping_thread_share.holds then "holds" else "fails" end) (worst \($h.stepping_thread_share.worst_share_of_tick_percent) percent at \($h.stepping_thread_share.worst_at); \($h.stepping_thread_share.worst_share_with_the_extraction_percent) percent were the extraction charged to the session; the run with the session against the run that only extracts: \($h.stepping_thread_share.worst_with_minus_extraction_alone_share_percent) percent at worst, against the run without extraction: \($h.stepping_thread_share.worst_with_minus_without_share_percent) percent at worst, both within the run-to-run variation of a paced tick). Set to live value within \($h.set_to_live_value_latency.threshold_ticks) ticks: \(if $h.set_to_live_value_latency.holds then "holds" else "fails" end) (worst 99th percentile \($h.set_to_live_value_latency.worst_p99_ms) ms, \($h.set_to_live_value_latency.worst_p99_ticks) ticks, at \($h.set_to_live_value_latency.worst_at); worst maximum \($h.set_to_live_value_latency.worst_max_ms) ms, within the threshold \($h.set_to_live_value_latency.maximum_within_threshold)). Change set size follows the fraction, not the tick count, and stays under the full-state read: \(if $h.change_set_size.holds then "holds" else "fails" end) (grows with the fraction \($h.change_set_size.grows_with_the_fraction); second half over first half \($h.change_set_size.worst_second_half_over_first_half) at worst; \($h.change_set_size.largest_change_set_bytes_at_100_percent) bytes at 100 percent against \($h.change_set_size.full_state_read_bytes) for the full-state read). Agent loss under \($h.agent_interference.threshold_percent) percent beside the editor session: \(if $h.agent_interference.holds then "holds" else "fails" end) (worst \($h.agent_interference.worst_loss_percent) percent at \($h.agent_interference.worst_at_workers) worker(s); shared resource: \($h.agent_interference.shared_resource))."' "$file"
+    done
+    echo
+    echo "The stepping thread per fraction (microseconds, medians over the ticks; the session's part is the admission of its commands and the publication of the change bitset):"
+    echo
+    echo "| Cell | Workers | Fraction percent | Transport | Matches the oracle | Tick us without session | Tick us with extraction alone | Tick us with session | Session us | Extraction us | Session share of tick percent | Session share of period percent | With extraction share of tick percent | With minus extraction alone percent | With minus without percent |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .editor_runs[] | select(.with_session) | .with_session.stepping_thread as $s | "| \($cell) | \(.workers) | \(.fraction_percent) | \(.transport) | \(.with_session.matches_oracle and .with_session.outcomes_match_oracle and .without_session.matches_reference) | \(.without_session.tick_us_median) | \(.extraction_without_session.tick_us_median) | \($s.total_us_median) | \($s.session_us_median) | \($s.extraction_us_median) | \($s.session_share_of_tick_percent) | \($s.session_share_of_period_percent) | \($s.session_and_extraction_share_of_tick_percent) | \($s.with_minus_extraction_alone_share_of_tick_percent) | \($s.with_minus_without_share_of_tick_percent) |"' "$file"
+    done
+    echo
+    echo "The drag and its latency (from a set command written by the client to the live-value message of the tick that decided it):"
+    echo
+    echo "| Cell | Workers | Fraction percent | Transport | Sets sent | Applied | Rejected stale | Latency ms median | Latency ms p99 | Latency ms max | Delivered ticks p99 | Delivered ticks max | Transaction applied | Inverse matches the oracle | I/O executor us per delivery median |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .editor_runs[] | select(.with_session) | .with_session as $w | $w.set_to_live_value_latency as $l | "| \($cell) | \(.workers) | \(.fraction_percent) | \(.transport) | \($w.drag.sets_sent) | \($w.drag.sets_applied) | \($w.drag.sets_rejected_stale) | \($l.ms_median) | \($l.ms_p99) | \($l.ms_max) | \($l.ticks_p99) | \($l.ticks_max) | \($w.drag.transaction_applied) | \($w.drag.inverse_matches_oracle) | \($w.io_executor.us_per_delivery_median) |"' "$file"
+    done
+    echo
+    echo "Message sizes per period (bytes, means over the deliveries; the change set as sent has canonical rows and string names):"
+    echo
+    echo "| Cell | Workers | Fraction percent | Transport | Rows mean | Ticks per delivery max | Change set as sent | Canonical rows, interned names | Tagged rows, string names | Tagged rows, interned names | Second half over first half | Full-state read, canonical | Full-state read, tagged strings | Live values, string names | Live values, interned names | Set command, string names | Set command, interned names | Client copy matches |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .editor_runs[] | select(.with_session) | .with_session as $w | $w.change_set as $c | "| \($cell) | \(.workers) | \(.fraction_percent) | \(.transport) | \($c.rows_mean) | \($c.ticks_per_delivery_max) | \($c.bytes_mean) | \($c.bytes_mean_canonical_rows_interned_names) | \($c.bytes_mean_tagged_rows_string_names) | \($c.bytes_mean_tagged_rows_interned_names) | \($c.second_half_over_first_half) | \($w.full_state_read_bytes.canonical_rows_string_names) | \($w.full_state_read_bytes.tagged_rows_string_names) | \($w.live_values.bytes_mean_string_names) | \($w.live_values.bytes_mean_interned_names) | \($w.drag.set_command_bytes_string_names) | \($w.drag.set_command_bytes_interned_names) | \($c.client_copy_matches_host) |"' "$file"
+    done
+    echo
+    echo "The stepped agent on a second world, alone and beside the editor session (ticks per second, the best of the rounds):"
+    echo
+    echo "| Cell | Workers | Every world matches its oracle | Alone | Beside, shared pool | Loss percent | Beside, one pool per world | Loss percent | Editor tick us alone | Editor tick us, shared pool | Shared resource |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .interference[] | "| \($cell) | \(.workers) | \(.every_world_matches_its_oracle) | \(.agent_alone_ticks_per_second) | \(.agent_beside_editor_shared_pool_ticks_per_second) | \(.loss_shared_pool_percent) | \(.agent_beside_editor_one_pool_per_world_ticks_per_second // "not run") | \(.loss_one_pool_per_world_percent // "not run") | \(.editor_tick_us_median_alone) | \(.editor_tick_us_median_shared_pool) | \(.shared_resource) |"' "$file"
+    done
+    ;;
   workload-history-capture)
     echo "The live run (cadence 60) and the replays from every snapshot to the next at 1, 2, 4 and 8 workers:"
     echo
