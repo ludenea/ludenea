@@ -1,0 +1,10 @@
+[package]
+name = "workload-scene-streaming"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: the reference workload's entities partitioned into a grid of scene cells loaded and unloaded by a scripted streaming policy from a moving point of interest, with cross-cell references resolved through a per-instance remap table, for the scenes and levels research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }

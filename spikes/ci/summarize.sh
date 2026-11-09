@@ -772,6 +772,41 @@ case "$spike" in
       jq -r '"- `\(.cell)`: \(.claiming_order.runs_needed) run(s) at \(.claiming_order.workers) workers, completion sequence hashes \([.claiming_order.runs[].completion_order_hash] | join(", ")); the sequences differ \(.claiming_order.orders_differ); the manifests are identical \(.claiming_order.manifests_identical); holds \(.claiming_order.holds)."' "$file"
     done
     ;;
+  workload-scene-streaming)
+    echo "Determinism per scenario: the scripted runs at every worker count against one another and the oracle of their log, the live run against the oracle of its log, the replays of the live log against the live run:"
+    echo
+    echo "| Cell | Scenario | Ticks | Scripted identical across workers | Scripted match the oracle | Scripted run hash | Live matches the oracle | Replays identical to live | Replays match the oracle | Loads | Unloads | Max loaded cells | Max remap entries | Holds |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .determinism.scenarios[] | "| \($cell) | \(.scenario) | \(.ticks) | \(.scripted_identical_across_workers) | \(.scripted_match_oracle) | \(.scripted_run_hash) | \(.live_matches_oracle) | \(.replays_identical_to_live) | \(.replays_match_oracle) | \(.loads) | \(.unloads) | \(.max_loaded_cells) | \(.max_remap_entries) | \(.holds) |"' "$file"
+    done
+    echo
+    echo "Distinct scripted run hashes per scenario across every cell (1 means identical everywhere):"
+    echo
+    for scenario in $(jq -r '.determinism.scenarios[].scenario' "${facts[@]}" | sort -u); do
+      distinct="$(jq -r --arg scenario "$scenario" '.determinism.scenarios[] | select(.scenario == $scenario) | .scripted_run_hash' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+      echo "- \`$scenario\`: $distinct distinct run hash value(s) across ${#facts[@]} cell(s)."
+    done
+    echo
+    echo "Every run (the live and replayed runs of a scenario share the live log; the remap cost rounds, the hysteresis control, the unsliced control and the two worlds follow the matrix):"
+    echo
+    echo "| Cell | Scenario | Loader | Workers | Ticks | Final hash | Matches the oracle | First divergent tick | Reads absent | Reads present | Stale slots | Loads | Unloads | Abandoned arrivals | Max remap entries | Wall ms | Ticks per second | Mean tick us | Spawn us per cell | Despawn us per cell | Changes share of the tick | Peak changes us | Peak tick us |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .runs[] | "| \($cell) | \(.scenario) | \(.loader) | \(.workers) | \(.ticks) | \(.final_hash) | \(.matches_oracle) | \(.first_divergent_tick) | \(.reads_absent) | \(.reads_present) | \(.stale_slots) | \(.loads) | \(.unloads) | \(.abandoned_arrivals) | \(.max_remap_entries) | \(.wall_ms) | \(.ticks_per_second) | \(.mean_tick_us) | \(.spawn_us_per_cell) | \(.despawn_us_per_cell) | \(.changes_share_of_tick) | \(.peak_changes_us) | \(.peak_tick_us) |"' "$file"
+    done
+    echo
+    echo "The verdicts, one line per hypothesis and cell:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)` determinism: holds \(.determinism.holds) (\([.determinism.scenarios[] | select(.holds)] | length) of \(.determinism.scenarios | length) scenarios; \(.platform.available_parallelism) CPUs, profile \(.profile), worker counts \([.settings.worker_counts[].workers] | map(tostring) | join(", "))); replay mismatches \([.determinism.scenarios[].replay_mismatches] | add)."' "$file"
+      jq -r '"- `\(.cell)` not present: holds \(.not_present.holds); reads while absent \(.not_present.reads_absent), reads while present \(.not_present.reads_present), stale slots \(.not_present.stale_slots), oracle check failures \(.not_present.oracle_check_failures), runs whose counts equal the oracle'"'"'s \(.not_present.runs_agreeing_with_oracle_counts) of \(.not_present.runs)."' "$file"
+      jq -r '"- `\(.cell)` remap cost: measured \(.remap_cost.measured), holds \(.remap_cost.holds) (limit \(.remap_cost.difference_limit)); at \(.remap_cost.density) entities per cell, one cell per \(.remap_cost.ticks_per_cell) ticks, \(.remap_cost.workers) workers, \(.settings.rounds) rounds, the best round'"'"'s median per cell (the best mean in parentheses): \([.remap_cost.grids[] | "\(.cells) cells: spawn \(.best_spawn_us_per_cell) (\(.best_mean_spawn_us_per_cell)) us per cell, despawn \(.best_despawn_us_per_cell) (\(.best_mean_despawn_us_per_cell)) us per cell, table at most \(.max_remap_entries) entries (\(.max_loaded_cells) cells), \(.loads) loads, every round matches \(.every_round_matches_oracle)"] | join("; ")); differences spawn \(.remap_cost.spawn_difference), despawn \(.remap_cost.despawn_difference), table \(.remap_cost.table_difference)."' "$file"
+      jq -r '"- `\(.cell)` hysteresis: holds \(.hysteresis.holds) (saving limit \(.hysteresis.saving_limit)); \(.hysteresis.scenario): \(.hysteresis.loads_with) loads and \(.hysteresis.unloads_with) unloads with the leaving distance one cell farther, \(.hysteresis.loads_without) loads and \(.hysteresis.unloads_without) unloads with equal distances, saving \(.hysteresis.saving); both match their oracle \(.hysteresis.with_matches_oracle and .hysteresis.without_matches_oracle)."' "$file"
+      jq -r '"- `\(.cell)` cost: holds \(.cost.holds) (share limit \(.cost.share_limit)); \(.cost.sliced.scenario) at \(.cost.sliced.workers) workers: the structural changes take \(.cost.sliced.changes_share_of_tick) of the tick (the whole structural node \(.cost.sliced.structural_node_share_of_tick)), peak changes \(.cost.sliced.peak_changes_us) us, peak tick \(.cost.sliced.peak_tick_us) us, mean tick \(.cost.sliced.mean_tick_us) us, \(.cost.sliced.us_per_spawned_entity) us per spawned entity, \(.cost.sliced.ticks_per_second) ticks per second; unsliced: share \(.cost.unsliced.changes_share_of_tick), peak changes \(.cost.unsliced.peak_changes_us) us, peak tick \(.cost.unsliced.peak_tick_us) us, mean tick \(.cost.unsliced.mean_tick_us) us, \(.cost.unsliced.us_per_spawned_entity) us per spawned entity; both match their oracle \(.cost.sliced.matches_oracle and .cost.unsliced.matches_oracle)."' "$file"
+      jq -r '"- `\(.cell)` two worlds: holds \(.two_worlds.holds); \(.two_worlds.first_scenario) and \(.two_worlds.second_scenario) at \(.two_worlds.workers) workers on one store and one loader: the first matches its oracle \(.two_worlds.first_matches_oracle) (\(.two_worlds.first_loads) loads), the second \(.two_worlds.second_matches_oracle) (\(.two_worlds.second_loads) loads), \(.two_worlds.payloads_in_store) payloads in the store for \(.two_worlds.imports) imports and \(.two_worlds.requests_served) requests served."' "$file"
+    done
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;

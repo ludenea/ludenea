@@ -1144,6 +1144,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "workload-scene-streaming"
+version = "0.1.0"
+dependencies = [
+ "reference-workload",
+]
+
+[[package]]
 name = "workload-scheduling-overhead"
 version = "0.1.0"
 dependencies = [
