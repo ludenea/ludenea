@@ -1085,6 +1085,52 @@ case "$spike" in
       jq -r '.cell as $cell | .inverse_cost[] | "| \($cell) | \(.kind) | \(.size) | \(.apply_ns) | \(.apply_with_inverse_ns) | \(.inverse_percent_of_apply) |"' "$file"
     done
     ;;
+  test-recording-round-trip)
+    echo "| Cell | Profile | Every check holds | Complete run (passed, failed) | Ended run (outcome, interrupted, not run) | Classes agree with what the tests said | Resumed run equals the complete run | Recordings carried from other runs | Every recording verified |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '"| \(.cell) | \(.profile) | \(.every_check_holds) | \(.complete_run.passed), \(.complete_run.failed) | \(.ended_run.with_an_outcome), \(.ended_run.interrupted), \(.ended_run.not_run) | \(.ended_run.classes_agree_with_what_the_tests_said) | \(.resumed_run.same_outcomes_and_hashes_as_the_complete_run) | \(.recordings_carried_from_other_runs) | \(.every_recording_verified) |"' "$file"
+    done
+    echo
+    echo "Every recording a cell listed and replayed (the verdict per worker count):"
+    echo
+    echo "| Reading cell | File | Written by | Form | Bytes | Last tick | Last recorded hash | Listed from the description | Verdicts |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.recordings + .measured_size_recording.files)[] | "| \($cell) | \(.file) | \(.writer_cell) (\(.writer_profile)) | \(.form) | \(.bytes) | \(.end_tick) | \(.last_recorded_hash) | \(.listed_from_the_description) | \([.replays[] | "\(.workers): \(.verdict)"] | join("; ")) |"' "$file"
+    done
+    echo
+    echo "Distinct digests across cells of the sections that hold no writer's name, per file kind:"
+    echo
+    for kind in self-contained reference; do
+      for tag in snap prep inpt hash; do
+        distinct="$(jq -r --arg kind "$kind" --arg tag "$tag" '.recordings[] | select(.origin | startswith("this run")) | select(.form == $kind) | .sections[]? | select(.tag == $tag) | .digest' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+        if [ "$distinct" -gt 0 ]; then
+          echo "- \`$kind\`, section \`$tag\`: $distinct distinct digest(s) across ${#facts[@]} cell(s)."
+        fi
+      done
+    done
+    for tag in snap prep inpt hash; do
+      distinct="$(jq -r --arg tag "$tag" '.measured_size_recording.files[] | .sections[]? | select(.tag == $tag) | .digest' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+      echo "- the measured size's files, section \`$tag\`: $distinct distinct digest(s) across ${#facts[@]} cell(s)."
+    done
+    echo
+    echo "Changed and cut files:"
+    echo
+    echo "| Cell | One byte changed in place | One byte changed, file made whole: changed tick, reported tick | Preparation records changed: refused with no record applied, same starting state, other | Cut files refused before any step | Hashes trimmed |"
+    echo "| --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '"| \(.cell) | \(.damage.one_byte_changed_in_place.verdict): \(.damage.one_byte_changed_in_place.reason) | \(.damage.one_byte_changed_and_the_file_made_whole.changed_record_tick), \(.damage.one_byte_changed_and_the_file_made_whole.first_divergent_tick) | \(.damage.one_preparation_record_changed.refused_at_the_starting_hash_with_no_record_applied), \(.damage.one_preparation_record_changed.same_starting_state_and_verified), \(.damage.one_preparation_record_changed.any_other_outcome) | \([.damage.cut_files[] | select(.refused_before_any_step)] | length) of \(.damage.cut_files | length) | \(.damage.hashes_trimmed.verdict) |"' "$file"
+    done
+    echo
+    echo "The cost of an invariant over every entity read after each one-tick step (microseconds per tick, best round):"
+    echo
+    echo "| Cell | Size | Workers | Hash cadence | One multi-tick step | One-tick steps | One-tick steps with the invariant | Invariant | With the invariant over one step | Invariant alone ns |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .invariant_cost as $c | $c.rows[] | "| \($cell) | \($c.size) | \(.workers) | \(.hash_cadence) | \(.one_multi_tick_step_us_per_tick) | \(.one_tick_steps_us_per_tick) | \(.one_tick_steps_with_the_invariant_us_per_tick) | \(.invariant_us_per_tick) | \(.one_tick_steps_with_the_invariant_over_one_step) | \($c.invariant_alone_ns) |"' "$file"
+    done
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;

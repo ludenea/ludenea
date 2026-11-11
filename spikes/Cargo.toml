@@ -34,6 +34,7 @@ members = [
     "asset-import-parallel",
     "workload-scene-streaming",
     "workload-nested-overrides",
+    "test-recording-round-trip",
     "rapier-snapshot-continuation",
     "scripting-runtime",
     "scripting-runtime/systems",

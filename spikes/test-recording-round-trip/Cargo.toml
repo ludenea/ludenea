@@ -1,0 +1,10 @@
+[package]
+name = "test-recording-round-trip"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: a failed test of the standard harness leaves a single-file recording that another process on another cell replays, a client lists and checks the file from its description alone, and a report is assembled from start markers and records after the test process is ended, for the game testing research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }
