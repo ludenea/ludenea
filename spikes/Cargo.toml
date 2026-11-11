@@ -36,6 +36,7 @@ members = [
     "workload-nested-overrides",
     "test-recording-round-trip",
     "input-records-from-device-events",
+    "audio-forms-and-threads",
     "rapier-snapshot-continuation",
     "scripting-runtime",
     "scripting-runtime/systems",

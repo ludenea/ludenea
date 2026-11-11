@@ -1160,6 +1160,44 @@ case "$spike" in
       jq -r '.device_layer as $d | ($d.report // {}) as $r | "| \(.cell) | \($d.outcome) | \($r.gamepad_library.outcome // "n/a")\(if $r.gamepad_library.error then ": " + $r.gamepad_library.error else "" end) | \($r.gamepad_library.gamepads_listed // "n/a") | \($r.gamepad_library.threads_before // "n/a"), \($r.gamepad_library.threads_while_running // $r.gamepad_library.threads_after_the_failure // "n/a"), \($r.gamepad_library.threads_after_the_drop // "n/a") | \($r.windowing_library.outcome // "n/a")\(if $r.windowing_library.error then ": " + $r.windowing_library.error else "" end) | \($r.windowing_library.threads_before // "n/a"), \($r.windowing_library.threads_while_it_exists // $r.windowing_library.threads_after_the_failure // "n/a"), \($r.windowing_library.threads_after_the_drop // "n/a") | \($r.display_variable_set | if . == null then "n/a" else . end), \($r.wayland_display_variable_set | if . == null then "n/a" else . end) |"' "$file"
     done
     ;;
+  audio-forms-and-threads)
+    echo "| Cell | Profile | Every check holds | Triangle samples hash | Platform sine samples hash | Mixer ns per buffer of 512 frames, 64 voices |"
+    echo "| --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '"| \(.cell) | \(.profile) | \(.every_check_holds) | \(.offline_samples.triangle_in_exact_arithmetic.samples_hash) | \(.offline_samples.the_platform_sine.samples_hash) | \(.mixer_cost.best_ns_per_buffer) |"' "$file"
+    done
+    echo
+    for wave in triangle_in_exact_arithmetic the_platform_sine; do
+      distinct="$(jq -r ".offline_samples.$wave.samples_hash" "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+      echo "- \`$wave\`: $distinct distinct samples hash(es) across ${#facts[@]} cell(s)."
+    done
+    echo
+    echo "The offline count (frames per tick: fewest, most; total over 600 ticks):"
+    echo
+    echo "| Cell | Rate | Step | Fewest | Most | Total | Total is the floor | Position follows the tick | Resumed run agrees |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .offline_count[] | "| \($cell) | \(.rate) | \(.step) | \(.fewest_frames_in_a_tick) | \(.most_frames_in_a_tick) | \(.frames_over_the_run) | \(.the_total_is_the_floor_of_rate_times_elapsed_time) | \(.the_mixer_position_after_each_tick_follows_the_tick_index) | \(.a_run_resumed_at_tick_300_mixes_the_same_frames_per_tick) |"' "$file"
+    done
+    echo
+    echo "The null form: what a process that never calls the output library has loaded."
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: \(.null_form.process); audio modules loaded: \((.null_form.report.loaded_audio_modules // []) | if length == 0 then "none" else join(", ") end); \(.null_form.report.loaded_modules // "n/a") modules in all."' "$file"
+    done
+    echo
+    echo "The device form (threads: before the library, with the host, with the stream built, running, after the stream is dropped, after the host is dropped):"
+    echo
+    echo "| Cell | Probe | Host | Outcome | Format, rate, channels | Threads | Callbacks | Frames per callback (fewest, most) | Playback lead ms | Callback thread policy, priority | Mixer allocations | Hashes equal the reference | Errors |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.device_form as $d | ($d.report // {}) as $r | "| \(.cell) | \($d.process) | \($r.host // "n/a") | \($r.outcome // "n/a")\(if $r.error then ": " + $r.error else "" end) | \($r.default_sample_format // "n/a"), \($r.default_rate // "n/a"), \($r.default_channels // "n/a") | \($r.threads_before_the_library // "n/a"), \($r.threads_with_the_host // "n/a"), \($r.threads_with_the_stream_built // "n/a"), \($r.threads_with_the_stream_running // "n/a"), \($r.threads_after_the_stream_is_dropped // "n/a"), \($r.threads_after_the_host_is_dropped // "n/a") | \($r.callbacks // "n/a") | \($r.fewest_frames_in_a_callback // "n/a"), \($r.most_frames_in_a_callback // "n/a") | \($r.playback_lead_ms_at_the_last_callback // "n/a") | \($r.callback_thread_scheduling_policy // "n/a"), \($r.callback_thread_priority // "n/a") | \($r.allocations_in_the_mixer // "n/a") | \($r.the_device_form_gives_the_reference_hashes | if . == null then "n/a" else . end) | \(($r.errors_reported_by_the_library // []) | join("; ")) |"' "$file"
+    done
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: thread names with the stream running: \((.device_form.report.thread_names_with_the_stream_running // []) | join(", ")); audio modules: \((.device_form.report.audio_modules_with_the_stream_running // .device_form.report.audio_modules_after_the_lookup // .device_form.report.audio_modules_after_the_failure // []) | join(", "))."' "$file"
+    done
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;

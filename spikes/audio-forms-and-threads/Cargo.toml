@@ -1,0 +1,12 @@
+[package]
+name = "audio-forms-and-threads"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: what audio output the cells offer, which threads an output library creates, whether an offline mix gives a sample count that depends on the ticks alone and reproducible samples, whether the null, offline and device forms leave the simulation's hashes alone, and what a process that takes the null form has loaded, for the audio research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }
+# The output library is the subject of the device and thread measurements.
+cpal = "0.18"
