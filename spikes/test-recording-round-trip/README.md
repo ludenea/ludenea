@@ -48,4 +48,31 @@ The five cells of the research CI and one local machine, the pinned toolchain, r
 
 ## Result
 
-Not measured yet.
+Measured on 2026-11-11 with the pinned toolchain (Rust 1.99.1). A first run of the research CI on the five cells ([run](https://github.com/ludenea/ludenea/actions/runs/43001097953)) wrote the recordings that `recordings/` holds. A second run in release ([run](https://github.com/ludenea/ludenea/actions/runs/43001585970)) and a third in the unoptimized profile ([run](https://github.com/ludenea/ludenea/actions/runs/43001604677)) then read them on the five cells, and so did a local machine (AMD Ryzen 9 9950X3D, Windows 11) in both profiles. Every check of the report holds in the twelve runs. The cells decide identity; timings from hosted runners compare per processor only.
+
+1. **A recording is portable as a file: holds.** On each cell and on the local machine, in both profiles, the process that reads lists and replays twelve files of the small size at 1 and at 4 workers: the two its own test process just wrote and the two that each of the five cells wrote in the first run. All 24 replays are verified in every run, to the failing tick, 179, whose hash is `0x3e3c365d51661be0` in every file. Ten of the twelve files come from another run, eight of them from another cell, and all were written by a release build, so the unoptimized runs read files of another profile too. The sections that hold no writer's name have one digest each across the cells, the local machine and the two profiles. The same run at 10 000 entities, written and read by the orchestrator, fails at tick 788 with the hash `0x8aeb9723c9040f62` on every cell, its snapshot, preparation, inputs and hashes sections byte-identical across cells. The files weigh 32.4 KB (self-contained) and 10.0 KB (reference) at 1 000 entities over 119 ticks, 291.5 KB and 44.1 KB at 10 000 entities over 728 ticks: 44 bytes per tick for an input record of two kicks, 12 for a hash, 25 per entity for the snapshot.
+2. **The reference form is checked: holds, with a nuance.** Of the sixty preparation records changed one at a time, 46 give another starting state and the replay is refused at the starting hash with no record of the run applied; 14 give the same starting state and the replay is verified. In those 14 the kicked entity was killed before the starting tick without having moved another, so the state the replay starts from is the recorded one. No other outcome occurs, identically on every cell. The check is on the rebuilt state, not on the recipe: a recipe that differs and rebuilds the same state is not told apart, and nothing a replay computes depends on the difference.
+3. **The container is read from its description, and a damaged one is found: holds.** The client lists every file, the carried ones included, with its five sections. One byte changed in place in the inputs section is refused by the client and by the replay as a section that differs from its digest, before any step. The same change in a file made whole again (17 bytes differ: the changed one and two digests) is listed as whole by the client and reported by the replay as a divergence at tick 120, the tick of the changed record. The twelve cut files are refused before any step. A recording whose hashes are trimmed replays and is reported as replayed with nothing compared.
+4. **The assembly is complete and exact: holds.** The whole run lists the sixteen tests once, fifteen passed and one failed, in agreement with the harness's verdicts and with what the tests said. With the process ended from outside, the report names eight tests with their outcomes, the failed one among them, four interrupted and four not run, in agreement with what each test said before the end. The resumed run of those eight completes the report, equal in outcomes and final hashes to the whole run's.
+5. **The cost of a per-tick invariant**, at 10 000 entities in release. The invariant alone takes 9 to 24 microseconds per evaluation. Read after each one-tick step it adds 6 to 29 microseconds per tick on the Linux and Windows cells and on the local machine, where the difference is above the noise (it is within it on the x86_64 cells, and the macOS cell's virtual machine is too irregular to read). What stepping tick by tick costs is the step and not the invariant: at 1 worker, one-tick steps with the invariant take 1.00 to 1.07 times the same ticks in one multi-tick step; at 4 workers they take 1.32 to 1.55 times with a hash every tick (1.48 on the local machine: 482 against 326 microseconds per tick) and 1.01 to 1.10 times with a hash every sixtieth tick (1.05: 304 against 288). The difference is the wait for the tick's hash, 150 to 280 microseconds, which a multi-tick step overlaps with the next tick's passes and a one-tick step cannot. In this spike a tick outside the cadence still waits for a hash node that computes nothing; the hash placed as work pending across steps is not built, and is what a lower figure at a cadence of 1 would need.
+
+| Machine | Workers | Hash cadence | One multi-tick step | One-tick steps | One-tick steps with the invariant |
+| --- | --- | --- | --- | --- | --- |
+| Local machine | 1 | 1 | 1 086 | 1 086 | 1 103 |
+| Local machine | 1 | 60 | 922 | 922 | 934 |
+| Local machine | 4 | 1 | 326 | 475 | 482 |
+| Local machine | 4 | 60 | 288 | 295 | 304 |
+| Linux x86_64 cell | 4 | 1 | 567 | 746 | 746 |
+| Linux x86_64 cell | 4 | 60 | 521 | 519 | 528 |
+| Linux ARM64 cell | 4 | 1 | 388 | 577 | 596 |
+| Linux ARM64 cell | 4 | 60 | 337 | 339 | 368 |
+| Windows x86_64 cell | 4 | 1 | 680 | 917 | 933 |
+| Windows x86_64 cell | 4 | 60 | 649 | 667 | 659 |
+| Windows ARM64 cell | 4 | 1 | 387 | 576 | 600 |
+| Windows ARM64 cell | 4 | 60 | 336 | 341 | 369 |
+| macOS ARM64 cell | 4 | 1 | 883 | 1 163 | 1 338 |
+| macOS ARM64 cell | 4 | 60 | 720 | 726 | 769 |
+
+Microseconds per tick, the best of five rounds of 600 ticks.
+
+**Limits.** The files crossed cells through the repository, as files; no hash differs and no file is unreadable, on a world without physics, without events and with one source of inputs. The entry function, the markers and the records are this spike's own, on the standard harness as it is at the pinned toolchain; the process was ended by the orchestrator at a moment the tests construct, not at random moments. The rules of the assembly on ignored tests and on a runner's time bound, a replay that restarts a world, and the comparison of hashes inside the step are not built.
