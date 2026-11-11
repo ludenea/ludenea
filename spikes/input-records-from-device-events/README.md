@@ -29,7 +29,7 @@ The five cells of the research CI (Windows Server 2025 and Windows 11 ARM64, Ubu
 
 ## Result
 
-Measured on 2026-11-11 on the developer machine; the five cells are recorded below once their run has completed.
+Measured on 2026-11-11 on the developer machine and on the five cells of the research CI.
 
 On the developer machine every check holds:
 
@@ -40,3 +40,15 @@ On the developer machine every check holds:
 - With timestamps a press is applied in the tick during which it happened at every fixed schedule; with irregular frames it is applied in its tick or one tick ahead (the last tick of a frame takes the events up to the frame's instant) and never late. Without timestamps a press is applied up to three ticks ahead of the tick during which it happened when a frame runs four ticks.
 - A record costs 121 nanoseconds to build from about 18 events and 7 nanoseconds to apply; 13.8 of its 49 bytes differ from the previous record on average.
 - The device layer on this machine: the gamepad library starts with no gamepad and takes the process from 4 threads to 14, of which 13 remain after it is dropped; the windowing library's event loop is created and adds no thread.
+
+On the five cells (research CI run 43019334701) every check holds, and everything that does not depend on the machine is identical to the developer machine's: the totals at the seven schedules, the idempotence variants, the writers, the 132 presses of the restore with nothing done, the placement of the presses (0 at every fixed schedule with timestamps, at most one tick ahead with irregular frames; up to three ticks ahead without timestamps) and the 13.8 bytes that change per record. A record costs 112 to 203 nanoseconds to build and 14 to 23 to apply.
+
+The device layer on the cells, none of which has a gamepad:
+
+| Cell | Gamepad library: threads before, running, after the drop | Windowing library's event loop | Threads before, while it exists, after the drop |
+| --- | --- | --- | --- |
+| Linux, x86_64 and ARM64 | 1, 3, 3 | fails with an error and no crash: neither display variable is set | 3, 3 |
+| macOS, ARM64 | 1, 3, 3 | created | 3, 5, 5 |
+| Windows, x86_64 and ARM64 | 4, 10, 9 | created | 9, 9, 9 |
+
+The gamepad library starts on every cell with no gamepad and no error. It creates two threads on Linux and macOS and six on Windows, and on no cell does the count return to its starting value after the library is dropped. The windowing library's event loop cannot exist on a Linux machine with no display server, creates two threads on macOS that outlive it, and none on Windows.

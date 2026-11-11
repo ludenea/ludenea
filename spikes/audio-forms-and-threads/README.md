@@ -30,7 +30,7 @@ The five cells of the research CI (Windows Server 2025 and Windows 11 ARM64, Ubu
 
 ## Result
 
-Measured on 2026-11-11 on the developer machine; the five cells are recorded below once their run has completed.
+Measured on 2026-11-11 on the developer machine and on the five cells of the research CI.
 
 On the developer machine every check with a threshold holds except the sixth hypothesis, which is refuted:
 
@@ -40,3 +40,14 @@ On the developer machine every check with a threshold holds except the sixth hyp
 - **The null form loads an audio module**: a process that never calls the output library has the system's audio endpoint library (`mmdevapi.dll`) loaded, because the executable imports it through the output library it links.
 - The device form: the WASAPI host, a default device at 48 000 hertz in two channels of 32-bit floats; the stream asks for 480 to 1 056 frames per callback and predicts 32 milliseconds between a callback and its playback. The process goes from 5 threads to 13 when the stream is built, and 12 remain after the stream and the host are dropped. The callback thread runs at the normal priority. Nothing is allocated in the mixer and the streamed sound never underruns.
 - The mixer takes 29 microseconds for a buffer of 512 frames with 64 voices, 0.3 percent of the buffer's duration.
+
+On the five cells (research CI run 43019340212) every check with a threshold holds:
+
+- **The offline count** is exact at the five combinations on every cell, and the simulation's hashes are the reference's alone, in the null form and in the offline form (final hash `0x83e0403cfdd589e8` everywhere).
+- **Offline samples across cells.** Two runs agree on every cell. With the triangle in exact arithmetic the 480 000 frames have one hash on the five cells and the developer machine (`0x84b047f535b60c3e`). With the platform's sine function they have three: the two Linux cells and Windows on ARM64 together, macOS, and Windows on x86_64 alone.
+- **The null form loads an audio library on every cell**: the ALSA library on Linux, the system's audio endpoint library on Windows, the Core Audio and Audio Toolbox frameworks and five more on macOS. The executable imports them through the output library it links, whether or not it ever calls it. On Linux a binary that links the ALSA library does not start where that library is absent, which is why `setup.sh` installs it.
+- **What the cells offer.** Only the macOS cell has an output device. On the Linux cells there is no sound device and no audio daemon; the library's ALSA host names a default device, asking its configuration fails with a device-not-available error, no thread is created, and the ALSA library prints its own messages on the standard error stream. On the Windows cells the library finds no default output device and creates no thread.
+- **The device form on the macOS cell**: Core Audio, 48 000 hertz in two channels of 32-bit floats, 512 frames per callback, 12.75 milliseconds predicted between a callback and its playback. The process goes from 2 threads to 10 with the stream built and 11 with it running; 7 remain after the stream and the host are dropped. The callback thread runs under the round-robin real-time policy at priority 63. The mixer allocates nothing and the hashes are the reference's.
+- The mixer takes 57 to 85 microseconds for a buffer of 512 frames with 64 voices on the cells, 0.5 to 0.8 percent of the buffer's duration.
+
+The thread set of a device stream was therefore measured on two platforms only: macOS on the cell and Windows on the developer machine. Linux with a sound device was not measured.
