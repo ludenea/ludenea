@@ -1,0 +1,10 @@
+[package]
+name = "workload-nested-overrides"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: scenes nested three deep with the five kinds of override on every level, imported with planted conflicts, spawned as families on the scene streaming spike's fixture by three application paths and compared with a sequential oracle, for the scenes and levels research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }

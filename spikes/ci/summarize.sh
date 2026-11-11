@@ -907,6 +907,41 @@ case "$spike" in
       jq -r '"- `\(.cell)` two worlds: holds \(.two_worlds.holds); \(.two_worlds.first_scenario) and \(.two_worlds.second_scenario) at \(.two_worlds.workers) workers on one store and one loader: the first matches its oracle \(.two_worlds.first_matches_oracle) (\(.two_worlds.first_loads) loads), the second \(.two_worlds.second_matches_oracle) (\(.two_worlds.second_loads) loads), \(.two_worlds.payloads_in_store) payloads in the store for \(.two_worlds.imports) imports and \(.two_worlds.requests_served) requests served."' "$file"
     done
     ;;
+  workload-nested-overrides)
+    echo "Every world run: the three places the overrides of an instance are applied, at every worker count, against the sequential oracle of the same log:"
+    echo
+    echo "| Cell | Size | Application | Workers | State run hash | Content run hash | Matches the oracle | First divergent tick | Reads absent | Reads present | Stale slots | Instances spawned | Instances failed | Entities spawned | Slots | Gate polls | Ticks with a required instance missing | Spawns not prepared | Ticks per second | Spawn us per entity |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .scenarios[] | .size as $size | .runs[] | "| \($cell) | \($size) | \(.application) | \(.workers) | \(.state_run_hash) | \(.content_run_hash) | \(.matches_oracle) | \(.first_divergent_tick) | \(.reads_absent) | \(.reads_present) | \(.stale_slots) | \(.instances_spawned) | \(.instances_failed) | \(.entities_spawned) | \(.slots) | \(.gate_polls) | \(.ticks_with_a_required_instance_missing) | \(.spawns_not_prepared) | \(.ticks_per_second) | \(.spawn_us_per_entity) |"' "$file" | tr -d '\r'
+    done
+    echo
+    echo "Distinct values across every cell and worker count (1 means identical everywhere):"
+    echo
+    for size in $(jq -r '.scenarios[].size' "${facts[@]}" | tr -d '\r' | sort -u); do
+      distinct="$(jq -r --arg size "$size" '.scenarios[] | select(.size == $size) | .import.payloads_digest' "${facts[@]}" | tr -d '\r' | sort -u | wc -l | tr -d ' ')"
+      echo "- \`$size\` imported payloads: $distinct distinct digest(s) across ${#facts[@]} cell(s)."
+      for application in $(jq -r '.scenarios[].runs[].application' "${facts[@]}" | tr -d '\r' | sort -u); do
+        state="$(jq -r --arg size "$size" --arg application "$application" '.scenarios[] | select(.size == $size) | .runs[] | select(.application == $application) | .state_run_hash' "${facts[@]}" | tr -d '\r' | sort -u | wc -l | tr -d ' ')"
+        content="$(jq -r --arg size "$size" --arg application "$application" '.scenarios[] | select(.size == $size) | .runs[] | select(.application == $application) | .content_run_hash' "${facts[@]}" | tr -d '\r' | sort -u | wc -l | tr -d ' ')"
+        echo "- \`$size\` \`$application\`: $state distinct state run hash value(s), $content distinct content run hash value(s)."
+      done
+    done
+    echo
+    echo "How each scripted family appeared (the run of the prepared payload at the first worker count):"
+    echo
+    echo "| Cell | Size | Family | Required | Command tick | Depth | Instances | Entities | Children failed | First tick | Last tick | Distinct ticks | Parents first | Holds |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .scenarios[] | .size as $size | .families[] | "| \($cell) | \($size) | \(.family) | \(.required) | \(.command_tick) | \(.depth) | \(.instances) | \(.entities) | \(.children_failed) | \(.first_tick) | \(.last_tick) | \(.distinct_ticks) | \(.parents_first) | \(.holds) |"' "$file" | tr -d '\r'
+    done
+    echo
+    echo "The verdicts, per cell and size:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .platform.available_parallelism as $cpus | .profile as $profile | .settings.worker_counts as $workers | .scenarios[] | "- `\($cell)` `\(.size)` (\($cpus) CPUs, profile \($profile), worker counts \($workers)): determinism holds \(.determinism.holds) (\(.determinism.runs_matching_their_oracle) of \(.determinism.world_runs) runs match their oracle, \(.determinism.stale_slots) stale slots); import holds \(.import.holds) (\(.import.lists) lists, \(.import.overrides_on_the_child + .import.overrides_through_a_path) overrides of which \(.import.overrides_through_a_path) through a path and \(.import.outer_overrides_on_what_an_inner_list_set) on what an inner list set; named conflicts refused by name \(.import.named_conflicts_refused_by_name) of \(.import.named_conflicts), all planted \(.import.planted_conflicts_refused_by_name) of \(.import.planted_conflicts), accepted \(.import.planted_conflicts_accepted); \(.import.orders_of_application_tried) orders of application, \(.import.orders_of_application_differing) differing); payload equals ordered in staging \(.application_paths.payload_equals_ordered_in_staging); ordered in the world spawns the same content \(.application_paths.ordered_in_world_spawns_the_same_content), same state hash \(.application_paths.ordered_in_world_same_state_hash) (first other at tick \(.application_paths.ordered_in_world_first_tick_of_another_state_hash)), same content hash \(.application_paths.ordered_in_world_same_content_hash) (first other at tick \(.application_paths.ordered_in_world_first_tick_of_another_content_hash)); \(.application_paths.prepared_payloads) prepared payloads for \(.application_paths.prepared_instances) instances; families hold \(.families_hold); another hash fails \(.another_hash.holds) (\(.another_hash.children_failed) of \(.another_hash.children_expected_to_fail) children failed, \(.another_hash.children_spawned_at_another_hash) spawned); identities hold \(.identities.holds) (\(.identities.by_application[0].kept) of \(.identities.by_application[0].entities) full references kept at the checkpoints, \(.identities.by_application[0].overridden) of them overridden, \([.identities.by_application[].changed] | add) changed; against the world without overrides: \(.identities.against_the_world_without_overrides.full_references_kept) kept of which \(.identities.against_the_world_without_overrides.kept_and_overridden) overridden, \(.identities.against_the_world_without_overrides.removed_by_an_override) removed, \(.identities.against_the_world_without_overrides.inside_a_removed_instance) inside a removed instance, \(.identities.against_the_world_without_overrides.added_by_an_override) added, \(.identities.against_the_world_without_overrides.unexplained) unexplained)."' "$file" | tr -d '\r'
+    done
+    ;;
   box2d-pool-sharing)
     echo "| Cell | Scene | Scheduler | Team | Library workers | Final hash | Matches the worker sweep | First divergent step | Step ms total | Cost over native (same team) | Cost over native (same library workers) | Worker parks | Finish parks | Synthetic chunks per step |"
     echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"

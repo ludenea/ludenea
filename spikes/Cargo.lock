@@ -1769,6 +1769,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "workload-nested-overrides"
+version = "0.1.0"
+dependencies = [
+ "reference-workload",
+]
+
+[[package]]
 name = "workload-persistent-pool"
 version = "0.1.0"
 dependencies = [

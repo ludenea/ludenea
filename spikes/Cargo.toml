@@ -33,6 +33,7 @@ members = [
     "workload-persistent-pool",
     "asset-import-parallel",
     "workload-scene-streaming",
+    "workload-nested-overrides",
     "rapier-snapshot-continuation",
     "scripting-runtime",
     "scripting-runtime/systems",
