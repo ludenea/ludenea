@@ -1131,6 +1131,35 @@ case "$spike" in
       jq -r '.cell as $cell | .invariant_cost as $c | $c.rows[] | "| \($cell) | \($c.size) | \(.workers) | \(.hash_cadence) | \(.one_multi_tick_step_us_per_tick) | \(.one_tick_steps_us_per_tick) | \(.one_tick_steps_with_the_invariant_us_per_tick) | \(.invariant_us_per_tick) | \(.one_tick_steps_with_the_invariant_over_one_step) | \($c.invariant_alone_ns) |"' "$file"
     done
     ;;
+  input-records-from-device-events)
+    echo "| Cell | Profile | Every check holds | Record bytes (8-byte epoch) | Mean bytes changed per record | Mapping ns per tick | Applying ns per tick |"
+    echo "| --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '"| \(.cell) | \(.profile) | \(.every_check_holds) | \(.record_size.bytes_with_an_epoch_of_8_bytes) | \(.record_size.mean_bytes_that_differ_from_the_previous_record) | \(.cost_per_tick_best_of_five_rounds.mapping_the_events_and_taking_the_record_ns) | \(.cost_per_tick_best_of_five_rounds.applying_the_record_ns) |"' "$file"
+    done
+    echo
+    echo "Presses against frames and ticks (the tick of application minus the tick of the press: earliest, latest, mean):"
+    echo
+    echo "| Cell | Schedule | Event timestamps | Ticks | Frames without a tick | Most ticks in a frame | Totals equal the stream | Earliest | Latest | Mean |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .frames_and_ticks[] | "| \($cell) | \(.schedule) | \(.event_timestamps) | \(.ticks) | \(.frames_without_a_tick) | \(.most_ticks_in_a_frame) | \(.presses_releases_and_motion_equal_the_stream) | \(.earliest_tick_of_application_against_the_tick_of_the_press) | \(.latest_tick_of_application_against_the_tick_of_the_press) | \(.mean_ticks_between_the_press_and_its_application) |"' "$file"
+    done
+    echo
+    echo "A restore under a live writer, with nothing done at the restore:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: the next record is \(.restore_under_a_live_writer.with_nothing_done_the_next_record_is) and applies \(.restore_under_a_live_writer.presses_that_record_applies) presses where the writer counted \(.restore_under_a_live_writer.presses_the_writer_counted_in_that_tick)."' "$file"
+    done
+    echo
+    echo "The device layer on each cell (threads before, while running or existing, after the drop):"
+    echo
+    echo "| Cell | Probe | Gamepad library | Gamepads | Threads | Windowing library | Threads | Display variables set (X11, Wayland) |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.device_layer as $d | ($d.report // {}) as $r | "| \(.cell) | \($d.outcome) | \($r.gamepad_library.outcome // "n/a")\(if $r.gamepad_library.error then ": " + $r.gamepad_library.error else "" end) | \($r.gamepad_library.gamepads_listed // "n/a") | \($r.gamepad_library.threads_before // "n/a"), \($r.gamepad_library.threads_while_running // $r.gamepad_library.threads_after_the_failure // "n/a"), \($r.gamepad_library.threads_after_the_drop // "n/a") | \($r.windowing_library.outcome // "n/a")\(if $r.windowing_library.error then ": " + $r.windowing_library.error else "" end) | \($r.windowing_library.threads_before // "n/a"), \($r.windowing_library.threads_while_it_exists // $r.windowing_library.threads_after_the_failure // "n/a"), \($r.windowing_library.threads_after_the_drop // "n/a") | \($r.display_variable_set | if . == null then "n/a" else . end), \($r.wayland_display_variable_set | if . == null then "n/a" else . end) |"' "$file"
+    done
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;

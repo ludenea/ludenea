@@ -1,0 +1,14 @@
+[package]
+name = "input-records-from-device-events"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: action records built from timestamped device events lose and double no press at any ratio of frames to ticks, stay harmless when applied twice or replaced, keep their baseline across writers and restores, and a windowing and a gamepad library start on a machine with no device, for the input management research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }
+# The two libraries are the subject of the device layer probe: what each does
+# and which threads it creates when it starts on a cell.
+winit = "0.30"
+gilrs = "0.11"

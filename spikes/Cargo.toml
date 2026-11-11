@@ -35,6 +35,7 @@ members = [
     "workload-scene-streaming",
     "workload-nested-overrides",
     "test-recording-round-trip",
+    "input-records-from-device-events",
     "rapier-snapshot-continuation",
     "scripting-runtime",
     "scripting-runtime/systems",
