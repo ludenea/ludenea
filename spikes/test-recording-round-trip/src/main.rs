@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 use reference_workload::{Json, fnv1a, write_platform_and_build};
 use test_recording_round_trip::container;
 use test_recording_round_trip::pool::{Executor, Runtime};
-use test_recording_round_trip::recording::{Recording, Replay, Start, TAG_INPUTS, Verdict, replay, replay_recording};
+use test_recording_round_trip::recording::{Recording, Replay, Start, TAG_HEADER, TAG_INPUTS, Verdict, replay, replay_recording};
 use test_recording_round_trip::run::{Assembly, BinaryEnd, CELL_VARIABLE, Class, HOLD_VARIABLE, RUN_DIR_VARIABLE, assemble, parse_listing};
 use test_recording_round_trip::world::{Size, World, WorldConfig};
 use test_recording_round_trip::{Fixture, every_entity_is_inside_and_under_the_speed_limit, run_until_the_watched_group_thins};
@@ -42,6 +42,9 @@ const TEST_COUNT: usize = 16;
 const TEST_THREADS: usize = 4;
 const HOLD_AFTER: usize = 8;
 const REPLAY_WORKERS: [usize; 2] = [1, 4];
+/// The recordings carried under `recordings/`: the two forms that each of the
+/// five cells of the research CI wrote.
+const CARRIED_RECORDINGS: usize = 10;
 const HOLD_TIMEOUT: Duration = Duration::from_secs(600);
 
 fn workspace_root() -> PathBuf {
@@ -276,9 +279,18 @@ fn write_replay(out: &mut Json, outcome: &Replay) {
     }
 }
 
+/// The digests of a file's sections other than the header, which holds the
+/// writer's name, by tag; nothing for a file the client refuses.
+fn digests_outside_the_header(bytes: &[u8]) -> Vec<(String, u64)> {
+    let header = container::tag_text(TAG_HEADER);
+    container::list(bytes).map_or(Vec::new(), |sections| sections.into_iter().filter(|s| s.tag != header).map(|s| (s.tag, s.digest)).collect())
+}
+
 /// One file listed by the client and replayed at every worker count. Returns
-/// whether the client listed it and every replay verified it.
-fn write_file(out: &mut Json, origin: &str, name: &str, bytes: &[u8], runtimes: &[Runtime]) -> bool {
+/// whether the client listed it and every replay verified it with every tick
+/// of the run compared. A carried file is given this run's files, and must
+/// also have the sections of the one of its form, the header apart.
+fn write_file(out: &mut Json, origin: &str, name: &str, bytes: &[u8], runtimes: &[Runtime], this_run: Option<&[(String, Vec<u8>)]>) -> bool {
     out.object_start();
     out.string("origin", origin);
     out.string("file", name);
@@ -307,7 +319,11 @@ fn write_file(out: &mut Json, origin: &str, name: &str, bytes: &[u8], runtimes: 
             out.string("listing_error", &error.0);
         }
     }
-    if let Ok(recording) = Recording::decode(bytes) {
+    let decoded = Recording::decode(bytes).ok();
+    // The ticks of the run: a replay counts as verified only when the hash
+    // of every one of them was compared.
+    let run_ticks = decoded.as_ref().map(|recording| recording.end_tick.saturating_sub(recording.start_tick));
+    if let Some(recording) = &decoded {
         out.string("form", recording.form());
         out.string("writer_cell", &recording.writer_cell);
         out.string("writer_profile", &recording.writer_profile);
@@ -322,13 +338,21 @@ fn write_file(out: &mut Json, origin: &str, name: &str, bytes: &[u8], runtimes: 
     out.array_start();
     for runtime in runtimes {
         let outcome = replay(bytes, runtime.pool());
-        holds &= matches!(outcome.verdict, Verdict::Verified { .. });
+        holds &= matches!(outcome.verdict, Verdict::Verified { compared, .. } if Some(compared) == run_ticks);
         out.object_start();
         out.u64("workers", runtime.pool().workers() as u64);
         write_replay(out, &outcome);
         out.object_end();
     }
     out.array_end();
+    if let Some(this_run) = this_run {
+        let form = decoded.as_ref().map_or("", Recording::form);
+        let own = this_run.iter().find(|(own_name, _)| !form.is_empty() && own_name.contains(form)).map(|(_, own)| digests_outside_the_header(own));
+        let digests = digests_outside_the_header(bytes);
+        let same = !digests.is_empty() && own.is_some_and(|own| own == digests);
+        holds &= same;
+        out.bool("same_sections_as_this_run_s_file_the_header_apart", same);
+    }
     out.bool("verified_at_every_worker_count", holds);
     out.object_end();
     holds
@@ -566,6 +590,8 @@ struct Settings {
     measured_size: Size,
     cost_ticks: u32,
     cost_rounds: usize,
+    /// How many carried recordings the run must read and replay.
+    carried_recordings: usize,
 }
 
 fn measure(settings: &Settings) -> (String, bool) {
@@ -675,14 +701,18 @@ fn measure(settings: &Settings) -> (String, bool) {
     for (name, bytes) in &local {
         let form = name.trim_start_matches(FAILING_TEST).trim_start_matches('.');
         fs::write(published.join(format!("{}.{form}", settings.cell)), bytes).expect("the recording is publishable");
-        portable &= write_file(&mut out, "this run, written by the test process", name, bytes, &runtimes);
+        portable &= write_file(&mut out, "this run, written by the test process", name, bytes, &runtimes, None);
     }
     let carried = recordings_in(&workspace_root().join(SPIKE).join("recordings"));
+    // Every carried file is counted, and its sections that hold no writer's
+    // name are compared by digest with this run's file of the same form.
+    portable &= carried.len() == settings.carried_recordings;
     for (name, bytes) in &carried {
-        portable &= write_file(&mut out, "carried from another run", name, bytes, &runtimes);
+        portable &= write_file(&mut out, "carried from another run", name, bytes, &runtimes, Some(&local));
     }
     out.array_end();
     out.u64("recordings_carried_from_other_runs", carried.len() as u64);
+    out.u64("recordings_carried_expected", settings.carried_recordings as u64);
     out.bool("every_recording_verified", portable);
     every_check &= portable;
 
@@ -710,7 +740,7 @@ fn measure(settings: &Settings) -> (String, bool) {
         let bytes = session.recording(&fixture, reference_form, "the_same_run_in_the_orchestrator", &settings.cell).encode();
         let name = format!("{}.{}-size.{form}.rec", settings.cell, settings.measured_size.name());
         fs::write(published.join(&name), &bytes).expect("the recording is publishable");
-        measured_holds &= write_file(&mut out, "this run, written by this process", &name, &bytes, &runtimes);
+        measured_holds &= write_file(&mut out, "this run, written by this process", &name, &bytes, &runtimes, None);
     }
     out.array_end();
     out.bool("holds", measured_holds);
@@ -759,9 +789,9 @@ fn main() {
     // An unoptimized build measures the small size, as the spikes before this
     // one do, and the report says which size ran.
     let settings = if release {
-        Settings { cell, release, measured_size: Size::Default, cost_ticks: 600, cost_rounds: 5 }
+        Settings { cell, release, measured_size: Size::Default, cost_ticks: 600, cost_rounds: 5, carried_recordings: CARRIED_RECORDINGS }
     } else {
-        Settings { cell, release, measured_size: Size::Small, cost_ticks: 120, cost_rounds: 3 }
+        Settings { cell, release, measured_size: Size::Small, cost_ticks: 120, cost_rounds: 3, carried_recordings: CARRIED_RECORDINGS }
     };
     let (report, _) = measure(&settings);
     println!("{report}");
@@ -793,7 +823,14 @@ mod tests {
     /// asserted.
     #[test]
     fn the_whole_report_holds_on_the_small_size() {
-        let settings = Settings { cell: "self-check".to_string(), release: !cfg!(debug_assertions), measured_size: Size::Small, cost_ticks: 20, cost_rounds: 1 };
+        let settings = Settings {
+            cell: "self-check".to_string(),
+            release: !cfg!(debug_assertions),
+            measured_size: Size::Small,
+            cost_ticks: 20,
+            cost_rounds: 1,
+            carried_recordings: CARRIED_RECORDINGS,
+        };
         let (report, holds) = measure(&settings);
         let _ = fs::remove_dir_all(workspace_root().join("out").join("self-check"));
         assert!(holds, "{report}");

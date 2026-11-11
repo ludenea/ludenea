@@ -197,6 +197,11 @@ impl Snapshot {
         }
         let seed = reader.u64()?;
         let entity_count = reader.u32()? as usize;
+        // The snapshot may come from a file: its count is checked before
+        // anything is allocated from it.
+        if !Size::ALL.iter().any(|size| size.entity_count() == entity_count) {
+            return Err(SnapshotError(format!("{entity_count} entities is not a workload size")));
+        }
         let tick = reader.u32()?;
         let wander = match reader.u8()? {
             0 => false,

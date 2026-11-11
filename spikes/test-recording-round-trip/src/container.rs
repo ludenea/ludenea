@@ -332,6 +332,12 @@ fn decode_description(bytes: &[u8]) -> Result<Vec<RecordType>, ContainerError> {
     for _ in 0..type_count {
         let name = reader.text()?;
         let field_count = reader.count(5)?;
+        // A record of a type without fields occupies no byte: a sequence of
+        // it could state as many items as bytes remain, at four bytes a
+        // sequence, and the reader would allocate far more than the file.
+        if field_count == 0 {
+            return refused(format!("type {name} has no field"));
+        }
         let mut fields = Vec::with_capacity(field_count);
         for _ in 0..field_count {
             let field_name = reader.text()?;

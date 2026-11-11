@@ -313,7 +313,10 @@ impl Verdict {
 }
 
 /// What a replay did: its verdict and how many input records of the run it
-/// applied, which is zero whenever the file or its starting state is refused.
+/// applied. Every refusal of the file, of its header or of its starting state
+/// returns before the step that applies the run's records, so its count is
+/// zero by the order of the code; a world that fails during that step is
+/// refused with the records applied before the failing tick.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Replay {
     pub verdict: Verdict,
@@ -359,6 +362,10 @@ pub fn replay_recording(recording: &Recording, executor: &dyn Executor) -> Repla
     };
     if recording.end_tick < recording.start_tick {
         return refuse("the recording ends before it starts");
+    }
+    // The tick after the last one is computed below and by the world.
+    if recording.end_tick == u32::MAX {
+        return refuse("the recording's last tick is the largest a tick counts to");
     }
     if recording.inputs.len() as u64 != u64::from(recording.end_tick - recording.start_tick) {
         return refuse(format!("{} input records for the ticks {} to {}", recording.inputs.len(), recording.start_tick + 1, recording.end_tick));
@@ -407,7 +414,10 @@ pub fn replay_recording(recording: &Recording, executor: &dyn Executor) -> Repla
         ));
     }
     if let Err(failed) = world.step(recording.inputs.iter().map(|record| record.kicks.clone()).collect(), executor) {
-        return refuse(failed.to_string());
+        // The one refusal after records of the run were applied: the world
+        // stands at the last tick before the failing one.
+        let records_applied = world.tick().saturating_sub(recording.start_tick);
+        return Replay { verdict: Verdict::Refused { reason: failed.to_string() }, records_applied };
     }
     let records_applied = recording.inputs.len() as u32;
     let mut compared = 0;
