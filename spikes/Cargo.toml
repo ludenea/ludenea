@@ -48,6 +48,7 @@ members = [
     "shader-forms-across-platforms",
     "physics-prepared-geometry",
     "physics-snapshot-every-tick",
+    "visual-reference-round-trip",
 ]
 
 [profile.release]

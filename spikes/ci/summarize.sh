@@ -1838,6 +1838,75 @@ case "$spike" in
     echo
     jq -r -s "$kinds"' [.[] | kinds[] | kind_name as $name | .behavior as $b | $b.sources[]? | {name: $name, steps: $b.steps, run_hash, local: (.source | test("locally")), unread: (was_read != true), differs: (.first_differing_step != -1), unequal: (bytes_equal != true)}] | group_by([.name, .steps]) | .[] | "- `\(.[0].name)`, \(.[0].steps) steps: \([.[] | select(.local) | .run_hash] | unique | length) distinct run hash(es) of the locally built world across \([.[] | select(.local)] | length) report(s); \([.[] | select(.local | not)] | length) world(s) from a form or an image, of which \([.[] | select(.unread)] | length) not read, \([.[] | select(.local | not) | select(.unequal)] | length) with bytes that differ from the local ones, \([.[] | select(.differs)] | length) with a differing step."' "${facts[@]}"
     ;;
+  visual-reference-round-trip)
+    echo "The capture of each cell (the content hash is the hash of the spike's own draw list; the key is what a byte part is held under, the processor is recorded beside it):"
+    echo
+    echo "| Cell | Device | Processor | Content hash | Frame bytes | Key hash | Key |"
+    echo "| --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r 'if .error then "| \(.cell) | \(.error) | \(.host_processor) | | | | |" else "| \(.cell) | \(.device.name) | \(.host_processor) | \(.frame.content_hash) | \(.frame_bytes_hash) | \(.key_hash) | \(.key | gsub("\\|"; "/")) |" end' "$file"
+    done
+    echo
+    echo "The carried references (a set is the parts one cell wrote in an earlier run; this cell reads each as a run that takes references):"
+    echo
+    echo "| Cell | Set | Exists | Byte part under this cell's key | Content equality | Byte equality | Bounded difference | Differing pixels against the base | Largest difference per channel | As designed | Pending files left |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.carried_references // [])[] | "| \($cell) | \(.set) | \(.exists | if . == null then "unread" else . end) | \(.byte_part_under_this_key | if . == null then "unread" else . end) | \(.content_equality.verdict // .error) | \(.byte_equality.verdict // "") | \(.bounded_difference.verdict // "") | \(.bounded_difference.numbers.differing_pixels // "none measured") | \(.bounded_difference.numbers.largest_per_channel // "") | \(.as_designed // false) | \(.pending_files) |"' "$file"
+    done
+    echo
+    echo "Each byte part read, against this cell's capture:"
+    echo
+    echo "| Cell | Set | Same key | Same bytes | Same processor | The part's processor | Pixel file read and equal to the part's hash |"
+    echo "| --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.carried_references // [])[] | .set as $set | (.byte_parts // [])[] | "| \($cell) | \($set) | \(.same_key) | \(.same_bytes) | \(.same_host_processor) | \(.host_processor) | \(.pixel_file_read) |"' "$file"
+    done
+    echo
+    echo "The causes brought about on purpose, grouped by the verdicts the cells report:"
+    echo
+    echo "| Case | What | Content equality | Byte equality | Pending parts of the byte comparison | Bounded difference | As designed | Cells |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- |"
+    jq -r -s '[.[] | .cell as $cell | (.causes // [])[] | {case, what, content: (.content_equality.verdict // .error), bytes: (.byte_equality.verdict // ""), pending: (.byte_equality.pending // ""), bounded: (.bounded_difference.verdict // ""), designed: (.as_designed // false), cell: $cell}] | group_by([.case, .content, .bytes, .pending, .bounded, .designed]) | .[] | "| \(.[0].case) | \(.[0].what) | \(.[0].content) | \(.[0].bytes) | \(.[0].pending) | \(.[0].bounded) | \(.[0].designed) | \([.[].cell] | join(", ")) |"' "${facts[@]}"
+    echo
+    echo "The numbers of each case where two pictures were compared and differ (the bounded difference against the base):"
+    echo
+    echo "| Cell | Case | Differing pixels | Beyond the second number | Beyond the largest number | Largest difference per channel | Rectangle | Cause of the byte comparison | Review group |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.causes // [])[] | select((.bounded_difference.numbers.differing_pixels // 0) > 0) | .bounded_difference.numbers as $n | "| \($cell) | \(.case) | \($n.differing_pixels) | \($n.beyond_the_second_number) | \($n.beyond_the_largest_number) | \($n.largest_per_channel) | \($n.rectangle) | \(.byte_equality.cause) | \(.byte_equality.review_group) |"' "$file"
+    done
+    echo
+    echo "The pixel file:"
+    echo
+    echo "| Cell | Decoder | Read back to the bytes written | Decoder gives the same pixels | Rewritten file decodes to the same pixels | Rewritten file refused by the strict reader | Refusal | Changed pixel caught by the hash |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r 'select(.pixel_file) | .pixel_file as $p | "| \(.cell) | \($p.decoder) | \($p.read_back_by_the_spike_to_the_bytes_it_wrote) | \(if $p.decoder_error then $p.decoder_error else $p.decoder_gives_the_same_pixels end) | \(if $p.rewriter_error then $p.rewriter_error else $p.rewritten_file_decodes_to_the_same_pixels end) | \($p.rewritten_file_refused_by_the_strict_reader | if . == null then "" else . end) | \($p.refusal // "") | \(if $p.changed_pixel_error then $p.changed_pixel_error else $p.changed_pixel_caught_by_the_hash_of_the_byte_part end) |"' "$file"
+    done
+    echo
+    echo "What a pixel file weighs, in bytes (the packed form is the pack git writes for the file alone, and for two revisions of it):"
+    echo
+    echo "| Cell | Target | As written | Compressed in the file | Packed | Packed, two revisions | Packed over as written |"
+    echo "| --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.pixel_file_weight // [])[] | "| \($cell) | \(.width) by \(.height) | \(.as_written_bytes // .error) | \(.compressed_in_the_file_bytes // .compressed_in_the_file_error // "") | \(.packed_bytes // .packed_error // "") | \(.packed_two_revisions_bytes // .packed_two_revisions_error // "") | \(if .packed_bytes and .as_written_bytes then (.packed_bytes / .as_written_bytes * 1000 | round / 1000) else "" end) |"' "$file"
+    done
+    echo
+    echo "One capture, fastest of five in microseconds (the render to the completion of the device's work, the read-back, the hash of the bytes), with the content hash and the bounded difference beside it:"
+    echo
+    echo "| Cell | Setting | Target | Render | Read-back | Hash of the bytes | Capture, fastest | Capture, median | Content hash | Bounded difference per million pixels | Frame bytes | Process threads |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.capture_costs // [])[] | "| \($cell) | \(.setting) | \(.width) by \(.height) | \(.render_fastest_us // .error) | \(.read_back_fastest_us // "") | \(.hash_fastest_us // "") | \(.capture_fastest_us // "") | \(.capture_median_us // "") | \(.content_hash_fastest_us // "") | \(.bounded_difference_fastest_us_per_million_pixels // "") | \(.hash // "") | \(.threads // "") |"' "$file"
+    done
+    echo
+    jq -r -s '"- Content hashes across \(length) cell(s): \([.[].frame.content_hash | select(. != null)] | unique | length) distinct. Frame bytes: \([.[].frame_bytes_hash | select(. != null)] | unique | length) distinct. Keys: \([.[].key | select(. != null)] | unique | length) distinct."' "${facts[@]}"
+    jq -r -s '"- Per cell and target size, distinct frame bytes across the settings timed: " + ([.[] | .cell as $cell | (.capture_costs // []) | group_by([.width, .height])[] | "\($cell) \(.[0].width) by \(.[0].height): \([.[].hash | select(. != null)] | unique | length)"] | join("; ")) + "."' "${facts[@]}"
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: carried references compare as designed: \(.hypotheses.carried_references_compare_as_designed | if . == null then "not run" else . end); causes not reported as designed: \(.hypotheses.causes_not_reported_as_designed // "not run"); the pixel file holds: \(.hypotheses.pixel_file_holds | if . == null then "not run" else . end)."' "$file"
+    done
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;

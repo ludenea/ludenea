@@ -1,0 +1,11 @@
+[package]
+name = "visual-reference-round-trip"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: a visual reference laid out as reviewed files (a content part, a byte part per device key, a pixel file) carried between jobs and cells, the three comparisons of a visual test with the cause each reports, and what a reference costs, for the game testing research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }
+render-device-baseline = { path = "../render-device-baseline" }
