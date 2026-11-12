@@ -424,6 +424,10 @@ pub fn run_plan(options: &Options) -> Json {
                     // read as one library's.
                     if device.index == found[0].index {
                         runs.push(run(&program, &words("soak", &[("library", "sdl3"), ("path", *path), ("device", &index(device)), ("mode", "synchronized"), ("frames", "1200")]), display, soak_limit));
+                        // And with the presenter inside the platform thread's
+                        // loop, so that a stall of that mode can be told from
+                        // the thread that presents.
+                        runs.push(run(&program, &words("soak", &[("library", "winit"), ("path", *path), ("device", &index(device)), ("mode", "synchronized"), ("frames", "1200"), ("presenter", "platform-thread")]), display, soak_limit));
                     }
                 }
             }
