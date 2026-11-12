@@ -39,7 +39,11 @@ get() {
   mkdir -p "$tools/$name"
   if curl --proto '=https' --tlsv1.2 -sSfL --retry 3 -o "$archive" "$url"; then
     case "$archive" in
-      *.zip) unzip -q -o "$archive" -d "$tools/$name" || rm -rf "$tools/$name" ;;
+      *.zip)
+        # unzip ends with status 1 on a warning, such as an archive whose
+        # paths use backslashes, and has unpacked it all the same.
+        unzip -q -o "$archive" -d "$tools/$name" || [ "$?" -eq 1 ] || rm -rf "$tools/$name"
+        ;;
       *) tar -xzf "$archive" -C "$tools/$name" || rm -rf "$tools/$name" ;;
     esac
   else

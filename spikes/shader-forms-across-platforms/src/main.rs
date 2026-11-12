@@ -15,6 +15,7 @@
 //! Run with a cell label, the spike prints one JSON document.
 
 mod chains;
+mod device;
 mod json;
 
 use std::env;
@@ -650,6 +651,41 @@ fn write_inputs_used(out: &mut Json, tools: &Tools, lighting: &Lighting, work: &
     out.array_end();
 }
 
+/// Where Apple's compiler is present, whether it accepts each payload of
+/// Metal text a chain made, and the time it takes: the compile such a
+/// payload costs the machine that loads it.
+fn write_metal_text_check(out: &mut Json, tools: &Tools, imports: &[Import], work: &Path) {
+    out.key("metal_text_through_apple_s_compiler");
+    out.array_start();
+    if tools.metal.found.is_ok() {
+        for chain in Chain::ALL {
+            let texts: Vec<&Import> = imports.iter().filter(|import| import.chain == chain && import.form == Form::MetalText && import.outcome.is_ok()).collect();
+            let mut times = Vec::new();
+            let mut refused = Vec::new();
+            for import in &texts {
+                let text = String::from_utf8_lossy(import.outcome.as_ref().map_or(&[][..], Vec::as_slice)).into_owned();
+                let started = Instant::now();
+                match chains::metal_library(tools, &text, work, &format!("check-{}-{}-{}", chain.name(), import.unit, import.stage.name())) {
+                    Ok(_) => times.push(started.elapsed().as_secs_f64() * 1_000.0),
+                    Err(reason) => refused.push(format!("{} {}: {}", import.unit, import.stage.name(), reason.chars().take(260).collect::<String>())),
+                }
+            }
+            times.sort_by(f64::total_cmp);
+            out.object_start();
+            out.string("chain", chain.name());
+            out.u64("texts", texts.len() as u64);
+            out.u64("accepted", times.len() as u64);
+            out.string("refused", &refused.join(" / "));
+            if !times.is_empty() {
+                out.decimal("median_milliseconds", times[times.len() / 2]);
+                out.decimal("slowest_milliseconds", times[times.len() - 1]);
+            }
+            out.object_end();
+        }
+    }
+    out.array_end();
+}
+
 /// The scene's payloads next to the measurements, for the machines that
 /// render a form made elsewhere.
 fn publish_scene_forms(output: &Path, imports: &[Import]) -> u64 {
@@ -703,6 +739,23 @@ fn measure(cell: &str) -> Result<String, String> {
     write_reflection(&mut out, &units, &first, &reflections, &tools, &work, &original);
     write_inputs_used(&mut out, &tools, &original, &work, &reflections, &first);
     out.u64("scene_payloads_published", publish_scene_forms(&output, &first));
+    // The scene drawn natively with the forms of Slang and of the chain with
+    // SPIRV-Cross, made here and on other cells. naga's HLSL binds samplers
+    // through a heap of its own and its Metal text binds arrays through
+    // argument buffers, which the native path does not implement: its forms
+    // are not drawn here (its SPIR-V form is the front end's, the same bytes
+    // as the other translated chain's).
+    write_metal_text_check(&mut out, &tools, &first, &work);
+    let mut candidates = device::from_other_cells(cell);
+    for chain in [Chain::Slang, Chain::Translated(Translator::SpirvCross)] {
+        for form in Form::ALL {
+            let stage = |stage: Stage| find(&first, chain, "scene", stage, form).and_then(|import| import.outcome.clone().ok());
+            if let (Some(vertex), Some(fragment)) = (stage(Stage::Vertex), stage(Stage::Fragment)) {
+                candidates.push(device::Candidate { origin: "this run".to_string(), chain: chain.name().to_string(), form, vertex, fragment });
+            }
+        }
+    }
+    device::write(&mut out, &candidates, &work);
     out.object_end();
     let _ = fs::remove_dir_all(&work);
     Ok(out.finish())

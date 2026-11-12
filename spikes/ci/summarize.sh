@@ -1585,6 +1585,24 @@ case "$spike" in
     echo "Distinct payload hashes per chain, unit, stage and form across the cells that made the payload (1 means the same bytes on every such cell):"
     echo
     jq -r '.imports[] | select(.made) | "\(.chain) \(.unit) \(.stage) \(.form)\t\(.hash)"' "${facts[@]}" | sort -u | awk -F '\t' '{ count[$1] += 1 } END { for (key in count) tally[count[key]] += 1; for (n in tally) print "- " tally[n] " payload(s) with " n " distinct hash value(s)" }' | sort
+    echo
+    echo "Where Apple's compiler is present, the payloads of Metal text it accepts per chain, with the time of its compile in milliseconds:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .metal_text_through_apple_s_compiler[]? | "- `\($cell)`, \(.chain): \(.accepted) of \(.texts) accepted, median \(.median_milliseconds // "n/a") ms, slowest \(.slowest_milliseconds // "n/a") ms\(if .refused == "" then "" else "; refused: " + (.refused | .[0:500]) end)"' "$file"
+    done
+    echo
+    echo "The device baseline's scene drawn natively with the forms a chain made, on this cell in this run or on another cell, against the image of the native path's own shaders on the same device:"
+    echo
+    echo "| Cell | Interface | Device | Made on | Chain | Form | Accepted and drawn | Bytes equal the reference | Milliseconds | Libraries us, pipelines us | Reason |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .the_scene_on_a_device.interfaces[]? | .interface as $interface | .devices[]? | .name as $device | .draws[] | "| \($cell) | \($interface) | \($device) | \(.made_on) | \(.chain) | \(.form) | \(.accepted_and_drawn) | \(if .bytes_equal_the_reference == null then "n/a" elif .bytes_equal_the_reference == false then "false: \(.differing_pixels) pixels differ, largest \(.largest_difference_per_channel)" else .bytes_equal_the_reference end) | \(.milliseconds // "n/a") | \(.libraries_us // "n/a"), \(.pipelines_us // "n/a") | \((.reason // "") | .[0:300] | gsub("\\|"; "/")) |"' "$file"
+    done
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .the_scene_on_a_device as $d | select($d != null) | "- `\($cell)`: Windows developer mode \($d.windows_developer_mode); " + ([$d.interfaces[] | "\(.interface) " + (if .available then ([.devices[] | "\(.name) reference \(.reference_hash // .reference_error), \(.reference_milliseconds // "n/a") ms"] | join("; ")) else "unavailable: \(.reason | .[0:160])" end)] | join(" / "))' "$file"
+    done
     ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
