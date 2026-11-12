@@ -1,0 +1,33 @@
+[package]
+name = "render-windowed-presentation"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: a window through each of winit and SDL3, and a swapchain presented by a thread that is not the platform thread, natively on Direct3D 12, Vulkan and Metal and through wgpu's surface, for the rendering research"
+license = "MIT OR Apache-2.0"
+default-run = "render-windowed-presentation"
+
+[dependencies]
+# The two windowing libraries and wgpu's surface are the subject of the
+# measurement; each is linked inside the spike only. The three graphics
+# interfaces are reached natively through the system's loader, with
+# declarations written by hand, as the device baseline spike reaches them.
+winit = "=0.30.13"
+sdl3-sys = { version = "=0.7.3", default-features = false, features = ["build-from-source-static", "no-default-subsystems", "sdl-video", "sdl-joystick", "sdl-hidapi", "sdl-audio"] }
+wgpu = { version = "=30.0.1", default-features = false, features = ["std", "vulkan", "dx12", "metal"] }
+raw-window-handle = "0.6"
+
+[[bin]]
+name = "render-windowed-presentation"
+path = "src/main.rs"
+
+# Two probes that link one windowing library each and nothing else of the
+# spike: what each library does with no display, and what a binary that links
+# it imports.
+[[bin]]
+name = "windowing-probe-winit"
+path = "src/bin/windowing_probe_winit.rs"
+
+[[bin]]
+name = "windowing-probe-sdl3"
+path = "src/bin/windowing_probe_sdl3.rs"

@@ -51,6 +51,7 @@ members = [
     "visual-reference-round-trip",
     "multiplayer-test-rounds",
     "render-frame-content",
+    "render-windowed-presentation",
 ]
 
 [profile.release]
