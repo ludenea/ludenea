@@ -13,10 +13,10 @@
 //! - a handle's generation is checked on every use, and a stale handle is refused;
 //! - a released resource is queued with the highest frame number declared so
 //!   far and destroyed when every frame up to that number is finished or dropped;
-//! - no command may name a resource queued for destruction, and no resource
-//!   may be destroyed while an unfinished frame names it: both are assertions
-//!   that are counted and reported, never a panic, so that a measurement can
-//!   trip them on purpose;
+//! - no command of a frame declared after a resource's release may name it,
+//!   and no resource may be destroyed while an unfinished frame names it: both
+//!   are assertions that are counted and reported, never a panic, so that a
+//!   measurement can trip them on purpose;
 //! - device memory is counted per owner and per class from the descriptions;
 //! - a loss is simulated here: the port answers "lost" to every call until
 //!   the device is created again, and every handle of before is stale.
@@ -359,7 +359,11 @@ impl Port {
     /// The adapter's identifier of a resource a command of `frame` names.
     fn resolve(&self, ledger: &mut Ledger, frame: u64, handle: Handle) -> PortResult<u64> {
         let slot = self.slot_of(ledger, handle)?;
-        if matches!(slot.state, SlotState::Queued(_)) {
+        // A frame declared before the release keeps what it resolved: only a
+        // frame declared after it trips the assertion.
+        if let SlotState::Queued(after) = slot.state
+            && frame > after
+        {
             self.queued_named.fetch_add(1, Ordering::Relaxed);
             return Err(PortError::QueuedForDestruction(handle));
         }
@@ -634,7 +638,10 @@ mod tests {
         assert_eq!(port.destroy_now(buffer), Ok(true));
         let other = port.create_vertex_buffer(&[0; 240], Some(0)).unwrap();
         port.release(other).unwrap();
-        let named = port.record_part(frame, pass, 0, &[PortDraw { buffer: other, ..draw }]);
+        // The frame declared before the release may still name it; one declared after may not.
+        assert!(port.record_part(frame, pass, 0, &[PortDraw { buffer: other, ..draw }]).is_ok());
+        let later = port.declare_frame();
+        let named = port.record_part(later, pass, 0, &[PortDraw { buffer: other, ..draw }]);
         assert_eq!(named, Err(PortError::QueuedForDestruction(other)));
         let counters = port.counters();
         assert_eq!((counters.destroyed_under_a_frame, counters.queued_named), (1, 1));
