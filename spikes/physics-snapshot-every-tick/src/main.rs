@@ -88,6 +88,7 @@ fn write_correction(out: &mut Json, r: &CorrectionResult) {
     summary(out, "frame_ms", r.frame);
     summary(out, "restore_ms", r.restore);
     summary(out, "tick_again_ms", r.tick_again);
+    summary(out, "first_tick_again_ms", r.first_tick_again);
     out.bool("fits_one_fixed_step", r.frame.p99 <= FIXED_STEP_MS);
     out.u64("ring_slots", r.ring_slots as u64);
     out.u64("ring_bytes", r.ring_bytes as u64);

@@ -204,6 +204,9 @@ pub struct CorrectionResult {
     pub frame: Summary,
     pub restore: Summary,
     pub tick_again: Summary,
+    /// The first tick applied after the restore, which is among the ticks
+    /// applied again and is timed apart as well.
+    pub first_tick_again: Summary,
     pub ring_slots: usize,
     pub ring_bytes: usize,
     pub final_hash: u64,
@@ -235,7 +238,7 @@ pub fn run_corrections(
         }
     }
 
-    let (mut frame, mut restore, mut again) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut frame, mut restore, mut again, mut first) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let (mut exceeding, mut ticks_again_at_most, mut settled) = (0, 0, false);
     for n in 0..config.corrections {
         let frame_start = Instant::now();
@@ -251,7 +254,11 @@ pub fn run_corrections(
                 sim.take(ring.slot(tick), tick);
             }
             if tick <= now {
-                again.push(milliseconds(clock));
+                let tick_ms = milliseconds(clock);
+                again.push(tick_ms);
+                if tick == start + 1 {
+                    first.push(tick_ms);
+                }
             }
         }
         now += 1;
@@ -293,6 +300,7 @@ pub fn run_corrections(
         frame: summarize(frame),
         restore: summarize(restore),
         tick_again: summarize(again),
+        first_tick_again: summarize(first),
         ring_slots: slots,
         ring_bytes,
         final_hash,

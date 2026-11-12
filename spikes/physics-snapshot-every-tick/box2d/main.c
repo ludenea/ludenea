@@ -220,7 +220,9 @@ typedef struct CorrectionResult
 	bool settledBeforeTheEnd;
 	int exceeding;
 	int ticksAgainAtMost;
-	Summary frame, restore, tickAgain;
+	// The first tick applied after the restore is among the ticks applied
+	// again and is timed apart as well.
+	Summary frame, restore, tickAgain, firstTickAgain;
 	int ringSlots;
 	int64_t ringBytes;
 	uint64_t finalHash;
@@ -259,7 +261,7 @@ static CorrectionResult RunCorrections( const Config* config, SceneKind scene, i
 		}
 	}
 
-	Samples frame = { 0 }, restore = { 0 }, again = { 0 };
+	Samples frame = { 0 }, restore = { 0 }, again = { 0 }, first = { 0 };
 	for ( int n = 0; n < config->corrections; ++n )
 	{
 		uint64_t frameTicks = b2GetTicks();
@@ -281,7 +283,12 @@ static CorrectionResult RunCorrections( const Config* config, SceneKind scene, i
 			}
 			if ( tick <= now )
 			{
-				Push( &again, ElapsedMs( &ticks ) );
+				double tickMs = ElapsedMs( &ticks );
+				Push( &again, tickMs );
+				if ( tick == start + 1 )
+				{
+					Push( &first, tickMs );
+				}
 			}
 		}
 		now += 1;
@@ -305,6 +312,7 @@ static CorrectionResult RunCorrections( const Config* config, SceneKind scene, i
 	result.frame = Summarize( &frame );
 	result.restore = Summarize( &restore );
 	result.tickAgain = Summarize( &again );
+	result.firstTickAgain = Summarize( &first );
 	result.ringBytes = RingBytes( &ring );
 	result.finalHash = SimHash( &sim );
 	RingFree( &ring );
@@ -790,6 +798,7 @@ static void PrintCorrection( const CorrectionResult* r, bool first )
 	PrintSummary( "frame_ms", r->frame );
 	PrintSummary( "restore_ms", r->restore );
 	PrintSummary( "tick_again_ms", r->tickAgain );
+	PrintSummary( "first_tick_again_ms", r->firstTickAgain );
 	printf( "\"fits_one_fixed_step\":%s,\"ring_slots\":%d,\"ring_bytes\":%" PRId64 ",\"final_hash\":\"0x%016" PRIx64
 			"\",\"final_hash_equals_the_uninterrupted_world\":%s}",
 			r->frame.p99 <= FIXED_STEP_MS ? "true" : "false", r->ringSlots, r->ringBytes, r->finalHash,

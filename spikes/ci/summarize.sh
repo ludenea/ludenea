@@ -1716,12 +1716,12 @@ case "$spike" in
     echo
     echo "A whole correction inside one frame, at the claims' body count and 4 workers (milliseconds; a restore in place, the ticks applied again with their takes, and the frame's new tick):"
     echo
-    echo "| Cell | Library | Scene | Takes | Depth | Ticks applied again at most | Frame median | Frame p99 | Restore median | A tick applied again, median | Corrections | Fits one fixed step | Ring bytes | Continues as the uninterrupted world |"
-    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    echo "| Cell | Library | Scene | Takes | Depth | Ticks applied again at most | Frame median | Frame p99 | Restore median | A tick applied again, median | The first tick after the restore, median | Corrections | Fits one fixed step | Ring bytes | Continues as the uninterrupted world |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
     for file in "${facts[@]}"; do
       jq -r "$claims"'
         .cell as $cell | libraries[] | .library as $library | claim_size as $n | .corrections[] | select(.bodies == $n)
-        | "| \($cell) | \($library) | \(.scene) | \(.takes) | \(.depth) | \(.ticks_applied_again_at_most) | \(.frame_ms_median) | \(.frame_ms_p99) | \(.restore_ms_median) | \(.tick_again_ms_median) | \(.corrections)\(if .settled_before_the_end then " (verdict settled)" else "" end) | \(.fits_one_fixed_step) | \(.ring_bytes) | \(.final_hash_equals_the_uninterrupted_world // "not checked") |"' "$file"
+        | "| \($cell) | \($library) | \(.scene) | \(.takes) | \(.depth) | \(.ticks_applied_again_at_most) | \(.frame_ms_median) | \(.frame_ms_p99) | \(.restore_ms_median) | \(.tick_again_ms_median) | \(.first_tick_again_ms_median // "not timed apart") | \(.corrections)\(if .settled_before_the_end then " (verdict settled)" else "" end) | \(.fits_one_fixed_step) | \(.ring_bytes) | \(.final_hash_equals_the_uninterrupted_world // "not checked") |"' "$file"
     done
     echo
     echo "The 99th percentile of the frame along the ladder, per form of take and depth, the slowest of the three scenes (milliseconds):"
