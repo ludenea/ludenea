@@ -2101,6 +2101,125 @@ case "$spike" in
       jq -r "$sources"' .cell as $cell | sources[] | "- \($cell), \(.device): \([.m | to_entries[] | select(.value | type == "object" and has("seconds")) | "\(.key | gsub("_"; " ")) \(.value.seconds)"] | join(", "))"' "$file"
     done
     ;;
+  render-windowed-presentation)
+    echo "A window through winit and through SDL3, and a swapchain presented to it by a thread that is not the platform thread, natively and through wgpu's surface. $(jq -r '"winit \(.libraries.winit); \(.libraries.sdl3); wgpu \(.libraries.wgpu)"' "${facts[0]}"), each linked inside the spike only."
+    echo
+    echo "The display of the machine, or the display servers a Linux cell is given, and the devices each path lists:"
+    echo
+    echo "| Cell | Real display | Display or display servers | Path | Devices |"
+    echo "| --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .with_a_real_display as $real | ((.display // .display_servers // {}) | to_entries | map("\(.key | gsub("_"; " ")): \(.value)") | join("; ")) as $display | .devices[] | "| \($cell) | \($real) | \($display) | \(.path) | \(if .error then "none: \(.error | gsub("\\|"; "/"))" else (.devices | map("\(.name) (\(.kind))") | join(", ")) end) |"' "$file"
+    done
+    echo
+    echo "What each binary imports, and what each windowing library answers when asked for a window (a probe that fails its first request asks for X11 in the same process, then a new process names X11 from its start):"
+    echo
+    echo "| Cell | Binary | Windowing, graphics or audio libraries imported |"
+    echo "| --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.imports // [])[] | "| \($cell) | \(.binary) | \(.windowing_graphics_or_audio_libraries // .error) |"' "$file"
+    done
+    echo
+    echo "| Cell | Under | Library | In a new process | Requests and answers | The process went on |"
+    echo "| --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.windowing_probes // [])[] | "| \($cell) | \(.under) | \(.library // "n/a") | \(.in_a_new_process // false) | \(if .requests then (.requests | map("asked \(.asked): \(.event_loop // .video)\(if .window then ", window \(.window)" else "" end)") | join("; ")) else "\(.status): \(.standard_error // "")" end | gsub("\\|"; "/")) | \(.the_process_went_on // false) |"' "$file"
+    done
+    echo
+    # One row per run of frames through gestures, for the three lists that hold such runs.
+    run_row='def row($cell): "| \($cell) | \(.under) | \(.library // .arguments) | \(.path // "") | \(.presenter.device // "device \(.device_index // "")") | \(.window // "") | \(.mode // "")\(if ((.presenter.acquisition // "") | test("at most 1000")) then ", acquisition may wait" else "" end) | \(.completed) | \(if .deadlock == null then "n/a" else .deadlock end) | \(.frames_presented // "n/a") of \(.frames_asked // "n/a") | \(.duration_ms // "n/a") | \(.sizes_followed // "n/a") | \([(.gestures // [])[] | select(.gesture) | "\(.gesture): \(if .not_run then "not run" elif .entered_the_system_loop != null then "system loop entered \(.entered_the_system_loop), left \(.left_the_system_loop)" elif .minimized != null then "minimized \(.minimized), restored \(.restored)" else "done" end)"] | join("; ")) | \((.error // .status // "") | gsub("\\|"; "/")) |";'
+    run_head="| Cell | Under | Library | Path | Device | Window | Mode | Completed | Deadlock | Frames presented | Milliseconds | Sizes followed | Gestures | Error |"
+    run_rule="| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    echo "Frames presented by a presentation thread while the platform thread pumps and the window is moved, resized, minimized and occluded, in the fastest mode the surface offers (a deadlock is no frame presented and no event pumped for five seconds):"
+    echo
+    echo "$run_head"
+    echo "$run_rule"
+    for file in "${facts[@]}"; do
+      jq -r "$run_row"' .cell as $cell | (.frames_through_gestures // [])[] | row($cell)' "$file"
+    done
+    echo
+    echo "The same with the presenter served inside the platform thread's event loop:"
+    echo
+    echo "$run_head"
+    echo "$run_rule"
+    for file in "${facts[@]}"; do
+      jq -r "$run_row"' .cell as $cell | (.presenter_inside_the_platform_thread // [])[] | row($cell)' "$file"
+    done
+    echo
+    echo "Runs in the synchronized and latest modes (1 200 and 3 000 frames), and on a machine with a real display ten thousand frames in the synchronized mode:"
+    echo
+    echo "$run_head"
+    echo "$run_rule"
+    for file in "${facts[@]}"; do
+      jq -r "$run_row"' .cell as $cell | ((.presentation_modes // []) + (.synchronized_long_runs // []))[] | row($cell)' "$file"
+    done
+    echo
+    echo "Where the time of a turn goes, per state of the window, in microseconds (median, 99th percentile): the acquisition, the submission, the wait for the device, the presentation call, one frame of the offscreen stream served by the same presenter, and the period of that stream (median, largest). The unsynchronized rows are the windowed runs with winit of the first table:"
+    echo
+    echo "| Cell | Under | Path | Device | Mode | Frames | Window is | Turns | Presented | Outcomes | Acquisition | Submission | Wait for the device | Presentation | Offscreen frame | Offscreen period |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | ((.presentation_modes // []) + (.synchronized_long_runs // []) + [(.frames_through_gestures // [])[] | select(.library == "winit" and .window == "windowed")])[] | . as $run | (.per_window_state // [])[] | "| \($cell) | \($run.under) | \($run.path) | \($run.presenter.device) | \($run.mode)\(if (($run.presenter.acquisition // "") | test("at most 1000")) then ", acquisition may wait" else "" end) | \($run.frames_asked) | \(.window) | \(.turns) | \(.presented) | \(.outcomes | map("\(.outcome): \(.turns)") | join("; ")) | \(.acquisition.median_us), \(.acquisition.p99_us) | \(.submission.median_us), \(.submission.p99_us) | \(.wait_for_the_device.median_us), \(.wait_for_the_device.p99_us) | \(.presentation.median_us), \(.presentation.p99_us) | \(.offscreen_stream_frame.median_us), \(.offscreen_stream_frame.p99_us) | \(.offscreen_stream_period.median_us), \(.offscreen_stream_period.max_us) |"' "$file"
+    done
+    echo
+    echo "The presentation times each path gave on its synchronized runs, against the compositor's refresh period:"
+    echo
+    echo "| Cell | Path | Device | Frames | Readings | Refused | Refresh period from the readings (us) | Compositor's refresh period (us) | Refreshes between two presentations: count | Presentation time extensions offered | Source |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.display.compositor_refresh_period_us // "n/a") as $period | ((.presentation_modes // []) + (.synchronized_long_runs // []))[] | select(.presentation_times != null and .mode == "synchronized") | "| \($cell) | \(.path) | \(.presenter.device) | \(.frames_presented) | \(.presentation_times.readings // "none") | \(.presentation_times.readings_refused // "n/a")\(if .presentation_times.first_refusal then " (\(.presentation_times.first_refusal))" else "" end) | \(.presentation_times.refresh_period_from_the_statistics_us // "n/a") | \($period) | \((.presentation_times.refreshes_between_two_presentations // []) | map("\(.refreshes): \(.presentations)") | join(", ")) | \(.presenter.presentation_time_extensions_offered // "n/a") | \(.presentation_times.source) |"' "$file"
+    done
+    echo
+    echo "The threads of the process at each step, each thread attributed to the step at which it appeared, and the processor time each set took over an idle second (a set waits under 1 000 microseconds):"
+    echo
+    echo "| Cell | Under | Library | Path | Device | Step | Threads | Appeared | Sets over the idle second | Ended |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.threads // [])[] | . as $run | if .steps then (.steps[] | "| \($cell) | \($run.under) | \($run.library) | \($run.path) | \($run.presenter.device // ($run.presenter_error // "" | gsub("\\|"; "/"))) | \(.step) | \(.threads // .error) | \(.appeared // "") | \((.idle_second // []) | map("\(.set): \(.threads) threads, \(.processor_us) us, \(if .waits then "waits" else "does not wait" end)") | join("; ")) | \((.ended // []) | map("\(.set): \(.threads)") | join("; ")) |") else "| \($cell) | \(.under) | \(.arguments // "") | | | \(.status // "") | | | | |" end' "$file"
+    done
+    echo
+    echo "| Cell | Under | Library | Path | Device | Threads left at the end, by the step at which they appeared | Gamepads SDL lists | Error |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.threads // [])[] | "| \($cell) | \(.under) | \(.library // "") | \(.path // "") | \(.presenter.device // "") | \((.threads_left_at_the_end // []) | map("\(.set): \(.threads)") | join("; ")) | \(if .gamepads_listed == null then "" else .gamepads_listed end) | \((.error // .presenter_error // .presentation_error // .status // "") | gsub("\\|"; "/")) |"' "$file"
+    done
+    echo
+    echo "A fixed-step loop at 60 ticks a second: the 99th percentile of its ticks' lateness per round, in microseconds, alone (the control), beside a presentation thread that presents in step with the display, and presenting itself (from an empty queue of frames, and with the queue filled first). A loop is within the control when the median of its rounds is not above the control's largest round; the gain of a thread is the loop presenting itself minus the loop beside a thread, against the control's spread:"
+    echo
+    echo "| Cell | Path | Device | Window is | Control | Control's spread | Beside a presentation thread | Within the control | Presenting itself | Beyond the control | Gain exceeds the spread | Presenting itself, queue full | Beyond the control | Gain exceeds the spread |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r 'def list: map(tostring) | join(", "); .cell as $cell | (.pace // [])[] | . as $run | if .verdicts then (.verdicts[] | "| \($cell) | \($run.path) | \($run.presenter.device) | \(.window) | \(.control_p99_us | list) | \(.control_spread_us) | \(.beside_a_presentation_thread_p99_us | list) | \(.beside_a_presentation_thread_is_within_the_control) | \(.presenting_itself_p99_us | list) | \(.presenting_itself_is_beyond_the_control) | \(.presenting_itself_gain_of_a_thread_exceeds_the_spread) (\(.presenting_itself_minus_beside_us)) | \(.presenting_itself_queue_full_p99_us | list) | \(.presenting_itself_queue_full_is_beyond_the_control) | \(.presenting_itself_queue_full_gain_of_a_thread_exceeds_the_spread) (\(.presenting_itself_queue_full_minus_beside_us)) |") else "| \($cell) | \(.path // .arguments) | | \((.error // .status // "") | gsub("\\|"; "/")) | | | | | | | | | | |" end' "$file"
+    done
+    echo
+    echo "Each segment of the pace: the lateness of the ticks in microseconds, the frames the loop made and those it did not make because a tick was due or the place was taken, what the presenter answered, and how busy the machine was:"
+    echo
+    echo "| Cell | Path | Round | Window is | Loop | Ticks | Lateness median | 99th percentile | Largest | Tick's own work | Frames made | Not made | Presenter | Machine busy (percent) |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.pace // [])[] | . as $run | (.segments // [])[] | "| \($cell) | \($run.path) | \(.round) | \(.window) | \(.loop) | \(.ticks) | \(.lateness_median_us) | \(.lateness_p99_us) | \(.lateness_max_us) | \(.tick_work_median_us) | \(.frames_made) | \(.frames_not_made) | \(.presenter_outcomes | map("\(.outcome): \(.turns)") | join("; ")) | \(.machine_busy_percent // "n/a") |"' "$file"
+    done
+    echo
+    echo "A key injected at the platform's level, the time each library gives it and the time the host receives it, in microseconds against the injection, and the platform's own message as a hook beneath the library sees it:"
+    echo
+    echo "| Cell | Library | Pump period (ms) | Injection | Injected, refused, delivered | Host receives after injection (median, 99th, largest) | Library gives a time | Library's time minus injection (smallest, median, largest) | Host receives after the library's time (smallest, median, largest) | Platform's time minus tick count at injection, in ms (smallest, median, largest; distinct values) | Tick count's step (ms) | Access to the platform's event |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r 'def three: if . == null then "n/a" else "\(.min_us), \(.median_us), \(.max_us)" end; .cell as $cell | (.injected_events // [])[] | "| \($cell) | \(.library // .arguments) | \(.pump_period_ms // "") | \(.injection // "") | \(if .injected == null then (.not_run // .error // .status // "") else "\(.injected), \(.injections_refused), \(.delivered)\(if .refusal then " (\(.refusal))" else "" end)" end) | \(if .host_receives_after_injection then "\(.host_receives_after_injection.median_us), \(.host_receives_after_injection.p99_us), \(.host_receives_after_injection.max_us)" else "n/a" end) | \(if .library_gives_a_time == null then "n/a" else .library_gives_a_time end) | \(.library_time_minus_injection | three) | \(.host_receives_after_the_library_time | three) | \(if .platform_time_minus_tick_count_at_injection_ms then (.platform_time_minus_tick_count_at_injection_ms | "\(.min), \(.median), \(.max); \(.distinct_values)") else "n/a" end) | \(.tick_count_step_ms // "n/a") | \(.access_to_the_platform_event // "n/a") |"' "$file"
+    done
+    echo
+    echo "The host's loop while Windows moves, then resizes, the window: its passes during the gesture, the longest time without one, and what the library ran meanwhile:"
+    echo
+    echo "| Cell | Library | Host loop | Remedy | Gesture | System loop entered, left | Held (ms) | Passes of the host's loop | Longest time without a pass (ms) | Events the host received meanwhile | Calls of SDL's event watch meanwhile |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r 'def counts: map("\(.event): \(.count)") | join(", "); .cell as $cell | (.move_and_resize_loop // [])[] | . as $run | if .gestures then (.gestures[] | "| \($cell) | \($run.library) | \($run.host_loop) | \($run.remedy) | \(.gesture) | \(.entered_the_system_loop), \(.left_the_system_loop) | \(.held_ms) | \(.passes_of_the_host_loop_during_the_gesture) | \(.longest_time_without_a_pass_ms) | \(.events_the_host_received_during_the_gesture | counts) | \(.calls_of_the_event_watch_during_the_gesture | counts) |") else "| \($cell) | \(.library // .arguments) | \(.host_loop // "") | | \((.not_run // .error // .status // "") | gsub("\\|"; "/")) | | | | | | |" end' "$file"
+    done
+    echo
+    for file in "${facts[@]}"; do
+      jq -r 'select(.not_run_without_a_real_display != null) | "- \(.cell), not run: \(.not_run_without_a_real_display)."' "$file"
+    done
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;
