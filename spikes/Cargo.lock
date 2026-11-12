@@ -1453,6 +1453,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "multiplayer-test-rounds"
+version = "0.1.0"
+dependencies = [
+ "reference-workload",
+ "test-recording-round-trip",
+ "workload-lockstep",
+]
+
+[[package]]
 name = "naga"
 version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

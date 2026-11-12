@@ -49,6 +49,7 @@ members = [
     "physics-prepared-geometry",
     "physics-snapshot-every-tick",
     "visual-reference-round-trip",
+    "multiplayer-test-rounds",
 ]
 
 [profile.release]

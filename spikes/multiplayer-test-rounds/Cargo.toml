@@ -1,0 +1,12 @@
+[package]
+name = "multiplayer-test-rounds"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: several peers of an agreed game hosted as worlds of one process and driven by rounds through a relay over seeded links, with a schedule, an oracle of agreement, a recording per world and a round table, for the game testing research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }
+workload-lockstep = { path = "../workload-lockstep" }
+test-recording-round-trip = { path = "../test-recording-round-trip" }

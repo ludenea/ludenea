@@ -1907,6 +1907,77 @@ case "$spike" in
       jq -r '"- `\(.cell)`: carried references compare as designed: \(.hypotheses.carried_references_compare_as_designed | if . == null then "not run" else . end); causes not reported as designed: \(.hypotheses.causes_not_reported_as_designed // "not run"); the pixel file holds: \(.hypotheses.pixel_file_holds | if . == null then "not run" else . end)."' "$file"
     done
     ;;
+  multiplayer-test-rounds)
+    echo "The hypotheses per cell and profile:"
+    echo
+    echo "| Cell | Profile | Order of the peers changes nothing under the two conditions | One random state for both directions lets the order in | Schedules repeat their history | Oracle reports the desync at its first divergent tick | Recordings replay alone and the round table places them |"
+    echo "| --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.hypotheses as $h | "| \(.cell) | \(.profile) | \($h.order_of_the_peers_changes_nothing_under_the_two_conditions) | \($h.one_random_state_for_both_directions_lets_the_order_in) | \($h.schedules_repeat_their_history) | \($h.oracle_reports_the_desync_at_its_first_divergent_tick) | \($h.recordings_replay_alone_and_the_round_table_places_them) |"' "$file"
+    done
+    echo
+    echo "The order of the peers (the history of a run is three hashes: every peer's hash at every confirmed tick, the round table with the hash each world held at each round, and the link logs; the last three columns are a link whose two directions share one random state):"
+    echo
+    echo "| Cell | Profile | Peers | Workers per world | Rounds | Tick hashes | Round table | Link logs | Messages lost | Shuffles with the fixed order's history | A round run at once gives it | Threads | Shuffles that change the link logs | The round table | The tick hashes |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '. as $r | .order_of_the_peers[] | .one_random_state_for_both_directions as $s | "| \($r.cell) | \($r.profile) | \(.peers) | \(.workers_per_world) | \(.rounds) | \(.tick_hashes) | \(.round_table_hash) | \(.link_log_hash) | \(.messages_lost) | \(.permutations_with_the_fixed_order_history) of \(.permutations) | \(.round_run_at_once_gives_the_fixed_order_history) | \(.threads_of_the_round_run_at_once) | \($s.permutations_that_change_the_link_log) | \($s.permutations_that_change_the_round_table) | \($s.permutations_that_change_the_tick_hashes) |"' "$file"
+    done
+    echo
+    echo "Distinct histories per count of peers across every cell, profile and worker budget (1 means one set everywhere):"
+    echo
+    jq -r -s '[.[] | .order_of_the_peers[]] | group_by(.peers) | .[] | "- \(.[0].peers) peers: \([.[].tick_hashes] | unique | length) distinct tick hashes, \([.[].round_table_hash] | unique | length) distinct round tables, \([.[].link_log_hash] | unique | length) distinct link logs across \(length) report(s); with one random state for both directions and the fixed order, \([.[].one_random_state_for_both_directions.link_log_hash] | unique | length) distinct link logs."' "${facts[@]}"
+    echo
+    echo "The schedules:"
+    echo
+    echo "| Cell | Profile | Schedule | Events | Rounds | Rounds with no schedule | Tick hashes | Round table | Link logs | Every run one history | Replayed from its recorded events | Differs from the run with no schedule | Tick hashes of the run with no schedule | Last confirmed ticks | Stalled rounds per peer |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '. as $r | .schedules[] | "| \($r.cell) | \($r.profile) | \(.schedule) | \(.events) | \(.rounds) | \(.rounds_with_no_schedule) | \(.tick_hashes) | \(.round_table_hash) | \(.link_log_hash) | \(.every_run_one_history) | \(.replayed_from_its_recorded_events_gives_that_history) | \(.history_differs_from_the_run_with_no_schedule) | \(.tick_hashes_are_those_of_the_run_with_no_schedule) | \(.last_confirmed_ticks) | \(.stalled_rounds_per_peer) |"' "$file"
+    done
+    echo
+    jq -r -s '[.[] | .schedules[]] | group_by(.schedule) | .[] | "- The \(.[0].schedule) schedule: \([.[] | [.tick_hashes, .round_table_hash, .link_log_hash]] | unique | length) distinct history(ies) and \([.[].events_as_recorded] | unique | length) distinct list(s) of events across \(length) report(s)."' "${facts[@]}"
+    echo
+    echo "The oracle (seven orders per case: the fixed one, five shuffles, a round run at once):"
+    echo
+    echo "| Cell | Profile | Case | Injected at tick | Into peer | Reported at tick, per order | Reported at round, per order | Rollbacks, per order | As expected in every order |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '. as $r | .oracle[] | "| \($r.cell) | \($r.profile) | \(.case) | \(.injected_at_tick) | \(.injected_into_peer) | \(.reported_at_tick_per_order) | \(.reported_at_round_per_order) | \(.rollbacks_per_order) | \(.as_expected_in_every_order) |"' "$file"
+    done
+    echo
+    echo "The recordings of one run of four peers, one of which rolls back, and its round table:"
+    echo
+    echo "| Cell | Profile | Rounds | Rollbacks | Recordings that replay alone to their hashes | Bytes per recording | Rounds of the table checked | Worlds placed at their recorded hash | Not placed | Of which stood ahead of their confirmed tick | Round table bytes | Link log artifact entries | Link log artifact bytes |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '. as $r | .recordings | "| \($r.cell) | \($r.profile) | \(.rounds) | \(.rollbacks) | \([.each_alone[] | select(.replays_alone_to_its_recorded_hashes)] | length) of \(.each_alone | length) | \([.each_alone[].file_bytes] | unique | map(tostring) | join(", ")) | \(.round_table_rounds_checked) | \(.worlds_placed_at_their_recorded_hash) | \(.worlds_not_placed) | \(.of_which_stood_ahead_of_their_confirmed_tick) | \(.round_table_bytes) | \(.link_log_artifact_entries) | \(.link_log_artifact_bytes) |"' "$file"
+    done
+    echo
+    echo "The fixture's preparation, from the creations to every peer's first agreed tick, in milliseconds:"
+    echo
+    echo "| Cell | Profile | Peers | Entities per peer | Rounds | Creations, median | Rounds, median | Total, median | Total, fastest | Total, slowest |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '. as $r | .fixture_preparation[] | "| \($r.cell) | \($r.profile) | \(.peers) | \(.entities_per_peer) | \(.rounds_to_the_first_agreed_tick) | \(.creations_median_ms) | \(.rounds_median_ms) | \(.total_median_ms) | \(.total_fastest_ms) | \(.total_slowest_ms) |"' "$file"
+    done
+    echo
+    echo "The pace:"
+    echo
+    echo "| Cell | Profile | Peers | The peers of a round run | Threads | Rounds | Fastest ms | Rounds per second | Microseconds per peer and round |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '. as $r | .pace[] | "| \($r.cell) | \($r.profile) | \(.peers) | \(.the_peers_of_a_round_run) | \(.threads) | \(.rounds) | \(.fastest_ms) | \(.rounds_per_second) | \(.microseconds_per_peer_and_round) |"' "$file"
+    done
+    echo
+    echo "The link log:"
+    echo
+    echo "| Cell | Profile | Entry bytes | Ring bytes per link | Messages of a run of 16 peers | Bytes carried per message | Run with the log, ms | Run without, ms | A link alone with the log, ns per message | Without, ns per message |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '. as $r | .link_log | "| \($r.cell) | \($r.profile) | \(.entry_bytes) | \(.ring_bytes_per_link) | \(.messages) | \(.bytes_carried_per_message) | \(.fastest_ms_with_the_log) | \(.fastest_ms_without_the_log) | \(.nanoseconds_per_message_on_a_link_alone_with_the_log) | \(.nanoseconds_per_message_on_a_link_alone_without_the_log) |"' "$file"
+    done
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;
