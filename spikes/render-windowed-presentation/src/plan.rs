@@ -148,6 +148,12 @@ impl Drop for Servers {
 /// Runs a program to its end or to its limit and gives the JSON object it
 /// printed last, with the display it ran under, or what happened instead.
 fn run(program: &Path, words: &[String], display: &Display, limit: Duration) -> Json {
+    run_with(program, words, display, limit, 0)
+}
+
+/// As `run`, and with `trace` above zero the child logs the Wayland protocol
+/// it speaks, whose last lines are kept with its answer.
+fn run_with(program: &Path, words: &[String], display: &Display, limit: Duration, trace: usize) -> Json {
     let mut command = Command::new(program);
     command.args(words).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     for name in &display.unset {
@@ -155,6 +161,9 @@ fn run(program: &Path, words: &[String], display: &Display, limit: Duration) -> 
     }
     for (name, value) in &display.set {
         command.env(name, value);
+    }
+    if trace > 0 {
+        command.env("WAYLAND_DEBUG", "1");
     }
     let failure = |status: String, standard_error: &str, printed: &str| {
         let tail = |text: &str| text.chars().rev().take(600).collect::<Vec<_>>().into_iter().rev().collect::<String>();
@@ -190,7 +199,16 @@ fn run(program: &Path, words: &[String], display: &Display, limit: Duration) -> 
     let errors = errors.and_then(|thread| thread.join().ok()).unwrap_or_default();
     let object = printed.lines().rev().map(str::trim).find(|line| line.starts_with('{') && line.ends_with('}'));
     match (status, object) {
-        (Some(status), Some(object)) if status.success() => Json::Raw(format!("{{\"under\":{},{}", Json::from(display.name.clone()).print(), &object[1..])),
+        (Some(status), Some(object)) if status.success() => {
+            let traced = if trace > 0 {
+                let lines: Vec<&str> = errors.lines().collect();
+                let kept = lines[lines.len().saturating_sub(trace)..].iter().map(|line| Json::from(*line)).collect::<Vec<_>>();
+                format!("\"protocol_trace_lines\":{},\"protocol_trace_tail\":{},", lines.len(), Json::List(kept).print())
+            } else {
+                String::new()
+            };
+            Json::Raw(format!("{{\"under\":{},{traced}{}", Json::from(display.name.clone()).print(), &object[1..]))
+        }
         (Some(status), _) => failure(format!("ended with {status}"), &errors, &printed),
         (None, _) => failure(format!("killed after {} seconds without an end", limit.as_secs()), &errors, &printed),
     }
@@ -433,6 +451,19 @@ pub fn run_plan(options: &Options) -> Json {
             }
         }
         facts.set("presentation_modes", Json::List(runs));
+        // Under the Wayland compositor, the synchronized mode once more with
+        // the protocol logged, the presenter on each of its two places, with
+        // no gesture: what a presenter that does not return was waiting for.
+        #[cfg(target_os = "linux")]
+        if let Some((path, found)) = devices.iter().find(|(path, found)| *path == "vulkan" && !found.is_empty()) {
+            let wayland = servers.wayland();
+            let device = index(&found[0]);
+            let mut traced = Vec::new();
+            for (library, presenter) in [("winit", "presentation-thread"), ("winit", "platform-thread"), ("sdl3", "presentation-thread"), ("sdl3", "platform-thread")] {
+                traced.push(run_with(&program, &words("soak", &[("library", library), ("path", path), ("device", &device), ("mode", "synchronized"), ("frames", "300"), ("presenter", presenter), ("gestures", "none")]), &wayland, Duration::from_secs(120), 80));
+            }
+            facts.set("synchronized_under_wayland_with_the_protocol_logged", Json::List(traced));
+        }
     }
 
     if options.with_display {
