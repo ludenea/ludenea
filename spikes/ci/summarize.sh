@@ -1280,6 +1280,96 @@ case "$spike" in
       jq -r '"- `\(.cell)`: thread names with the stream running: \((.device_form.report.thread_names_with_the_stream_running // []) | join(", ")); audio modules: \((.device_form.report.audio_modules_with_the_stream_running // .device_form.report.audio_modules_after_the_lookup // .device_form.report.audio_modules_after_the_failure // []) | join(", "))."' "$file"
     done
     ;;
+  workload-asset-table)
+    echo "The verdict of each hypothesis per cell (the cost of a handle is a magnitude, judged on one quiet machine; the others are identities):"
+    echo
+    echo "| Cell | Profile | Size | Ticks | CPUs | A handle's cost | Wants | The gate during a run | A revision as one batch | The table under the hash | A save read by another process | One resident copy |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.hypotheses as $h | "| \(.cell) | \(.profile) | \(.size) | \(.ticks) | \(.platform.available_parallelism) | \($h.a_handles_cost) | \($h.wants) | \($h.the_gate_during_a_run) | \($h.a_revision_as_one_batch) | \($h.the_table_under_the_hash) | \($h.a_save_read_by_another_process) | \($h.one_resident_copy) |"' "$file"
+    done
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: reference run hash \(.reference_run_hash); the oracle with every leaf at the specification equals the reference \(.oracle_with_every_leaf_at_the_specification_equals_reference); the sequential reference runs \(.reference_ticks_per_second) ticks per second."' "$file"
+    done
+    echo
+    echo "A handle's cost: every entity names one of the distinct assets, resolved in the table once per chunk and distinct asset, against the world that reads one runtime value and has no asset (ratios of ticks per second to that world, in alternating rounds; the generational index form is recorded beside):"
+    echo
+    echo "| Cell | Workers | Form | Distinct assets | Rounds | Best | Median | Ratio of bests | Ratio of medians | Resolutions per tick | Allocations in the timed step | Every run matches the reference |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .handle_cost[] | "| \($cell) | \(.workers) | \(.form) | \(.distinct_assets) | \(.rounds) | \(.best_ticks_per_second) | \(.median_ticks_per_second) | \(.ratio_of_bests) | \(.ratio_of_medians) | \(.resolutions_per_tick) | \(.allocations_in_the_timed_step) | \(.every_run_matches_reference) |"' "$file"
+    done
+    echo
+    echo "Wants (scripted: two entities want one asset and are despawned one after the other by the workload; a root is wanted, answered with its closure by one batch, then released; an arrival names an asset no want names; an asset is wanted again after it fell):"
+    echo
+    echo "| Cell | Workers | State run hash | First divergent tick from the oracle | Replayed at | Record ticks | Log bytes | Checks that fail |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .wants.runs[] | "| \($cell) | \(.workers) | \(.state_run_hash) | \(.first_divergent_tick_from_oracle) | \(.replay_workers) workers | \(.record_ticks) | \(.log_bytes) | \([to_entries[] | select(.value == false) | .key] | if length == 0 then "none" else join(", ") end) |"' "$file"
+    done
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: the owners are the entities of slots \(.wants.first_owner_slot) and \(.wants.second_owner_slot), despawned at ticks \(.wants.first_owner_despawned_at) and \(.wants.second_owner_despawned_at); the table after a fifth of the run is \(.wants.table_bytes_after_a_fifth_of_the_run) bytes, hash \(.wants.table_hash_after_a_fifth_of_the_run)."' "$file"
+    done
+    distinct="$(jq -r '.profile + " " + .size + " " + (.wants.runs[].state_run_hash)' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+    echo "- Distinct state run hashes of the wants scenario across every cell and worker count, per profile and size (1 per profile and size means identical everywhere): $distinct."
+    distinct="$(jq -r '.profile + " " + .size + " " + .wants.table_hash_after_a_fifth_of_the_run' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+    echo "- Distinct hashes of the table's canonical bytes after a fifth of the run, per profile and size: $distinct."
+    echo
+    echo "The gate during a run (a live loader with a real delay: the composition's required set before the first tick, an instance made from a root with a closure of three levels, an instance made from a corrupt root, a required want nothing answers and the host releases):"
+    echo
+    echo "| Cell | Workers | Loader delay | Loader delays ms | Step while loading | Gates (before tick: unanswered, waited ms) | Step without waiting | Step with a deadline, waited ms | Record ticks | State run hash | First divergent tick from the oracle | Checks that fail |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .gate.runs[] | "| \($cell) | \(.workers) | \(.delay) | \(.loader_delays_ms) | \(.step_while_loading) | \([.gates[] | "\(.before_tick): \(.unanswered), \(.waited_ms)"] | join("; ")) | \(.step_without_waiting.ticks_ran) ticks, gated \(.step_without_waiting.gated), \(.step_without_waiting.unanswered) | \(.step_with_a_deadline.ticks_ran) ticks, gated \(.step_with_a_deadline.gated), \(.deadline_waited_ms) | \(.record_ticks) | \(.state_run_hash) | \(.first_divergent_tick_from_oracle) | \([to_entries[] | select(.value == false) | .key] | if length == 0 then "none" else join(", ") end) |"' "$file"
+    done
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: \(.gate.distinct_state_run_hashes) distinct state run hash value(s) across its delays and worker counts; the failed required asset as the step names it: \([.gate.runs[].step_through_two_gates.failed_required] | unique | join(" / "))."' "$file"
+    done
+    distinct="$(jq -r '.profile + " " + .size + " " + (.gate.runs[].state_run_hash)' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+    echo "- Distinct state run hashes of the gate scenario across every cell, delay and worker count, per profile and size: $distinct."
+    echo
+    echo "A revision as one batch (eight payloads landing one by one in a random order while the world steps, posted once all are resident; then two revisions posted before one drain):"
+    echo
+    echo "| Cell | Workers | Spread ms | Payloads landed at ms | Landing order | Identifier order | Tick at the first payload | Applied at tick | Partial applications compared | Merged at tick | Record ticks | First divergent tick from the oracle | Checks that fail |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .revision | "| \($cell) | \(.workers) | \(.spread_ms) | \(.payloads_landed_at_ms) | \(.landing_order) | \(.identifier_order) | \(.tick_at_the_first_payload) | \(.applied_at_tick) | \(.partial_applications_compared) | \(.merged_at_tick) | \(.record_ticks) | \(.first_divergent_tick_from_oracle) | \([to_entries[] | select(.value == false) | .key] | if length == 0 then "none" else join(", ") end) |"' "$file"
+    done
+    echo
+    echo "The table under the hash (two worlds equal in every component, different in the hash of one asset no entity names):"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.table_under_the_hash as $t | "- `\(.cell)`: components equal at every tick \($t.components_equal_at_every_tick); state hashes differ from the arrival \($t.state_hashes_differ_from_the_arrival); table of \($t.table_bytes) bytes, hashes \($t.table_hash_of_the_one) and \($t.table_hash_of_the_other)."' "$file"
+    done
+    distinct="$(jq -r '.table_under_the_hash | .table_hash_of_the_one + " " + .table_hash_of_the_other' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+    echo "- Distinct pairs of table hashes across every cell (1 means the canonical bytes are identical everywhere): $distinct."
+    echo
+    echo "A save read by another process (the world saved at half of the run, then read as a new run on its answers and to continue its history):"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: saved at tick \(.save.saved_at_tick), \(.save.save_bytes) bytes, table hash \(.save.table_hash_at_the_save); the run matches its oracle \(.save.matches_oracle); a reload during the run instantiates the instance again \(.save.a_reload_instantiates_again); state run hash \(.save.state_run_hash)."' "$file"
+    done
+    echo
+    echo "| Cell | Reader | Another process | Refused | Refused for, at hash, reason | Assets awaited | First tick waits for every answer | Answers in the first record | Reload events on the answers | Failure events | Instantiations | Instance failed | Step names | Record unchanged | Confirmations in the record | Matches expected | First divergent tick | Holds |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .save.readers[].report | "| \($cell) | \(.mode) | \(if .in_another_process == null then "n/a" else .in_another_process end) | \(if .refused == null then "n/a" else .refused end) | \(if .refused then "\(.refused_for), \(.refused_at_hash), \(.reason)" else (.error // "") end) | \(.assets_awaited // "n/a") | \(.first_tick_waits_for_every_answer // "n/a") | \(.answers_in_the_first_record // "n/a") | \(.reload_events_on_the_answers // "n/a") | \(.failure_events_on_the_answers // "n/a") | \(.instantiations_of_the_instance // "n/a") | \(if .instance_failed == null then "n/a" else .instance_failed end) | \(.step.failed_required // "n/a") | \(if .record_unchanged == null then "n/a" else .record_unchanged end) | \(.confirmations_in_the_record // "n/a") | \(if .matches_expected == null then "n/a" else .matches_expected end) | \(.first_divergent_tick // "n/a") | \(.holds) |"' "$file"
+    done
+    echo
+    distinct="$(jq -r '.profile + " " + .size + " " + .save.state_run_hash + " " + .save.table_hash_at_the_save' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+    echo "- Distinct state run hashes and table hashes of the saved run across every cell, per profile and size: $distinct."
+    echo
+    echo "One resident copy (the live blocks of the size of the large asset's canonical part, counted by the allocator, while the worlds of one process hold it):"
+    echo
+    echo "| Cell | Worlds | Part bytes | Artifact reads | Available midway | Copies midway | References midway | Available at the end | Copies at the end | References at the end | Peak copies | Copies with a deliberate second one | Distinct run hashes | Holds |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .one_resident_copy | "| \($cell) | \(.worlds) | \(.part_bytes) | \(.reads_of_the_artifact) | \(.worlds_holding_it_available_midway) | \(.copies_midway) | \(.references_held_by_worlds_midway) | \(.worlds_holding_it_available_at_the_end) | \(.copies_at_the_end) | \(.references_held_by_worlds_at_the_end) | \(.peak_copies) | \(.copies_with_a_deliberate_second_one) | \(.distinct_run_hashes) | \(.holds) |"' "$file"
+    done
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;

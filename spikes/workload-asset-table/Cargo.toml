@@ -1,0 +1,10 @@
+[package]
+name = "workload-asset-table"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: the reference workload reading its repulsion parameters through asset handles resolved in a world's asset table, with wants and their owners, a loading gate evaluated on the pending input record, revisions applied as one batch, the table under the state hash, a save read by another process and one resident copy shared by sixteen worlds, for the assets research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }

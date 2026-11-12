@@ -42,6 +42,7 @@ members = [
     "scripting-runtime/systems",
     "scripting-runtime/module",
     "render-device-baseline",
+    "workload-asset-table",
 ]
 
 [profile.release]
