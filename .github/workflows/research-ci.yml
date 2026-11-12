@@ -12,9 +12,19 @@
 # image's default is MSVC) and another set of cells (for example the oldest
 # runner images the engine's baseline must support, or a Linux cell inside a
 # minimal container image).
+#
+# On a schedule, a run measures the visual reference round trip spike: the key
+# each cell reports is recorded every day for eight weeks, from 13 November
+# 2026 to 7 January 2027, to count how often a hosted runner's key moves
+# (spikes/visual-reference-round-trip/key-record.sh reads the record). The two
+# schedules name those days and no others of the winter; they are to be
+# removed once the record is read, or they start again in November.
 name: Research CI
 
 on:
+  schedule:
+    - cron: "23 5 * 11,12 *"
+    - cron: "23 5 1-7 1 *"
   push:
     branches: [main]
     paths:
@@ -53,7 +63,9 @@ permissions:
   contents: read
 
 env:
-  SPIKE: ${{ inputs.spike || 'platform-facts' }}
+  # The spike a run on demand names; on a schedule, the spike whose keys are
+  # recorded; on a push or a pull request, the platform facts.
+  SPIKE: ${{ inputs.spike || (github.event_name == 'schedule' && 'visual-reference-round-trip') || 'platform-facts' }}
   RUSTFLAGS: ${{ inputs.rustflags }}
   SPIKE_PROFILE: ${{ inputs.profile || 'release' }}
   # CMake reads the compiler of a C or C++ spike from these; the run script

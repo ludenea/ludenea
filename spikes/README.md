@@ -21,7 +21,7 @@ The workflow [`research-ci.yml`](../.github/workflows/research-ci.yml) builds an
 | `windows-arm64`  | `windows-11-arm`   | Windows 11, ARM64         |
 | `macos-arm64`    | `macos-15`         | macOS 15, Apple silicon   |
 
-The workflow runs on pushes and pull requests that touch `spikes/` (Markdown files excepted: a README edit is not a measurement) or the workflow, and on demand. Each cell is independent: one failing cell never cancels the others, because every cell is a measurement, and a later run never cancels an earlier one for the same reason.
+The workflow runs on pushes and pull requests that touch `spikes/` (Markdown files excepted: a README edit is not a measurement) or the workflow, and on demand. From 13 November 2026 to 7 January 2027 it also runs every day on a schedule, to measure the [visual reference round trip spike](visual-reference-round-trip/): the key each cell reports is recorded for eight weeks, and the schedule is removed once that record is read. Each cell is independent: one failing cell never cancels the others, because every cell is a measurement, and a later run never cancels an earlier one for the same reason.
 
 On demand (`workflow_dispatch`), a run can pick another spike, pass extra `RUSTFLAGS` to a Rust spike, build a Rust spike with another Cargo profile (`dev` for an unoptimized build with debug assertions), build a C or C++ spike with another compiler (`cxx`, exported as `CC` and `CXX`; empty keeps the platform's default), and run on another set of cells given as a JSON list. Four uses of the cross-platform compatibility, determinism and physics research:
 
