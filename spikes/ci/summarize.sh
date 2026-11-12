@@ -1991,6 +1991,14 @@ case "$spike" in
       jq -r '.cell as $cell | (.interfaces // [])[] | select(.available == false) | "| \($cell) | \(.interface) | unavailable: \(.reason) | | | | |"' "$file"
     done
     echo
+    echo "The check of the adapter behind the port, on each device (the lines that fail, with what was found):"
+    echo
+    echo "| Cell | Device | Lines that hold | Lines that fail |"
+    echo "| --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.devices // [])[] | .report | "| \($cell) | \(.device.name // "unknown") (\(.interface // "?")) | \([(.adapter_check // [])[] | select(.holds)] | length) of \((.adapter_check // []) | length) | \([(.adapter_check // [])[] | select(.holds | not) | "\(.check): \(.found | gsub("\|"; "/"))"] | join("; ")) |"' "$file"
+    done
+    echo
     echo "The content hash of two frames (tick 30 at the factor 0.5, tick 60 at 0.25), prepared with each arithmetic at 1, 4 and 8 workers:"
     echo
     echo "| Cell | Math layer, tick 30 | Math layer, tick 60 | One value at every worker count | Platform's arithmetic, tick 30 | Platform's arithmetic, tick 60 | One value at every worker count |"
@@ -2039,6 +2047,14 @@ case "$spike" in
     echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
     for file in "${facts[@]}"; do
       jq -r "$sources"' .cell as $cell | sources[] | .device as $d | .m.shared_device | if . == null then "| \($cell) | \($d) | not run | | | | | | | | | | | |" elif .error then "| \($cell) | \($d) | \(.error) | | | | | | | | | | | |" else (.counts[] | "| \($cell) | \($d) | \(.worlds) | \(.frames_measured_per_world) | \(.frame_cost_per_world_us) | \(.frame_cost_against_one_world) | \(.stages_processor_time_per_frame_us) | \(.presenter_time_per_frame_us) | \(.most_frames_in_flight) | \(.stage_medians_us.device) | \(.device_memory_bytes.per_world_targets) | \(.device_memory_bytes.per_world_geometry_of_tile_blocks) | \(.device_memory_bytes.instance_transient_targets_at_peak) | \(.device_memory_bytes.instance_textures + .device_memory_bytes.instance_geometry) |") end' "$file"
+    done
+    echo
+    echo "The ratio the claim on sixteen worlds is judged on, on the content device, over five series (fastest, median, slowest), with a control in which each world has an instance, a device and a presenter of its own:"
+    echo
+    echo "| Cell | 4 worlds against one | 16 worlds against one | 16 worlds that share nothing against one |"
+    echo "| --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r 'def three: if . == null then "not run" else "\(.min), \(.median), \(.max)" end; .content_device.shared_device as $s | "| \(.cell) | \($s.frame_cost_at_4_worlds_against_one_over_five_series | three) | \($s.frame_cost_at_16_worlds_against_one_over_five_series | three) | \($s.frame_cost_at_16_worlds_with_an_instance_each_against_one_over_five_series | three) |"' "$file"
     done
     echo
     echo "A loss simulated at the port:"

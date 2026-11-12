@@ -183,6 +183,26 @@ fn child(arguments: &[String]) {
         return;
     }
     drop(opened);
+    // The adapter's own check first: what the measurements stand on.
+    let check = match api.open_frames(index, false) {
+        Ok(device) => render_device_baseline::frames::check(device.as_ref())
+            .iter()
+            .map(|line| {
+                let mut out = Json::new();
+                out.object_start();
+                out.string("check", line.name);
+                out.bool("holds", line.outcome.is_ok());
+                out.string("found", match &line.outcome {
+                    Ok(found) | Err(found) => found,
+                });
+                out.object_end();
+                out.finish()
+            })
+            .collect(),
+        Err(reason) => vec![format!("{{\"check\":\"the device opens\",\"holds\":false,\"found\":{}}}", quoted(&reason))],
+    };
+    entries.push(("adapter_check".to_string(), array_of(&check)));
+    let _ = std::fs::write(report, object_of(&entries));
     if let [pictures, label] = rest {
         let _ = scenarios::PICTURES.set((PathBuf::from(pictures), label.clone()));
     }

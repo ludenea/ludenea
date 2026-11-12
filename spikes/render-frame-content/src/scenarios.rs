@@ -321,39 +321,7 @@ pub fn shared_device(out: &mut Json, backend: Backend) -> Result<(), String> {
     let mut cost_at_one = None;
     for count in [1_u32, 4, 16] {
         let rig = Rig::new(backend, Presenter::Thread)?;
-        let barrier = Barrier::new(count as usize);
-        let results: Mutex<Vec<Result<Vec<FrameTimes>, String>>> = Mutex::new(Vec::new());
-        let started = Mutex::new(None);
-        std::thread::scope(|threads| {
-            for id in 0..count {
-                let (rig, barrier, results, started) = (&rig, &barrier, &results, &started);
-                threads.spawn(move || {
-                    let mut world = RenderedWorld::new(rig, id, Size::Default, 1, 1);
-                    world.step(2);
-                    let warm = world.warm_up::<MathLayer>(&Request { content_hash: false, ..request(2, 1.0, false, Mode::ORDINARY) });
-                    barrier.wait();
-                    let begun = *started.lock().unwrap().get_or_insert_with(Instant::now);
-                    let mut frames = Vec::new();
-                    let outcome = warm.and_then(|()| {
-                        while frames.len() < frames_wanted && (frames.len() < 3 || begun.elapsed() < deadline) {
-                            world.step(1);
-                            let tick = world.world.tick();
-                            let delivered = world.capture::<MathLayer>(&Request { tick, factor: 1.0, reproducible: false, content_hash: false, mode: Mode::ORDINARY })?;
-                            frames.push(delivered.times);
-                        }
-                        Ok(frames)
-                    });
-                    results.lock().unwrap().push(outcome);
-                });
-            }
-        });
-        let mut per_world_cost = Vec::new();
-        let mut all = Vec::new();
-        for result in results.into_inner().unwrap() {
-            let frames = result?;
-            per_world_cost.push(frames.iter().map(|times| times.latency_us).sum::<f64>() / frames.len() as f64);
-            all.extend(frames);
-        }
+        let (per_world_cost, all) = worlds_series(std::slice::from_ref(&rig), count, frames_wanted, deadline)?;
         let cost = per_world_cost.iter().sum::<f64>() / per_world_cost.len() as f64;
         let processor = all.iter().map(|times| times.refresh.processor_us + times.prepare.processor_us + times.sort.processor_us + times.declare_us + times.record.processor_us).sum::<f64>() / all.len() as f64;
         let presenter = rig.instance.presenter_counters();
@@ -376,7 +344,67 @@ pub fn shared_device(out: &mut Json, backend: Backend) -> Result<(), String> {
         out.object_end();
     }
     out.array_end();
+    if !backend.draws_pixels() {
+        // The ratio the claim is judged on, over five series, and a control:
+        // sixteen worlds that share nothing, each with an instance, a device
+        // and a presentation thread of its own.
+        let cost = |count: u32, an_instance_each: bool| -> Result<f64, String> {
+            let rigs = (0..if an_instance_each { count } else { 1 }).map(|_| Rig::new(backend, Presenter::Thread)).collect::<Result<Vec<Rig>, String>>()?;
+            let (per_world_cost, _) = worlds_series(&rigs, count, frames_wanted, deadline)?;
+            Ok(per_world_cost.iter().sum::<f64>() / per_world_cost.len() as f64)
+        };
+        let (mut four, mut sixteen, mut apart) = (Vec::new(), Vec::new(), Vec::new());
+        for _ in 0..5 {
+            let one = cost(1, false)?;
+            four.push(cost(4, false)? / one);
+            sixteen.push(cost(16, false)? / one);
+            apart.push(cost(16, true)? / one);
+        }
+        write_summary(out, "frame_cost_at_4_worlds_against_one_over_five_series", &four);
+        write_summary(out, "frame_cost_at_16_worlds_against_one_over_five_series", &sixteen);
+        write_summary(out, "frame_cost_at_16_worlds_with_an_instance_each_against_one_over_five_series", &apart);
+    }
     Ok(())
+}
+
+/// Steps and draws `count` worlds at once, each on its own thread, and
+/// returns each world's mean frame cost and every frame's times. The worlds
+/// share the one instance given, or take one each when as many are given.
+fn worlds_series(rigs: &[Rig], count: u32, frames_wanted: usize, deadline: Duration) -> Result<(Vec<f64>, Vec<FrameTimes>), String> {
+    let barrier = Barrier::new(count as usize);
+    let results: Mutex<Vec<Result<Vec<FrameTimes>, String>>> = Mutex::new(Vec::new());
+    let started = Mutex::new(None);
+    std::thread::scope(|threads| {
+        for id in 0..count {
+            let (rig, barrier, results, started) = (&rigs[id as usize % rigs.len()], &barrier, &results, &started);
+            threads.spawn(move || {
+                let mut world = RenderedWorld::new(rig, id, Size::Default, 1, 1);
+                world.step(2);
+                let warm = world.warm_up::<MathLayer>(&Request { content_hash: false, ..request(2, 1.0, false, Mode::ORDINARY) });
+                barrier.wait();
+                let begun = *started.lock().unwrap().get_or_insert_with(Instant::now);
+                let mut frames = Vec::new();
+                let outcome = warm.and_then(|()| {
+                    while frames.len() < frames_wanted && (frames.len() < 3 || begun.elapsed() < deadline) {
+                        world.step(1);
+                        let tick = world.world.tick();
+                        let delivered = world.capture::<MathLayer>(&Request { tick, factor: 1.0, reproducible: false, content_hash: false, mode: Mode::ORDINARY })?;
+                        frames.push(delivered.times);
+                    }
+                    Ok(frames)
+                });
+                results.lock().unwrap().push(outcome);
+            });
+        }
+    });
+    let mut per_world_cost = Vec::new();
+    let mut all = Vec::new();
+    for result in results.into_inner().unwrap() {
+        let frames = result?;
+        per_world_cost.push(frames.iter().map(|times| times.latency_us).sum::<f64>() / frames.len() as f64);
+        all.extend(frames);
+    }
+    Ok((per_world_cost, all))
 }
 
 fn write_memory(out: &mut Json, port: &Port, worlds: u32) {
