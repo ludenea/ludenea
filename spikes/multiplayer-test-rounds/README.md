@@ -63,4 +63,46 @@ The five cells of the research CI and a developer machine (Windows 11), in the r
 
 ## Result
 
-Not measured yet.
+Measured on 2026-11-12 on the five cells of the research CI in the release profile ([run](https://github.com/ludenea/ludenea/actions/runs/43284528151)) and in the unoptimized one ([run](https://github.com/ludenea/ludenea/actions/runs/43284534815)), and on a developer machine (AMD Ryzen 9 9950X3D, Windows 11) in both. Rust 1.99.1. The raw measurements, the recordings, the round table, the schedules as recorded and the last entries of the link logs are in the runs' artifacts.
+
+1. **The order of the peers: holds, and the hashes at every tick do not show it.** Under the two conditions, the twenty shuffles and the round run at once give the fixed order's history, its three hashes, at 2, 4 and 16 peers and at one and two workers per world, on every machine and in both profiles. With one random state for both directions of a link, each of the twenty shuffles changes the link logs and the round table, and none changes the hash of a tick, at every size and on every machine: the ticks of a lockstep game are fixed by their inputs, and the order of the peers is seen in when they are stepped.
+
+   | Peers | Rounds for 60 ticks | Messages, of which lost | Shuffles with the fixed order's history | A round run at once gives it | With one random state: shuffles that change the link logs, the round table, the tick hashes |
+   | --- | --- | --- | --- | --- | --- |
+   | 2 | 150 | 600, 32 | 20 of 20 | yes | 20, 20, 0 |
+   | 4 | 153 | 1 224, 64 | 20 of 20 | yes | 20, 20, 0 |
+   | 16 | 175 | 5 600, 309 | 20 of 20 | yes | 20, 20, 0 |
+
+2. **The repetition: holds.** The three hashes of the fixed order's history are one set on the five cells, in both profiles, at both worker budgets and on the developer machine, 24 reports per size:
+
+   | Peers | Hashes at every tick | Round table | Link logs |
+   | --- | --- | --- | --- |
+   | 2 | `1f9ec3579e90f541` | `d3db2f31f1b170cf` | `5ae06a7d39fcfba8` |
+   | 4 | `24e69849abbfa875` | `abd64058b22cc0fd` | `d1d09c198c602790` |
+   | 16 | `7d4bf6729e86b5e5` | `d5518de8266d07ab` | `cc38ae6f37bbcc5a` |
+
+3. **The schedule: holds.** The written schedule of seven events and the schedule of nineteen events drawn from the seed each give one history in three runs, the same from the text of their recorded events, and the same on every machine and in both profiles. Every peer confirms the 90 ticks; the run takes 246 rounds under the written schedule and 267 under the drawn one, against 228 with none; the hashes at every tick are those of the run with no schedule.
+4. **The oracle: holds.** The kick applied at tick 23 and never sent is reported at tick 23 in the seven orders of each setting, and in the same round in every order: round 63 with every peer in lockstep, round 60 with the kick in a lockstep peer beside a peer that rolls back, round 61 with the kick in the peer that rolls back. With no kick the oracle reports nothing, the peer that rolls back having rolled back 31 times.
+5. **The recordings: hold.** The four recordings, 29 kilobytes each for 90 ticks, replay alone to every hash they hold, the one of the peer that rolled back 46 times among them. For 24 rounds of the 233 in the round table, each of the four worlds replayed alone to the confirmed tick the table gives it holds the hash recorded for that tick: 96 worlds placed, none misplaced, 23 of them worlds that stood ahead of their confirmed tick at that round. The round table is 7.6 kilobytes as text. The recording round trip spike's replay does not read these files: it expects one input record per tick.
+6. **The fixture's cost.** The preparation takes three rounds over the link with no latency. From the creations to every peer's first agreed tick, median of five in milliseconds:
+
+   | Peers of 1 000 entities | Release, the five cells | Unoptimized, the five cells | Developer machine, release |
+   | --- | --- | --- | --- |
+   | 2 | 0.23 to 0.33 | 2.0 to 3.4 | 0.16 |
+   | 4 | 0.46 to 0.64 | 3.9 to 6.8 | 0.31 |
+   | 16 | 2.0 to 3.2 | 17 to 30 | 1.5 |
+
+7. **The pace**, in rounds per second in release, the peers of a round in turn and at once (on four threads on the Linux and Windows cells, three on the macOS cell):
+
+   | Cell | 2 peers | 4 peers | 16 peers | 64 peers |
+   | --- | --- | --- | --- | --- |
+   | `linux-x86_64` | 5 465 and 8 040 | 2 844 and 4 686 | 691 and 1 410 | 115 and 274 |
+   | `linux-arm64` | 6 426 and 10 360 | 3 213 and 6 662 | 736 and 1 908 | 121 and 363 |
+   | `windows-x86_64` | 4 162 and 5 323 | 2 102 and 3 647 | 498 and 1 103 | 88 and 220 |
+   | `windows-arm64` | 6 281 and 8 591 | 3 140 and 7 511 | 714 and 2 122 | 118 and 400 |
+   | `macos-arm64` | 5 282 and 6 432 | 2 249 and 4 050 | 512 and 1 558 | 91 and 293 |
+
+   In turn a round costs 78 to 126 microseconds per peer at 2 to 16 peers and 129 to 179 at 64. Run at once the peers go 1.2 to 3.4 times faster. Unoptimized, a round in turn costs 650 to 1 350 microseconds per peer at 2 to 16 peers.
+8. **The link log.** An entry is 30 bytes; a link's ring of 256 entries is 7 680 bytes; a message carries 750 bytes on average at 16 peers. On a link alone a message costs 123 to 257 nanoseconds without the log and 13 to 30 more with it, in release. A run of 16 peers does not resolve the difference: 91.1 to 137.4 milliseconds with the log and 91.0 to 135.4 without.
+
+Not measured here, and not held by the spike: the loss of a peer, a late join, a leave and a return, for which the relay has no rule; the predicates of progress and of agreement at rest; a trace; an authority with its replicas; a world that leaves the replay promise; physics; the real transport; a recording read on another cell; and a fixture whose worlds carry content, on which the cost of its preparation would turn.
