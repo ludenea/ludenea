@@ -24,7 +24,7 @@ use std::cell::OnceCell;
 use std::path::Path;
 use std::ptr;
 
-use crate::backend::{Api, Device, DeviceInfo, DeviceKind, Setting};
+use crate::backend::{Api, Device, DeviceInfo, DeviceKind, SceneShaders, Setting};
 use crate::loader::Library;
 use ffi::*;
 use gpu::Gpu;
@@ -181,7 +181,15 @@ impl Api for Direct3d12 {
         }
         let gpu = self.create_gpu(adapter)?;
         let collector = if validation { Some(validation::Collector::attach(gpu.raw())?) } else { None };
-        Ok(Box::new(device::Direct3d12Device::new(gpu, &self.shaders, collector)?))
+        Ok(Box::new(device::Direct3d12Device::new(gpu, std::borrow::Cow::Borrowed(&self.shaders), collector)?))
+    }
+
+    fn open_with_scene_shaders(&self, index: usize, scene: &SceneShaders) -> Result<Box<dyn Device + '_>, String> {
+        let adapter = self.adapters.get(index).ok_or_else(|| format!("no DXGI adapter at index {index} ({} enumerated)", self.adapters.len()))?;
+        let mut shaders = self.shaders.clone();
+        shaders.scene_vertex = scene.vertex.clone();
+        shaders.scene_pixel = scene.fragment.clone();
+        Ok(Box::new(device::Direct3d12Device::new(self.create_gpu(adapter)?, std::borrow::Cow::Owned(shaders), None)?))
     }
 
     fn software_settings(&self, device: &DeviceInfo) -> Vec<Setting> {

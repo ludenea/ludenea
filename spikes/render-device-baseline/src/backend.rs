@@ -332,6 +332,36 @@ pub struct Setting {
     pub affinity_cpus: Option<u32>,
 }
 
+/// The two stages of the filtering and blending scene in a form a toolchain
+/// made, in place of the source the interface compiles itself: SPIR-V on
+/// Vulkan, DXIL on Direct3D 12, a Metal library or Metal text on Metal. The
+/// shaders must meet the bindings the scene's specification gives for the
+/// interface. On Vulkan both entry points are named `main`. On Direct3D 12
+/// the vertex inputs carry the semantics `POSITION`, `TEXCOORD` and `COLOR`.
+/// On Metal the vertex function takes its inputs as the attributes 0, 1 and
+/// 2 of a vertex descriptor, which the pipeline then has.
+#[derive(Clone, Debug)]
+pub struct SceneShaders {
+    pub vertex: Vec<u8>,
+    pub fragment: Vec<u8>,
+    /// The names of the two functions, which Metal looks up.
+    pub vertex_entry: String,
+    pub fragment_entry: String,
+    /// On Metal, whether the bytes are Metal text, which the platform
+    /// compiles when it is loaded, or a Metal library.
+    pub metal_text: bool,
+}
+
+/// What loading the scene's shaders and building its pipelines took on the
+/// last render, where an interface measures it.
+#[derive(Clone, Copy, Debug)]
+pub struct ShaderLoad {
+    /// The two stages made into libraries of the device.
+    pub libraries_us: f64,
+    /// The scene's two pipelines built from them.
+    pub pipelines_us: f64,
+}
+
 /// One graphics interface, loaded.
 pub trait Api {
     /// `vulkan`, `direct3d12` or `metal`.
@@ -344,6 +374,9 @@ pub trait Api {
     fn devices(&self) -> Vec<DeviceInfo>;
     /// Creates the device at `index` from scratch.
     fn open(&self, index: usize, validation: bool) -> Result<Box<dyn Device + '_>, String>;
+    /// Creates the device at `index` from scratch, with the scene's shaders
+    /// in the form given instead of those the interface compiles itself.
+    fn open_with_scene_shaders(&self, index: usize, shaders: &SceneShaders) -> Result<Box<dyn Device + '_>, String>;
     /// The settings under which a software device is measured again; empty
     /// for a device that has none.
     fn software_settings(&self, device: &DeviceInfo) -> Vec<Setting>;
@@ -359,6 +392,11 @@ pub trait Device {
     /// read from the environment, the sample positions), for the reference key.
     fn settings(&self) -> String;
     fn render_scene(&mut self, scene: &Scene, recording: Recording) -> Result<SceneRender, String>;
+    /// What loading the scene's shaders took on the last render of the
+    /// scene, where the interface measures it.
+    fn scene_shader_load(&self) -> Option<ShaderLoad> {
+        None
+    }
     fn compute(&mut self, scene: &Scene) -> Result<ComputeOutput, String>;
     fn pass_through(&mut self, scene: &Scene) -> Result<Image, String>;
     fn lit(&mut self, scene: &Scene, variant: LitVariant, repetitions: usize) -> Result<LitRender, String>;

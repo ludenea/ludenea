@@ -17,13 +17,13 @@ pub struct Direct3d12Device<'a> {
     scene: Option<FilteringScene>,
     collector: Option<Collector>,
     pattern: filtering::SamplePattern,
-    shaders: &'a Shaders,
+    shaders: std::borrow::Cow<'a, Shaders>,
     /// Dropped last: every object above is released before the device.
     gpu: Gpu,
 }
 
 impl<'a> Direct3d12Device<'a> {
-    pub fn new(gpu: Gpu, shaders: &'a Shaders, collector: Option<Collector>) -> Result<Direct3d12Device<'a>, String> {
+    pub fn new(gpu: Gpu, shaders: std::borrow::Cow<'a, Shaders>, collector: Option<Collector>) -> Result<Direct3d12Device<'a>, String> {
         let pattern = filtering::SamplePattern::choose(&gpu)?;
         Ok(Direct3d12Device { scene: None, collector, pattern, shaders, gpu })
     }
@@ -52,7 +52,7 @@ impl Device for Direct3d12Device<'_> {
 
     fn render_scene(&mut self, scene: &Scene, recording: Recording) -> Result<SceneRender, String> {
         if self.scene.is_none() {
-            self.scene = Some(FilteringScene::create(&mut self.gpu, self.shaders, scene, self.pattern.sample)?);
+            self.scene = Some(FilteringScene::create(&mut self.gpu, &self.shaders, scene, self.pattern.sample)?);
         }
         match &self.scene {
             Some(resources) => resources.render(&mut self.gpu, scene, recording),
@@ -61,15 +61,15 @@ impl Device for Direct3d12Device<'_> {
     }
 
     fn compute(&mut self, scene: &Scene) -> Result<ComputeOutput, String> {
-        exercises::compute(&mut self.gpu, self.shaders, scene)
+        exercises::compute(&mut self.gpu, &self.shaders, scene)
     }
 
     fn pass_through(&mut self, scene: &Scene) -> Result<Image, String> {
-        exercises::pass_through(&mut self.gpu, self.shaders, scene)
+        exercises::pass_through(&mut self.gpu, &self.shaders, scene)
     }
 
     fn lit(&mut self, scene: &Scene, variant: LitVariant, repetitions: usize) -> Result<LitRender, String> {
-        lit::render(&mut self.gpu, self.shaders, scene, variant, repetitions)
+        lit::render(&mut self.gpu, &self.shaders, scene, variant, repetitions)
     }
 
     fn validation_delivery(&self) -> String {

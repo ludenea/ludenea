@@ -27,7 +27,7 @@ use std::fs;
 use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
 
-use crate::backend::{Api, Capability, ComputeOutput, Device, DeviceInfo, DeviceKind, LitRender, LitVariant, Recording, SceneRender, Setting};
+use crate::backend::{Api, Capability, ComputeOutput, Device, DeviceInfo, DeviceKind, LitRender, LitVariant, Recording, SceneRender, SceneShaders, Setting, ShaderLoad};
 use crate::loader::Library;
 use crate::scene::{Image, Scene};
 
@@ -172,6 +172,21 @@ fn metal_environment() -> String {
 }
 
 impl MetalApi {
+    /// Creates the device at `index` from scratch, with the scene's shaders
+    /// in a supplied form when one is given.
+    fn open_device(&self, index: usize, validation: bool, supplied: Option<SceneShaders>) -> Result<Box<dyn Device + '_>, String> {
+        let _pool = Pool::push();
+        let capture = if validation { Some(self.start_validation()?) } else { None };
+        let devices = self.list_devices()?;
+        let listed = devices.len();
+        let device = devices.into_iter().nth(index).ok_or_else(|| format!("there is no Metal device at index {index}: {listed} listed"))?;
+        let queue = Owned::adopt(send!(Id; device.id(), "newCommandQueue")?, "newCommandQueue")?;
+        let settings = format!("{}; {}", sample_positions(device.id()), metal_environment());
+        let clock = Clock::read(device.id());
+        let gpu = Gpu { device, queue, timestamp_set: self.timestamp_set.clone(), clock };
+        Ok(Box::new(MetalDevice { api: self, gpu: ManuallyDrop::new(gpu), settings, capture, supplied, shader_load: None }))
+    }
+
     /// Every device the framework lists, each with a reference of its own;
     /// the system's default device where the list is empty.
     fn list_devices(&self) -> Result<Vec<Owned>, String> {
@@ -248,16 +263,11 @@ impl Api for MetalApi {
     }
 
     fn open(&self, index: usize, validation: bool) -> Result<Box<dyn Device + '_>, String> {
-        let _pool = Pool::push();
-        let capture = if validation { Some(self.start_validation()?) } else { None };
-        let devices = self.list_devices()?;
-        let listed = devices.len();
-        let device = devices.into_iter().nth(index).ok_or_else(|| format!("there is no Metal device at index {index}: {listed} listed"))?;
-        let queue = Owned::adopt(send!(Id; device.id(), "newCommandQueue")?, "newCommandQueue")?;
-        let settings = format!("{}; {}", sample_positions(device.id()), metal_environment());
-        let clock = Clock::read(device.id());
-        let gpu = Gpu { device, queue, timestamp_set: self.timestamp_set.clone(), clock };
-        Ok(Box::new(MetalDevice { api: self, gpu: ManuallyDrop::new(gpu), settings, capture }))
+        self.open_device(index, validation, None)
+    }
+
+    fn open_with_scene_shaders(&self, index: usize, shaders: &SceneShaders) -> Result<Box<dyn Device + '_>, String> {
+        self.open_device(index, false, Some(shaders.clone()))
     }
 
     fn software_settings(&self, _device: &DeviceInfo) -> Vec<Setting> {
@@ -277,6 +287,10 @@ struct MetalDevice<'a> {
     settings: String,
     /// The standard error captured for the validation layer's messages.
     capture: Option<StandardErrorCapture>,
+    /// The scene's shaders in a form a toolchain made, when one was given.
+    supplied: Option<SceneShaders>,
+    /// What loading the scene's shaders took on the last render.
+    shader_load: Option<ShaderLoad>,
 }
 
 impl Drop for MetalDevice<'_> {
@@ -300,7 +314,17 @@ impl Device for MetalDevice<'_> {
 
     fn render_scene(&mut self, scene: &Scene, recording: Recording) -> Result<SceneRender, String> {
         let _pool = Pool::push();
-        scene_pass::render(&self.gpu, &self.api.sources.scene, scene, recording)
+        let stages = match &self.supplied {
+            Some(shaders) => scene_pass::Stages::Supplied(shaders),
+            None => scene_pass::Stages::Source(&self.api.sources.scene),
+        };
+        let (render, load) = scene_pass::render(&self.gpu, &stages, scene, recording)?;
+        self.shader_load = Some(load);
+        Ok(render)
+    }
+
+    fn scene_shader_load(&self) -> Option<ShaderLoad> {
+        self.shader_load
     }
 
     fn compute(&mut self, scene: &Scene) -> Result<ComputeOutput, String> {

@@ -22,7 +22,7 @@ use std::path::Path;
 use std::process::Command;
 use std::ptr;
 
-use crate::backend::{Api, Capability, ComputeOutput, Device, DeviceInfo, LitRender, LitVariant, Recording, SceneRender, Setting};
+use crate::backend::{Api, Capability, ComputeOutput, Device, DeviceInfo, LitRender, LitVariant, Recording, SceneRender, SceneShaders, Setting};
 use crate::loader::Library;
 use crate::scene::{Image, Scene};
 use ffi::*;
@@ -80,6 +80,7 @@ fn compile_glsl(compiler: &str, source: &Path, work: &Path, label: &str, defines
 }
 
 /// The SPIR-V of every stage the module uses.
+#[derive(Clone)]
 pub struct Shaders {
     pub scene_vertex: Vec<u32>,
     pub scene_fragment: Vec<u32>,
@@ -166,7 +167,21 @@ impl Api for VulkanApi {
 
     fn open(&self, index: usize, validation: bool) -> Result<Box<dyn Device + '_>, String> {
         let gpu = Gpu::open(&self.library, index, validation)?;
-        Ok(Box::new(VulkanDevice { gpu, shaders: &self.shaders }))
+        Ok(Box::new(VulkanDevice { gpu, shaders: std::borrow::Cow::Borrowed(&self.shaders) }))
+    }
+
+    fn open_with_scene_shaders(&self, index: usize, scene: &SceneShaders) -> Result<Box<dyn Device + '_>, String> {
+        let words = |bytes: &[u8], what: &str| {
+            if bytes.len() % 4 != 0 || bytes.len() < 20 {
+                return Err(format!("the {what} stage given is not a SPIR-V module ({} bytes)", bytes.len()));
+            }
+            Ok(bytes.as_chunks::<4>().0.iter().map(|word| u32::from_le_bytes(*word)).collect::<Vec<u32>>())
+        };
+        let mut shaders = self.shaders.clone();
+        shaders.scene_vertex = words(&scene.vertex, "vertex")?;
+        shaders.scene_fragment = words(&scene.fragment, "fragment")?;
+        let gpu = Gpu::open(&self.library, index, false)?;
+        Ok(Box::new(VulkanDevice { gpu, shaders: std::borrow::Cow::Owned(shaders) }))
     }
 
     fn software_settings(&self, device: &DeviceInfo) -> Vec<Setting> {
@@ -199,7 +214,7 @@ impl Api for VulkanApi {
 
 struct VulkanDevice<'a> {
     gpu: Gpu,
-    shaders: &'a Shaders,
+    shaders: std::borrow::Cow<'a, Shaders>,
 }
 
 impl VulkanDevice<'_> {
@@ -248,19 +263,19 @@ impl Device for VulkanDevice<'_> {
     }
 
     fn render_scene(&mut self, scene: &Scene, recording: Recording) -> Result<SceneRender, String> {
-        filtering::render(&self.gpu, self.shaders, scene, recording)
+        filtering::render(&self.gpu, &self.shaders, scene, recording)
     }
 
     fn compute(&mut self, scene: &Scene) -> Result<ComputeOutput, String> {
-        compute::run(&self.gpu, self.shaders, scene)
+        compute::run(&self.gpu, &self.shaders, scene)
     }
 
     fn pass_through(&mut self, scene: &Scene) -> Result<Image, String> {
-        pass_through::run(&self.gpu, self.shaders, scene)
+        pass_through::run(&self.gpu, &self.shaders, scene)
     }
 
     fn lit(&mut self, scene: &Scene, variant: LitVariant, repetitions: usize) -> Result<LitRender, String> {
-        lit::render(&self.gpu, self.shaders, scene, variant, repetitions)
+        lit::render(&self.gpu, &self.shaders, scene, variant, repetitions)
     }
 
     fn validation_delivery(&self) -> String {

@@ -10,6 +10,9 @@ pub const PIXEL_FORMAT_R32_UINT: usize = 53;
 pub const PIXEL_FORMAT_RGBA8_UNORM: usize = 70;
 /// `MTLPixelFormatRGBA8Unorm_sRGB`.
 pub const PIXEL_FORMAT_RGBA8_UNORM_SRGB: usize = 71;
+/// `MTLVertexFormatFloat2` and `MTLVertexFormatFloat4`.
+pub const VERTEX_FORMAT_FLOAT2: usize = 29;
+pub const VERTEX_FORMAT_FLOAT4: usize = 31;
 /// `MTLPixelFormatRGBA16Float`.
 pub const PIXEL_FORMAT_RGBA16_FLOAT: usize = 115;
 /// `MTLPixelFormatDepth32Float`.

@@ -105,6 +105,31 @@ impl Gpu {
         self.compile(file, source).map(|(library, _)| library)
     }
 
+    /// A library from the bytes of a Metal library compiled ahead.
+    pub fn library_from_bytes(&self, what: &str, bytes: &[u8]) -> Result<Owned, String> {
+        unsafe extern "C" {
+            fn dispatch_data_create(buffer: *const std::ffi::c_void, size: usize, queue: *mut std::ffi::c_void, destructor: *mut std::ffi::c_void) -> Id;
+            fn dispatch_release(object: Id);
+        }
+        // SAFETY: with no destructor given the system copies the bytes, so
+        // the data object owns its storage; it is an object of the runtime
+        // and is released once the library has been made from it.
+        let data = unsafe { dispatch_data_create(bytes.as_ptr().cast(), bytes.len(), ptr::null_mut(), ptr::null_mut()) };
+        if data.is_null() {
+            return Err(format!("dispatch_data_create gave no data for {what}"));
+        }
+        let mut error: Id = ptr::null_mut();
+        let library = send!(Id; self.device.id(), "newLibraryWithData:error:", Id: data, *mut Id: &mut error);
+        // SAFETY: the data object was created above and the library, when
+        // one was made, keeps what it needs of it.
+        unsafe { dispatch_release(data) };
+        let library = library?;
+        if library.is_null() {
+            return Err(format!("newLibraryWithData:error: for {what}: {}", error_text(error)));
+        }
+        Owned::adopt(library, "newLibraryWithData:error:")
+    }
+
     pub fn compute_pipeline(&self, function: &Owned, what: &str) -> Result<Owned, String> {
         let mut error: Id = ptr::null_mut();
         let pipeline = send!(Id; self.device.id(), "newComputePipelineStateWithFunction:error:", Id: function.id(), *mut Id: &mut error)?;
@@ -115,9 +140,36 @@ impl Gpu {
     }
 
     pub fn render_pipeline(&self, shape: &PipelineShape) -> Result<Owned, String> {
+        self.build_render_pipeline(shape, false)
+    }
+
+    /// A pipeline whose vertex function takes the scene's vertices as the
+    /// attributes 0, 1 and 2 of a vertex descriptor (position, four floats;
+    /// uv, two; color, four; 40 bytes a vertex, from the buffer at index 0),
+    /// as a shader made by a toolchain does, where the spike's own source
+    /// reads the buffer by vertex index.
+    pub fn render_pipeline_with_scene_attributes(&self, shape: &PipelineShape) -> Result<Owned, String> {
+        self.build_render_pipeline(shape, true)
+    }
+
+    fn build_render_pipeline(&self, shape: &PipelineShape, scene_attributes: bool) -> Result<Owned, String> {
         let descriptor = new_object("MTLRenderPipelineDescriptor")?;
         send!((); descriptor.id(), "setVertexFunction:", Id: shape.vertex.id())?;
         send!((); descriptor.id(), "setFragmentFunction:", Id: shape.fragment.id())?;
+        if scene_attributes {
+            let vertices = new_object("MTLVertexDescriptor")?;
+            let attributes = present(send!(Id; vertices.id(), "attributes")?, "attributes of the vertex descriptor")?;
+            for (index, (format, offset)) in [(values::VERTEX_FORMAT_FLOAT4, 0_usize), (values::VERTEX_FORMAT_FLOAT2, 16), (values::VERTEX_FORMAT_FLOAT4, 24)].into_iter().enumerate() {
+                let attribute = present(send!(Id; attributes, "objectAtIndexedSubscript:", usize: index)?, "objectAtIndexedSubscript: of the vertex attributes")?;
+                send!((); attribute, "setFormat:", usize: format)?;
+                send!((); attribute, "setOffset:", usize: offset)?;
+                send!((); attribute, "setBufferIndex:", usize: 0)?;
+            }
+            let layouts = present(send!(Id; vertices.id(), "layouts")?, "layouts of the vertex descriptor")?;
+            let layout = present(send!(Id; layouts, "objectAtIndexedSubscript:", usize: 0)?, "objectAtIndexedSubscript: of the vertex layouts")?;
+            send!((); layout, "setStride:", usize: 40)?;
+            send!((); descriptor.id(), "setVertexDescriptor:", Id: vertices.id())?;
+        }
         // The property was named `sampleCount` before `rasterSampleCount` replaced it.
         if answers(descriptor.id(), "setRasterSampleCount:") {
             send!((); descriptor.id(), "setRasterSampleCount:", usize: shape.samples)?;

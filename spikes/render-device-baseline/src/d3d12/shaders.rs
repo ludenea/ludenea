@@ -11,6 +11,7 @@ use super::gpu::{blob_bytes, blob_text};
 use crate::loader::c_string;
 
 /// The bytecode of every entry point the module draws or dispatches with.
+#[derive(Clone)]
 pub struct Shaders {
     pub scene_vertex: Vec<u8>,
     pub scene_pixel: Vec<u8>,

@@ -10,7 +10,7 @@ use std::ffi::c_void;
 use std::sync::Barrier;
 use std::time::Instant;
 
-use crate::backend::{Recording, SceneRender};
+use crate::backend::{Recording, SceneRender, SceneShaders, ShaderLoad};
 use crate::scene::{self, Draw, Encoding, Image, Scene};
 
 use super::gpu::{self, ColorAttachment, ColorTarget, DepthAttachment, Gpu, PipelineShape, TextureShape};
@@ -78,19 +78,45 @@ impl ChunkJob<'_> {
 }
 
 impl Resources {
-    fn create(gpu: &Gpu, source: &str, scene: &Scene) -> Result<Resources, String> {
-        let library = gpu.library(FILE, source)?;
-        let vertex = gpu::function(&library, FILE, "scene_vertex")?;
-        let fragment = gpu::function(&library, FILE, "scene_fragment")?;
-        let pipeline = |what: &str, blended: bool| {
-            gpu.render_pipeline(&PipelineShape { what, vertex: &vertex, fragment: &fragment, colors: &[ColorTarget { format: values::PIXEL_FORMAT_RGBA8_UNORM_SRGB, blended }], depth: true, samples: SAMPLES })
+    fn create(gpu: &Gpu, stages: &Stages, scene: &Scene) -> Result<(Resources, ShaderLoad), String> {
+        let started = Instant::now();
+        // The spike's own source reads the vertex buffer by vertex index; a
+        // shader a toolchain made takes its inputs through a vertex descriptor.
+        let (vertex, fragment, supplied) = match stages {
+            Stages::Source(source) => {
+                let library = gpu.library(FILE, source)?;
+                (gpu::function(&library, FILE, "scene_vertex")?, gpu::function(&library, FILE, "scene_fragment")?, false)
+            }
+            Stages::Supplied(shaders) => {
+                let load = |bytes: &[u8], what: &str| {
+                    if shaders.metal_text {
+                        gpu.library(what, std::str::from_utf8(bytes).map_err(|error| format!("{what} is not text: {error}"))?)
+                    } else {
+                        gpu.library_from_bytes(what, bytes)
+                    }
+                };
+                let (vertex_library, fragment_library) = (load(&shaders.vertex, "the supplied vertex stage")?, load(&shaders.fragment, "the supplied fragment stage")?);
+                (
+                    gpu::function(&vertex_library, "the supplied vertex stage", &shaders.vertex_entry)?,
+                    gpu::function(&fragment_library, "the supplied fragment stage", &shaders.fragment_entry)?,
+                    true,
+                )
+            }
         };
+        let libraries_us = microseconds_since(started);
+        let started = Instant::now();
+        let pipeline = |what: &str, blended: bool| {
+            let shape = PipelineShape { what, vertex: &vertex, fragment: &fragment, colors: &[ColorTarget { format: values::PIXEL_FORMAT_RGBA8_UNORM_SRGB, blended }], depth: true, samples: SAMPLES };
+            if supplied { gpu.render_pipeline_with_scene_attributes(&shape) } else { gpu.render_pipeline(&shape) }
+        };
+        let (opaque_pipeline, blended_pipeline) = (pipeline("the scene's opaque pipeline", false)?, pipeline("the scene's blended pipeline", true)?);
+        let load = ShaderLoad { libraries_us, pipelines_us: microseconds_since(started) };
         let target = |what: &str, format: usize, samples: usize| {
             gpu.texture(what, &TextureShape { format, width: WIDTH, height: HEIGHT, levels: 1, samples, usage: values::TEXTURE_USAGE_RENDER_TARGET, private: true })
         };
-        Ok(Resources {
-            opaque_pipeline: pipeline("the scene's opaque pipeline", false)?,
-            blended_pipeline: pipeline("the scene's blended pipeline", true)?,
+        let resources = Resources {
+            opaque_pipeline,
+            blended_pipeline,
             depth_written: gpu.depth_state(true)?,
             depth_tested_only: gpu.depth_state(false)?,
             samplers: samplers(gpu)?,
@@ -102,7 +128,8 @@ impl Resources {
             resolved: target("the scene's resolved target", values::PIXEL_FORMAT_RGBA8_UNORM_SRGB, 1)?,
             read_back: gpu.empty_buffer("the scene's read-back", WIDTH * HEIGHT * BYTES_PER_PIXEL)?,
             timestamps: StageTimestamps::create(gpu).ok(),
-        })
+        };
+        Ok((resources, load))
     }
 
     fn bindings(&self) -> Result<Bindings, String> {
@@ -297,8 +324,15 @@ fn record_and_complete(gpu: &Gpu, resources: &Resources, bindings: &Bindings, sc
     Ok(([recorded_us, submitted_us, render_us], timestamps.filter(|_| timed).and_then(|timestamps| timestamps.elapsed_nanoseconds(gpu))))
 }
 
-pub fn render(gpu: &Gpu, source: &str, scene: &Scene, recording: Recording) -> Result<SceneRender, String> {
-    let resources = Resources::create(gpu, source, scene)?;
+/// Where the scene's two functions come from: the spike's own source, or a
+/// form a toolchain made.
+pub enum Stages<'a> {
+    Source(&'a str),
+    Supplied(&'a SceneShaders),
+}
+
+pub fn render(gpu: &Gpu, stages: &Stages, scene: &Scene, recording: Recording) -> Result<(SceneRender, ShaderLoad), String> {
+    let (resources, load) = Resources::create(gpu, stages, scene)?;
     let bindings = resources.bindings()?;
 
     // A device that offers the timestamps and then fails the pass that takes
@@ -316,5 +350,5 @@ pub fn render(gpu: &Gpu, source: &str, scene: &Scene, recording: Recording) -> R
     let (bytes, readback_polls) = read_back(gpu, &resources)?;
     let readback_us = microseconds_since(started);
     let image = Image::from_rows(scene::WIDTH, scene::HEIGHT, WIDTH * BYTES_PER_PIXEL, &bytes);
-    Ok(SceneRender { image, recorded_us, submitted_us, render_us, readback_us, readback_polls, timestamp_ns })
+    Ok((SceneRender { image, recorded_us, submitted_us, render_us, readback_us, readback_polls, timestamp_ns }, load))
 }
