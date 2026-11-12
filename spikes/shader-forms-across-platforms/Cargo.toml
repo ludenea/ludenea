@@ -1,0 +1,13 @@
+[package]
+name = "shader-forms-across-platforms"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: one small shader set through Slang run as a tool and through a front end to SPIR-V with each of two translators, the forms each chain produces on each development platform, and whether a form made on one platform renders on another, for the rendering research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }
+render-device-baseline = { path = "../render-device-baseline" }
+naga = { version = "=30.0.1", features = ["spv-in", "hlsl-out", "msl-out", "wgsl-in", "spv-out"] }
+spirv-cross2 = { version = "=0.7.2", default-features = false, features = ["hlsl", "msl"] }

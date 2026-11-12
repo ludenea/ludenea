@@ -1,0 +1,17 @@
+// The vertex stage of a lit shader: the engine's template around a surface
+// function's vertex code. Composed by text after the lighting module and
+// the surface: the composition supplies the version line.
+layout(location = 0) in vec4 position;
+layout(location = 1) in vec3 normal;
+layout(location = 2) in vec2 uv;
+layout(location = 0) out vec3 world_position;
+layout(location = 1) out vec3 world_normal;
+layout(location = 2) out vec2 surface_uv;
+
+void main() {
+    vec3 moved = position.xyz + surface_offset(position.xyz, normal);
+    gl_Position = vec4(moved.x, -moved.y, moved.z, position.w);
+    world_position = moved;
+    world_normal = normal;
+    surface_uv = uv;
+}

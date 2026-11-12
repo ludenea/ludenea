@@ -1,0 +1,15 @@
+// A probe around a surface function alone, with no lighting: what an
+// importer compiles to ask a chain which inputs the surface itself uses.
+layout(location = 0) in vec3 world_position;
+layout(location = 1) in vec3 world_normal;
+layout(location = 2) in vec2 surface_uv;
+layout(location = 0) out vec4 out_color;
+
+void main() {
+    SurfaceInput inputs;
+    inputs.uv = Coordinate(surface_uv, dFdx(surface_uv), dFdy(surface_uv));
+    inputs.position = world_position;
+    inputs.normal = world_normal;
+    Surface result = surface(inputs);
+    out_color = vec4(result.base_color + result.emission + result.normal, result.roughness);
+}

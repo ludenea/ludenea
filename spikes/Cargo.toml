@@ -45,6 +45,7 @@ members = [
     "workload-asset-table",
     "asset-import-graph",
     "render-backend-comparison",
+    "shader-forms-across-platforms",
 ]
 
 [profile.release]

@@ -1,0 +1,15 @@
+// The fragment stage of a lit shader: the engine's template, which hands
+// the surface function its interpolated inputs, each coordinate with the
+// differentials of a raster pass, and lights what it returns.
+layout(location = 0) in vec3 world_position;
+layout(location = 1) in vec3 world_normal;
+layout(location = 2) in vec2 surface_uv;
+layout(location = 0) out vec4 out_color;
+
+void main() {
+    SurfaceInput inputs;
+    inputs.uv = Coordinate(surface_uv, dFdx(surface_uv), dFdy(surface_uv));
+    inputs.position = world_position;
+    inputs.normal = world_normal;
+    out_color = vec4(light_surface(surface(inputs), world_position), 1.0);
+}

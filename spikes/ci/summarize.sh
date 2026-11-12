@@ -1533,6 +1533,59 @@ case "$spike" in
     inputs="$(jq -r '.inputs.scene_hash' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
     echo "- the inputs: $inputs distinct hash value(s) across every cell (the scene is the same bytes everywhere)."
     ;;
+  shader-forms-across-platforms)
+    echo "One small shader set through Slang run as a tool and through a front end to SPIR-V with each of two translators, to the four forms a device takes."
+    echo
+    echo "The tools found on each cell:"
+    echo
+    echo "| Cell | Tool | Found | Version or reason | Origin |"
+    echo "| --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .tools[] | "| \($cell) | \(.name) | \(.found) | \((.version // .reason) | gsub("\\|"; "/")) | \(.origin // "") |"' "$file"
+    done
+    echo
+    echo "The forms each chain produces on each cell (stages made of the 13 of the shader set; the stages not made; the first reason; median and slowest import in milliseconds):"
+    echo
+    echo "| Cell | Chain | Form | Made | Not made | First reason | Median ms | Slowest ms |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .forms_per_chain[] | "| \($cell) | \(.chain) | \(.form) | \(.made) of \(.stages) | \(.not_made) | \((.first_reason // "") | .[0:300] | gsub("\\|"; "/")) | \(.median_milliseconds // "n/a") | \(.slowest_milliseconds // "n/a") |"' "$file"
+    done
+    echo
+    echo "A second import from the same sources, and an import after one constant of the lighting module is changed (payloads that call the module, payloads composed with it that call nothing of it, payloads of shaders apart from it: changed and unchanged):"
+    echo
+    echo "| Cell | Chain | Compared twice | Differ on the second import | Call the module: changed, unchanged | Composed only: changed, unchanged | Apart: changed, unchanged | Every payload that calls it changes | No payload apart from it changes |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.a_second_import | map({(.chain): .}) | add) as $twice | .a_change_of_the_lighting_module[] | "| \($cell) | \(.chain) | \($twice[.chain].payloads_compared) | \($twice[.chain].payloads_that_differ) | \(.that_call_the_module_changed), \(.that_call_the_module_unchanged) | \(.composed_with_it_and_calling_nothing_of_it_changed), \(.composed_with_it_and_calling_nothing_of_it_unchanged) | \(.of_shaders_apart_from_it_changed), \(.of_shaders_apart_from_it_unchanged) | \(.every_payload_that_calls_it_changes) | \(.no_payload_apart_from_it_changes) |"' "$file"
+    done
+    echo
+    echo "Payloads that differ on a second import, or change with the lighting module while apart from it, where there are any:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.a_second_import[] | select(.payloads_that_differ > 0) | "- `\($cell)`, \(.chain), differ on a second import: \(.differing)"), (.a_change_of_the_lighting_module[] | select(.apart_and_changed != "") | "- `\($cell)`, \(.chain), apart from the module and changed: \(.apart_and_changed)")' "$file"
+    done
+    echo
+    echo "Whether each chain tells which inputs a surface function uses (reads the view, moves vertices), against what the source has:"
+    echo
+    echo "| Cell | Surface | The source | How it was asked | Reads the view | Moves vertices | As the source has it | Note |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .inputs_a_surface_function_uses[] | .surface as $surface | "\(.reads_the_view), \(.moves_vertices)" as $source | .answers[] | "| \($cell) | \($surface) | \($source) | \(.how) | \(.reads_the_view) | \(.moves_vertices) | \(.as_the_source_has_it) | \((.note // "") | .[0:200] | gsub("\\|"; "/")) |"' "$file"
+    done
+    echo
+    echo "Slang's reflection per form (forms reflected, and whether they name the same stages and parameters):"
+    echo
+    echo "| Cell | Unit | Stage | Forms reflected | The same for every form |"
+    echo "| --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .reflection[] | "| \($cell) | \(.unit) | \(.stage) | \(.slang_forms_reflected) | \(.slang_names_the_same_for_every_form_reflected) |"' "$file"
+    done
+    echo
+    echo "Distinct payload hashes per chain, unit, stage and form across the cells that made the payload (1 means the same bytes on every such cell):"
+    echo
+    jq -r '.imports[] | select(.made) | "\(.chain) \(.unit) \(.stage) \(.form)\t\(.hash)"' "${facts[@]}" | sort -u | awk -F '\t' '{ count[$1] += 1 } END { for (key in count) tally[count[key]] += 1; for (n in tally) print "- " tally[n] " payload(s) with " n " distinct hash value(s)" }' | sort
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;
