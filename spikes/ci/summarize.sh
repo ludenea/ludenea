@@ -1370,6 +1370,96 @@ case "$spike" in
       jq -r '.cell as $cell | .one_resident_copy | "| \($cell) | \(.worlds) | \(.part_bytes) | \(.reads_of_the_artifact) | \(.worlds_holding_it_available_midway) | \(.copies_midway) | \(.references_held_by_worlds_midway) | \(.worlds_holding_it_available_at_the_end) | \(.copies_at_the_end) | \(.references_held_by_worlds_at_the_end) | \(.peak_copies) | \(.copies_with_a_deliberate_second_one) | \(.distinct_run_hashes) | \(.holds) |"' "$file"
     done
     ;;
+  asset-import-graph)
+    echo "The verdict of each hypothesis per cell (the costs of the ready set and of the change journal are magnitudes, judged on one quiet machine; the others are identities and counts):"
+    echo
+    echo "| Cell | Profile | CPUs | Sources | Assets | Source bytes | One domain set | The two-pass graph on the ready set | The cascade stops | The key is complete | The change journal | A revision is atomic | A package is a function of its inputs | A scene-sized source is imported |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.hypotheses as $h | "| \(.cell) | \(.profile) | \(.platform.available_parallelism) | \(.set.sources) | \(.set.assets) | \(.set.source_bytes) | \($h.one_domain_set) | \($h.the_two_pass_graph_on_the_ready_set) | \($h.the_cascade_stops_where_bytes_stop_changing) | \($h.the_key_is_complete) | \($h.the_change_journal) | \($h.a_revision_is_atomic) | \($h.a_package_is_a_function_of_its_inputs) | \($h.a_scene_sized_text_source_is_imported) |"' "$file"
+    done
+    echo
+    echo "One domain set (the full import from an empty cache per worker count and target; the presentation encoder mixes the worker's index into its output):"
+    echo
+    echo "| Cell | Workers | Target | Domain manifest | Canonical actions run | Presentation actions run | Wall ms | Failures |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .one_domain_set.imports[] | "| \($cell) | \(.workers) | \(.target) | \(.domain_manifest) | \(.canonical_actions_run) | \(.presentation_actions_run) | \(.wall_ms) | \(.failures) |"' "$file"
+    done
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.one_domain_set as $o | "- `\(.cell)`: \($o.distinct_domain_manifests) distinct domain manifest(s) across its imports; \($o.distinct_desktop_presentation_manifests) distinct desktop and \($o.distinct_mobile_presentation_manifests) distinct mobile presentation manifests; a presentation manifest shared by the two targets \($o.a_presentation_manifest_shared_by_the_two_targets); each canonical action once for two targets \($o.each_canonical_action_once_for_two_targets)."' "$file"
+    done
+    distinct="$(jq -r '.profile + " " + .domain_manifest' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+    echo "- Distinct domain manifest hashes across every cell, per profile (1 per profile means one domain set everywhere): $distinct."
+    echo
+    echo "The two-pass graph (imports that end with a request and are run again, against every dependency declared in advance):"
+    echo
+    echo "| Cell | Form | Workers | Canonical imports | Ended with a request | Actions run again | Work run twice ms | Wall ms | Waiting share | Same manifest |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .two_pass_graph.imports[] | "| \($cell) | \(.form) | \(.workers) | \(.canonical_imports) | \(.imports_that_ended_with_a_request) | \(.actions_run_again) | \(.work_run_twice_ms) | \(.wall_ms) | \(.waiting_share) | \(.same_manifest) |"' "$file"
+    done
+    echo
+    echo "Many small independent actions on the central ready set (the waiting share is the share of the workers' time spent outside an action):"
+    echo
+    echo "| Cell | Workers | Actions | Microseconds per action | Wall ms | Waiting share |"
+    echo "| --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .two_pass_graph.independent_actions[] | "| \($cell) | \(.workers) | \(.actions) | \(.microseconds_per_action) | \(.wall_ms) | \(.waiting_share) |"' "$file"
+    done
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: a planted cycle of two requests fails both actions naming it \(.two_pass_graph.a_cycle_fails_both_actions_naming_it): \(.two_pass_graph.cycle_failures | .[0:260])"' "$file"
+    done
+    echo
+    echo "The cascade and the key (re-imports on one cache; describe, canonical and presentation actions expected and run):"
+    echo
+    echo "| Cell | Change | Expected | Ran | Exactly the expected actions | Wall ms |"
+    echo "| --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.cascade.re_imports + .the_key_is_complete.re_imports)[] | "| \($cell) | \(.change) | \(.expected_describe_canonical_presentation) | \(.ran_describe_canonical_presentation) | \(.exactly_the_expected_actions) | \(.wall_ms) |"' "$file"
+    done
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.the_key_is_complete as $k | "- `\(.cell)`: the copy names its own siblings \($k.the_copy_names_its_own_siblings); its sprites have the original bytes \($k.the_copy_s_sprites_have_the_original_s_bytes); a duplicate identifier is refused naming both files \($k.a_duplicate_is_refused_naming_both_files) (\($k.the_refusal))."' "$file"
+    done
+    distinct="$(jq -r '.profile + " " + ([(.cascade.re_imports + .the_key_is_complete.re_imports)[].ran_describe_canonical_presentation] | join(" / "))' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+    echo "- Distinct lists of action counts across every cell, per profile: $distinct."
+    echo
+    echo "The change journal (the pass that finds nothing to do against the full import at the same worker count; phases are the scan, the graph, the import actions and the revision):"
+    echo
+    echo "| Cell | Workers | Full import ms | Journal, a metadata call per file: ms, ratio, phases | Journal, facts from the directory listing: ms, ratio, phases | No journal: ms, ratio, phases | Sources digested (journal, none) | Nothing ran | The rewrite in place is missed by the journal | Found by the hermetic pass |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .change_journal | "| \($cell) | \(.workers) | \(.full_import_ms) | \(.nothing_to_do_with_the_journal_ms), \(.ratio_with_the_journal), (\(.scan_graph_imports_revision_ms_with_the_journal)) | \(.nothing_to_do_with_the_journal_and_the_listing_ms), \(.ratio_with_the_journal_and_the_listing), (\(.scan_graph_imports_revision_ms_with_the_journal_and_the_listing)) | \(.nothing_to_do_without_the_journal_ms), \(.ratio_without_the_journal), (\(.scan_graph_imports_revision_ms_without_the_journal)) | \(.sources_digested_with_the_journal), \(.sources_digested_without_the_journal) of \(.sources) | \(.nothing_ran) | \(.the_rewrite_in_place_is_missed_by_the_journal) | \(.the_rewrite_in_place_is_found_by_the_hermetic_pass) |"' "$file"
+    done
+    echo
+    echo "A revision is atomic (the importing process ended from outside at random moments, a reader after each):"
+    echo
+    echo "| Cell | Assets | Another process | An uninterrupted pass ms | Passes | Ended before they finished | Readers with the former revision | Readers with the new revision | Unreadable or mixed | Cache entries at the end | Invalid entries | Unfinished files left | First problem |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .a_revision_is_atomic | "| \($cell) | \(.assets) | \(.the_importing_process_is_another_process) | \(.an_uninterrupted_pass_ms) | \(.passes) | \(.passes_ended_before_they_finished) | \(.readers_that_obtained_the_former_revision) | \(.readers_that_obtained_the_new_revision) | \(.unreadable_or_mixed_revisions) | \(.cache_entries_at_the_end) | \(.invalid_cache_entries) | \(.unfinished_files_left) | \(.first_problem) |"' "$file"
+    done
+    echo
+    echo "Packages (built from the scenes and their closure; a later package from what two manifests say is new, mounted with and without leave to override):"
+    echo
+    echo "| Cell | Entries | Domain package bytes | Domain package hash | Domain slice identical from two caches | Presentation slice identical from one cache | From two caches | Later package: entries, already mounted, new | Later package hash | Overrides the entries it names and no other | Refused for each entry already mounted |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .packages | "| \($cell) | \(.entries) | \(.domain_package_bytes) | \(.domain_package_hash) | \(.domain_slice_identical_from_two_caches) | \(.presentation_slice_identical_from_one_cache) | \(.presentation_slice_identical_from_two_caches) | \(.later_package_entries), \(.later_package_entries_already_mounted), \(.later_package_entries_new) | \(.later_package_hash) | \(.overrides_the_entries_it_names_and_no_other) | \(.refused_for_each_entry_already_mounted) |"' "$file"
+    done
+    echo
+    distinct="$(jq -r '.profile + " " + .packages.domain_package_hash + " " + .packages.later_package_hash' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+    echo "- Distinct pairs of package hashes (the domain package and the later package) across every cell, per profile: $distinct."
+    echo
+    echo "A scene-sized text source (its import into canonical bytes with its validation):"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.scene_sized_source as $s | "- `\(.cell)`: \($s.prototypes) prototypes, \($s.source_bytes) source bytes, \($s.canonical_bytes) canonical bytes; \($s.best_ms) ms at best of \($s.rounds), \($s.best_nanoseconds_per_prototype) ns per prototype at best, \($s.median_nanoseconds_per_prototype) at the median; the part is the pipeline'"'"'s \($s.the_part_is_the_pipeline_s)."' "$file"
+    done
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;
