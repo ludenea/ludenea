@@ -21,6 +21,10 @@ use crate::scenario::{Arguments, EventCounts, Shared, Turns};
 /// A deadlock is no frame presented and no event pumped for this long.
 const DEADLOCK_AFTER: Duration = Duration::from_secs(5);
 
+/// A stall is the presenter finishing no turn for this long while the
+/// platform thread still pumps: a call of the presenter that does not return.
+const STALL_AFTER: Duration = Duration::from_secs(20);
+
 /// Sets a flag when the thread that owns it ends, however it ends.
 struct DoneOnDrop(Arc<Shared>);
 
@@ -68,6 +72,7 @@ fn run_inner(arguments: &Arguments, header: &Json) -> Result<Json, String> {
     host::publish_size(size.0, size.1);
     shared.pumped();
     shared.last_frame_ns.store(now_ns(), Ordering::Relaxed);
+    shared.last_turn_ns.store(now_ns(), Ordering::Relaxed);
     let request = Request {
         path: arguments.text("path", "direct3d12"),
         device: arguments.number("device", 0) as usize,
@@ -106,6 +111,24 @@ fn run_inner(arguments: &Arguments, header: &Json) -> Result<Json, String> {
                             .with("frames_presented", shared.frames_presented.load(Ordering::Relaxed))
                             .with("window_was", crate::scenario::PHASES[shared.phase.load(Ordering::Relaxed).min(4) as usize])
                             .with("milliseconds_since_a_frame", since_frame / 1_000_000)
+                            .with("milliseconds_since_a_pump", since_pump / 1_000_000);
+                        println!("{}", report.print());
+                        std::process::exit(0);
+                    }
+                    // A presenter held inside one call while the platform thread
+                    // still pumps is no deadlock by the definition above, and no
+                    // run either: it is reported as a stall.
+                    let since_turn = now.saturating_sub(shared.last_turn_ns.load(Ordering::Relaxed));
+                    if since_turn > STALL_AFTER.as_nanos() as u64 && !shared.presenter_done.load(Ordering::Relaxed) {
+                        let report = header
+                            .clone()
+                            .with("completed", false)
+                            .with("deadlock", false)
+                            .with("presenter_stalled", true)
+                            .with("error", format!("the presenter did not finish a turn for {} seconds while the platform thread pumped", STALL_AFTER.as_secs()))
+                            .with("frames_presented", shared.frames_presented.load(Ordering::Relaxed))
+                            .with("window_was", crate::scenario::PHASES[shared.phase.load(Ordering::Relaxed).min(4) as usize])
+                            .with("milliseconds_since_a_turn", since_turn / 1_000_000)
                             .with("milliseconds_since_a_pump", since_pump / 1_000_000);
                         println!("{}", report.print());
                         std::process::exit(0);
@@ -187,7 +210,7 @@ fn run_inner(arguments: &Arguments, header: &Json) -> Result<Json, String> {
             pump(host.as_mut(), &shared, &mut counts);
             std::thread::sleep(Duration::from_millis(1));
         }
-        thread.join().map_err(|_| "the presentation thread panicked".to_string())?
+        thread.join().map_err(|payload| format!("the presentation thread panicked: {}", crate::scenario::panic_text(payload.as_ref())))?
     };
     // The gestures end on their own once the presenter is done; the platform
     // thread keeps pumping meanwhile, since a gesture may be waiting for it.

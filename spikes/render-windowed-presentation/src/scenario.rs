@@ -56,6 +56,8 @@ pub const COVERED: u32 = 4;
 pub struct Shared {
     pub last_pump_ns: AtomicU64,
     pub last_frame_ns: AtomicU64,
+    /// When the presenter last finished a turn, whether or not it presented.
+    pub last_turn_ns: AtomicU64,
     pub frames_presented: AtomicU64,
     pub phase: AtomicU32,
     pub gesture_cycles: AtomicU32,
@@ -140,6 +142,7 @@ impl Turns {
             self.phases[phase as usize].offscreen_period.add(completed - self.last_offscreen_ns);
         }
         self.last_offscreen_ns = completed;
+        shared.last_turn_ns.store(completed, Ordering::Relaxed);
         self.last_phase = phase;
         Ok(outcome)
     }
@@ -189,4 +192,11 @@ impl EventCounts {
     pub fn json(&self) -> Json {
         Json::List(self.0.iter().map(|(name, count)| Json::object().with("event", *name).with("count", *count)).collect())
     }
+}
+
+/// The message of a thread's panic, for the report: a library that panics
+/// instead of returning an error is a fact of the measurement.
+pub fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
+    let text = payload.downcast_ref::<String>().cloned().or_else(|| payload.downcast_ref::<&str>().map(|text| text.to_string())).unwrap_or_else(|| "with no message".to_string());
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
