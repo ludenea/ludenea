@@ -70,6 +70,9 @@ unsafe extern "system" {
     fn GetForegroundWindow() -> usize;
     fn SendInput(count: u32, inputs: *const KeyboardInput, size: i32) -> u32;
     fn IsIconic(window: usize) -> i32;
+    fn IsWindowVisible(window: usize) -> i32;
+    fn GetClientRect(window: usize, rect: *mut Rect) -> i32;
+    fn GetWindowLongPtrW(window: usize, index: i32) -> isize;
     fn GetCursorPos(point: *mut Point) -> i32;
     fn SetCursorPos(x: i32, y: i32) -> i32;
     fn EnumDisplaySettingsW(device: *const u16, mode: u32, settings: *mut u8) -> i32;
@@ -389,4 +392,19 @@ pub fn display_facts() -> Json {
         facts.set("compositor_timing_error", format!("DwmGetCompositionTimingInfo failed with HRESULT {:#010x}", result as u32));
     }
     facts
+}
+
+/// The styles, the visibility and the areas of a window, for the report of a
+/// swapchain the system refused to create for it.
+pub fn describe_window(window: usize) -> String {
+    const GWL_STYLE: i32 = -16;
+    const GWL_EXSTYLE: i32 = -20;
+    let mut client = Rect::default();
+    // SAFETY: the calls take a window handle and fill a plain structure.
+    let (style, extended, visible, minimized) = unsafe {
+        GetClientRect(window, &mut client);
+        (GetWindowLongPtrW(window, GWL_STYLE) as u32, GetWindowLongPtrW(window, GWL_EXSTYLE) as u32, IsWindowVisible(window) != 0, IsIconic(window) != 0)
+    };
+    let rect = window_rect(window);
+    format!("style {style:#010x}, extended style {extended:#010x}, visible {visible}, minimized {minimized}, client area {} by {}, window from ({}, {}) to ({}, {})", client.right - client.left, client.bottom - client.top, rect[0], rect[1], rect[2], rect[3])
 }

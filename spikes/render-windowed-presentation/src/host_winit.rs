@@ -37,7 +37,11 @@ impl App {
             .with_window_level(WindowLevel::AlwaysOnTop)
             .with_active(spec.activate);
         if spec.borderless {
-            attributes = attributes.with_decorations(false).with_fullscreen(Some(Fullscreen::Borderless(None)));
+            // Not above the other windows: DXGI refuses a swapchain for a
+            // winit window that is both full screen and above the others
+            // (measured on three devices), and a window that covers its
+            // display needs no such level.
+            attributes = attributes.with_decorations(false).with_fullscreen(Some(Fullscreen::Borderless(None))).with_window_level(WindowLevel::Normal);
         }
         match event_loop.create_window(attributes) {
             Ok(window) => self.window = Some(window),

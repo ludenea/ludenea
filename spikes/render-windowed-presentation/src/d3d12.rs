@@ -415,7 +415,7 @@ impl Direct3d12Presenter {
         let result = unsafe {
             com!(factory.raw(), slot::factory::CREATE_SWAP_CHAIN_FOR_HWND, fn(Object, usize, *const SwapChainDesc1, *const c_void, Object, *mut Object) -> Hresult, queue.raw(), hwnd, &desc, ptr::null(), ptr::null_mut(), &mut first)
         };
-        let first = created(result, first, "IDXGIFactory2::CreateSwapChainForHwnd")?;
+        let first = created(result, first, "IDXGIFactory2::CreateSwapChainForHwnd").map_err(|error| format!("{error}; the swapchain was asked at {} by {}, for a window of {}", desc.width, desc.height, crate::win32::describe_window(hwnd)))?;
         let mut swapchain: Object = ptr::null_mut();
         // SAFETY: the swapchain is live; the call writes the interface asked.
         let result = unsafe { com!(first.raw(), slot::QUERY_INTERFACE, fn(*const Guid, *mut Object) -> Hresult, &IID_SWAPCHAIN3, &mut swapchain) };
