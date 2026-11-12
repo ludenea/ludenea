@@ -176,10 +176,16 @@ fn bind_and_draw(encoder: Id, bindings: &Bindings, draws: &[Draw]) -> Result<(),
     for (index, sampler) in bindings.samplers.iter().enumerate() {
         send!((); encoder, "setFragmentSamplerState:atIndex:", Id: *sampler, usize: index)?;
     }
+    // The pipeline and the depth state are set when they change only: the
+    // validation layer reports a state set again to the same value.
+    let mut bound = None;
     for draw in draws {
-        let (pipeline, depth_state) = if draw.blended { (bindings.blended_pipeline, bindings.depth_tested_only) } else { (bindings.opaque_pipeline, bindings.depth_written) };
-        send!((); encoder, "setRenderPipelineState:", Id: pipeline)?;
-        send!((); encoder, "setDepthStencilState:", Id: depth_state)?;
+        if bound != Some(draw.blended) {
+            let (pipeline, depth_state) = if draw.blended { (bindings.blended_pipeline, bindings.depth_tested_only) } else { (bindings.opaque_pipeline, bindings.depth_written) };
+            send!((); encoder, "setRenderPipelineState:", Id: pipeline)?;
+            send!((); encoder, "setDepthStencilState:", Id: depth_state)?;
+            bound = Some(draw.blended);
+        }
         // The fragment bytes of the draw: the texture's index, then the sampler's.
         let constants = [draw.texture, draw.sampler];
         send!((); encoder, "setFragmentBytes:length:atIndex:", *const c_void: constants.as_ptr().cast(), usize: size_of_val(&constants), usize: 0)?;
