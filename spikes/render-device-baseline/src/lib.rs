@@ -6,6 +6,7 @@
 pub mod backend;
 #[cfg(windows)]
 pub mod d3d12;
+pub mod frames;
 pub mod imports;
 pub mod loader;
 #[cfg(target_os = "macos")]

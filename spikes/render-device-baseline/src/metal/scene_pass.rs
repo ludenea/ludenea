@@ -170,7 +170,7 @@ impl Resources {
 }
 
 /// Nearest, linear and trilinear, in the order of the scene's sampler indexes.
-fn samplers(gpu: &Gpu) -> Result<Vec<Owned>, String> {
+pub fn samplers(gpu: &Gpu) -> Result<Vec<Owned>, String> {
     Ok(vec![
         gpu.sampler(values::SAMPLER_MIN_MAG_FILTER_NEAREST, values::SAMPLER_MIP_FILTER_NEAREST, values::SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)?,
         gpu.sampler(values::SAMPLER_MIN_MAG_FILTER_LINEAR, values::SAMPLER_MIP_FILTER_NEAREST, values::SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)?,
@@ -179,7 +179,7 @@ fn samplers(gpu: &Gpu) -> Result<Vec<Owned>, String> {
 }
 
 /// One texture of the scene in the format of its encoding, every level uploaded as given.
-fn sampled_texture(gpu: &Gpu, texture: &scene::Texture) -> Result<Owned, String> {
+pub fn sampled_texture(gpu: &Gpu, texture: &scene::Texture) -> Result<Owned, String> {
     let format = match texture.encoding {
         Encoding::Srgb => values::PIXEL_FORMAT_RGBA8_UNORM_SRGB,
         Encoding::Unorm => values::PIXEL_FORMAT_RGBA8_UNORM,

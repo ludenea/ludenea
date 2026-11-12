@@ -7,13 +7,15 @@
 //!
 //! `objc` holds the runtime, `values` the enumerations and structures of the
 //! framework's headers, `gpu` the objects every exercise builds, and one
-//! module stands for each exercise of the contract in `backend.rs`.
+//! module stands for each exercise of the contract in `backend.rs`. `frames`
+//! is the adapter of `crate::frames::FrameDevice`: a device open for frames.
 //! Throwaway, never product code.
 
 #[macro_use]
 mod objc;
 mod capabilities;
 mod compute;
+mod frames;
 mod gpu;
 mod lit;
 mod pass_through;
@@ -28,10 +30,12 @@ use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
 
 use crate::backend::{Api, Capability, ComputeOutput, Device, DeviceInfo, DeviceKind, LitRender, LitVariant, Recording, SceneRender, SceneShaders, Setting, ShaderLoad};
+use crate::frames::FrameDevice;
 use crate::loader::Library;
 use crate::scene::{Image, Scene};
 
 use capabilities::Families;
+use frames::MetalFrames;
 use gpu::Gpu;
 use objc::{Id, Owned, Pool, class, class_name, flag, new_object, text, yes_no};
 use timestamps::Clock;
@@ -53,6 +57,7 @@ type DeviceFunction = unsafe extern "C" fn() -> Id;
 /// The shader sources, read once when the interface is opened.
 struct Sources {
     scene: String,
+    frame: String,
     compute: String,
     pass_through: String,
     lit_forward: String,
@@ -69,6 +74,7 @@ impl Sources {
         };
         Ok(Sources {
             scene: read("scene.metal")?,
+            frame: read(frames::FILE)?,
             compute: read("compute.metal")?,
             pass_through: read("pass_through.metal")?,
             lit_forward: read("lit_forward.metal")?,
@@ -176,6 +182,15 @@ impl MetalApi {
     /// in a supplied form when one is given.
     fn open_device(&self, index: usize, validation: bool, supplied: Option<SceneShaders>) -> Result<Box<dyn Device + '_>, String> {
         let _pool = Pool::push();
+        let (gpu, settings, capture) = self.open_gpu(index, validation)?;
+        Ok(Box::new(MetalDevice { api: self, gpu: ManuallyDrop::new(gpu), settings, capture, supplied, shader_load: None }))
+    }
+
+    /// The device at `index` created from scratch with its queue, what
+    /// configures it and, with validation asked for, the capture of the
+    /// layer's messages, started before the device is created. The caller
+    /// holds an autorelease pool.
+    fn open_gpu(&self, index: usize, validation: bool) -> Result<(Gpu, String, Option<StandardErrorCapture>), String> {
         let capture = if validation { Some(self.start_validation()?) } else { None };
         let devices = self.list_devices()?;
         let listed = devices.len();
@@ -183,8 +198,7 @@ impl MetalApi {
         let queue = Owned::adopt(send!(Id; device.id(), "newCommandQueue")?, "newCommandQueue")?;
         let settings = format!("{}; {}", sample_positions(device.id()), metal_environment());
         let clock = Clock::read(device.id());
-        let gpu = Gpu { device, queue, timestamp_set: self.timestamp_set.clone(), clock };
-        Ok(Box::new(MetalDevice { api: self, gpu: ManuallyDrop::new(gpu), settings, capture, supplied, shader_load: None }))
+        Ok((Gpu { device, queue, timestamp_set: self.timestamp_set.clone(), clock }, settings, capture))
     }
 
     /// Every device the framework lists, each with a reference of its own;
@@ -268,6 +282,13 @@ impl Api for MetalApi {
 
     fn open_with_scene_shaders(&self, index: usize, shaders: &SceneShaders) -> Result<Box<dyn Device + '_>, String> {
         self.open_device(index, false, Some(shaders.clone()))
+    }
+
+    fn open_frames(&self, index: usize, validation: bool) -> Result<Box<dyn FrameDevice + '_>, String> {
+        let _pool = Pool::push();
+        let (gpu, settings, capture) = self.open_gpu(index, validation)?;
+        let info = self.describe(index, gpu.device.id());
+        Ok(Box::new(MetalFrames::open(gpu, info, settings, capture, self.sources.frame.clone())?))
     }
 
     fn software_settings(&self, _device: &DeviceInfo) -> Vec<Setting> {

@@ -86,6 +86,7 @@ const fn guid(data1: u32, data2: u16, data3: u16, data4: [u8; 8]) -> Guid {
 pub const IID_IDXGI_FACTORY1: Guid = guid(0x770a_ae78, 0xf26f, 0x4dba, [0xa8, 0x29, 0x25, 0x3c, 0x83, 0xd1, 0xb3, 0x87]);
 pub const IID_IDXGI_DEVICE: Guid = guid(0x54ec_77fa, 0x1377, 0x44e6, [0x8c, 0x32, 0x88, 0xfd, 0x5f, 0x44, 0xc8, 0x4c]);
 pub const IID_DEVICE: Guid = guid(0x1898_19f1, 0x1db6, 0x4b57, [0xbe, 0x54, 0x18, 0x21, 0x33, 0x9b, 0x85, 0xf7]);
+pub const IID_DEVICE5: Guid = guid(0x8b4f_173b, 0x2fea, 0x4b80, [0x8f, 0x58, 0x43, 0x07, 0x19, 0x1a, 0xb9, 0x5d]);
 pub const IID_COMMAND_QUEUE: Guid = guid(0x0ec8_70a6, 0x5d7e, 0x4c22, [0x8c, 0xfc, 0x5b, 0xaa, 0xe0, 0x76, 0x16, 0xed]);
 pub const IID_COMMAND_ALLOCATOR: Guid = guid(0x6102_dee4, 0xaf59, 0x4b09, [0xb9, 0x99, 0xb4, 0x4d, 0x73, 0xf0, 0x9b, 0x24]);
 pub const IID_GRAPHICS_COMMAND_LIST: Guid = guid(0x5b16_0d0f, 0xac1b, 0x4185, [0x8b, 0xa8, 0xb3, 0xae, 0x42, 0xa5, 0xa4, 0x55]);
@@ -156,6 +157,11 @@ pub mod slot {
         pub const GET_COPYABLE_FOOTPRINTS: usize = 38;
         pub const CREATE_QUERY_HEAP: usize = 39;
         pub const CREATE_COMMAND_SIGNATURE: usize = 41;
+        /// ID3D12Device5::RemoveDevice. ID3D12Device ends at slot 43
+        /// (GetAdapterLuid); the four interfaces after it add 3, 1, 3 and 6
+        /// methods (slots 44 to 56); ID3D12Device5 then adds
+        /// CreateLifetimeTracker at slot 57 and RemoveDevice after it.
+        pub const REMOVE_DEVICE: usize = 58;
     }
 
     /// ID3D12CommandQueue (ID3D12DeviceChild::GetDevice is 7).
@@ -228,6 +234,15 @@ pub mod slot {
 }
 
 pub const DXGI_ERROR_NOT_FOUND: Hresult = 0x887a_0002_u32 as i32;
+/// The results `ID3D12Device::GetDeviceRemovedReason` documents for a removed
+/// device, each with the name DXGI gives it.
+pub const REMOVAL_REASONS: [(Hresult, &str); 5] = [
+    (0x887a_0001_u32 as i32, "DXGI_ERROR_INVALID_CALL"),
+    (0x887a_0005_u32 as i32, "DXGI_ERROR_DEVICE_REMOVED"),
+    (0x887a_0006_u32 as i32, "DXGI_ERROR_DEVICE_HUNG"),
+    (0x887a_0007_u32 as i32, "DXGI_ERROR_DEVICE_RESET"),
+    (0x887a_0020_u32 as i32, "DXGI_ERROR_DRIVER_INTERNAL_ERROR"),
+];
 pub const DXGI_ADAPTER_FLAG_SOFTWARE: u32 = 2;
 /// The vendor and device identifiers DXGI documents for the Microsoft Basic
 /// Render Driver, the rasterizer that runs on the processor.
@@ -391,6 +406,14 @@ pub struct AdapterDesc1 {
     pub shared_system_memory: usize,
     pub adapter_luid: [u32; 2],
     pub flags: u32,
+}
+
+/// D3D_SHADER_MACRO: one definition given to the shader compiler's
+/// preprocessor. A list of them ends with an entry of two null pointers.
+#[repr(C)]
+pub struct ShaderMacro {
+    pub name: *const c_char,
+    pub definition: *const c_char,
 }
 
 #[repr(C)]
@@ -929,6 +952,7 @@ mod tests {
     #[test]
     fn the_structures_have_the_layouts_of_the_headers() {
         assert_eq!(size_of::<AdapterDesc1>(), 312);
+        assert_eq!(size_of::<ShaderMacro>(), 16);
         assert_eq!(size_of::<ResourceDesc>(), 56);
         assert_eq!(offset_of!(ResourceDesc, format), 32);
         assert_eq!(size_of::<ClearValue>(), 20);

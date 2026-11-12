@@ -350,6 +350,16 @@ pub fn wait_until_completed(command_buffer: Id, what: &str) -> Result<(), String
     if status == values::COMMAND_BUFFER_STATUS_COMPLETED { Ok(()) } else { Err(format!("the command buffer of {what} ended with {}", failure(command_buffer, status))) }
 }
 
+/// Whether the device has completed a committed command buffer, read from
+/// its status without waiting. An error when the device failed it.
+pub fn is_completed(command_buffer: Id, what: &str) -> Result<bool, String> {
+    match send!(usize; command_buffer, "status")? {
+        values::COMMAND_BUFFER_STATUS_COMPLETED => Ok(true),
+        values::COMMAND_BUFFER_STATUS_ERROR => Err(format!("the command buffer of {what} ended with {}", failure(command_buffer, values::COMMAND_BUFFER_STATUS_ERROR))),
+        _ => Ok(false),
+    }
+}
+
 /// Polls the status of a committed command buffer until the device has
 /// completed it, without blocking in the framework; returns the polls made.
 pub fn poll_until_completed(command_buffer: Id, what: &str) -> Result<u64, String> {

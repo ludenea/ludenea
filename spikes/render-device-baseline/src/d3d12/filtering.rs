@@ -58,11 +58,11 @@ impl SamplePattern {
     }
 }
 
-fn color_desc([width, height]: [u32; 2], sample: SampleDesc) -> ResourceDesc {
+pub fn color_desc([width, height]: [u32; 2], sample: SampleDesc) -> ResourceDesc {
     texture_desc(width, height, 1, FORMAT_R8G8B8A8_UNORM_SRGB, sample, RESOURCE_FLAG_ALLOW_RENDER_TARGET)
 }
 
-fn depth_desc([width, height]: [u32; 2], sample: SampleDesc) -> ResourceDesc {
+pub fn depth_desc([width, height]: [u32; 2], sample: SampleDesc) -> ResourceDesc {
     texture_desc(width, height, 1, FORMAT_D32_FLOAT, sample, RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)
 }
 
@@ -142,8 +142,8 @@ impl FilteringScene {
         let (textures, texture_views) = upload_textures(gpu, scene)?;
         let samplers = create_samplers(gpu)?;
         let root_signature = root_signature(gpu)?;
-        let opaque = pipeline(gpu, shaders, root_signature.raw(), sample, false)?;
-        let blended = pipeline(gpu, shaders, root_signature.raw(), sample, true)?;
+        let opaque = pipeline(gpu, &shaders.scene_vertex, &shaders.scene_pixel, root_signature.raw(), sample, false, "filtering scene")?;
+        let blended = pipeline(gpu, &shaders.scene_vertex, &shaders.scene_pixel, root_signature.raw(), sample, true, "filtering scene")?;
         let command_signature = draw_signature(gpu)?;
         let timestamps = match timestamp_frequency(gpu) {
             Ok(frequency) => Some(create_timestamps(gpu, frequency)?),
@@ -396,7 +396,7 @@ fn sampler(filter: u32, address: u32) -> SamplerDesc {
 
 /// Nearest (clamp), linear with the nearest level (clamp) and trilinear
 /// (repeat), at the indexes the scene names them by.
-fn create_samplers(gpu: &Gpu) -> Result<DescriptorHeap, String> {
+pub fn create_samplers(gpu: &Gpu) -> Result<DescriptorHeap, String> {
     let heap = gpu.descriptor_heap(DESCRIPTOR_HEAP_TYPE_SAMPLER, 3, true)?;
     let descs = [
         (scene::SAMPLER_NEAREST, sampler(FILTER_MIN_MAG_MIP_POINT, ADDRESS_MODE_CLAMP)),
@@ -421,10 +421,12 @@ fn root_signature(gpu: &Gpu) -> Result<Com, String> {
     gpu.root_signature(&parameters, &[], ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT, "filtering scene")
 }
 
-fn pipeline(gpu: &Gpu, shaders: &Shaders, root_signature: Object, sample: SampleDesc, blended: bool) -> Result<Com, String> {
+/// The opaque or the blended pipeline of the scene's vertex layout and
+/// targets, from the bytecode of the two stages; `what` names it in an error.
+pub fn pipeline(gpu: &Gpu, vertex: &[u8], pixel: &[u8], root_signature: Object, sample: SampleDesc, blended: bool, what: &str) -> Result<Com, String> {
     let (position, uv, color) = (c_string("POSITION"), c_string("TEXCOORD"), c_string("COLOR"));
     let elements = [input_element(&position, FORMAT_R32G32B32A32_FLOAT, 0), input_element(&uv, FORMAT_R32G32_FLOAT, 16), input_element(&color, FORMAT_R32G32B32A32_FLOAT, 24)];
-    let mut desc = default_graphics_desc(root_signature, &shaders.scene_vertex, &shaders.scene_pixel);
+    let mut desc = default_graphics_desc(root_signature, vertex, pixel);
     desc.input_layout = InputLayoutDesc { elements: elements.as_ptr(), count: elements.len() as u32 };
     set_targets(&mut desc, &[FORMAT_R8G8B8A8_UNORM_SRGB]);
     set_depth(&mut desc, !blended);
@@ -440,5 +442,5 @@ fn pipeline(gpu: &Gpu, shaders: &Shaders, root_signature: Object, sample: Sample
         target.destination_blend_alpha = BLEND_INV_SRC_ALPHA;
         target.blend_operation_alpha = BLEND_OP_ADD;
     }
-    gpu.graphics_pipeline(&desc, if blended { "filtering scene, blended" } else { "filtering scene, opaque" })
+    gpu.graphics_pipeline(&desc, &format!("{what}, {}", if blended { "blended" } else { "opaque" }))
 }

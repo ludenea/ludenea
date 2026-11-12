@@ -13,6 +13,7 @@ mod capabilities;
 mod compute;
 mod ffi;
 mod filtering;
+mod frames;
 mod gpu;
 mod lit;
 mod pass_through;
@@ -23,6 +24,7 @@ use std::process::Command;
 use std::ptr;
 
 use crate::backend::{Api, Capability, ComputeOutput, Device, DeviceInfo, LitRender, LitVariant, Recording, SceneRender, SceneShaders, Setting};
+use crate::frames::FrameDevice;
 use crate::loader::Library;
 use crate::scene::{Image, Scene};
 use ffi::*;
@@ -118,6 +120,8 @@ struct VulkanApi {
     library: Library,
     compiler: String,
     shaders: Shaders,
+    /// What a device open for frames compiles the frame shader from.
+    frame_sources: frames::ShaderSources,
     devices: Vec<DeviceInfo>,
 }
 
@@ -143,9 +147,34 @@ fn list_devices(library: &Library) -> Result<Vec<DeviceInfo>, String> {
 pub fn open(shaders: &Path, work: &Path) -> Result<Box<dyn Api>, String> {
     let library = Library::open(LOADER_NAMES).map_err(|error| format!("no Vulkan loader: {error}"))?;
     let (compiler, version) = find_glsl_compiler()?;
+    let frame_sources = frames::ShaderSources { compiler: compiler.clone(), directory: shaders.to_path_buf(), work: work.to_path_buf() };
     let shaders = Shaders::compile(&compiler, shaders, work)?;
     let devices = list_devices(&library)?;
-    Ok(Box::new(VulkanApi { library, compiler: format!("{compiler} ({version})"), shaders, devices }))
+    Ok(Box::new(VulkanApi { library, compiler: format!("{compiler} ({version})"), shaders, frame_sources, devices }))
+}
+
+/// What configures a device beyond its name and version: the variables that
+/// steer Mesa's software rasterizer and the sample locations the device uses.
+fn settings_of(gpu: &Gpu) -> String {
+    let mut variables: Vec<String> = std::env::vars_os()
+        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.to_string_lossy().into_owned())))
+        .filter(|(key, _)| key.starts_with("LP_") || key.starts_with("GALLIVM_") || key == "MESA_SHADER_CACHE_DISABLE")
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect();
+    variables.sort();
+    let environment = if variables.is_empty() { "no LP_, GALLIVM_ or MESA_SHADER_CACHE_DISABLE variable set".to_string() } else { variables.join(" ") };
+    format!("{environment}; standardSampleLocations = {}", gpu.physical.properties.u32_at(property::STANDARD_SAMPLE_LOCATIONS))
+}
+
+/// How the validation layer's messages reach the program, in words.
+fn validation_delivery_of(gpu: &Gpu) -> String {
+    match gpu.sink {
+        Some(_) => format!(
+            "a messenger of the VK_EXT_debug_utils extension, registered by the program on the instance under {}, whose callback stores each warning and error in the process",
+            gpu::VALIDATION_LAYER
+        ),
+        None => "validation is off on this device".to_string(),
+    }
 }
 
 impl Api for VulkanApi {
@@ -182,6 +211,12 @@ impl Api for VulkanApi {
         shaders.scene_fragment = words(&scene.fragment, "fragment")?;
         let gpu = Gpu::open(&self.library, index, false)?;
         Ok(Box::new(VulkanDevice { gpu, shaders: std::borrow::Cow::Owned(shaders) }))
+    }
+
+    fn open_frames(&self, index: usize, validation: bool) -> Result<Box<dyn FrameDevice + '_>, String> {
+        let info = self.devices.get(index).cloned().ok_or_else(|| format!("no physical device at index {index} ({} listed)", self.devices.len()))?;
+        let gpu = Gpu::open(&self.library, index, validation)?;
+        Ok(Box::new(frames::VulkanFrames::open(gpu, info, self.frame_sources.clone())?))
     }
 
     fn software_settings(&self, device: &DeviceInfo) -> Vec<Setting> {
@@ -252,14 +287,7 @@ impl Device for VulkanDevice<'_> {
     }
 
     fn settings(&self) -> String {
-        let mut variables: Vec<String> = std::env::vars_os()
-            .filter_map(|(key, value)| Some((key.into_string().ok()?, value.to_string_lossy().into_owned())))
-            .filter(|(key, _)| key.starts_with("LP_") || key.starts_with("GALLIVM_") || key == "MESA_SHADER_CACHE_DISABLE")
-            .map(|(key, value)| format!("{key}={value}"))
-            .collect();
-        variables.sort();
-        let environment = if variables.is_empty() { "no LP_, GALLIVM_ or MESA_SHADER_CACHE_DISABLE variable set".to_string() } else { variables.join(" ") };
-        format!("{environment}; standardSampleLocations = {}", self.gpu.physical.properties.u32_at(property::STANDARD_SAMPLE_LOCATIONS))
+        settings_of(&self.gpu)
     }
 
     fn render_scene(&mut self, scene: &Scene, recording: Recording) -> Result<SceneRender, String> {
@@ -279,13 +307,7 @@ impl Device for VulkanDevice<'_> {
     }
 
     fn validation_delivery(&self) -> String {
-        match self.gpu.sink {
-            Some(_) => format!(
-                "a messenger of the VK_EXT_debug_utils extension, registered by the program on the instance under {}, whose callback stores each warning and error in the process",
-                gpu::VALIDATION_LAYER
-            ),
-            None => "validation is off on this device".to_string(),
-        }
+        validation_delivery_of(&self.gpu)
     }
 
     fn validation_messages(&mut self) -> Vec<String> {

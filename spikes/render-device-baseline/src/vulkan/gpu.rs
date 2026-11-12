@@ -4,7 +4,7 @@
 
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use super::ffi::*;
@@ -524,6 +524,54 @@ enum Owned {
 pub struct Scope<'g> {
     pub gpu: &'g Gpu,
     owned: Vec<Owned>,
+    /// The lock of the queue, on a device that several threads use at once.
+    queue_lock: Option<&'g Mutex<()>>,
+}
+
+/// What a scope created, kept beyond it by [`Scope::keep`]: it lives until
+/// [`Kept::destroy`], which its keeper calls once the device no longer uses it.
+#[derive(Default)]
+pub struct Kept(Vec<Owned>);
+
+impl Kept {
+    pub fn destroy(self, gpu: &Gpu) {
+        destroy_owned(gpu, &self.0);
+    }
+}
+
+/// Destroys objects in the reverse order of their creation, then frees their
+/// memory.
+fn destroy_owned(gpu: &Gpu, owned: &[Owned]) {
+    let (functions, device) = (&gpu.functions, gpu.device);
+    // SAFETY: every object below was created from this device and is
+    // destroyed once, after the device has finished with it; memory is freed
+    // last, once nothing bound to it remains.
+    unsafe {
+        for owned in owned.iter().rev() {
+            match *owned {
+                Owned::Buffer(object) => (functions.destroy_buffer)(device, object, ptr::null()),
+                Owned::Image(object) => (functions.destroy_image)(device, object, ptr::null()),
+                Owned::ImageView(object) => (functions.destroy_image_view)(device, object, ptr::null()),
+                Owned::Sampler(object) => (functions.destroy_sampler)(device, object, ptr::null()),
+                Owned::ShaderModule(object) => (functions.destroy_shader_module)(device, object, ptr::null()),
+                Owned::DescriptorSetLayout(object) => (functions.destroy_descriptor_set_layout)(device, object, ptr::null()),
+                Owned::DescriptorPool(object) => (functions.destroy_descriptor_pool)(device, object, ptr::null()),
+                Owned::PipelineLayout(object) => (functions.destroy_pipeline_layout)(device, object, ptr::null()),
+                Owned::Pipeline(object) => (functions.destroy_pipeline)(device, object, ptr::null()),
+                Owned::RenderPass(object) => (functions.destroy_render_pass)(device, object, ptr::null()),
+                Owned::Framebuffer(object) => (functions.destroy_framebuffer)(device, object, ptr::null()),
+                Owned::CommandPool(object) => (functions.destroy_command_pool)(device, object, ptr::null()),
+                Owned::Fence(object) => (functions.destroy_fence)(device, object, ptr::null()),
+                Owned::QueryPool(object) => (functions.destroy_query_pool)(device, object, ptr::null()),
+                Owned::Memory(_) => {}
+            }
+        }
+        for owned in owned {
+            if let Owned::Memory(memory) = *owned {
+                (functions.free_memory)(device, memory, ptr::null());
+            }
+        }
+    }
 }
 
 /// One image to upload: its levels, largest first, tightly packed RGBA8.
@@ -552,7 +600,21 @@ pub struct GraphicsPipelineDescription<'a> {
 
 impl<'g> Scope<'g> {
     pub fn new(gpu: &'g Gpu) -> Scope<'g> {
-        Scope { gpu, owned: Vec::new() }
+        Scope { gpu, owned: Vec::new(), queue_lock: None }
+    }
+
+    /// A scope on a device that several threads use at once, with other work
+    /// in flight: its submissions take `queue_lock`, which serializes every
+    /// use of the queue, and it does not wait for the whole device when it
+    /// ends, so the device may use nothing it still owns then (what
+    /// `run_once` submits is waited for before it returns).
+    pub fn on_shared_device(gpu: &'g Gpu, queue_lock: &'g Mutex<()>) -> Scope<'g> {
+        Scope { gpu, owned: Vec::new(), queue_lock: Some(queue_lock) }
+    }
+
+    /// Ends the scope without destroying what it created.
+    pub fn keep(mut self) -> Kept {
+        Kept(std::mem::take(&mut self.owned))
     }
 
     fn device(&self) -> Handle {
@@ -823,6 +885,17 @@ impl<'g> Scope<'g> {
     }
 
     pub fn graphics_pipeline(&mut self, description: &GraphicsPipelineDescription) -> Result<Object, String> {
+        self.build_graphics_pipeline(description, false)
+    }
+
+    /// The same pipeline with its viewport and its scissor set while
+    /// recording instead of fixed (`description.viewport` is not read), so
+    /// that it draws to targets of any size.
+    pub fn graphics_pipeline_of_any_size(&mut self, description: &GraphicsPipelineDescription) -> Result<Object, String> {
+        self.build_graphics_pipeline(description, true)
+    }
+
+    fn build_graphics_pipeline(&mut self, description: &GraphicsPipelineDescription, dynamic_viewport: bool) -> Result<Object, String> {
         let entry_name = c_string("main");
         let stage = |stage: u32, module: Object| PipelineShaderStageCreateInfo {
             s_type: structure::PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -900,6 +973,8 @@ impl<'g> Scope<'g> {
             attachments: description.blends.as_ptr(),
             blend_constants: [0.0; 4],
         };
+        let dynamic_states = [DYNAMIC_STATE_VIEWPORT, DYNAMIC_STATE_SCISSOR];
+        let dynamic = PipelineDynamicStateCreateInfo { s_type: structure::PIPELINE_DYNAMIC_STATE_CREATE_INFO, p_next: ptr::null(), flags: 0, dynamic_state_count: dynamic_states.len() as u32, dynamic_states: dynamic_states.as_ptr() };
         let info = GraphicsPipelineCreateInfo {
             s_type: structure::GRAPHICS_PIPELINE_CREATE_INFO,
             p_next: ptr::null(),
@@ -914,7 +989,7 @@ impl<'g> Scope<'g> {
             multisample_state: &multisample,
             depth_stencil_state: if description.depth_write.is_some() { &depth_stencil } else { ptr::null() },
             color_blend_state: &color_blend,
-            dynamic_state: ptr::null(),
+            dynamic_state: if dynamic_viewport { &dynamic as *const PipelineDynamicStateCreateInfo as *const c_void } else { ptr::null() },
             layout: description.layout,
             render_pass: description.render_pass,
             subpass: 0,
@@ -999,7 +1074,10 @@ impl<'g> Scope<'g> {
         begin(self.functions(), command_buffer, COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT, None)?;
         record(self.functions(), command_buffer);
         end(self.functions(), command_buffer)?;
-        self.gpu.submit(command_buffer, fence)?;
+        {
+            let _queue = self.queue_lock.map(|lock| lock.lock().unwrap_or_else(PoisonError::into_inner));
+            self.gpu.submit(command_buffer, fence)?;
+        }
         self.gpu.wait_fence(fence)
     }
 
@@ -1048,37 +1126,13 @@ impl<'g> Scope<'g> {
 
 impl Drop for Scope<'_> {
     fn drop(&mut self) {
-        let (functions, device) = (&self.gpu.functions, self.gpu.device);
-        // SAFETY: every object below was created from this device by this
-        // scope and is destroyed once, after the device has finished with it;
-        // memory is freed last, once nothing bound to it remains.
-        unsafe {
-            (functions.device_wait_idle)(device);
-            for owned in self.owned.iter().rev() {
-                match *owned {
-                    Owned::Buffer(object) => (functions.destroy_buffer)(device, object, ptr::null()),
-                    Owned::Image(object) => (functions.destroy_image)(device, object, ptr::null()),
-                    Owned::ImageView(object) => (functions.destroy_image_view)(device, object, ptr::null()),
-                    Owned::Sampler(object) => (functions.destroy_sampler)(device, object, ptr::null()),
-                    Owned::ShaderModule(object) => (functions.destroy_shader_module)(device, object, ptr::null()),
-                    Owned::DescriptorSetLayout(object) => (functions.destroy_descriptor_set_layout)(device, object, ptr::null()),
-                    Owned::DescriptorPool(object) => (functions.destroy_descriptor_pool)(device, object, ptr::null()),
-                    Owned::PipelineLayout(object) => (functions.destroy_pipeline_layout)(device, object, ptr::null()),
-                    Owned::Pipeline(object) => (functions.destroy_pipeline)(device, object, ptr::null()),
-                    Owned::RenderPass(object) => (functions.destroy_render_pass)(device, object, ptr::null()),
-                    Owned::Framebuffer(object) => (functions.destroy_framebuffer)(device, object, ptr::null()),
-                    Owned::CommandPool(object) => (functions.destroy_command_pool)(device, object, ptr::null()),
-                    Owned::Fence(object) => (functions.destroy_fence)(device, object, ptr::null()),
-                    Owned::QueryPool(object) => (functions.destroy_query_pool)(device, object, ptr::null()),
-                    Owned::Memory(_) => {}
-                }
-            }
-            for owned in &self.owned {
-                if let Owned::Memory(memory) = *owned {
-                    (functions.free_memory)(device, memory, ptr::null());
-                }
-            }
+        if self.queue_lock.is_none() {
+            // SAFETY: no other thread uses the queue of a device that is not
+            // shared; waiting makes sure no work that uses the scope's
+            // objects is pending.
+            unsafe { (self.gpu.functions.device_wait_idle)(self.gpu.device) };
         }
+        destroy_owned(self.gpu, &self.owned);
     }
 }
 

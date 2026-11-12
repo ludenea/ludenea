@@ -92,6 +92,8 @@ pub const BLEND_FACTOR_SRC_ALPHA: u32 = 6;
 pub const BLEND_FACTOR_ONE_MINUS_SRC_ALPHA: u32 = 7;
 pub const BLEND_OP_ADD: u32 = 0;
 pub const COLOR_COMPONENTS_RGBA: u32 = 0xf;
+pub const DYNAMIC_STATE_VIEWPORT: u32 = 0;
+pub const DYNAMIC_STATE_SCISSOR: u32 = 1;
 
 pub const FILTER_NEAREST: u32 = 0;
 pub const FILTER_LINEAR: u32 = 1;
@@ -123,6 +125,8 @@ pub const MEMORY_HOST_COHERENT: u32 = 0x4;
 
 pub const PIPELINE_STAGE_TOP_OF_PIPE: u32 = 0x1;
 pub const PIPELINE_STAGE_FRAGMENT_SHADER: u32 = 0x80;
+pub const PIPELINE_STAGE_EARLY_FRAGMENT_TESTS: u32 = 0x100;
+pub const PIPELINE_STAGE_LATE_FRAGMENT_TESTS: u32 = 0x200;
 pub const PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT: u32 = 0x400;
 pub const PIPELINE_STAGE_COMPUTE_SHADER: u32 = 0x800;
 pub const PIPELINE_STAGE_TRANSFER: u32 = 0x1000;
@@ -134,6 +138,8 @@ pub const ACCESS_SHADER_READ: u32 = 0x20;
 pub const ACCESS_SHADER_WRITE: u32 = 0x40;
 pub const ACCESS_COLOR_ATTACHMENT_READ: u32 = 0x80;
 pub const ACCESS_COLOR_ATTACHMENT_WRITE: u32 = 0x100;
+pub const ACCESS_DEPTH_STENCIL_ATTACHMENT_READ: u32 = 0x200;
+pub const ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE: u32 = 0x400;
 pub const ACCESS_TRANSFER_READ: u32 = 0x800;
 pub const ACCESS_TRANSFER_WRITE: u32 = 0x1000;
 pub const ACCESS_HOST_READ: u32 = 0x2000;
@@ -183,6 +189,7 @@ pub mod structure {
     pub const PIPELINE_MULTISAMPLE_STATE_CREATE_INFO: u32 = 24;
     pub const PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO: u32 = 25;
     pub const PIPELINE_COLOR_BLEND_STATE_CREATE_INFO: u32 = 26;
+    pub const PIPELINE_DYNAMIC_STATE_CREATE_INFO: u32 = 27;
     pub const GRAPHICS_PIPELINE_CREATE_INFO: u32 = 28;
     pub const COMPUTE_PIPELINE_CREATE_INFO: u32 = 29;
     pub const PIPELINE_LAYOUT_CREATE_INFO: u32 = 30;
@@ -716,6 +723,15 @@ pub struct PipelineColorBlendStateCreateInfo {
 }
 
 #[repr(C)]
+pub struct PipelineDynamicStateCreateInfo {
+    pub s_type: u32,
+    pub p_next: *const c_void,
+    pub flags: u32,
+    pub dynamic_state_count: u32,
+    pub dynamic_states: *const u32,
+}
+
+#[repr(C)]
 #[derive(Clone, Copy)]
 pub struct PushConstantRange {
     pub stage_flags: u32,
@@ -1162,6 +1178,8 @@ entry_points!(DeviceFunctions {
     cmd_end_render_pass = "vkCmdEndRenderPass": fn(Handle);
     cmd_execute_commands = "vkCmdExecuteCommands": fn(Handle, u32, *const Handle);
     cmd_bind_pipeline = "vkCmdBindPipeline": fn(Handle, u32, Object);
+    cmd_set_viewport = "vkCmdSetViewport": fn(Handle, u32, u32, *const Viewport);
+    cmd_set_scissor = "vkCmdSetScissor": fn(Handle, u32, u32, *const Rect2D);
     cmd_bind_descriptor_sets = "vkCmdBindDescriptorSets": fn(Handle, u32, Object, u32, u32, *const Object, u32, *const u32);
     cmd_bind_vertex_buffers = "vkCmdBindVertexBuffers": fn(Handle, u32, u32, *const Object, *const u64);
     cmd_push_constants = "vkCmdPushConstants": fn(Handle, Object, u32, u32, u32, *const c_void);

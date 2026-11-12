@@ -15,6 +15,7 @@ It extends the [offscreen rendering spike](../render-offscreen/README.md) by its
 - `src/platform.rs`: the count of the process's threads and the restriction of a process to a number of processors.
 - `src/loader.rs`, `src/imports.rs`: `dlopen` and `LoadLibraryW`, and the reader of the binary's own imports (copies of the offscreen spike's).
 - `src/lib.rs`: the modules above as a library, for a later spike of the rendering research that stands on this native path.
+- `src/frames.rs`, with `src/vulkan/frames.rs`, `src/d3d12/frames.rs` and `src/metal/frames.rs`: added for the [frame content](../render-frame-content/README.md) spike and no part of this spike's measurements. Frames on the native path: resources that outlive a frame (textures, vertex buffers, targets, pipelines built from a shader payload), passes recorded in parts by any thread, submissions that are polled, and on Direct3D 12 a real removal of the device. `src/frames.rs` states what each interface implements and holds a check of every call, which `cargo run --release -p render-device-baseline --example frame_device_check` runs on every device of a machine.
 - `shaders/`: one set of sources per interface, named after what they shade.
 - `setup.sh`: what a machine of the research CI needs installed (below).
 

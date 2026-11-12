@@ -39,6 +39,13 @@ fn message_text(severity: u32, id: u32, description: &str) -> String {
     format!("{} {}: {}", severity_name(severity), id, description.trim())
 }
 
+/// Where the messages are collected, and which are left out.
+struct Sink {
+    /// The identifiers of the messages that are not collected.
+    left_out: &'static [u32],
+    messages: Mutex<Vec<String>>,
+}
+
 /// The callback the info queue calls for each message, on any thread.
 unsafe extern "system" fn on_message(_category: u32, severity: u32, id: u32, description: *const c_char, context: *mut c_void) {
     if context.is_null() || description.is_null() {
@@ -47,8 +54,11 @@ unsafe extern "system" fn on_message(_category: u32, severity: u32, id: u32, des
     // SAFETY: the context is the collector's boxed sink, which outlives the
     // registration (the callback is unregistered before the box is freed);
     // the description is a NUL-terminated string for the call's duration.
-    let (sink, text) = unsafe { (&*(context as *const Mutex<Vec<String>>), CStr::from_ptr(description).to_string_lossy()) };
-    if let Ok(mut messages) = sink.lock() {
+    let (sink, text) = unsafe { (&*(context as *const Sink), CStr::from_ptr(description).to_string_lossy()) };
+    if sink.left_out.contains(&id) {
+        return;
+    }
+    if let Ok(mut messages) = sink.messages.lock() {
         messages.push(message_text(severity, id, &text));
     }
 }
@@ -64,20 +74,21 @@ enum Delivery {
 pub struct Collector {
     delivery: Delivery,
     /// Read by the callback through a raw pointer: boxed so that it never moves.
-    sink: Box<Mutex<Vec<String>>>,
+    sink: Box<Sink>,
     queue: Com,
 }
 
 impl Collector {
-    /// Attaches to the info queue of `device`, created under the layer.
-    pub fn attach(device: Object) -> Result<Collector, String> {
-        let sink = Box::new(Mutex::new(Vec::new()));
+    /// Attaches to the info queue of `device`, created under the layer. The
+    /// messages whose identifier is in `left_out` are not collected.
+    pub fn attach(device: Object, left_out: &'static [u32]) -> Result<Collector, String> {
+        let sink = Box::new(Sink { left_out, messages: Mutex::new(Vec::new()) });
         let mut newer: Object = ptr::null_mut();
         // SAFETY: the device is live; QueryInterface writes an owned reference.
         let result = unsafe { com!(device, slot::QUERY_INTERFACE, fn(*const Guid, *mut Object) -> Hresult, &IID_INFO_QUEUE1, &mut newer) };
         if let Ok(queue) = created(result, newer, "QueryInterface(ID3D12InfoQueue1)") {
             let mut cookie = 0_u32;
-            let context = &*sink as *const Mutex<Vec<String>> as *mut c_void;
+            let context = &*sink as *const Sink as *mut c_void;
             let callback: MessageCallback = on_message;
             // SAFETY: the queue is a live ID3D12InfoQueue1; the context stays
             // valid until the callback is unregistered in `drop`.
@@ -104,11 +115,11 @@ impl Collector {
     pub fn drain(&mut self) -> Vec<String> {
         if let Delivery::Polling = self.delivery {
             let stored = self.stored_messages();
-            if let Ok(mut messages) = self.sink.lock() {
+            if let Ok(mut messages) = self.sink.messages.lock() {
                 messages.extend(stored);
             }
         }
-        match self.sink.lock() {
+        match self.sink.messages.lock() {
             Ok(mut messages) => std::mem::take(&mut *messages),
             Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
         }
@@ -136,12 +147,14 @@ impl Collector {
             let text = unsafe {
                 let result = com!(queue, slot::info_queue::GET_MESSAGE, fn(u64, *mut Message, *mut usize) -> Hresult, index, message, &mut length);
                 if result < 0 || (*message).description.is_null() {
-                    format!("ID3D12InfoQueue::GetMessage({index}) failed with HRESULT {:#010x}", result as u32)
+                    Some(format!("ID3D12InfoQueue::GetMessage({index}) failed with HRESULT {:#010x}", result as u32))
+                } else if self.sink.left_out.contains(&(*message).id) {
+                    None
                 } else {
-                    message_text((*message).severity, (*message).id, &CStr::from_ptr((*message).description).to_string_lossy())
+                    Some(message_text((*message).severity, (*message).id, &CStr::from_ptr((*message).description).to_string_lossy()))
                 }
             };
-            messages.push(text);
+            messages.extend(text);
         }
         // SAFETY: the queue is live; ClearStoredMessages takes no argument.
         unsafe { com!(queue, slot::info_queue::CLEAR_STORED_MESSAGES, fn() -> ()) };

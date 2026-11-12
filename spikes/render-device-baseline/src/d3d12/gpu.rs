@@ -5,6 +5,7 @@
 
 use std::ffi::c_void;
 use std::ptr;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use super::ffi::*;
@@ -92,10 +93,21 @@ pub struct ReadBack {
     pub size: u64,
 }
 
+/// What the processor's side knows of the fence and of the queue.
+struct Signaled {
+    /// The last value signaled.
+    last: u64,
+    /// Whether `Gpu::remove` removed the device: nothing more is handed to
+    /// its queue.
+    removed: bool,
+}
+
 pub struct Gpu {
     pub queue: Com,
     pub fence: Com,
-    fence_value: u64,
+    /// Held from the submission of lists to their signal, so that the values
+    /// reach the queue in their order whichever thread submits.
+    signaled: Mutex<Signaled>,
     serialize: SerializeRootSignature,
     /// Dropped last: every other object of the device is released before it.
     pub device: Com,
@@ -114,7 +126,7 @@ impl Gpu {
         // SAFETY: the device is live; the call writes an ID3D12Fence.
         let result = unsafe { com!(device.raw(), slot::device::CREATE_FENCE, fn(u64, u32, *const Guid, *mut Object) -> Hresult, 0, 0, &IID_FENCE, &mut fence) };
         let fence = created(result, fence, "ID3D12Device::CreateFence")?;
-        Ok(Gpu { queue, fence, fence_value: 0, serialize, device })
+        Ok(Gpu { queue, fence, signaled: Mutex::new(Signaled { last: 0, removed: false }), serialize, device })
     }
 
     pub fn raw(&self) -> Object {
@@ -122,11 +134,32 @@ impl Gpu {
     }
 
     /// Signals the fence on the queue after the work submitted so far.
-    pub fn signal(&mut self) -> Result<u64, String> {
-        self.fence_value += 1;
+    pub fn signal(&self) -> Result<u64, String> {
+        self.signal_next(&mut self.signaled())
+    }
+
+    /// The fence's state: an integer and a flag, which a thread that
+    /// panicked while holding them cannot have left half written.
+    fn signaled(&self) -> MutexGuard<'_, Signaled> {
+        self.signaled.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn signal_next(&self, signaled: &mut Signaled) -> Result<u64, String> {
+        self.refuse_once_removed(signaled)?;
+        signaled.last += 1;
         // SAFETY: the queue and the fence are live.
-        check(unsafe { com!(self.queue.raw(), slot::queue::SIGNAL, fn(Object, u64) -> Hresult, self.fence.raw(), self.fence_value) }, "ID3D12CommandQueue::Signal")?;
-        Ok(self.fence_value)
+        check(unsafe { com!(self.queue.raw(), slot::queue::SIGNAL, fn(Object, u64) -> Hresult, self.fence.raw(), signaled.last) }, "ID3D12CommandQueue::Signal")?;
+        Ok(signaled.last)
+    }
+
+    /// An error once `remove` has removed the device: its queue is given
+    /// nothing more, so that what it was given stays done.
+    fn refuse_once_removed(&self, signaled: &Signaled) -> Result<(), String> {
+        if !signaled.removed {
+            return Ok(());
+        }
+        self.check_not_removed()?;
+        Err("the device was removed by ID3D12Device5::RemoveDevice".to_string())
     }
 
     pub fn completed_value(&self) -> u64 {
@@ -140,6 +173,17 @@ impl Gpu {
         // SAFETY: the fence is live; a null event makes the call block.
         check(unsafe { com!(self.fence.raw(), slot::fence::SET_EVENT_ON_COMPLETION, fn(u64, *mut c_void) -> Hresult, value, ptr::null_mut()) }, "ID3D12Fence::SetEventOnCompletion")?;
         self.check_not_removed()
+    }
+
+    /// Whether the fence has reached `value`, without blocking. An error once
+    /// the device is removed: its fence then reads as the largest value, and
+    /// the work it was given is not done.
+    pub fn reached(&self, value: u64) -> Result<bool, String> {
+        let completed = self.completed_value();
+        if completed == u64::MAX || completed < value {
+            self.check_not_removed()?;
+        }
+        Ok(completed >= value)
     }
 
     /// Polls the fence without blocking until it reaches `value`, and returns
@@ -164,19 +208,68 @@ impl Gpu {
     }
 
     fn check_not_removed(&self) -> Result<(), String> {
+        match self.removed_reason() {
+            Some(reason) => Err(format!("the device was removed: ID3D12Device::GetDeviceRemovedReason returns {reason}")),
+            None => Ok(()),
+        }
+    }
+
+    /// What ID3D12Device::GetDeviceRemovedReason returns once the device is
+    /// removed, with the name DXGI gives the result where it is one of those
+    /// the call documents; nothing while the device is not removed.
+    pub fn removed_reason(&self) -> Option<String> {
         // SAFETY: the device is live.
         let reason = unsafe { com!(self.raw(), slot::device::GET_DEVICE_REMOVED_REASON, fn() -> Hresult) };
-        check(reason, "the device was removed; ID3D12Device::GetDeviceRemovedReason")
+        if reason == 0 {
+            return None;
+        }
+        let name = REMOVAL_REASONS.iter().find(|(result, _)| *result == reason).map_or(String::new(), |(_, name)| format!(" ({name})"));
+        Some(format!("HRESULT {:#010x}{name}", reason as u32))
+    }
+
+    /// Removes the device for real, as the loss of its adapter would: every
+    /// later call that reaches the device may fail.
+    ///
+    /// The queue is drained first, and given nothing afterwards. A removed
+    /// device's fence reads as the largest value at once, while the software
+    /// adapter's threads go on executing the lists they were given: removed
+    /// with work in flight and released right after, as nothing then says
+    /// when that work ends, it ended the process with an access violation
+    /// inside the rasterizer in 6 runs of 8 on the machine this was written
+    /// on (and in none of 6 on each of its two hardware devices).
+    pub fn remove(&self) -> Result<(), String> {
+        let mut newer: Object = ptr::null_mut();
+        // SAFETY: the device is live; QueryInterface writes an owned reference.
+        let result = unsafe { com!(self.raw(), slot::QUERY_INTERFACE, fn(*const Guid, *mut Object) -> Hresult, &IID_DEVICE5, &mut newer) };
+        let device = created(result, newer, "QueryInterface(ID3D12Device5), the interface that offers RemoveDevice,")?;
+        // Held to the end: no other thread hands lists to the queue between
+        // the wait and the removal.
+        let mut signaled = self.signaled();
+        if self.removed_reason().is_none() {
+            let value = self.signal_next(&mut signaled)?;
+            if let Err(reason) = self.wait(value)
+                && self.removed_reason().is_none()
+            {
+                return Err(reason);
+            }
+        }
+        // SAFETY: the object is a live ID3D12Device5; RemoveDevice takes no
+        // argument and returns nothing.
+        unsafe { com!(device.raw(), slot::device::REMOVE_DEVICE, fn() -> ()) };
+        signaled.removed = true;
+        Ok(())
     }
 
     /// Submits `lists` in their order, signals and returns the fence value.
-    pub fn execute(&mut self, lists: &[Object]) -> Result<u64, String> {
+    pub fn execute(&self, lists: &[Object]) -> Result<u64, String> {
+        let mut signaled = self.signaled();
+        self.refuse_once_removed(&signaled)?;
         // SAFETY: the lists are live and closed; the queue is live.
         unsafe { com!(self.queue.raw(), slot::queue::EXECUTE_COMMAND_LISTS, fn(u32, *const Object) -> (), lists.len() as u32, lists.as_ptr()) };
-        self.signal()
+        self.signal_next(&mut signaled)
     }
 
-    pub fn wait_idle(&mut self) -> Result<(), String> {
+    pub fn wait_idle(&self) -> Result<(), String> {
         let value = self.signal()?;
         self.wait(value)
     }
@@ -198,7 +291,7 @@ impl Gpu {
     }
 
     /// Records with `record` on a list of its own, submits it and waits.
-    pub fn submit_and_wait(&mut self, record: impl FnOnce(Object)) -> Result<(), String> {
+    pub fn submit_and_wait(&self, record: impl FnOnce(Object)) -> Result<(), String> {
         let recorder = self.recorder()?;
         recorder.begin()?;
         record(recorder.list.raw());
@@ -230,7 +323,7 @@ impl Gpu {
     }
 
     /// A buffer of the default heap holding `bytes`, left in `state`.
-    pub fn upload_buffer(&mut self, bytes: &[u8], state: u32, flags: u32, what: &str) -> Result<Com, String> {
+    pub fn upload_buffer(&self, bytes: &[u8], state: u32, flags: u32, what: &str) -> Result<Com, String> {
         let size = bytes.len() as u64;
         let buffer = self.buffer(HEAP_TYPE_DEFAULT, size, flags, what)?;
         let staging = self.buffer(HEAP_TYPE_UPLOAD, size, RESOURCE_FLAG_NONE, &format!("{what}, upload"))?;
@@ -260,7 +353,7 @@ impl Gpu {
 
     /// A texture of the default heap with every level of `levels` (tight rows
     /// of `bytes_per_texel`) uploaded, left in `state`.
-    pub fn upload_texture(&mut self, desc: &ResourceDesc, levels: &[Vec<u8>], bytes_per_texel: u32, state: u32, what: &str) -> Result<Com, String> {
+    pub fn upload_texture(&self, desc: &ResourceDesc, levels: &[Vec<u8>], bytes_per_texel: u32, state: u32, what: &str) -> Result<Com, String> {
         let texture = self.committed(HEAP_TYPE_DEFAULT, desc, STATE_COPY_DEST, None, what)?;
         let (layouts, rows, total) = self.footprints(desc, levels.len() as u32);
         let staging = self.buffer(HEAP_TYPE_UPLOAD, total, RESOURCE_FLAG_NONE, &format!("{what}, upload"))?;
@@ -579,9 +672,20 @@ pub fn set_triangle_list(list: Object) {
 /// Binds a vertex buffer of triangles.
 pub fn set_vertex_buffer(list: Object, buffer: Object, size: u32, stride: u32) {
     set_triangle_list(list);
-    let view = VertexBufferView { location: gpu_address(buffer), size, stride };
+    set_vertex_view(list, &VertexBufferView { location: gpu_address(buffer), size, stride });
+}
+
+/// Binds the vertex buffer a view names.
+pub fn set_vertex_view(list: Object, view: &VertexBufferView) {
     // SAFETY: the list is recording; the view names a live buffer.
-    unsafe { com!(list, slot::list::IA_SET_VERTEX_BUFFERS, fn(u32, u32, *const VertexBufferView) -> (), 0, 1, &view) };
+    unsafe { com!(list, slot::list::IA_SET_VERTEX_BUFFERS, fn(u32, u32, *const VertexBufferView) -> (), 0, 1, view) };
+}
+
+/// Sets the 32-bit constants of a root parameter, from its first one on.
+pub fn set_graphics_constants(list: Object, parameter: u32, constants: &[u32]) {
+    // SAFETY: the list is recording with a root signature whose parameter
+    // holds at least this many constants.
+    unsafe { com!(list, slot::list::SET_GRAPHICS_ROOT_32BIT_CONSTANTS, fn(u32, u32, *const c_void, u32) -> (), parameter, constants.len() as u32, constants.as_ptr() as *const c_void, 0) };
 }
 
 pub fn set_render_targets(list: Object, targets: &[CpuHandle], depth: Option<CpuHandle>) {
@@ -598,6 +702,14 @@ pub fn clear_target(list: Object, target: CpuHandle, color: [f32; 4]) {
 pub fn clear_depth(list: Object, depth: CpuHandle, value: f32) {
     // SAFETY: the list is recording; the handle is a slot of a live heap.
     unsafe { com!(list, slot::list::CLEAR_DEPTH_STENCIL_VIEW, fn(CpuHandle, u32, f32, u8, u32, *const Rect) -> (), depth, CLEAR_FLAG_DEPTH, value, 0, 0, ptr::null()) };
+}
+
+/// Resolves the first subresource of a multisampled texture in the resolve
+/// source state to a single-sample one in the resolve destination state.
+pub fn resolve(list: Object, destination: Object, source: Object, format: u32) {
+    // SAFETY: the list is recording; both textures are live, of `format` and
+    // of one size.
+    unsafe { com!(list, slot::list::RESOLVE_SUBRESOURCE, fn(Object, u32, Object, u32, u32) -> (), destination, 0, source, 0, format) };
 }
 
 pub fn set_pipeline(list: Object, pipeline: Object) {

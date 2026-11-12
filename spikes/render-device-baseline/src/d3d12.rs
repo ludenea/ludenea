@@ -15,6 +15,7 @@ mod device;
 mod exercises;
 mod ffi;
 mod filtering;
+mod frames;
 mod gpu;
 mod lit;
 mod shaders;
@@ -25,10 +26,11 @@ use std::path::Path;
 use std::ptr;
 
 use crate::backend::{Api, Device, DeviceInfo, DeviceKind, SceneShaders, Setting};
+use crate::frames::FrameDevice;
 use crate::loader::Library;
 use ffi::*;
 use gpu::Gpu;
-use shaders::Shaders;
+use shaders::{Compiler, Shaders};
 
 /// The functions the module calls from the three libraries.
 #[derive(Clone, Copy)]
@@ -57,6 +59,9 @@ struct Direct3d12 {
     devices: OnceCell<Vec<DeviceInfo>>,
     functions: Functions,
     shaders: Shaders,
+    /// Kept for the shaders compiled after the module is opened (the frame
+    /// shader and its variants).
+    shader_compiler: Compiler,
     compiler_name: String,
     // The libraries are released last, after every object they created.
     _compiler: Library,
@@ -77,10 +82,11 @@ pub fn open(shaders: &Path, _work: &Path) -> Result<Box<dyn Api>, String> {
         };
         (functions, dxgi.function::<CreateDxgiFactory1>("CreateDXGIFactory1")?, compiler.function::<Compile>("D3DCompile")?)
     };
-    let shaders = Shaders::compile(compile, shaders)?;
+    let shader_compiler = Compiler::new(compile, shaders);
+    let shaders = Shaders::compile(&shader_compiler)?;
     let adapters = enumerate_adapters(create_factory)?;
     let compiler_name = format!("{} (D3DCompile, shader model 5.1 targets)", compiler.name);
-    Ok(Box::new(Direct3d12 { adapters, devices: OnceCell::new(), functions, shaders, compiler_name, _compiler: compiler, _dxgi: dxgi, d3d12 }))
+    Ok(Box::new(Direct3d12 { adapters, devices: OnceCell::new(), functions, shaders, shader_compiler, compiler_name, _compiler: compiler, _dxgi: dxgi, d3d12 }))
 }
 
 fn enumerate_adapters(create_factory: CreateDxgiFactory1) -> Result<Vec<Adapter>, String> {
@@ -139,21 +145,30 @@ impl Direct3d12 {
     /// The kind and the interface version of an adapter, read from a device
     /// created for the purpose and released at once.
     fn device_info(&self, index: usize, adapter: &Adapter) -> DeviceInfo {
-        let (kind, interface_version) = match self.create_gpu(adapter) {
-            Ok(gpu) => {
-                let kind = match (adapter.software, capabilities::unified_memory(&gpu)) {
-                    (true, _) => DeviceKind::Software,
-                    (false, Ok(true)) => DeviceKind::Integrated,
-                    (false, Ok(false)) => DeviceKind::Discrete,
-                    (false, Err(_)) => DeviceKind::Other,
-                };
-                let level = capabilities::feature_level(&gpu).map_or_else(|error| error, |level| format!("feature level {}", capabilities::level_name(level)));
-                let model = capabilities::shader_model(&gpu).map_or_else(|error| error, |model| format!("shader model {}", capabilities::model_name(model)));
-                (kind, format!("{level}, {model}"))
-            }
-            Err(error) => (if adapter.software { DeviceKind::Software } else { DeviceKind::Other }, format!("no device: {error}")),
+        match self.create_gpu(adapter) {
+            Ok(gpu) => adapter.info(index, &gpu),
+            Err(error) => adapter.described(index, if adapter.software { DeviceKind::Software } else { DeviceKind::Other }, format!("no device: {error}")),
+        }
+    }
+}
+
+impl Adapter {
+    /// What the interface reports of the adapter, its kind and its interface
+    /// version read from a device open on it.
+    fn info(&self, index: usize, gpu: &Gpu) -> DeviceInfo {
+        let kind = match (self.software, capabilities::unified_memory(gpu)) {
+            (true, _) => DeviceKind::Software,
+            (false, Ok(true)) => DeviceKind::Integrated,
+            (false, Ok(false)) => DeviceKind::Discrete,
+            (false, Err(_)) => DeviceKind::Other,
         };
-        DeviceInfo { index, name: adapter.name.clone(), kind, vendor_id: adapter.vendor_id, device_id: adapter.device_id, driver: adapter.driver.clone(), interface_version }
+        let level = capabilities::feature_level(gpu).map_or_else(|error| error, |level| format!("feature level {}", capabilities::level_name(level)));
+        let model = capabilities::shader_model(gpu).map_or_else(|error| error, |model| format!("shader model {}", capabilities::model_name(model)));
+        self.described(index, kind, format!("{level}, {model}"))
+    }
+
+    fn described(&self, index: usize, kind: DeviceKind, interface_version: String) -> DeviceInfo {
+        DeviceInfo { index, name: self.name.clone(), kind, vendor_id: self.vendor_id, device_id: self.device_id, driver: self.driver.clone(), interface_version }
     }
 }
 
@@ -180,8 +195,19 @@ impl Api for Direct3d12 {
             validation::enable_layer(self.functions.get_debug_interface)?;
         }
         let gpu = self.create_gpu(adapter)?;
-        let collector = if validation { Some(validation::Collector::attach(gpu.raw())?) } else { None };
+        let collector = if validation { Some(validation::Collector::attach(gpu.raw(), &[])?) } else { None };
         Ok(Box::new(device::Direct3d12Device::new(gpu, std::borrow::Cow::Borrowed(&self.shaders), collector)?))
+    }
+
+    fn open_frames(&self, index: usize, validation: bool) -> Result<Box<dyn FrameDevice + '_>, String> {
+        let adapter = self.adapters.get(index).ok_or_else(|| format!("no DXGI adapter at index {index} ({} enumerated)", self.adapters.len()))?;
+        if validation {
+            validation::enable_layer(self.functions.get_debug_interface)?;
+        }
+        let gpu = self.create_gpu(adapter)?;
+        let collector = if validation { Some(validation::Collector::attach(gpu.raw(), &frames::MESSAGES_LEFT_OUT)?) } else { None };
+        let info = adapter.info(index, &gpu);
+        Ok(Box::new(frames::Direct3d12Frames::new(gpu, info, &self.shader_compiler, collector)?))
     }
 
     fn open_with_scene_shaders(&self, index: usize, scene: &SceneShaders) -> Result<Box<dyn Device + '_>, String> {

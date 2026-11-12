@@ -136,6 +136,7 @@
 //! renders the scene, drains the messages, calls [`Device::misuse`] and
 //! drains again. An error from `open` is the reason no layer could be used.
 
+use crate::frames::FrameDevice;
 use crate::scene::{Image, Scene};
 
 /// What stands behind a device, as the interface reports it.
@@ -377,6 +378,13 @@ pub trait Api {
     /// Creates the device at `index` from scratch, with the scene's shaders
     /// in the form given instead of those the interface compiles itself.
     fn open_with_scene_shaders(&self, index: usize, shaders: &SceneShaders) -> Result<Box<dyn Device + '_>, String>;
+    /// Creates the device at `index` from scratch for frames: resources that
+    /// outlive a frame, passes recorded in parts, submissions that are polled
+    /// (see [`crate::frames`]).
+    fn open_frames(&self, index: usize, validation: bool) -> Result<Box<dyn FrameDevice + '_>, String> {
+        let _ = (index, validation);
+        Err(format!("frames are not built on {}", self.name()))
+    }
     /// The settings under which a software device is measured again; empty
     /// for a device that has none.
     fn software_settings(&self, device: &DeviceInfo) -> Vec<Setting>;

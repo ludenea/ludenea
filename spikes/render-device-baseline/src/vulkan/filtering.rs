@@ -56,7 +56,7 @@ fn sampler_info(filter: u32, mipmap_mode: u32, address_mode: u32) -> SamplerCrea
 }
 
 /// The nearest, linear and trilinear samplers, in the scene's order.
-fn samplers(scope: &mut Scope) -> Result<[Object; 3], String> {
+pub(super) fn samplers(scope: &mut Scope) -> Result<[Object; 3], String> {
     Ok([
         scope.sampler(&sampler_info(FILTER_NEAREST, MIPMAP_MODE_NEAREST, ADDRESS_MODE_CLAMP_TO_EDGE))?,
         scope.sampler(&sampler_info(FILTER_LINEAR, MIPMAP_MODE_NEAREST, ADDRESS_MODE_CLAMP_TO_EDGE))?,
@@ -108,7 +108,7 @@ fn targets(scope: &mut Scope, [width, height]: [u32; 2]) -> Result<(Object, Obje
     Ok((render_pass, framebuffer, resolved))
 }
 
-fn alpha_blend() -> PipelineColorBlendAttachmentState {
+pub(super) fn alpha_blend() -> PipelineColorBlendAttachmentState {
     PipelineColorBlendAttachmentState {
         blend_enable: 1,
         src_color_blend_factor: BLEND_FACTOR_SRC_ALPHA,
