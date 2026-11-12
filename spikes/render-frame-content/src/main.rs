@@ -179,6 +179,23 @@ fn child(arguments: &[String]) {
         drop(opened);
         entries.push(("validation_layer".to_string(), quoted(&layer)));
         entries.push(("validation_delivery".to_string(), quoted(&delivery)));
+        // The adapter's check under the layer: what the layer says of the
+        // adapter itself, before anything is ordered wrongly on purpose.
+        if layer == "on"
+            && let Ok(device) = api.open_frames(index, true)
+        {
+            let failing = render_device_baseline::frames::check(device.as_ref()).iter().filter(|line| line.outcome.is_err()).count();
+            let messages = device.validation_messages();
+            let mut out = Json::new();
+            out.object_start();
+            out.u64("lines_that_fail", failing as u64);
+            out.u64("validation_messages", messages.len() as u64);
+            for (index, message) in messages.iter().take(3).enumerate() {
+                out.string(&format!("message_{}", index + 1), &message.chars().take(500).collect::<String>());
+            }
+            out.object_end();
+            entries.push(("adapter_check_under_the_layer".to_string(), out.finish()));
+        }
         lifetimes_report(backend, &entries, Some(Path::new(report)));
         return;
     }

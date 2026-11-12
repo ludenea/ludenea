@@ -1996,7 +1996,8 @@ case "$spike" in
     echo "| Cell | Device | Lines that hold | Lines that fail |"
     echo "| --- | --- | --- | --- |"
     for file in "${facts[@]}"; do
-      jq -r '.cell as $cell | (.devices // [])[] | .report | "| \($cell) | \(.device.name // "unknown") (\(.interface // "?")) | \([(.adapter_check // [])[] | select(.holds)] | length) of \((.adapter_check // []) | length) | \([(.adapter_check // [])[] | select(.holds | not) | "\(.check): \(.found | gsub("\|"; "/"))"] | join("; ")) |"' "$file"
+      jq -r '.cell as $cell | (.devices // [])[] | .report | "| \($cell) | \(.device.name // "unknown") (\(.interface // "?")) | \([(.adapter_check // [])[] | select(.holds)] | length) of \((.adapter_check // []) | length) | \([(.adapter_check // [])[] | select(.holds | not) | "\(.check): \(.found | gsub("\\|"; "/"))"] | join("; ")) |"' "$file"
+      jq -r '.cell as $cell | (.lifetimes_under_validation // [])[] | .report | select(.adapter_check_under_the_layer) | .adapter_check_under_the_layer as $c | "| \($cell) | \(.device.name // "unknown") (\(.interface // "?")), under the validation layer | \($c.lines_that_fail) lines fail | \($c.validation_messages) messages of the layer\(if $c.message_1 then ": " + ([$c.message_1, $c.message_2, $c.message_3] | map(select(. != null) | gsub("\\|"; "/") | gsub("\n"; " ")) | join(" // ")) else "" end) |"' "$file"
     done
     echo
     echo "The content hash of two frames (tick 30 at the factor 0.5, tick 60 at 0.25), prepared with each arithmetic at 1, 4 and 8 workers:"
