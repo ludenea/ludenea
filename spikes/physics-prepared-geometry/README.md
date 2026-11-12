@@ -68,4 +68,62 @@ A magnitude (a time) is judged on the founder's machine (AMD Ryzen 9 9950X3D, 16
 
 ## Result
 
-Not measured yet.
+Measured on 2026-11-12. Research CI on the five cells, twice in release ([first run](https://github.com/ludenea/ludenea/actions/runs/43254006864), [second run](https://github.com/ludenea/ludenea/actions/runs/43257216128)) and twice unoptimized ([first run](https://github.com/ludenea/ludenea/actions/runs/43254015154), whose macOS job the platform cancelled for lack of a runner, and [second run](https://github.com/ludenea/ludenea/actions/runs/43257222307), five cells). The first release run wrote each cell's forms, committed under `forms-from-other-cells/`; the second runs read them. On the founder's machine: three release runs and one unoptimized run on a quiet machine, then one release run with the five cells' forms.
+
+| Cell | Machine | Compiler of the Box2D half |
+| --- | --- | --- |
+| `linux-x86_64` | Intel Xeon 6975P-C in the first release run, AMD EPYC 9V45 in the second, 4 vCPU | GCC 13.3 |
+| `linux-arm64` | Neoverse N2, 4 vCPU | GCC 13.3 |
+| `windows-x86_64` | Intel Xeon Platinum 8573C in the first release run, AMD EPYC 7763 in the second | MSVC 19.51 |
+| `windows-arm64` | Cobalt 100 | Clang 22.1.8 (`clang-cl`) |
+| `macos-arm64` | Apple M1 (virtual), 3 vCPU | Apple Clang 17 |
+| founder's machine | AMD Ryzen 9 9950X3D, Windows 11 | MSVC 19.51 |
+
+**The first step, per kind.**
+
+| Library and kind | A form built outside a world, written and read back |
+| --- | --- |
+| Rapier, triangle mesh with its acceleration structure | Yes: `TriMesh::with_flags` needs no world and the type derives serde's traits; the form is its `bincode` bytes. |
+| Rapier, convex hull | Yes: `ConvexPolyhedron::from_convex_hull`, likewise. |
+| Box2D, convex polygon | Yes, as the application's own bytes: `b2Polygon` is a plain value made by `b2ComputeHull` and `b2MakePolygon`, and the library neither writes nor reads one. `b2ComputeHull` returns an empty hull for 1 000, 10 000 and 100 000 points and a hull of 8 points for 8: a polygon has at most 8 vertices, so a larger cloud is reduced before the library sees it. |
+| Box2D, chain | **None.** A chain exists only as segment shapes created on a body of a world; no function builds one outside a world, writes one or reads one. The two hypotheses on portability do not apply to it. |
+
+**Portable bytes: holds for three kinds, refuted for the triangle mesh with fixed internal edges.** Across the ten builds measured in the second runs (five cells, release and unoptimized) and the founder's machine:
+
+| Kind | Distinct hashes of the form | Reading |
+| --- | --- | --- |
+| Rapier triangle mesh, no flag | 1 (`0xa8aa235e8a06796e` at 1 000 triangles) | Holds, at the three sizes, on Intel, AMD and ARM64 hosts. |
+| Rapier triangle mesh, fixed internal edges | 4: one per platform, the two Windows cells and the founder's machine agreeing | **Refuted.** Two cells' forms of 142 117 bytes differ by 26 to 80 bytes, each the low byte of a float among the vertex pseudo-normals. Read in Parry 0.31.1: a pseudo-normal weighs each triangle's normal by an angle that `VectorExt::angle` takes from the standard library's `acos`, the platform's own, which the `enhanced-determinism` feature does not replace. Release and unoptimized builds of one cell agree. |
+| Rapier convex hull | 1 (`0x7086d704a066a473` at 1 000 points) | Holds, at the three sizes. |
+| Box2D convex polygons | 1 (`0x0fe8d071b9e87227` for 125 polygons) | Holds, at the three sizes, with four compilers. |
+
+Every form gives the same bytes twice in one process and after being read and written again, on every cell.
+
+**Portable behavior: holds for every kind, the refuted one included.** In the second runs each cell stepped, per kind, a world that built its shapes, a world that read this run's form and a world for the form of each of the five cells: 350 worlds over the ten builds, every form read, **no step differing in 600**, and one run hash per kind on every cell, build and source (`0xb6bd2e00b9d365c5` and `0x312a5b3d92e17728` for the two meshes, `0x57440d4051b62229` for the hull, `0xa168395a98e76bf7` for the polygons). The founder's machine, reading the five cells' forms, stepped its 35 worlds to the same run hashes. For the mesh with fixed internal edges this says that the bytes that differ changed nothing in this scene, not that they cannot: the pseudo-normals of two cells are not the same numbers.
+
+**What it saves.** Milliseconds to build, then to read the prepared form, medians of 7 repetitions; the founder's machine as the range of its three runs, the cells as the range of the five cells over the two release runs. One fixed step is 16.67 ms.
+
+| Kind | 1 000 elements | 10 000 | 100 000 | Build at 100 000 over one step |
+| --- | --- | --- | --- | --- |
+| Rapier triangle mesh, no flag, founder's machine | 0.12 to 0.13, read 0.05 | 1.27 to 1.30, read 0.46 to 0.48 | 14.6 to 15.1, read 5.7 to 5.8 | 0.88 to 0.91 |
+| The same, cells | 0.10 to 0.27 | 1.7 to 2.8 | 19.8 to 32.9, read 3.2 to 13.9 | 1.2 to 2.0 |
+| Rapier triangle mesh, fixed internal edges, founder's machine | 0.37 to 0.38, read 0.08 | 4.26 to 4.32, read 0.67 to 0.71 | 48.9 to 49.2, read 8.1 | 2.9 |
+| The same, cells | 0.33 to 1.09 | 4.1 to 8.9 | 48.8 to 117.2, read 4.8 to 19.2 | 2.9 to 7.0 |
+| Rapier convex hull (133, 441 and 1 410 hull vertices), founder's machine | 0.20 to 0.21, read 0.01 | 1.47 to 1.53, read 0.03 | 13.7 to 13.9, read 0.11 to 0.12 | 0.82 to 0.83 |
+| The same, cells | 0.15 to 0.47 | 1.4 to 3.5 | 12.4 to 36.1, read 0.07 to 0.26 | 0.74 to 2.2 |
+| Box2D convex polygons (125, 1 250 and 12 500), founder's machine | 0.03, read 0.002 | 0.31 to 0.33, read 0.02 | 3.4, read 0.21 | 0.20 |
+| The same, cells | 0.03 to 0.06 | 0.34 to 0.67 | 3.6 to 6.9, read 0.11 to 0.53 | 0.22 to 0.41 |
+| Box2D chain, no prepared form, founder's machine | 0.32 to 0.34 | 4.2 to 4.3 | 46.2 to 46.9 | 2.8 |
+| The same, cells | 0.27 to 0.80 | 3.5 to 9.5 | 51.7 to 101.8 | 3.1 to 6.1 |
+
+On the machine that judges, a build exceeds one fixed step for the triangle mesh with fixed internal edges at 100 000 triangles and for the Box2D chain at 100 000 points, and for nothing else on the ladder. The plain triangle mesh and the convex hull stay under one step there, at 0.82 to 0.91 of it, with no margin: at 100 000 elements the plain mesh exceeds it on every hosted cell, and the hull on three or four cells of five depending on the run. No build exceeds one step at 10 000 elements on any machine. The Box2D polygons never come near a step: their prepared form is needless. A read costs 2 to 18 times less than the build for the meshes and 14 to 270 times less for the hull, more at the larger sizes. The unoptimized build of the founder's machine multiplies the builds by 6 to 15 (681 ms for the mesh with fixed internal edges and 345 ms for the chain at 100 000 elements).
+
+So the one kind whose build is long enough to justify a prepared form on the machine that judges, the triangle mesh with fixed internal edges, is the one whose bytes are not the same on every cell. Its form built on one cell and read on the others gave one simulation here.
+
+**Beside the Box2D chain: the image of a whole world**, which is not a prepared form of the kind. A world that holds a static body and its chain weighs 406 699 bytes for 1 000 points, 4.0 MB for 10 000 and 40.0 MB for 100 000, about 400 bytes a point; on the founder's machine the image of 100 000 points takes 14.6 ms to write and 3.8 ms to turn back into a world, against 46 to 47 ms for `b2CreateChain` (on the cells 15 to 45 ms and 1.7 to 13.7 ms). Two worlds built alike in one process give the same image; two processes do not: the cells' images of 1 000 points have four hashes and differ by 999 or 3 996 bytes, one or four per segment. A world created from any cell's image, to which the bodies were then added, stepped as the world that created its chain locally: 70 worlds, no step differing.
+
+The unoptimized builds give the hashes and the run hashes of the release builds on every cell.
+
+**Not measured**: the reduction of a cloud above eight points to polygons Box2D takes; the time to write a form and the file system; a build on several threads; Rapier 2D; a triangle mesh whose form is read by another version of the library; whether the pseudo-normals of two cells can part two simulations, which no scene here showed; the cause of the bytes that differ between two images of a Box2D world, read as padding and not traced.
+
+The raw measurements and the environment of each cell are the artifacts of the runs. The result holds for Box2D v3.2.0, Rapier 3D 0.36.1 with Parry 0.31.1 and the pinned toolchain on these machines.
