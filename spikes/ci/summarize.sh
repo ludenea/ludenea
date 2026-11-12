@@ -2171,6 +2171,14 @@ case "$spike" in
       jq -r "$run_row"' .cell as $cell | ((.presentation_modes // []) + (.synchronized_long_runs // []))[] | row($cell)' "$file"
     done
     echo
+    echo "Under the Wayland compositor, the synchronized mode once more with no gesture and the protocol logged, the presenter on each of its two places (the last lines of the protocol are in the cell's facts):"
+    echo
+    echo "$run_head"
+    echo "$run_rule"
+    for file in "${facts[@]}"; do
+      jq -r "$run_row"' .cell as $cell | (.synchronized_under_wayland_with_the_protocol_logged // [])[] | row($cell)' "$file"
+    done
+    echo
     echo "Where the time of a turn goes, per state of the window, in microseconds (median, 99th percentile): the acquisition, the submission, the wait for the device, the presentation call, one frame of the offscreen stream served by the same presenter, and the period of that stream (median, largest). The unsynchronized rows are the windowed runs with winit of the first table:"
     echo
     echo "| Cell | Under | Path | Device | Mode | Frames | Window is | Turns | Presented | Outcomes | Acquisition | Submission | Wait for the device | Presentation | Offscreen frame | Offscreen period |"
@@ -2181,10 +2189,10 @@ case "$spike" in
     echo
     echo "The presentation times each path gave on its synchronized runs, against the compositor's refresh period:"
     echo
-    echo "| Cell | Path | Device | Frames | Readings | Refused | Refresh period from the readings (us) | Compositor's refresh period (us) | Refreshes between two presentations: count | Presentation time extensions offered | Source |"
-    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    echo "| Cell | Path | Device | Frames | Readings | Refused | Readings that give a period, whose count did not move, breaks in the count | Refresh period from the readings in us (median, smallest, largest) | Compositor's refresh period (us) | Refreshes between two presentations: count | Presentation time extensions offered | Source |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
     for file in "${facts[@]}"; do
-      jq -r '.cell as $cell | (.display.compositor_refresh_period_us // "n/a") as $period | ((.presentation_modes // []) + (.synchronized_long_runs // []))[] | select(.presentation_times != null and .mode == "synchronized") | "| \($cell) | \(.path) | \(.presenter.device) | \(.frames_presented) | \(.presentation_times.readings // "none") | \(.presentation_times.readings_refused // "n/a")\(if .presentation_times.first_refusal then " (\(.presentation_times.first_refusal))" else "" end) | \(.presentation_times.refresh_period_from_the_statistics_us // "n/a") | \($period) | \((.presentation_times.refreshes_between_two_presentations // []) | map("\(.refreshes): \(.presentations)") | join(", ")) | \(.presenter.presentation_time_extensions_offered // "n/a") | \(.presentation_times.source) |"' "$file"
+      jq -r '.cell as $cell | (.display.compositor_refresh_period_us // "n/a") as $period | ((.presentation_modes // []) + (.synchronized_long_runs // []))[] | select(.presentation_times != null and .mode == "synchronized") | "| \($cell) | \(.path) | \(.presenter.device) | \(.frames_presented) | \(.presentation_times.readings // "none") | \(.presentation_times.readings_refused // "n/a")\(if .presentation_times.first_refusal then " (\(.presentation_times.first_refusal))" else "" end) | \(.presentation_times.readings_that_give_a_period // "n/a"), \(.presentation_times.readings_whose_refresh_count_did_not_move // "n/a"), \(.presentation_times.breaks_in_the_refresh_count // "n/a") | \(.presentation_times.refresh_period_from_the_statistics_us // "n/a"), \(.presentation_times.refresh_period_smallest_us // "n/a"), \(.presentation_times.refresh_period_largest_us // "n/a") | \($period) | \((.presentation_times.refreshes_between_two_presentations // []) | map("\(.refreshes): \(.presentations)") | join(", ")) | \(.presenter.presentation_time_extensions_offered // "n/a") | \(.presentation_times.source) |"' "$file"
     done
     echo
     echo "The threads of the process at each step, each thread attributed to the step at which it appeared, and the processor time each set took over an idle second (a set waits under 1 000 microseconds):"

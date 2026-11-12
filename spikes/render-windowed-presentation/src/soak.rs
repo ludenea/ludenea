@@ -108,6 +108,7 @@ fn run_inner(arguments: &Arguments, header: &Json) -> Result<Json, String> {
                             .clone()
                             .with("completed", false)
                             .with("deadlock", true)
+                            .with("error", format!("no frame was presented and no event was pumped for {} seconds", DEADLOCK_AFTER.as_secs()))
                             .with("presenter_was_in", crate::presenter::current_call())
                             .with("frames_presented", shared.frames_presented.load(Ordering::Relaxed))
                             .with("window_was", crate::scenario::PHASES[shared.phase.load(Ordering::Relaxed).min(4) as usize])

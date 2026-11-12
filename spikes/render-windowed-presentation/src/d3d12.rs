@@ -682,17 +682,37 @@ impl Presenter for Direct3d12Presenter {
         if self.statistics_errors > 0 {
             times.set("first_refusal", format!("HRESULT {:#010x}", self.first_statistics_error as u32));
         }
-        // The refresh period the statistics imply: the performance counter
-        // against the count of refreshes, between the first and the last
-        // reading that differ.
-        if let (Some(first), Some(last)) = (self.statistics.first(), self.statistics.last()) {
-            let refreshes = last.sync_refresh_count.wrapping_sub(first.sync_refresh_count);
-            if refreshes > 0 {
-                let ticks = (last.sync_qpc_time - first.sync_qpc_time) as f64;
-                let period_ns = ticks * 1e9 / crate::win32::performance_frequency() as f64 / f64::from(refreshes);
-                times.set("refresh_period_from_the_statistics_us", Json::Float(period_ns / 1000.0));
-                times.set("refreshes_spanned", refreshes);
+        if !self.statistics.is_empty() {
+            // The refresh period the statistics imply: the performance
+            // counter against the count of refreshes, between two readings
+            // in a row whose count advanced by one to eight refreshes; a
+            // larger step is a break in the statistics and is counted apart.
+            let frequency = crate::win32::performance_frequency() as f64;
+            let mut periods: Vec<u64> = Vec::new();
+            let (mut unchanged, mut breaks) = (0_u64, 0_u64);
+            for pair in self.statistics.windows(2) {
+                match pair[1].sync_refresh_count.wrapping_sub(pair[0].sync_refresh_count) {
+                    0 => unchanged += 1,
+                    refreshes @ 1..=8 => periods.push(((pair[1].sync_qpc_time - pair[0].sync_qpc_time) as f64 * 1e9 / frequency / f64::from(refreshes)) as u64),
+                    _ => breaks += 1,
+                }
             }
+            periods.sort_unstable();
+            times.set("readings_whose_refresh_count_did_not_move", unchanged);
+            times.set("breaks_in_the_refresh_count", breaks);
+            times.set("readings_that_give_a_period", periods.len());
+            if !periods.is_empty() {
+                times.set("refresh_period_from_the_statistics_us", Json::Float(crate::clock::percentile(&periods, 0.5) as f64 / 1000.0));
+                times.set("refresh_period_smallest_us", Json::Float(periods[0] as f64 / 1000.0));
+                times.set("refresh_period_largest_us", Json::Float(periods[periods.len() - 1] as f64 / 1000.0));
+            }
+            // The first readings as the system gave them: the count of
+            // presentations, the refresh the last frame was shown at, the
+            // refresh the counter was read at.
+            times.set(
+                "first_readings",
+                Json::List(self.statistics.iter().take(6).map(|reading| Json::from(format!("presentations {}, shown at refresh {}, counter read at refresh {}", reading.present_count, reading.present_refresh_count, reading.sync_refresh_count))).collect()),
+            );
             // By how many refreshes the shown frame advanced from one
             // presentation to the next.
             let mut steps: std::collections::BTreeMap<u32, u64> = std::collections::BTreeMap::new();
