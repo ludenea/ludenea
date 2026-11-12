@@ -70,4 +70,82 @@ No third-party library is linked or vendored. The independent decoders are tools
 
 ## Result
 
-Not measured yet.
+Measured on 2026-11-12 on the five cells of the research CI: a [first run](https://github.com/ludenea/ludenea/actions/runs/43281455488), in which each cell took its references; a [second run](https://github.com/ludenea/ludenea/actions/runs/43282602225) on fresh runners after those references were accepted into the repository, whose macOS cell found no runner and ran [alone](https://github.com/ludenea/ludenea/actions/runs/43285128958); four more runs of the Linux x86_64 cell ([one](https://github.com/ludenea/ludenea/actions/runs/43284674109), [two](https://github.com/ludenea/ludenea/actions/runs/43284688936), [three](https://github.com/ludenea/ludenea/actions/runs/43284701183), [four](https://github.com/ludenea/ludenea/actions/runs/43284713860)); the two Linux cells in the `rust:1.99.1-slim-trixie` container ([run](https://github.com/ludenea/ludenea/actions/runs/43282634519)); and a developer machine (AMD Ryzen 9 9950X3D, Windows 11), natively and in that container, named by its digest, under the Linux subsystem. Rust 1.99.1, release profile. The raw measurements, the pending parts and the pictures are in the runs' artifacts.
+
+The content hash is one value on every machine, as a hash of the spike's own draw list must be. The pictures:
+
+| Machine | Device and implementation | Processor | Frame bytes |
+| --- | --- | --- | --- |
+| `linux-x86_64`, three runs | llvmpipe (LLVM 20.1.2, 256 bits), Mesa 25.2.8 | AMD EPYC 7763, AMD EPYC 9V74 (twice) | `e3a283950520fad1` |
+| `linux-x86_64`, three runs | the same device, under the same key | Intel Xeon 6973P-C, Intel Xeon 6975P-C (twice) | `1109dde3338ef346` |
+| `linux-arm64`, two runs | llvmpipe (LLVM 20.1.2, 128 bits), Mesa 25.2.8 | Arm Neoverse N2 | `a96b67d1d9209ee0` |
+| `windows-x86_64`, two runs | Microsoft Basic Render Driver 10.0.26100.33648 | AMD EPYC 7763 | `f81b63a351b9eedc` |
+| `windows-arm64`, two runs | Microsoft Basic Render Driver 10.0.26100.9711 | Cobalt 100 | `f81b63a351b9eedc` |
+| `macos-arm64`, two runs in two data centers | Apple Paravirtual device, macOS 15.8.2 | Apple M1 (Virtual) | `e46b7fa74288cad1` |
+| container on the Linux x86_64 cell | llvmpipe (LLVM 19.1.7, 256 bits), Mesa 25.0.7 | AMD EPYC 9V74 | `e3a283950520fad1` |
+| container on the Linux ARM64 cell | llvmpipe (LLVM 19.1.7, 128 bits), Mesa 25.0.7 | Arm Neoverse N2 | `a96b67d1d9209ee0` |
+| container on the developer machine | llvmpipe (LLVM 19.1.7, 256 bits), Mesa 25.0.7 | AMD Ryzen 9 9950X3D | `e3a283950520fad1` |
+| developer machine | Microsoft Basic Render Driver 10.0.26100.9818 | AMD Ryzen 9 9950X3D | `f81b63a351b9eedc` |
+
+1. **The round trip of the files: holds on four cells and between cells, refuted on the Linux x86_64 cell.**
+   - On a later run, on a fresh runner, the two Windows cells, the Linux ARM64 cell and the macOS cell report the key of their reference and its bytes: the three comparisons pass and no pending part is written. The two macOS runs landed on hosts in two data centers.
+   - The Linux x86_64 cell reports one key in its six runs and two pictures. On the hosts with an AMD processor it draws the reference's bytes; on the hosts with an Intel processor, three runs of six, it draws another picture, 854 pixels of 65 536 apart by one level per channel. There the byte comparison fails under the reference's own key, with the cause "the bytes differ" (content and payloads equal), and leaves a pending byte part under that same key; the bounded difference passes. The key as designed (the interface, the device, its implementation and version, its settings and thread count, the processor architecture) does not tell the two hosts apart; the processor recorded beside it does.
+   - Read by another cell, each of the twenty pairs is reported as designed: the content is equal, the byte comparison is "not compared", and a pending byte part with its pixel file under the reading cell's key is among the run's artifacts.
+   - The two Windows cells hold two keys, two versions of the adapter, and draw the same bytes: each is "not compared" against the other's part, and the bounded difference against it measures no differing pixel. The two versions of Mesa and LLVM, on the runner and in the container, are two keys with the same bytes as well, on each architecture.
+   - The bounded difference against another cell's base, under the test's numbers (16, 4, 1 024 pixels beyond 4):
+
+     | Capture and base | Differing pixels of 65 536 | Largest difference per channel | Verdict |
+     | --- | --- | --- | --- |
+     | Linux x86_64 and Linux ARM64 | 11 448 on an AMD host, 11 713 on an Intel host | 4, 4, 4, 0 | passes |
+     | The Windows cells and the macOS cell | 10 532 | 6, 7, 7, 0 | passes |
+     | The Windows cells and Linux x86_64 | 16 549 on an AMD host, 16 634 on an Intel host | 8, 8, 8, 0 | fails |
+     | The Windows cells and Linux ARM64 | 16 650 | 9, 9, 9, 0 | fails |
+     | The macOS cell and Linux x86_64 | 16 330 on an AMD host, 16 408 on an Intel host | 11, 10, 10, 0 | fails |
+     | The macOS cell and Linux ARM64 | 16 426 | 11, 12, 12, 0 | fails |
+
+2. **The causes: holds.** The eleven cases are reported with the verdicts of their row on the five cells, in the container and on the developer machine:
+
+   | Case | Content equality | Byte equality | Pending part of the byte comparison | Bounded difference |
+   | --- | --- | --- | --- | --- |
+   | Nothing changed | passes | passes | none | passes |
+   | The reference does not exist | fails | fails | byte part | fails |
+   | A target of another size | fails | fails | byte part | fails |
+   | An item moved inside the view | fails | fails | byte part | fails on its numbers |
+   | An item moved outside every view | fails | passes | refresh of the content part | passes |
+   | A texture encoded again | passes | fails | byte part | passes on its numbers |
+   | A texel no draw samples encoded again | passes | passes | refresh of the byte part | passes |
+   | The adapter sets a blend state wrongly | passes | fails | byte part | fails on its numbers |
+   | A run under another key | passes | not compared | byte part under a new key | passes |
+   | A key that moved with a changed item | fails | not compared, fails on the content | byte part under a new key | fails on its numbers |
+   | A device that draws nothing | passes | not made | none | not made |
+
+   The item moved inside the view changes 693 pixels on every device and is named in the first pass of the view. The item moved outside every view and the texel no draw samples change no byte on any device. The texture encoded again changes 4 521 to 4 532 pixels by at most 5 levels, 156 to 208 of them beyond the test's second number: the byte comparison fails with the cause "a payload differs" and the bounded difference passes. The blend state set wrongly changes 4 096 pixels with content and payloads equal: the byte comparison alone catches it, with the cause "the bytes differ". The key that moved with a changed item is put in the review group "the content differs and the key moved", not in the group of a key that moved alone.
+3. **The pixel file: holds on every cell.** The file is read back by the spike to the bytes it wrote, and the independent decoder gives the same pixels: `pngtopam` of Netpbm 11.05.02 with libpng 1.6.43 on the Linux cells, of Netpbm 11.10.02 with libpng 1.6.48 in the container, of Netpbm 10.86.51 with libpng 1.6.59 on the macOS cell, and the PNG codec of GDI+ on the two Windows cells. The file each platform's tool wrote again decodes to the same pixels and is refused by the strict reader ("a compressed deflate block"). The file with one changed pixel is read, and its hash is not the byte part's.
+4. **The weight**, in bytes, the packed form within 4 percent from one cell to another:
+
+   | Target | As written | Compressed in the file, libpng | Compressed in the file, GDI+ | Packed | Packed, two revisions |
+   | --- | --- | --- | --- | --- | --- |
+   | 256 by 256 | 262 488 | 35 842 to 37 074 | 71 648 | 62 936 to 63 404 | 64 173 to 64 641 |
+   | 1 024 by 1 024 | 4 195 716 | 343 048 to 377 712 | 615 398 | 578 661 to 601 166 | 583 243 to 605 721 |
+   | 1 920 by 1 080 | 8 296 178 | 499 345 to 570 484 | 931 471 | 887 390 to 923 095 | 892 751 to 928 403 |
+
+   The packed form of one picture is 24, 14 and 11 percent of the file as written; a second revision in which one triangle moved adds 1 to 5 kilobytes to the pack. A checkout holds the file as written. The content part is 683 bytes and a byte part 559 to 823. The scene is flat colors and five small textures: a frame of a game compresses less.
+5. **The costs**, one capture in milliseconds, fastest of five (the render to the completion of the device's work, the read-back and the hash of the bytes):
+
+   | Cell, device and setting | 256 by 256 | 1 024 by 1 024 | 1 920 by 1 080 | Of which the hash at 1 920 by 1 080 |
+   | --- | --- | --- | --- | --- |
+   | `linux-x86_64`, llvmpipe, four threads | 3.6 | 55.7 | 101.8 | 10.4 |
+   | `linux-x86_64`, llvmpipe, one thread | 5.2 | 67.3 | 134.6 | 10.4 |
+   | `linux-arm64`, llvmpipe, four threads | 3.6 | 46.5 | 86.7 | 7.4 |
+   | `linux-arm64`, llvmpipe, one thread | 7.1 | 100.6 | 193.6 | 7.4 |
+   | `windows-x86_64`, software adapter, as started | 2.1 | 26.3 | 52.2 | 10.3 |
+   | `windows-x86_64`, software adapter, one processor | 4.2 | 38.0 | 74.3 | 10.3 |
+   | `windows-arm64`, software adapter, as started | 3.2 | 45.2 | 89.5 | 7.4 |
+   | `windows-arm64`, software adapter, one processor | 4.7 | 71.6 | 141.7 | 7.4 |
+   | `macos-arm64`, virtual device | 16.3 | 32.3 | 57.5 | 11.7 |
+
+   Every setting of a cell gives one picture per size. The four-processor setting of the Windows software adapter costs what the cell's four processors do as started. The read-back is 2.5 to 7.7 milliseconds at 1 920 by 1 080. The hash, 64-bit FNV-1a one byte at a time, is 8 to 20 percent of a capture at that size on a software device. The content hash of the frame takes 7 to 14 microseconds at any size. The bounded difference of two pictures takes 1.5 milliseconds per million pixels on the two x86_64 cells, 0.8 on the Linux and Windows ARM64 cells and 0.7 on the macOS cell.
+6. **The container on a developer's machine: holds for the pair measured.** The developer machine, in the container named by the digest the cell's run recorded, reports the key of the cell's run in that image and draws its bytes. Both machines have an AMD processor: by the first result, the same container on an Intel host would report that key and is not expected to draw those bytes, which was not measured. The device's version in the container is the one the distribution's packages gave when the setup installed them, not one the image's digest fixes.
+7. **How often a key moves: not measured.** It needs eight weeks of runs. The record begins with one day: each cell reported one key in each of its runs.
+
+Not measured here: a content hash delivered by a renderer; a hardware device; the Windows cells and the container on a host with an Intel processor; a target the format cannot hold, a float target among them; the weight of a picture of a game; the review of the pending parts by a tool; and eight weeks of keys.
