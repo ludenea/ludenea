@@ -482,6 +482,7 @@ fn say_debug_strings(prefix: &str) {
     {
         let seen: Vec<String> = workload::debug_strings::drain().into_iter().filter(|text| text.starts_with("D3D12 ")).collect();
         say(&format!("{prefix}_debug_strings"), seen.len());
+        say(&format!("{prefix}_debug_string_errors"), seen.iter().filter(|text| text.starts_with("D3D12 ERROR")).count());
         if let Some(first) = seen.iter().find(|text| text.starts_with("D3D12 ERROR")).or(seen.first()) {
             say(&format!("{prefix}_debug_strings_first"), first.chars().take(600).collect::<String>());
         }
