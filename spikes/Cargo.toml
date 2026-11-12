@@ -44,6 +44,7 @@ members = [
     "render-device-baseline",
     "workload-asset-table",
     "asset-import-graph",
+    "render-backend-comparison",
 ]
 
 [profile.release]

@@ -1460,6 +1460,73 @@ case "$spike" in
       jq -r '.scene_sized_source as $s | "- `\(.cell)`: \($s.prototypes) prototypes, \($s.source_bytes) source bytes, \($s.canonical_bytes) canonical bytes; \($s.best_ms) ms at best of \($s.rounds), \($s.best_nanoseconds_per_prototype) ns per prototype at best, \($s.median_nanoseconds_per_prototype) at the median; the part is the pipeline'"'"'s \($s.the_part_is_the_pipeline_s)."' "$file"
     done
     ;;
+  render-backend-comparison)
+    echo "The device baseline's scene through three paths on every device of each cell: natively (the device baseline spike's own code), through wgpu's lower level and through its safe level. wgpu $(jq -r '.wgpu.version' "${facts[0]}") ($(jq -r '.wgpu.license' "${facts[0]}")), linked inside the spike only."
+    echo
+    echo "What the binary imports, whether the system has a Vulkan loader, and the adapters wgpu lists and calls its fallback:"
+    echo
+    echo "| Cell | Windowing, graphics or audio libraries imported | Vulkan loader | Interface | Native path | Adapters (safe level, lower level) | Fallback adapter |"
+    echo "| --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (if (.imports.denied // "") == "" then (.imports.error // "none") else .imports.denied end) as $denied | (.listing.vulkan_loader // "n/a") as $loader | .interfaces[] | "| \($cell) | \($denied) | \($loader) | \(.interface) | \(if .native_path_available then "available" else "unavailable: \(.native_path_reason)" end) | \(.adapters_at_the_safe_level), \(.adapters_at_the_lower_level)\(if .lower_level_reason then " (\(.lower_level_reason))" else "" end) | \(if .fallback_adapter.given then "\(.fallback_adapter.name) (\(.fallback_adapter.kind))" else "none: \(.fallback_adapter.reason)" end) |"' "$file"
+    done
+    echo
+    echo "The shaders compiled ahead on each cell by its platform's own compiler, run as a tool:"
+    echo
+    echo "| Cell | Form | Made | Bytes or reason | Tool |"
+    echo "| --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .shaders_compiled_ahead[] | "| \($cell) | \(.form) | \(.made) | \(.bytes // .reason) | \(.tool) |"' "$file"
+    done
+    echo
+    echo "The scene per path: its hash recorded serially and on four workers with a fifth thread submitting, whether its bytes are those of the native path on the same device, and the shader compiler libraries the process holds after the adapters are listed, after the device is opened and after the pipelines are made:"
+    echo
+    echo "| Cell | Interface | Device | Path | Shaders | Bindings | Serial | Four workers | Recordings identical | Bytes equal the native path | Shader compilers loaded (adapters, device, pipelines) | Error |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .interfaces[] | .interface as $interface | .devices[] | .name as $device | .runs[] | "| \($cell) | \($interface) | \($device) | \(.path) | \(.shaders) | \(.bindings // "as the native path binds") | \(.scene_serial_hash // .scene_serial_one_buffer_hash // "n/a") | \(.scene_four_workers_one_submitter_hash // .scene_chunked_four_threads_hash // "n/a") | \(if .recordings_identical == null then "n/a" else .recordings_identical end) | \(if .path == "native" then "the reference" elif .scene_bytes_equal_the_native_path == false then "false: \(.scene_differing_pixels) pixels differ, largest \(.scene_largest_difference_per_channel), upside down: \(.scene_is_the_native_image_upside_down)" else .scene_bytes_equal_the_native_path end) | \(.shader_compilers_adapters // "n/a"), \(.shader_compilers_device // "n/a"), \(.shader_compilers_pipelines // "n/a") | \(.error // (if .completed then "" else .status end)) |"' "$file"
+    done
+    echo
+    echo "The many draws workload (10 000 draws in one pass), fastest and median of the repetitions in microseconds: the time to record, the time of the submission, and the wait for the device, recorded serially and on four workers:"
+    echo
+    echo "| Cell | Interface | Device | Path | Shaders | Record, serial | Submit, serial | Wait, serial | Record, four workers | Submit, four workers | Bytes equal the native path |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .interfaces[] | .interface as $interface | .devices[] | .name as $device | .runs[] | select(.many_serial_record_us_fastest != null) | "| \($cell) | \($interface) | \($device) | \(.path) | \(.shaders) | \(.many_serial_record_us_fastest), \(.many_serial_record_us_median) | \(.many_serial_submit_us_fastest), \(.many_serial_submit_us_median) | \(.many_serial_wait_us_fastest), \(.many_serial_wait_us_median) | \(.many_four_workers_one_submitter_record_us_fastest), \(.many_four_workers_one_submitter_record_us_median) | \(.many_four_workers_one_submitter_submit_us_fastest), \(.many_four_workers_one_submitter_submit_us_median) | \(if .path == "native" then "the reference" else .many_draws_bytes_equal_the_native_path end) |"' "$file"
+    done
+    echo
+    echo "The threads of the process on each path, counted in a process that opens one device and renders the scene once:"
+    echo
+    echo "| Cell | Interface | Device | Path | At start | Loader or instance | Adapters listed | Device open | Scene rendered | Device dropped | Loader or instance dropped | Error |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .interfaces[] | .interface as $interface | .devices[] | .name as $device | .threads[] | "| \($cell) | \($interface) | \($device) | \(.path) | \(.threads_start // "n/a") | \(.threads_loader // .threads_instance // "n/a") | \(.threads_adapters // "n/a") | \(.threads_device // "n/a") | \(.threads_rendered // "n/a") | \(.threads_device_dropped // "n/a") | \(.threads_loader_dropped // .threads_instance_dropped // "n/a") | \(.error // (if .completed then "" else .status end)) |"' "$file"
+    done
+    echo
+    echo "Saving and loading a pipeline cache at the safe level (the bytes saved after the scene's two pipelines, the time to make the scene through an empty cache and through a cache created from the saved bytes, in microseconds):"
+    echo
+    echo "| Cell | Interface | Device | Offered | Saved bytes | Through an empty cache | Through the loaded cache | Bytes after the load | Error |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .interfaces[] | .interface as $interface | .devices[] | .name as $device | .runs[] | select(.path == "wgpu_safe_level" and .shaders == "wgsl") | "| \($cell) | \($interface) | \($device) | \(if .pipeline_cache_offered == null then "n/a" else .pipeline_cache_offered end) | \(.pipeline_cache_saved_bytes // "n/a") | \(.pipeline_cache_cold_us // "n/a") | \(.pipeline_cache_loaded_us // "n/a") | \(.pipeline_cache_bytes_after_load // "n/a") | \(.pipeline_cache_error // "") |"' "$file"
+    done
+    echo
+    echo "The interface's validation layer switched on beneath wgpu, in a child process: the messages while the scene renders, and whether a deliberate misuse made beneath wgpu is reported to the program, through the log or on its standard error:"
+    echo
+    echo "| Cell | Interface | Device | Path | Child completed | Scene rendered | Messages on the scene | Messages on the misuse | Standard error lines after the misuse | Reaches the program | First message, error or standard error |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .interfaces[] | .interface as $interface | .devices[] | .name as $device | .validation[] | "| \($cell) | \($interface) | \($device) | \(.path) | \(.completed) (\(.status)) | \(if .scene_rendered == null then "n/a" else .scene_rendered end) | \(.clean_messages // "n/a") | \(.misuse_messages // "n/a") | \(.standard_error_lines_after_the_misuse) | \(.the_misuse_reaches_the_program) | \((.misuse_first // .clean_first // .error // .scene_error // .standard_error // "") | .[0:400] | gsub("\\|"; "/")) |"' "$file"
+    done
+    echo
+    echo "The warnings and errors wgpu logged during a measured run, where there were any:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .interfaces[] | .interface as $interface | .devices[] | .name as $device | .runs[] | select((.log_messages // 0) > 0) | "- `\($cell)`, \($interface), \($device), \(.path) with \(.shaders): \(.log_messages) message(s), the first: \(.log_first | .[0:400])"' "$file"
+    done
+    inputs="$(jq -r '.inputs.scene_hash' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+    echo "- the inputs: $inputs distinct hash value(s) across every cell (the scene is the same bytes everywhere)."
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;

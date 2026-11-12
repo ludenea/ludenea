@@ -1,0 +1,15 @@
+[package]
+name = "render-backend-comparison"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: the device baseline's scene through wgpu, at its lower level and at its safe one, beside the native path of the device baseline spike, for the rendering research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }
+render-device-baseline = { path = "../render-device-baseline" }
+wgpu = { version = "=30.0.1", default-features = false, features = ["std", "vulkan", "dx12", "metal", "wgsl"] }
+wgpu-hal = { version = "=30.0.1", default-features = false, features = ["vulkan", "dx12", "metal"] }
+wgpu-types = "=30.0.1"
+log = "0.4"
