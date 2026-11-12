@@ -2155,6 +2155,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "physics-snapshot-every-tick"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "rapier3d",
+ "rayon",
+ "reference-workload",
+]
+
+[[package]]
 name = "pin-project"
 version = "1.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"

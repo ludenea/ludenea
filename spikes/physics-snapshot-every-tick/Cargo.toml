@@ -1,0 +1,13 @@
+[package]
+name = "physics-snapshot-every-tick"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: the image of a physics world, the tables that travel with it and the canonical bytes of its components, taken after every tick and restored for a correction of several ticks, in Box2D and in Rapier 3D, with the cost of a take, of a whole correction inside one frame and of sparser cadences, the continuation after a restore at every frame and a correction by write-back, for the networking research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }
+rapier3d = { version = "=0.36.1", features = ["enhanced-determinism", "serde-serialize", "parallel"] }
+bincode = "=1.3.3"
+rayon = "1"

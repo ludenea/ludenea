@@ -1640,6 +1640,141 @@ case "$spike" in
       jq -r '.cell as $cell | .the_computed_coordinate.interfaces[]? | "- `\($cell)`, \(.interface): \(.devices | length) device(s); \(.the_shaders_reach_the_device_as)" + ([.devices[] | select(.measured | not) | "; not measured on \(.name): \(.reason | .[0:500] | gsub("\\|"; "/"))"] | join(""))' "$file"
     done
     ;;
+  physics-snapshot-every-tick)
+    # The verdict of each claim is derived here from the figures a cell
+    # reports, per library: a take within a tenth of the fixed step, a frame
+    # within one fixed step at its 99th percentile, hashes equal, sizes within
+    # a tenth. The fixed step is one sixtieth of a second.
+    claims='
+      def step: 1000 / 60;
+      def verdict(holds): if holds then "holds" else "refuted" end;
+      def sizes: [.takes_after_every_tick[].bodies] | unique;
+      def claim_size: .settings.bodies_of_the_claims;
+      def take_holds($n): [.takes_after_every_tick[] | select(.bodies == $n) | .take_ms_median <= step / 10] | (length > 0 and all);
+      def largest_of: if length == 0 then "none" else (max | tostring) end;
+      def largest_take: [sizes[] as $n | select(take_holds($n)) | $n] | largest_of;
+      def frames($takes; $depth): [.corrections[] | select(.takes == $takes and .depth == $depth)];
+      def frame_fits($takes; $depth; $n): [frames($takes; $depth)[] | select(.bodies == $n) | .fits_one_fixed_step] | (length > 0 and all);
+      def largest_frame($takes; $depth): [sizes[] as $n | select(frame_fits($takes; $depth; $n)) | $n] | largest_of;
+      def smallest_size_the_take_fails: [sizes[] as $n | select(take_holds($n) | not) | $n] | min;
+      def sparse_cadence:
+        smallest_size_the_take_fails as $n
+        | if $n == null then "not evaluated: the take holds at every size"
+          else
+            ([.takes_after_every_tick[] | select(.bodies == $n and .workers == 4) | .tick_and_take_ms_p99 <= step] | (length > 0 and all)) as $tick
+            | frame_fits("every_fourth_tick"; 8; $n) as $frame
+            | verdict($tick and $frame) + " at \($n) bodies (the tick that takes fits: \($tick); the frame fits: \($frame))"
+          end;
+      def ring_claim:
+        claim_size as $n
+        | ([.takes_after_every_tick[] | select(.bodies == $n) | (.ring_over_ten_takes >= 0.9 and .ring_over_ten_takes <= 1.1)] | (length > 0 and all)) as $ring
+        | (.churn != null and .churn.churned_over_fresh <= 1.1) as $churn
+        | verdict($ring and $churn) + " (a ring of ten is ten takes within a tenth: \($ring); the image after the churn is at most a tenth larger: \($churn))";
+      def asleep_claim: if .asleep == null then "not measured" else verdict(.asleep.asleep_over_awake_time >= 0.9 and .asleep.asleep_over_awake_bytes >= 0.9) end;
+      def continuation_claim: if (.continuation | length) == 0 then "not measured" else verdict([.continuation[] | .first_differing_tick == -1] | all) end;
+      def write_back_differs: if (.write_back | length) == 0 then "not measured" else verdict([.write_back[] | .first_tick_the_hashes_part != -1] | any) end;
+      def write_back_close:
+        if (.write_back | length) == 0 then "not measured"
+        else verdict(([.write_back[] | .largest_error_over_body_size <= 0.01] | all)
+          and ([.write_back[] | select(.scene == "pile_at_rest") | ((.highest_body_corrected - .highest_body_uninterrupted) | fabs) <= 1] | all))
+        end;
+      def libraries: [.box2d, .rapier] | map(select(. != null and .takes_after_every_tick != null));
+    '
+    echo "The verdict of each claim per cell and library, at the fixed step of 16.67 ms (the timed claims are judged on the Linux and Windows cells and on the founder's machine; a macOS cell is reported without a verdict for them and counts for the continuation):"
+    echo
+    echo "| Cell | Library | A take at the claims' body count | Largest count the take holds at | A correction of eight ticks in one frame | Largest count that fits at depths 2, 8 and 24 | Continuation | Ring | Asleep | A take every fourth tick | The confirmed tick alone | Largest count that fits with the confirmed tick alone | Write-back is not a continuation | Write-back stays close |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r "$claims"'
+        .cell as $cell | libraries[] | claim_size as $n
+        | "| \($cell) | \(.library) \(.version) | \(verdict(take_holds($n))) at \($n) | \(largest_take) | \(verdict(frame_fits("every_tick"; 8; $n))) | \(largest_frame("every_tick"; 2)), \(largest_frame("every_tick"; 8)), \(largest_frame("every_tick"; 24)) | \(continuation_claim) | \(ring_claim) | \(asleep_claim) | \(sparse_cadence) | \(verdict(frame_fits("confirmed_tick_alone"; 8; $n))) | \(largest_frame("confirmed_tick_alone"; 8)) | \(write_back_differs) | \(write_back_close) |"' "$file"
+    done
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: \(.platform.os) \(.platform.arch), \(.platform.available_parallelism) logical processors; Box2D half: \(if .box2d.takes_after_every_tick != null then "built with \(.box2d.compiler)" else "did not run (\(.box2d.reason // "not asked"))" end); complete: \(.complete)."' "$file"
+    done
+    echo
+    echo "A take of the three parts after every tick, at the claims' body count (milliseconds; the take is the image, the tables and the canonical bytes together):"
+    echo
+    echo "| Cell | Library | Scene | Workers | Step median | Read back median | Take median | Take p99 | Image median | Tables median | Canonical median | Image bytes per body | Tables bytes per body | Canonical bytes per body | Ring of ten over ten takes |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r "$claims"'
+        .cell as $cell | libraries[] | .library as $library | claim_size as $n | .takes_after_every_tick[] | select(.bodies == $n)
+        | "| \($cell) | \($library) | \(.scene) | \(.workers) | \(.step_ms_median) | \(.read_back_ms_median) | \(.take_ms_median) | \(.take_ms_p99) | \(.take_image_ms_median) | \(.take_tables_ms_median) | \(.take_canonical_ms_median) | \(.image_bytes_per_body) | \(.tables_bytes_per_body) | \(.canonical_bytes_per_body) | \(.ring_over_ten_takes) |"' "$file"
+    done
+    echo
+    echo "The take along the ladder of body counts, at 4 workers (median of the take, then of the step, in milliseconds, then the bytes of one take):"
+    echo
+    echo "| Cell | Library | Scene | 100 | 300 | 1 000 | 3 000 | 10 000 |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r "$claims"'
+        .cell as $cell | libraries[] | .library as $library | [.takes_after_every_tick[] | select(.workers == 4)] | group_by(.scene)[]
+        | "| \($cell) | \($library) | \(.[0].scene) | " + ([sort_by(.bodies)[] | "\(.take_ms_median) / \(.step_ms_median) / \(.take_bytes)"] | join(" | ")) + " |"' "$file"
+    done
+    echo
+    echo "A whole correction inside one frame, at the claims' body count and 4 workers (milliseconds; a restore in place, the ticks applied again with their takes, and the frame's new tick):"
+    echo
+    echo "| Cell | Library | Scene | Takes | Depth | Ticks applied again at most | Frame median | Frame p99 | Restore median | A tick applied again, median | Corrections | Fits one fixed step | Ring bytes | Continues as the uninterrupted world |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r "$claims"'
+        .cell as $cell | libraries[] | .library as $library | claim_size as $n | .corrections[] | select(.bodies == $n)
+        | "| \($cell) | \($library) | \(.scene) | \(.takes) | \(.depth) | \(.ticks_applied_again_at_most) | \(.frame_ms_median) | \(.frame_ms_p99) | \(.restore_ms_median) | \(.tick_again_ms_median) | \(.corrections)\(if .settled_before_the_end then " (verdict settled)" else "" end) | \(.fits_one_fixed_step) | \(.ring_bytes) | \(.final_hash_equals_the_uninterrupted_world // "not checked") |"' "$file"
+    done
+    echo
+    echo "The 99th percentile of the frame along the ladder, per form of take and depth, the slowest of the three scenes (milliseconds):"
+    echo
+    echo "| Cell | Library | Takes | Depth | 100 | 300 | 1 000 | 3 000 | 10 000 |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r "$claims"'
+        .cell as $cell | libraries[] | .library as $library | .corrections | group_by([.takes, .depth])[]
+        | "| \($cell) | \($library) | \(.[0].takes) | \(.[0].depth) | " + ([group_by(.bodies)[] | (map(.frame_ms_p99) | max | tostring)] | join(" | ")) + " |"' "$file"
+    done
+    echo
+    echo "The corrections whose final hash was compared with a world never restored that stepped the same ticks (takes at every tick, depth 8, every body count):"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r "$claims"'
+        .cell as $cell | libraries[]
+        | "- `\($cell)`, \(.library): \([.corrections[] | select(.final_hash_equals_the_uninterrupted_world == true)] | length) of \([.corrections[] | select(.final_hash_equals_the_uninterrupted_world != null)] | length) equal."' "$file"
+    done
+    echo
+    echo "The continuation after a restore at every frame (corrections of one to eight ticks, half with the same inputs, half amending a mispredicted impulse):"
+    echo
+    echo "| Cell | Library | Scene | Bodies | Workers | Frames | Same inputs again | Amended | Mispredicted ticks that differed | Ticks compared | First differing tick | Final hash | Image bytes | Wall seconds |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r "$claims"'
+        .cell as $cell | libraries[] | .library as $library | .continuation[]
+        | "| \($cell) | \($library) | \(.scene) | \(.bodies) | \(.workers) | \(.frames) | \(.corrections_with_the_same_inputs) | \(.corrections_with_an_amended_input) | \(.mispredicted_ticks_that_differed) of \(.mispredicted_ticks) | \(.ticks_compared) | \(.first_differing_tick) | \(.final_hash) | \(.image_bytes) | \(.wall_seconds) |"' "$file"
+    done
+    echo
+    distinct="$(jq -r "$claims"'libraries[] | .library as $library | .continuation[] | "\($library) \(.scene) \(.final_hash)"' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+    scenes="$(jq -r "$claims"'libraries[] | .library as $library | .continuation[] | "\($library) \(.scene)"' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+    echo "- Distinct final hashes across every cell and worker count: $distinct for $scenes scene(s) (equal counts mean one hash per scene everywhere)."
+    echo
+    echo "The image after a churn of bodies, and of a sleeping world:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r "$claims"'
+        .cell as $cell | libraries[]
+        | "- `\($cell)`, \(.library): " + (if .churn == null then "churn not measured" else "after \(.churn.ticks) ticks that destroy and create \(.churn.destroyed_and_created_per_tick) of \(.churn.bodies) bodies, the image weighs \(.churn.churned_image_bytes) bytes against \(.churn.fresh_image_bytes) for a world created from the same components (ratio \(.churn.churned_over_fresh); same components: \(.churn.the_fresh_world_holds_the_same_components))" end)
+          + "; " + (if .asleep == null then "asleep not measured" else "\(.asleep.asleep_bodies) of \(.asleep.bodies) bodies asleep after \(.asleep.ticks_until_asleep) ticks: a take costs \(.asleep.asleep_take_ms_median) ms and weighs \(.asleep.asleep_take_bytes) bytes asleep, \(.asleep.awake_take_ms_median) ms and \(.asleep.awake_take_bytes) bytes awake (ratios \(.asleep.asleep_over_awake_time) and \(.asleep.asleep_over_awake_bytes))" end) + "."' "$file"
+    done
+    echo
+    echo "The correction by write-back (the components of eight ticks ago written into the bodies of the present world, eight ticks applied again, then 600 more; ticks are counted from the correction):"
+    echo
+    echo "| Cell | Library | Scene | Workers | Identical before | First differing tick of the eight | Largest error over the body's size | Largest error, distance | First tick the hashes part | Tick they meet again | Equal at the end | Highest body, uninterrupted | Highest body, corrected |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r "$claims"'
+        .cell as $cell | libraries[] | .library as $library | .write_back[]
+        | "| \($cell) | \($library) | \(.scene) | \(.workers) | \(.identical_before_the_correction) | \(.first_differing_tick_of_the_eight) | \(.largest_error_over_body_size) | \(.largest_error_distance) | \(.first_tick_the_hashes_part) | \(.tick_they_meet_again) | \(.equal_at_the_end) | \(.highest_body_uninterrupted) | \(.highest_body_corrected) |"' "$file"
+    done
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;

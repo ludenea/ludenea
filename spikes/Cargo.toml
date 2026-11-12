@@ -46,6 +46,7 @@ members = [
     "asset-import-graph",
     "render-backend-comparison",
     "shader-forms-across-platforms",
+    "physics-snapshot-every-tick",
 ]
 
 [profile.release]
