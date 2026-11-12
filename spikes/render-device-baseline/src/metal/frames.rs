@@ -1,21 +1,28 @@
 //! The adapter of [`crate::frames::FrameDevice`] on Metal: resources kept in
 //! registries until they are destroyed, a pass recorded as one command buffer
-//! that holds a parallel render command encoder with one encoder per part,
-//! and submissions whose command buffers are committed in order and polled.
+//! that holds one encoder per part (the encoders of a parallel render command
+//! encoder from two parts on), and submissions whose command buffers are
+//! committed in order and polled.
 //!
 //! - **A target** is three textures kept on the device: the color and the
 //!   depth at 4 samples, and the image the color is resolved into by the
 //!   pass's store action. The image is in the sRGB format itself, so that a
 //!   pass samples it as it is and a submission copies it as it is: nothing
 //!   moves it from one state to another.
-//! - **A pass** makes its command buffer and every encoder when it is opened,
-//!   the encoders of the parts in the parts' order: that order is the order
-//!   Metal runs their commands in, whoever records them and whenever. A pass
-//!   of no part is one plain render command encoder, ended at once.
+//! - **A pass** makes its command buffer and every encoder when it is opened.
+//!   From two parts on, the encoders are those of a parallel render command
+//!   encoder, made in the parts' order: that order is the order Metal runs
+//!   their commands in, whoever records them and whenever. A pass of no part
+//!   is one plain render command encoder, ended at once. A pass of one part
+//!   is one plain render command encoder too, left open until the part is
+//!   recorded: on the Apple Paravirtual device of the research CI, a parallel
+//!   encoder with a single encoder left the target's image as it was, neither
+//!   cleared nor drawn, and its command buffer completed without an error.
 //! - **A submission** commits the command buffers of its passes in the order
 //!   given, then one more that copies each target read back to a buffer in
 //!   shared storage. It is finished when the status of every one of them says
-//!   so, the last one committed being read first.
+//!   so; every status is read at each poll, so that a command buffer the
+//!   device failed is an error at once, with what its `NSError` says.
 //!
 //! Metal returns a command buffer and an encoder autoreleased; each is kept
 //! here with a reference of its own, since the call that made it pops its
@@ -136,9 +143,10 @@ struct Encoder {
 
 // SAFETY: Metal asks that one thread at a time use an encoder, and makes the
 // encoders of a parallel render command encoder to be handed to threads. An
-// encoder here is made by the thread that opens the pass and reaches one
-// other thread: the one that takes it out of the registry, under its lock, to
-// record a part, or the one that closes or discards the pass.
+// encoder here, plain or of a parallel encoder, is made by the thread that
+// opens the pass and reaches one other thread: the one that takes it out of
+// the registry, under its lock, to record a part, or the one that closes or
+// discards the pass.
 unsafe impl Send for Encoder {}
 
 impl Encoder {
@@ -194,7 +202,8 @@ unsafe impl Send for Bindings {}
 struct Pass {
     /// The encoder of each part, in the parts' order, until the part is recorded.
     parts: Vec<Option<Encoder>>,
-    /// The parallel encoder until the pass is closed; none for a pass of no part.
+    /// The parallel encoder of a pass of two parts or more, until the pass is
+    /// closed; none for a pass of no part or of one, whose encoder is plain.
     parallel: Option<Encoder>,
     command_buffer: CommandBuffer,
     bindings: Bindings,
@@ -245,15 +254,17 @@ struct Submission {
 
 impl Submission {
     /// Whether the device has completed every command buffer, read from their
-    /// statuses. The last one committed is read first: while the submission
-    /// is in flight, one status is read and no more.
+    /// statuses without waiting. Every status is read, in the order of the
+    /// commits: the first command buffer the device failed is an error, with
+    /// its place among the others and what its `NSError` says, even while
+    /// later ones are still in flight.
     fn finished(&self) -> Result<bool, String> {
-        for command_buffer in self.command_buffers.iter().rev() {
-            if !gpu::is_completed(command_buffer.id(), "a submission of the frames")? {
-                return Ok(false);
-            }
+        let count = self.command_buffers.len();
+        let mut completed = true;
+        for (index, command_buffer) in self.command_buffers.iter().enumerate() {
+            completed &= gpu::is_completed(command_buffer.id(), "a submission of the frames").map_err(|reason| format!("{reason} (command buffer {} of the {count} committed)", index + 1))?;
         }
-        Ok(true)
+        Ok(completed)
     }
 }
 
@@ -604,19 +615,29 @@ impl FrameDevice for MetalFrames {
         // Declared before the encoders, so that an error ends them before
         // the command buffer is released.
         let command_buffer = CommandBuffer::create(self.gpu(), "a pass of the frames")?;
-        let (parallel, parts) = if pass.parts == 0 {
-            let encoder = present(send!(Id; command_buffer.id(), "renderCommandEncoderWithDescriptor:", Id: descriptor)?, "renderCommandEncoderWithDescriptor: for a pass of no part")?;
-            gpu::end_encoding(encoder, Ok(()))?;
-            (None, Vec::new())
-        } else {
-            let parallel = Encoder::keep(send!(Id; command_buffer.id(), "parallelRenderCommandEncoderWithDescriptor:", Id: descriptor)?, "parallelRenderCommandEncoderWithDescriptor: for a pass of the frames")?;
-            // One encoder per part, made in the parts' order: the order
-            // their commands run in.
-            let mut parts = Vec::with_capacity(pass.parts);
-            for _ in 0..pass.parts {
-                parts.push(Some(Encoder::keep(send!(Id; parallel.id(), "renderCommandEncoder")?, "renderCommandEncoder of the parallel encoder")?));
+        let (parallel, parts) = match pass.parts {
+            0 => {
+                let encoder = present(send!(Id; command_buffer.id(), "renderCommandEncoderWithDescriptor:", Id: descriptor)?, "renderCommandEncoderWithDescriptor: for a pass of no part")?;
+                gpu::end_encoding(encoder, Ok(()))?;
+                (None, Vec::new())
             }
-            (Some(parallel), parts)
+            // One part is one plain encoder, left open for `record_part`: a
+            // parallel encoder with a single encoder left the target's image
+            // as it was on the Apple Paravirtual device.
+            1 => {
+                let encoder = Encoder::keep(send!(Id; command_buffer.id(), "renderCommandEncoderWithDescriptor:", Id: descriptor)?, "renderCommandEncoderWithDescriptor: for a pass of one part")?;
+                (None, vec![Some(encoder)])
+            }
+            count => {
+                let parallel = Encoder::keep(send!(Id; command_buffer.id(), "parallelRenderCommandEncoderWithDescriptor:", Id: descriptor)?, "parallelRenderCommandEncoderWithDescriptor: for a pass of the frames")?;
+                // One encoder per part, made in the parts' order: the order
+                // their commands run in.
+                let mut parts = Vec::with_capacity(count);
+                for _ in 0..count {
+                    parts.push(Some(Encoder::keep(send!(Id; parallel.id(), "renderCommandEncoder")?, "renderCommandEncoder of the parallel encoder")?));
+                }
+                (Some(parallel), parts)
+            }
         };
         Ok(self.register(&objects.passes, Pass { parts, parallel, command_buffer, bindings, closed: false }))
     }
