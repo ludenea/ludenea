@@ -294,7 +294,9 @@ impl<A: hal::Api> LowerScene<A> {
             let module = |label: &str, input: hal::ShaderInput| {
                 device.create_shader_module(&hal::ShaderModuleDescriptor { label: Some(label), runtime_checks: wgt::ShaderRuntimeChecks::unchecked() }, input).map_err(|error| failed(label, error))
             };
-            let no_workgroups = || Default::default();
+            // The Metal backend looks every entry point up in this map, whatever
+            // its stage: a function that is no compute kernel is given no size.
+            let no_workgroups = || [VERTEX_ENTRY, FRAGMENT_ENTRY].into_iter().map(|entry| (entry.to_string(), (0, 0, 0))).collect();
             let (modules, vertex_entry, fragment_entry) = match shaders {
                 Shaders::Wgsl(_) => return Err("the lower level takes no WGSL: the caller would run a translator itself".to_string()),
                 Shaders::SpirV { vertex, fragment } => (vec![module("scene vertex, SPIR-V", hal::ShaderInput::SpirV(vertex))?, module("scene fragment, SPIR-V", hal::ShaderInput::SpirV(fragment))?], "main", "main"),
