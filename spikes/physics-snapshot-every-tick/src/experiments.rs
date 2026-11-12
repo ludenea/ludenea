@@ -430,6 +430,9 @@ pub struct ChurnResult {
     pub churned_take_bytes: usize,
     pub fresh_take_bytes: usize,
     pub same_components: bool,
+    /// The hash of the transforms and the motion after the churn, so that the
+    /// cells can be compared on the scene they churned.
+    pub hash: u64,
 }
 
 pub fn run_churn(config: &Config, pool: &Pool) -> ChurnResult {
@@ -466,6 +469,7 @@ pub fn run_churn(config: &Config, pool: &Pool) -> ChurnResult {
         churned_take_bytes: churned_take.bytes(),
         fresh_take_bytes: fresh_take.bytes(),
         same_components: churned.hash() == fresh.hash(),
+        hash: churned.hash(),
     }
 }
 

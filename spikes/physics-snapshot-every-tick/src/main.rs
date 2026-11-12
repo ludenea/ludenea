@@ -247,6 +247,7 @@ fn rapier_report(cell: &str, config: &Config, only: Option<&str>) -> String {
         out.u64("churned_take_bytes", r.churned_take_bytes as u64);
         out.u64("fresh_take_bytes", r.fresh_take_bytes as u64);
         out.bool("the_fresh_world_holds_the_same_components", r.same_components);
+        out.hex("hash_after_the_churn", r.hash);
         out.object_end();
     } else {
         out.raw("churn", "null");

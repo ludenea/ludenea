@@ -1761,7 +1761,7 @@ case "$spike" in
     for file in "${facts[@]}"; do
       jq -r "$claims"'
         .cell as $cell | libraries[]
-        | "- `\($cell)`, \(.library): " + (if .churn == null then "churn not measured" else "after \(.churn.ticks) ticks that destroy and create \(.churn.destroyed_and_created_per_tick) of \(.churn.bodies) bodies, the image weighs \(.churn.churned_image_bytes) bytes against \(.churn.fresh_image_bytes) for a world created from the same components (ratio \(.churn.churned_over_fresh); same components: \(.churn.the_fresh_world_holds_the_same_components))" end)
+        | "- `\($cell)`, \(.library): " + (if .churn == null then "churn not measured" else "after \(.churn.ticks) ticks that destroy and create \(.churn.destroyed_and_created_per_tick) of \(.churn.bodies) bodies, the image weighs \(.churn.churned_image_bytes) bytes against \(.churn.fresh_image_bytes) for a world created from the same components (ratio \(.churn.churned_over_fresh); same components: \(.churn.the_fresh_world_holds_the_same_components); hash after the churn: \(.churn.hash_after_the_churn // "not recorded"))" end)
           + "; " + (if .asleep == null then "asleep not measured" else "\(.asleep.asleep_bodies) of \(.asleep.bodies) bodies asleep after \(.asleep.ticks_until_asleep) ticks: a take costs \(.asleep.asleep_take_ms_median) ms and weighs \(.asleep.asleep_take_bytes) bytes asleep, \(.asleep.awake_take_ms_median) ms and \(.asleep.awake_take_bytes) bytes awake (ratios \(.asleep.asleep_over_awake_time) and \(.asleep.asleep_over_awake_bytes))" end) + "."' "$file"
     done
     echo

@@ -185,7 +185,12 @@ static void ChurnTick( Sim* sim, Random* random, int side )
 		Definition d = MotionDefinition( (int)( RandomNext( random ) % 3 ) );
 		float middle = 0.5f * extent - 2.0f;
 		float reach = 0.5f * extent - 2.0f;
-		Components c = RestingAt( middle + reach * RandomSigned( random ), middle + reach * RandomSigned( random ) );
+		// One draw per statement: the order in which a call's arguments are
+		// evaluated is the compiler's, and the stream must be read in one order
+		// on every cell.
+		float x = middle + reach * RandomSigned( random );
+		float y = middle + reach * RandomSigned( random );
+		Components c = RestingAt( x, y );
 		c.vx = RandomSigned( random );
 		c.vy = RandomSigned( random );
 		c.w = RandomSigned( random );

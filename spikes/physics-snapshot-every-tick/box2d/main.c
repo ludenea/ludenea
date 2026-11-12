@@ -472,6 +472,9 @@ typedef struct ChurnResult
 	int churnedTakeBytes;
 	int freshTakeBytes;
 	bool sameComponents;
+	// The hash of the transforms and the motion after the churn, so that the
+	// cells can be compared on the scene they churned.
+	uint64_t hash;
 } ChurnResult;
 
 static ChurnResult RunChurn( const Config* config, int workers )
@@ -516,7 +519,8 @@ static ChurnResult RunChurn( const Config* config, int workers )
 	result.freshImageBytes = freshTake.image.size;
 	result.churnedTakeBytes = TakeBytes( &churnedTake );
 	result.freshTakeBytes = TakeBytes( &freshTake );
-	result.sameComponents = SimHash( &churned ) == SimHash( &fresh );
+	result.hash = SimHash( &churned );
+	result.sameComponents = result.hash == SimHash( &fresh );
 	TakeFree( &churnedTake );
 	TakeFree( &freshTake );
 	SimDestroy( &churned );
@@ -1012,10 +1016,11 @@ int main( int argc, char** argv )
 				 r.freshImageBytes );
 		printf( "{\"scene\":\"bodies_in_motion\",\"bodies\":%d,\"ticks\":%d,\"destroyed_and_created_per_tick\":%d,"
 				"\"churned_image_bytes\":%d,\"fresh_image_bytes\":%d,\"churned_over_fresh\":%.4f,"
-				"\"churned_take_bytes\":%d,\"fresh_take_bytes\":%d,\"the_fresh_world_holds_the_same_components\":%s}",
+				"\"churned_take_bytes\":%d,\"fresh_take_bytes\":%d,\"the_fresh_world_holds_the_same_components\":%s,"
+				"\"hash_after_the_churn\":\"0x%016" PRIx64 "\"}",
 				r.bodies, r.ticks, r.changesPerTick, r.churnedImageBytes, r.freshImageBytes,
 				(double)r.churnedImageBytes / (double)r.freshImageBytes, r.churnedTakeBytes, r.freshTakeBytes,
-				r.sameComponents ? "true" : "false" );
+				r.sameComponents ? "true" : "false", r.hash );
 	}
 	else
 	{
