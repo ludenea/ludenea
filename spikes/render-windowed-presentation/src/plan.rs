@@ -419,6 +419,12 @@ pub fn run_plan(options: &Options) -> Json {
                         runs.push(with(&[("mode", "synchronized"), ("frames", "1200"), ("acquire_wait_ms", "1000")]));
                     }
                     runs.push(with(&[("mode", "latest"), ("frames", "3000")]));
+                    // The synchronized mode is run with SDL3 too on the first
+                    // device of each path, so that a fact of that mode is not
+                    // read as one library's.
+                    if device.index == found[0].index {
+                        runs.push(run(&program, &words("soak", &[("library", "sdl3"), ("path", *path), ("device", &index(device)), ("mode", "synchronized"), ("frames", "1200")]), display, soak_limit));
+                    }
                 }
             }
         }
