@@ -1775,6 +1775,69 @@ case "$spike" in
         | "| \($cell) | \($library) | \(.scene) | \(.workers) | \(.identical_before_the_correction) | \(.first_differing_tick_of_the_eight) | \(.largest_error_over_body_size) | \(.largest_error_distance) | \(.first_tick_the_hashes_part) | \(.tick_they_meet_again) | \(.equal_at_the_end) | \(.highest_body_uninterrupted) | \(.highest_body_corrected) |"' "$file"
     done
     ;;
+  physics-prepared-geometry)
+    # The kinds of the two libraries as one list (a cell whose Box2D half did
+    # not run has none for it), their names, and the shape of a timing.
+    kinds='def kinds: [(.rapier.kinds // [])[] | . + {library: "Rapier"}] + [(.box2d.kinds // [])[] | . + {library: "Box2D"}]; def kind_name: [.library, .kind, .variant] | map(select(. != null and . != "")) | join(" "); def shown: if . == null then "n/a" else tostring end; def ms(prefix): if .[prefix + "_ms_median"] == null then "n/a" else "\(.[prefix + "_ms_median"]) (\(.[prefix + "_ms_fastest"]) to \(.[prefix + "_ms_slowest"]))" end; def was_read: if .read_succeeded != null then .read_succeeded else .restore_succeeded end; def bytes_equal: if .form_bytes_equal_local != null then .form_bytes_equal_local else .image_bytes_equal_local end;'
+    echo "Collision shapes built from large inputs by Rapier 3D $(jq -r '.rapier.version' "${facts[0]}") (Parry $(jq -r '.rapier.parry_version' "${facts[0]}"), forms written with $(jq -r '.rapier.serializer' "${facts[0]}")) and by Box2D v3.2.0: whether a prepared form exists, its bytes, the steps of a world that reads it, and the build against the read beside the fixed step of $(jq -r '.fixed_step_ms' "${facts[0]}") ms. A time is a magnitude, judged on one quiet machine; the hashes are identities."
+    echo
+    echo "| Cell | Profile | Complete | Quick | Repetitions | Rust target | Box2D half | Box2D compiler | Forms from other cells |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '"| \(.cell) | \(.profile) | \(.complete) | \(.quick) | \(.repetitions) | \(.platform.os) \(.platform.arch) | \(if .box2d.ran == true then "ran (\(.box2d.profile))" else "did not run: \(.box2d.reason // "no reason recorded" | gsub("\\|"; "/") | .[0:300])" end) | \(.box2d.compiler // "n/a") | \([.forms_from_other_cells[]?.cell] | if length == 0 then "none" else join(", ") end) |"' "$file"
+    done
+    echo
+    echo "The first step (does the library expose a form of the shape that is built outside a world, written and read back):"
+    echo
+    echo "| Cell | Profile | Library | Kind | Variant | Prepared form | Facts of the first step |"
+    echo "| --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r "$kinds"' . as $r | kinds[] | "| \($r.cell) | \($r.profile) | \(.library) | \(.kind) | \(.variant) | \(.prepared_form) | \(if .largest_cloud_the_library_takes != null then "a cloud of at most \(.largest_cloud_the_library_takes) points is taken; hull points returned for eight points: \(.hull_points_returned_for_eight_points); for the whole input as one cloud: \([.hull_points_returned_for_the_whole_input[] | "\(.hull_points) for \(.points) points"] | join(", "))" elif .measured_in_full != null then "built with no world, written and read back at every size, and stepped: \(.measured_in_full)" else "read in the library headers and sources" end) |"' "$file"
+    done
+    echo
+    echo "How each form is built, written and read, as the reports record it (the count is the reports that say so):"
+    echo
+    jq -r -s "$kinds"' [.[] | kinds[] | {name: kind_name, how}] | group_by(.) | .[] | "- `\(.[0].name)` (\(length)): \(.[0].how)"' "${facts[@]}"
+    echo
+    echo "The ladder (the build against the read of the prepared form; a chain has no prepared form and its build is the action at load):"
+    echo
+    echo "| Cell | Profile | Library, kind and variant | Elements | Input hash | Built | Build ms: median (fastest to slowest) | Build over the fixed step | Form bytes | Form hash | Read ms: median (fastest to slowest) | Same bytes twice | Same bytes after a round trip |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r "$kinds"' . as $r | kinds[] | kind_name as $name | .ladder[]? | "| \($r.cell) | \($r.profile) | \($name) | \(.elements) | \(.input_hash) | \(.built) | \(ms("build")) | \(.build_over_fixed_step) | \(.form_bytes | shown) | \(.form_hash | shown) | \(ms("read")) | \(.same_bytes_twice | shown) | \(.same_bytes_after_a_round_trip | shown) |"' "$file"
+    done
+    echo
+    echo "Beside the Box2D chain, the image of a whole world that holds only a static body and its chain (the one written form that holds a built chain; not a prepared form of the kind):"
+    echo
+    echo "| Cell | Profile | Chain points | Image bytes | Image hash | Take ms: median (fastest to slowest) | Take over the fixed step | Create a world ms: median (fastest to slowest) | Create over the fixed step | A world was created | Same bytes from two worlds of one process |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r "$kinds"' . as $r | (.box2d.kinds // [])[] | .world_image[]? | "| \($r.cell) | \($r.profile) | \(.elements) | \(.image_bytes) | \(.image_hash) | \(ms("take")) | \(.take_over_fixed_step) | \(ms("create_world")) | \(.create_world_over_fixed_step) | \(.create_world_succeeded) | \(.same_bytes_twice) |"' "$file"
+    done
+    echo
+    echo "The files of the smallest ladder size, written under each cell's forms directory:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r "$kinds"' "- `\(.cell)` (\(.profile)), \(.forms_directory): " + ([kinds[] | "\(.form_file // .world_image_file // "no file") \(.form_file_bytes // .world_image_file_bytes // 0) bytes" + (if (.form_file_written // .world_image_file_written) == true then "" else " (not written)" end)] | join(", ")) + "."' "$file"
+    done
+    echo
+    echo "The worlds (the first source of each kind builds its shapes locally; every other reads a form, or is created from a world image, and is compared with it step by step; -1 means no differing step, and no differing byte count when the sizes differ or nothing was read):"
+    echo
+    echo "| Cell | Profile | Library, kind and variant | Steps | Bodies | Source | Read or created | Bytes equal to the local ones | Bytes that differ | First differing step | Run hash |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r "$kinds"' . as $r | kinds[] | kind_name as $name | .behavior as $b | $b.sources[]? | "| \($r.cell) | \($r.profile) | \($name) | \($b.steps) | \($b.bodies) | \(.source) | \(was_read | shown) | \(bytes_equal | shown) | \(.bytes_differing_from_local | shown) | \(.first_differing_step) | \(.run_hash) |"' "$file"
+    done
+    echo
+    echo "Distinct hashes per kind and size across every cell and profile (1 means identical everywhere):"
+    echo
+    jq -r -s "$kinds"' [.[] | kinds[] | kind_name as $name | .ladder[]? | {name: $name, elements, input_hash, form_hash}] | group_by([.name, .elements]) | .[] | "- `\(.[0].name)`, \(.[0].elements) elements: \([.[].input_hash] | unique | length) distinct input hash(es), " + (([.[].form_hash | select(. != null)] | unique | length) as $forms | if $forms == 0 then "no prepared form" else "\($forms) distinct form hash(es)" end) + " across \(length) report(s)."' "${facts[@]}"
+    jq -r -s ' [.[] | (.box2d.kinds // [])[] | .world_image[]?] | group_by(.elements) | .[] | "- `Box2D chain` world image, \(.[0].elements) points: \([.[].image_hash] | unique | length) distinct image hash(es) and \([.[].image_bytes] | unique | length) distinct size(s) across \(length) report(s)."' "${facts[@]}"
+    echo
+    echo "The worlds per kind across every cell and profile:"
+    echo
+    jq -r -s "$kinds"' [.[] | kinds[] | kind_name as $name | .behavior as $b | $b.sources[]? | {name: $name, steps: $b.steps, run_hash, local: (.source | test("locally")), unread: (was_read != true), differs: (.first_differing_step != -1), unequal: (bytes_equal != true)}] | group_by([.name, .steps]) | .[] | "- `\(.[0].name)`, \(.[0].steps) steps: \([.[] | select(.local) | .run_hash] | unique | length) distinct run hash(es) of the locally built world across \([.[] | select(.local)] | length) report(s); \([.[] | select(.local | not)] | length) world(s) from a form or an image, of which \([.[] | select(.unread)] | length) not read, \([.[] | select(.local | not) | select(.unequal)] | length) with bytes that differ from the local ones, \([.[] | select(.differs)] | length) with a differing step."' "${facts[@]}"
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;

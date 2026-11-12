@@ -2155,6 +2155,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "physics-prepared-geometry"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "rapier3d",
+ "reference-workload",
+]
+
+[[package]]
 name = "physics-snapshot-every-tick"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,12 @@
+[package]
+name = "physics-prepared-geometry"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: collision shapes built from large inputs by the two physics libraries under study (a convex polygon and a chain in Box2D, a triangle mesh with its acceleration structure and a convex polyhedron in Rapier 3D), written as a prepared form and read back, their bytes across cells, the steps of a world that reads them and the time a prepared form saves, for the assets research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }
+rapier3d = { version = "=0.36.1", features = ["enhanced-determinism", "serde-serialize"] }
+bincode = "=1.3.3"
