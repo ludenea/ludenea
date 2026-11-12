@@ -294,7 +294,9 @@ pub fn render(gpu: &Gpu, shaders: &Shaders, scene: &Scene, recording: Recording)
         record_chunks(&gpu.functions, &chunks, &state, scene, recording == Recording::ChunkedFourThreads)?;
     }
     record_primary(&gpu.functions, primary, &state, scene, &chunks, timestamps, resolved, readback.buffer)?;
+    let recorded_us = started.elapsed().as_secs_f64() * 1_000_000.0;
     gpu.submit(primary, fence)?;
+    let submitted_us = started.elapsed().as_secs_f64() * 1_000_000.0;
     let readback_polls = gpu.poll_fence(fence)?;
     let render_us = started.elapsed().as_secs_f64() * 1_000_000.0;
 
@@ -303,5 +305,5 @@ pub fn render(gpu: &Gpu, shaders: &Shaders, scene: &Scene, recording: Recording)
     let image = Image::from_rows(scene::WIDTH, scene::HEIGHT, WIDTH as usize * 4, &bytes);
     let readback_us = read_started.elapsed().as_secs_f64() * 1_000_000.0;
     let timestamp_ns = timestamps.map(|pool| elapsed_between_timestamps(gpu, pool)).transpose()?;
-    Ok(SceneRender { image, render_us, readback_us, readback_polls, timestamp_ns })
+    Ok(SceneRender { image, recorded_us, submitted_us, render_us, readback_us, readback_polls, timestamp_ns })
 }

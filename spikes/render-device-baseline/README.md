@@ -14,6 +14,7 @@ It extends the [offscreen rendering spike](../render-offscreen/README.md) by its
 - `src/main.rs`: the measurements and the report, the same for every interface. It also holds the child process's side and the comparison of images across machines.
 - `src/platform.rs`: the count of the process's threads and the restriction of a process to a number of processors.
 - `src/loader.rs`, `src/imports.rs`: `dlopen` and `LoadLibraryW`, and the reader of the binary's own imports (copies of the offscreen spike's).
+- `src/lib.rs`: the modules above as a library, for a later spike of the rendering research that stands on this native path.
 - `shaders/`: one set of sources per interface, named after what they shade.
 - `setup.sh`: what a machine of the research CI needs installed (below).
 

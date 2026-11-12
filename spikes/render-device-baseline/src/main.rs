@@ -18,16 +18,11 @@
 //! with `--compare <directory>`, it compares the scene images found under the
 //! directory (the artifacts of several cells) and prints a Markdown table.
 
-mod backend;
 #[cfg(windows)]
-mod d3d12;
-mod imports;
-mod loader;
+use render_device_baseline::d3d12;
 #[cfg(target_os = "macos")]
-mod metal;
-mod platform;
-mod scene;
-mod vulkan;
+use render_device_baseline::metal;
+use render_device_baseline::{backend, imports, platform, scene, vulkan};
 
 use std::env;
 use std::fs;

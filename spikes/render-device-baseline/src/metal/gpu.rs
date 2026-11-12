@@ -288,6 +288,11 @@ fn failure(command_buffer: Id, status: usize) -> String {
 /// Commits a command buffer and waits for the device to complete it.
 pub fn complete(command_buffer: Id, what: &str) -> Result<(), String> {
     send!((); command_buffer, "commit")?;
+    wait_until_completed(command_buffer, what)
+}
+
+/// Waits for a committed command buffer and checks that the device completed it.
+pub fn wait_until_completed(command_buffer: Id, what: &str) -> Result<(), String> {
     send!((); command_buffer, "waitUntilCompleted")?;
     let status = send!(usize; command_buffer, "status")?;
     if status == values::COMMAND_BUFFER_STATUS_COMPLETED { Ok(()) } else { Err(format!("the command buffer of {what} ended with {}", failure(command_buffer, status))) }

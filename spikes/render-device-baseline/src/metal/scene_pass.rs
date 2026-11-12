@@ -276,10 +276,11 @@ fn microseconds_since(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1_000_000.0
 }
 
-/// Records the pass, commits it and waits for the device. Returns the time
-/// from the start of the recording to the completion and, where the pass
-/// wrote its two timestamps, the time between them.
-fn record_and_complete(gpu: &Gpu, resources: &Resources, bindings: &Bindings, scene: &Scene, recording: Recording, timestamps: Option<&StageTimestamps>) -> Result<(f64, Option<u64>), String> {
+/// Records the pass, commits it and waits for the device. Returns the times
+/// from the start of the recording to its end, to the commit and to the
+/// completion and, where the pass wrote its two timestamps, the time between
+/// them.
+fn record_and_complete(gpu: &Gpu, resources: &Resources, bindings: &Bindings, scene: &Scene, recording: Recording, timestamps: Option<&StageTimestamps>) -> Result<([f64; 3], Option<u64>), String> {
     let started = Instant::now();
     let command_buffer = gpu.command_buffer("the scene")?;
     let (pass, timed) = resources.pass(timestamps)?;
@@ -288,9 +289,12 @@ fn record_and_complete(gpu: &Gpu, resources: &Resources, bindings: &Bindings, sc
         Recording::ChunkedOneThread => record_with_sub_encoders(command_buffer, pass, bindings, scene, false)?,
         Recording::ChunkedFourThreads => record_with_sub_encoders(command_buffer, pass, bindings, scene, true)?,
     }
-    gpu::complete(command_buffer, "the scene's pass")?;
+    let recorded_us = microseconds_since(started);
+    send!((); command_buffer, "commit")?;
+    let submitted_us = microseconds_since(started);
+    gpu::wait_until_completed(command_buffer, "the scene's pass")?;
     let render_us = microseconds_since(started);
-    Ok((render_us, timestamps.filter(|_| timed).and_then(|timestamps| timestamps.elapsed_nanoseconds(gpu))))
+    Ok(([recorded_us, submitted_us, render_us], timestamps.filter(|_| timed).and_then(|timestamps| timestamps.elapsed_nanoseconds(gpu))))
 }
 
 pub fn render(gpu: &Gpu, source: &str, scene: &Scene, recording: Recording) -> Result<SceneRender, String> {
@@ -299,7 +303,7 @@ pub fn render(gpu: &Gpu, source: &str, scene: &Scene, recording: Recording) -> R
 
     // A device that offers the timestamps and then fails the pass that takes
     // them still renders the scene: the failure is said, the pass repeated.
-    let (render_us, timestamp_ns) = match resources.timestamps.as_ref().map(|timestamps| record_and_complete(gpu, &resources, &bindings, scene, recording, Some(timestamps))) {
+    let ([recorded_us, submitted_us, render_us], timestamp_ns) = match resources.timestamps.as_ref().map(|timestamps| record_and_complete(gpu, &resources, &bindings, scene, recording, Some(timestamps))) {
         Some(Ok(rendered)) => rendered,
         Some(Err(reason)) => {
             gpu::log(&format!("the scene's pass failed with its two timestamps attached ({reason}); it is rendered again without them"));
@@ -312,5 +316,5 @@ pub fn render(gpu: &Gpu, source: &str, scene: &Scene, recording: Recording) -> R
     let (bytes, readback_polls) = read_back(gpu, &resources)?;
     let readback_us = microseconds_since(started);
     let image = Image::from_rows(scene::WIDTH, scene::HEIGHT, WIDTH * BYTES_PER_PIXEL, &bytes);
-    Ok(SceneRender { image, render_us, readback_us, readback_polls, timestamp_ns })
+    Ok(SceneRender { image, recorded_us, submitted_us, render_us, readback_us, readback_polls, timestamp_ns })
 }

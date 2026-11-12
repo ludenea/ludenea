@@ -254,6 +254,11 @@ impl Recording {
 
 pub struct SceneRender {
     pub image: Image,
+    /// From the start of the recording to the last command recorded.
+    pub recorded_us: f64,
+    /// From the start of the recording to the return of the call that hands
+    /// the commands to the device.
+    pub submitted_us: f64,
     /// From the start of the recording to the completion of the device's work.
     pub render_us: f64,
     pub readback_us: f64,

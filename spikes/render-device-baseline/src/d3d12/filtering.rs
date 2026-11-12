@@ -211,7 +211,9 @@ impl FilteringScene {
                 self.recorders.iter().map(|recorder| recorder.list.raw()).collect()
             }
         };
+        let recorded_us = started.elapsed().as_secs_f64() * 1_000_000.0;
         let value = gpu.execute(&lists)?;
+        let submitted_us = started.elapsed().as_secs_f64() * 1_000_000.0;
         let readback_polls = gpu.poll(value)?;
         let render_us = started.elapsed().as_secs_f64() * 1_000_000.0;
         let read_started = Instant::now();
@@ -221,7 +223,7 @@ impl FilteringScene {
             Some(timestamps) => Some(elapsed_nanoseconds(timestamps)?),
             None => None,
         };
-        Ok(SceneRender { image: Image { width: scene::WIDTH, height: scene::HEIGHT, rgba }, render_us, readback_us, readback_polls, timestamp_ns })
+        Ok(SceneRender { image: Image { width: scene::WIDTH, height: scene::HEIGHT, rgba }, recorded_us, submitted_us, render_us, readback_us, readback_polls, timestamp_ns })
     }
 }
 
@@ -275,7 +277,13 @@ fn record(allocator: Object, list: Object, inputs: &ChunkInputs, draws: &[Draw],
         clear_target(list, inputs.target, scene::CLEAR_COLOR);
         clear_depth(list, inputs.depth_target, scene::CLEAR_DEPTH);
     }
+    // The pipeline is set when it changes only, as on the two other interfaces.
+    let mut bound = None;
     for draw in draws {
+        if bound != Some(draw.blended) {
+            set_pipeline(list, if draw.blended { inputs.blended.0 } else { inputs.opaque.0 });
+            bound = Some(draw.blended);
+        }
         record_draw(list, inputs, draw);
     }
     if last {
@@ -285,7 +293,6 @@ fn record(allocator: Object, list: Object, inputs: &ChunkInputs, draws: &[Draw],
 }
 
 fn record_draw(list: Object, inputs: &ChunkInputs, draw: &Draw) {
-    set_pipeline(list, if draw.blended { inputs.blended.0 } else { inputs.opaque.0 });
     let constants = [draw.texture, draw.sampler];
     // SAFETY: the list is recording with the root signature whose first
     // parameter holds two constants; the indirect arguments buffer is live
