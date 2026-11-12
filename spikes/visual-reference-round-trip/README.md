@@ -14,6 +14,7 @@ It stands on the [device baseline spike](../render-device-baseline/README.md): i
 - `tools/system-drawing.ps1`: the independent decoder of the Windows cells.
 - `setup.sh`: what a machine of the research CI needs installed (below).
 - `references/from-<cell>/`: the reference set each cell wrote on its first run, accepted into the repository for the later runs.
+- `key-record.sh`: reads, from the runs of the research CI, the key, the processor and the bytes each cell reported at each run, and counts per cell the changes of key and the changes of bytes under an unchanged key (`bash key-record.sh`, with `gh` and `jq`).
 
 ## A reference set
 
@@ -53,7 +54,7 @@ The research CI builds and runs the binary on the five cells after `setup.sh`; l
 
 **Departures from the specification**, each stated here and in the findings:
 
-- The specification has each cell run two jobs in one run, the second reading the first's references from the run's artifacts. The research CI has one job per cell and its workflow was left as it is: the second job is a later run of the research CI, and the references reach it through the first run's artifacts accepted into the repository. The files still travel from one runner to a fresh one, and through the path a reference takes in a project (an artifact of a run, a review, a commit).
+- The specification has each cell run two jobs in one run, the second reading the first's references from the run's artifacts. The research CI has one job per cell, and no second job was added to it: the second job is a later run of the research CI, and the references reach it through the first run's artifacts accepted into the repository. The files still travel from one runner to a fresh one, and through the path a reference takes in a project (an artifact of a run, a review, a commit).
 - "Each cause is a build option of the spike" is read as an option of the frame's build, chosen at run time in one binary, not as a compilation option.
 - A run under another key is brought about in two ways: within a cell by accepting the cell's own part under a key named otherwise, and across cells by the sets the other cells wrote, whose keys are those of other devices.
 - The device baseline spike's scene gained a target size of its own for the three sizes; at 256 by 256 it renders the bytes it rendered before.
@@ -146,6 +147,6 @@ The content hash is one value on every machine, as a hash of the spike's own dra
 
    Every setting of a cell gives one picture per size. The four-processor setting of the Windows software adapter costs what the cell's four processors do as started. The read-back is 2.5 to 7.7 milliseconds at 1 920 by 1 080. The hash, 64-bit FNV-1a one byte at a time, is 8 to 20 percent of a capture at that size on a software device. The content hash of the frame takes 7 to 14 microseconds at any size. The bounded difference of two pictures takes 1.5 milliseconds per million pixels on the two x86_64 cells, 0.8 on the Linux and Windows ARM64 cells and 0.7 on the macOS cell.
 6. **The container on a developer's machine: holds for the pair measured.** The developer machine, in the container named by the digest the cell's run recorded, reports the key of the cell's run in that image and draws its bytes. Both machines have an AMD processor: by the first result, the same container on an Intel host would report that key and is not expected to draw those bytes, which was not measured. The device's version in the container is the one the distribution's packages gave when the setup installed them, not one the image's digest fixes.
-7. **How often a key moves: not measured.** It needs eight weeks of runs. The record begins with one day: each cell reported one key in each of its runs.
+7. **How often a key moves: not measured yet.** It needs eight weeks of runs. The record begins with one day: each cell reported one key in each of its runs, and on the Linux x86_64 cell the bytes moved under that key four times in six runs. Since 13 November 2026 the research CI runs the spike on the five cells every day, until 7 January 2027; `key-record.sh` reads the record, to be read before the artifacts of its first runs expire, ninety days after them.
 
 Not measured here: a content hash delivered by a renderer; a hardware device; the Windows cells and the container on a host with an Intel processor; a target the format cannot hold, a float target among them; the weight of a picture of a game; the review of the pending parts by a tool; and eight weeks of keys.
