@@ -699,6 +699,7 @@ fn measure(cell: &str) {
             out.string("first", &a.label);
             out.string("second", &b.label);
             write_difference(&mut out, a.image.difference(&b.image));
+            out.string("differing_pixels_per_region", &differing_pixels_per_region(&a.image, &b.image));
             out.object_end();
         }
     }
@@ -756,17 +757,42 @@ fn compare(directory: &Path) -> i32 {
         println!("- image {} (`{:016x}`): {}", position + 1, image.hash(), labels.join("; "));
     }
     println!();
-    println!("| Images | Differing pixels | Differing bytes | Largest difference per channel |");
-    println!("| --- | --- | --- | --- |");
+    println!("| Images | Differing pixels | Differing bytes | Largest difference per channel | Differing pixels per region |");
+    println!("| --- | --- | --- | --- | --- |");
     for (position, (a, _)) in sets.iter().enumerate() {
         for (offset, (b, _)) in sets[position + 1..].iter().enumerate() {
             match a.difference(b) {
-                Some(difference) => println!("| {} and {} | {} | {} | {:?} |", position + 1, position + offset + 2, difference.differing_pixels, difference.differing_bytes, difference.largest),
-                None => println!("| {} and {} | different sizes | | |", position + 1, position + offset + 2),
+                Some(difference) => println!(
+                    "| {} and {} | {} | {} | {:?} | {} |",
+                    position + 1,
+                    position + offset + 2,
+                    difference.differing_pixels,
+                    difference.differing_bytes,
+                    difference.largest,
+                    differing_pixels_per_region(a, b)
+                ),
+                None => println!("| {} and {} | different sizes | | | |", position + 1, position + offset + 2),
             }
         }
     }
     0
+}
+
+/// Where two images of the scene differ: the differing pixels of each region
+/// of the scene (regions overlap where the scene's draws do, so a pixel may
+/// count in two), then those outside every region.
+fn differing_pixels_per_region(a: &Image, b: &Image) -> String {
+    if (a.width, a.height) != (scene::WIDTH, scene::HEIGHT) || (b.width, b.height) != (scene::WIDTH, scene::HEIGHT) {
+        return "not images of the scene".to_string();
+    }
+    let differs = |x: u32, y: u32| a.pixel(x, y) != b.pixel(x, y);
+    let inside = |bounds: [u32; 4], x: u32, y: u32| x >= bounds[0] && x < bounds[2] && y >= bounds[1] && y < bounds[3];
+    let pixels = || (0..scene::HEIGHT).flat_map(|y| (0..scene::WIDTH).map(move |x| (x, y)));
+    let mut parts: Vec<String> =
+        scene::REGIONS.iter().map(|region| format!("{} {}", region.name, pixels().filter(|&(x, y)| inside(region.bounds, x, y) && differs(x, y)).count())).collect();
+    let elsewhere = pixels().filter(|&(x, y)| differs(x, y) && !scene::REGIONS.iter().any(|region| inside(region.bounds, x, y))).count();
+    parts.push(format!("elsewhere {elsewhere}"));
+    parts.join(", ")
 }
 
 fn main() {
@@ -847,6 +873,19 @@ mod tests {
         assert_eq!(lines, vec![("hash.serial_one_buffer".to_string(), "00ff".to_string()), ("threads".to_string(), "12".to_string()), ("reason".to_string(), "a=b".to_string())]);
         assert_eq!(mismatches(&[1, 2, 3], &[1, 0, 3]), 1);
         assert_eq!(mismatches(&[1], &[1, 2]), 2);
+    }
+
+    #[test]
+    fn differing_pixels_are_counted_per_region_and_elsewhere() {
+        let blank = Image { width: scene::WIDTH, height: scene::HEIGHT, rgba: scene::CLEAR_BYTES.repeat((scene::WIDTH * scene::HEIGHT) as usize) };
+        let mut changed = blank.clone();
+        for (x, y) in [(160, 10), (254, 110), (110, 110)] {
+            changed.rgba[((y * scene::WIDTH + x) * 4) as usize] ^= 1;
+        }
+        let counts = differing_pixels_per_region(&blank, &changed);
+        // The third pixel lies in the triangles' region and in the fan's.
+        assert_eq!(counts, "depth_tested_triangles 1, nearest_hashed_texels 1, linear_gradient 0, trilinear_floor 0, blended_discs 0, sliver_fan 1, elsewhere 1");
+        assert_eq!(differing_pixels_per_region(&blank, &Image { width: 1, height: 1, rgba: vec![0; 4] }), "not images of the scene");
     }
 
     #[test]
