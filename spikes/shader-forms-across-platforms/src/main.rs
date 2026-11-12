@@ -176,10 +176,26 @@ fn lighting(work: &Path, changed: bool) -> Result<Lighting, String> {
     }
     let label = if changed { "changed" } else { "original" };
     let (glsl, slang) = if changed { (glsl.replace(LIGHTING_LINE, LIGHTING_LINE_CHANGED), slang.replace(LIGHTING_LINE, LIGHTING_LINE_CHANGED)) } else { (glsl, slang) };
-    let slang_directory = work.join(format!("lighting-{label}"));
-    fs::create_dir_all(&slang_directory).map_err(|error| format!("{}: {error}", slang_directory.display()))?;
+    // Slang looks for an imported module beside the importing file first, so
+    // the whole Slang set is copied with the module as this import reads it:
+    // a search path alone would leave the original in use.
+    let slang_directory = work.join(format!("slang-{label}"));
+    copy_tree(&own_shaders().join("slang"), &slang_directory)?;
     fs::write(slang_directory.join("lighting.slang"), slang).map_err(|error| format!("{}: {error}", slang_directory.display()))?;
     Ok(Lighting { label, glsl, slang_directory })
+}
+
+fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
+    fs::create_dir_all(to).map_err(|error| format!("{}: {error}", to.display()))?;
+    for entry in fs::read_dir(from).map_err(|error| format!("{}: {error}", from.display()))?.flatten() {
+        let (source, target) = (entry.path(), to.join(entry.file_name()));
+        if source.is_dir() {
+            copy_tree(&source, &target)?;
+        } else {
+            fs::copy(&source, &target).map_err(|error| format!("{}: {error}", source.display()))?;
+        }
+    }
+    Ok(())
 }
 
 fn glsl_text(spec: &StageSpec, lighting: &Lighting) -> Result<String, String> {
@@ -220,9 +236,9 @@ fn import(tools: &Tools, chain: Chain, unit: &Unit, spec: &StageSpec, form: Form
     let started = Instant::now();
     let outcome = match chain {
         Chain::Slang => {
-            let source = own_shaders().join("slang").join(unit.slang_source);
+            let source = lighting.slang_directory.join(unit.slang_source);
             let mut search = vec![lighting.slang_directory.clone()];
-            search.extend(unit.surface.map(|surface| own_shaders().join("slang").join("surfaces").join(surface)));
+            search.extend(unit.surface.map(|surface| lighting.slang_directory.join("surfaces").join(surface)));
             let request = SlangImport { source: &source, search: &search, entry: spec.slang_entry, stage: spec.stage, recent: unit.recent, reflection };
             chains::slang(tools, &request, form, &work.join(format!("{label}.{}", form.extension())))
         }
@@ -599,7 +615,7 @@ fn write_inputs_used(out: &mut Json, tools: &Tools, lighting: &Lighting, work: &
         };
         let active = |spirv: Result<Vec<u8>, String>, wanted: Option<&str>| -> Result<bool, String> {
             let lines = reflect_with_spirv_cross(&spirv?, true)?;
-            Ok(lines.iter().any(|line| line.starts_with("parameter ") && wanted.is_none_or(|wanted| line.split(' ').nth(1).is_some_and(|name| name.eq_ignore_ascii_case(wanted)))))
+            Ok(lines.iter().any(|line| line.starts_with("parameter ") && wanted.is_none_or(|wanted| line.split(' ').nth(1).is_some_and(|name| name.to_ascii_lowercase().contains(wanted)))))
         };
         let cross = Chain::Translated(Translator::SpirvCross);
         let (view, moves) = (active(probe_spirv(cross, Stage::Fragment), Some("view")), active(probe_spirv(cross, Stage::Vertex), None));
@@ -805,6 +821,8 @@ mod tests {
         let after = glsl_text(&lit.stages[1], &changed).unwrap();
         assert!(after.contains(LIGHTING_LINE_CHANGED) && !after.contains(LIGHTING_LINE));
         assert!(read(&changed.slang_directory.join("lighting.slang")).unwrap().contains(LIGHTING_LINE_CHANGED));
+        assert!(read(&original.slang_directory.join("lighting.slang")).unwrap().contains(LIGHTING_LINE));
+        assert!(changed.slang_directory.join("surfaces").join("view").join("surface.slang").is_file());
         // A shader that is not composed with the module does not read it.
         let scene = glsl_text(&units[0].stages[1], &changed).unwrap();
         assert!(!scene.contains("SPECULAR_STRENGTH"));

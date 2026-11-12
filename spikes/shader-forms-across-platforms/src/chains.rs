@@ -282,7 +282,10 @@ pub fn slang(tools: &Tools, import: &SlangImport, form: Form, output: &Path) -> 
     for directory in import.search {
         command.arg("-I").arg(directory);
     }
-    command.args(["-entry", import.entry, "-stage", import.stage.name()]);
+    // No line directive: they would write the path of the source into a
+    // payload of text, and the same source read from two directories would
+    // then give two payloads.
+    command.args(["-entry", import.entry, "-stage", import.stage.name(), "-line-directive-mode", "none"]);
     match form {
         Form::SpirV => {
             command.args(["-target", "spirv", "-fvk-invert-y"]);
