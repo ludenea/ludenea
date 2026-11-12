@@ -10,11 +10,14 @@
 //! machine, whether an import gives the same bytes twice, which payloads a
 //! change of the lighting module changes, what each chain says of a shader's
 //! stages and parameters, whether it tells which inputs a surface function
-//! uses, and the time of each import.
+//! uses, and the time of each import. It then draws the device baseline's
+//! scene natively with the forms made, and runs the surface with a computed
+//! coordinate in a raster pass and in a compute pass.
 //!
 //! Run with a cell label, the spike prints one JSON document.
 
 mod chains;
+mod computed;
 mod device;
 mod json;
 
@@ -772,6 +775,10 @@ fn measure(cell: &str) -> Result<String, String> {
         }
     }
     device::write(&mut out, &candidates, &work);
+    // The surface with a computed coordinate, in a raster pass against a
+    // compute pass, with the front end's SPIR-V of the spike's own sources.
+    let stages = computed::make(&tools, &original.glsl, &own_shaders().join("glsl"), &work);
+    computed::write(&mut out, &stages, &tools, &output);
     out.object_end();
     let _ = fs::remove_dir_all(&work);
     Ok(out.finish())
@@ -804,6 +811,21 @@ mod tests {
                 assert!(own_shaders().join("slang").join("surfaces").join(surface).join("surface.slang").is_file());
             }
         }
+    }
+
+    #[test]
+    fn the_computed_coordinate_is_measured_with_the_stages_of_the_shader_set() {
+        let work = env::temp_dir().join(format!("{SPIKE}-test-set-{}", std::process::id()));
+        fs::create_dir_all(&work).unwrap();
+        let original = lighting(&work, false).unwrap();
+        let units = units();
+        let lit = units.iter().find(|unit| unit.name == "lit_computed").unwrap();
+        let directory = own_shaders().join("glsl");
+        // The vertex stage and the raster pass with the hardware's
+        // differentials are the two stages of the set, text for text.
+        assert_eq!(computed::source(computed::Part::Vertex, &original.glsl, &directory).unwrap(), glsl_text(&lit.stages[0], &original).unwrap());
+        assert_eq!(computed::source(computed::Part::RasterHardware, &original.glsl, &directory).unwrap(), glsl_text(&lit.stages[1], &original).unwrap());
+        let _ = fs::remove_dir_all(&work);
     }
 
     #[test]

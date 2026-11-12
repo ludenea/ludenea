@@ -1603,6 +1603,42 @@ case "$spike" in
     for file in "${facts[@]}"; do
       jq -r '.cell as $cell | .the_scene_on_a_device as $d | select($d != null) | "- `\($cell)`: Windows developer mode \($d.windows_developer_mode); " + ([$d.interfaces[] | "\(.interface) " + (if .available then ([.devices[] | "\(.name) reference \(.reference_hash // .reference_error), \(.reference_milliseconds // "n/a") ms"] | join("; ")) else "unavailable: \(.reason | .[0:160])" end)] | join(" / "))' "$file"
     done
+    echo
+    echo "The surface with a computed coordinate, in a raster pass against a compute pass, on a plane seen in perspective. The stages are the front end's SPIR-V of the spike's sources, run through wgpu at its safe level:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .the_computed_coordinate as $c | select($c != null) | "- `\($cell)`: a target of \($c.target_side) by \($c.target_side); the bound: no channel of any pixel beyond \($c.bound.largest_difference_per_channel) of 255, at most \($c.bound.pixels_allowed_beyond_the_second) pixels beyond \($c.bound.second_difference); stages from \($c.stages_from): " + ([$c.stages[] | "\(.stage) " + (if .made then "\(.bytes) bytes" else "not made (\(.reason | .[0:300]))" end)] | join(", "))' "$file"
+    done
+    echo
+    echo "Whether the two passes agree within the bound, per device, with the image of each pass (its hash, its distinct colors, its pixels left uncovered) under a sampler that reads every level of the texture:"
+    echo
+    echo "| Cell | Interface | Device | Kind | Both images show the plane | The two passes agree within the bound | Raster, hardware differentials | Raster, supplied differentials | Raster, plain sampling | Compute, computed differentials |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .the_computed_coordinate.interfaces[]? | .interface as $interface | .devices[]? | select(.measured) | ([.images[] | select(.levels == "every_level") | {(.pass): "\(.hash), \(.distinct_colors), \(.pixels_not_covered)"}] | add) as $image | "| \($cell) | \($interface) | \(.name) | \(.kind) | \(.both_images_show_the_plane) | \(.the_two_passes_agree_within_the_bound) | \($image.raster_hardware_differentials) | \($image.raster_supplied_differentials) | \($image.raster_plain_sampling) | \($image.compute_computed_differentials) |"' "$file"
+    done
+    echo
+    echo "The comparisons, per device and per sampler (every level of the texture, or the first level only, under which the differentials decide nothing): pixels that differ, the largest difference of a channel with the largest per channel, pixels beyond the second difference, the mean difference of a channel:"
+    echo
+    echo "| Cell | Interface | Device | Levels | Compared | Against | Bytes equal | Differing pixels | Largest difference | Beyond the second | Mean difference | Within the bound |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .the_computed_coordinate.interfaces[]? | .interface as $interface | .devices[]? | select(.measured) | .name as $device | .comparisons[] | "| \($cell) | \($interface) | \($device) | \(.levels) | \(.of) | \(.against) | \(.bytes_equal) | \(.differing_pixels) | \(.largest_difference) \(.largest_difference_per_channel) | \(.pixels_beyond_the_second_difference) | \(.mean_absolute_difference * 1000 | round / 1000) | \(.within_the_bound) |"' "$file"
+    done
+    echo
+    echo "The raster pass timed per sampling, from its submission to the completion of the device's work, fastest and median in microseconds, with the engine's sampling over plain sampling at the fastest:"
+    echo
+    echo "| Cell | Interface | Device | Draws a pass, passes timed | Engine, hardware differentials | Engine, supplied differentials | Plain sampling | Engine over plain | Supplied over plain |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .the_computed_coordinate as $c | $c.interfaces[]? | .interface as $interface | .devices[]? | select(.measured) | (.raster_pass_times | map({(.sampling): .}) | add) as $t | "| \($cell) | \($interface) | \(.name) | \($c.draws_per_timed_pass), \($c.timed_repetitions) | \($t.raster_hardware_differentials.fastest_us | round), \($t.raster_hardware_differentials.median_us | round) | \($t.raster_supplied_differentials.fastest_us | round), \($t.raster_supplied_differentials.median_us | round) | \($t.raster_plain_sampling.fastest_us | round), \($t.raster_plain_sampling.median_us | round) | \($t.raster_hardware_differentials.fastest_us / $t.raster_plain_sampling.fastest_us * 100 | round / 100) | \($t.raster_supplied_differentials.fastest_us / $t.raster_plain_sampling.fastest_us * 100 | round / 100) |"' "$file"
+    done
+    echo
+    echo "How the shaders reach each interface's devices, and the devices on which the measurement did not run:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .the_computed_coordinate.interfaces[]? | "- `\($cell)`, \(.interface): \(.devices | length) device(s); \(.the_shaders_reach_the_device_as)" + ([.devices[] | select(.measured | not) | "; not measured on \(.name): \(.reason | .[0:500] | gsub("\\|"; "/"))"] | join(""))' "$file"
+    done
     ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."

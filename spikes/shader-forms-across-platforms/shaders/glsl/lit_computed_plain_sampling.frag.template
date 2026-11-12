@@ -1,0 +1,27 @@
+// The fragment stage of the lit surface with a computed coordinate, written
+// with plain sampling: no coordinate type and no engine sampling function,
+// the coordinate scaled and rotated with the language's own arithmetic and
+// sampled with the hardware's differentials. It is what the engine's
+// sampling is timed against in a raster pass. Composed by text after the
+// lighting module, for the properties of a surface and the lighting.
+layout(set = 1, binding = 0) uniform texture2D base_color_image;
+layout(set = 1, binding = 1) uniform sampler base_color_filtering;
+layout(set = 1, binding = 2) uniform Material {
+    vec4 tint;
+    vec4 sway;
+} material;
+
+layout(location = 0) in vec3 world_position;
+layout(location = 1) in vec3 world_normal;
+layout(location = 2) in vec2 surface_uv;
+layout(location = 0) out vec4 out_color;
+
+void main() {
+    vec2 turned = mat2(0.8, 0.6, -0.6, 0.8) * (surface_uv * vec2(3.0, 2.0));
+    Surface result;
+    result.base_color = texture(sampler2D(base_color_image, base_color_filtering), turned).rgb * material.tint.rgb;
+    result.roughness = 0.5;
+    result.normal = normalize(world_normal);
+    result.emission = vec3(0.0);
+    out_color = vec4(light_surface(result, world_position), 1.0);
+}

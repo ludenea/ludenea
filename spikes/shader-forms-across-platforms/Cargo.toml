@@ -11,3 +11,4 @@ reference-workload = { path = "../reference-workload" }
 render-device-baseline = { path = "../render-device-baseline" }
 naga = { version = "=30.0.1", features = ["spv-in", "hlsl-out", "msl-out", "wgsl-in", "spv-out"] }
 spirv-cross2 = { version = "=0.7.2", default-features = false, features = ["hlsl", "msl"] }
+wgpu = { version = "=30.0.1", default-features = false, features = ["std", "vulkan", "dx12", "metal", "spirv"] }

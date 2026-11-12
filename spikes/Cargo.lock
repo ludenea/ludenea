@@ -370,6 +370,8 @@ version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af491d569909a7e4dee0ad7db7f5341fef5c614d5b8ec8cf765732aba3cff681"
 dependencies = [
+ "serde",
+ "termcolor",
  "unicode-width",
 ]
 
@@ -2734,6 +2736,7 @@ dependencies = [
  "reference-workload",
  "render-device-baseline",
  "spirv-cross2",
+ "wgpu",
 ]
 
 [[package]]
@@ -3637,6 +3640,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "js-sys",
  "log",
+ "naga",
  "portable-atomic",
  "profiling",
  "raw-window-handle",

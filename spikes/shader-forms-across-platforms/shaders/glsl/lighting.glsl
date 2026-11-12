@@ -3,8 +3,12 @@
 // properties a surface returns, the frame's constants and the lighting.
 //
 // A coordinate travels with its differentials as one value, and a surface
-// samples through `engine_sample` only: in a raster pass the function is
-// plain sampling, since the hardware supplies the differentials there.
+// samples through `engine_sample` only. The module is compiled for the kind
+// of pass it serves: in a raster pass the function is plain sampling, since
+// the hardware supplies the differentials there; compiled with
+// `DIFFERENTIALS_ARE_SUPPLIED`, for a pass with no rasterizer or to compare
+// the two in a raster pass, it samples with the differentials the
+// coordinate carries.
 
 struct Coordinate {
     vec2 value;
@@ -22,7 +26,11 @@ Coordinate coordinate_rotated(Coordinate c, float cosine, float sine) {
 }
 
 vec4 engine_sample(texture2D image, sampler filtering, Coordinate c) {
+#ifdef DIFFERENTIALS_ARE_SUPPLIED
+    return textureGrad(sampler2D(image, filtering), c.value, c.ddx, c.ddy);
+#else
     return texture(sampler2D(image, filtering), c.value);
+#endif
 }
 
 struct Surface {
