@@ -154,6 +154,11 @@ impl WgpuPresenter {
         let mut configuration = surface.get_default_config(&adapter, request.width.max(1), request.height.max(1)).ok_or("wgpu gave no default configuration for the surface")?;
         configuration.present_mode = present_mode;
         surface.configure(&device, &configuration);
+        // wgpu reports a surface it could not configure as an error of the
+        // device, and panics at the next acquisition if nobody reads it.
+        if let Some(error) = errors.lock().ok().and_then(|mut errors| errors.pop()) {
+            return Err(format!("wgpu could not configure the surface: {error}"));
+        }
         let offscreen = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("offscreen stream"),
             size: wgpu::Extent3d { width: OFFSCREEN_SIZE, height: OFFSCREEN_SIZE, depth_or_array_layers: 1 },
@@ -234,6 +239,7 @@ impl Presenter for WgpuPresenter {
 
     fn frame(&mut self, index: u64) -> Result<FrameOutcome, String> {
         let started = now_ns();
+        crate::presenter::in_call(crate::presenter::ACQUISITION);
         let current = self.surface.get_current_texture();
         let acquired = now_ns();
         let (texture, suboptimal) = match current {
@@ -252,10 +258,13 @@ impl Presenter for WgpuPresenter {
             }
         };
         let view = texture.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        crate::presenter::in_call(crate::presenter::SUBMISSION);
         self.clear_and_submit(&view, index);
         drop(view);
         let submitted = now_ns();
+        crate::presenter::in_call(crate::presenter::PRESENTATION);
         self.queue.present(texture);
+        crate::presenter::in_call(crate::presenter::BETWEEN_CALLS);
         let presented_at = now_ns();
         if suboptimal {
             self.surface.configure(&self.device, &self.configuration);

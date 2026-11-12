@@ -132,9 +132,11 @@ impl Turns {
             shared.frames_presented.store(self.presented, Ordering::Relaxed);
             shared.last_frame_ns.store(now_ns(), Ordering::Relaxed);
         }
+        crate::presenter::in_call(crate::presenter::OFFSCREEN_FRAME);
         let before_offscreen = now_ns();
         self.presenter.offscreen(self.index)?;
         let completed = now_ns();
+        crate::presenter::in_call(crate::presenter::BETWEEN_CALLS);
         self.phases[phase as usize].offscreen_frame.add(completed - before_offscreen);
         // The period of the offscreen stream is counted between two of its
         // frames of the same phase.

@@ -893,6 +893,7 @@ impl Presenter for VulkanPresenter {
                 return Ok(FrameOutcome::nothing(now_ns() - started, "no image: the surface has no extent"));
             }
         }
+        crate::presenter::in_call(crate::presenter::ACQUISITION);
         let mut image = 0_u32;
         // SAFETY: the device, the swapchain and the semaphore are live; the
         // semaphore has no pending signal, since every frame that acquired
@@ -908,13 +909,17 @@ impl Presenter for VulkanPresenter {
             }
             other => return Err(format!("vkAcquireNextImageKHR failed with {}", result_name(other))),
         }
+        crate::presenter::in_call(crate::presenter::SUBMISSION);
         self.clear_and_submit(0, self.images[image as usize], LAYOUT_PRESENT_SRC, frame_color(index), Some(self.acquired), Some(self.rendered))?;
         let submitted = now_ns();
         let info = PresentInfo { kind: STRUCTURE_PRESENT_INFO, next: ptr::null(), wait_count: 1, wait_semaphores: &self.rendered, swapchain_count: 1, swapchains: &self.swapchain, image_indices: &image, results: ptr::null_mut() };
         // SAFETY: the queue, the swapchain and the semaphore are live.
+        crate::presenter::in_call(crate::presenter::PRESENTATION);
         let presented = unsafe { (self.calls.present)(self.queue, &info) };
         let presented_at = now_ns();
+        crate::presenter::in_call(crate::presenter::WAIT_FOR_THE_DEVICE);
         self.wait_for(0)?;
+        crate::presenter::in_call(crate::presenter::BETWEEN_CALLS);
         let waited = now_ns() - presented_at;
         let status = match presented {
             SUCCESS => "presented".to_string(),

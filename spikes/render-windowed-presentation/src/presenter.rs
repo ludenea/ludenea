@@ -147,3 +147,31 @@ pub fn open(request: &Request, prepared: Prepared) -> Result<Box<dyn Presenter>,
         other => Err(format!("{other} is not an interface of this platform")),
     }
 }
+
+/// The call the presenter is inside, for the watchdog's report of a stall
+/// or of a deadlock: each path says which call it is about to make.
+static CURRENT_CALL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+pub const BETWEEN_CALLS: usize = 0;
+pub const ACQUISITION: usize = 1;
+pub const SUBMISSION: usize = 2;
+pub const PRESENTATION: usize = 3;
+pub const WAIT_FOR_THE_DEVICE: usize = 4;
+pub const OFFSCREEN_FRAME: usize = 5;
+
+const CALLS: [&str; 6] = [
+    "between two calls",
+    "the acquisition of the window's image",
+    "the recording and submission of the frame",
+    "the presentation call",
+    "the wait for the device",
+    "the frame of the offscreen stream",
+];
+
+pub fn in_call(call: usize) {
+    CURRENT_CALL.store(call, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn current_call() -> &'static str {
+    CALLS[CURRENT_CALL.load(std::sync::atomic::Ordering::Relaxed).min(CALLS.len() - 1)]
+}

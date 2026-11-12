@@ -622,12 +622,15 @@ impl Presenter for Direct3d12Presenter {
     }
 
     fn frame(&mut self, index: u64) -> Result<FrameOutcome, String> {
+        crate::presenter::in_call(crate::presenter::ACQUISITION);
         let started = now_ns();
         // SAFETY: the swapchain is live.
         let back = unsafe { com!(self.swapchain.raw(), slot::swapchain::GET_CURRENT_BACK_BUFFER_INDEX, fn() -> u32) } as usize;
         let indexed = now_ns();
+        crate::presenter::in_call(crate::presenter::WAIT_FOR_THE_DEVICE);
         self.wait(self.buffer_fences[back])?;
         let acquired = now_ns();
+        crate::presenter::in_call(crate::presenter::SUBMISSION);
         self.clear_and_submit(self.allocators[back].raw(), self.list.raw(), self.render_target(back), Some(self.buffers[back].raw()), frame_color(index))?;
         let submitted = now_ns();
         let (interval, flags) = match self.mode {
@@ -636,8 +639,10 @@ impl Presenter for Direct3d12Presenter {
             Mode::Unsynchronized => (0, DXGI_PRESENT_ALLOW_TEARING),
         };
         // SAFETY: the swapchain is live.
+        crate::presenter::in_call(crate::presenter::PRESENTATION);
         let result = unsafe { com!(self.swapchain.raw(), slot::swapchain::PRESENT, fn(u32, u32) -> Hresult, interval, flags) };
         let presented_at = now_ns();
+        crate::presenter::in_call(crate::presenter::BETWEEN_CALLS);
         self.buffer_fences[back] = self.signal()?;
         if result < 0 {
             return Err(format!("IDXGISwapChain::Present failed with HRESULT {:#010x}", result as u32));

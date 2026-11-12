@@ -250,12 +250,14 @@ impl Presenter for MetalPresenter {
         unsafe {
             let pool = objc_autoreleasePoolPush();
             let started = now_ns();
+            crate::presenter::in_call(crate::presenter::ACQUISITION);
             let drawable = send!(self.layer, "nextDrawable", fn() -> Id);
             let acquired = now_ns();
             if drawable.is_null() {
                 objc_autoreleasePoolPop(pool);
                 return Ok(FrameOutcome::nothing(acquired - started, "no image: the layer gave no drawable"));
             }
+            crate::presenter::in_call(crate::presenter::SUBMISSION);
             let texture = send!(drawable, "texture", fn() -> Id);
             let buffer = match self.clear_pass(texture, frame_color(index)) {
                 Ok(buffer) => buffer,
@@ -266,8 +268,10 @@ impl Presenter for MetalPresenter {
             };
             send!(buffer, "presentDrawable:", fn(Id) -> (), drawable);
             let submitted = now_ns();
+            crate::presenter::in_call(crate::presenter::PRESENTATION);
             send!(buffer, "commit", fn() -> ());
             let presented = now_ns();
+            crate::presenter::in_call(crate::presenter::BETWEEN_CALLS);
             objc_autoreleasePoolPop(pool);
             Ok(FrameOutcome { acquire_ns: acquired - started, submit_ns: submitted - acquired, wait_ns: 0, present_ns: presented - submitted, presented: true, status: "presented".to_string() })
         }
