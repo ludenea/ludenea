@@ -753,6 +753,88 @@ case "$spike" in
       jq -r '"- `\(.cell)`: \(.platform.available_parallelism) CPUs; DISPLAY set \(.session.display_set), WAYLAND_DISPLAY set \(.session.wayland_display_set); open sockets before and after rendering: \(.session.open_sockets_before_rendering), \(.session.open_sockets_after_rendering); Vulkan ICD files: \([.session.vulkan_icd_files[].file] | join(", ")); GLSL compiler: \(.session.glsl_compiler); the binary (\(.imports.format)) imports \([.imports.libraries[]?.name] | join(", ")); a windowing, graphics or audio library imported: \(if .imports.error then .imports.error else .imports.imports_a_windowing_graphics_or_audio_library end)."' "$file"
     done
     ;;
+  render-device-baseline)
+    echo "Every device each graphics interface lists, opened with no window through the system's loader, and the scene with filtered textures, blending, depth and 4 samples rendered in three recordings on two devices of one process, in a second process and under each setting of a software device:"
+    echo
+    echo "| Cell | Interface | Device | Kind | Driver | Interface version | Opened | Every baseline item reported | Renders completed | Distinct scene hashes | Every render identical | Image hash | Nearest-filtered pixels off their texel | Compute exact | Pass-through exact | Converting form: differing bytes, largest | Reason when not opened |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .interfaces[] | .interface as $interface | .devices[]? | "| \($cell) | \($interface) | \(.name) | \(.kind) | \(.driver) | \(.interface_version) | \(.opened) | \(if .every_baseline_item_reported == null then "n/a" else .every_baseline_item_reported end) | \(.renders_completed // "n/a") of \(.renders_expected // "n/a") | \(.distinct_scene_hashes // "n/a") | \(if .every_render_identical == null then "n/a" else .every_render_identical end) | \(.scene.image_hash // "n/a") | \(.scene.nearest_filtered_pixels_that_differ_from_their_texel // "n/a") | \(if .compute.exact == null then (.compute.reason // "n/a") else .compute.exact end) | \(if .pass_through.pass_through == null then (.pass_through.reason // "n/a") else .pass_through.pass_through.every_texel_arrives_with_its_bytes end) | \(.pass_through.converting.differing_bytes // "n/a"), \(.pass_through.converting.largest_difference_per_channel // "n/a") | \(.reason // "") |"' "$file"
+    done
+    echo
+    echo "Interfaces unavailable on a cell, with the reason:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .interfaces[] | select(.available | not) | "- `\($cell)`, \(.interface): \(.reason)"' "$file"
+    done
+    echo
+    echo "Baseline items a device does not report, with what it reports instead (none listed means every item is reported):"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .interfaces[] | .interface as $interface | .devices[]? | select(.opened) | .name as $device | .baseline[] | select(.reported != "yes") | "- `\($cell)`, \($interface), \($device): \(.name) is \(.reported) (\(.evidence))"' "$file"
+    done
+    echo
+    echo "What each device reports beyond the baseline:"
+    echo
+    echo "| Cell | Interface | Device | BC | ETC2 | ASTC | 64-bit atomics | Indirect count from a buffer | Resource arrays without a fixed bound | Mesh shaders | Ray queries | Second queue |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .interfaces[] | .interface as $interface | .devices[]? | select(.opened) | "| \($cell) | \($interface) | \(.name) | \([.beyond_the_baseline[].reported] | join(" | ")) |"' "$file"
+    done
+    echo
+    echo "The evidence behind each item, per device:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .interfaces[] | .interface as $interface | .devices[]? | select(.opened) | "- `\($cell)`, \($interface), \(.name) (settings: \(.settings)): " + ([(.baseline + .beyond_the_baseline)[] | "\(.name): \(.evidence)"] | join("; "))' "$file"
+    done
+    echo
+    echo "The three recordings on the first and on the second device of the process (render time, read-back time and polls, time between the two timestamps):"
+    echo
+    echo "| Cell | Interface | Device | Recording | First hash | Second hash | Render us (first, second) | Read-back us (first, second) | Read-back polls (first, second) | Timestamps ns (first, second) | Error |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .interfaces[] | .interface as $interface | .devices[]? | select(.opened) | .name as $device | .scene.recordings[] | "| \($cell) | \($interface) | \($device) | \(.recording) | \(.first_device_hash // "n/a") | \(.second_device_hash // "n/a") | \(.first_device_render_us // "n/a"), \(.second_device_render_us // "n/a") | \(.first_device_readback_us // "n/a"), \(.second_device_readback_us // "n/a") | \(.first_device_readback_polls // "n/a"), \(.second_device_readback_polls // "n/a") | \(.first_device_timestamps_ns // "n/a"), \(.second_device_timestamps_ns // "n/a") | \([.first_device_error, .second_device_error] | map(select(. != null)) | join("; ")) |"' "$file"
+    done
+    echo
+    echo "The scene again in child processes (the same settings, then each setting of a software device), with the difference from the first image where the hash differs:"
+    echo
+    echo "| Cell | Interface | Device | Run | What | Environment | Processors | Completed | Device as the child names it | Threads | Hashes (one buffer, chunked on one thread, chunked on four) | Differences |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .interfaces[] | .interface as $interface | .devices[]? | select(.opened) | .name as $device | .runs[] | "| \($cell) | \($interface) | \($device) | \(.label) | \(.what) | \(.environment) | \(.affinity_cpus) | \(.completed) (\(.status)) | \(.device // "n/a") | \(.threads // "n/a") | \([.recordings[] | .hash // .error] | join(", ")) | \([.recordings[] | select(.differing_pixels != null) | "\(.recording): \(.differing_pixels) pixels, largest \(.largest_difference_per_channel)"] | join("; ")) |"' "$file"
+    done
+    echo
+    echo "Distinct images of the scene per interface and device name across every cell (1 means identical bytes on every cell that has the device), and the differences between the devices of one cell:"
+    echo
+    jq -r '.interfaces[] | .interface as $interface | .devices[]? | select(.scene.image_hash != null) | "\($interface)\t\(.name)\t\(.scene.image_hash)"' "${facts[@]}" | sort -u | awk -F '\t' '{ key = $1 ", " $2; count[key] += 1; hashes[key] = hashes[key] " " $3 } END { for (key in count) print "- " key ": " count[key] " distinct image(s):" hashes[key] }' | sort
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .differences_between_devices[] | "- `\($cell)`: \(.first) and \(.second): \(.differing_pixels // .difference) differing pixels, \(.differing_bytes // "n/a") differing bytes, largest difference per channel \(.largest_difference_per_channel // "n/a")"' "$file"
+    done
+    inputs="$(jq -r '.inputs.hash' "${facts[@]}" | sort -u | wc -l | tr -d ' ')"
+    echo "- the inputs: $inputs distinct hash value(s) across every cell (the scenes are the same bytes everywhere)."
+    echo
+    echo "The validation layer of each interface, in a child process: whether it could be used, how its messages reach the program, the messages while the scene renders, and whether a deliberate misuse is reported:"
+    echo
+    echo "| Cell | Interface | Device | Child completed | Layer | Delivery | Scene rendered | Messages on the scene | Misuse | Messages on the misuse | Reported to the program | First message, reason or standard error |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .interfaces[] | .interface as $interface | .devices[]? | select(.opened) | .name as $device | .validation | "| \($cell) | \($interface) | \($device) | \(.completed) (\(.status)) | \(if .layer == null then "n/a" else .layer end) | \(.delivery // "n/a") | \(if .scene_rendered == null then "n/a" else .scene_rendered end) | \(.clean_messages // "n/a") | \(.misuse // "n/a") | \(.misuse_messages // "n/a") | \(.the_misuse_is_reported_to_the_program) | \(.misuse_first // .clean_first // .reason // .error // .standard_error // "") |"' "$file"
+    done
+    echo
+    echo "The lit scene, timed from the start of the recording to the completion of the device's work (fastest and median of the repetitions, in microseconds):"
+    echo
+    echo "| Cell | Interface | Device | Kind | One image, lit | Geometry buffer of 160 bits, fill | Geometry buffer of 192 bits, fill | Geometry buffer of 160 bits, fill then light | Output hashes |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .interfaces[] | .interface as $interface | .devices[]? | select(.opened) | "| \($cell) | \($interface) | \(.name) | \(.kind) | \([.lit_scene[] | if .ran then "\(.fastest_us), \(.median_us)" else "not run: \(.reason)" end] | join(" | ")) | \([.lit_scene[] | .output_hash // "n/a"] | join(", ")) |"' "$file"
+    done
+    echo
+    echo "Session and imports per cell:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: \(.platform.available_parallelism) CPUs; \(.devices_measured) device(s) measured; DISPLAY set \(.session.display_set), WAYLAND_DISPLAY set \(.session.wayland_display_set); open sockets before and after rendering: \(.session.open_sockets_before_rendering), \(.session.open_sockets_after_rendering); threads after rendering: \(.session.threads_after_rendering); the binary (\(.imports.format)) imports \(.imports.libraries // .imports.error); a windowing, graphics or audio library imported: \(if .imports.error then .imports.error else .imports.imports_a_windowing_graphics_or_audio_library end)."' "$file"
+    done
+    ;;
   workload-persistent-pool)
     echo "The cost of a one-tick step on both pools, per worker count (the wall time of 1 000 calls of step(1) minus one call of step(1000), per step; the best of the rounds):"
     echo

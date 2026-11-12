@@ -1,0 +1,20 @@
+#version 450
+// The compute exercise: for the invocation at (x, y), with i = y * 64 + x and
+// v the input at i, writes v * 2654435761 + i (wrapping) to the output buffer
+// and v ^ 0x9e3779b9 to the texel (x, y) of the storage texture.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(std430, set = 0, binding = 0) readonly buffer Source {
+    uint values[];
+} source_values;
+layout(std430, set = 0, binding = 1) writeonly buffer Results {
+    uint values[];
+} results;
+layout(set = 0, binding = 2, r32ui) uniform writeonly uimage2D result_texture;
+
+void main() {
+    uvec2 position = gl_GlobalInvocationID.xy;
+    uint index = position.y * 64u + position.x;
+    uint value = source_values.values[index];
+    results.values[index] = value * 2654435761u + index;
+    imageStore(result_texture, ivec2(position), uvec4(value ^ 0x9e3779b9u, 0u, 0u, 0u));
+}

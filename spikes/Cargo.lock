@@ -2203,6 +2203,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "render-device-baseline"
+version = "0.1.0"
+dependencies = [
+ "reference-workload",
+]
+
+[[package]]
 name = "render-offscreen"
 version = "0.1.0"
 dependencies = [

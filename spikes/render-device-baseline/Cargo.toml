@@ -1,0 +1,10 @@
+[package]
+name = "render-device-baseline"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: what the devices of the research CI offer through Direct3D 12, Vulkan and Metal, each reached through the system's loader, and whether a scene with filtering, blending, depth and multisampling renders to the same bytes, for the rendering research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }

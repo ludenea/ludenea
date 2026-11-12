@@ -41,6 +41,7 @@ members = [
     "scripting-runtime",
     "scripting-runtime/systems",
     "scripting-runtime/module",
+    "render-device-baseline",
 ]
 
 [profile.release]
