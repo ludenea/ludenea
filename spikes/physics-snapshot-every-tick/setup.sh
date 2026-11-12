@@ -16,11 +16,21 @@ build="build/$name"
 generator=()
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*)
-    if [ -z "${CC:-}" ] && [ "${PROCESSOR_ARCHITECTURE:-}" = "ARM64" ]; then
-      export CC='clang-cl /FIintrin.h /DARM64_FPCR=0x5A20'
-      export CXX="$CC"
-      echo "setup: Windows for ARM64, building the Box2D half with $CC"
-    fi
+    # A shell that runs under emulation reports the emulated architecture;
+    # the processor identifier and the runner's own variable name the real one.
+    machine="$(uname -m)"
+    case "${PROCESSOR_ARCHITECTURE:-} ${PROCESSOR_ARCHITEW6432:-} ${RUNNER_ARCH:-} ${PROCESSOR_IDENTIFIER:-}" in
+      *ARM64*|*ARMv8*) machine="arm64" ;;
+    esac
+    case "$machine" in
+      arm64|aarch64)
+        if [ -z "${CC:-}" ]; then
+          export CC='clang-cl /FIintrin.h /DARM64_FPCR=0x5A20'
+          export CXX="$CC"
+          echo "setup: Windows for ARM64, building the Box2D half with $CC"
+        fi
+        ;;
+    esac
     if [ -n "${CC:-}" ]; then generator=(-G Ninja); fi
     ;;
 esac
