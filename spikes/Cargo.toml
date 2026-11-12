@@ -50,6 +50,7 @@ members = [
     "physics-snapshot-every-tick",
     "visual-reference-round-trip",
     "multiplayer-test-rounds",
+    "render-frame-content",
 ]
 
 [profile.release]

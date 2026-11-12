@@ -1978,6 +1978,129 @@ case "$spike" in
       jq -r '. as $r | .link_log | "| \($r.cell) | \($r.profile) | \(.entry_bytes) | \(.ring_bytes_per_link) | \(.messages) | \(.bytes_carried_per_message) | \(.fastest_ms_with_the_log) | \(.fastest_ms_without_the_log) | \(.nanoseconds_per_message_on_a_link_alone_with_the_log) | \(.nanoseconds_per_message_on_a_link_alone_without_the_log) |"' "$file"
     done
     ;;
+  render-frame-content)
+    # One entry per device a cell measured on: the device that draws nothing,
+    # then each device of the machine, with the measurements found under it.
+    sources='def b: if . == null then "" else tostring end; def sources: [{device: "content device (draws nothing)", m: .content_device}] + [(.devices // [])[] | {device: "\(.report.device.name // "unknown") (\(.report.interface // "?"))", m: .report}];'
+    echo "The devices each cell measured on:"
+    echo
+    echo "| Cell | Interface | Device | Kind | Driver | Settings | The device's process |"
+    echo "| --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.devices // [])[] | "| \($cell) | \(.report.interface // "") | \(.report.device.name // .report.error // "") | \(.report.device.kind // "") | \(.report.device.driver // "") | \(.report.device.settings // "" | gsub("\\|"; "/")) | \(.process) |"' "$file"
+      jq -r '.cell as $cell | (.interfaces // [])[] | select(.available == false) | "| \($cell) | \(.interface) | unavailable: \(.reason) | | | | |"' "$file"
+    done
+    echo
+    echo "The content hash of two frames (tick 30 at the factor 0.5, tick 60 at 0.25), prepared with each arithmetic at 1, 4 and 8 workers:"
+    echo
+    echo "| Cell | Math layer, tick 30 | Math layer, tick 60 | One value at every worker count | Platform's arithmetic, tick 30 | Platform's arithmetic, tick 60 | One value at every worker count |"
+    echo "| --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.content_device.content_hashes as $h | if $h.error then "| \(.cell) | \($h.error) | | | | | |" else "| \(.cell) | \($h.math_layer.workers_1.tick_30) | \($h.math_layer.workers_1.tick_60) | \($h.math_layer.one_value_at_every_worker_count) | \($h.platform.workers_1.tick_30) | \($h.platform.workers_1.tick_60) | \($h.platform.one_value_at_every_worker_count) |" end' "$file"
+    done
+    echo
+    jq -r -s '"- Across \(length) cell(s): \([.[].content_device.content_hashes.math_layer.frames_hash | select(. != null)] | unique | length) distinct value(s) with the math layer, \([.[].content_device.content_hashes.platform.frames_hash | select(. != null)] | unique | length) with the platform'"'"'s arithmetic."' "${facts[@]}"
+    echo
+    echo "What the math layer costs prepare (160 tasks, four views of 10 000 entities), processor time in microseconds over 31 repetitions:"
+    echo
+    echo "| Cell | Worker budget | Items kept | Math layer: fastest, median, slowest | Platform: fastest, median, slowest | Ratio of medians | Ratio of fastest | Wall time, math layer median | Wall time, platform median |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .content_device.prepare_cost | if .error then "| \($cell) | \(.error) | | | | | | | |" else (to_entries[] | select(.key | startswith("worker_budget_")) | "| \($cell) | \(.key | ltrimstr("worker_budget_")) | \(.value.items_in_four_views) | \(.value.math_layer_processor_us.min), \(.value.math_layer_processor_us.median), \(.value.math_layer_processor_us.max) | \(.value.platform_processor_us.min), \(.value.platform_processor_us.median), \(.value.platform_processor_us.max) | \(.value.ratio_of_medians_processor) | \(.value.ratio_of_fastest_processor) | \(.value.math_layer_wall_us.median) | \(.value.platform_wall_us.median) |") end' "$file"
+    done
+    echo
+    echo "Declaring and compiling a graph of 300 passes and 600 resources on one thread, microseconds over 300 repetitions:"
+    echo
+    echo "| Cell | Fastest | Median | 99th percentile | Slowest | Passes kept | Passes removed | Median under one millisecond | Slowest under one millisecond |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.content_device.graph_cost as $g | "| \(.cell) | \($g.declare_and_compile_us.min) | \($g.declare_and_compile_us.median) | \($g.percentile_99_us) | \($g.declare_and_compile_us.max) | \($g.passes_kept) | \($g.passes_removed) | \($g.median_under_one_millisecond) | \($g.largest_under_one_millisecond) |"' "$file"
+    done
+    echo
+    echo "The bytes of a frame in the ordinary mode, in the reference mode and with each switch alone (the draws and the passes are the ordinary mode's, then the reference mode's):"
+    echo
+    echo "| Cell | Device | Every mode gives the ordinary mode's bytes | Image, tick 30 | Image, tick 60 | Content, tick 30 | Draws | Passes | Modes that differ |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r "$sources"' .cell as $cell | sources[] | .device as $d | .m.modes | if . == null then "| \($cell) | \($d) | not run | | | | | | |" elif .error then "| \($cell) | \($d) | \(.error) | | | | | | |" else . as $m | ($m.frames | map(select(.mode == "ordinary"))) as $o | ($m.frames | map(select(.mode == "reference"))) as $r | "| \($cell) | \($d) | \($m.every_mode_gives_the_bytes_of_the_ordinary_mode) | \($o[0].image_hash) | \($o[1].image_hash) | \($o[0].content_hash) | \($o[0].draws), \($r[0].draws) | \($o[0].passes), \($r[0].passes) | \([$m.frames[] | select(.bytes_of_the_ordinary_mode == false) | "\(.mode) at tick \(.tick): \(.differing_pixels // "?") pixels, largest \(.largest_difference // "?")"] | join("; ")) |" end' "$file"
+    done
+    echo
+    echo "The lateness of ticks due every sixtieth of a second and the rate of frames, microseconds (overlap: a presentation thread submits and reads back while the loop goes on; without: the stepping thread serves the presenter and goes on when the image is read back):"
+    echo
+    echo "| Cell | Device | Frames | Worker budget | Overlap | Lateness: median | 99th percentile | Largest | Frames per second | Ticks per second | Prepare and sort, wall | Record, wall | Submit | Device | Frame start to image |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r "$sources"' .cell as $cell | sources[] | .device as $d | .m.pace | if . == null then "| \($cell) | \($d) | not run | | | | | | | | | | | | |" elif .error then "| \($cell) | \($d) | \(.error) | | | | | | | | | | | | |" else (.runs[] | "| \($cell) | \($d) | \(.frames | split(",")[0]) | \(.worker_budget) | \(.overlap) | \(.tick_lateness_us.median) | \(.tick_lateness_percentile_99_us) | \(.tick_lateness_us.max) | \(.frames_per_second) | \(.ticks_per_second) | \(.stage_medians_us.prepare_wall + .stage_medians_us.sort_wall | . * 10 | round / 10) | \(.stage_medians_us.record_wall) | \(.stage_medians_us.submit) | \(.stage_medians_us.device) | \(.stage_medians_us.start_to_image) |") end' "$file"
+    done
+    echo
+    echo "1, 4 and 16 worlds through one presenter, each on its own stepping thread at a worker budget of one (the frame cost is the mean time from a frame's start to its image, microseconds; device memory in bytes):"
+    echo
+    echo "| Cell | Device | Worlds | Frames per world | Frame cost per world | Against one world | Stages' processor time per frame | Presenter's time per frame | Most frames in flight | Device, median | Targets per world | Tile geometry per world | Transient targets at peak | Instance textures and geometry |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r "$sources"' .cell as $cell | sources[] | .device as $d | .m.shared_device | if . == null then "| \($cell) | \($d) | not run | | | | | | | | | | | |" elif .error then "| \($cell) | \($d) | \(.error) | | | | | | | | | | | |" else (.counts[] | "| \($cell) | \($d) | \(.worlds) | \(.frames_measured_per_world) | \(.frame_cost_per_world_us) | \(.frame_cost_against_one_world) | \(.stages_processor_time_per_frame_us) | \(.presenter_time_per_frame_us) | \(.most_frames_in_flight) | \(.stage_medians_us.device) | \(.device_memory_bytes.per_world_targets) | \(.device_memory_bytes.per_world_geometry_of_tile_blocks) | \(.device_memory_bytes.instance_transient_targets_at_peak) | \(.device_memory_bytes.instance_textures + .device_memory_bytes.instance_geometry) |") end' "$file"
+    done
+    echo
+    echo "A loss simulated at the port:"
+    echo
+    echo "| Cell | Device | The stream ended | What it said | A frame asked while lost is refused | The device was created again | Images before the loss are the control's | Images after the recovery are the control's | Frames dropped | Resources created again | Tile blocks built again | Image after, tick 22 |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r "$sources"' .cell as $cell | sources[] | .device as $d | .m.loss | if . == null then "| \($cell) | \($d) | not run | | | | | | | | | |" elif .error then "| \($cell) | \($d) | \(.error) | | | | | | | | | |" else "| \($cell) | \($d) | \(.the_stream_ended | b) | \(.the_stream_said) | \(.a_frame_asked_while_lost_is_refused | b) | \(.the_device_was_created_again | b) | \(.the_images_before_the_loss_are_the_control_s | b) | \(.the_images_after_the_recovery_are_the_control_s | b) | \(.frames_dropped) | \(.resources_created_again) | \(.tile_blocks_built_again) | \(.tick_22_after_image_hash) |" end' "$file"
+    done
+    echo
+    echo "A reproducible frame after 10 000 ticks unwatched, against the same tick's in a world watched from its first tick:"
+    echo
+    echo "| Cell | Device | The two frames are the same | Image | Content | Frames the watched world drew before | Tile blocks built, watched | Tile blocks built, unwatched | The watched world's interactive frame read a history | And differs from its reproducible frame |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r "$sources"' .cell as $cell | sources[] | .device as $d | .m.unwatched | if . == null then "| \($cell) | \($d) | not run | | | | | | | |" elif .error then "| \($cell) | \($d) | \(.error) | | | | | | | |" else "| \($cell) | \($d) | \(.the_two_reproducible_frames_are_the_same | b) | \(.unwatched_image_hash) | \(.unwatched_content_hash) | \(.frames_the_watched_world_drew_before) | \(.tile_blocks_built_in_the_watched_world) | \(.tile_blocks_built_in_the_unwatched_world) | \(.the_interactive_frame_of_the_watched_world_read_its_history | b) | \(.the_interactive_frame_differs_from_the_reproducible_one | b) |" end' "$file"
+    done
+    echo
+    jq -r -s '"- Content hash of the frame of tick 10 000 across \(length) cell(s), on the content device: \([.[].content_device.unwatched.unwatched_content_hash | select(. != null)] | unique | length) distinct value(s)."' "${facts[@]}"
+    echo
+    echo "Lifetimes under the bound of three frames in flight (the content device has no validation layer; each device of a machine runs under its interface's):"
+    echo
+    echo "| Cell | Device | The process | Step | What was found |"
+    echo "| --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | ([{device: "content device (draws nothing)", process: "the parent", r: .content_device.lifetimes}] + [(.lifetimes_under_validation // [])[] | {device: "\(.report.device.name // "unknown") (\(.report.interface // "?"))", process: .process, r: .report}])[] | .device as $d | .process as $p | (if .r.error then "| \($cell) | \($d) | \($p) | error | \(.r.error | gsub("\\|"; "/")) |" else empty end), ((.r.steps // [])[] | "| \($cell) | \($d) | \($p) | \(.step | gsub("_"; " ")) | \([to_entries[] | select(.key != "step") | "\(.key | gsub("_"; " ")): \(.value | tostring | gsub("\\|"; "/") | gsub("\n"; " "))"] | join("; ")) |")' "$file"
+    done
+    echo
+    echo "How each validation layer delivers its messages:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | (.lifetimes_under_validation // [])[] | "- \($cell), \(.report.device.name // "unknown"): the layer is \(.report.validation_layer // "unknown"); \(.report.validation_delivery // .report.error // "no report")"' "$file"
+    done
+    echo
+    echo "The extraction's bytes per tick for a tile layer's written blocks when one tile changes (512 by 512 cells of two bytes, written blocks in chunks of 256 with one change flag per chunk):"
+    echo
+    echo "| Written before | Block side, cells | Written blocks | Chunks | Bytes of one block | Gathered from the domain per tick | Copied from the previous slice per tick | Cells |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- |"
+    jq -r -s '[.[] | .cell as $cell | (.content_device.tile_extraction.cases // [])[] | . + {cell: $cell}] | group_by([.population, .block_side_cells, .written_blocks, .bytes_gathered_from_the_domain_per_tick, .bytes_copied_from_the_previous_slice_per_tick]) | sort_by([.[0].tiles_written_before, .[0].block_side_cells]) | .[] | "| \(.[0].population) | \(.[0].block_side_cells) | \(.[0].written_blocks) | \(.[0].chunks_of_written_blocks) | \(.[0].bytes_of_one_block) | \(.[0].bytes_gathered_from_the_domain_per_tick) | \(.[0].bytes_copied_from_the_previous_slice_per_tick) | \([.[].cell] | join(", ")) |"' "${facts[@]}"
+    echo
+    echo "From a shader's new payload being resident to the image that shows it, microseconds:"
+    echo
+    echo "| Cell | Device | Payload | Bytes | Import | Pipelines built | Resident to cache entry published | Resident to the image that shows it | Images delivered in between | Frame start to image, median | The image changed | The content hash is unchanged |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r "$sources"' .cell as $cell | sources[] | .device as $d | .m.shader_payload | if . == null then "| \($cell) | \($d) | not run | | | | | | | | | |" elif .error then "| \($cell) | \($d) | \(.error) | | | | | | | | | |" else "| \($cell) | \($d) | \(.payload_form) | \(.payload_bytes) | \(.import_us) | \(.pipelines_built_us) | \(.resident_to_cache_entry_published_us) | \(.resident_to_the_image_that_shows_it_us) | \(.images_delivered_in_between_with_the_old_payload) | \(.frame_start_to_image_median_us) | \(.the_image_changed | b) | \(.the_content_hash_is_unchanged | b) |" end' "$file"
+    done
+    echo
+    echo "A real removal of the device, where the interface offers a call that removes one:"
+    echo
+    echo "| Cell | Device | Tried | What was called, or why not | The interface reports the removal | What it says | A frame asked after the call | The stream ended | The device was created again | Images after the recovery are the control's |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r "$sources"' .cell as $cell | sources[] | select(.device | startswith("content device") | not) | .device as $d | .m.removal | if . == null then "| \($cell) | \($d) | not run | | | | | | | |" elif .error then "| \($cell) | \($d) | \(.error) | | | | | | | |" else "| \($cell) | \($d) | \(.tried | b) | \(.called // .why_not // "") | \(.the_interface_reports_the_removal | b) | \(.the_interface_says // "") | \(.a_frame_asked_after_the_call // "")\(if .with_the_control_s_bytes == null then "" else ", the control'"'"'s bytes: \(.with_the_control_s_bytes)" end) | \(.the_stream_ended | b) | \(.the_device_was_created_again | b)\(if .the_creation_said then ": \(.the_creation_said)" else "" end) | \(.the_images_after_the_recovery_are_the_control_s | b) |" end' "$file"
+    done
+    echo
+    echo "Seconds each measurement took:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r "$sources"' .cell as $cell | sources[] | "- \($cell), \(.device): \([.m | to_entries[] | select(.value | type == "object" and has("seconds")) | "\(.key | gsub("_"; " ")) \(.value.seconds)"] | join(", "))"' "$file"
+    done
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;

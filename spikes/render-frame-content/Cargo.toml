@@ -1,0 +1,12 @@
+[package]
+name = "render-frame-content"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: the stages of a frame at the size of the reference workload, above a render device port, with a device that draws nothing and with the device of each cell that needs no graphics processor, for the rendering research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }
+skeleton-core = { path = "../runtime-skeleton/core" }
+render-device-baseline = { path = "../render-device-baseline" }

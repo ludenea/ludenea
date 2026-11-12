@@ -2547,6 +2547,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "render-frame-content"
+version = "0.1.0"
+dependencies = [
+ "reference-workload",
+ "render-device-baseline",
+ "skeleton-core",
+]
+
+[[package]]
 name = "render-offscreen"
 version = "0.1.0"
 dependencies = [
