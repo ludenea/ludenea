@@ -1,0 +1,13 @@
+part = bytes
+form = 1
+key = metal | Apple Paravirtual device | macOS Version 15.8.2 (Build 24H232), device class AppleParavirtDevice, registry identifier 0x10000019a | Metal, supportsFamily: Apple5 (the highest of Apple1 to Apple9), Mac2 yes, Metal3 no, Common3; Metal Shading Language 3.2 | default positions of 4 samples: (0.3750, 0.1250) (0.8750, 0.3750) (0.1250, 0.6250) (0.6250, 0.8750); no MTL_ or METAL_ variable in the environment | aarch64
+frame_bytes_hash = e46b7fa74288cad1
+payloads = hashed gradient tinted_levels soft_disc white
+payload.hashed = c6bb07622abd2381
+payload.gradient = e07b778d63171b25
+payload.tinted_levels = 8ab7a25e4a612969
+payload.soft_disc = fbd03c2f075e6765
+payload.white = 994f76653e2a3951
+pixel_file = cb63aa2a6ea29af0.png
+base = yes
+host_processor = Apple M1 (Virtual)

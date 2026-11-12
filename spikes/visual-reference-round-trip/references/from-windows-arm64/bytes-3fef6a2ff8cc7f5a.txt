@@ -1,0 +1,13 @@
+part = bytes
+form = 1
+key = direct3d12 | Microsoft Basic Render Driver | user-mode driver 10.0.26100.9711 | feature level 12_1, shader model 6.8 | 4 samples at the standard sample pattern (sample quality D3D12_STANDARD_MULTISAMPLE_PATTERN), 1 quality levels reported for the color format; the three samplers in a shader-visible sampler heap, the five textures in a table of shader resource views; no environment setting is read by the interface | aarch64
+frame_bytes_hash = f81b63a351b9eedc
+payloads = hashed gradient tinted_levels soft_disc white
+payload.hashed = c6bb07622abd2381
+payload.gradient = e07b778d63171b25
+payload.tinted_levels = 8ab7a25e4a612969
+payload.soft_disc = fbd03c2f075e6765
+payload.white = 994f76653e2a3951
+pixel_file = d436637ced0e5d29.png
+base = yes
+host_processor = Cobalt 100

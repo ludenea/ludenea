@@ -1,0 +1,13 @@
+part = bytes
+form = 1
+key = vulkan | llvmpipe (LLVM 20.1.2, 256 bits) | llvmpipe Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2) | 1.4.318 | LP_NUM_THREADS=4; standardSampleLocations = 1 | x86_64
+frame_bytes_hash = e3a283950520fad1
+payloads = hashed gradient tinted_levels soft_disc white
+payload.hashed = c6bb07622abd2381
+payload.gradient = e07b778d63171b25
+payload.tinted_levels = 8ab7a25e4a612969
+payload.soft_disc = fbd03c2f075e6765
+payload.white = 994f76653e2a3951
+pixel_file = 6fab76a8ce864e05.png
+base = yes
+host_processor = AMD EPYC 7763 64-Core Processor
