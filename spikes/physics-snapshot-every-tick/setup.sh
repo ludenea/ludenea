@@ -25,7 +25,9 @@ case "$(uname -s)" in
     ;;
 esac
 
-cmake -S "$source_dir" -B "$build" "${generator[@]}" -DCMAKE_BUILD_TYPE=Release
+# The form below expands to nothing when the list is empty: the shell macOS
+# ships takes an empty list for an unset variable.
+cmake -S "$source_dir" -B "$build" ${generator[@]+"${generator[@]}"} -DCMAKE_BUILD_TYPE=Release
 cmake --build "$build" --config Release --parallel
 cmake --install "$build" --config Release --prefix "$build/install" >/dev/null
 echo "--- compiler of the Box2D half"
