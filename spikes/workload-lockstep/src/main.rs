@@ -13,15 +13,12 @@
 //! system from the two retained states, how many frames a peer stalls per link
 //! setting, and what a rollback variant costs per rollback.
 
-mod lockstep;
-mod world;
-
 use std::thread;
 use std::time::Duration;
 
-use lockstep::{DivergenceReport, KICKS_PER_TICK, LinkSettings, Outcome, Settings, run};
 use reference_workload::{DEFAULT_TICK_COUNT, Json, run_hash, write_platform_and_build};
-use world::{GROUP_NAMES, GROUP_SYSTEMS, Size, WorldConfig, oracle};
+use workload_lockstep::lockstep::{DivergenceReport, KICKS_PER_TICK, LinkSettings, Outcome, Settings, run};
+use workload_lockstep::world::{GROUP_NAMES, GROUP_SYSTEMS, Size, WorldConfig, oracle};
 
 const SCHEMA_VERSION: u64 = 1;
 const SPIKE: &str = "workload-lockstep";
