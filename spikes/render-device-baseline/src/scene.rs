@@ -128,6 +128,11 @@ const NEAREST_BOUNDS: [u32; 4] = [152, 4, 248, 100];
 const NEAREST_PIXELS_PER_TEXEL: u32 = 8;
 
 pub struct Scene {
+    /// The width and the height of the filtering and blending scene's target,
+    /// `WIDTH` by `HEIGHT` as built. The vertices are in clip space, so a later
+    /// spike that sets another size renders the same scene stretched to it; the
+    /// regions and the nearest-filter check hold at the built size only.
+    pub target: [u32; 2],
     pub vertices: Vec<Vertex>,
     pub textures: Vec<Texture>,
     pub draws: Vec<Draw>,
@@ -404,6 +409,7 @@ impl Scene {
             [1.0, 0.5, 0.75, 80.0],
         ];
         Scene {
+            target: [WIDTH, HEIGHT],
             vertices,
             textures: textures(),
             draws,

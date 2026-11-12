@@ -15,7 +15,7 @@ use super::Shaders;
 use super::ffi::*;
 use super::gpu::*;
 use crate::backend::{Recording, SceneRender};
-use crate::scene::{self, CLEAR_COLOR, CLEAR_DEPTH, Draw, Encoding, HEIGHT, Image, SAMPLES, Scene, TEXTURE_COUNT, WIDTH};
+use crate::scene::{CLEAR_COLOR, CLEAR_DEPTH, Draw, Encoding, Image, SAMPLES, Scene, TEXTURE_COUNT};
 
 /// Position, uv and color: 40 bytes.
 const VERTEX_STRIDE: u32 = 40;
@@ -87,12 +87,12 @@ fn textures(scope: &mut Scope, scene: &Scene) -> Result<Vec<Object>, String> {
 }
 
 /// The render pass, its framebuffer and the resolved image the copy reads.
-fn targets(scope: &mut Scope) -> Result<(Object, Object, Object), String> {
+fn targets(scope: &mut Scope, [width, height]: [u32; 2]) -> Result<(Object, Object, Object), String> {
     // `VkSampleCountFlagBits` has the value of the count it names.
     let samples = SAMPLES;
-    let color = scope.image(&image_info(FORMAT_R8G8B8A8_SRGB, WIDTH, HEIGHT, 1, samples, IMAGE_USAGE_COLOR_ATTACHMENT, 0))?;
-    let depth = scope.image(&image_info(FORMAT_D32_SFLOAT, WIDTH, HEIGHT, 1, samples, IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT, 0))?;
-    let resolved = scope.image(&image_info(FORMAT_R8G8B8A8_SRGB, WIDTH, HEIGHT, 1, SAMPLE_COUNT_1, IMAGE_USAGE_COLOR_ATTACHMENT | IMAGE_USAGE_TRANSFER_SRC, 0))?;
+    let color = scope.image(&image_info(FORMAT_R8G8B8A8_SRGB, width, height, 1, samples, IMAGE_USAGE_COLOR_ATTACHMENT, 0))?;
+    let depth = scope.image(&image_info(FORMAT_D32_SFLOAT, width, height, 1, samples, IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT, 0))?;
+    let resolved = scope.image(&image_info(FORMAT_R8G8B8A8_SRGB, width, height, 1, SAMPLE_COUNT_1, IMAGE_USAGE_COLOR_ATTACHMENT | IMAGE_USAGE_TRANSFER_SRC, 0))?;
     let views = [
         scope.image_view(color, FORMAT_R8G8B8A8_SRGB, ASPECT_COLOR, 1)?,
         scope.image_view(depth, FORMAT_D32_SFLOAT, ASPECT_DEPTH, 1)?,
@@ -104,7 +104,7 @@ fn targets(scope: &mut Scope) -> Result<(Object, Object, Object), String> {
         attachment(FORMAT_R8G8B8A8_SRGB, SAMPLE_COUNT_1, LOAD_OP_DONT_CARE, STORE_OP_STORE, (LAYOUT_UNDEFINED, LAYOUT_TRANSFER_SRC_OPTIMAL)),
     ];
     let render_pass = scope.render_pass(&attachments, &[0], &[2], Some(1), &[after_color_writes(PIPELINE_STAGE_TRANSFER, ACCESS_TRANSFER_READ)])?;
-    let framebuffer = scope.framebuffer(render_pass, &views, WIDTH, HEIGHT)?;
+    let framebuffer = scope.framebuffer(render_pass, &views, width, height)?;
     Ok((render_pass, framebuffer, resolved))
 }
 
@@ -140,7 +140,7 @@ fn prepare(scope: &mut Scope, shaders: &Shaders, scene: &Scene) -> Result<(DrawS
     scope.write_images(set, 1, DESCRIPTOR_SAMPLER, &sampler_infos);
     let push_constants = [PushConstantRange { stage_flags: STAGE_FRAGMENT, offset: 0, size: 8 }];
     let layout = scope.pipeline_layout(&[set_layout], &push_constants)?;
-    let (render_pass, framebuffer, resolved) = targets(scope)?;
+    let (render_pass, framebuffer, resolved) = targets(scope, scene.target)?;
     let vertex = scope.shader_module(&shaders.scene_vertex)?;
     let fragment = scope.shader_module(&shaders.scene_fragment)?;
     let attributes = [
@@ -154,7 +154,7 @@ fn prepare(scope: &mut Scope, shaders: &Shaders, scene: &Scene) -> Result<(DrawS
             fragment,
             vertex_stride: VERTEX_STRIDE,
             attributes: &attributes,
-            viewport: full_viewport(WIDTH, HEIGHT),
+            viewport: full_viewport(scene.target[0], scene.target[1]),
             samples: SAMPLES,
             depth_write: Some(depth_write),
             blends: &[blend],
@@ -257,7 +257,7 @@ fn record_primary(functions: &DeviceFunctions, primary: Handle, state: &DrawStat
             (functions.cmd_reset_query_pool)(primary, pool, 0, 2);
             (functions.cmd_write_timestamp)(primary, PIPELINE_STAGE_TOP_OF_PIPE, pool, 0);
         }
-        begin_render_pass(functions, primary, state.render_pass, state.framebuffer, [WIDTH, HEIGHT], &clears, contents);
+        begin_render_pass(functions, primary, state.render_pass, state.framebuffer, scene.target, &clears, contents);
         if chunks.is_empty() {
             record_draws(functions, primary, state, &scene.draws);
         } else {
@@ -269,14 +269,14 @@ fn record_primary(functions: &DeviceFunctions, primary: Handle, state: &DrawStat
             (functions.cmd_write_timestamp)(primary, PIPELINE_STAGE_BOTTOM_OF_PIPE, pool, 1);
         }
     }
-    copy_to_host(functions, primary, resolved, WIDTH, HEIGHT, readback);
+    copy_to_host(functions, primary, resolved, scene.target[0], scene.target[1], readback);
     end(functions, primary)
 }
 
 pub fn render(gpu: &Gpu, shaders: &Shaders, scene: &Scene, recording: Recording) -> Result<SceneRender, String> {
     let mut scope = Scope::new(gpu);
     let (state, resolved) = prepare(&mut scope, shaders, scene)?;
-    let readback = scope.host_buffer((WIDTH * HEIGHT * 4) as usize, BUFFER_USAGE_TRANSFER_DST)?;
+    let readback = scope.host_buffer(scene.target[0] as usize * scene.target[1] as usize * 4, BUFFER_USAGE_TRANSFER_DST)?;
     let timestamps = if gpu.timestamp_bits() > 0 { Some(scope.timestamp_pool(2)?) } else { None };
     let primary_pool = scope.command_pool()?;
     let primary = scope.command_buffer(primary_pool, COMMAND_BUFFER_LEVEL_PRIMARY)?.0;
@@ -302,7 +302,7 @@ pub fn render(gpu: &Gpu, shaders: &Shaders, scene: &Scene, recording: Recording)
 
     let read_started = Instant::now();
     let bytes = scope.read(&readback)?;
-    let image = Image::from_rows(scene::WIDTH, scene::HEIGHT, WIDTH as usize * 4, &bytes);
+    let image = Image::from_rows(scene.target[0], scene.target[1], scene.target[0] as usize * 4, &bytes);
     let readback_us = read_started.elapsed().as_secs_f64() * 1_000_000.0;
     let timestamp_ns = timestamps.map(|pool| elapsed_between_timestamps(gpu, pool)).transpose()?;
     Ok(SceneRender { image, recorded_us, submitted_us, render_us, readback_us, readback_polls, timestamp_ns })

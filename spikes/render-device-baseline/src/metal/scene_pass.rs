@@ -19,8 +19,6 @@ use super::timestamps::StageTimestamps;
 use super::values;
 
 const FILE: &str = "scene.metal";
-const WIDTH: usize = scene::WIDTH as usize;
-const HEIGHT: usize = scene::HEIGHT as usize;
 const SAMPLES: usize = scene::SAMPLES as usize;
 const BYTES_PER_PIXEL: usize = 4;
 const SAMPLER_COUNT: usize = 3;
@@ -40,6 +38,8 @@ struct Resources {
     resolved: Owned,
     read_back: Owned,
     timestamps: Option<StageTimestamps>,
+    /// The width and the height the targets were created with.
+    size: [usize; 2],
 }
 
 /// What an encoder binds, as plain object pointers a recording thread can carry.
@@ -53,6 +53,8 @@ struct Bindings {
     textures: [Id; scene::TEXTURE_COUNT],
     vertices: Id,
     indirect_arguments: Id,
+    /// The width and the height of the targets, for the viewport and the scissor.
+    size: [usize; 2],
 }
 
 /// One chunk of the pass for one recording thread.
@@ -111,8 +113,9 @@ impl Resources {
         };
         let (opaque_pipeline, blended_pipeline) = (pipeline("the scene's opaque pipeline", false)?, pipeline("the scene's blended pipeline", true)?);
         let load = ShaderLoad { libraries_us, pipelines_us: microseconds_since(started) };
+        let [width, height] = scene.target.map(|side| side as usize);
         let target = |what: &str, format: usize, samples: usize| {
-            gpu.texture(what, &TextureShape { format, width: WIDTH, height: HEIGHT, levels: 1, samples, usage: values::TEXTURE_USAGE_RENDER_TARGET, private: true })
+            gpu.texture(what, &TextureShape { format, width, height, levels: 1, samples, usage: values::TEXTURE_USAGE_RENDER_TARGET, private: true })
         };
         let resources = Resources {
             opaque_pipeline,
@@ -126,8 +129,9 @@ impl Resources {
             color: target("the scene's 4-sample color target", values::PIXEL_FORMAT_RGBA8_UNORM_SRGB, SAMPLES)?,
             depth: target("the scene's 4-sample depth target", values::PIXEL_FORMAT_DEPTH32_FLOAT, SAMPLES)?,
             resolved: target("the scene's resolved target", values::PIXEL_FORMAT_RGBA8_UNORM_SRGB, 1)?,
-            read_back: gpu.empty_buffer("the scene's read-back", WIDTH * HEIGHT * BYTES_PER_PIXEL)?,
+            read_back: gpu.empty_buffer("the scene's read-back", width * height * BYTES_PER_PIXEL)?,
             timestamps: StageTimestamps::create(gpu).ok(),
+            size: [width, height],
         };
         Ok((resources, load))
     }
@@ -143,6 +147,7 @@ impl Resources {
             textures: ids(&self.textures).try_into().map_err(|_| format!("the scene binds {} textures, it has {}", scene::TEXTURE_COUNT, self.textures.len()))?,
             vertices: self.vertices.id(),
             indirect_arguments: self.indirect_arguments.id(),
+            size: self.size,
         })
     }
 
@@ -194,8 +199,8 @@ fn encode(encoder: Id, bindings: &Bindings, draws: &[Draw]) -> Result<(), String
 }
 
 fn bind_and_draw(encoder: Id, bindings: &Bindings, draws: &[Draw]) -> Result<(), String> {
-    send!((); encoder, "setViewport:", values::Viewport: values::Viewport::of(0, 0, WIDTH, HEIGHT))?;
-    send!((); encoder, "setScissorRect:", values::ScissorRect: values::ScissorRect { x: 0, y: 0, width: WIDTH, height: HEIGHT })?;
+    send!((); encoder, "setViewport:", values::Viewport: values::Viewport::of(0, 0, bindings.size[0], bindings.size[1]))?;
+    send!((); encoder, "setScissorRect:", values::ScissorRect: values::ScissorRect { x: 0, y: 0, width: bindings.size[0], height: bindings.size[1] })?;
     send!((); encoder, "setVertexBuffer:offset:atIndex:", Id: bindings.vertices, usize: 0, usize: 0)?;
     for (index, texture) in bindings.textures.iter().enumerate() {
         send!((); encoder, "setFragmentTexture:atIndex:", Id: *texture, usize: index)?;
@@ -293,10 +298,10 @@ fn record_on_threads(encoders: &[Id], bindings: &Bindings, scene: &Scene) -> Res
 fn read_back(gpu: &Gpu, resources: &Resources) -> Result<(Vec<u8>, u64), String> {
     const WHAT: &str = "the scene's read-back";
     let command_buffer = gpu.command_buffer(WHAT)?;
-    gpu::encode_copy_to_buffer(command_buffer, resources.resolved.id(), resources.read_back.id(), WIDTH, HEIGHT, BYTES_PER_PIXEL)?;
+    gpu::encode_copy_to_buffer(command_buffer, resources.resolved.id(), resources.read_back.id(), resources.size[0], resources.size[1], BYTES_PER_PIXEL)?;
     send!((); command_buffer, "commit")?;
     let polls = gpu::poll_until_completed(command_buffer, WHAT)?;
-    Ok((gpu::buffer_bytes(&resources.read_back, WIDTH * HEIGHT * BYTES_PER_PIXEL, WHAT)?, polls))
+    Ok((gpu::buffer_bytes(&resources.read_back, resources.size[0] * resources.size[1] * BYTES_PER_PIXEL, WHAT)?, polls))
 }
 
 fn microseconds_since(started: Instant) -> f64 {
@@ -349,6 +354,6 @@ pub fn render(gpu: &Gpu, stages: &Stages, scene: &Scene, recording: Recording) -
     let started = Instant::now();
     let (bytes, readback_polls) = read_back(gpu, &resources)?;
     let readback_us = microseconds_since(started);
-    let image = Image::from_rows(scene::WIDTH, scene::HEIGHT, WIDTH * BYTES_PER_PIXEL, &bytes);
+    let image = Image::from_rows(scene.target[0], scene.target[1], resources.size[0] * BYTES_PER_PIXEL, &bytes);
     Ok((SceneRender { image, recorded_us, submitted_us, render_us, readback_us, readback_polls, timestamp_ns }, load))
 }

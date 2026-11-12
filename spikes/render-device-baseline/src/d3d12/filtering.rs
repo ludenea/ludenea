@@ -42,8 +42,8 @@ impl SamplePattern {
         }
         let standard = SampleDesc { count: samples, quality: STANDARD_MULTISAMPLE_PATTERN };
         let probe = (|| {
-            gpu.committed(HEAP_TYPE_DEFAULT, &color_desc(standard), STATE_RENDER_TARGET, Some(&clear_color(FORMAT_R8G8B8A8_UNORM_SRGB, scene::CLEAR_COLOR)), "standard pattern probe, color")?;
-            gpu.committed(HEAP_TYPE_DEFAULT, &depth_desc(standard), STATE_DEPTH_WRITE, Some(&clear_depth_value(scene::CLEAR_DEPTH)), "standard pattern probe, depth")
+            gpu.committed(HEAP_TYPE_DEFAULT, &color_desc([scene::WIDTH, scene::HEIGHT], standard), STATE_RENDER_TARGET, Some(&clear_color(FORMAT_R8G8B8A8_UNORM_SRGB, scene::CLEAR_COLOR)), "standard pattern probe, color")?;
+            gpu.committed(HEAP_TYPE_DEFAULT, &depth_desc([scene::WIDTH, scene::HEIGHT], standard), STATE_DEPTH_WRITE, Some(&clear_depth_value(scene::CLEAR_DEPTH)), "standard pattern probe, depth")
         })();
         Ok(match probe {
             Ok(_) => SamplePattern {
@@ -58,12 +58,12 @@ impl SamplePattern {
     }
 }
 
-fn color_desc(sample: SampleDesc) -> ResourceDesc {
-    texture_desc(scene::WIDTH, scene::HEIGHT, 1, FORMAT_R8G8B8A8_UNORM_SRGB, sample, RESOURCE_FLAG_ALLOW_RENDER_TARGET)
+fn color_desc([width, height]: [u32; 2], sample: SampleDesc) -> ResourceDesc {
+    texture_desc(width, height, 1, FORMAT_R8G8B8A8_UNORM_SRGB, sample, RESOURCE_FLAG_ALLOW_RENDER_TARGET)
 }
 
-fn depth_desc(sample: SampleDesc) -> ResourceDesc {
-    texture_desc(scene::WIDTH, scene::HEIGHT, 1, FORMAT_D32_FLOAT, sample, RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)
+fn depth_desc([width, height]: [u32; 2], sample: SampleDesc) -> ResourceDesc {
+    texture_desc(width, height, 1, FORMAT_D32_FLOAT, sample, RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)
 }
 
 /// A timestamp query heap of two queries and the buffer they resolve to.
@@ -91,6 +91,8 @@ pub struct FilteringScene {
     indirect_arguments: Com,
     vertex_buffer: Com,
     vertex_bytes: u32,
+    /// The width and the height the targets were created with.
+    target_size: [u32; 2],
     resolved: Com,
     /// Held for its view in `depth_views`.
     _depth: Com,
@@ -108,6 +110,8 @@ struct ChunkInputs {
     indirect_arguments: Shared,
     vertex_buffer: Shared,
     vertex_bytes: u32,
+    /// The width and the height the targets were created with.
+    target_size: [u32; 2],
     textures_table: u64,
     samplers_table: u64,
     target: CpuHandle,
@@ -121,9 +125,9 @@ struct ChunkInputs {
 
 impl FilteringScene {
     pub fn create(gpu: &mut Gpu, shaders: &Shaders, scene: &Scene, sample: SampleDesc) -> Result<FilteringScene, String> {
-        let color = gpu.committed(HEAP_TYPE_DEFAULT, &color_desc(sample), STATE_RENDER_TARGET, Some(&clear_color(FORMAT_R8G8B8A8_UNORM_SRGB, scene::CLEAR_COLOR)), "4-sample color target")?;
-        let depth = gpu.committed(HEAP_TYPE_DEFAULT, &depth_desc(sample), STATE_DEPTH_WRITE, Some(&clear_depth_value(scene::CLEAR_DEPTH)), "4-sample depth target")?;
-        let resolved_desc = texture_desc(scene::WIDTH, scene::HEIGHT, 1, FORMAT_R8G8B8A8_UNORM_SRGB, ONE_SAMPLE, RESOURCE_FLAG_NONE);
+        let color = gpu.committed(HEAP_TYPE_DEFAULT, &color_desc(scene.target, sample), STATE_RENDER_TARGET, Some(&clear_color(FORMAT_R8G8B8A8_UNORM_SRGB, scene::CLEAR_COLOR)), "4-sample color target")?;
+        let depth = gpu.committed(HEAP_TYPE_DEFAULT, &depth_desc(scene.target, sample), STATE_DEPTH_WRITE, Some(&clear_depth_value(scene::CLEAR_DEPTH)), "4-sample depth target")?;
+        let resolved_desc = texture_desc(scene.target[0], scene.target[1], 1, FORMAT_R8G8B8A8_UNORM_SRGB, ONE_SAMPLE, RESOURCE_FLAG_NONE);
         let resolved = gpu.committed(HEAP_TYPE_DEFAULT, &resolved_desc, STATE_RESOLVE_DEST, None, "resolved color")?;
         let read_back = gpu.read_back_for(&resolved_desc, "scene read-back")?;
 
@@ -162,6 +166,7 @@ impl FilteringScene {
             indirect_arguments,
             vertex_buffer,
             vertex_bytes: vertex_bytes.len() as u32,
+            target_size: scene.target,
             resolved,
             _depth: depth,
             color,
@@ -178,6 +183,7 @@ impl FilteringScene {
             indirect_arguments: Shared(self.indirect_arguments.raw()),
             vertex_buffer: Shared(self.vertex_buffer.raw()),
             vertex_bytes: self.vertex_bytes,
+            target_size: self.target_size,
             textures_table: self.texture_views.gpu(0),
             samplers_table: self.samplers.gpu(0),
             target: self.target_views.cpu(0),
@@ -223,7 +229,7 @@ impl FilteringScene {
             Some(timestamps) => Some(elapsed_nanoseconds(timestamps)?),
             None => None,
         };
-        Ok(SceneRender { image: Image { width: scene::WIDTH, height: scene::HEIGHT, rgba }, recorded_us, submitted_us, render_us, readback_us, readback_polls, timestamp_ns })
+        Ok(SceneRender { image: Image { width: self.target_size[0], height: self.target_size[1], rgba }, recorded_us, submitted_us, render_us, readback_us, readback_polls, timestamp_ns })
     }
 }
 
@@ -267,7 +273,7 @@ fn record(allocator: Object, list: Object, inputs: &ChunkInputs, draws: &[Draw],
     set_graphics_root_signature(list, inputs.root_signature.0);
     set_graphics_table(list, PARAMETER_TEXTURES, inputs.textures_table);
     set_graphics_table(list, PARAMETER_SAMPLERS, inputs.samplers_table);
-    set_viewport(list, 0, scene::WIDTH, scene::HEIGHT);
+    set_viewport(list, 0, inputs.target_size[0], inputs.target_size[1]);
     set_render_targets(list, &[inputs.target], Some(inputs.depth_target));
     set_vertex_buffer(list, inputs.vertex_buffer.0, inputs.vertex_bytes, VERTEX_STRIDE);
     if first {
