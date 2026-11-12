@@ -475,6 +475,56 @@ fn child_generated(interface: &str, index: usize, output: &Path) -> Result<(), S
     Ok(())
 }
 
+/// The debug strings the process's own handler saw since the last call that
+/// carry Direct3D 12's mark, on Windows; nothing elsewhere.
+fn say_debug_strings(prefix: &str) {
+    #[cfg(windows)]
+    {
+        let seen: Vec<String> = workload::debug_strings::drain().into_iter().filter(|text| text.starts_with("D3D12 ")).collect();
+        say(&format!("{prefix}_debug_strings"), seen.len());
+        if let Some(first) = seen.iter().find(|text| text.starts_with("D3D12 ERROR")).or(seen.first()) {
+            say(&format!("{prefix}_debug_strings_first"), first.chars().take(600).collect::<String>());
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = prefix;
+}
+
+/// On Direct3D 12, what tells apart a layer that is absent, a layer whose
+/// debug strings do not reach the log, and a misuse the layer does not
+/// report: whether the layer's library is in the process, and whether a
+/// debug string of the process's own, in the form the layer writes its
+/// messages, is seen by the process's own handler and arrives in the log
+/// through wgpu's.
+fn say_direct3d12_layer_facts(interface: &str) {
+    if interface != "direct3d12" {
+        return;
+    }
+    if let Some(held) = workload::holds_library("d3d12sdklayers") {
+        say("validation_layer_library_loaded", held);
+    }
+    #[cfg(windows)]
+    {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn OutputDebugStringA(text: *const std::ffi::c_char);
+        }
+        workload::drain_log();
+        workload::debug_strings::drain();
+        // SAFETY: the text is NUL-terminated and lives for the call.
+        unsafe { OutputDebugStringA(c"D3D12 ERROR: a debug string of the spike's own\n".as_ptr()) };
+        say("a_debug_string_of_the_process_is_seen_by_its_own_handler", workload::debug_strings::drain().iter().any(|text| text.contains("debug string of the spike")));
+        say("a_debug_string_of_the_process_reaches_the_log", workload::drain_log().iter().any(|record| record.message.contains("debug string of the spike")));
+    }
+}
+
+/// Starts collecting what a validation layer may write outside the log.
+fn collect_validation_output() {
+    workload::collect_log(log::LevelFilter::Warn);
+    #[cfg(windows)]
+    workload::debug_strings::collect();
+}
+
 /// A view in a format its texture was not created for, made through the
 /// interface beneath a device of the safe level, which wgpu's own
 /// validation never sees.
@@ -506,7 +556,7 @@ fn safe_misuse<A: hal::Api>(device: &wgpu::Device, texture: &wgpu::Texture) -> R
 
 /// The interface's validation layer beneath the safe level.
 fn child_safe_validation(interface: &str, index: usize) -> Result<(), String> {
-    workload::collect_log(log::LevelFilter::Warn);
+    collect_validation_output();
     let backend = safe::backend_named(interface).ok_or_else(|| format!("no interface named {interface}"))?;
     let instance = safe::instance(validation_flags(), wgpu::Backends::from(backend));
     let adapters = safe::adapters(&instance, backend);
@@ -522,6 +572,8 @@ fn child_safe_validation(interface: &str, index: usize) -> Result<(), String> {
         say("scene_error", reason);
     }
     say_log("clean");
+    say_debug_strings("clean");
+    say_direct3d12_layer_facts(interface);
     eprintln!("{MISUSE_MARK}");
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("misused"),
@@ -536,13 +588,14 @@ fn child_safe_validation(interface: &str, index: usize) -> Result<(), String> {
     say("misuse", with_hal!(interface, safe_misuse(&device, &texture))?);
     let _ = device.poll(wgpu::PollType::wait_indefinitely());
     say_log("misuse");
+    say_debug_strings("misuse");
     say("wgpu_errors_after_misuse", errors.take().len());
     Ok(())
 }
 
 /// The interface's validation layer beneath the lower level.
-fn child_lower_validation<A: hal::Api>(index: usize, form: &str, work: &Path) -> Result<(), String> {
-    workload::collect_log(log::LevelFilter::Warn);
+fn child_lower_validation<A: hal::Api>(interface: &str, index: usize, form: &str, work: &Path) -> Result<(), String> {
+    collect_validation_output();
     let (instance, mut adapters) = lower::instance::<A>(validation_flags())?;
     if index >= adapters.len() {
         return Err(format!("wgpu's lower level lists no adapter {index}"));
@@ -563,9 +616,12 @@ fn child_lower_validation<A: hal::Api>(index: usize, form: &str, work: &Path) ->
             say("scene_error", reason);
         }
         say_log("clean");
+        say_debug_strings("clean");
+        say_direct3d12_layer_facts(interface);
         eprintln!("{MISUSE_MARK}");
         say("misuse", on_device.misuse(&device));
         say_log("misuse");
+        say_debug_strings("misuse");
         on_device.destroy(&device);
     }
     drop(queue);
@@ -601,7 +657,7 @@ fn child(arguments: &[String]) -> i32 {
         "lower" => with_hal!(interface, child_lower(index, form, work, label)),
         "generated" => child_generated(interface, index, output),
         "safe-validation" => child_safe_validation(interface, index),
-        "lower-validation" => with_hal!(interface, child_lower_validation(index, form, work)),
+        "lower-validation" => with_hal!(interface, child_lower_validation(interface, index, form, work)),
         _ => {
             eprintln!("unknown task {task}");
             return 2;
@@ -846,9 +902,18 @@ fn write_validation(out: &mut Json, path: &str, run: &ChildRun) {
     write_run(out, path, "validation layer switched on", run);
     let after_mark = run.standard_error.split_once(MISUSE_MARK).map(|(_, after)| after.lines().filter(|line| !line.trim().is_empty()).count() as u64);
     out.u64("standard_error_lines_after_the_misuse", after_mark.unwrap_or(0));
+    // What the layer wrote before the misuse, while the scene rendered.
+    let before_mark = run.standard_error.split_once(MISUSE_MARK).map_or(run.standard_error.as_str(), |(before, _)| before);
+    out.u64("standard_error_lines_on_the_scene", before_mark.lines().filter(|line| !line.trim().is_empty()).count() as u64);
+    if let Some((_, after)) = run.standard_error.split_once(MISUSE_MARK) {
+        out.string("standard_error_after_the_misuse", &excerpt(after));
+    }
     let in_the_log = run.value("misuse_messages").and_then(|count| count.parse::<u64>().ok()).unwrap_or(0);
+    let as_debug_strings = run.value("misuse_debug_strings").and_then(|count| count.parse::<u64>().ok()).unwrap_or(0);
     out.bool("the_misuse_reaches_the_log", in_the_log > 0);
-    out.bool("the_misuse_reaches_the_program", in_the_log > 0 || after_mark.unwrap_or(0) > 0);
+    out.bool("the_misuse_reaches_the_standard_error", after_mark.unwrap_or(0) > 0);
+    out.bool("the_misuse_reaches_a_handler_of_the_process_s_own", as_debug_strings > 0);
+    out.bool("the_misuse_reaches_the_program", in_the_log > 0 || after_mark.unwrap_or(0) > 0 || as_debug_strings > 0);
     out.object_end();
 }
 

@@ -139,6 +139,12 @@ pub fn loaded_shader_compilers() -> Result<Vec<String>, String> {
     Ok(found)
 }
 
+/// Whether the process has loaded a library whose file name contains
+/// `mark`, given in lowercase; nothing where the libraries cannot be listed.
+pub fn holds_library(mark: &str) -> Option<bool> {
+    loaded_libraries().ok().map(|libraries| libraries.iter().any(|path| path.rsplit(['/', '\\']).next().unwrap_or(path).to_ascii_lowercase().contains(mark)))
+}
+
 #[cfg(target_os = "linux")]
 fn loaded_libraries() -> Result<Vec<String>, String> {
     let maps = std::fs::read_to_string("/proc/self/maps").map_err(|reason| format!("/proc/self/maps could not be read: {reason}"))?;
@@ -225,6 +231,73 @@ fn loaded_libraries() -> Result<Vec<String>, String> {
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn loaded_libraries() -> Result<Vec<String>, String> {
     Err("the libraries of a process are not listed on this platform".to_string())
+}
+
+/// The debug strings of the process on Windows, collected by a handler of
+/// the spike's own: Direct3D 12's validation layer writes its messages as
+/// debug strings, and a debug string is first an exception that carries its
+/// length and its address, which a vectored handler sees with no debugger
+/// attached. The handler only records; the exception goes on to the next.
+#[cfg(windows)]
+pub mod debug_strings {
+    use std::ffi::c_void;
+    use std::sync::Mutex;
+
+    static SEEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    /// `DBG_PRINTEXCEPTION_C`: a debug string of narrow characters.
+    const PRINT_EXCEPTION: u32 = 0x4001_0006;
+    const CONTINUE_SEARCH: i32 = 0;
+
+    #[repr(C)]
+    struct ExceptionRecord {
+        code: u32,
+        flags: u32,
+        chained: *mut ExceptionRecord,
+        address: *mut c_void,
+        parameters: u32,
+        information: [usize; 15],
+    }
+
+    #[repr(C)]
+    struct ExceptionPointers {
+        record: *mut ExceptionRecord,
+        context: *mut c_void,
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn AddVectoredExceptionHandler(first: u32, handler: Option<unsafe extern "system" fn(*mut ExceptionPointers) -> i32>) -> *mut c_void;
+    }
+
+    unsafe extern "system" fn record_debug_string(pointers: *mut ExceptionPointers) -> i32 {
+        // SAFETY: the system hands a valid record; for this exception code
+        // its first two parameters are the length of a string with its
+        // terminator and the address of that string, alive for the call.
+        unsafe {
+            let record = &*(*pointers).record;
+            if record.code == PRINT_EXCEPTION && record.parameters >= 2 && record.information[1] != 0 {
+                let bytes = std::slice::from_raw_parts(record.information[1] as *const u8, record.information[0]);
+                let text = String::from_utf8_lossy(bytes).trim_end_matches(['\0', '\n', '\r']).to_string();
+                if let Ok(mut seen) = SEEN.try_lock() {
+                    seen.push(text);
+                }
+            }
+        }
+        CONTINUE_SEARCH
+    }
+
+    /// Installs the handler before every other; called once per process.
+    pub fn collect() {
+        // SAFETY: the handler is a function of this module that lives as
+        // long as the process and only reads the record it is given.
+        unsafe { AddVectoredExceptionHandler(1, Some(record_debug_string)) };
+    }
+
+    /// The debug strings seen since the last call.
+    pub fn drain() -> Vec<String> {
+        SEEN.lock().map(|mut seen| std::mem::take(&mut *seen)).unwrap_or_default()
+    }
 }
 
 #[cfg(test)]

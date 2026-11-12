@@ -1511,12 +1511,18 @@ case "$spike" in
       jq -r '.cell as $cell | .interfaces[] | .interface as $interface | .devices[] | .name as $device | .runs[] | select(.path == "wgpu_safe_level" and .shaders == "wgsl") | "| \($cell) | \($interface) | \($device) | \(if .pipeline_cache_offered == null then "n/a" else .pipeline_cache_offered end) | \(.pipeline_cache_saved_bytes // "n/a") | \(.pipeline_cache_cold_us // "n/a") | \(.pipeline_cache_loaded_us // "n/a") | \(.pipeline_cache_bytes_after_load // "n/a") | \(.pipeline_cache_error // "") |"' "$file"
     done
     echo
-    echo "The interface's validation layer switched on beneath wgpu, in a child process: the messages while the scene renders, and whether a deliberate misuse made beneath wgpu is reported to the program, through the log or on its standard error:"
+    echo "The interface's validation layer switched on beneath wgpu, in a child process: the messages while the scene renders, and whether a deliberate misuse made beneath wgpu is reported to the program, through wgpu's log, on its standard error, or as debug strings a handler of the process's own collects (Windows):"
     echo
-    echo "| Cell | Interface | Device | Path | Child completed | Scene rendered | Messages on the scene | Messages on the misuse | Standard error lines after the misuse | Reaches the program | First message, error or standard error |"
+    echo "| Cell | Interface | Device | Path | Child completed | Scene rendered | On the scene: log messages, standard error lines, debug strings | On the misuse: log messages, standard error lines, debug strings | Reaches the log | Reaches the program | First message, error or standard error |"
     echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
     for file in "${facts[@]}"; do
-      jq -r '.cell as $cell | .interfaces[] | .interface as $interface | .devices[] | .name as $device | .validation[] | "| \($cell) | \($interface) | \($device) | \(.path) | \(.completed) (\(.status)) | \(if .scene_rendered == null then "n/a" else .scene_rendered end) | \(.clean_messages // "n/a") | \(.misuse_messages // "n/a") | \(.standard_error_lines_after_the_misuse) | \(.the_misuse_reaches_the_program) | \((.misuse_first // .clean_first // .error // .scene_error // .standard_error // "") | .[0:400] | gsub("\\|"; "/")) |"' "$file"
+      jq -r '.cell as $cell | .interfaces[] | .interface as $interface | .devices[] | .name as $device | .validation[] | "| \($cell) | \($interface) | \($device) | \(.path) | \(.completed) (\(.status)) | \(if .scene_rendered == null then "n/a" else .scene_rendered end) | \(.clean_messages // "n/a"), \(.standard_error_lines_on_the_scene // "n/a"), \(.clean_debug_strings // "n/a") | \(.misuse_messages // "n/a"), \(.standard_error_lines_after_the_misuse), \(.misuse_debug_strings // "n/a") | \(.the_misuse_reaches_the_log) | \(.the_misuse_reaches_the_program) | \((.misuse_first // .misuse_debug_strings_first // .standard_error_after_the_misuse // .clean_first // .error // .scene_error // .standard_error // "") | .[0:400] | gsub("\\|"; "/")) |"' "$file"
+    done
+    echo
+    echo "On Direct3D 12, whether the layer's library is in the process, and whether a debug string of the process's own, written in the layer's form, is seen by the process's own handler and arrives in wgpu's log:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .interfaces[] | select(.interface == "direct3d12") | .devices[] | .name as $device | .validation[] | "- `\($cell)`, \($device), \(.path): layer library loaded \(if .validation_layer_library_loaded == null then "n/a" else .validation_layer_library_loaded end), seen by the process'"'"'s own handler \(if .a_debug_string_of_the_process_is_seen_by_its_own_handler == null then "n/a" else .a_debug_string_of_the_process_is_seen_by_its_own_handler end), reaches the log \(if .a_debug_string_of_the_process_reaches_the_log == null then "n/a" else .a_debug_string_of_the_process_reaches_the_log end)"' "$file"
     done
     echo
     echo "The warnings and errors wgpu logged during a measured run, where there were any:"
