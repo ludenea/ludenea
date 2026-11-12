@@ -306,6 +306,7 @@ fn segment(kind: Loop, seconds: u64, slot: &Mutex<Option<SendPresenter>>, hand_o
     lateness.sort_unstable();
     work.sort_unstable();
     let micro = |nanoseconds: u64| Json::Float(nanoseconds as f64 / 1000.0);
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut json = Json::object()
         .with("loop", kind.name())
         .with("ticks", lateness.len())

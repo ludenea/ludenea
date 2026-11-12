@@ -11,7 +11,9 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use crate::clock::now_ns;
-use crate::host::{self, NativeWindow};
+use crate::host;
+#[cfg(windows)]
+use crate::host::NativeWindow;
 use crate::json::Json;
 use crate::presenter::{self, Request};
 use crate::scenario::{Arguments, EventCounts, Shared, Turns};

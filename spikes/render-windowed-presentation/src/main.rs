@@ -20,6 +20,8 @@ mod host_winit;
 mod imports;
 mod json;
 mod loader;
+#[cfg(target_os = "macos")]
+mod metal;
 mod modal;
 mod pace;
 mod plan;
