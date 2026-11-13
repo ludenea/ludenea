@@ -1,9 +1,13 @@
 # Workspace of the throwaway research spikes. Spikes share this workspace, the
 # pinned toolchain and the reference workload, and a spike may stand on the
 # code of an earlier one when it measures on the same scene or path and its
-# README says so (see README.md).
+# README says so (see README.md). A spike that builds against a patched copy
+# of a library is a workspace of its own and is excluded here: a patch
+# replaces the library for every package of a workspace, and the other spikes
+# measure the libraries as published.
 [workspace]
 resolver = "3"
+exclude = ["rapier-platform-math-routed"]
 members = [
     "platform-facts",
     "platform-threading-constraints",

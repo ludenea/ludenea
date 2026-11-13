@@ -1,0 +1,27 @@
+[package]
+name = "rapier-platform-math-routed"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: whether the worlds that diverge between platforms with Rapier 3D 0.36.1 as published hash alike once the five calls its steps make to the platform's math library go to the pure Rust library its determinism feature already uses, measured on the same worlds built against patched copies of the three libraries, for the physics research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }
+rapier3d = { version = "=0.36.1", features = ["enhanced-determinism"] }
+
+# A workspace of its own, with its own lock file: a patch replaces a library
+# for every package of a workspace, and the other spikes measure the libraries
+# as published. The copies under patched/ are made by setup.sh and are not
+# members.
+[workspace]
+exclude = ["patched"]
+
+[patch.crates-io]
+rapier3d = { path = "patched/rapier3d" }
+parry3d = { path = "patched/parry3d" }
+glamx = { path = "patched/glamx" }
+
+# As in the spikes' workspace: the debugger needs the lines of the sources.
+[profile.release]
+debug = 1

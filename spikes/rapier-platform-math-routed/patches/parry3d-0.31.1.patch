@@ -1,0 +1,42 @@
+--- a/src/partitioning/bvh/bvh_optimize.rs
++++ b/src/partitioning/bvh/bvh_optimize.rs
+@@ -3,7 +3,7 @@
+ use core::cmp::Ordering;
+ use ordered_float::OrderedFloat;
+ 
+-#[cfg(not(feature = "std"))]
++// In every build: the logarithms below must not be the platform's.
+ use crate::math::ComplexField; // For `round` and `sqrt` in no-std+alloc builds.
+ 
+ impl Bvh {
+@@ -23,8 +23,8 @@
+ 
+         let target_root_node_count = num_leaves_sqrt.ceil();
+         let target_subtree_leaf_count = (num_leaves_sqrt * 4.0).ceil();
+-        let root_refinement_cost = target_root_node_count * target_root_node_count.log2()
+-            / (target_subtree_leaf_count * target_subtree_leaf_count.log2());
++        let root_refinement_cost = target_root_node_count * ComplexField::log2(target_root_node_count)
++            / (target_subtree_leaf_count * ComplexField::log2(target_subtree_leaf_count));
+         let mut target_optimized_subtree_count =
+             (num_optimized_leaves as Real / target_subtree_leaf_count - root_refinement_cost)
+                 .round()
+--- a/src/shape/convex_polyhedron.rs
++++ b/src/shape/convex_polyhedron.rs
+@@ -1,7 +1,7 @@
+ use crate::math::{Real, Vector, DIM};
+ use crate::shape::{FeatureId, PackedFeatureId, PolygonalFeature, PolygonalFeatureMap, SupportMap};
+ // use crate::transformation;
+-#[cfg(not(feature = "std"))]
++// In every build: the sine and cosine below must not be the platform's.
+ use crate::math::ComplexField;
+ use crate::utils::hashmap::{Entry, HashMap};
+ use crate::utils::{self, SortedPair};
+@@ -870,7 +870,7 @@
+     }
+ 
+     fn support_feature_id_toward_eps(&self, local_dir: Vector, eps: Real) -> FeatureId {
+-        let (seps, ceps) = eps.sin_cos();
++        let (seps, ceps) = ComplexField::sin_cos(eps);
+         let support_pt_id = utils::point_cloud_support_point_id(local_dir, &self.points);
+         let vertex = &self.vertices[support_pt_id];
+ 

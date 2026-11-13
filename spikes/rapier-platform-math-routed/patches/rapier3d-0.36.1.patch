@@ -1,0 +1,39 @@
+--- a/src/dynamics/solver/joint_constraint/generic_joint_constraint_builder.rs
++++ b/src/dynamics/solver/joint_constraint/generic_joint_constraint_builder.rs
+@@ -1,4 +1,4 @@
+-#[cfg(not(feature = "std"))]
++// In every build: the motor's sine must not be the platform's.
+ use simba::scalar::ComplexField;
+ 
+ use crate::dynamics::solver::MotorParameters;
+@@ -766,7 +766,7 @@
+             let s_ang_dist = (self.ang_err.angle() / 2.0).sin();
+             #[cfg(feature = "dim3")]
+             let s_ang_dist = self.ang_err.xyz()[_motor_axis];
+-            let s_target_ang = (motor_params.target_pos / 2.0).sin();
++            let s_target_ang = ComplexField::sin(motor_params.target_pos / 2.0);
+             rhs_wo_bias += utils::smallest_abs_diff_between_sin_angles(s_ang_dist, s_target_ang)
+                 * motor_params.erp_inv_dt;
+         }
+--- a/src/dynamics/solver/joint_constraint/joint_constraint_helper.rs
++++ b/src/dynamics/solver/joint_constraint/joint_constraint_helper.rs
+@@ -17,8 +17,8 @@
+     PoseOps, RotationOps, ScalarType, SimdLength,
+ };
+ 
+-#[cfg(not(feature = "std"))]
+-use simba::scalar::ComplexField as _;
++// In every build: the limit's sine and cosine must not be the platform's.
++use simba::scalar::ComplexField;
+ 
+ use crate::num::FloatConst;
+ #[cfg(feature = "dim2")]
+@@ -61,7 +61,7 @@
+         #[cfg(feature = "dim2")]
+         let (sin, cos) = center.sin_cos();
+         #[cfg(feature = "dim3")]
+-        let (sin, cos) = (center * 0.5).sin_cos();
++        let (sin, cos) = ComplexField::sin_cos(center * 0.5);
+ 
+         Self {
+             center: [cos, sin],

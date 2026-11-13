@@ -2326,6 +2326,42 @@ case "$spike" in
       jq -r 'select(.reach.measured | not) | "- `\(.cell)`: the calls are not counted (\(.reach.why))."' "$file"
     done
     ;;
+  rapier-platform-math-routed)
+    echo "What each cell built: the patch it read for each library (the hash of the patch's text) and where its lock file takes the three libraries from:"
+    echo
+    echo "| Cell | rapier3d patch | parry3d patch | glamx patch | The lock file takes the three libraries from the patched copies |"
+    echo "| --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '"| \(.cell) | \(.patches["rapier3d-0.36.1"]) | \(.patches["parry3d-0.31.1"]) | \(.patches["glamx-0.3.1"]) | \(.the_lock_file_takes_the_three_libraries_from_the_patched_copies) |"' "$file"
+    done
+    echo
+    echo "The worlds of the earlier spike, built against the patched libraries and hashed at the same ticks on every cell (the transform and the motion of every body):"
+    echo
+    echo "| World | Variant | Cell | Initial hash | Final hash | Inertia after the build | Inertia after the steps | Starts as with the published libraries | The published libraries ended on this final hash on |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    jq -r -s '[.[] | .cell as $cell | (.worlds // [])[] | . + {cell: $cell}] | sort_by([.world, .variant, .cell])[] | "| \(.world) | \(.variant) | \(.cell) | \(.initial_hash) | \(.final_hash) | \(.inertia_hash_after_the_build) | \(.inertia_hash_after_the_steps) | \(.starts_as_with_the_published_libraries) | \(.the_published_libraries_ended_on_this_final_hash_on) |"' "${facts[@]}"
+    echo
+    jq -r -s '[.[] | .cell as $cell | (.worlds // [])[] | . + {cell: $cell}] | group_by([.world, .variant])[] | . as $group | ($group[0].checkpoints | split(" ") | map(split(":")[0])) as $ticks | ([$ticks[] as $tick | select(([$group[] | .checkpoints | split(" ")[] | select(startswith($tick + ":"))] | unique | length) > 1) | $tick] | first) as $parts | "- `\($group[0].world)`, \($group[0].variant): \([$group[].initial_hash] | unique | length) distinct initial hash(es), \([$group[].final_hash] | unique | length) distinct final hash(es), \([$group[].inertia_hash_after_the_build] | unique | length) distinct inertia hash(es) after the build and \([$group[].inertia_hash_after_the_steps] | unique | length) after the steps, across \($group | length) cell(s)" + (if $parts then "; the cells part at the checkpoint of tick \($parts)" else "" end) + ". Final hashes: " + ([$group | group_by(.final_hash)[] | "\(.[0].final_hash) on \([.[].cell] | join(", "))"] | join("; ")) + ". With the published libraries: \($group[0].final_hashes_with_the_published_libraries)."' "${facts[@]}"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: the feature changes what its world does: \(.the_feature_changes_what_its_world_does | to_entries | map("\(.key) \(.value)") | join(", "))."' "$file"
+    done
+    echo
+    echo "The calls a world's steps still make to the platform's math library, counted by a debugger (Linux cells), and the lines of the libraries' sources that were met:"
+    echo
+    echo "| Cell | World | Calls during the build | Calls during the steps | Calls during the steps, in all | Lines met during the build | Lines met during the steps |"
+    echo "| --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r 'def none: if . == "" then "none" else . end; .cell as $cell | select(.reach.measured) | .reach.worlds[] | "| \($cell) | \(.world) | \(if .error then .error else (.calls_during_the_build | none) end) | \(if .error then "" else (.calls_during_the_steps | none) end) | \(.calls_during_the_steps_in_all // "") | \(.lines_met_during_the_build // "" | none) | \(.lines_met_during_the_steps // "" | none) |"' "$file"
+    done
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | select(.reach.measured) | .reach.worlds[] | .world as $world | (.first_callers_during_the_steps // {}) | to_entries[] | "- `\($cell)`, `\($world)`, `\(.key)` is still called: \(.value | split(" < ") | .[0:12] | map(split("::") | .[-2:] | join("::")) | join(" < "))"' "$file"
+    done
+    for file in "${facts[@]}"; do
+      jq -r 'select(.reach.measured | not) | "- `\(.cell)`: the calls are not counted (\(.reach.why))."' "$file"
+    done
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;
