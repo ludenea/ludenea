@@ -1,5 +1,7 @@
-# Workspace of the throwaway research spikes. Spikes share nothing but this
-# workspace, the pinned toolchain and the reference workload (see README.md).
+# Workspace of the throwaway research spikes. Spikes share this workspace, the
+# pinned toolchain and the reference workload, and a spike may stand on the
+# code of an earlier one when it measures on the same scene or path and its
+# README says so (see README.md).
 [workspace]
 resolver = "3"
 members = [

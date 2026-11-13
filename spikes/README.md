@@ -5,9 +5,9 @@ Throwaway experiments of the Ludenea research program. A spike answers one engin
 ## Layout
 
 - `<slug>/`: one spike, named after what it measures. Each spike has a README stating the research subject it serves, its hypothesis, its method, its environment and its result.
-- `reference-workload/`: the specification of the synthetic simulation that the spikes of several research subjects measure against, so that their numbers are comparable, with its sequential reference implementation, the one crate other spikes build on, and the reference hashes measured on the cells.
+- `reference-workload/`: the specification of the synthetic simulation that the spikes of several research subjects measure against, so that their numbers are comparable, with its sequential reference implementation, the crate the spikes of every subject may build on, and the reference hashes measured on the cells.
 - `ci/run-spike.sh`: builds one spike and runs it. The research CI calls it; it runs the same way on a developer machine. `ci/summarize.sh` prints the Markdown summary of a run's measurements across cells.
-- `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`: the Cargo workspace of the Rust spikes and its pinned toolchain. A spike that studies a C or C++ library is a C or C++ program with its own `CMakeLists.txt`, built with the platform's default compiler, since the library under study is compiled that way too, or with the compiler a run names on demand. Spikes share nothing else.
+- `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`: the Cargo workspace of the Rust spikes and its pinned toolchain. A spike that studies a C or C++ library is a C or C++ program with its own `CMakeLists.txt`, built with the platform's default compiler, since the library under study is compiled that way too, or with the compiler a run names on demand. Beyond these, a spike may stand on the code of an earlier spike when it measures on the same scene or the same path, and says so in its README. Spikes share nothing else.
 
 ## Research CI
 
@@ -70,7 +70,7 @@ The script installs the pinned toolchain if needed (Rust spikes), builds the spi
 - A spike uses a third-party library only when that library is the subject of the measurement, for example a physics library under study; the spike's README names the library, its version and its license. Copyleft code is never vendored.
 - Spikes are licensed like the rest of this repository: MIT or Apache 2.0, at your option.
 - A spike's conclusion lives in its README and is updated when a measurement changes it; raw measurements live in the CI artifacts.
-- Spikes are not maintained as software. A spike that has served its purpose is left as is or deleted, never refactored into reusable code. The only shared parts are the workspace, the toolchain and the reference workload.
+- Spikes are not maintained as software. A spike that has served its purpose is left as is or deleted, never refactored into reusable code. The shared parts are the workspace, the toolchain, the reference workload and the code of an earlier spike that a later one stands on to measure on the same scene or the same path, which the later spike's README states. Nothing moves from a spike into the engine without the planning named at the top of this file.
 - Spikes, directories and READMEs name things in plain words; they carry no identifier of the steering documentation.
 
 ## Index
