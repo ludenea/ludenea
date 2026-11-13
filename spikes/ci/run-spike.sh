@@ -10,6 +10,10 @@
 # and is built with the pinned toolchain; RUSTFLAGS, when set, is passed to the
 # compiler by Cargo and recorded in the environment file, and SPIKE_PROFILE
 # selects the Cargo profile (release by default; dev for an unoptimized build).
+# A Rust spike that builds against a patched copy of a library is a workspace
+# of its own, because a patch replaces the library for every package of a
+# workspace: its Cargo.toml has a [workspace] table, and it is built from that
+# manifest with its own lock file, at the same pinned toolchain.
 # SPIKE_CONTAINER_IMAGE and SPIKE_CONTAINER_MANIFEST, set by the research CI
 # for a cell that runs inside a container image, are recorded as well: the
 # image as named and the JSON of its manifest index resolved at the start of
@@ -115,8 +119,14 @@ fi
 } > "$out/environment.txt"
 
 if [ "$kind" = rust ]; then
-  cargo build --profile "$profile" --locked --package "$package"
-  cargo run --quiet --profile "$profile" --locked --package "$package" -- "$cell" > "$out/facts.json"
+  cargo_arguments=(--profile "$profile" --locked --package "$package")
+  # A spike whose manifest opens a workspace of its own is built from that
+  # manifest, with its own lock file.
+  if grep -q '^\[workspace\]' "$spike/Cargo.toml"; then
+    cargo_arguments+=(--manifest-path "$spike/Cargo.toml")
+  fi
+  cargo build "${cargo_arguments[@]}"
+  cargo run --quiet "${cargo_arguments[@]}" -- "$cell" > "$out/facts.json"
 else
   build="build/$spike"
   # The Visual Studio generator, CMake's default on Windows, builds with its
