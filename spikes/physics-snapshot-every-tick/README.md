@@ -28,8 +28,9 @@ Two programs, one per library, at the versions the research names. The Box2D hal
 - **The churn**: the bodies in motion at 1 000 bodies, in which every tick destroys ten bodies drawn from a seeded stream and creates ten, for 10 000 ticks; the fresh world is created from the components of the churned world's last tick, and the two images are compared.
 - **The sleeping world**: the pile at 1 000 bodies with sleeping on and no input, stepped until no body is awake; 200 takes of it are timed; then every body is woken, one step is taken so that the awake world carries its contact constraints, and 200 takes are timed again.
 - **Write-back**: each scaling scene at 1 000 bodies, at 1 and at 4 workers; after 128 ticks the components of tick 120 are written into the bodies, the eight ticks are applied again with the same inputs, then 600 more, each tick compared with the uninterrupted world.
+- **The world taken as a copy of its state types**, a variant of the Rapier half added on 2026-11-13. The library's world is taken by copying its state types (the sets of bodies, colliders and joints, the island manager, the broad phase, the narrow phase, the parameters: what the image holds, each type copied by the copy it derives) in place of serializing it, and restored by copying that back into the world, whose pipelines are kept as they are with the image. The ring keeps its copy, so a restore makes a second one. A copy holds the workspace fields the serializer skips and a restore from an image builds again, so the state it restores is not the state an image restores. **Hypothesis**: a restore from a copy costs a fraction of a restore from the image, and the world continues identically. Three experiments run with it beside the image's in the same run: the take after every tick at 1 000 bodies, at 1 and 4 workers; the correction of eight ticks inside one frame, with takes at every tick and with the confirmed tick alone, at 1 000, 3 000 and 10 000 bodies and 4 workers; and the continuation on the three library scenes. The memory a copy holds is the library's own, in as many allocations as its types make, and is not measured.
 
-`cargo test` and the C program's `--self-check` verify the drivers' own logic (hash vectors, a world restored and stepped again equals the world never restored, a mispredicted input changes what follows, the report holds every section). `--quick` runs a tenth of everything; `--library box2d` or `--library rapier` runs one half and `--only takes`, `corrections`, `continuation`, `churn`, `asleep` or `write_back` one experiment. `ci/summarize.sh physics-snapshot-every-tick <out directory>` derives the verdict of each claim from the figures and prints the tables.
+`cargo test` and the C program's `--self-check` verify the drivers' own logic (hash vectors, a world restored and stepped again equals the world never restored, from an image and from a copy, a mispredicted input changes what follows, the report holds every section). `--quick` runs a tenth of everything; `--library box2d` or `--library rapier` runs one half and `--only takes`, `corrections`, `continuation`, `copy`, `churn`, `asleep` or `write_back` one experiment. `ci/summarize.sh physics-snapshot-every-tick <out directory>` derives the verdict of each claim from the figures and prints the tables.
 
 What is read where the specification was silent, and what differs from it: a run of corrections stops once its verdict is settled, as said above; cadences of two and four are measured at every size, so that the claim on a take every fourth tick is read at whichever size the claim on a take fails on each machine; the ring's memory is the memory its buffers hold, not the process's; the tables and the canonical bytes are the spike's own formats.
 
@@ -93,6 +94,41 @@ A frame is its restore and nine ticks with their takes, and nothing more: the fi
 
 **The macOS cell**, 3 vCPU under 4 workers, reported without a verdict for the timed claims: the continuation holds; a take at 1 000 bodies costs 0.3 to 1.3 ms for Box2D and 0.4 to 1.6 ms for Rapier; at a depth of eight ticks the frames' 99th percentiles run from 10 to 200 ms.
 
-**Not measured**: a body count between two rungs of the ladder; worker counts other than 1 and 4; a world with both a pile and joints; an image written incrementally or compressed; a restore that reuses the world's memory in Rapier (the image is deserialized into a new state); the engine's own adapter, tables and storage; a correction that starts while a step runs; hardware between the founder's machine and the hosted cells. The cause of the dearer take of a sleeping Box2D world was not looked for.
+**The world taken as a copy of its state types**, measured on 2026-11-13: a [run](https://github.com/ludenea/ludenea/actions/runs/43448975684) of the research CI on the five cells with the variant at 1 000 bodies (hosts: AMD EPYC 9V74 for Linux x86_64, AMD EPYC 7763 for Windows x86_64, Neoverse N2, Cobalt 100, a virtual Apple M1), and the founder's machine with the corrections at 1 000, 3 000 and 10 000 bodies. The image's figures beside the copy's are those of the same run on each cell, and of the same day on the founder's machine. Rapier half only; milliseconds; the image, then the copy.
+
+- **The continuation holds with copies, on every machine.** On the three library scenes, at 1 and 4 workers, no tick differs after 1 000 frames of corrections, and the final hashes are those of the image and of the uninterrupted world, one value per scene on the five cells. The corrections of eight ticks end on the uninterrupted world's hash as well.
+- **A restore from a copy costs a tenth to a half of a restore from the image**, at 1 000 bodies, median:
+
+  | Scene | Founder's machine | Hosted Linux and Windows cells | macOS cell |
+  | --- | --- | --- | --- |
+  | Pile at rest | 2.0 to 2.1, then 0.6 to 1.0 | 3.1 to 4.6, then 0.9 to 2.0 | 2.2 to 2.3, then 1.2 |
+  | Bodies in motion | 0.56, then 0.11 to 0.12 | 1.0 to 1.2, then 0.19 to 0.41 | 0.59 to 0.71, then 0.19 to 0.29 |
+  | Jointed chains | 0.70, then 0.10 | 1.3 to 1.5, then 0.16 to 0.41 | 0.75 to 0.82, then 0.19 to 0.23 |
+
+- **A take as a copy is not cheaper for a pile.** The take of the world at 1 000 bodies, median, at both worker counts:
+
+  | Scene | Founder's machine | Hosted Linux and Windows cells | macOS cell |
+  | --- | --- | --- | --- |
+  | Pile at rest | 0.81 to 0.82, then 1.03 to 1.05 | 1.34 to 2.22, then 1.02 to 2.12 | 1.26 to 1.35, then 0.92 to 1.12 |
+  | Bodies in motion | 0.15, then 0.10 to 0.11 | 0.32 to 0.49, then 0.17 to 0.36 | 0.35 to 0.40, then 0.17 to 0.26 |
+  | Jointed chains | 0.23 to 0.24, then 0.10 | 0.54 to 0.77, then 0.15 to 0.41 | 0.54 to 0.56, then 0.16 to 0.25 |
+
+  For the pile a copy costs 0.7 to 1.3 times the image, by the machine: dearer on the founder's machine and on Linux ARM64, cheaper on the three other hosted cells. For the two other scenes it costs 0.3 to 1.0 times the image.
+- **A correction of eight ticks inside one frame gains little**, 99th percentile of the frame at 1 000 bodies and 4 workers:
+
+  | Scene and takes | Founder's machine | Hosted Linux and Windows cells | macOS cell |
+  | --- | --- | --- | --- |
+  | Pile at rest, takes at every tick | 17.0, then 16.1 to 16.6 | 26.3 to 44.5, then 24.7 to 41.6 | 35.3, then 45.0 |
+  | Pile at rest, the confirmed tick alone | 7.4, then 6.0 to 7.8 | 14.9 to 25.6, then 13.1 to 22.6 | 34.3, then 36.6 |
+  | Bodies in motion, takes at every tick | 4.9, then 4.1 to 4.2 | 9.3 to 15.4, then 7.2 to 11.9 | 19.2, then 16.2 |
+  | Bodies in motion, the confirmed tick alone | 3.5, then 2.9 to 3.4 | 6.5 to 9.5, then 5.3 to 8.0 | 12.1, then 14.6 |
+  | Jointed chains, takes at every tick | 5.9, then 4.2 to 4.7 | 13.5 to 21.0, then 9.1 to 14.2 | 20.4, then 17.9 |
+  | Jointed chains, the confirmed tick alone | 3.8, then 3.0 to 3.9 | 8.9 to 13.6, then 7.4 to 11.6 | 18.4, then 13.7 |
+
+  The verdicts of the claims at 1 000 bodies move on two machines and stay elsewhere. With takes at every tick the pile stays over the fixed step on every hosted cell; on the founder's machine it reads 16.1, 16.4 and 16.6 ms in three runs of that day with copies and 17.0 with the image, on either side of 16.67. With the confirmed tick alone the pile comes under the fixed step on Linux ARM64 (16.8, then 15.2) and stays over it on Windows x86_64. The chains come under it on Windows x86_64 with takes at every tick (21.0, then 14.2).
+- **Above 1 000 bodies, on the founder's machine**: at 3 000 the pile fits in neither form (47.3, then 57.2 with takes at every tick, the copy being the dearer; 22.7, then 20.4 with the confirmed tick alone), the bodies in motion fit in both (14.0, then 13.5), and the chains fit with copies and not with the image (17.3, then 15.0). At 10 000 nothing fits (26.7 to 220 ms).
+- **What bounds a correction is the takes, not the restore.** A frame with takes at every tick is one restore and nine ticks, each with its take. For the pile at 1 000 bodies on the founder's machine that is a restore of 1.0 ms, nine steps of 0.4 ms and nine takes of 1.05 ms with copies, against a restore of 2.1 ms and nine takes of 0.82 ms with the image: the copy halves the smallest part and raises the largest. The confirmed tick alone, which takes once per frame, is the form the copy helps, by the restore's difference.
+
+**Not measured**: a body count between two rungs of the ladder; worker counts other than 1 and 4; a world with both a pile and joints; an image written incrementally or compressed; a restore that reuses the world's memory in Rapier (the image is deserialized into a new state, and a copy is copied once more); the memory a copy holds; a copy that leaves out the workspace fields, or a take that copies only what changed; the engine's own adapter, tables and storage; a correction that starts while a step runs; hardware between the founder's machine and the hosted cells. The cause of the dearer take of a sleeping Box2D world was not looked for.
 
 The raw measurements and the environment of each cell are the artifacts of the runs. The result holds for Box2D v3.2.0 and Rapier 3D 0.36.1 with `bincode` 1.3.3, at the pinned toolchain, on these machines.
