@@ -52,6 +52,7 @@ members = [
     "multiplayer-test-rounds",
     "render-frame-content",
     "render-windowed-presentation",
+    "rapier-platform-math-calls",
 ]
 
 [profile.release]

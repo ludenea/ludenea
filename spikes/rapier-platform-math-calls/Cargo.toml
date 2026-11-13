@@ -1,0 +1,12 @@
+[package]
+name = "rapier-platform-math-calls"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway spike: whether the platforms differ on the calls Rapier 3D makes to the platform's math library on the path of a step with its determinism feature on, measured on the functions themselves against a pure Rust reference and on worlds that reach each call (joint limits, motor targets, bodies with several colliders, balls on convex hulls), for the physics research"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../reference-workload" }
+rapier3d = { version = "=0.36.1", features = ["enhanced-determinism"] }
+libm = "=0.2.16"

@@ -2259,6 +2259,53 @@ case "$spike" in
       jq -r 'select(.not_run_without_a_real_display != null) | "- \(.cell), not run: \(.not_run_without_a_real_display)."' "$file"
     done
     ;;
+  rapier-platform-math-calls)
+    echo "The platform's math functions as a method on a plain \`f32\` reaches them, against the pure Rust library (the reference's hash is one value on every cell if the reference is the same computation everywhere):"
+    echo
+    echo "| Function | Cell | Inputs | Inputs differing from the reference | Largest distance, units of the last place | Platform hash | Reference hash | Hash of the differences |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- |"
+    jq -r -s '[.[] | .cell as $cell | (.functions // [])[] | . + {cell: $cell}] | sort_by([.function, .cell])[] | "| \(.function) | \(.cell) | \(.inputs) | \(.inputs_differing_from_the_reference) | \(.largest_distance_in_units_of_the_last_place) | \(.platform_hash) | \(.reference_hash) | \(.differences_hash) |"' "${facts[@]}"
+    echo
+    jq -r -s '[.[] | (.functions // [])[]] | group_by(.function)[] | "- `\(.[0].function)`: \([.[].platform_hash] | unique | length) distinct platform result(s) and \([.[].reference_hash] | unique | length) distinct reference result(s) across \(length) cell(s)."' "${facts[@]}"
+    echo
+    echo "The values the worlds hand to the platform by construction (their sine and cosine as the platform returns them, hashed):"
+    echo
+    echo "| Cell | Half centers of the 64 joint limits: hash, differing from the reference | Half targets of the 96 motors: hash, differing | One degree: input, sine, cosine | One degree with a constant argument |"
+    echo "| --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.constants as $c | "| \(.cell) | \($c.half_centers_of_the_joint_limits.platform_hash), \($c.half_centers_of_the_joint_limits.differing_from_the_reference) | \($c.half_targets_of_the_motors.platform_hash), \($c.half_targets_of_the_motors.differing_from_the_reference) | \($c.one_degree.input_sine_cosine) | \($c.one_degree_with_a_constant_argument) |"' "$file"
+    done
+    echo
+    echo "The worlds, hashed at the same ticks on every cell (the transform and the motion of every body):"
+    echo
+    echo "| World | Variant | Cell | Bodies | Joints | Initial hash | Final hash | Inertia after the build | Inertia after the steps | Bodies with a turned inertia frame | Most contact pairs: a ball and a hull, two hulls |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    jq -r -s '[.[] | .cell as $cell | (.worlds // [])[] | . + {cell: $cell}] | sort_by([.world, .variant, .cell])[] | "| \(.world) | \(.variant) | \(.cell) | \(.bodies_hashed) | \(.joints) | \(.initial_hash) | \(.final_hash) | \(.inertia_hash_after_the_build) | \(.inertia_hash_after_the_steps) | \(.bodies_with_a_turned_inertia_frame_after_the_steps) | \(.most_contact_pairs_of_a_ball_and_a_hull), \(.most_contact_pairs_of_two_hulls) |"' "${facts[@]}"
+    echo
+    jq -r -s '[.[] | .cell as $cell | (.worlds // [])[] | . + {cell: $cell}] | group_by([.world, .variant])[] | . as $group | ($group[0].checkpoints | split(" ") | map(split(":")[0])) as $ticks | ([$ticks[] as $tick | select(([$group[] | .checkpoints | split(" ")[] | select(startswith($tick + ":"))] | unique | length) > 1) | $tick] | first) as $parts | "- `\($group[0].world)`, \($group[0].variant): \([$group[].initial_hash] | unique | length) distinct initial hash(es), \([$group[].final_hash] | unique | length) distinct final hash(es), \([$group[].inertia_hash_after_the_build] | unique | length) distinct inertia hash(es) after the build and \([$group[].inertia_hash_after_the_steps] | unique | length) after the steps, across \($group | length) cell(s)" + (if $parts then "; the cells part at the checkpoint of tick \($parts)" else "" end) + ". Final hashes: " + ([$group | group_by(.final_hash)[] | "\(.[0].final_hash) on \([.[].cell] | join(", "))"] | join("; ")) + "."' "${facts[@]}"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '"- `\(.cell)`: the feature changes what its world does: \(.the_feature_changes_what_its_world_does | to_entries | map("\(.key) \(.value)") | join(", "))."' "$file"
+    done
+    echo
+    echo "The calls a world's steps make to the platform's math library, counted by a debugger (Linux cells), and the lines of the libraries' sources that were met:"
+    echo
+    echo "| Cell | World | Calls during the build | Calls during the steps | Lines met during the build | Lines met during the steps |"
+    echo "| --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | select(.reach.measured) | .reach.worlds[] | "| \($cell) | \(.world) | \(.calls_during_the_build // .error) | \(.calls_during_the_steps // "") | \(.lines_met_during_the_build // "") | \(.lines_met_during_the_steps // "") |"' "$file"
+    done
+    echo
+    echo "The callers of the first call of each function during the steps (innermost first, the last two parts of each name, twelve frames):"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | select(.reach.measured) | .reach.worlds[] | .world as $world | (.first_callers_during_the_steps // {}) | to_entries[] | "- `\($cell)`, `\($world)`, `\(.key)`: \(.value | split(" < ") | .[0:12] | map(split("::") | .[-2:] | join("::")) | join(" < "))"' "$file"
+    done
+    echo
+    for file in "${facts[@]}"; do
+      jq -r 'select(.reach.measured | not) | "- `\(.cell)`: the calls are not counted (\(.reach.why))."' "$file"
+    done
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;
