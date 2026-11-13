@@ -1901,6 +1901,20 @@ case "$spike" in
       jq -r '.cell as $cell | (.capture_costs // [])[] | "| \($cell) | \(.setting) | \(.width) by \(.height) | \(.render_fastest_us // .error) | \(.read_back_fastest_us // "") | \(.hash_fastest_us // "") | \(.capture_fastest_us // "") | \(.capture_median_us // "") | \(.content_hash_fastest_us // "") | \(.bounded_difference_fastest_us_per_million_pixels // "") | \(.hash // "") | \(.threads // "") |"' "$file"
     done
     echo
+    echo "Mesa's software device held to a stated processor capability (x86_64 only; one capture per setting in a process of its own, against the run's own capture; whether two hosts are alike is read across runs, one run having one host):"
+    echo
+    echo "| Cell | Processor | Vendor, family, model, stepping | Capabilities the device reads | Distinct pictures across the settings |"
+    echo "| --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r 'select(.processor_capability.applies) | .processor_capability as $c | $c.processor as $p | "| \(.cell) | \($p.name) | \($p.vendor), \($p.family), \($p.model), \($p.stepping) | \($p.capabilities_the_device_reads) | \($c.distinct_pictures) |"' "$file"
+    done
+    echo
+    echo "| Cell | Setting | Environment | Frame bytes | Same bytes as the run's capture | Differing pixels against it | Largest difference per channel |"
+    echo "| --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | select(.processor_capability.applies) | .processor_capability.settings[] | "| \($cell) | \(.setting) | \(.environment) | \(.frame_bytes_hash // .error) | \(.same_bytes_as_the_run | if . == null then "" else . end) | \(.numbers.differing_pixels // .picture_error // "") | \(.numbers.largest_per_channel // "") |"' "$file"
+    done
+    echo
     jq -r -s '"- Content hashes across \(length) cell(s): \([.[].frame.content_hash | select(. != null)] | unique | length) distinct. Frame bytes: \([.[].frame_bytes_hash | select(. != null)] | unique | length) distinct. Keys: \([.[].key | select(. != null)] | unique | length) distinct."' "${facts[@]}"
     jq -r -s '"- Per cell and target size, distinct frame bytes across the settings timed: " + ([.[] | .cell as $cell | (.capture_costs // []) | group_by([.width, .height])[] | "\($cell) \(.[0].width) by \(.[0].height): \([.[].hash | select(. != null)] | unique | length)"] | join("; ")) + "."' "${facts[@]}"
     for file in "${facts[@]}"; do

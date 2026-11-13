@@ -6,13 +6,16 @@
 //! file) and the three comparisons of a visual test, and measures what a
 //! reference costs. It stands on the device baseline spike's scene and native
 //! path and measures nothing of a renderer: its content hash is the hash of
-//! the draw list its own code builds.
+//! the draw list its own code builds. On Mesa's software device on x86_64 it
+//! also captures the frame with the device held to a stated processor
+//! capability (`capability.rs`).
 //!
 //! Run with a cell label, it prints one JSON document and writes its pending
 //! parts under `out/<cell>/pending/`. `frame.rs` builds the frame and the
 //! changes brought about on purpose, `reference.rs` holds the files,
 //! `comparison.rs` the three comparisons and `pixels.rs` the pixel file.
 
+mod capability;
 mod comparison;
 mod frame;
 mod pixels;
@@ -34,7 +37,7 @@ use frame::{AdapterFault, Change, Frame};
 use pixels::{Bounds, Numbers};
 use reference::{BytePart, ContentPart, ReferenceSet, pixel_file_name, write_accepted};
 
-const SCHEMA_VERSION: u64 = 1;
+const SCHEMA_VERSION: u64 = 2;
 const SPIKE: &str = "visual-reference-round-trip";
 /// The device thread count the run states, set in the environment before any
 /// device exists: the count is part of the key and cannot be set afterwards.
@@ -611,12 +614,19 @@ fn timed_captures(work: &Path, index: usize, width: u32, height: u32) -> Result<
 /// Runs this executable again for one timing: another process is the only
 /// way to give a software device another thread count.
 fn run_child(index: usize, [width, height]: [u32; 2], setting: &Setting, work: &Path) -> Result<Vec<(String, String)>, String> {
+    let arguments = ["--child".to_string(), index.to_string(), width.to_string(), height.to_string(), setting.affinity_cpus.unwrap_or(0).to_string()];
+    run_process(&arguments, &setting.environment, work)
+}
+
+/// Runs this executable again with the arguments and the environment given,
+/// and returns the `name=value` lines it printed.
+fn run_process(arguments: &[String], environment: &[(String, String)], work: &Path) -> Result<Vec<(String, String)>, String> {
     let (output_path, error_path) = (work.join("child.out"), work.join("child.err"));
     let output = fs::File::create(&output_path).map_err(|error| error.to_string())?;
     let error = fs::File::create(&error_path).map_err(|error| error.to_string())?;
     let mut command = Command::new(env::current_exe().map_err(|error| error.to_string())?);
-    command.arg("--child").args([index.to_string(), width.to_string(), height.to_string(), setting.affinity_cpus.unwrap_or(0).to_string()]);
-    command.envs(setting.environment.iter().map(|(name, value)| (name.as_str(), value.as_str())));
+    command.args(arguments);
+    command.envs(environment.iter().map(|(name, value)| (name.as_str(), value.as_str())));
     let mut child = command.stdin(Stdio::null()).stdout(output).stderr(error).spawn().map_err(|error| format!("the child could not be started: {error}"))?;
     let started = Instant::now();
     let status = loop {
@@ -729,6 +739,7 @@ fn measure(cell: &str) {
                     let pixel_file = write_pixel_file(&mut out, &rendered.image, &work);
                     write_weights(&mut out, api, &info, &processor, &work);
                     write_costs(&mut out, api, &info, &work);
+                    capability::write(&mut out, &info, &rendered.image, &output, &work);
                     out.key("hypotheses");
                     out.object_start();
                     out.bool("carried_references_compare_as_designed", carried);
@@ -749,8 +760,11 @@ fn measure(cell: &str) {
 
 fn main() {
     let arguments: Vec<String> = env::args().skip(1).collect();
-    if arguments.first().map(String::as_str) == Some("--child") {
-        std::process::exit(child(&arguments[1..]));
+    match arguments.first().map(String::as_str) {
+        Some("--child") => std::process::exit(child(&arguments[1..])),
+        Some("--held") => std::process::exit(capability::child(&arguments[1..])),
+        Some("--difference") => std::process::exit(capability::difference(&arguments[1..])),
+        _ => {}
     }
     // The run states its device thread count before any thread or device
     // exists; a count already in the environment is the run's and is kept.
