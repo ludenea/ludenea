@@ -1903,16 +1903,16 @@ case "$spike" in
     echo
     echo "Mesa's software device held to a stated processor capability (x86_64 only; one capture per setting in a process of its own, against the run's own capture; whether two hosts are alike is read across runs, one run having one host):"
     echo
-    echo "| Cell | Processor | Vendor, family, model, stepping | Capabilities the device reads | Distinct pictures across the settings |"
-    echo "| --- | --- | --- | --- | --- |"
+    echo "| Cell | Processor | Vendor, family, model, stepping | Capabilities the device reads | Reciprocal square root estimate: hash over 2^20 inputs, of 2, of 3 | Distinct pictures across the settings |"
+    echo "| --- | --- | --- | --- | --- | --- |"
     for file in "${facts[@]}"; do
-      jq -r 'select(.processor_capability.applies) | .processor_capability as $c | $c.processor as $p | "| \(.cell) | \($p.name) | \($p.vendor), \($p.family), \($p.model), \($p.stepping) | \($p.capabilities_the_device_reads) | \($c.distinct_pictures) |"' "$file"
+      jq -r 'select(.processor_capability.applies) | .processor_capability as $c | $c.processor as $p | "| \(.cell) | \($p.name) | \($p.vendor), \($p.family), \($p.model), \($p.stepping) | \($p.capabilities_the_device_reads) | \($p.reciprocal_square_root_estimate_hash // ""), \($p.reciprocal_square_root_estimate_of_2 // ""), \($p.reciprocal_square_root_estimate_of_3 // "") | \($c.distinct_pictures) |"' "$file"
     done
     echo
-    echo "| Cell | Setting | Environment | Frame bytes | Same bytes as the run's capture | Differing pixels against it | Largest difference per channel |"
-    echo "| --- | --- | --- | --- | --- | --- | --- |"
+    echo "| Cell | Setting | Environment | Frame bytes | Same bytes as the run's capture | Differing pixels against it | Largest difference per channel | Render, fastest of five, microseconds | Key states the setting |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
     for file in "${facts[@]}"; do
-      jq -r '.cell as $cell | select(.processor_capability.applies) | .processor_capability.settings[] | "| \($cell) | \(.setting) | \(.environment) | \(.frame_bytes_hash // .error) | \(.same_bytes_as_the_run | if . == null then "" else . end) | \(.numbers.differing_pixels // .picture_error // "") | \(.numbers.largest_per_channel // "") |"' "$file"
+      jq -r '.cell as $cell | select(.processor_capability.applies) | .processor_capability.settings[] | "| \($cell) | \(.setting) | \(.environment) | \(.frame_bytes_hash // .error) | \(.same_bytes_as_the_run | if . == null then "" else . end) | \(.numbers.differing_pixels // .picture_error // "") | \(.numbers.largest_per_channel // "") | \(.render_fastest_us // "") | \(.key_states_the_setting | if . == null then "" else . end) |"' "$file"
     done
     echo
     jq -r -s '"- Content hashes across \(length) cell(s): \([.[].frame.content_hash | select(. != null)] | unique | length) distinct. Frame bytes: \([.[].frame_bytes_hash | select(. != null)] | unique | length) distinct. Keys: \([.[].key | select(. != null)] | unique | length) distinct."' "${facts[@]}"

@@ -27,8 +27,9 @@ use crate::frame::{AdapterFault, Change, Frame};
 use crate::pixels;
 
 /// Mesa's on-disk shader cache keys its entries on neither the vector width
-/// nor the capabilities: every held capture compiles afresh.
-const WITHOUT_THE_CACHE: (&str, &str) = ("MESA_SHADER_CACHE_DISABLE", "true");
+/// nor the capabilities: every setting is given a cache directory of its
+/// own, empty at its first render.
+const CACHE_DIRECTORY: &str = "MESA_SHADER_CACHE_DIR";
 const WIDTH: &str = "LP_NATIVE_VECTOR_WIDTH";
 const CAPABILITIES: &str = "GALLIUM_OVERRIDE_CPU_CAPS";
 const PERFORMANCE: &str = "GALLIVM_PERF";
@@ -48,17 +49,18 @@ pub fn settings() -> Vec<Setting> {
     let setting = |label: &str, what: &str, environment: &[(&str, &str)]| Setting {
         label: label.to_string(),
         what: what.to_string(),
-        environment: environment.iter().chain([&WITHOUT_THE_CACHE]).map(|(name, value)| (name.to_string(), value.to_string())).collect(),
+        environment: environment.iter().map(|(name, value)| (name.to_string(), value.to_string())).collect(),
         affinity_cpus: None,
     };
     vec![
-        setting("as_started", "the host's own capabilities and the default vector width, compiled afresh: the control", &[]),
+        setting("as_started", "the host's own capabilities and the default vector width, compiled into an empty cache: the control", &[]),
         setting("vector_width_128", "128-bit vectors, the host's own capabilities", &[(WIDTH, "128")]),
         setting("vector_width_256", "256-bit vectors stated, the host's own capabilities", &[(WIDTH, "256")]),
         setting("capabilities_to_avx2", "capabilities held below AVX-512 (AVX2, FMA and F16C stay), 256-bit vectors", &[(CAPABILITIES, "avx"), (WIDTH, "256")]),
         setting("capabilities_to_avx2_width_128", "capabilities held below AVX-512, 128-bit vectors", &[(CAPABILITIES, "avx"), (WIDTH, "128")]),
         setting("capabilities_to_sse4", "capabilities held below AVX (no AVX, AVX2, FMA or F16C), 128-bit vectors", &[(CAPABILITIES, "sse4.1"), (WIDTH, "128")]),
         setting("capabilities_to_sse2", "capabilities held to SSE2, which every x86_64 processor has, 128-bit vectors", &[(CAPABILITIES, "sse2"), (WIDTH, "128")]),
+        setting("capabilities_without_sse", "no SSE capability stated to the device, 128-bit vectors: the generated code holds no reciprocal square root estimate", &[(CAPABILITIES, "nosse"), (WIDTH, "128")]),
         setting("no_optimization_passes", "the host's own capabilities, the generated code without optimization passes: states no capability", &[(PERFORMANCE, "nopt")]),
         setting("capabilities_to_sse2_no_optimization_passes", "capabilities held to SSE2, 128-bit vectors, without optimization passes", &[(CAPABILITIES, "sse2"), (WIDTH, "128"), (PERFORMANCE, "nopt")]),
     ]
@@ -82,6 +84,35 @@ fn processor_facts() -> Vec<(&'static str, String)> {
         ("name", field("model name")),
         ("capabilities_the_device_reads", present.join(" ")),
     ]
+}
+
+/// The processor's reciprocal square root estimate, the instruction the
+/// device's generated code computes with wherever it is told of SSE: the hash
+/// of its results over 2^20 inputs spread over [1, 4), two binades since the
+/// estimate depends on the parity of the exponent, and its result at 2 and
+/// at 3. The instruction's result is the processor's own, within a bound.
+#[cfg(target_arch = "x86_64")]
+fn estimate_facts() -> Vec<(&'static str, String)> {
+    use std::arch::x86_64::{_mm_cvtss_f32, _mm_rsqrt_ss, _mm_set_ss};
+    // SAFETY: SSE is part of every x86_64 processor.
+    let estimate = |x: f32| unsafe { _mm_cvtss_f32(_mm_rsqrt_ss(_mm_set_ss(x))) }.to_bits();
+    let first = 1.0_f32.to_bits();
+    let mut hash = reference_workload::fnv1a(&[]);
+    for step in 0..(1_u32 << 20) {
+        for byte in estimate(f32::from_bits(first + step * 16)).to_le_bytes() {
+            hash = (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    vec![
+        ("reciprocal_square_root_estimate_hash", format!("{hash:016x}")),
+        ("reciprocal_square_root_estimate_of_2", format!("{:08x}", estimate(2.0))),
+        ("reciprocal_square_root_estimate_of_3", format!("{:08x}", estimate(3.0))),
+    ]
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn estimate_facts() -> Vec<(&'static str, String)> {
+    Vec::new()
 }
 
 /// The child's side: `--held <device index> <picture path>`. One capture on
@@ -110,9 +141,14 @@ fn held_capture(work: &Path, index: usize, picture: &Path) -> Result<(), String>
     let info = api.devices().into_iter().find(|info| info.index == index).ok_or("no device at that index")?;
     let frame = Frame::build(Change::None);
     let mut device = api.open(index, false)?;
-    let render = device.render_scene(&frame.device_scene(AdapterFault::None), Recording::SerialOneBuffer)?;
+    let scene = frame.device_scene(AdapterFault::None);
+    let render = device.render_scene(&scene, Recording::SerialOneBuffer)?;
     println!("key={}", crate::one_line(&crate::key_of(api.as_ref(), &info, &device.settings())));
     println!("hash={:016x}", render.image.hash());
+    // The first render compiles the device's code; later ones are what a
+    // capture costs under the setting.
+    let fastest = (0..5).map(|_| device.render_scene(&scene, Recording::SerialOneBuffer).map(|render| render.render_us)).collect::<Result<Vec<f64>, String>>()?.into_iter().fold(f64::INFINITY, f64::min);
+    println!("render_fastest_us={fastest:.3}");
     fs::write(picture, pixels::write(&render.image)).map_err(|error| format!("the picture could not be written: {error}"))
 }
 
@@ -158,7 +194,7 @@ pub fn write(out: &mut Json, info: &DeviceInfo, base: &Image, output: &Path, wor
     }
     out.key("processor");
     out.object_start();
-    for (name, value) in processor_facts() {
+    for (name, value) in processor_facts().into_iter().chain(estimate_facts()) {
         out.string(name, &value);
     }
     out.object_end();
@@ -174,11 +210,22 @@ pub fn write(out: &mut Json, info: &DeviceInfo, base: &Image, output: &Path, wor
         out.string("environment", &setting.environment.iter().map(|(name, value)| format!("{name}={value}")).collect::<Vec<_>>().join(" "));
         let picture = pictures.join(format!("{}.png", setting.label));
         let arguments = ["--held".to_string(), info.index.to_string(), picture.to_string_lossy().into_owned()];
-        match crate::run_process(&arguments, &setting.environment, work) {
+        let cache = work.join(format!("cache-{}", setting.label));
+        let _ = fs::create_dir_all(&cache);
+        let mut environment = setting.environment.clone();
+        environment.push((CACHE_DIRECTORY.to_string(), cache.to_string_lossy().into_owned()));
+        match crate::run_process(&arguments, &environment, work) {
             Ok(lines) => {
                 let value = |name: &str| lines.iter().find(|(key, _)| key == name).map(|(_, value)| value.clone()).unwrap_or_default();
                 let hash = value("hash");
-                out.string("key", &value("key"));
+                // A variable the key does not state is one a byte part held
+                // under that key says nothing of.
+                let key = value("key");
+                out.bool("key_states_the_setting", setting.environment.iter().all(|(name, value)| key.contains(&format!("{name}={value}"))));
+                out.string("key", &key);
+                if let Ok(render) = value("render_fastest_us").parse::<f64>() {
+                    out.decimal("render_fastest_us", render);
+                }
                 out.string("frame_bytes_hash", &hash);
                 out.bool("same_bytes_as_the_run", hash == format!("{:016x}", base.hash()));
                 match fs::read(&picture).map_err(|error| error.to_string()).and_then(|file| pixels::read_strict(&file)) {
@@ -206,14 +253,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_setting_is_named_once_and_compiles_afresh() {
+    fn every_setting_is_named_once_and_leaves_the_cache_to_the_run() {
         let settings = settings();
         let mut labels: Vec<&str> = settings.iter().map(|setting| setting.label.as_str()).collect();
         labels.sort();
         labels.dedup();
         assert_eq!(labels.len(), settings.len());
         for setting in &settings {
-            assert!(setting.environment.iter().any(|(name, value)| (name.as_str(), value.as_str()) == WITHOUT_THE_CACHE), "{}", setting.label);
+            assert!(setting.environment.iter().all(|(name, _)| name != CACHE_DIRECTORY), "{}", setting.label);
             assert!(setting.label.chars().all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_'), "{}", setting.label);
         }
     }
