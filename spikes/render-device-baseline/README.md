@@ -124,4 +124,20 @@ Vulkan is unavailable on the Windows cells and on the developer machine for want
 
    On the software devices the fifth attachment costs 3 to 16 percent of the fill. The fill alone is cheaper than the lit image on every software device but one. Filling and then lighting costs the Windows software adapter 1 to 8 percent more than lighting in one pass, and Mesa's software device from nothing to 45 percent more. The lit image and the geometry buffer are the same bytes on both architectures for the Windows software adapter and for Mesa 25.2.8, and differ between the two architectures under Mesa 22.3.6.
 
-Not measured here: any hardware device through Vulkan or Metal, and Direct3D 12's validation layer on a hardware device; a capability beyond the baseline in use (a mesh shader, a ray query, a 64-bit atomic that runs); the cause of the difference between Mesa's two architectures; the scene on Mesa 22.3.6.
+### A hardware device through Metal
+
+Measured on 2026-11-13, twice, on a second developer machine: a MacBook Pro with an Apple M5 (10 cores), macOS 26.5, Rust 1.99.1, release profile. Other applications ran on the machine, so the times are a sample; the two runs agree on every identity.
+
+| Machine | Interface | Device | Driver or implementation | Interface version | Scene image |
+| --- | --- | --- | --- | --- | --- |
+| second developer machine | Metal | Apple M5 | macOS 26.5 | family Apple9, Mac2, Metal3 | `e46b7fa74288cad1` |
+
+- **The scene image is the virtual Metal device's, byte for byte**, across two devices and two versions of macOS (15.8.2 and 26.5): the differences of the table above between the virtual Metal device and the other devices are this device's too. 9 renders of 9 give that image in each run (the three recordings, a second device created from scratch, a second process), and recording on four threads gives the bytes of one buffer.
+- **The baseline: every item is reported**, timestamp queries included (a counter set of timestamps, sampled at the boundaries of a stage), which the virtual device lacks. Metal has no query for six of the items, reported from the device's GPU family as above.
+- **Beyond the baseline** the device reports everything but a draw count read from a buffer, for which Metal has no call: the three families of compressed formats, resource arrays without a fixed bound, mesh shaders, ray queries, a second queue. Its compute pipeline with a 64-bit atomic builds, where the virtual device's fails.
+- The compute kernels are exact, and the pass-through form returns each of the 1 024 texels with its bytes, as does the converting form.
+- The validation layer is silent on the three recordings and reports the misuse on the standard error.
+- **The lit scene**, fastest of five repetitions in milliseconds, the two runs: one image 0.39 and 0.57, the geometry buffer of 160 bits 0.29 and 0.47, of 192 bits 0.36 and 0.34, fill then light 0.39 and 0.37.
+- The binary imports the Objective-C runtime and the system library only. Vulkan is unavailable for want of a loader.
+
+Not measured here: any hardware device through Vulkan, and Direct3D 12's validation layer on a hardware device; a capability beyond the baseline in use (a mesh shader, a ray query, a 64-bit atomic that runs); the cause of the difference between Mesa's two architectures; the scene on Mesa 22.3.6.

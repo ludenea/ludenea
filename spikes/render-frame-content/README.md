@@ -282,9 +282,46 @@ One changed tile costs every written block of its chunk: 9 to 256 times the byte
 
 The time to the image is the build of the pipelines and one to two frames: the frame on its way keeps the pipelines it resolved, one image is delivered with the old payload, and the next shows the new one. The first-time column is from the first runs, in which the process had never built the payload; in the final run the adapter's check had built it once. The content hash does not change with the payload: the shading form is not content.
 
+### A hardware device through Metal
+
+Measured on 2026-11-13, twice, on the founder's Apple M5: a MacBook Pro with 4 performance and 6 efficiency cores, macOS 26.5, Rust 1.99.1, release profile. Other applications ran on the machine (20 to 30 percent of its processors busy as sampled around the runs), so the times are a sample; the two runs agree on every identity. The figures are the second run's, on mains, with the first run's beside them where they differ.
+
+- **The content hash**: with the math layer the value of the five cells and of the Windows machine (`01284e00a6490c3b`, `70e60289841660ef`), at 1, 4 and 8 workers; with the platform's arithmetic the macOS cell's (`02cbec19afc06035`, `4679fdeef8d4813b`), across macOS 15.8.2 and 26.5. The frame of tick 10 000 has the content hash of every other machine.
+- **The math layer** costs prepare 1.28 times the platform's arithmetic at a worker budget of one (1 074 microseconds of processor time against 836) and 1.26 at four (1 154 against 915); 1.27 and 1.24 in the first run.
+- **The graph** of 300 passes is declared and compiled in 25 microseconds at the median and 35 at the 99th percentile.
+- **The modes**: the six frames of a tick are the same bytes, at both ticks. **The images are not the virtual Metal device's**: `f228433cfaf2df42` and `2806d73b9ee861d3`, a seventh image for one content, where the device baseline's scene gives one image on the two Metal devices.
+- The check of the adapter behind the port holds (15 lines of 15), and under Metal's validation layer with no message.
+
+The pace on the device, milliseconds, one frame after each tick at most:
+
+| Worker budget | Overlap | Lateness: median | 99th percentile | Largest | Frames per second | Refresh | Prepare and sort | Record | Submit | Device |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 4 | yes | 0 | 0 | 2.4 | 60 | 0.05 | 0.8 | 1.9 | 0.06 | 3.8 |
+| 4 | no | 0 | 0 | 0 | 60 | 0.04 | 0.8 | 2.0 | 0.06 | 3.1 |
+| 1 | yes | 0 | 0 | 1.7 | 60 | 0.04 | 2.1 | 5.1 | 0.05 | 4.1 |
+| 1 | no | 0 | 0 | 1.7 | 60 | 0.04 | 2.1 | 5.0 | 0.05 | 3.4 |
+
+- **The frame fits in a tick's period either way**, as on the two hardware devices of the Windows machine. In the first run the loop without overlap at a worker budget of one was late by 5.2 milliseconds at the 99th percentile and 10.2 at the most; no other loop of either run is late by more than 0.04 millisecond at the 99th percentile.
+- **With frames back to back the overlap gives more frames and earlier ticks**: 286 to 293 frames a second against 157 to 166 at a worker budget of four, a tick late by nothing at the median against 2.4 milliseconds; 115 to 126 against 82 to 84 at a budget of one, a tick late by 2.3 to 3.6 milliseconds against 5.0 to 6.8.
+- **Refresh costs 0.03 to 0.05 millisecond a frame**, where the creation of one tile block's vertex buffer costs the two hardware devices of the Windows machine 1.2 and 2.4.
+- Recording the 22 060 draws takes 5.0 to 5.4 milliseconds on one thread and 1.9 to 2.3 at a worker budget of four. The device baseline's Metal code asks the runtime whether an object answers each message before it sends it, so the figure is that code's cost and not the interface's.
+
+The worlds through one presenter:
+
+- **On the device that draws nothing, sixteen worlds cost 2.6 to 3.7 times one world's frame** (the median of five series is 3.0 to 3.5 over three runs), and 1.1 to 1.4 at four worlds. The control in which each world has an instance, a device and a presentation thread of its own gives 2.7 to 4.0 (3.2 to 3.4 at the median). On this machine of ten cores, four of them fast, the threshold of twice is passed by sixteen worlds that share nothing: the cause is the processors, as on the Windows machine, and not the shared device, whose presenter spends 12 to 21 microseconds a frame.
+- **On the device** a frame costs a world 10.9 to 11.3 milliseconds alone, 11.2 to 15.4 among four and 30.9 to 31.7 among sixteen, 2.8 times one world's; the presenter spends 0.3 millisecond a frame at sixteen, with three frames in flight at most. The transient targets take 4.7 MB for one world and 44.8 MB at their peak for sixteen.
+
+The rest:
+
+- **A lost device**: holds as on every device, by the simulated loss; Metal offers no call that removes a device.
+- **The unwatched world**: the two reproducible frames of tick 10 000 are the same, by content and by bytes.
+- **Lifetimes under Metal's layer on a hardware device**: as on the macOS cell. The layer is silent on the four steps, and the process goes on after the last.
+- **A shader's new payload** (Metal text of 5 602 bytes, compiled by the platform): the pipelines are built in 0.24 to 0.25 millisecond, the payload seen before; the image that shows it comes 12.2 to 14.1 milliseconds after the payload is resident, a frame taking 8.2 to 8.5 from its start to its image.
+
 ### Not measured
 
-- A hardware device through Vulkan or Metal: no such machine was available, and Vulkan natively on the founder's machine lacks a GLSL compiler on the path.
+- A hardware device through Vulkan: no such machine was available, and Vulkan natively on the founder's Windows machine lacks a GLSL compiler on the path.
+- The times on the founder's Apple M5 with the machine at rest: other applications ran during both runs.
 - Direct3D 12's validation layer on a hardware device: the founder's machine lacks the Graphics Tools component of Windows.
 - What Direct3D 12's layer says before it ends the process on the last lifetime step.
 - A pass of two or three parts on Metal: the cause of a one-part pass having no effect through a parallel encoder on the macOS cell's device was not found; one part is recorded through a plain encoder, and eight parts and four are measured.
