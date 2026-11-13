@@ -101,7 +101,7 @@ The self-checks (`cargo test -p render-windowed-presentation`) verify the report
 ## Environment
 
 - The five cells of the research CI: no hardware graphics device, no real display, no person. The Windows and macOS runners are expected to hold a desktop session; the Linux cells are given a virtual X11 display (`Xvfb`) and a Wayland compositor that needs no display (`weston` with its headless backend), both started by the spike. Ubuntu 24.04's packages give them Mesa 25.2.8 for the software Vulkan device, weston 13.0.0 and Xvfb 21.1.12.
-- One machine with a display, a hardware device and nobody at the window: a Windows 11 machine with an NVIDIA GeForce RTX 5080 that drives the display, an AMD Radeon integrated device and the Windows software adapter. No such machine is named for macOS nor for Linux under a real compositor: what the hypotheses ask there is listed as not measured.
+- One machine with a display, a hardware device and nobody at the window: a Windows 11 machine with an NVIDIA GeForce RTX 5080 that drives the display, an AMD Radeon integrated device and the Windows software adapter. For macOS, since 2026-11-13, a MacBook Pro with an Apple M5 and its built-in display at 120 hertz, whose results have their own section. No such machine is named for Linux under a real compositor: what the hypotheses ask there is listed as not measured.
 - Rust 1.99.1, release profile. winit 0.30.13 (Apache 2.0), with its default features. SDL 3.4.20 (zlib license) through the `sdl3-sys` crate 0.7.3 (zlib license), which builds SDL from its sources and links it statically, with its video, joystick, HIDAPI and audio subsystems. wgpu 30.0.1 (MIT or Apache 2.0) at its safe level. Each license was read before the first run.
 
 ## Result
@@ -238,9 +238,35 @@ A hypothesis is said to hold, to be refuted, or to be recorded where it has no t
 
 Neither library returns to a loop the host owns. winit and SDL3's polling each offer a callback that runs inside the system's loop; only SDL3's main callbacks keep the host's iteration running, at the rate of a system timer.
 
+### On a Mac with a display
+
+Measured on 2026-11-13, once in full (22 minutes), on the founder's Apple M5: a MacBook Pro with 4 performance and 6 efficiency cores, macOS 26.5, on mains, its built-in display at 120 hertz with a variable refresh. The gestures are made by calls, with nobody at the window. **The machine was not at rest**: other applications ran, and 18 to 47 percent of its processors were busy in 45 samples taken every thirty seconds. The counts and the places of the waits do not depend on that; the pace does, and is a first pass.
+
+- **A presentation thread through the gestures: holds.** 20 runs of 20 complete with no deadlock and no error: 8 of ten thousand frames through a resize and a minimization (two libraries, Metal natively and through wgpu, windowed and borderless), 4 of ten thousand with the presenter inside the platform thread's loop, 6 of 1 200 frames in the synchronized mode, and 2 of ten thousand frames in that mode (83 and 85 seconds). The layer is given to the view, and wgpu's surface is made, on the main thread; the device, the queue and every frame are the presentation thread's.
+- **In the synchronized mode the acquisition of the layer's drawable waits**, natively and through wgpu (7.6 to 8.0 milliseconds at the median), and the offscreen stream is served one frame per refresh: a period of 8 303 to 8 332 microseconds at the median, for a refresh of 8 333. With the presenter inside winit's loop the acquisition takes 6 microseconds, and the loop itself turns once per refresh.
+- **The unsynchronized mode does not free a window the system composes.** With the layer's display sync off, a windowed layer is still served one frame per refresh: ten thousand frames take 81 to 84 seconds, and the wait moves from the acquisition (0.17 to 0.25 millisecond) to the next work given to the queue, here the offscreen frame (8.0 to 8.2 milliseconds). A borderless window that covers the display runs free in three runs of four (a turn every 1.2 to 1.7 milliseconds, ten thousand frames in 12 to 19 seconds); SDL3's borderless window through wgpu stayed at one frame per refresh. The cause was not sought.
+- **A minimized window is still given drawables natively**: every turn presents, every 3.9 to 4.6 milliseconds at the median in the unsynchronized mode and once per refresh in the synchronized one. Through wgpu the surface answers "occluded" once the window is gone (after 186 to 394 frames presented on its way), and the offscreen stream then runs free, a turn every 0.2 to 0.3 millisecond. The longest acquisition of the twenty runs is 33 milliseconds: the wait of up to one second that the layer may impose was not seen on this device either.
+- **The presenter inside the platform thread's loop serves nothing for half a second when the window is minimized**: the longest period of its offscreen stream is 554 to 588 milliseconds in the six runs of that form, against 34 milliseconds at the most, four refreshes, on a presentation thread.
+- **What each library says of the window's state**: winit reports the minimized window as occluded, then as shown again; SDL3 reports it as minimized and occluded, then as restored.
+- **Threads**: winit creates 3 or 4 when it starts and 1 when a window opens (none where it had created 4); SDL3 4 or 5, then 1 or none, 2 for its audio subsystem and none for its gamepad subsystem; a Metal device and its layer none until frames are presented, then 2 beside winit and none beside SDL3, natively and through wgpu. Every set waits by the spike's figure but one reading: SDL3's own threads took 1 215 microseconds of an idle second after frames were presented, as in the macOS cell's first run. No thread ends when its owner is released.
+- **The "latest" mode is not offered**: a Metal layer presents in step with the display or not, and wgpu lists the first in first out and the immediate modes.
+- The imports are the macOS cell's.
+
+**The pace, a first pass that decides nothing.** The 99th percentile of the lateness of the ticks, in microseconds, three rounds of twenty seconds, natively on Metal with winit, the window shown:
+
+| Loop | Round 1 | Round 2 | Round 3 |
+| --- | --- | --- | --- |
+| Control, presenting nothing | 3 978 | 7 169 | 7 628 |
+| Beside a presentation thread | 4 005 | 7 555 | 7 152 |
+| Presenting itself, from an empty queue | 4 102 | 7 696 | 6 955 |
+| Presenting itself, the queue full | 8 062 | 8 125 | 8 145 |
+
+- **The control itself is late by 3.3 to 5.5 milliseconds at the median.** The loop sleeps until a tick's due instant, and on this machine as it was the sleep returns that late, where the control of the Windows machine is late by about half a millisecond at the 99th percentile. Whether the lateness is the system's timers or the load of the other applications is not known.
+- Beside a presentation thread, and presenting itself from an empty queue, the loop stays within the control's interval. With the queue full it is late by 8.1 milliseconds at the 99th percentile, one refresh at 120 hertz being 8.3. The gain of a presentation thread there (1.0 millisecond) is smaller than the control's spread (3.7 milliseconds), so the hypothesis is neither confirmed nor refuted on this machine: a run at rest is owed.
+
 ### Not measured
 
-- **macOS on a machine with a display and a hardware device, and Linux under a real compositor**: no such machine is named. The hypotheses on the gestures, on the pace, on the presentation times against a display's refresh and on a driver's threads are measured on Windows alone; what the macOS and Linux cells give is given above for a virtual device, a virtual display and a compositor with no display.
+- **Linux under a real compositor**: no such machine is named. On macOS with a display the pace was taken once, on a machine that was not at rest, and its hypothesis stays open there; the presentation times against the display's refresh are not read, Metal's handler not being registered.
 - **Whether a real Wayland compositor answers the frame callback of a window it shows**, which decides whether the stall of the synchronized mode is the headless compositor's or any compositor's for a window it does not show.
 - **Gestures made by a person**: every gesture was injected or made by a call. On the Linux cells a move, a minimization and an occlusion were not run, and on the macOS cell a move and an occlusion.
 - **Injected input and the time of an event on Linux and on macOS.**
