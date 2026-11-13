@@ -51,13 +51,40 @@ Its limits, stated before it ran: those of the earlier spike (the worlds are syn
 
 Research CI, workflow `research-ci.yml`, five cells (see [`spikes/README.md`](../README.md)), run on demand with `-f spike=rapier-platform-math-routed`; a developer machine (AMD Ryzen 9 9950X3D, Windows 11) natively and, under its Linux subsystem, in the `rust:1.99.1-slim-trixie` and `rust:1.99.1-slim-bookworm` containers (glibc 2.41 and 2.36). Release builds at the pinned Rust toolchain.
 
-Relationship to the external components: Rapier 3D 0.36.1 (Apache 2.0) with its `enhanced-determinism` feature, parry3d 0.31.1 (Apache 2.0) and glamx 0.3.1 (MIT or Apache 2.0) are the subjects of the measurement, each built from its published archive with this spike's patch applied; `libm` 0.2.16 (MIT) is where the patched calls go, as the feature's other calls do; GDB (GPL 3.0) is run as a tool on the Linux cells. None of their code is in this repository: the archives are fetched when the spike is built, and the patches hold a few lines of context of the files they change. Nothing of them is reused beyond this spike.
+Relationship to the external components: Rapier 3D 0.36.1 (Apache 2.0) with its `enhanced-determinism` feature, parry3d 0.31.1 (Apache 2.0) and glamx 0.3.1 (MIT or Apache 2.0) are the subjects of the measurement, each built from its published archive with this spike's patch applied; `libm` 0.2.16 (MIT) is where the patched calls go, as the feature's other calls do; GDB (GPL 3.0) is run as a tool on the Linux cells. Their code is not in this repository beyond the lines the patches replace and their context: the archives are fetched when the spike is built. Nothing of them is reused beyond this spike.
 
 ## Result
 
-Measured on 2026-11-13 on the developer machine, natively and in the two containers. The run on the five cells of the research CI is not recorded here yet.
+Measured on 2026-11-13: a [first run](https://github.com/ludenea/ludenea/actions/runs/43489738477) of the research CI on the five cells (hosts: AMD EPYC 7763, Arm Neoverse N2, AMD EPYC 9V74, Cobalt 100, a virtual Apple M1; glibc 2.39 on the two Linux cells, the Universal C Runtime of Windows Server 2025 and of Windows 11, the system library of macOS 15.8.2); a [second run](https://github.com/ludenea/ludenea/actions/runs/43490503725), whose two x86_64 cells exchanged those hosts and whose five cells repeat the first run's hashes and counts exactly; and the developer machine natively and in the two containers. The raw measurements and the debugger's output are in the runs' artifacts.
 
-On the developer machine:
+Every machine built the same thing: the hash of each patch's text is one value on the five cells and on the developer machine, and every lock file takes the three libraries from the patched copies.
 
-- **The worlds hash alike under Windows and under both versions of glibc.** Each of the five worlds and of the two twins has one hash before the first step, one final hash and one inertia hash after the build and after the steps, natively and in the two containers. With the libraries as published the two containers gave two worlds for the hulls and for the bodies of several colliders.
-- **No call to the platform's math library is counted**, in either container, while any of the five worlds is built or steps: none of the 28 functions is hit. The lines are still met: the limit's 64 times, the motor's 40 960 times, the eigenvalues' 192 times for the bodies of several colliders and 768 for the hulls, the one-degree line 8 561 times.
+1. **The worlds: holds for all seven.** Each world has one hash before the first step, one at each of the eight ticks hashed and one inertia hash after the build and after the steps, on the five cells, on the developer machine natively and in its two containers.
+
+   | World | Distinct hashes before the first step, at each tick hashed, of the inertia | Final hash, on every machine | With the libraries as published |
+   | --- | --- | --- | --- |
+   | `control` | 1, 1, 1 | `978720a6934c0050` | this hash, on the five cells |
+   | `joint_limits` | 1, 1, 1 | `b7aa90e8b7a11b06` | two hashes; this one on Windows x86_64 and macOS |
+   | `joint_limits`, the twin without limits | 1, 1, 1 | `a890594c53a00ad1` | this hash, on the five cells |
+   | `motor_targets` | 1, 1, 1 | `7c60329141664112` | three hashes; this one on Windows x86_64 |
+   | `motor_targets`, the twin without motors | 1, 1, 1 | `4f5d5c00da016a20` | this hash, on the five cells |
+   | `several_colliders` | 1, 1, 1 | `72fd85fa0af432cd` | three hashes, none of them this one |
+   | `balls_on_hulls` | 1, 1, 1 | `3727c16910e54471` | three hashes; this one on the two Windows cells |
+
+   - Every world starts from the hash it started from with the libraries as published, and on every machine the limits and the motors still change what their worlds do.
+   - The worlds that held with the libraries as published, the control and the two twins, hash as they did: routing the logarithms of the broad phase's tree changes nothing in them.
+   - A routed world is the world of the cells whose library returned, on the inputs the world took, what the pure Rust library returns: Windows on x86_64 and macOS for the limits, Windows on x86_64 for the motors' sines, the two Windows cells for the hulls. For the bodies of several colliders no cell's library did, and the routed world is a new one.
+2. **The versions of one platform's library: holds.** The containers with glibc 2.36 and with glibc 2.41 give the hashes of the cells for every world, the hulls and the bodies of several colliders included, which they gave two worlds for with the libraries as published.
+3. **The reach: holds.** Counted on the two Linux cells and in the two containers over 320 ticks, the same on the four: none of the 28 functions of the platform's math library is hit while any of the five worlds is built or steps. The lines that held the calls are still met during the steps:
+
+   | World | Lines of the sources met during the steps |
+   | --- | --- |
+   | `control` | the tree's optimization 317 |
+   | `joint_limits` | the limit's half center 64, the tree's optimization 72 |
+   | `motor_targets` | the motor's half target 40 960, the tree's optimization 306 |
+   | `several_colliders` | the eigenvalues' arc cosine 192 and cosines 192, the tree's optimization 175 |
+   | `balls_on_hulls` | the eigenvalues' arc cosine 768 and cosines 768, the one-degree tolerance 8 561, the tree's optimization 308 |
+
+   The limit's, the motor's and the eigenvalues' lines are met as often as the earlier spike counted their calls. The line of the tree's optimization is met about twice as often as in the earlier spike, where it held two calls: a line's breakpoint counts every place the compiler put the line's code, and why it put this line's in more places here was not traced. The one-degree line is met 8 561 times against 8 661: on Linux the hulls' world is no longer the same world.
+
+**What it says and does not say.** On these worlds the five calls are all that separated the cells: with them routed to the pure Rust library, a world with asymmetric joint limits, with motor targets on a joint that hangs from a multibody, with bodies of several colliders or with convex hulls hashes to one value on the five cells, on a sixth machine and under two versions of one platform's library, and its steps make no call to the platform's math library. The change is 14 lines in 5 files of three crates. Not measured: any world beyond these five (other joint kinds, a limit centered on zero, the soft bodies, the mesh intersection code, whose own methods on a plain `f32` the patches leave as published); the 2D build; what the routed calls cost in time; the reach on Windows and macOS, the sources being the same there; an x86_64 processor that is not AMD's, the two x86_64 cells and the developer machine having landed on three AMD models. Whether the libraries' authors would take such a change, and what a project that depends on the libraries should do meanwhile, are not this spike's to say.
