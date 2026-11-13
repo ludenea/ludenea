@@ -175,6 +175,30 @@ pub fn constants(out: &mut Json, name: &str, values: &[f32]) {
     out.object_end();
 }
 
+/// The sine alone of the values a world hands to the platform, as a motor's
+/// constraint takes it: on a platform where the sine taken with the cosine
+/// is another function, the two give other bits.
+pub fn sines(out: &mut Json, name: &str, values: &[f32]) {
+    let mut hash = Fnv1a::new();
+    let mut lines = String::new();
+    for &value in values {
+        let sin = black_box(value).sin();
+        hash.write(&sin.to_bits().to_le_bytes());
+        let _ = write!(lines, "{:08x}:{:08x}", value.to_bits(), sin.to_bits());
+        if sin.to_bits() != libm::sinf(value).to_bits() {
+            lines.push('*');
+        }
+        lines.push(' ');
+    }
+    out.key(name);
+    out.object_start();
+    out.u64("values", values.len() as u64);
+    out.hex("platform_hash", hash.finish());
+    out.u64("differing_from_the_reference", lines.matches('*').count() as u64);
+    out.string("input_sine", lines.trim_end());
+    out.object_end();
+}
+
 pub fn write(out: &mut Json, output: &Path) {
     let directory = output.join("functions");
     let _ = fs::create_dir_all(&directory);

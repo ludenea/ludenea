@@ -2290,7 +2290,7 @@ case "$spike" in
     echo
     echo "The values the worlds hand to the platform by construction (their sine and cosine as the platform returns them, hashed):"
     echo
-    echo "| Cell | Half centers of the 64 joint limits: hash, differing from the reference | Half targets of the 96 motors: hash, differing | One degree: input, sine, cosine | One degree with a constant argument |"
+    echo "| Cell | Half centers of the 64 joint limits: hash, differing from the reference | Half targets of the 96 motors, the sine alone: hash, differing | One degree: input, sine, cosine | One degree with a constant argument |"
     echo "| --- | --- | --- | --- | --- |"
     for file in "${facts[@]}"; do
       jq -r '.constants as $c | "| \(.cell) | \($c.half_centers_of_the_joint_limits.platform_hash), \($c.half_centers_of_the_joint_limits.differing_from_the_reference) | \($c.half_targets_of_the_motors.platform_hash), \($c.half_targets_of_the_motors.differing_from_the_reference) | \($c.one_degree.input_sine_cosine) | \($c.one_degree_with_a_constant_argument) |"' "$file"

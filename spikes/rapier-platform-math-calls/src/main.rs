@@ -78,7 +78,7 @@ fn measure(cell: &str) {
     out.key("constants");
     out.object_start();
     functions::constants(&mut out, "half_centers_of_the_joint_limits", &scenes::limit_half_centers());
-    functions::constants(&mut out, "half_targets_of_the_motors", &scenes::motor_half_targets());
+    functions::sines(&mut out, "half_targets_of_the_motors", &scenes::motor_half_targets());
     functions::constants(&mut out, "one_degree", &[scenes::one_degree()]);
     // The same call on a constant, as the collision library writes it: the
     // compiler may compute it when it builds, with no call left to make.
