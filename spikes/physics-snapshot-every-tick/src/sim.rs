@@ -190,8 +190,52 @@ pub fn make_pool(threads: usize) -> Pool {
     Arc::new(rayon::ThreadPoolBuilder::new().num_threads(threads).build().expect("a thread pool"))
 }
 
+/// How the library's world is taken: as the image a general serializer
+/// writes, or as a copy of the world's state types.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TakeForm {
+    Image,
+    Copy,
+}
+
+/// The state of a world as its own types, each copied: what the image holds,
+/// with the workspace fields the serializer skips and a restore from an image
+/// builds again.
+#[derive(Clone)]
+pub struct WorldCopy {
+    gravity: Vector,
+    integration_parameters: IntegrationParameters,
+    islands: IslandManager,
+    broad_phase: BroadPhaseBvh,
+    narrow_phase: NarrowPhase,
+    bodies: RigidBodySet,
+    colliders: ColliderSet,
+    impulse_joints: ImpulseJointSet,
+    multibody_joints: MultibodyJointSet,
+    soft_bodies: SoftBodySet,
+}
+
+impl WorldCopy {
+    fn of(world: &PhysicsWorld) -> WorldCopy {
+        WorldCopy {
+            gravity: world.gravity,
+            integration_parameters: world.integration_parameters,
+            islands: world.islands.clone(),
+            broad_phase: world.broad_phase.clone(),
+            narrow_phase: world.narrow_phase.clone(),
+            bodies: world.bodies.clone(),
+            colliders: world.colliders.clone(),
+            impulse_joints: world.impulse_joints.clone(),
+            multibody_joints: world.multibody_joints.clone(),
+            soft_bodies: world.soft_bodies.clone(),
+        }
+    }
+}
+
 pub struct Sim {
     pub world: PhysicsWorld,
+    /// The form of the takes; a restore reads whichever form a take holds.
+    pub form: TakeForm,
     pub workers: usize,
     pub sleep: bool,
     pub entities: Vec<Entity>,
@@ -213,6 +257,7 @@ impl Sim {
         world.set_thread_pool(Some(pool.clone()));
         Sim {
             world,
+            form: TakeForm::Image,
             workers: pool.current_num_threads(),
             sleep,
             entities: Vec::new(),
@@ -354,11 +399,19 @@ impl Sim {
             .count()
     }
 
-    fn take_image(&mut self, image: &mut Vec<u8>) {
+    fn take_image(&mut self, take: &mut Take) {
+        if self.form == TakeForm::Copy {
+            // A copy holds no bytes of its own to count: its memory is the
+            // library's, in as many allocations as its types make.
+            take.image.clear();
+            take.copy = Some(Box::new(WorldCopy::of(&self.world)));
+            return;
+        }
+        take.copy = None;
         self.scratch.clear();
         bincode::serialize_into(&mut self.scratch, &self.world).expect("the world serializes");
-        fit(image, self.scratch.len());
-        image.extend_from_slice(&self.scratch);
+        fit(&mut take.image, self.scratch.len());
+        take.image.extend_from_slice(&self.scratch);
     }
 
     fn take_tables(&self, tables: &mut Vec<u8>) {
@@ -386,7 +439,7 @@ impl Sim {
 
     pub fn take(&mut self, take: &mut Take, tick: usize) -> TakeTimes {
         let start = Instant::now();
-        self.take_image(&mut take.image);
+        self.take_image(take);
         let image_ms = milliseconds(start);
         let start = Instant::now();
         self.take_tables(&mut take.tables);
@@ -433,6 +486,23 @@ impl Sim {
     /// continuation spike restored it.
     pub fn restore(&mut self, take: &Take) {
         assert!(take.held, "a correction asked for a tick the ring does not hold");
+        if let Some(copy) = &take.copy {
+            // The ring keeps its copy for a later correction: the world
+            // receives a copy of it, and keeps its pipelines.
+            let state = WorldCopy::clone(copy);
+            self.world.gravity = state.gravity;
+            self.world.integration_parameters = state.integration_parameters;
+            self.world.islands = state.islands;
+            self.world.broad_phase = state.broad_phase;
+            self.world.narrow_phase = state.narrow_phase;
+            self.world.bodies = state.bodies;
+            self.world.colliders = state.colliders;
+            self.world.impulse_joints = state.impulse_joints;
+            self.world.multibody_joints = state.multibody_joints;
+            self.world.soft_bodies = state.soft_bodies;
+            self.restore_tables_and_components(take);
+            return;
+        }
         let state: PhysicsWorld = bincode::deserialize(&take.image).expect("the library reads its own image");
         self.world.gravity = state.gravity;
         self.world.integration_parameters = state.integration_parameters;
@@ -485,6 +555,8 @@ fn fit(buffer: &mut Vec<u8>, size: usize) {
 
 #[derive(Default)]
 pub struct Take {
+    /// The world as a copy of its state types, when the take has that form.
+    pub copy: Option<Box<WorldCopy>>,
     pub image: Vec<u8>,
     pub tables: Vec<u8>,
     pub canonical: Vec<u8>,

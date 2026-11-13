@@ -11,10 +11,13 @@ use crate::scenes::{
     INPUT_SEED, LibraryScene, SCENE_SEED, SceneKind, build_library_scene, build_motion_walls, build_scene,
     ceil_cube_root, churn_tick,
 };
-use crate::sim::{FIXED_STEP_MS, Pool, Random, Ring, Sim, Take, milliseconds};
+use crate::sim::{FIXED_STEP_MS, Pool, Random, Ring, Sim, Take, TakeForm, milliseconds};
 
 pub struct Config {
     pub quick: bool,
+    /// The form of the takes of a take after every tick, of a correction and
+    /// of the continuation.
+    pub form: TakeForm,
     pub ladder: Vec<usize>,
     pub claim_bodies: usize,
     pub warmup_ticks: usize,
@@ -33,6 +36,7 @@ impl Config {
     pub fn full() -> Config {
         Config {
             quick: false,
+            form: TakeForm::Image,
             ladder: vec![100, 300, 1_000, 3_000, 10_000],
             claim_bodies: 1_000,
             warmup_ticks: 60,
@@ -51,6 +55,7 @@ impl Config {
     pub fn quick() -> Config {
         Config {
             quick: true,
+            form: TakeForm::Image,
             ladder: vec![100, 300],
             claim_bodies: 300,
             warmup_ticks: 30,
@@ -111,6 +116,7 @@ pub struct ForwardResult {
 
 pub fn run_forward(config: &Config, scene: SceneKind, bodies: usize, pool: &Pool) -> ForwardResult {
     let mut sim = build_scene(scene, bodies, pool, false, true);
+    sim.form = config.form;
     let mut ring = Ring::new(10, 1);
     for tick in 1..=config.warmup_ticks {
         sim.tick(tick, false);
@@ -229,6 +235,7 @@ pub fn run_corrections(
     let taken = |tick: usize, single: usize| if form.confirmed_alone { tick == single } else { tick % cadence == 0 };
 
     let mut sim = build_scene(scene, bodies, pool, false, true);
+    sim.form = config.form;
     let mut ring = Ring::new(slots, cadence);
     let mut now = config.warmup_ticks;
     for tick in 1..=now {
@@ -344,6 +351,7 @@ pub fn run_continuation(config: &Config, scene: &LibraryScene, pool: &Pool) -> C
     drop(uninterrupted);
 
     let mut sim = build_library_scene(scene, pool);
+    sim.form = config.form;
     let mut ring = Ring::new(10, 1);
     let mut random = Random::new(SCENE_SEED ^ 0x636f_6e74_696e_7565);
     let mut result = ContinuationResult {

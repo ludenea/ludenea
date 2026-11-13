@@ -23,13 +23,13 @@ use std::process::{Command, Stdio};
 use reference_workload::{Json, write_platform_and_build};
 
 use experiments::{
-    CORRECTION_FORMS, Config, CorrectionResult, ForwardResult, Summary, WriteBackResult, run_asleep, run_churn,
+    CORRECTION_FORMS, Config, ContinuationResult, CorrectionResult, ForwardResult, Summary, WriteBackResult, run_asleep, run_churn,
     run_continuation, run_corrections, run_forward, run_write_back,
 };
 use scenes::{LIBRARY_SCENES, SCENE_KINDS};
-use sim::{FIXED_STEP_MS, IMPULSES_PER_TICK, make_pool};
+use sim::{FIXED_STEP_MS, IMPULSES_PER_TICK, TakeForm, make_pool};
 
-const SCHEMA_VERSION: u64 = 1;
+const SCHEMA_VERSION: u64 = 2;
 const SPIKE: &str = "physics-snapshot-every-tick";
 const BOX2D_PROGRAM: &str = "physics-snapshot-every-tick-box2d";
 
@@ -97,6 +97,25 @@ fn write_correction(out: &mut Json, r: &CorrectionResult) {
         Some(equal) => out.bool("final_hash_equals_the_uninterrupted_world", equal),
         None => out.raw("final_hash_equals_the_uninterrupted_world", "null"),
     }
+    out.object_end();
+}
+
+fn write_continuation(out: &mut Json, r: &ContinuationResult) {
+    out.object_start();
+    out.string("scene", r.scene);
+    out.u64("bodies", r.bodies as u64);
+    out.u64("workers", r.workers as u64);
+    out.u64("frames", r.frames as u64);
+    out.u64("corrections_with_the_same_inputs", r.same_inputs_again as u64);
+    out.u64("corrections_with_an_amended_input", r.amended as u64);
+    out.u64("mispredicted_ticks", r.mispredicted_ticks as u64);
+    out.u64("mispredicted_ticks_that_differed", r.mispredicted_ticks_that_differed as u64);
+    out.u64("ticks_compared", r.ticks_compared as u64);
+    out.i64("first_differing_tick", r.first_differing_tick);
+    out.hex("final_hash", r.final_hash);
+    out.hex("uninterrupted_final_hash", r.uninterrupted_final_hash);
+    out.u64("image_bytes", r.image_bytes as u64);
+    out.raw("wall_seconds", &format!("{:.1}", r.wall_seconds));
     out.object_end();
 }
 
@@ -208,26 +227,58 @@ fn rapier_report(cell: &str, config: &Config, only: Option<&str>) -> String {
                     "rapier continuation {} {} bodies {} workers: first differing tick {}, {:.1} s",
                     r.scene, r.bodies, r.workers, r.first_differing_tick, r.wall_seconds
                 );
-                out.object_start();
-                out.string("scene", r.scene);
-                out.u64("bodies", r.bodies as u64);
-                out.u64("workers", r.workers as u64);
-                out.u64("frames", r.frames as u64);
-                out.u64("corrections_with_the_same_inputs", r.same_inputs_again as u64);
-                out.u64("corrections_with_an_amended_input", r.amended as u64);
-                out.u64("mispredicted_ticks", r.mispredicted_ticks as u64);
-                out.u64("mispredicted_ticks_that_differed", r.mispredicted_ticks_that_differed as u64);
-                out.u64("ticks_compared", r.ticks_compared as u64);
-                out.i64("first_differing_tick", r.first_differing_tick);
-                out.hex("final_hash", r.final_hash);
-                out.hex("uninterrupted_final_hash", r.uninterrupted_final_hash);
-                out.u64("image_bytes", r.image_bytes as u64);
-                out.raw("wall_seconds", &format!("{:.1}", r.wall_seconds));
-                out.object_end();
+                write_continuation(&mut out, &r);
             }
         }
     }
     out.array_end();
+
+    // The variant asked on 2026-11-13: the library's world taken as a copy
+    // of its state types and restored by copying it back, at the body count
+    // of the claims, with the three experiments a rollback rests on.
+    out.key("takes_as_a_copy");
+    out.object_start();
+    out.bool("ran", wanted("copy"));
+    out.string("what", "the world taken as a copy of its state types (the sets of bodies, colliders and joints, the island manager, the two phases, the parameters) in place of the serializer's image, restored by copying it back into the world, whose pipelines are kept");
+    let mut copy = if config.quick { Config::quick() } else { Config::full() };
+    copy.form = TakeForm::Copy;
+    out.key("takes_after_every_tick");
+    out.array_start();
+    if wanted("copy") {
+        for scene in SCENE_KINDS {
+            for pool in &pools {
+                let r = run_forward(&copy, scene, copy.claim_bodies, pool);
+                eprintln!("rapier takes as a copy {} {} bodies {} workers: step {:.3} ms, take {:.3} ms (p99 {:.3})", scene.name(), r.bodies, r.workers, r.step.median, r.take.median, r.take.p99);
+                write_forward(&mut out, &r);
+            }
+        }
+    }
+    out.array_end();
+    out.key("corrections");
+    out.array_start();
+    if wanted("copy") {
+        for scene in SCENE_KINDS {
+            for form in CORRECTION_FORMS.iter().filter(|form| form.depth == 8 && form.cadence == 1) {
+                let r = run_corrections(&copy, scene, copy.claim_bodies, &pools[1], form);
+                eprintln!("rapier corrections as a copy {} {} bodies, takes {}: frame {:.3} ms (p99 {:.3}), restore {:.3} ms", scene.name(), r.bodies, form.name, r.frame.median, r.frame.p99, r.restore.median);
+                write_correction(&mut out, &r);
+            }
+        }
+    }
+    out.array_end();
+    out.key("continuation");
+    out.array_start();
+    if wanted("copy") {
+        for scene in &LIBRARY_SCENES {
+            for pool in &pools {
+                let r = run_continuation(&copy, scene, pool);
+                eprintln!("rapier continuation as a copy {} {} bodies {} workers: first differing tick {}, {:.1} s", r.scene, r.bodies, r.workers, r.first_differing_tick, r.wall_seconds);
+                write_continuation(&mut out, &r);
+            }
+        }
+    }
+    out.array_end();
+    out.object_end();
 
     if wanted("churn") {
         let r = run_churn(config, &pools[1]);
@@ -445,11 +496,40 @@ mod tests {
     }
 
     #[test]
+    fn a_world_restored_from_a_copy_and_stepped_again_is_the_world_never_restored() {
+        let pool = make_pool(1);
+        for scene in SCENE_KINDS {
+            let mut a = build_scene(scene, 120, &pool, false, true);
+            a.form = TakeForm::Copy;
+            let mut take = Take::default();
+            let mut at_take = 0;
+            for tick in 1..=30 {
+                a.tick(tick, false);
+                if tick == 20 {
+                    a.take(&mut take, tick);
+                    at_take = a.hash();
+                }
+            }
+            assert!(take.copy.is_some() && take.image.is_empty(), "{}: the take is a copy", scene.name());
+            let at_end = a.hash();
+            // The copy serves two corrections: a restore leaves it whole.
+            for _ in 0..2 {
+                a.restore(&take);
+                assert_eq!(a.hash(), at_take, "{}: the restored components", scene.name());
+                for tick in 21..=30 {
+                    a.tick(tick, false);
+                }
+                assert_eq!(a.hash(), at_end, "{}: restored from a copy and stepped again", scene.name());
+            }
+        }
+    }
+
+    #[test]
     fn a_quick_report_is_json_with_every_section() {
         let config = Config::quick();
         let report = rapier_report("test", &config, Some("asleep"));
         assert!(report.starts_with('{') && report.ends_with('}'));
-        for key in ["takes_after_every_tick", "corrections", "continuation", "churn", "asleep", "write_back"] {
+        for key in ["takes_after_every_tick", "corrections", "continuation", "takes_as_a_copy", "churn", "asleep", "write_back"] {
             assert!(report.contains(&format!("\"{key}\"")), "{key} is missing");
         }
     }

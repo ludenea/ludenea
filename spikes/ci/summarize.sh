@@ -1774,6 +1774,26 @@ case "$spike" in
         .cell as $cell | libraries[] | .library as $library | .write_back[]
         | "| \($cell) | \($library) | \(.scene) | \(.workers) | \(.identical_before_the_correction) | \(.first_differing_tick_of_the_eight) | \(.largest_error_over_body_size) | \(.largest_error_distance) | \(.first_tick_the_hashes_part) | \(.tick_they_meet_again) | \(.equal_at_the_end) | \(.highest_body_uninterrupted) | \(.highest_body_corrected) |"' "$file"
     done
+    echo
+    echo "Rapier's world taken as a copy of its state types, beside the serializer's image, at the claims' body count (the variant measured on 2026-11-13; milliseconds):"
+    echo
+    echo "| Cell | Scene | Workers | Take of the world: image, median | Take of the world: copy, median | Whole take: image, median and 99th percentile | Whole take: copy, median and 99th percentile |"
+    echo "| --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | select(.rapier.takes_as_a_copy.ran) | .rapier as $r | $r.settings.bodies_of_the_claims as $n | $r.takes_as_a_copy.takes_after_every_tick[] | . as $copy | ($r.takes_after_every_tick[] | select(.scene == $copy.scene and .bodies == $n and .workers == $copy.workers)) as $image | "| \($cell) | \($copy.scene) | \($copy.workers) | \($image.take_image_ms_median) | \($copy.take_image_ms_median) | \($image.take_ms_median), \($image.take_ms_p99) | \($copy.take_ms_median), \($copy.take_ms_p99) |"' "$file"
+    done
+    echo
+    echo "| Cell | Scene | Takes | Restore: image, median | Restore: copy, median | Frame of a correction of eight ticks: image, median and 99th percentile | Frame: copy, median and 99th percentile | Fits one fixed step: image, copy | Final hash equals the uninterrupted world's: image, copy |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | select(.rapier.takes_as_a_copy.ran) | .rapier as $r | $r.settings.bodies_of_the_claims as $n | $r.takes_as_a_copy.corrections[] | . as $copy | ($r.corrections[] | select(.scene == $copy.scene and .bodies == $n and .takes == $copy.takes and .depth == $copy.depth and .cadence == $copy.cadence)) as $image | "| \($cell) | \($copy.scene) | \($copy.takes) | \($image.restore_ms_median) | \($copy.restore_ms_median) | \($image.frame_ms_median), \($image.frame_ms_p99)\(if $image.settled_before_the_end then " (settled)" else "" end) | \($copy.frame_ms_median), \($copy.frame_ms_p99)\(if $copy.settled_before_the_end then " (settled)" else "" end) | \($image.fits_one_fixed_step), \($copy.fits_one_fixed_step) | \($image.final_hash_equals_the_uninterrupted_world | if . == null then "not checked" else . end), \($copy.final_hash_equals_the_uninterrupted_world | if . == null then "not checked" else . end) |"' "$file"
+    done
+    echo
+    echo "| Cell | Scene | Bodies | Workers | First differing tick with copies (-1: none) | Final hash with copies | Final hash with images | Uninterrupted world |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | select(.rapier.takes_as_a_copy.ran) | .rapier as $r | $r.takes_as_a_copy.continuation[] | . as $copy | ($r.continuation[] | select(.scene == $copy.scene and .workers == $copy.workers)) as $image | "| \($cell) | \($copy.scene) | \($copy.bodies) | \($copy.workers) | \($copy.first_differing_tick) | \($copy.final_hash) | \($image.final_hash) | \($copy.uninterrupted_final_hash) |"' "$file"
+    done
     ;;
   physics-prepared-geometry)
     # The kinds of the two libraries as one list (a cell whose Box2D half did
