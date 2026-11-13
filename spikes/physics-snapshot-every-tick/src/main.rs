@@ -258,10 +258,14 @@ fn rapier_report(cell: &str, config: &Config, only: Option<&str>) -> String {
     out.array_start();
     if wanted("copy") {
         for scene in SCENE_KINDS {
-            for form in CORRECTION_FORMS.iter().filter(|form| form.depth == 8 && form.cadence == 1) {
-                let r = run_corrections(&copy, scene, copy.claim_bodies, &pools[1], form);
-                eprintln!("rapier corrections as a copy {} {} bodies, takes {}: frame {:.3} ms (p99 {:.3}), restore {:.3} ms", scene.name(), r.bodies, form.name, r.frame.median, r.frame.p99, r.restore.median);
-                write_correction(&mut out, &r);
+            // From the body count of the claims upward: the largest count a
+            // correction fits at is what a decision on rollback is sized on.
+            for &bodies in copy.ladder.iter().filter(|&&bodies| bodies >= copy.claim_bodies) {
+                for form in CORRECTION_FORMS.iter().filter(|form| form.depth == 8 && form.cadence == 1) {
+                    let r = run_corrections(&copy, scene, bodies, &pools[1], form);
+                    eprintln!("rapier corrections as a copy {} {} bodies, takes {}: frame {:.3} ms (p99 {:.3}), restore {:.3} ms", scene.name(), r.bodies, form.name, r.frame.median, r.frame.p99, r.restore.median);
+                    write_correction(&mut out, &r);
+                }
             }
         }
     }
