@@ -240,7 +240,7 @@ Neither library returns to a loop the host owns. winit and SDL3's polling each o
 
 ### On a Mac with a display
 
-Measured on 2026-11-13, once in full (22 minutes), on the founder's Apple M5: a MacBook Pro with 4 performance and 6 efficiency cores, macOS 26.5, on mains, its built-in display at 120 hertz with a variable refresh. The gestures are made by calls, with nobody at the window. **The machine was not at rest**: other applications ran, and 18 to 47 percent of its processors were busy in 45 samples taken every thirty seconds. The counts and the places of the waits do not depend on that; the pace does, and is a first pass.
+Measured on 2026-11-13, once in full (22 minutes), on the founder's Apple M5: a MacBook Pro with 4 performance and 6 efficiency cores, macOS 26.5, on mains, its built-in display at 120 hertz with a variable refresh. The gestures are made by calls, with nobody at the window. **The machine was not at rest**: other applications ran, and 18 to 47 percent of its processors were busy in 45 samples taken every thirty seconds. The counts and the places of the waits do not depend on that; the pace does, and was measured again alone, the other applications closed.
 
 - **A presentation thread through the gestures: holds.** 20 runs of 20 complete with no deadlock and no error: 8 of ten thousand frames through a resize and a minimization (two libraries, Metal natively and through wgpu, windowed and borderless), 4 of ten thousand with the presenter inside the platform thread's loop, 6 of 1 200 frames in the synchronized mode, and 2 of ten thousand frames in that mode (83 and 85 seconds). The layer is given to the view, and wgpu's surface is made, on the main thread; the device, the queue and every frame are the presentation thread's.
 - **In the synchronized mode the acquisition of the layer's drawable waits**, natively and through wgpu (7.6 to 8.0 milliseconds at the median), and the offscreen stream is served one frame per refresh: a period of 8 303 to 8 332 microseconds at the median, for a refresh of 8 333. With the presenter inside winit's loop the acquisition takes 6 microseconds, and the loop itself turns once per refresh.
@@ -252,21 +252,23 @@ Measured on 2026-11-13, once in full (22 minutes), on the founder's Apple M5: a 
 - **The "latest" mode is not offered**: a Metal layer presents in step with the display or not, and wgpu lists the first in first out and the immediate modes.
 - The imports are the macOS cell's.
 
-**The pace, a first pass that decides nothing.** The 99th percentile of the lateness of the ticks, in microseconds, three rounds of twenty seconds, natively on Metal with winit, the window shown:
+**The pace: holds beside a presentation thread; a loop that presents itself shows little at 120 hertz.** Measured twice, natively on Metal with winit, the window shown: in the full run, while other applications kept 26 to 40 percent of the processors busy, and again alone with them closed (15 to 19 percent busy in 18 samples, the measurement and its sampler included). The 99th percentile of the lateness of the ticks, in microseconds, the three rounds of twenty seconds in their order:
 
-| Loop | Round 1 | Round 2 | Round 3 |
-| --- | --- | --- | --- |
-| Control, presenting nothing | 3 978 | 7 169 | 7 628 |
-| Beside a presentation thread | 4 005 | 7 555 | 7 152 |
-| Presenting itself, from an empty queue | 4 102 | 7 696 | 6 955 |
-| Presenting itself, the queue full | 8 062 | 8 125 | 8 145 |
+| Loop | Machine at rest | Other applications running |
+| --- | --- | --- |
+| Control, presenting nothing | 3 835, 3 944, 3 852 | 3 978, 7 169, 7 628 |
+| Beside a presentation thread | 4 036, 3 795, 3 580 | 4 005, 7 555, 7 152 |
+| Presenting itself, from an empty queue | 4 000, 3 900, 3 959 | 4 102, 7 696, 6 955 |
+| Presenting itself, the queue filled first | 3 955, 3 940, 3 966 | 8 062, 8 125, 8 145 |
 
-- **The control itself is late by 3.3 to 5.5 milliseconds at the median.** The loop sleeps until a tick's due instant, and on this machine as it was the sleep returns that late, where the control of the Windows machine is late by about half a millisecond at the 99th percentile. Whether the lateness is the system's timers or the load of the other applications is not known.
-- Beside a presentation thread, and presenting itself from an empty queue, the loop stays within the control's interval. With the queue full it is late by 8.1 milliseconds at the 99th percentile, one refresh at 120 hertz being 8.3. The gain of a presentation thread there (1.0 millisecond) is smaller than the control's spread (3.7 milliseconds), so the hypothesis is neither confirmed nor refuted on this machine: a run at rest is owed.
+- **The control is late by 3.3 milliseconds at the median, at rest as under load**: 3 319 to 3 324 microseconds in the three rounds at rest. The loop sleeps until a tick's due instant, and on this Mac the sleep returns that late, where the control of the Windows machine is late by about half a millisecond at the 99th percentile. The load is not the cause. What in the system is (its coalescing of timers, the class of service of a process started from a shell) was not sought.
+- **Beside a presentation thread the loop keeps the control's lateness**: 3 795 at the median of its rounds, not beyond the control's interval (3 835 to 3 944).
+- **A loop that presents itself is late by 15 microseconds more than the control's latest round** (3 959 from an empty queue, 3 955 with the queue filled first), and the gain of a presentation thread, 160 microseconds, is larger than the control's spread of 109: by the definitions stated before the run, the reason for a presentation thread stands. The distances are small beside the spread of the rounds of the loop beside a presentation thread, 456 microseconds.
+- **The 12 milliseconds a full queue costs on Windows have no counterpart here, and this measurement cannot show one**: the display refreshes 120 times a second and the loop makes 63 frames a second, so a queue filled first drains. Under load the same loop was late by 8.1 milliseconds, one refresh. A display held at 60 hertz is the like for like case, and was not run.
 
 ### Not measured
 
-- **Linux under a real compositor**: no such machine is named. On macOS with a display the pace was taken once, on a machine that was not at rest, and its hypothesis stays open there; the presentation times against the display's refresh are not read, Metal's handler not being registered.
+- **Linux under a real compositor**: no such machine is named. On macOS with a display the pace is not measured in front of a display at 60 hertz, where a queue of frames can stay full, nor is the cause of the lateness of a sleep sought; the presentation times against the display's refresh are not read, Metal's handler not being registered.
 - **Whether a real Wayland compositor answers the frame callback of a window it shows**, which decides whether the stall of the synchronized mode is the headless compositor's or any compositor's for a window it does not show.
 - **Gestures made by a person**: every gesture was injected or made by a call. On the Linux cells a move, a minimization and an occlusion were not run, and on the macOS cell a move and an occlusion.
 - **Injected input and the time of an event on Linux and on macOS.**
