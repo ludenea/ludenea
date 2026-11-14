@@ -320,11 +320,10 @@ fn what_the_scripted_system_does_is_no_element_of_a_record_and_a_replay_runs_it_
     let a = parts.part(1, &[]);
     let parts = Arc::new(parts);
     let entity = Owner::Entity { slot: 0, generation: 0 };
+    let holder = Holder::Entity { slot: 0, generation: 0 };
     let system = |config: &mut WorldConfig| {
-        config.system = vec![
-            (2, Command::Want { asset: A, asset_type: PARAMETERS, owner: entity, policy: Policy::Required }),
-            (5, Command::Release { asset: A, owner: entity }),
-        ];
+        let does = vec![(2, Act::Want { asset: A, asset_type: PARAMETERS, holder, policy: Policy::Required }), (5, Act::Release { asset: A, holder })];
+        config.systems = vec![System { name: SystemName::new("prototype/scripted"), contributor: 9, does }];
     };
     let mut links = Links::new(parts.clone());
     let queue = links.queue.clone();
@@ -362,4 +361,94 @@ fn what_the_scripted_system_does_is_no_element_of_a_record_and_a_replay_runs_it_
     let mut by_command = World::new(config(&[PARAMETERS]), script, Links::new(parts));
     assert!(!step(&mut by_command, 7).gated);
     assert_eq!(by_command.state_hashes(), world.state_hashes());
+}
+
+#[test]
+fn each_system_is_the_maker_of_the_want_it_makes_and_two_systems_of_one_contributor_hold_two_wants() {
+    let mut parts = Parts::default();
+    let a = parts.part(1, &[]);
+    let parts = Arc::new(parts);
+    let (spawner, cleaner) = (SystemName::new("logic/spawner"), SystemName::new("logic/cleaner"));
+    let composition = Owner::World(Maker::Contributor(7));
+    let wants = |policy: Policy| Act::Want { asset: A, asset_type: PARAMETERS, holder: Holder::World, policy };
+    // Two systems brought by the contributor whose composition wants `A`:
+    // both want it at tick 1, and the first releases its want at tick 4.
+    let systems = vec![
+        System { name: spawner, contributor: 7, does: vec![(1, wants(Policy::Optional)), (4, Act::Release { asset: A, holder: Holder::World })] },
+        System { name: cleaner, contributor: 7, does: vec![(1, wants(Policy::Required))] },
+    ];
+    let configured = |rules: Rules| {
+        let mut world_config = config(&[PARAMETERS]).wanting(7, &[(A, PARAMETERS, Policy::Optional)]);
+        world_config.systems = systems.clone();
+        world_config.rules = rules;
+        world_config
+    };
+    let run = |rules: Rules| {
+        let links = Links::new(parts.clone());
+        let queue = links.queue.clone();
+        let mut world = World::new(configured(rules), Vec::new(), links);
+        queue.post(&[Arrival::at(A, a).sized(64)]);
+        assert!(!step(&mut world, 2).gated);
+        let after_the_wants = world.entry(A).map(|(_, wants)| wants);
+        assert!(!step(&mut world, 3).gated);
+        (world, after_the_wants)
+    };
+    let (world, after_the_wants) = run(Rules::default());
+    let by = |name: SystemName| Owner::World(Maker::System(name));
+    // The composition's want is left as it was, and each system holds its
+    // own, between the contributor's and a command source's, by its name.
+    assert_eq!(after_the_wants, Some(vec![(composition, Policy::Optional), (by(cleaner), Policy::Required), (by(spawner), Policy::Optional)]));
+    assert_eq!(world.entry(A), Some((Availability::Available(a), vec![(composition, Policy::Optional), (by(cleaner), Policy::Required)])), "the release of one leaves the other");
+    assert_eq!(world.size(A), Some(64), "the entry holds the size its arrival named");
+    assert!(world.log().iter().all(|record| record.commands.is_empty()), "what a system does stands in no input record");
+    // A save holds the stable name of a system and the size of an entry.
+    let confirm = |_: AssetId, hash: u64| parts.get(hash).ok_or_else(|| "the part cannot be had".to_string());
+    let request = Restore::Continue { confirm: &confirm, dropped: &[] };
+    let restored = World::restore(configured(Rules::default()), &world.save(), Vec::new(), Links::new(parts.clone()), request).expect("the restore is admitted");
+    assert_eq!(restored.typed_table_bytes(), world.typed_table_bytes());
+    assert_eq!((restored.size(A), restored.entry(A)), (Some(64), world.entry(A)));
+    // Not taken: the wants are made under the contributor that brings the
+    // systems. The two systems and the composition share one want, whose
+    // policy the last to act decides and which the release of one ends.
+    let (world, after_the_wants) = run(Rules { system_wants_under_their_contributor: true, ..Rules::default() });
+    assert_eq!(after_the_wants, Some(vec![(composition, Policy::Required)]));
+    assert_eq!(world.entry(A), None, "the one want released at tick 4, the asset fell at tick 5");
+    // The other reading of the order among systems: by their stable names,
+    // the cleaner first. Under one maker the last to act decides the policy.
+    let by_name = Rules { system_wants_under_their_contributor: true, systems_applied_in_name_order: true, ..Rules::default() };
+    assert_eq!(run(by_name).1, Some(vec![(composition, Policy::Optional)]));
+    assert_eq!(run(Rules { systems_applied_in_name_order: true, ..Rules::default() }).1, run(Rules::default()).1, "where each system is its own maker the order does not reach the table here");
+}
+
+#[test]
+fn the_state_is_extracted_at_the_end_of_every_tick_in_which_the_table_changed() {
+    let mut parts = Parts::default();
+    let a = parts.part(1, &[]);
+    let parts = Arc::new(parts);
+    let entity = Owner::Entity { slot: 0, generation: 0 };
+    // Under the reading in which a despawn of a record ends its entity's
+    // wants at the structural change fixed point, the table changes there
+    // and nowhere else at tick 2.
+    let run = |rules: Rules| {
+        let mut first = Record::arrivals(1, vec![Arrival::at(A, a)]);
+        first.commands = vec![Command::Want { asset: A, asset_type: PARAMETERS, owner: entity, policy: Policy::Optional }];
+        let script = vec![first, Record::commands(2, vec![Command::Despawn { slot: 0, generation: 0 }])];
+        let mut links = Links::new(parts.clone());
+        let extracted = Arc::new(Mutex::new(Vec::new()));
+        let sink = extracted.clone();
+        links.extract = Some(Arc::new(move |extraction: Extraction| sink.lock().expect("never poisoned").push(extraction)));
+        let mut world_config = config(&[PARAMETERS]);
+        world_config.rules = Rules { despawn_ends_wants_at_the_structural_point: true, ..rules };
+        let mut world = World::new(world_config, script, links);
+        assert!(!step(&mut world, 4).gated);
+        assert_eq!(world.entry(A), None, "the asset fell at tick 3");
+        let extracted = extracted.lock().expect("never poisoned");
+        extracted.iter().map(|extraction| (extraction.tick, extraction.entries.iter().map(|entry| (entry.asset, entry.wanted)).collect::<Vec<_>>())).collect::<Vec<_>>()
+    };
+    // The availability source reads, at the end of tick 2, that no want
+    // names the asset any more: its view is never older than the last tick.
+    assert_eq!(run(Rules::default()), vec![(1, vec![(A, true)]), (2, vec![(A, false)]), (3, Vec::new())]);
+    // The build as it stood: nothing leaves at tick 2, the record having
+    // changed nothing at its input fixed point.
+    assert_eq!(run(Rules { extracted_at_the_input_fixed_point: true, ..Rules::default() }), vec![(1, vec![(A, true)]), (3, Vec::new())]);
 }

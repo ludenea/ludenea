@@ -132,20 +132,20 @@ impl Catalog {
     /// The closure of root A at version 1, as arrivals: the root, its group, the leaves 0 to 3.
     pub fn closure_a(&self) -> Vec<Arrival> {
         let mut arrivals = vec![
-            Arrival::at(self.root_a, fnv1a(&self.root_part(self.group_a))),
-            Arrival::at(self.group_a, fnv1a(&self.group_a_part())),
+            arrival(self.root_a, &self.root_part(self.group_a)),
+            arrival(self.group_a, &self.group_a_part()),
         ];
-        arrivals.extend((0..4).map(|leaf| Arrival::at(self.leaf[leaf], Catalog::leaf_hash(1, leaf))));
+        arrivals.extend((0..4).map(|leaf| arrival(self.leaf[leaf], &Catalog::leaf_part(1, leaf))));
         arrivals
     }
 
     /// The closure of root B at version 1: the root, its group, the leaves 5 to 7.
     pub fn closure_b(&self) -> Vec<Arrival> {
         let mut arrivals = vec![
-            Arrival::at(self.root_b, fnv1a(&self.root_part(self.group_b))),
-            Arrival::at(self.group_b, fnv1a(&self.group_b_part())),
+            arrival(self.root_b, &self.root_part(self.group_b)),
+            arrival(self.group_b, &self.group_b_part()),
         ];
-        arrivals.extend((5..8).map(|leaf| Arrival::at(self.leaf[leaf], Catalog::leaf_hash(1, leaf))));
+        arrivals.extend((5..8).map(|leaf| arrival(self.leaf[leaf], &Catalog::leaf_part(1, leaf))));
         arrivals
     }
 
@@ -241,6 +241,22 @@ impl Manifest {
     }
 }
 
+/// A scripted arrival of an asset at a part: to the hash of the part, naming
+/// the size the manifest would give, the length of the part.
+pub fn arrival(asset: AssetId, part: &[u8]) -> Arrival {
+    Arrival::at(asset, fnv1a(part)).sized(part.len() as u64)
+}
+
+/// The arrival of an asset from the outcome of its load. An arrival to a hash
+/// names the size of what it puts in force: the length of its canonical
+/// part, the manifest of this copy of the spike's loader holding no size.
+fn loaded(store: &ResidentStore, asset: AssetId, outcome: Outcome) -> Arrival {
+    match outcome {
+        Outcome::Hash(hash) => Arrival::at(asset, hash).sized(store.get(hash).map_or(0, |resident| resident.bytes.len() as u64)),
+        Outcome::Failure(code) => Arrival::failed(asset, code),
+    }
+}
+
 /// The real delay a load takes.
 #[derive(Clone, Copy, Debug)]
 pub enum Delay {
@@ -322,7 +338,7 @@ impl Loader {
                         }
                         let started = Instant::now();
                         thread::sleep(delay.draw());
-                        let load = |id: &AssetId| manifest.load(&store, *id, &reads_in).map(|outcome| Arrival { asset: *id, outcome, marked: false, root: None });
+                        let load = |id: &AssetId| manifest.load(&store, *id, &reads_in).map(|outcome| loaded(&store, *id, outcome));
                         let batch: Vec<Arrival> = closure.iter().filter_map(load).collect();
                         queue.post(&batch);
                         report.batches += 1;
@@ -331,7 +347,7 @@ impl Loader {
                     Request::Restore(held) => {
                         let started = Instant::now();
                         thread::sleep(delay.draw());
-                        let answer = |(id, _): &(AssetId, u64)| manifest.load(&store, *id, &reads_in).map(|outcome| Arrival { asset: *id, outcome, marked: true, root: None });
+                        let answer = |(id, _): &(AssetId, u64)| manifest.load(&store, *id, &reads_in).map(|outcome| loaded(&store, *id, outcome).marked());
                         let batch: Vec<Arrival> = held.iter().filter_map(answer).collect();
                         queue.post(&batch);
                         report.batches += 1;
@@ -348,9 +364,8 @@ impl Loader {
                         let mut batch = Vec::new();
                         for (offset, id, bytes) in landings {
                             thread::sleep(offset.saturating_sub(started.elapsed()));
-                            let hash = fnv1a(&bytes);
-                            store.insert(hash, bytes).expect("a valid part");
-                            batch.push(Arrival::at(id, hash));
+                            batch.push(arrival(id, &bytes));
+                            store.insert(fnv1a(&bytes), bytes).expect("a valid part");
                             report.landing.push((id, started.elapsed().as_secs_f64() * 1_000.0));
                             landed_in.fetch_add(1, Ordering::SeqCst);
                         }

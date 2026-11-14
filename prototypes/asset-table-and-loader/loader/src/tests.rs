@@ -54,7 +54,7 @@ impl Loose {
         for (asset, asset_type, version, dependencies) in contents {
             let bytes = part(*version, dependencies);
             let listed = dependencies.iter().map(|(dependency, listed)| (*dependency, listed.stable_name().to_string())).collect();
-            let entry = DomainEntry { asset_type: asset_type.stable_name().to_string(), hash: self.put(&bytes), size: bytes.len() as u64, dependencies: listed };
+            let entry = DomainEntry { asset_type: asset_type.stable_name().to_string(), hash: self.put(&bytes), size: bytes.len() as u64, dependencies: listed, forms: Vec::new() };
             domain.insert(*asset, entry);
         }
         self.place(&domain);
@@ -86,6 +86,12 @@ fn hash_of(version: u32, dependencies: &[Dependency]) -> u64 {
     content_hash(&part(version, dependencies))
 }
 
+/// The arrival of an asset as a manifest gives it: at the hash it names, with
+/// the size it gives, which is what an arrival names.
+fn of(domain: &Domain, asset: AssetId) -> Arrival {
+    Arrival::at(asset, domain[&asset].hash).sized(domain[&asset].size)
+}
+
 fn held(asset: AssetId, asset_type: AssetType, availability: Availability, wanted: bool) -> EntryView {
     EntryView { asset, asset_type, availability, wanted }
 }
@@ -99,7 +105,7 @@ struct Attached {
 impl Attached {
     fn new(loader: &Loader, set: Option<u64>, entries: &[EntryView], unanswered: &[(AssetId, AssetType)], restore: &[AssetId]) -> Attached {
         let queue = Arc::new(ArrivalQueue::default());
-        let attachment = Attachment { queue: queue.clone(), set, entries: entries.to_vec(), unanswered: unanswered.to_vec(), restore: restore.to_vec() };
+        let attachment = Attachment { queue: queue.clone(), set, entries: entries.to_vec(), unanswered: unanswered.to_vec(), restore: restore.to_vec(), standing: Vec::new() };
         Attached { extract: loader.attach(attachment).expect("the world is attached"), queue }
     }
 
@@ -127,7 +133,7 @@ fn a_want_that_leaves_is_answered_by_its_closure_without_what_the_table_holds_av
     assert!(world.posted(&loader).is_empty(), "a table that asks nothing is posted nothing");
     let table = [held(D, PARAMETERS, Availability::Available(domain[&D].hash), true), held(P, PARAMETERS, Availability::Unavailable, true)];
     world.extract(&[(P, PARAMETERS)], &table, false);
-    assert_eq!(world.posted(&loader), vec![Arrival::at(E, domain[&E].hash), Arrival::at(P, domain[&P].hash)], "one complete batch, the asset in force left out");
+    assert_eq!(world.posted(&loader), vec![of(&domain, E), of(&domain, P)], "one complete batch, the asset in force left out");
     // A table that extracts no want that leaves is posted nothing.
     world.extract(&[], &table, false);
     assert!(world.posted(&loader).is_empty());
@@ -136,7 +142,7 @@ fn a_want_that_leaves_is_answered_by_its_closure_without_what_the_table_holds_av
     let every = Loader::start(&store.directory, Options { every_want_answered: true, ..Options::default() }).expect("the capability starts");
     let world = Attached::new(&every, None, &[], &[], &[]);
     world.extract(&[(D, PARAMETERS)], &table, false);
-    assert_eq!(world.posted(&every), vec![Arrival::at(D, domain[&D].hash)]);
+    assert_eq!(world.posted(&every), vec![of(&domain, D)]);
 }
 
 #[test]
@@ -149,15 +155,15 @@ fn an_asset_the_manifest_holds_under_another_type_than_its_entry_fails_for_that_
     // A want leaves with the type its entry holds: once the entry has taken
     // the manifest's type, the same asset loads.
     world.extract(&[(A, PARAMETERS)], &[held(A, PARAMETERS, Availability::Unavailable, true)], false);
-    assert_eq!(world.posted(&loader), vec![Arrival::at(A, domain[&A].hash)]);
+    assert_eq!(world.posted(&loader), vec![of(&domain, A)]);
     // An asset of a closure is checked against the entry the table holds for it.
     let table = [held(D, PARAMETERS, Availability::Unavailable, true), held(P, PARAMETERS, Availability::Unavailable, true)];
     world.extract(&[(P, PARAMETERS)], &table, false);
-    assert_eq!(world.posted(&loader), vec![Arrival::failed(D, REASON_ANOTHER_TYPE), Arrival::at(P, domain[&P].hash)]);
+    assert_eq!(world.posted(&loader), vec![Arrival::failed(D, REASON_ANOTHER_TYPE), of(&domain, P)]);
     // The control: no type is checked.
     let unchecked = Loader::start(&store.directory, Options { types_not_checked: true, ..Options::default() }).expect("the capability starts");
     let world = Attached::new(&unchecked, None, &[], &[(A, SECOND)], &[]);
-    assert_eq!(world.posted(&unchecked), vec![Arrival::at(A, domain[&A].hash)]);
+    assert_eq!(world.posted(&unchecked), vec![of(&domain, A)]);
 }
 
 #[test]
@@ -179,7 +185,7 @@ fn a_part_whose_dependencies_are_not_those_the_manifest_lists_fails() {
     assert_eq!(outcome(Q), Some(Outcome::Failure(REASON_DEPENDENCIES_DIFFER)));
     assert_eq!(outcome(R), Some(Outcome::Failure(REASON_DEPENDENCIES_DIFFER)), "each under the type the manifest holds that dependency under");
     let world = Attached::new(&loader, None, &[], &[(D, SECOND)], &[]);
-    assert_eq!(world.posted(&loader), vec![Arrival::at(D, domain[&D].hash)]);
+    assert_eq!(world.posted(&loader), vec![of(&domain, D)]);
 }
 
 #[test]
@@ -198,11 +204,11 @@ fn the_batch_of_a_revision_holds_what_it_changes_that_the_table_names_and_the_cl
         (world.posted(&loader), after)
     };
     let (posted, after) = run(Options::default());
-    let expected = vec![Arrival::at(N, after[&N].hash), Arrival::at(P, after[&P].hash), Arrival::at(Q, after[&Q].hash)];
+    let expected = vec![of(&after, N), of(&after, P), of(&after, Q)];
     assert_eq!(posted, expected, "the new dependency with its parent, the entry with no want, and for no other asset");
     // The text as it stood: the changed assets a want names, and nothing else.
     let (posted, after) = run(Options { moves_leave_entries_without_a_want: true, moves_without_the_closure: true, ..Options::default() });
-    assert_eq!(posted, vec![Arrival::at(P, after[&P].hash)]);
+    assert_eq!(posted, vec![of(&after, P)]);
 }
 
 #[test]
@@ -221,7 +227,7 @@ fn an_asset_that_leaves_the_manifest_fails_and_a_replacement_that_cannot_be_put_
     // An asset that leaves the manifest is a different event and does fail.
     store.revision(&[(P, PARAMETERS, 1, &[])]);
     loader.revision_in_place().expect("the revision is read");
-    assert_eq!(world.posted(&loader), vec![Arrival::failed(A, REASON_UNKNOWN_ASSET), Arrival::at(P, before[&P].hash)]);
+    assert_eq!(world.posted(&loader), vec![Arrival::failed(A, REASON_UNKNOWN_ASSET), of(&before, P)]);
 }
 
 #[test]
@@ -233,10 +239,10 @@ fn a_move_reaches_a_failed_entry_whose_asset_enters_the_manifest() {
         let world = Attached::new(&loader, None, &[held(A, PARAMETERS, Availability::Failed(REASON_UNKNOWN_ASSET), true)], &[], &[]);
         let after = store.revision(&[(P, PARAMETERS, 1, &[]), (A, PARAMETERS, 1, &[])]);
         loader.revision_in_place().expect("the revision is read");
-        (world.posted(&loader), after[&A].hash)
+        (world.posted(&loader), of(&after, A))
     };
-    let (posted, hash) = run(Options::default());
-    assert_eq!(posted, vec![Arrival::at(A, hash)], "the move changes the asset, and the table names it");
+    let (posted, arrival) = run(Options::default());
+    assert_eq!(posted, vec![arrival], "the move changes the asset, and the table names it");
     // The other reading: a failed entry moves by a want alone.
     let (posted, _) = run(Options { moves_leave_failed_entries: true, ..Options::default() });
     assert!(posted.is_empty());
@@ -260,53 +266,74 @@ fn a_move_that_changes_the_type_of_an_asset_in_force_is_a_report() {
 }
 
 #[test]
-fn the_answers_to_a_restore_follow_the_closure_and_a_revision_is_held_until_the_first_tick() {
+fn the_answers_to_a_restore_complete_the_batch_of_each_closure_and_a_revision_is_held_until_the_first_tick() {
     let store = Loose::new();
-    let lists: &[Dependency] = &[(N, PARAMETERS), (F, PARAMETERS)];
-    let at_hand = store.revision(&[(P, PARAMETERS, 2, lists), (N, PARAMETERS, 1, &[]), (F, PARAMETERS, 1, &[]), (U, PARAMETERS, 1, &[]), (Q, PARAMETERS, 1, &[])]);
-    // The saved table: P available under a want at another hash, O available
-    // with no want, F failed under a want, U wanted and unanswered, Q an
-    // entry with no want that never rose.
+    let lists: &[Dependency] = &[(N, PARAMETERS), (F, PARAMETERS), (E, PARAMETERS), (Q, PARAMETERS)];
+    let below: &[Dependency] = &[(D, PARAMETERS)];
+    let leaves: [Content; 6] = [(N, PARAMETERS, 1, &[]), (F, PARAMETERS, 1, &[]), (E, PARAMETERS, 1, &[]), (Q, PARAMETERS, 1, &[]), (U, PARAMETERS, 1, &[]), (D, PARAMETERS, 1, &[])];
+    let with = |parent: Content<'static>| -> Vec<Content<'static>> { leaves.iter().copied().chain([parent, (R, PARAMETERS, 1, below)]).collect() };
+    let at_hand = store.revision(&with((P, PARAMETERS, 2, lists)));
+    // The saved table. P is available under a want at another hash, and its
+    // part at hand lists N, which the table does not name; F, failed under
+    // the want P itself owns; E, failed under the want of a command; and Q,
+    // unavailable under no want. O is available with no want and gone from
+    // the content at hand. R is available with no want, and its part lists
+    // D, which the table does not name. U is wanted and unanswered.
+    let host = Owner::World(prototype_core::table::Maker::Source(3));
     let saved = [
+        held(E, PARAMETERS, Availability::Failed(REASON_ARTIFACT_GONE), true),
         held(F, PARAMETERS, Availability::Failed(REASON_ARTIFACT_GONE), true),
         held(O, PARAMETERS, Availability::Available(7), false),
         held(P, PARAMETERS, Availability::Available(hash_of(1, &[])), true),
         held(Q, PARAMETERS, Availability::Unavailable, false),
+        held(R, PARAMETERS, Availability::Available(at_hand[&R].hash), false),
         held(U, PARAMETERS, Availability::Unavailable, true),
     ];
+    // What the query before the first tick gives of the entries the table
+    // does not hold available: the wants that stand on each, with their owners.
+    let standing = vec![(E, vec![(host, Policy::Optional)]), (F, vec![(Owner::Asset(P), Policy::Required)]), (Q, Vec::new()), (U, vec![(host, Policy::Required)])];
+    let restored = |loader: &Loader| {
+        let queue = Arc::new(ArrivalQueue::default());
+        let attachment = Attachment { queue: queue.clone(), set: None, entries: saved.to_vec(), unanswered: vec![(U, PARAMETERS)], restore: vec![O, P, R], standing: standing.clone() };
+        Attached { extract: loader.attach(attachment).expect("the world is attached"), queue }
+    };
+    let answers = [Arrival::failed(O, REASON_UNKNOWN_ASSET).marked(), of(&at_hand, P).marked(), of(&at_hand, R).marked()];
+    let with_the_answers = |ordinary: &[AssetId]| {
+        let mut batch: Vec<Arrival> = ordinary.iter().map(|asset| of(&at_hand, *asset)).chain(answers).collect();
+        batch.sort_by_key(|arrival| arrival.asset);
+        batch
+    };
+    // The narrow form: an ordinary arrival for what a want the core adds
+    // from the part of an answer creates (N) or returns to unavailable (E),
+    // and for the entry held unavailable under no want that such a part
+    // lists (Q). F, failed under its parent's own standing want, receives
+    // nothing and stays failed. The part of R adds no want, R holding none:
+    // D receives nothing. U is answered as any unanswered want is.
     let loader = Loader::start(&store.directory, Options::default()).expect("the capability starts");
-    let world = Attached::new(&loader, None, &saved, &[(U, PARAMETERS)], &[O, P]);
-    let expected = vec![
-        Arrival::at(N, at_hand[&N].hash),
-        Arrival::failed(O, REASON_UNKNOWN_ASSET).marked(),
-        Arrival::at(P, at_hand[&P].hash).marked(),
-        Arrival::at(U, at_hand[&U].hash),
-    ];
-    assert_eq!(world.posted(&loader), expected, "the new dependency as an ordinary arrival; the entry held failed under a want receives nothing");
+    let world = restored(&loader);
+    assert_eq!(world.posted(&loader), with_the_answers(&[E, N, Q, U]));
     // A revision that lands while the world waits is held, then posted as a reload.
-    let later = store.revision(&[(P, PARAMETERS, 3, &[]), (N, PARAMETERS, 1, &[]), (F, PARAMETERS, 1, &[]), (U, PARAMETERS, 1, &[]), (Q, PARAMETERS, 1, &[])]);
+    let later = store.revision(&with((P, PARAMETERS, 3, &[])));
     loader.revision_in_place().expect("the revision is read");
     assert!(world.posted(&loader).is_empty());
     assert_eq!(loader.report().held_moves, 1);
-    let after_the_first_tick = [
-        held(F, PARAMETERS, Availability::Failed(REASON_ARTIFACT_GONE), true),
-        held(N, PARAMETERS, Availability::Available(at_hand[&N].hash), true),
-        held(P, PARAMETERS, Availability::Available(at_hand[&P].hash), true),
-        held(U, PARAMETERS, Availability::Available(at_hand[&U].hash), true),
-    ];
+    let available = |asset: AssetId| held(asset, PARAMETERS, Availability::Available(at_hand[&asset].hash), true);
+    let after_the_first_tick = [available(E), held(F, PARAMETERS, Availability::Failed(REASON_ARTIFACT_GONE), true), available(N), available(P), available(Q), available(U)];
     world.extract(&[], &after_the_first_tick, true);
-    assert_eq!(world.posted(&loader), vec![Arrival::at(P, later[&P].hash)]);
-    // The other reading: every asset of the closure that the table does not
-    // hold available is posted, the failed entry under a want included.
-    let complete = Loader::start(&store.directory, Options { restore_answers_complete_the_batch: true, ..Options::default() }).expect("the capability starts");
+    assert_eq!(world.posted(&loader), vec![of(&later, P)]);
     store.place(&at_hand);
-    complete.revision_in_place().expect("the revision is read");
-    let world = Attached::new(&complete, None, &saved, &[], &[O, P]);
-    assert!(world.posted(&complete).contains(&Arrival::at(F, at_hand[&F].hash)));
-    // Not taken: the answers and nothing else.
+    // Not taken, the build's former default: what the saved table holds
+    // under no want. E, failed under another want, is left out, and D is
+    // posted, below an entry that holds no want.
+    let former = Loader::start(&store.directory, Options { restore_answers_for_what_no_want_names: true, ..Options::default() }).expect("the capability starts");
+    assert_eq!(restored(&former).posted(&former), with_the_answers(&[D, N, Q, U]));
+    // Not taken, the wider form: every asset of a closure that the table
+    // does not hold available, the entry failed under a standing want included.
+    let wider = Loader::start(&store.directory, Options { restore_answers_complete_the_batch: true, ..Options::default() }).expect("the capability starts");
+    assert_eq!(restored(&wider).posted(&wider), with_the_answers(&[D, E, F, N, Q, U]));
+    // Not taken: the answers and nothing else, beside the unanswered want.
     let literal = Loader::start(&store.directory, Options { restore_answers_do_not_follow_the_closure: true, ..Options::default() }).expect("the capability starts");
-    let world = Attached::new(&literal, None, &saved, &[], &[O, P]);
-    assert_eq!(world.posted(&literal), vec![Arrival::failed(O, REASON_UNKNOWN_ASSET).marked(), Arrival::at(P, at_hand[&P].hash).marked()]);
+    assert_eq!(restored(&literal).posted(&literal), with_the_answers(&[U]));
 }
 
 #[test]
@@ -321,13 +348,13 @@ fn a_world_under_a_named_set_is_resolved_in_its_set_and_receives_no_revision() {
     let later = store.revision(&[(A, PARAMETERS, 2, &[]), (P, PARAMETERS, 2, &[]), (N, PARAMETERS, 1, &[])]);
     loader.revision_in_place().expect("the revision is read");
     assert!(under_set.posted(&loader).is_empty(), "a world created under a content set receives nothing");
-    assert_eq!(no_set.posted(&loader), vec![Arrival::at(A, later[&A].hash)]);
+    assert_eq!(no_set.posted(&loader), vec![of(&later, A)]);
     // A want made meanwhile is answered inside the set, and one it cannot
     // answer there is a failed transition.
     under_set.extract(&[(P, PARAMETERS), (N, PARAMETERS)], &table, false);
-    assert_eq!(under_set.posted(&loader), vec![Arrival::failed(N, REASON_UNKNOWN_ASSET), Arrival::at(P, set[&P].hash)]);
+    assert_eq!(under_set.posted(&loader), vec![Arrival::failed(N, REASON_UNKNOWN_ASSET), of(&set, P)]);
     no_set.extract(&[(P, PARAMETERS), (N, PARAMETERS)], &table, false);
-    assert_eq!(no_set.posted(&loader), vec![Arrival::at(N, later[&N].hash), Arrival::at(P, later[&P].hash)]);
+    assert_eq!(no_set.posted(&loader), vec![of(&later, N), of(&later, P)]);
 }
 
 #[test]
@@ -335,8 +362,8 @@ fn several_worlds_each_receive_their_own_batches_whatever_the_delay() {
     let store = Loose::new();
     let domain = store.revision(&[(D, PARAMETERS, 1, &[]), (P, PARAMETERS, 1, &[(D, PARAMETERS)]), (A, PARAMETERS, 1, &[])]);
     let wanted = |asset: AssetId| [held(asset, PARAMETERS, Availability::Unavailable, true)];
-    let own_p = vec![Arrival::at(D, domain[&D].hash), Arrival::at(P, domain[&P].hash)];
-    let own_a = vec![Arrival::at(A, domain[&A].hash)];
+    let own_p = vec![of(&domain, D), of(&domain, P)];
+    let own_a = vec![of(&domain, A)];
     for delay in [Delay::None, Delay::ReverseOfTheOrder, Delay::Clock] {
         let loader = Loader::start(&store.directory, Options { delay, ..Options::default() }).expect("the capability starts");
         let first = Attached::new(&loader, None, &[], &[], &[]);
@@ -369,7 +396,7 @@ fn under_the_candidate_on_the_closure_of_a_want_an_arrival_to_a_hash_names_its_r
     let world = Attached::new(&loader, None, &[], &[], &[]);
     let table = [held(P, PARAMETERS, Availability::Unavailable, true), held(Q, PARAMETERS, Availability::Unavailable, true), held(U, PARAMETERS, Availability::Unavailable, true)];
     world.extract(&[(Q, PARAMETERS), (P, PARAMETERS), (U, PARAMETERS)], &table, false);
-    let at = |asset: AssetId, root: AssetId| Arrival::at(asset, domain[&asset].hash).for_root(root);
+    let at = |asset: AssetId, root: AssetId| of(&domain, asset).for_root(root);
     // `E` stands in the closures of both wants: it names the first of the
     // two assets in identifier order. A failure has no size and names none.
     assert_eq!(world.posted(&loader), vec![at(D, P), at(E, P), at(P, P), at(Q, Q), Arrival::failed(U, REASON_UNKNOWN_ASSET)]);
@@ -386,7 +413,7 @@ fn under_the_candidate_on_the_closure_of_a_want_an_arrival_to_a_hash_names_its_r
     let gains: &[Dependency] = &[(E, PARAMETERS), (N, PARAMETERS)];
     let later = store.revision(&[(D, PARAMETERS, 2, &[]), (E, PARAMETERS, 1, &[]), (N, PARAMETERS, 1, &[]), (P, PARAMETERS, 1, shared), (Q, PARAMETERS, 2, gains)]);
     loader.revision_in_place().expect("the revision is read");
-    let moved = |asset: AssetId, root: AssetId| Arrival::at(asset, later[&asset].hash).for_root(root);
+    let moved = |asset: AssetId, root: AssetId| of(&later, asset).for_root(root);
     assert_eq!(world.posted(&loader), vec![moved(D, D), moved(N, Q), moved(Q, Q)]);
     // No other candidate writes the mark.
     let plain = Loader::start(&store.directory, Options::default()).expect("the capability starts");
@@ -412,7 +439,7 @@ fn a_hold_keeps_the_capability_still_and_the_arrivals_of_a_move_may_be_posted_on
     std::thread::sleep(std::time::Duration::from_millis(30));
     assert_eq!(waiting(&world.queue), 0);
     drop(hold);
-    assert_eq!(world.posted(&loader), vec![Arrival::at(A, domain[&A].hash)]);
+    assert_eq!(world.posted(&loader), vec![of(&domain, A)]);
     // The control of a mount and of a revision: one arrival per tick, in
     // identifier order, each posted when the host waits before a step.
     let slow = Loader::start(&store.directory, Options { moves_posted_one_per_tick: true, ..Options::default() }).expect("the capability starts");
@@ -420,8 +447,8 @@ fn a_hold_keeps_the_capability_still_and_the_arrivals_of_a_move_may_be_posted_on
     let world = Attached::new(&slow, None, &table, &[], &[]);
     let later = store.revision(&[(A, PARAMETERS, 2, &[]), (D, PARAMETERS, 4, &[])]);
     slow.revision_in_place().expect("the revision is read");
-    assert_eq!(world.posted(&slow), vec![Arrival::at(A, later[&A].hash)]);
-    assert_eq!(world.posted(&slow), vec![Arrival::at(D, later[&D].hash)]);
+    assert_eq!(world.posted(&slow), vec![of(&later, A)]);
+    assert_eq!(world.posted(&slow), vec![of(&later, D)]);
     assert!(world.posted(&slow).is_empty());
 }
 
@@ -436,4 +463,73 @@ fn a_restore_under_the_recorded_content_is_confirmed_in_the_content_at_hand() {
     assert!(loader.confirm(None, A, hash_of(2, &[])).is_err(), "another hash than the content holds");
     assert!(loader.confirm(None, U, domain[&A].hash).is_err(), "an asset the content does not hold");
     assert!(loader.confirm(None, D, domain[&D].hash).is_err(), "a part that cannot be had");
+}
+
+#[test]
+fn an_arrival_names_the_size_the_manifest_gives_and_a_failure_names_none() {
+    let store = Loose::new();
+    let domain = store.revision(&[(P, PARAMETERS, 1, &[(D, PARAMETERS)]), (D, PARAMETERS, 1, &[])]);
+    let loader = Loader::start(&store.directory, Options::default()).expect("the capability starts");
+    let world = Attached::new(&loader, None, &[], &[(P, PARAMETERS), (U, PARAMETERS)], &[]);
+    let posted = world.posted(&loader);
+    let sizes: Vec<(AssetId, u64)> = posted.iter().map(|arrival| (arrival.asset, arrival.size)).collect();
+    assert_eq!(sizes, vec![(D, domain[&D].size), (P, domain[&P].size), (U, 0)], "the size of the canonical part, no prepared form existing");
+    assert!(domain[&P].size > domain[&D].size && domain[&D].size == part(1, &[]).len() as u64);
+    assert_eq!(posted[2].outcome, Outcome::Failure(REASON_UNKNOWN_ASSET));
+}
+
+#[test]
+fn a_dependency_failed_for_its_type_is_loaded_under_the_manifests_type_below_a_parent_the_batch_brings() {
+    let store = Loose::new();
+    let domain = store.revision(&[(P, PARAMETERS, 1, &[(D, PARAMETERS)]), (D, PARAMETERS, 1, &[]), (R, PARAMETERS, 1, &[(P, PARAMETERS)])]);
+    // A command wanted D under a wrong type and D failed for it. A want of
+    // P, whose part lists D under the manifest's type, then leaves: the
+    // core's want will give the entry that type before the arrival is applied.
+    let failed = held(D, SECOND, Availability::Failed(REASON_ANOTHER_TYPE), true);
+    let table = [failed, held(P, PARAMETERS, Availability::Unavailable, true)];
+    let run = |options: Options, table: &[EntryView], left: AssetId| {
+        let loader = Loader::start(&store.directory, options).expect("the capability starts");
+        let world = Attached::new(&loader, None, &[], &[], &[]);
+        world.extract(&[(left, PARAMETERS)], table, false);
+        world.posted(&loader)
+    };
+    assert_eq!(run(Options::default(), &table, P), vec![of(&domain, D), of(&domain, P)]);
+    // Not taken: the dependency fails anew for its type, and the reading
+    // taken on such an entry is undone by the batch that brings the want.
+    let anew = Options { dependency_failed_for_its_type_fails_anew: true, ..Options::default() };
+    assert_eq!(run(anew, &table, P), vec![Arrival::failed(D, REASON_ANOTHER_TYPE), of(&domain, P)]);
+    // An entry that is not failed for its type is checked as any asset is.
+    let unanswered = [held(D, SECOND, Availability::Unavailable, true), held(P, PARAMETERS, Availability::Unavailable, true)];
+    assert_eq!(run(Options::default(), &unanswered, P), vec![Arrival::failed(D, REASON_ANOTHER_TYPE), of(&domain, P)]);
+    // Below a parent the table holds available, which the batch does not
+    // bring, the core adds no want: the dependency fails anew. The letter of
+    // the exception, the other reading, loads it all the same.
+    let in_force = [failed, held(P, PARAMETERS, Availability::Available(domain[&P].hash), true), held(R, PARAMETERS, Availability::Unavailable, true)];
+    assert_eq!(run(Options::default(), &in_force, R), vec![Arrival::failed(D, REASON_ANOTHER_TYPE), of(&domain, R)]);
+    let letter = Options { type_exception_below_a_parent_in_force: true, ..Options::default() };
+    assert_eq!(run(letter, &in_force, R), vec![of(&domain, D), of(&domain, R)]);
+}
+
+#[test]
+fn a_batch_is_complete_against_the_state_extracted_and_never_against_what_was_posted() {
+    let store = Loose::new();
+    let domain = store.revision(&[(P, PARAMETERS, 1, &[(D, PARAMETERS)]), (D, PARAMETERS, 1, &[]), (Q, PARAMETERS, 1, &[(D, PARAMETERS)])]);
+    let run = |options: Options| {
+        let loader = Loader::start(&store.directory, options).expect("the capability starts");
+        let world = Attached::new(&loader, None, &[], &[], &[]);
+        // The want of P leaves, and its closure is posted.
+        world.extract(&[(P, PARAMETERS)], &[held(P, PARAMETERS, Availability::Unavailable, true)], false);
+        assert_eq!(world.posted(&loader), vec![of(&domain, D), of(&domain, P)]);
+        // The world rejected the group over its budget: P is failed, and D,
+        // which the rejected part alone listed, has no entry. A want of Q,
+        // whose part lists D too, then leaves.
+        let state = [held(P, PARAMETERS, Availability::Failed(prototype_core::table::REASON_OVER_BUDGET), true), held(Q, PARAMETERS, Availability::Unavailable, true)];
+        world.extract(&[(Q, PARAMETERS)], &state, false);
+        world.posted(&loader)
+    };
+    assert_eq!(run(Options::default()), vec![of(&domain, D), of(&domain, Q)], "the rejection is learned from the state: the batch holds the dependency again");
+    // The control: the capability trusts what it posted, and leaves out an
+    // asset the table does not hold. On a gated world the gate would then
+    // stay closed for good.
+    assert_eq!(run(Options { trusts_what_it_posted: true, ..Options::default() }), vec![of(&domain, Q)]);
 }

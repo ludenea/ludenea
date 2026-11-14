@@ -15,11 +15,11 @@ use std::sync::{Arc, OnceLock};
 use asset_loader::{Attachment, Hold, Loader, Options, ResidentStore};
 use asset_pipeline::Cache;
 use content_store::set_hash;
-use prototype_core::table::{ArrivalQueue, AssetId, AssetType, Policy, Record, Residents, Rules, decode_log, encode_log};
-use prototype_core::world::{Extraction, History, Links, Mode, Refusal, Restore, Size, Wait, World, WorldConfig, save_header};
+use prototype_core::table::{ArrivalQueue, AssetId, AssetType, Policy, Record, Residents, Rules, SystemName, decode_log, encode_log};
+use prototype_core::world::{Act as SystemAct, Extraction, History, Links, Mode, Refusal, Restore, Size, System, Wait, World, WorldConfig, save_header};
 use reference_workload::run_hash;
 
-use crate::oracle::{Element, Expected, Observed, Stated, Verdict, compare, element, observed_text, parse_each, stated_entries, system_act};
+use crate::oracle::{Element, Expected, Observed, SCRIPTED_SYSTEM, SCRIPTED_SYSTEM_CONTRIBUTOR, Stated, Verdict, compare, element, observed_text, parse_each, stated_entries, system_act};
 use crate::run::{BASE, Claim, Family, Outcome, Settings, Variant, import};
 use crate::sequential::oracle_with_kills;
 
@@ -88,6 +88,16 @@ pub enum SetName {
     AtHand,
 }
 
+/// One system of a world that makes wants: its stable name, the contributor
+/// of the composition that brings it, and what it does per tick, in the
+/// words of the sheet.
+#[derive(Clone, Debug)]
+pub struct SystemPlan {
+    pub name: &'static str,
+    pub contributor: &'static str,
+    pub does: Vec<(u32, &'static str)>,
+}
+
 /// One world of a scenario.
 #[derive(Clone)]
 pub struct WorldPlan {
@@ -102,8 +112,8 @@ pub struct WorldPlan {
     /// The asset types the composition declares.
     pub types: Vec<AssetType>,
     pub set: SetName,
-    /// What the scripted system does: per tick, in the words of the sheet.
-    pub system: Vec<(u32, &'static str)>,
+    /// The systems that make wants, in the order the composition lists them.
+    pub systems: Vec<SystemPlan>,
     /// The budget of the world for its asset data, in bytes.
     pub budget: Option<u64>,
     pub acts: Vec<(u32, Act)>,
@@ -126,7 +136,7 @@ impl WorldPlan {
             wants: Vec::new(),
             types: vec![AssetType::Parameters, AssetType::Second],
             set: SetName::None,
-            system: Vec::new(),
+            systems: Vec::new(),
             budget: None,
             acts: Vec::new(),
             to,
@@ -173,8 +183,19 @@ impl WorldPlan {
         self
     }
 
-    pub fn system(mut self, tick: u32, does: &[&'static str]) -> WorldPlan {
-        self.system.extend(does.iter().map(|text| (tick, *text)));
+    /// What the one scripted system of a sheet that names none does in a tick.
+    pub fn system(self, tick: u32, does: &[&'static str]) -> WorldPlan {
+        self.system_of(SCRIPTED_SYSTEM, SCRIPTED_SYSTEM_CONTRIBUTOR, tick, does)
+    }
+
+    /// What a named system does in a tick. A system is listed, with the
+    /// contributor that brings it, where the plan first names it.
+    pub fn system_of(mut self, name: &'static str, contributor: &'static str, tick: u32, does: &[&'static str]) -> WorldPlan {
+        if !self.systems.iter().any(|system| system.name == name) {
+            self.systems.push(SystemPlan { name, contributor, does: Vec::new() });
+        }
+        let system = self.systems.iter_mut().find(|system| system.name == name).expect("the system is listed");
+        system.does.extend(does.iter().map(|text| (tick, *text)));
         self
     }
 
@@ -442,6 +463,17 @@ fn refused(refusal: &Refusal) -> Verdict {
     }
 }
 
+/// A system of a plan as the world holds it: what it does read from the words
+/// of the sheet, each tick moved by the offset of its world.
+fn system_of(plan: &SystemPlan, offset: u32, names: &crate::oracle::Names) -> System {
+    let act = |(tick, text): &(u32, &'static str)| (tick + offset, system_act(text, names).expect("what a system does, in the words of the sheet"));
+    System {
+        name: SystemName::new(plan.name),
+        contributor: names.contributor(plan.contributor).expect("a system is brought by a contributor the sheets name"),
+        does: plan.does.iter().map(act).collect(),
+    }
+}
+
 /// Everything a play is made with.
 struct Player<'a> {
     settings: &'a Settings,
@@ -464,7 +496,7 @@ impl Player<'_> {
         config.asset_types = plan.types.clone();
         config.content_set = set;
         config.budget = plan.budget;
-        config.system = plan.system.iter().map(|(tick, text)| (tick + plan.offset, system_act(text, names).expect("what a system does, in the words of the sheet"))).collect();
+        config.systems = plan.systems.iter().map(|system| system_of(system, plan.offset, names)).collect();
         config.rules = self.rules;
         config.set_under_the_hash = self.tweak(Tweak::SetUnderTheHash);
         config
@@ -587,7 +619,8 @@ pub fn play(settings: &Settings, family: &Family, scenario: &Scenario, workers: 
                     restore.push(names.assets[*asset]);
                 }
             }
-            let attachment = Attachment { queue: world.queue.clone(), set, entries: world.world.entries(), unanswered: world.world.unanswered(), restore };
+            let standing = world.world.standing_wants();
+            let attachment = Attachment { queue: world.queue.clone(), set, entries: world.world.entries(), unanswered: world.world.unanswered(), restore, standing };
             let _ = slot.set(instance.loader.attach(attachment).expect("the world is attached"));
         }
         running.push(world);
@@ -708,11 +741,13 @@ pub fn play(settings: &Settings, family: &Family, scenario: &Scenario, workers: 
             replayed.step(plan.to - from, Wait::No).expect("the replay does not fail");
             replayed.state_hashes() == world.observed.state
         });
+        let despawns = |system: &SystemPlan| system_of(system, plan.offset, names).does;
         let kills = plan
-            .system
+            .systems
             .iter()
-            .filter_map(|(tick, text)| match system_act(text, names) {
-                Ok(prototype_core::table::Command::Despawn { slot, .. }) => Some((tick + plan.offset, slot as usize)),
+            .flat_map(despawns)
+            .filter_map(|(tick, act)| match act {
+                SystemAct::Despawn { slot, .. } => Some((tick, slot as usize)),
                 _ => None,
             })
             .collect();

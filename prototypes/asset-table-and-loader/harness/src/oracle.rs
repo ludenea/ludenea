@@ -14,15 +14,18 @@ use std::collections::BTreeMap;
 
 use prototype_core::table::{
     Arrival, AssetId, AssetType, Availability, Command, Event, Instance, Maker, NewHistory, Outcome, Owner, Policy, Record, Refused, RepulsionTable, Rules,
-    Table, put_entry, put_instances, reason as listed_reason, reason_named,
+    SystemName, Table, put_entry, put_instances, reason as listed_reason, reason_named,
 };
+use prototype_core::world::{Act, Holder};
 use reference_workload::{Fnv1a, fnv1a};
 
 use crate::sequential::Switch;
 
-/// The contributor that brings the scripted system: a want the system makes
-/// under the world's own entry carries its identity.
-pub const SYSTEM_MAKER: Owner = Owner::World(Maker::Contributor(9));
+/// The one scripted system of the sheets that name none: its stable name, and
+/// the contributor that brings it. A want it makes under the world's own
+/// entry is its own: the system is its maker.
+pub const SCRIPTED_SYSTEM: &str = "scripted";
+pub const SCRIPTED_SYSTEM_CONTRIBUTOR: &str = "contributor:logic";
 
 /// The makers the sheets name, each with its numeric identity. A source and
 /// a contributor may share an identity: their kinds tell them apart.
@@ -39,6 +42,10 @@ const MAKERS: [(&str, Maker); 5] = [
 pub struct Names {
     pub assets: BTreeMap<String, AssetId>,
     pub hashes: BTreeMap<String, u64>,
+    /// The size the domain manifest gives each content, by content hash: the
+    /// length of its canonical part, no prepared form existing. It is the
+    /// size an arrival names and an entry holds where a sheet states none.
+    pub sizes: BTreeMap<u64, u64>,
     /// The parameters a part gives, by content hash.
     pub tables: BTreeMap<u64, RepulsionTable>,
     pub entities: BTreeMap<String, (u32, u32)>,
@@ -74,6 +81,8 @@ impl Names {
         match kind {
             "entity" => self.entity(name).map(|(slot, generation)| Owner::Entity { slot, generation }),
             "asset" => self.asset(name).map(Owner::Asset),
+            // A system is the maker of the want it makes, known by its stable name.
+            "system" if !name.is_empty() => Ok(Owner::World(Maker::System(SystemName::new(name)))),
             "instance" => {
                 let at = self.instances.iter().position(|(other, _, _)| other == name).ok_or_else(|| format!("unknown instance {name}"))?;
                 Ok(Owner::World(Maker::Instance(at as u32 + 1)))
@@ -87,11 +96,32 @@ impl Names {
         self.entities.get(name).copied().ok_or_else(|| format!("unknown entity {name}"))
     }
 
+    /// The size the manifest gives a content: what an arrival to its hash
+    /// names, and what an entry in force at that hash holds.
+    pub fn size(&self, hash: u64) -> u64 {
+        self.sizes.get(&hash).copied().unwrap_or(0)
+    }
+
+    /// The size in the words of a statement: nothing where it is the size the
+    /// manifest gives the content, which a statement need not name.
+    fn size_text(&self, hash: u64, size: u64) -> String {
+        if size == self.size(hash) { String::new() } else { format!(" size {size}") }
+    }
+
+    /// The numeric identity of a contributor the sheets name.
+    pub fn contributor(&self, text: &str) -> Result<u64, String> {
+        match MAKERS.iter().find(|(name, _)| *name == text) {
+            Some((_, Maker::Contributor(identity))) => Ok(*identity),
+            _ => Err(format!("unknown contributor {text}")),
+        }
+    }
+
     fn owner_name(&self, owner: &Owner) -> String {
         match owner {
             Owner::World(Maker::Instance(index)) => {
                 format!("instance:{}", self.instances.get(*index as usize - 1).map_or("?", |(name, _, _)| name.as_str()))
             }
+            Owner::World(Maker::System(name)) => format!("system:{}", name.as_str()),
             Owner::World(maker) => MAKERS.iter().find(|(_, other)| other == maker).map_or_else(|| format!("{maker:?}"), |(name, _)| (*name).to_string()),
             Owner::Entity { slot, generation } => {
                 let name = self.entities.iter().find(|(_, other)| **other == (*slot, *generation)).map(|(name, _)| name.clone());
@@ -156,6 +186,9 @@ pub enum Element {
 }
 
 /// Reads one element, in the words the scenario sheets and the oracles share.
+/// An arrival to a hash names the size the domain manifest gives its
+/// content, the length of its part, but where the statement names another:
+/// `size <bytes>` stands after the hash, before `marked` and before a root.
 pub fn element(text: &str, names: &Names) -> Result<Element, String> {
     let words: Vec<&str> = text.split_whitespace().collect();
     Ok(match words.as_slice() {
@@ -178,23 +211,42 @@ pub fn element(text: &str, names: &Names) -> Result<Element, String> {
         }),
         ["arrival", asset, "failed", code] => Element::Arrival(Arrival::failed(names.asset(asset)?, reason(code)?)),
         ["arrival", asset, "failed", code, "marked"] => Element::Arrival(Arrival::failed(names.asset(asset)?, reason(code)?).marked()),
-        ["arrival", asset, hash] => Element::Arrival(Arrival::at(names.asset(asset)?, names.hash(hash)?)),
-        ["arrival", asset, hash, "marked"] => Element::Arrival(Arrival::at(names.asset(asset)?, names.hash(hash)?).marked()),
-        ["arrival", asset, hash, "for", root] => Element::Arrival(Arrival::at(names.asset(asset)?, names.hash(hash)?).for_root(names.asset(root)?)),
+        ["arrival", asset, hash, rest @ ..] => {
+            let hash = names.hash(hash)?;
+            let (size, rest) = match rest {
+                ["size", bytes, rest @ ..] => (bytes.parse().map_err(|_| format!("not a size: {bytes}"))?, rest),
+                rest => (names.size(hash), rest),
+            };
+            let arrival = Arrival::at(names.asset(asset)?, hash).sized(size);
+            Element::Arrival(match rest {
+                [] => arrival,
+                ["marked"] => arrival.marked(),
+                ["for", root] => arrival.for_root(names.asset(root)?),
+                _ => return Err(format!("not an element: {text}")),
+            })
+        }
         _ => return Err(format!("not an element: {text}")),
     })
 }
 
-/// What the scripted system does, in the words of the sheet: an element in
-/// which a want under the world's own entry names `world` as its owner. The
-/// maker such a want carries is the contributor that brings the system.
-pub fn system_act(text: &str, names: &Names) -> Result<Command, String> {
-    let system = MAKERS.iter().find(|(_, maker)| Owner::World(*maker) == SYSTEM_MAKER).map(|(name, _)| *name).expect("the system's contributor is named");
-    let words: Vec<&str> = text.split_whitespace().map(|word| if word == "world" { system } else { word }).collect();
-    match element(&words.join(" "), names)? {
-        Element::Command(command) => Ok(command),
-        Element::Arrival(_) => Err(format!("a system posts no arrival: {text}")),
-    }
+/// What a system does, in the words of the sheet: an element in which a
+/// want under the world's own entry names `world` as its owner. The maker
+/// such a want carries is the system itself, which the world gives it.
+pub fn system_act(text: &str, names: &Names) -> Result<Act, String> {
+    let holder = |text: &str| match text {
+        "world" => Ok(Holder::World),
+        entity => names.entity(entity).map(|(slot, generation)| Holder::Entity { slot, generation }),
+    };
+    let words: Vec<&str> = text.split_whitespace().collect();
+    Ok(match words.as_slice() {
+        ["want", asset, kind, owner, level] => Act::Want { asset: names.asset(asset)?, asset_type: asset_type(kind)?, holder: holder(owner)?, policy: policy(level)? },
+        ["release", asset, owner] => Act::Release { asset: names.asset(asset)?, holder: holder(owner)? },
+        ["despawn", entity] => {
+            let (slot, generation) = names.entity(entity)?;
+            Act::Despawn { slot, generation }
+        }
+        _ => return Err(format!("not what a system does: {text}")),
+    })
 }
 
 fn element_text(element: &Element, names: &Names) -> String {
@@ -210,7 +262,7 @@ fn element_text(element: &Element, names: &Names) -> String {
         }
         Element::Arrival(arrival) => {
             let outcome = match arrival.outcome {
-                Outcome::Hash(hash) => names.hash_name(hash),
+                Outcome::Hash(hash) => format!("{}{}", names.hash_name(hash), names.size_text(hash, arrival.size)),
                 Outcome::Failure(code) => format!("failed {}", reason_name(code)),
             };
             let marked = if arrival.marked { " marked" } else { "" };
@@ -324,8 +376,9 @@ fn verdict(text: &str, names: &Names) -> Result<Verdict, String> {
 }
 
 /// One entry as an oracle states it: the asset, the type its entry holds,
-/// its availability and its wants in the order stated.
-pub type StatedEntry = (AssetId, AssetType, Availability, Vec<(Owner, Policy)>);
+/// its availability, the size it holds where it is available, and its wants
+/// in the order stated.
+pub type StatedEntry = (AssetId, AssetType, Availability, u64, Vec<(Owner, Policy)>);
 
 /// The statement of one tick.
 #[derive(Clone, Debug, Default)]
@@ -347,8 +400,8 @@ impl Block {
     pub fn table_bytes(&self) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&(self.entries.len() as u32).to_le_bytes());
-        for (id, asset_type, availability, wants) in &self.entries {
-            put_entry(&mut out, *id, *asset_type, *availability, wants);
+        for (id, asset_type, availability, size, wants) in &self.entries {
+            put_entry(&mut out, *id, *asset_type, *availability, *size, wants);
         }
         put_instances(&mut out, &self.instances);
         out
@@ -391,7 +444,7 @@ impl Expected {
         for tick in from..=to {
             let entries = self.table_at(tick).map_or(creation, |block| block.entries.as_slice());
             for (index, asset) in names.pool.iter().enumerate() {
-                let table = entries.iter().find(|(id, _, _, _)| id == asset).and_then(|(_, _, availability, _)| match availability {
+                let table = entries.iter().find(|(id, _, _, _, _)| id == asset).and_then(|(_, _, availability, _, _)| match availability {
                     Availability::Available(hash) => names.tables.get(hash).copied(),
                     _ => None,
                 });
@@ -478,17 +531,25 @@ pub fn parse(text: &str, names: &Names) -> Result<Stated, String> {
                     }
                     ("rejected", [asset, hash]) => block.rejected.push((names.asset(asset).map_err(fail)?, names.hash(hash).map_err(fail)?)),
                     ("entry", [asset, kind, held @ ..]) => {
-                        let availability = match held {
-                            ["unavailable"] => Availability::Unavailable,
-                            ["available", hash] => Availability::Available(names.hash(hash).map_err(fail)?),
-                            ["failed", code] => Availability::Failed(reason(code).map_err(fail)?),
+                        // An entry in force holds the size the manifest gives its
+                        // content, but where the statement names another.
+                        let (availability, size) = match held {
+                            ["unavailable"] => (Availability::Unavailable, 0),
+                            ["available", hash] => {
+                                let hash = names.hash(hash).map_err(fail)?;
+                                (Availability::Available(hash), names.size(hash))
+                            }
+                            ["available", hash, "size", bytes] => {
+                                (Availability::Available(names.hash(hash).map_err(fail)?), bytes.parse().map_err(|_| fail(format!("not a size: {bytes}")))?)
+                            }
+                            ["failed", code] => (Availability::Failed(reason(code).map_err(fail)?), 0),
                             _ => return Err(fail(format!("not an availability: {line}"))),
                         };
-                        block.entries.push((names.asset(asset).map_err(fail)?, asset_type(kind).map_err(fail)?, availability, Vec::new()));
+                        block.entries.push((names.asset(asset).map_err(fail)?, asset_type(kind).map_err(fail)?, availability, size, Vec::new()));
                     }
                     ("want", [owner, level]) => {
                         let want = (names.owner(owner).map_err(fail)?, policy(level).map_err(fail)?);
-                        block.entries.last_mut().ok_or_else(|| fail("a want before any entry".to_string()))?.3.push(want);
+                        block.entries.last_mut().ok_or_else(|| fail("a want before any entry".to_string()))?.4.push(want);
                     }
                     ("event", ["arrived", asset, hash]) => {
                         block.events.push(Event::Arrived { asset: names.asset(asset).map_err(fail)?, hash: names.hash(hash).map_err(fail)? });
@@ -583,7 +644,7 @@ pub fn table_text(bytes: &[u8], names: &Names) -> String {
     for (id, entry) in &table.entries {
         let availability = match entry.availability {
             Availability::Unavailable => "unavailable".to_string(),
-            Availability::Available(hash) => format!("available {}", names.hash_name(hash)),
+            Availability::Available(hash) => format!("available {}{}", names.hash_name(hash), names.size_text(hash, entry.size)),
             Availability::Failed(code) => format!("failed {}", reason_name(code)),
         };
         let wants: Vec<String> = entry.wants.iter().map(|(owner, policy)| format!("{} {}", names.owner_name(owner), policy_name(*policy))).collect();
@@ -721,7 +782,7 @@ pub fn observed_text(observed: &Observed, names: &Names) -> Vec<String> {
 /// The stated entries of typed table bytes: what stands before an oracle's first block.
 pub fn stated_entries(bytes: &[u8]) -> Vec<StatedEntry> {
     let table = Table::decode(bytes, Rules::default()).expect("a table the build wrote decodes");
-    table.entries.into_iter().map(|(id, entry)| (id, entry.asset_type, entry.availability, entry.wants)).collect()
+    table.entries.into_iter().map(|(id, entry)| (id, entry.asset_type, entry.availability, entry.size, entry.wants)).collect()
 }
 
 #[cfg(test)]
@@ -733,6 +794,7 @@ mod tests {
         names.assets.insert("A".to_string(), 0x0a);
         names.assets.insert("P".to_string(), 0x30);
         names.hashes.insert("A.1".to_string(), 0x11);
+        names.sizes.insert(0x11, 640);
         names.entities.insert("E1".to_string(), (4, 0));
         names.instances.push(("one".to_string(), Policy::Required, true));
         names
@@ -754,15 +816,26 @@ mod tests {
         let failed = element("arrival A failed other-type marked", &names).expect("an element");
         assert_eq!(element_text(&failed, &names), "arrival A failed other-type marked");
         let rooted = element("arrival A A.1 for P", &names).expect("an element");
-        assert_eq!(rooted, Element::Arrival(Arrival::at(0x0a, 0x11).for_root(0x30)));
+        assert_eq!(rooted, Element::Arrival(Arrival::at(0x0a, 0x11).sized(640).for_root(0x30)), "an arrival names the size the manifest gives its content");
         assert_eq!(element_text(&rooted, &names), "arrival A A.1 for P");
+        // A statement may name another size: after the hash, before `marked`.
+        let sized = element("arrival A A.1 size 5 marked", &names).expect("an element");
+        assert_eq!(sized, Element::Arrival(Arrival::at(0x0a, 0x11).sized(5).marked()));
+        assert_eq!(element_text(&sized, &names), "arrival A A.1 size 5 marked");
+        assert!(element("arrival A A.1 marked size 5", &names).is_err());
+        let stated = parse("scenario s
+tick 1
+entry A parameters available A.1 size 7
+", &names).expect("the statement reads");
+        assert_eq!(stated["s"]["world"].blocks[&1].entries[0].3, 7);
+        assert_eq!(table_text(&stated["s"]["world"].blocks[&1].table_bytes(), &names), "[A parameters available A.1 size 7: ]");
         let text = "scenario s\ntick 2\nrecord want A parameters entity:E1 optional\nrecord want A third source:twin optional\nrefusal other-type\n\
                     rejected A A.1\nentry A parameters available A.1\nwant entity:E1 optional\nentry P second failed over-budget\n\
                     event arrived A A.1\ninstance one P instantiations 0 failed no\n";
         let stated = parse(text, &names).expect("the statement reads");
         let block = &stated["s"]["world"].blocks[&2];
         let entity = Owner::Entity { slot: 4, generation: 0 };
-        assert_eq!(block.entries[0], (0x0a, AssetType::Parameters, Availability::Available(0x11), vec![(entity, Policy::Optional)]));
+        assert_eq!(block.entries[0], (0x0a, AssetType::Parameters, Availability::Available(0x11), 640, vec![(entity, Policy::Optional)]), "an entry in force holds the size the manifest gives");
         assert_eq!(block.entries[1].1, AssetType::Second);
         assert_eq!(block.refusals, vec![(1, Refused::AnotherType)]);
         assert_eq!(block.rejected, vec![(0x0a, 0x11)]);
@@ -798,9 +871,15 @@ mod tests {
     fn what_the_system_does_reads_in_the_words_of_the_sheet() {
         let names = names();
         let want = system_act("want A parameters world optional", &names).expect("a want");
-        assert_eq!(want, Command::Want { asset: 0x0a, asset_type: AssetType::Parameters, owner: SYSTEM_MAKER, policy: Policy::Optional });
-        assert_eq!(system_act("release A world", &names), Ok(Command::Release { asset: 0x0a, owner: SYSTEM_MAKER }));
-        assert_eq!(system_act("despawn E1", &names), Ok(Command::Despawn { slot: 4, generation: 0 }));
+        assert_eq!(want, Act::Want { asset: 0x0a, asset_type: AssetType::Parameters, holder: Holder::World, policy: Policy::Optional });
+        assert_eq!(system_act("release A entity:E1", &names), Ok(Act::Release { asset: 0x0a, holder: Holder::Entity { slot: 4, generation: 0 } }));
+        assert_eq!(system_act("despawn E1", &names), Ok(Act::Despawn { slot: 4, generation: 0 }));
+        assert!(system_act("arrival A A.1", &names).is_err(), "a system posts no arrival");
+        // A system is the maker of its want, known by its stable name.
+        let spawner = Owner::World(Maker::System(SystemName::new("logic/spawner")));
+        assert_eq!(names.owner("system:logic/spawner"), Ok(spawner));
+        assert_eq!(names.owner_name(&spawner), "system:logic/spawner");
+        assert_eq!(names.contributor(SCRIPTED_SYSTEM_CONTRIBUTOR), Ok(9));
         assert_eq!(names.owner("source:twin"), Ok(Owner::World(Maker::Source(7))));
         assert_eq!(names.owner_name(&Owner::World(Maker::Contributor(7))), "contributor:base");
     }

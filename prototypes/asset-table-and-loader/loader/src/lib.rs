@@ -12,13 +12,17 @@
 //! not know the pipeline: a new revision reaches it as a notification of the
 //! store.
 //!
-//! What it knows of a world's table is the state the world extracts: per
-//! entry, the asset type the entry holds, its availability and whether a
-//! want names it. A batch holds no arrival for an asset the table holds
-//! available; an asset the manifest holds under another type than its entry
-//! holds fails; and a part whose dependencies are not those the manifest
-//! lists for it, each under the type the manifest holds that dependency
-//! under, fails.
+//! What it knows of a world's table is the state the world extracts at the
+//! end of a tick, or gives by a query where no tick has ended: per entry,
+//! the asset type the entry holds, its availability and whether a want names
+//! it. Every batch is complete against that state, and a rejection or a fall
+//! is learned from it, never from what was posted. A batch holds no arrival
+//! for an asset the table holds available; an asset the manifest holds under
+//! another type than its entry holds fails, but a dependency failed for that
+//! reason below a parent whose part the batch brings; and a part whose
+//! dependencies are not those the manifest lists for it, each under the type
+//! the manifest holds that dependency under, fails. An arrival to a hash
+//! names the size the manifest gives of what it puts in force.
 //!
 //! Every behavior a scenario's control changes on purpose is a field of
 //! `Options`, and so is every place where the design text was read one way
@@ -34,8 +38,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use content_store::{AssetId, Domain, DomainEntry, Mounted, Package, closure, content_hash, decode_domain, decode_root, hex, set_hash};
 use prototype_core::table::{
-    Arrival, ArrivalQueue, AssetType, Availability, EntryView, Outcome, Part, REASON_ANOTHER_TYPE, REASON_ARTIFACT_GONE, REASON_DEPENDENCIES_DIFFER,
-    REASON_HASH_MISMATCH, REASON_INVALID_PART, REASON_UNKNOWN_ASSET, Resident, Residents,
+    Arrival, ArrivalQueue, AssetType, Availability, EntryView, Outcome, Owner, Part, Policy, REASON_ANOTHER_TYPE, REASON_ARTIFACT_GONE,
+    REASON_DEPENDENCIES_DIFFER, REASON_HASH_MISMATCH, REASON_INVALID_PART, REASON_UNKNOWN_ASSET, Resident, Residents,
 };
 use prototype_core::world::Extraction;
 
@@ -257,7 +261,43 @@ pub struct Options {
     /// any replacement that cannot be put in force: the asset stays at its
     /// hash, and the refusal is a report.
     pub a_changed_type_fails_an_asset_in_force: bool,
+    // --- the readings taken on the same-harness stage: each field runs the
+    // former default of the build, or the reading not taken ---
+    /// Not taken, the build's former default: with the answers to a restore,
+    /// an ordinary arrival is posted for each asset of an answer's closure
+    /// that receives no marked answer and that the saved table holds under
+    /// no want. The default is the narrow form: an ordinary arrival for each
+    /// asset that a want the core adds from the part of an answer creates or
+    /// returns to unavailable, an entry failed under another want included
+    /// and an entry failed under its parent's own standing want left as it
+    /// is, read from the owners of the wants the query gives; and for an
+    /// entry held unavailable under no want that such a part lists.
+    pub restore_answers_for_what_no_want_names: bool,
+    /// Not taken, the build's former default: following a closure, a
+    /// dependency whose entry the table holds failed for the reason of
+    /// another type fails anew for its type, as any asset the manifest
+    /// holds under another type than its entry. The default does not fail
+    /// it where the part of its parent, brought by the batch, lists it under
+    /// the manifest's type, and loads it under that type, which is the type
+    /// the core's want gives the entry before the arrival is applied.
+    pub dependency_failed_for_its_type_fails_anew: bool,
+    /// The other reading of that exception, its letter: it holds as well
+    /// below a parent that the table holds available and that the batch
+    /// does not bring, on which the core adds no want.
+    pub type_exception_below_a_parent_in_force: bool,
+    /// Not taken, run as a control: the capability trusts what it posted. An
+    /// asset it posted to a hash counts as held available by that world from
+    /// then on, whatever the state the world extracts: a rejection over a
+    /// budget, or an entry that left the table, is never learned, and a
+    /// later batch leaves the asset out. The default reads the state
+    /// extracted at the end of the last tick, and nothing else.
+    pub trusts_what_it_posted: bool,
 }
+
+/// The prepared forms built once that a world's composition declares, by
+/// what prepares each: none, no asset type of this prototype having one.
+/// The size an arrival names is that of the part with the forms named here.
+const DECLARED_FORMS: [&str; 0] = [];
 
 /// What the capability knows of one attached world.
 struct WorldLink {
@@ -275,16 +315,52 @@ struct WorldLink {
     /// Under the control that posts a move one arrival per tick: what is
     /// left to post.
     backlog: VecDeque<Arrival>,
+    /// For a restore under the content at hand: the owners of the wants
+    /// that stand on each entry the table does not hold available, as the
+    /// query before the first tick gave them.
+    standing: BTreeMap<AssetId, Vec<Owner>>,
+    /// Under the control that trusts what was posted, and read under it
+    /// alone: the assets posted to a hash.
+    posted: BTreeSet<AssetId>,
+    trusted: bool,
 }
 
 impl WorldLink {
+    /// Whether the world's table holds an asset available, read from the
+    /// state the world last extracted: a batch is complete against it.
     fn holds_available(&self, asset: &AssetId) -> bool {
-        self.table.get(asset).is_some_and(|entry| matches!(entry.availability, Availability::Available(_)))
+        let extracted = self.table.get(asset).is_some_and(|entry| matches!(entry.availability, Availability::Available(_)));
+        extracted || (self.trusted && self.posted.contains(asset))
     }
 
     fn entry_type(&self, asset: &AssetId) -> Option<AssetType> {
         self.table.get(asset).map(|entry| entry.asset_type)
     }
+
+    /// Whether a parent already owns a want on an entry the table does not
+    /// hold available, as the query of a restore gave it.
+    fn owns(&self, asset: &AssetId, parent: AssetId) -> bool {
+        self.standing.get(asset).is_some_and(|owners| owners.contains(&Owner::Asset(parent)))
+    }
+}
+
+/// What a closure is followed for, below one asset of a batch.
+struct Follow<'a> {
+    /// The wants that left, each with the type it left with.
+    left: &'a [(AssetId, AssetType)],
+    /// An arrival is posted for an asset the table holds available too.
+    every_asset: bool,
+    /// The closure is the closure of a want: under one reading it is not
+    /// followed below an asset that fails.
+    of_a_want: bool,
+    /// The asset the arrivals name as their root, where roots are marked.
+    root: AssetId,
+}
+
+/// Whether a batch holds an arrival to a hash for an asset: its part is
+/// brought by the batch.
+fn brought(batch: &[Arrival], asset: &AssetId) -> bool {
+    batch.iter().any(|arrival| arrival.asset == *asset && matches!(arrival.outcome, Outcome::Hash(_)))
 }
 
 /// What happened outside the domain, for the report.
@@ -453,6 +529,9 @@ impl Instance {
             vec![self.worlds[&world].queue.clone()]
         };
         self.report.batches += 1;
+        // Under the control that trusts what was posted, and read under it alone.
+        let posted = batch.iter().filter(|arrival| matches!(arrival.outcome, Outcome::Hash(_))).map(|arrival| arrival.asset);
+        self.worlds.get_mut(&world).expect("an attached world").posted.extend(posted);
         let delay = self.delay_for(world);
         if delay.is_zero() {
             for queue in queues {
@@ -492,9 +571,80 @@ impl Instance {
         self.deliver(world, batch);
     }
 
+    /// The arrival of one asset of a batch: to the hash the manifest names,
+    /// with the size of what it puts in force, which the manifest gives, or
+    /// a failure with its reason, which names no size.
+    fn arrival(&mut self, manifest: &Domain, asset: AssetId, held: Option<AssetType>) -> Arrival {
+        match self.load(manifest, asset, held) {
+            Outcome::Hash(hash) => Arrival::at(asset, hash).sized(manifest.get(&asset).map_or(0, |entry| entry.size_in_force(&DECLARED_FORMS))),
+            Outcome::Failure(code) => Arrival::failed(asset, code),
+        }
+    }
+
+    /// The type a dependency is loaded under where a closure reaches it from
+    /// a parent: the type the world's entry holds, where it holds one. With
+    /// one exception: a dependency whose entry the table holds failed for
+    /// the reason of another type, and that the part of its parent, brought
+    /// by the batch, lists under the manifest's type, is not failed for its
+    /// type and is loaded under the manifest's type, which is the type the
+    /// core's want gives the entry before the arrival is applied.
+    fn type_below(&self, world: u32, manifest: &Domain, parent: AssetId, asset: AssetId, batch: &[Arrival]) -> Option<AssetType> {
+        let entry = self.worlds[&world].table.get(&asset)?;
+        if entry.availability == Availability::Failed(REASON_ANOTHER_TYPE) && !self.options.dependency_failed_for_its_type_fails_anew {
+            let lists = |(above, own): (&DomainEntry, &DomainEntry)| above.dependencies.iter().any(|(dependency, listed)| *dependency == asset && *listed == own.asset_type);
+            let listed = manifest.get(&parent).zip(manifest.get(&asset)).is_some_and(lists);
+            if listed && (brought(batch, &parent) || self.options.type_exception_below_a_parent_in_force) {
+                return None;
+            }
+        }
+        Some(entry.asset_type)
+    }
+
+    /// Follows a closure below one asset of a batch, in the manifest, each
+    /// parent before what its part lists: an arrival is added to the batch
+    /// for each asset reached that the world's table does not hold available
+    /// and that the batch does not hold yet. A want that left is loaded
+    /// under the type it left with wherever the closure reaches its asset.
+    /// A dependency that failed for its type above and is reached again
+    /// below a parent whose part the batch brings is loaded again under the
+    /// exception of `type_below`.
+    fn follow_below(&mut self, world: u32, manifest: &Domain, batch: &mut Vec<Arrival>, followed: &mut BTreeSet<AssetId>, from: AssetId, follow: Follow) {
+        let below = |asset: AssetId| -> Vec<(AssetId, AssetId)> {
+            manifest.get(&asset).map_or_else(Vec::new, |entry| entry.dependencies.iter().map(|(dependency, _)| (asset, *dependency)).collect())
+        };
+        let mut open = below(from);
+        while let Some((parent, asset)) = open.pop() {
+            let left_as = follow.left.iter().find(|(other, _)| *other == asset).map(|(_, asset_type)| *asset_type);
+            let failed_for_its_type = |arrival: &Arrival| arrival.asset == asset && arrival.outcome == Outcome::Failure(REASON_ANOTHER_TYPE) && !arrival.marked;
+            if let Some(at) = batch.iter().position(failed_for_its_type)
+                && left_as.is_none()
+                && self.type_below(world, manifest, parent, asset, batch).is_none()
+            {
+                let again = self.arrival(manifest, asset, None);
+                batch[at] = Arrival { root: self.root_of(again.outcome, follow.root), ..again };
+            }
+            if !followed.insert(asset) {
+                continue;
+            }
+            let link = &self.worlds[&world];
+            let posts = !batch.iter().any(|arrival| arrival.asset == asset) && (follow.every_asset || !link.holds_available(&asset));
+            let mut stops = false;
+            if posts {
+                let held = if left_as.is_some() { left_as } else { self.type_below(world, manifest, parent, asset, batch) };
+                let arrival = self.arrival(manifest, asset, held);
+                stops = follow.of_a_want && self.options.nothing_posted_below_a_failed_asset && matches!(arrival.outcome, Outcome::Failure(_));
+                batch.push(Arrival { root: self.root_of(arrival.outcome, follow.root), ..arrival });
+            }
+            if !stops {
+                open.extend(below(asset));
+            }
+        }
+    }
+
     /// Answers the wants that left a world: the closure of each in the
     /// manifest the world stands under, as one complete batch that holds no
-    /// arrival for an asset the world's table holds available. A want leaves
+    /// arrival for an asset the world's table holds available, read from the
+    /// state the world extracted at the end of its last tick. A want leaves
     /// with the asset type its entry holds. Where roots are marked, an
     /// arrival names the asset of the want it answers, the first in
     /// identifier order where it stands in the closures of several.
@@ -509,22 +659,20 @@ impl Instance {
         sorted.dedup_by_key(|(asset, _)| *asset);
         let mut followed = BTreeSet::new();
         let mut batch = Vec::new();
-        for (root, _) in &sorted {
-            let mut open = vec![*root];
-            while let Some(asset) = open.pop() {
-                if !followed.insert(asset) {
-                    continue;
-                }
-                let link = &self.worlds[&world];
-                let held = sorted.iter().find(|(other, _)| *other == asset).map(|(_, asset_type)| *asset_type).or_else(|| link.entry_type(&asset));
-                let outcome = (every_asset || !link.holds_available(&asset)).then(|| self.load(&manifest, asset, held));
-                let stops = self.options.nothing_posted_below_a_failed_asset && matches!(outcome, Some(Outcome::Failure(_)));
-                if !stops && let Some(entry) = manifest.get(&asset) {
-                    open.extend(entry.dependencies.iter().map(|(dependency, _)| *dependency));
-                }
-                if let Some(outcome) = outcome {
-                    batch.push(Arrival { asset, outcome, marked: false, root: self.root_of(outcome, *root) });
-                }
+        for (root, left_as) in &sorted {
+            // A want reached before, in the closure of another, was followed there.
+            if !followed.insert(*root) {
+                continue;
+            }
+            let mut stops = false;
+            if every_asset || !self.worlds[&world].holds_available(root) {
+                let arrival = self.arrival(&manifest, *root, Some(*left_as));
+                stops = self.options.nothing_posted_below_a_failed_asset && matches!(arrival.outcome, Outcome::Failure(_));
+                batch.push(Arrival { root: self.root_of(arrival.outcome, *root), ..arrival });
+            }
+            if !stops {
+                let follow = Follow { left: &sorted, every_asset, of_a_want: true, root: *root };
+                self.follow_below(world, &manifest, &mut batch, &mut followed, *root, follow);
             }
         }
         self.post(world, batch);
@@ -539,31 +687,38 @@ impl Instance {
     /// Answers a restore under the content at hand: one marked answer per
     /// asset the world's table holds as available, an entry with no want
     /// included; and, following the closure of each answer in the manifest
-    /// the world stands under, an ordinary arrival for each asset of that
-    /// closure that receives no marked answer and that the saved table holds
-    /// under no want, named there or not, so that the gate opens on a
-    /// complete batch.
+    /// the world stands under, the ordinary arrivals that complete the batch
+    /// of each closure, so that the gate opens on a complete batch.
     fn answer_restore(&mut self, world: u32, held: &[AssetId]) {
         let manifest = self.manifest_of(self.worlds[&world].set);
         let marked = !self.options.answers_unmarked;
         let mut batch = Vec::new();
         for asset in held {
-            let outcome = self.load(&manifest, *asset, self.worlds[&world].entry_type(asset));
-            if self.options.no_answer_for_an_absent_asset && outcome == Outcome::Failure(REASON_UNKNOWN_ASSET) {
+            let arrival = self.arrival(&manifest, *asset, self.worlds[&world].entry_type(asset));
+            if self.options.no_answer_for_an_absent_asset && arrival.outcome == Outcome::Failure(REASON_UNKNOWN_ASSET) {
                 continue;
             }
-            batch.push(Arrival { asset: *asset, outcome, marked, root: None });
+            batch.push(Arrival { marked, ..arrival });
         }
-        if !self.options.restore_answers_do_not_follow_the_closure {
+        let wider = self.options.restore_answers_complete_the_batch;
+        if self.options.restore_answers_do_not_follow_the_closure {
+            // Not taken: the answers and nothing else.
+        } else if wider || self.options.restore_answers_for_what_no_want_names {
+            // The two forms not taken: an ordinary arrival for every asset
+            // of a closure that the table does not hold available, or for
+            // every one the saved table holds under no want.
             let answered: Vec<AssetId> = batch.iter().map(|arrival| arrival.asset).collect();
             for asset in closure(&manifest, &answered) {
                 let link = &self.worlds[&world];
                 let wanted = link.table.get(&asset).is_some_and(|entry| entry.wanted);
-                let posted = if self.options.restore_answers_complete_the_batch { !link.holds_available(&asset) } else { !wanted };
+                let posted = if wider { !link.holds_available(&asset) } else { !wanted };
                 if !answered.contains(&asset) && posted {
-                    batch.push(Arrival { asset, outcome: self.load(&manifest, asset, link.entry_type(&asset)), marked: false, root: None });
+                    let held = link.entry_type(&asset);
+                    batch.push(self.arrival(&manifest, asset, held));
                 }
             }
+        } else {
+            self.complete_the_closures_of_a_restore(world, &manifest, &mut batch);
         }
         let link = self.worlds.get_mut(&world).expect("an attached world");
         // The world waits for its first tick to apply these answers.
@@ -571,13 +726,74 @@ impl Instance {
         self.deliver(world, batch);
     }
 
+    /// The narrow form of the batch of a restore: with the answers, an
+    /// ordinary arrival, unmarked, for each asset that a want the core adds
+    /// from the part of an answer creates or returns to unavailable, and for
+    /// an entry the save holds unavailable under no want that such a part
+    /// lists.
+    ///
+    /// The core adds its wants at the first step of the first tick, starting
+    /// from the part of an asset that holds a want at that step and
+    /// following it downwards, to any depth: the parents here are the assets
+    /// the saved table holds under a want whose arrival in the batch is to a
+    /// hash, and every asset reached below one whose arrival is to a hash,
+    /// the core's want then naming it. For each dependency such a part lists
+    /// that receives no arrival yet: an asset the saved table does not name
+    /// is created by the want; an entry the save holds as failed returns to
+    /// unavailable where the want is added on it, which it is but where its
+    /// parent's own want already stands on it, as the owners the query gave
+    /// tell, and such an entry receives nothing and stays failed; an entry
+    /// the save holds unavailable under no want is left unanswered by the
+    /// want; one it holds unavailable under a want is answered as any
+    /// unanswered want is, by the batch of its own closure.
+    fn complete_the_closures_of_a_restore(&mut self, world: u32, manifest: &Domain, batch: &mut Vec<Arrival>) {
+        let link = &self.worlds[&world];
+        let wanted = |asset: &AssetId| link.table.get(asset).is_some_and(|entry| entry.wanted);
+        let mut open: Vec<AssetId> = batch.iter().map(|arrival| arrival.asset).filter(|asset| brought(batch, asset) && wanted(asset)).collect();
+        let mut parents = BTreeSet::new();
+        while let Some(parent) = open.pop() {
+            if !parents.insert(parent) {
+                continue;
+            }
+            let dependencies: Vec<AssetId> = manifest.get(&parent).map_or_else(Vec::new, |entry| entry.dependencies.iter().map(|(dependency, _)| *dependency).collect());
+            for dependency in dependencies {
+                if batch.iter().any(|arrival| arrival.asset == dependency) {
+                    // An answer, or an arrival another parent brought: where
+                    // it is to a hash, its part adds wants in its turn.
+                    if brought(batch, &dependency) {
+                        open.push(dependency);
+                    }
+                    continue;
+                }
+                let link = &self.worlds[&world];
+                let posted = match link.table.get(&dependency) {
+                    None => true,
+                    Some(entry) => match entry.availability {
+                        Availability::Available(_) => false,
+                        Availability::Failed(_) => !link.owns(&dependency, parent),
+                        Availability::Unavailable => !entry.wanted,
+                    },
+                };
+                if posted {
+                    let held = self.type_below(world, manifest, parent, dependency, batch);
+                    batch.push(self.arrival(manifest, dependency, held));
+                    if brought(batch, &dependency) {
+                        open.push(dependency);
+                    }
+                }
+            }
+        }
+    }
+
     /// The transitions a move of the manifest owes one world, as one batch:
     /// an arrival for each asset the move changes that the world's table
     /// names, an entry with no want included, with an arrival for each asset
     /// of the closure of a changed part that the table does not hold
-    /// available, and for no other asset. Where roots are marked, an arrival
-    /// names the asset the move changed that brought it: itself, or the
-    /// changed asset whose closure holds it, the first in identifier order.
+    /// available, and for no other asset. The table is the state the world
+    /// extracted at the end of its last tick. Where roots are marked, an
+    /// arrival names the asset the move changed that brought it: itself, or
+    /// the changed asset whose closure holds it, the first in identifier
+    /// order.
     fn post_move(&mut self, world: u32) {
         let manifest = self.manifest_of(self.worlds[&world].set);
         let link = self.worlds.get_mut(&world).expect("an attached world");
@@ -595,22 +811,17 @@ impl Instance {
         let mut batch = Vec::new();
         let mut parts = Vec::new();
         for (asset, held) in &changed {
-            let outcome = self.load(&manifest, *asset, Some(*held));
-            if matches!(outcome, Outcome::Hash(_)) {
+            let arrival = self.arrival(&manifest, *asset, Some(*held));
+            if matches!(arrival.outcome, Outcome::Hash(_)) {
                 parts.push(*asset);
             }
-            batch.push(Arrival { asset: *asset, outcome, marked: false, root: self.root_of(outcome, *asset) });
+            batch.push(Arrival { root: self.root_of(arrival.outcome, *asset), ..arrival });
         }
         if !self.options.moves_without_the_closure {
+            let mut followed = BTreeSet::new();
             for part in &parts {
-                for asset in closure(&manifest, &[*part]) {
-                    let link = &self.worlds[&world];
-                    if batch.iter().any(|arrival| arrival.asset == asset) || link.holds_available(&asset) {
-                        continue;
-                    }
-                    let outcome = self.load(&manifest, asset, link.entry_type(&asset));
-                    batch.push(Arrival { asset, outcome, marked: false, root: self.root_of(outcome, *part) });
-                }
+                let follow = Follow { left: &[], every_asset: false, of_a_want: false, root: *part };
+                self.follow_below(world, &manifest, &mut batch, &mut followed, *part, follow);
             }
         }
         if self.options.moves_posted_one_per_tick {
@@ -693,6 +904,9 @@ pub struct Attachment {
     /// For a restore under the content at hand: the entries the table holds
     /// available, which that restore answers.
     pub restore: Vec<AssetId>,
+    /// For the same restore: for each entry the table does not hold
+    /// available, the wants that stand on it with their owners.
+    pub standing: Vec<(AssetId, Vec<(Owner, Policy)>)>,
 }
 
 /// The capability held still: while it lives, the capability handles nothing
@@ -774,6 +988,9 @@ impl Loader {
                 awaiting_restore: false,
                 held: false,
                 backlog: VecDeque::new(),
+                standing: attachment.standing.iter().map(|(asset, wants)| (*asset, wants.iter().map(|(owner, _)| *owner).collect())).collect(),
+                posted: BTreeSet::new(),
+                trusted: instance.options.trusts_what_it_posted,
             };
             instance.worlds.insert(world, link);
             instance.answer_restore(world, &attachment.restore);

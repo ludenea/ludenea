@@ -42,8 +42,18 @@ fn release(asset: AssetId, owner: Owner) -> Command {
     Command::Release { asset, owner }
 }
 
+/// A scripted arrival to a hash that names no size names the one the
+/// manifest would give: the length of its part.
+fn sized(parts: &Parts, arrivals: Vec<Arrival>) -> Vec<Arrival> {
+    let named = |arrival: Arrival| match arrival.outcome {
+        Outcome::Hash(hash) if arrival.size == 0 => arrival.sized(parts.get(hash).map_or(0, |resident| resident.bytes.len() as u64)),
+        _ => arrival,
+    };
+    arrivals.into_iter().map(named).collect()
+}
+
 fn apply(table: &mut Table, parts: &Parts, commands: Vec<Command>, arrivals: Vec<Arrival>) -> Applied {
-    let mut record = Record::arrivals(1, arrivals);
+    let mut record = Record::arrivals(1, sized(parts, arrivals));
     record.commands = commands;
     table.apply(&record, parts, &|_, _| true)
 }
@@ -444,36 +454,59 @@ fn a_failed_entry_under_a_want_that_a_restored_parent_newly_lists_keeps_the_gate
     assert!(restored.gate_open(&Record::arrivals(9, complete), &parts));
 }
 
-/// Found by reading, shown here: a case the design text leaves without a way
-/// out. An entry takes another type from "the next want that states
-/// another", and a want the core adds "states a type only where it is the
-/// dependency's first". So the entry of a dependency that a command first
-/// wanted under a wrong type, and that the core alone still wants, is never
-/// corrected by its parent: each retry leaves with the wrong type and fails
-/// again, until a command wants the dependency under the manifest's type or
-/// the entry falls.
+/// On an entry failed for the reason of another type, a want the core adds
+/// takes the type its parent's part lists, replaces the entry's type and is
+/// the new load, whatever other want stands on the entry: a dependency its
+/// parent's part lists correctly is not held failed until a command states
+/// the right type. The reading not taken is the letter the text had: the
+/// core's want states no type there, and each retry leaves with the wrong
+/// type and fails again.
 #[test]
-fn an_entry_failed_for_its_type_that_the_core_alone_wants_keeps_the_wrong_type() {
+fn on_an_entry_failed_for_its_type_the_cores_want_takes_the_type_its_parents_part_lists() {
     let mut parts = Parts::default();
     let p = parts.part(1, &[(D, PARAMETERS)]);
-    let mut table = Table::default();
-    let commands = vec![want(D, SECOND, HOST, Policy::Optional), want(P, PARAMETERS, BASE, Policy::Required)];
-    apply(&mut table, &parts, commands, vec![Arrival::at(P, p), Arrival::failed(D, REASON_ANOTHER_TYPE)]);
-    assert_eq!(availability(&table, D), Some(Availability::Failed(REASON_ANOTHER_TYPE)));
-    // The maker of the wrong want releases it.
-    apply(&mut table, &parts, vec![release(D, HOST)], Vec::new());
-    assert_eq!(wants(&table, D), vec![(Owner::Asset(P), Policy::Required)]);
-    // The parent is released and wanted again: the core's want is the new
-    // load of the failed entry, and states no type.
-    let applied = apply(&mut table, &parts, vec![release(P, BASE), want(P, PARAMETERS, BASE, Policy::Required)], Vec::new());
-    assert_eq!(table.entries[&D].asset_type, SECOND);
-    assert_eq!(availability(&table, D), Some(Availability::Unavailable));
-    assert_eq!(applied.left, vec![(D, SECOND)], "the retry leaves with the type the entry holds");
-    // What corrects it: a command's want of the manifest's type, once the failure has arrived again.
+    // A command wants `D` under a wrong type and `D` fails for it; then a
+    // parent whose part lists `D` under the manifest's type is wanted.
+    let failed = |rules: Rules, released: bool| {
+        let mut table = Table::with_rules(rules);
+        apply(&mut table, &parts, vec![want(D, SECOND, HOST, Policy::Optional)], vec![Arrival::failed(D, REASON_ANOTHER_TYPE)]);
+        if released {
+            apply(&mut table, &parts, vec![release(D, HOST)], Vec::new());
+        }
+        let applied = apply(&mut table, &parts, vec![want(P, PARAMETERS, BASE, Policy::Required)], vec![Arrival::at(P, p)]);
+        (table, applied)
+    };
+    // The wrong want still stands: the type is replaced all the same, and
+    // the want made under the former type stays.
+    let (table, applied) = failed(Rules::default(), false);
+    assert_eq!(table.entries[&D].asset_type, PARAMETERS);
+    assert_eq!(availability(&table, D), Some(Availability::Unavailable), "the core's want is the new load");
+    assert_eq!(wants(&table, D), vec![(HOST, Policy::Optional), (Owner::Asset(P), Policy::Required)]);
+    assert!(applied.left.contains(&(D, PARAMETERS)), "the want leaves with the type the entry now holds");
+    assert!(table.blocked(), "and gates, its parent being required");
+    // The entry held no want when the core's want was added: the same.
+    let (table, applied) = failed(Rules::default(), true);
+    assert_eq!((table.entries[&D].asset_type, availability(&table, D)), (PARAMETERS, Some(Availability::Unavailable)));
+    assert!(applied.left.contains(&(D, PARAMETERS)));
+    // Not taken: the entry keeps the wrong type, and the retry leaves with it.
+    let (mut table, applied) = failed(Rules { core_want_keeps_the_type_of_a_failed_entry: true, ..Rules::default() }, false);
+    assert_eq!((table.entries[&D].asset_type, availability(&table, D)), (SECOND, Some(Availability::Unavailable)));
+    assert!(applied.left.contains(&(D, SECOND)));
+    // What corrects it there: a command's want of the manifest's type, once the failure has arrived again.
     apply(&mut table, &parts, Vec::new(), vec![Arrival::failed(D, REASON_ANOTHER_TYPE)]);
     let applied = apply(&mut table, &parts, vec![want(D, PARAMETERS, TOOL, Policy::Optional)], Vec::new());
     assert_eq!(table.entries[&D].asset_type, PARAMETERS);
     assert_eq!(applied.left, vec![(D, PARAMETERS)]);
+    // An entry failed for another reason keeps its type under the core's want.
+    let mut other = Table::default();
+    apply(&mut other, &parts, vec![want(D, SECOND, HOST, Policy::Optional)], vec![Arrival::failed(D, REASON_ARTIFACT_GONE)]);
+    apply(&mut other, &parts, vec![want(P, PARAMETERS, BASE, Policy::Required)], vec![Arrival::at(P, p)]);
+    assert_eq!((other.entries[&D].asset_type, availability(&other, D)), (SECOND, Some(Availability::Unavailable)));
+    // An entry that fails for its type while a want of the core already
+    // stands on it is not reached: the rule acts when the want is added.
+    let mut standing = Table::default();
+    apply(&mut standing, &parts, vec![want(D, SECOND, HOST, Policy::Optional), want(P, PARAMETERS, BASE, Policy::Required)], vec![Arrival::at(P, p), Arrival::failed(D, REASON_ANOTHER_TYPE)]);
+    assert_eq!((standing.entries[&D].asset_type, availability(&standing, D)), (SECOND, Some(Availability::Failed(REASON_ANOTHER_TYPE))));
 }
 
 #[test]
@@ -521,7 +554,8 @@ fn the_candidates_of_a_budget_reject_one_arrival_the_closure_of_one_want_or_the_
     };
     // Each arrival alone, in identifier order: `D` stands, `A` would bring
     // the count to 160, `P` brings it to 140.
-    let (table, applied) = run(Rules::default(), 150);
+    let single = Rules { budget_unit: BudgetUnit::SingleArrival, ..Rules::default() };
+    let (table, applied) = run(single, 150);
     assert_eq!(applied.rejected, vec![(A, a)]);
     assert_eq!(applied.events, vec![Event::Arrived { asset: D, hash: d }, Event::Failed { asset: A, code: over }, Event::Arrived { asset: P, hash: p }]);
     assert_eq!(availability(&table, A), Some(Availability::Failed(over)), "a rejected arrival fails an entry the table does not hold available");
@@ -543,7 +577,7 @@ fn the_candidates_of_a_budget_reject_one_arrival_the_closure_of_one_want_or_the_
     assert!(applied.rejected.is_empty());
     assert!(table.entries.values().all(|entry| matches!(entry.availability, Availability::Available(_))));
     // The control: the budget only reports, and every arrival is applied.
-    let (table, applied) = run(Rules { budget_only_reports: true, ..Rules::default() }, 150);
+    let (table, applied) = run(Rules { budget_only_reports: true, ..single }, 150);
     assert_eq!(applied.rejected, vec![(A, a)]);
     assert_eq!(availability(&table, A), Some(Availability::Available(a)));
 }
@@ -575,7 +609,8 @@ fn an_arrival_at_another_hash_counts_the_new_size_in_place_of_the_former_one() {
     assert_eq!(applied.unnamed_arrivals, 1);
 }
 
-/// The rules under the unit of a rejection the design text proposes.
+/// The rules under the unit of a rejection the design text takes, the group
+/// of a root: the default.
 fn proposed() -> Rules {
     Rules { budget_unit: BudgetUnit::DerivedClosure, ..Rules::default() }
 }
@@ -593,18 +628,19 @@ fn the_proposed_unit_rejects_the_closure_of_a_root_and_leaves_nothing_of_it() {
     let a = parts.sized(2, &[], 100);
     let p = parts.sized(3, &[(D, PARAMETERS)], 80);
     let over = REASON_OVER_BUDGET;
-    // A table under a budget that wants `A` and `P`, whose part lists `D`,
-    // and one record that holds the three arrivals. None names a root.
+    // A table under a budget that requires `A` and `P`, whose part lists
+    // `D`, and one record that holds the three arrivals. None names a root.
     let run = |rules: Rules, budget: u64| {
         let mut table = Table::with_rules(rules);
         table.budget = Some(budget);
-        apply(&mut table, &parts, vec![want(A, PARAMETERS, HOST, Policy::Optional), want(P, PARAMETERS, HOST, Policy::Required)], Vec::new());
+        apply(&mut table, &parts, vec![want(A, PARAMETERS, HOST, Policy::Required), want(P, PARAMETERS, HOST, Policy::Required)], Vec::new());
         let applied = apply(&mut table, &parts, Vec::new(), vec![Arrival::at(D, d), Arrival::at(A, a), Arrival::at(P, p)]);
         (table, applied)
     };
-    // The roots are `A` and `P`, tested in that order and in no other: the
-    // group of `A`, an optional want, brings the count to 100, and the group
-    // of `P`, its own arrival with the arrival of `D`, would bring it to 240.
+    // The roots are `A` and `P`, both under a required want, tested in the
+    // identifier order of the roots: the group of `A` brings the count to
+    // 100, and the group of `P`, its own arrival with the arrival of `D`,
+    // would bring it to 240.
     let (mut table, applied) = run(proposed(), 150);
     assert_eq!(applied.rejected, vec![(D, d), (P, p)], "the step names every rejected arrival");
     assert_eq!(applied.events, vec![Event::Arrived { asset: A, hash: a }, Event::Failed { asset: P, code: over }]);
@@ -679,7 +715,7 @@ fn the_room_of_an_entry_that_falls_is_free_for_the_arrivals_of_the_same_record()
     assert_eq!(availability(&table, P), Some(Availability::Available(p)));
     // The control, and the three candidates: the count holds the entry that
     // falls, and the arrival is rejected for an asset that leaves the table.
-    for rules in [Rules { budget_count_holds_the_falling_entries: true, ..proposed() }, Rules::default()] {
+    for rules in [Rules { budget_count_holds_the_falling_entries: true, ..proposed() }, Rules { budget_unit: BudgetUnit::SingleArrival, ..Rules::default() }] {
         let (table, applied) = run(rules);
         assert_eq!(applied.rejected, vec![(P, p)]);
         assert_eq!(applied.fallen, vec![A]);
@@ -735,7 +771,7 @@ fn an_entry_due_to_fall_that_a_closure_reaches_stays_counted() {
     assert!(applied.rejected.is_empty() && applied.fallen.is_empty());
     assert_eq!(wants(&table, D), vec![(Owner::Asset(P), Policy::Required)]);
     // `A` reaches nothing but itself and would fit once `D` has left. It is
-    // tested first, against a count that holds `D`, and is rejected too.
+    // tested against a count that holds `D`, and is rejected too.
     let (table, applied) = run(1000, true);
     assert_eq!(applied.rejected, vec![(A, a), (P, p)]);
     assert_eq!(applied.fallen, vec![D]);
@@ -886,4 +922,330 @@ fn the_gate_of_a_world_that_is_not_gated_reads_no_pending_record() {
     assert!(!read.gate_open(&alone, &parts), "the other reading: the pending record closes the gate before it is applied");
     table.apply(&alone, &parts, &|_, _| true);
     assert_eq!(table.required_unanswered(), vec![D], "the record applied, the dependency gates from the next boundary");
+}
+
+// ---------------------------------------------------------------------------
+// The readings taken on the same-harness stage, each with the reading not
+// taken beside it
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_system_is_the_maker_of_its_want_between_contributors_and_command_sources() {
+    let parts = Parts::default();
+    let spawner = Owner::World(Maker::System(SystemName::new("logic/spawner")));
+    let cleaner = Owner::World(Maker::System(SystemName::new("logic/cleaner")));
+    let mut table = Table::default();
+    let commands = vec![
+        want(A, PARAMETERS, HOST, Policy::Optional),
+        want(A, PARAMETERS, spawner, Policy::Optional),
+        want(A, PARAMETERS, cleaner, Policy::Required),
+        want(A, PARAMETERS, BASE, Policy::Optional),
+    ];
+    apply(&mut table, &parts, commands, Vec::new());
+    // Contributors first, systems next by their stable name, command sources after.
+    assert_eq!(wants(&table, A), vec![(BASE, Policy::Optional), (cleaner, Policy::Required), (spawner, Policy::Optional), (HOST, Policy::Optional)]);
+    // Two systems hold two wants: the release of one leaves the other, and
+    // neither is the want of the contributor.
+    apply(&mut table, &parts, vec![release(A, cleaner)], Vec::new());
+    assert_eq!(wants(&table, A), vec![(BASE, Policy::Optional), (spawner, Policy::Optional), (HOST, Policy::Optional)]);
+    // The canonical bytes carry the kind and the stable name, and read back.
+    let bytes = table.canonical_bytes();
+    assert!(bytes.windows(13).any(|window| window == b"logic/spawner"));
+    let read = Table::decode(&bytes, Rules::default()).expect("the table decodes");
+    assert_eq!(read.entries[&A].wants, table.entries[&A].wants);
+    assert_eq!(read.canonical_bytes(), bytes);
+    let record = Record::commands(3, vec![want(A, PARAMETERS, spawner, Policy::Required), release(A, cleaner)]);
+    assert_eq!(decode_log(&encode_log(std::slice::from_ref(&record))).expect("the log decodes"), vec![record]);
+    // Under the reading that orders makers by their numeric identity, a
+    // system, which has none, stands after them.
+    let mut by_identity = Table::with_rules(Rules { makers_by_identity_alone: true, ..Rules::default() });
+    apply(&mut by_identity, &parts, vec![want(A, PARAMETERS, spawner, Policy::Optional), want(A, PARAMETERS, BASE, Policy::Optional), want(A, PARAMETERS, HOST, Policy::Optional)], Vec::new());
+    assert_eq!(wants(&by_identity, A), vec![(HOST, Policy::Optional), (BASE, Policy::Optional), (spawner, Policy::Optional)]);
+}
+
+#[test]
+fn an_arrival_names_its_size_and_the_entry_holds_it_in_the_canonical_bytes() {
+    let mut parts = Parts::default();
+    let first = parts.sized(1, &[], 100);
+    let second = parts.sized(2, &[], 140);
+    let mut table = Table::default();
+    apply(&mut table, &parts, vec![want(A, PARAMETERS, HOST, Policy::Optional)], vec![Arrival::at(A, first).sized(321)]);
+    assert_eq!(table.entries[&A].size, 321, "the entry holds the size its arrival named, and not the length of the part");
+    // The bytes of the table hold it, and a table read back holds it.
+    let bytes = table.canonical_bytes();
+    let read = Table::decode(&bytes, Rules::default()).expect("the table decodes");
+    assert_eq!((read.entries[&A].size, read.canonical_bytes() == bytes), (321, true));
+    let mut other = Table::default();
+    apply(&mut other, &parts, vec![want(A, PARAMETERS, HOST, Policy::Optional)], vec![Arrival::at(A, first).sized(322)]);
+    assert_ne!(other.canonical_bytes(), bytes, "two tables that differ in the size of one entry differ in their bytes");
+    // The control: the bytes as they stood before an entry held a size.
+    let without = |table: &Table| Table { rules: Rules { size_left_out_of_the_bytes: true, ..Rules::default() }, ..table.clone() }.canonical_bytes();
+    assert_eq!(without(&table), without(&other));
+    assert_eq!(without(&table).len() + 8, bytes.len());
+    // The bytes of a record hold it, and a failure names none.
+    let record = Record::arrivals(2, vec![Arrival::at(A, first).sized(321), Arrival::failed(P, REASON_ARTIFACT_GONE).sized(9)]);
+    assert_eq!(record.arrivals[1].size, 0);
+    let log = encode_log(std::slice::from_ref(&record));
+    assert_eq!(decode_log(&log).expect("the log decodes"), vec![record]);
+    assert_ne!(log, encode_log(&[Record::arrivals(2, vec![Arrival::at(A, first).sized(320), Arrival::failed(P, REASON_ARTIFACT_GONE)])]));
+    // An arrival at the hash in force leaves the entry as it was, its size
+    // included; an arrival at another hash brings its own; a failure leaves
+    // none.
+    apply(&mut table, &parts, Vec::new(), vec![Arrival::at(A, first).sized(999)]);
+    assert_eq!(table.entries[&A].size, 321);
+    let mut other_reading = Table { rules: Rules { arrival_at_the_hash_in_force_brings_its_size: true, ..Rules::default() }, ..table.clone() };
+    let applied = apply(&mut other_reading, &parts, Vec::new(), vec![Arrival::at(A, first).sized(999)]);
+    assert_eq!((other_reading.entries[&A].size, applied.events.len()), (999, 0), "the other reading: the entry takes the size named, with no event");
+    apply(&mut table, &parts, Vec::new(), vec![Arrival::at(A, second).sized(555)]);
+    assert_eq!(table.entries[&A].size, 555);
+    apply(&mut table, &parts, Vec::new(), vec![Arrival::failed(A, REASON_ARTIFACT_GONE)]);
+    assert_eq!(table.entries[&A].size, 0);
+}
+
+#[test]
+fn the_count_of_a_budget_reads_the_size_an_entry_holds_and_not_the_length_of_its_part() {
+    let mut parts = Parts::default();
+    let a = parts.sized(1, &[], 100);
+    let p = parts.sized(2, &[], 100);
+    // `A` is put in force by an arrival that names 600 for a part of 100
+    // bytes, as a part with a prepared form built once would be; `P` names 500.
+    let run = |rules: Rules| {
+        let mut table = Table::with_rules(rules);
+        table.budget = Some(1000);
+        apply(&mut table, &parts, vec![want(A, PARAMETERS, HOST, Policy::Required), want(P, PARAMETERS, HOST, Policy::Required)], vec![Arrival::at(A, a).sized(600)]);
+        apply(&mut table, &parts, Vec::new(), vec![Arrival::at(P, p).sized(500)])
+    };
+    assert_eq!(run(Rules::default()).rejected, vec![(P, p)], "600 and 500 stand over a budget of 1000");
+    assert!(run(Rules { budget_counts_the_length_of_the_part: true, ..Rules::default() }).rejected.is_empty(), "the stand-in read before: two parts of 100 bytes");
+}
+
+#[test]
+fn the_groups_of_the_roots_that_hold_a_required_want_are_tested_before_the_others() {
+    let mut parts = Parts::default();
+    let d = parts.sized(1, &[], 60);
+    let a = parts.sized(2, &[], 100);
+    let p = parts.sized(3, &[(D, PARAMETERS)], 80);
+    let over = REASON_OVER_BUDGET;
+    // `A`, optional, stands before `P`, required, in identifier order: each
+    // closure fits alone under 150, and the two together do not.
+    let run = |rules: Rules| {
+        let mut table = Table::with_rules(rules);
+        table.budget = Some(150);
+        apply(&mut table, &parts, vec![want(A, PARAMETERS, HOST, Policy::Optional), want(P, PARAMETERS, HOST, Policy::Required)], Vec::new());
+        let applied = apply(&mut table, &parts, Vec::new(), vec![Arrival::at(D, d), Arrival::at(A, a), Arrival::at(P, p)]);
+        (table, applied)
+    };
+    let (table, applied) = run(Rules::default());
+    assert_eq!(applied.rejected, vec![(A, a)], "the required closure is tested first and takes the room");
+    assert_eq!(availability(&table, P), Some(Availability::Available(p)));
+    assert_eq!(availability(&table, A), Some(Availability::Failed(over)));
+    assert!(applied.failed_required.is_empty());
+    // Not taken: in identifier order alone the optional closure takes the room of the required one.
+    let (table, applied) = run(Rules { budget_groups_in_identifier_order_alone: true, ..Rules::default() });
+    assert_eq!(applied.rejected, vec![(D, d), (P, p)]);
+    assert_eq!(availability(&table, A), Some(Availability::Available(a)));
+    assert_eq!(applied.failed_required, vec![(P, over)]);
+    // A root holds a required want whichever maker made it, the core
+    // included. `F`, required, is in force at a part that lists `P`, which a
+    // command wants as optional: `P` is a root, and required through the
+    // want of its parent. One record brings a replacement of `F` that does
+    // not fit, the first load of `P`, and `A`, an optional root that stands
+    // before `P`; `P` and `A` each fit alone and not together.
+    let first = parts.sized(4, &[(P, PARAMETERS)], 100);
+    let second = parts.sized(5, &[(P, PARAMETERS)], 1000);
+    let leaf = parts.sized(6, &[], 80);
+    let mut table = Table { budget: Some(250), ..Table::default() };
+    let commands = vec![want(F, PARAMETERS, HOST, Policy::Required), want(P, PARAMETERS, TOOL, Policy::Optional), want(A, PARAMETERS, HOST, Policy::Optional)];
+    apply(&mut table, &parts, commands, vec![Arrival::at(F, first)]);
+    assert_eq!(wants(&table, P), vec![(TOOL, Policy::Optional), (Owner::Asset(F), Policy::Required)]);
+    let applied = apply(&mut table, &parts, Vec::new(), vec![Arrival::at(F, second), Arrival::at(A, a), Arrival::at(P, leaf)]);
+    assert_eq!(applied.rejected, vec![(F, second), (A, a)], "the group of `P` is tested with the required ones, before the group of `A`");
+    assert_eq!(availability(&table, P), Some(Availability::Available(leaf)));
+    assert_eq!(availability(&table, F), Some(Availability::Available(first)));
+}
+
+#[test]
+fn an_entry_that_fails_at_the_same_fixed_point_is_left_out_of_the_count() {
+    let mut parts = Parts::default();
+    let a = parts.sized(1, &[], 60);
+    let p = parts.sized(2, &[], 90);
+    // `A` is in force under a want; one record fails it and brings `P`.
+    let run = |rules: Rules| {
+        let mut table = Table::with_rules(rules);
+        table.budget = Some(100);
+        apply(&mut table, &parts, vec![want(A, PARAMETERS, HOST, Policy::Optional), want(P, PARAMETERS, HOST, Policy::Optional)], vec![Arrival::at(A, a)]);
+        let applied = apply(&mut table, &parts, Vec::new(), vec![Arrival::failed(A, REASON_UNKNOWN_ASSET), Arrival::at(P, p)]);
+        (table, applied)
+    };
+    let (table, applied) = run(Rules::default());
+    assert!(applied.rejected.is_empty(), "the room of the entry that fails is free for the arrival of the same record");
+    assert_eq!(availability(&table, P), Some(Availability::Available(p)));
+    let (table, applied) = run(Rules { budget_count_holds_the_failing_entries: true, ..Rules::default() });
+    assert_eq!(applied.rejected, vec![(P, p)]);
+    assert_eq!(availability(&table, P), Some(Availability::Failed(REASON_OVER_BUDGET)));
+}
+
+#[test]
+fn a_group_that_does_not_raise_the_count_is_accepted_whatever_the_count() {
+    let mut parts = Parts::default();
+    let large = parts.sized(1, &[], 900);
+    let small = parts.sized(2, &[], 700);
+    let p = parts.sized(3, &[], 50);
+    // The count stands at 900 over a budget lowered to 500: the replacement
+    // that brings it to 700 is still over the budget.
+    let run = |rules: Rules| {
+        let mut table = Table::with_rules(rules);
+        table.budget = Some(1000);
+        apply(&mut table, &parts, vec![want(A, PARAMETERS, HOST, Policy::Required), want(P, PARAMETERS, HOST, Policy::Optional)], vec![Arrival::at(A, large)]);
+        table.budget = Some(500);
+        let applied = apply(&mut table, &parts, Vec::new(), vec![Arrival::at(A, small), Arrival::at(P, p)]);
+        (table, applied)
+    };
+    let (table, applied) = run(Rules::default());
+    assert_eq!(applied.rejected, vec![(P, p)], "the group that raises the count is rejected as before");
+    assert_eq!(availability(&table, A), Some(Availability::Available(small)), "the world takes the replacement that brings its count down");
+    let (table, applied) = run(Rules { budget_tests_a_group_that_does_not_raise_the_count: true, ..Rules::default() });
+    assert_eq!(applied.rejected, vec![(A, small), (P, p)]);
+    assert_eq!(availability(&table, A), Some(Availability::Available(large)));
+}
+
+/// A table gated on `D`, the dependency of a required parent `P` in force.
+/// Returns it with a second content of `P`, which lists nothing.
+fn gated_on_a_dependency(parts: &mut Parts, rules: Rules) -> (Table, u64) {
+    let first = parts.part(1, &[(D, PARAMETERS)]);
+    let second = parts.part(2, &[]);
+    let mut table = Table::with_rules(rules);
+    apply(&mut table, parts, vec![want(P, PARAMETERS, HOST, Policy::Required)], vec![Arrival::at(P, first)]);
+    assert_eq!(table.required_unanswered(), vec![D]);
+    (table, second)
+}
+
+#[test]
+fn the_gate_does_not_see_the_wants_that_a_pending_element_ends_through_the_recomputation() {
+    let copying = Rules { gate_copies_the_table: true, ..Rules::default() };
+    for (rules, sees) in [(Rules::default(), false), (copying, true), (Rules { required_set_not_kept: true, ..Rules::default() }, false)] {
+        let mut parts = Parts::default();
+        let (table, second) = gated_on_a_dependency(&mut parts, rules);
+        let d = parts.part(3, &[]);
+        // A pending release of the parent's last required want, a pending
+        // failure of the parent, a pending replacement whose part no longer
+        // lists the dependency: each leaves, once applied, no required want
+        // on the dependency.
+        let release_of_the_parent = Record::commands(2, vec![release(P, HOST)]);
+        let failure_of_the_parent = Record::arrivals(2, vec![Arrival::failed(P, REASON_UNKNOWN_ASSET)]);
+        let replacement = Record::arrivals(2, vec![Arrival::at(P, second)]);
+        for pending in [&release_of_the_parent, &failure_of_the_parent, &replacement] {
+            assert_eq!(table.gate_open(pending, &parts), sees, "the gate stays closed on the dependency until its own answer is pending");
+            let mut applied = table.clone();
+            applied.apply(pending, &parts, &|_, _| true);
+            assert!(!applied.blocked(), "though the record, once applied, leaves no required want on it");
+        }
+        // Its own answer pending, the gate opens.
+        let mut with_its_answer = replacement.clone();
+        with_its_answer.arrivals.push(Arrival::at(D, d));
+        with_its_answer.arrivals.sort_by_key(|arrival| arrival.asset);
+        assert!(table.gate_open(&with_its_answer, &parts));
+        assert_eq!(table.gate(&replacement, &parts), if sees { Vec::new() } else { vec![D] });
+    }
+}
+
+#[test]
+fn a_pending_release_answers_a_required_asset_only_where_it_ends_its_last_required_want() {
+    let parts = Parts::default();
+    let any_release = Rules { gate_takes_a_pending_release_as_an_answer: true, ..Rules::default() };
+    let sees_policies = Rules { gate_sees_pending_policy_changes: true, ..Rules::default() };
+    let gated = |rules: Rules| {
+        let mut table = Table::with_rules(rules);
+        apply(&mut table, &parts, vec![want(A, PARAMETERS, HOST, Policy::Required), want(A, PARAMETERS, TOOL, Policy::Required), want(A, PARAMETERS, BASE, Policy::Optional)], Vec::new());
+        table
+    };
+    let one = Record::commands(2, vec![release(A, HOST)]);
+    let both = Record::commands(2, vec![release(A, HOST), release(A, TOOL)]);
+    for rules in [Rules::default(), Rules { gate_copies_the_table: true, ..Rules::default() }] {
+        assert_eq!(gated(rules).gate(&one, &parts), vec![A], "a required want is left on the asset");
+        assert!(gated(rules).gate_open(&both, &parts), "no required want is left: the optional one does not gate");
+    }
+    assert!(gated(any_release).gate_open(&one, &parts), "the control: any pending release is an answer");
+    // A pending command that changes a required want to optional is not
+    // seen: it is neither a pending arrival nor a pending release.
+    let lowered = Record::commands(2, vec![release(A, HOST), want(A, PARAMETERS, TOOL, Policy::Optional)]);
+    assert_eq!(gated(Rules::default()).gate(&lowered, &parts), vec![A]);
+    assert!(gated(sees_policies).gate_open(&lowered, &parts), "the control sees the change of policy");
+    let mut applied = gated(Rules::default());
+    applied.apply(&lowered, &parts, &|_, _| true);
+    assert!(!applied.blocked(), "the record applied, the asset is under optional wants alone");
+}
+
+#[test]
+fn the_gate_of_a_restore_reads_a_count_and_a_want_the_core_would_add_is_followed_through_the_pending_parts() {
+    let mut parts = Parts::default();
+    let f = parts.part(1, &[(P, PARAMETERS)]);
+    let p = parts.part(2, &[(D, PARAMETERS)]);
+    let d = parts.part(3, &[]);
+    let a = parts.part(4, &[]);
+    // A restored table that awaits the answers of `A`, under a want, and of
+    // `X`, an entry with no want: the count is two.
+    let mut saved = Table::default();
+    apply(&mut saved, &parts, vec![want(A, PARAMETERS, HOST, Policy::Optional), want(X, PARAMETERS, HOST, Policy::Optional)], vec![Arrival::at(A, a), Arrival::at(X, a)]);
+    apply(&mut saved, &parts, vec![release(X, HOST)], Vec::new());
+    let mut restored = Table::decode(&saved.canonical_bytes(), Rules::default()).expect("the table decodes");
+    restored.awaiting = BTreeSet::from([A, X]);
+    assert!(restored.blocked(), "a restored world is gated on its answers whatever its state holds");
+    let one = Record::arrivals(5, vec![Arrival::at(A, a).marked()]);
+    assert_eq!(restored.gate(&one, &parts), vec![X], "an entry that holds no want is awaited as the others are");
+    let both = Record::arrivals(5, vec![Arrival::at(A, a).marked(), Arrival::at(X, a).marked()]);
+    assert!(restored.gate_open(&both, &parts));
+    // A world gated on `F`, whose pending part lists `P`, whose pending part
+    // lists `D`, of which no arrival is pending: the want the core would add
+    // on `P` gives the part of `P` its policy.
+    let gated = |rules: Rules| {
+        let mut table = Table::with_rules(rules);
+        apply(&mut table, &parts, vec![want(F, PARAMETERS, HOST, Policy::Required)], Vec::new());
+        table
+    };
+    let incomplete = Record::arrivals(2, vec![Arrival::at(F, f), Arrival::at(P, p)]);
+    assert_eq!(gated(Rules::default()).gate(&incomplete, &parts), vec![D]);
+    assert_eq!(gated(Rules { gate_copies_the_table: true, ..Rules::default() }).gate(&incomplete, &parts), vec![D]);
+    let one_level = Rules { gate_counts_core_wants_from_the_tables_wants_alone: true, ..Rules::default() };
+    assert!(gated(one_level).gate_open(&incomplete, &parts), "the other reading: the table holds no want on `P`, whose part adds nothing");
+    let complete = Record::arrivals(2, vec![Arrival::at(D, d), Arrival::at(F, f), Arrival::at(P, p)]);
+    assert!(gated(Rules::default()).gate_open(&complete, &parts));
+}
+
+#[test]
+fn the_incremental_gate_does_not_apply_the_budget_to_a_pending_batch() {
+    let mut parts = Parts::default();
+    let d = parts.sized(1, &[], 600);
+    let p = parts.sized(2, &[(D, PARAMETERS)], 500);
+    // A world gated on `P`, whose closure stands over the budget.
+    let gated = |rules: Rules| {
+        let mut table = Table::with_rules(rules);
+        table.budget = Some(1000);
+        apply(&mut table, &parts, vec![want(P, PARAMETERS, HOST, Policy::Required)], Vec::new());
+        table
+    };
+    let copying = Rules { gate_copies_the_table: true, ..Rules::default() };
+    let whole = Record::arrivals(2, sized(&parts, vec![Arrival::at(D, d), Arrival::at(P, p)]));
+    assert!(gated(Rules::default()).gate_open(&whole, &parts), "a complete batch opens the gate, rejected or not");
+    assert!(gated(copying).gate_open(&whole, &parts));
+    let mut applied = gated(Rules::default());
+    assert_eq!(applied.apply(&whole, &parts, &|_, _| true).rejected, vec![(D, d), (P, p)]);
+    assert!(!applied.blocked(), "a rejected first load is a failure, and a failure is an answer");
+    // The two forms part on a parent pending without its dependency, where
+    // its own arrival stands over the budget: applied, the parent is
+    // rejected and fails, and the wants of its part are not added. The copy
+    // sees it; the incremental form, which derives no group, waits for the
+    // dependency.
+    let over = Record::arrivals(2, vec![Arrival::at(P, p).sized(1001)]);
+    assert!(gated(copying).gate_open(&over, &parts));
+    assert_eq!(gated(Rules::default()).gate(&over, &parts), vec![D]);
+}
+
+#[test]
+fn the_query_of_a_restore_gives_the_wants_that_stand_on_each_entry_not_held_available() {
+    let mut parts = Parts::default();
+    let p = parts.part(1, &[(D, PARAMETERS)]);
+    let mut table = Table::default();
+    apply(&mut table, &parts, vec![want(P, PARAMETERS, HOST, Policy::Required), want(A, PARAMETERS, TOOL, Policy::Optional)], vec![Arrival::at(P, p), Arrival::failed(D, REASON_ARTIFACT_GONE)]);
+    assert_eq!(table.standing_wants(), vec![(D, vec![(Owner::Asset(P), Policy::Required)]), (A, vec![(TOOL, Policy::Optional)])]);
 }

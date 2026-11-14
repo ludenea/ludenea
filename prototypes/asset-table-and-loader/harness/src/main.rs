@@ -246,7 +246,7 @@ fn report(settings: &Settings, cell: &str, only: &[String]) -> (String, String, 
     out.object_start();
     out.u64("schema_version", SCHEMA_VERSION);
     out.string("prototype", PROTOTYPE);
-    out.string("stage", "the same-harness stage");
+    out.string("stage", "the stand-in stage, first pass of the build");
     out.string("cell", cell);
     write_platform_and_build(&mut out);
     out.string("size", settings.size.name());
@@ -362,15 +362,15 @@ fn write_cells(out: &mut Json, log: &mut String, key: &str, repetitions: &[Vec<g
 /// is a magnitude. Returns whether the largest ratio stands under the bound
 /// and every verdict is the one its case states.
 fn gate_cost(out: &mut Json, summary: &mut String, log: &mut String, repetitions: usize, workers: &[usize]) -> bool {
-    const HOW: &str = "a copy of the whole table, on which the pending record is applied, where the world is gated; \
-                       where it is not gated the build answers from the state alone and reads no pending record";
     let cost = gate_cost::run(repetitions, workers);
+    // The form that evaluated, as the measured worlds name it.
+    let how = format!("{}, where the world is gated; where it is not gated the build answers from the state alone and reads no pending record", cost.form);
     let verdicts = cost.repetitions.iter().chain(&cost.open_with_the_record_read).flatten().all(|cell| cell.verdict_as_stated);
     let largest = cost.largest();
     let holds = largest < GATE_COST_BOUND && verdicts && cost.table_as_stated && cost.record_as_assembled;
     out.key("gate_cost");
     out.object_start();
-    out.string("how_the_table_the_gate_is_evaluated_on_is_obtained", HOW);
+    out.string("the_form_that_evaluates_the_gate", &how);
     out.u64("repetitions", repetitions as u64);
     out.bool("table_as_stated", cost.table_as_stated);
     out.bool("record_built_as_the_world_assembles_it", cost.record_as_assembled);
@@ -380,7 +380,7 @@ fn gate_cost(out: &mut Json, summary: &mut String, log: &mut String, repetitions
     out.bool("under_the_bound", largest < GATE_COST_BOUND);
     out.decimal("largest_ratio_of_the_case_open_with_the_pending_record_read", cost.largest_with_the_record_read());
     out.decimal("largest_ratio_of_the_copy_alone", cost.largest_copy());
-    let _ = writeln!(log, "\n== the gate's cost on a table of ten thousand assets: {HOW}");
+    let _ = writeln!(log, "\n== the gate's cost on a table of ten thousand assets: {how}");
     write_cells(out, log, "figures", &cost.repetitions);
     let _ = writeln!(log, "  the case open under the other reading, the pending record of a world that is not gated being read:");
     write_cells(out, log, "open_with_the_pending_record_read", &cost.open_with_the_record_read);
@@ -390,8 +390,9 @@ fn gate_cost(out: &mut Json, summary: &mut String, log: &mut String, repetitions
     let at = largest_cell.map_or_else(String::new, |cell| format!("{} {} at {} workers", cell.case, cell.size, cell.workers));
     let _ = writeln!(
         summary,
-        "the gate's cost: the largest of the ratios of an evaluation to a tick is {largest:.3} ({at}); per repetition {}; under a tenth of a tick: {}; \
+        "the gate's cost, evaluated by {}: the largest of the ratios of an evaluation to a tick is {largest:.3} ({at}); per repetition {}; under a tenth of a tick: {}; \
          of an evaluation, the copy of the table alone is at most {:.3} of a tick; the case open with the pending record read: {:.3}; every verdict as stated: {verdicts}",
+        cost.form,
         per_repetition.join(", "),
         largest < GATE_COST_BOUND,
         cost.largest_copy(),

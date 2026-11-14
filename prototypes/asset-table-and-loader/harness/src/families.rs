@@ -110,6 +110,15 @@ pub fn readings() -> Vec<VariantPlan> {
         reading("reading: nothing is posted below an asset that fails", vec![loader(|options| options.nothing_posted_below_a_failed_asset = true)]),
         reading("reading: a move of the manifest posts nothing for a failed entry", vec![loader(|options| options.moves_leave_failed_entries = true)]),
         reading("reading: a move that changes the type of an asset in force fails it", vec![loader(|options| options.a_changed_type_fails_an_asset_in_force = true)]),
+        reading(
+            "reading: the wants the table holds on a pending parent alone give the want the core would add its policy",
+            vec![core(|rules| rules.gate_counts_core_wants_from_the_tables_wants_alone = true)],
+        ),
+        reading("reading: what several systems did in one tick is applied in the order of their stable names", vec![core(|rules| rules.systems_applied_in_name_order = true)]),
+        reading(
+            "reading: a dependency failed for its type is loaded under the manifest's type below a parent in force too",
+            vec![loader(|options| options.type_exception_below_a_parent_in_force = true)],
+        ),
     ]
 }
 

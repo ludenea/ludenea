@@ -65,7 +65,7 @@ use prototype_core::table::{
 use prototype_core::world::{Extraction, Links, Mode, Refusal, Restore, StepResult, Wait, World, WorldConfig};
 use reference_workload::{Json, Parameters, Size, first_divergent_tick, fnv1a, run_hash, run_sequential};
 
-use loader::{Catalog, Delay, LEAVES, Loader, Request, Source};
+use loader::{Catalog, Delay, LEAVES, Loader, Request, Source, arrival};
 use oracle::{Switch, first_kill_ticks, oracle, switch};
 
 // ---------------------------------------------------------------------------
@@ -300,7 +300,7 @@ fn preload(store: &ResidentStore, catalog: &Catalog) {
 /// roots and leaf 4 on its own: twelve assets.
 fn everything(catalog: &Catalog) -> Vec<Arrival> {
     let mut arrivals = catalog.closure_a();
-    arrivals.push(Arrival::at(catalog.leaf[4], Catalog::leaf_hash(1, 4)));
+    arrivals.push(arrival(catalog.leaf[4], &Catalog::leaf_part(1, 4)));
     arrivals.extend(catalog.closure_b());
     arrivals
 }
@@ -337,14 +337,14 @@ fn wants(out: &mut Json, settings: &Settings, catalog: &Catalog) -> bool {
     let want = |owner: Owner| Command::Want { asset: leaf4, asset_type: PARAMETERS, owner, policy: Policy::Optional };
     let script = vec![
         Record::arrivals(1, catalog.closure_a()),
-        Record::arrivals(t(50), vec![Arrival::at(catalog.extra, fnv1a(&Catalog::extra_part(1)))]),
+        Record::arrivals(t(50), vec![arrival(catalog.extra, &Catalog::extra_part(1))]),
         Record::commands(t(100), vec![want(owners[0]), want(owners[1])]),
-        Record::arrivals(t(110), vec![Arrival::at(leaf4, Catalog::leaf_hash(1, 4))]),
+        Record::arrivals(t(110), vec![arrival(leaf4, &Catalog::leaf_part(1, 4))]),
         Record::commands(t(150), vec![Command::Want { asset: catalog.root_b, asset_type: PARAMETERS, owner: COMMANDED, policy: Policy::Optional }]),
         Record::arrivals(t(160), catalog.closure_b()),
         Record::commands(t(250), vec![Command::Release { asset: catalog.root_b, owner: COMMANDED }]),
         Record::commands(t(900), vec![want(COMMANDED)]),
-        Record::arrivals(t(905), vec![Arrival::at(leaf4, Catalog::leaf_hash(2, 4))]),
+        Record::arrivals(t(905), vec![arrival(leaf4, &Catalog::leaf_part(2, 4))]),
     ];
     let mut expected_ticks = record_ticks(&script);
     expected_ticks.dedup();
@@ -646,7 +646,7 @@ fn revision(out: &mut Json, settings: &Settings, catalog: &Catalog) -> bool {
     }
     stepped &= step_to(&mut world, t(800));
     // Two revisions posted before one drain: every leaf at version 3, then the leaves 0 to 3 at version 4.
-    let leaves_at = |version: u32, leaves: std::ops::Range<usize>| -> Vec<Arrival> { leaves.map(|leaf| Arrival::at(catalog.leaf[leaf], Catalog::leaf_hash(version, leaf))).collect() };
+    let leaves_at = |version: u32, leaves: std::ops::Range<usize>| -> Vec<Arrival> { leaves.map(|leaf| arrival(catalog.leaf[leaf], &Catalog::leaf_part(version, leaf))).collect() };
     preload(&store, catalog);
     queue.post(&leaves_at(3, 0..LEAVES));
     queue.post(&leaves_at(4, 0..4));
@@ -739,7 +739,7 @@ fn table_under_the_hash(out: &mut Json, settings: &Settings, catalog: &Catalog) 
     let ticks = 10.min(settings.ticks);
     let run = |version: u32| {
         let config = WorldConfig::new(Size::Small, 1, Mode::Identifiers, catalog.leaf.to_vec()).wanting(CONTRIBUTOR, &[(catalog.extra, PARAMETERS, Policy::Optional)]);
-        let script = vec![Record::arrivals(1, vec![Arrival::at(catalog.extra, fnv1a(&Catalog::extra_part(version)))])];
+        let script = vec![Record::arrivals(1, vec![arrival(catalog.extra, &Catalog::extra_part(version))])];
         let mut world = World::new(config, script, Links::new(store.clone()));
         let stepped = step_to(&mut world, ticks);
         (world.component_hashes(), world.state_hashes(), world.table_hash(ticks), world.table_bytes().len(), stepped)
@@ -797,8 +797,8 @@ fn save(out: &mut Json, settings: &Settings, catalog: &Catalog) -> bool {
     first.commands.push(instantiate);
     let script = vec![
         first,
-        Record::arrivals(t(300), vec![Arrival::at(catalog.leaf[4], Catalog::leaf_hash(2, 4))]),
-        Record::arrivals(t(700), vec![Arrival::at(catalog.leaf[6], Catalog::leaf_hash(2, 6))]),
+        Record::arrivals(t(300), vec![arrival(catalog.leaf[4], &Catalog::leaf_part(2, 4))]),
+        Record::arrivals(t(700), vec![arrival(catalog.leaf[6], &Catalog::leaf_part(2, 6))]),
     ];
     let mut world = World::new(settings.world(workers, catalog, &all_wants(catalog)), script, Links::new(store.clone()));
     let saved_at = t(500);
@@ -1097,7 +1097,7 @@ fn one_resident_copy(out: &mut Json, settings: &Settings, catalog: &Catalog) -> 
             store.insert(hash, Catalog::big_part(settings.big_payload)).expect("a valid part");
         }
         let config = WorldConfig::new(Size::Small, 1, Mode::Identifiers, vec![catalog.big]).wanting(CONTRIBUTOR, &[(catalog.big, PARAMETERS, Policy::Optional)]);
-        let script = vec![Record::arrivals(index as u32 + 1, vec![Arrival::at(catalog.big, hash)])];
+        let script = vec![Record::arrivals(index as u32 + 1, vec![Arrival::at(catalog.big, hash).sized(Catalog::big_len(settings.big_payload) as u64)])];
         worlds.push(World::new(config, script, Links::new(store.clone())));
     }
     let half = (settings.shared_worlds / 2) as u32;

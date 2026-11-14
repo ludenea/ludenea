@@ -85,15 +85,40 @@ fn put_text(out: &mut Vec<u8>, text: &str) {
 /// entry.
 pub type Dependency = (AssetId, String);
 
+/// A prepared form that is built once, as the domain manifest lists it for
+/// an asset whose type has one: what prepares it, by name and version, the
+/// hash of the form and its size. No asset type of this prototype has such
+/// a form: the place is kept, and every list is empty.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreparedForm {
+    pub preparer: String,
+    pub hash: u64,
+    pub size: u64,
+}
+
 /// An entry of the domain manifest: the asset's type, by the stable name of
-/// the type's schema entry, the hash and the size of its canonical part, and
-/// its domain dependencies, each with its type. Nothing of a target.
+/// the type's schema entry, the hash and the size of its canonical part, its
+/// domain dependencies, each with its type, and its prepared forms built
+/// once, each with its hash and its size. Nothing of a target.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DomainEntry {
     pub asset_type: String,
     pub hash: u64,
     pub size: u64,
     pub dependencies: Vec<Dependency>,
+    pub forms: Vec<PreparedForm>,
+}
+
+impl DomainEntry {
+    /// The size of what an arrival of this asset puts in force: its
+    /// canonical part with the prepared forms built once that the arrival
+    /// names, those of the preparers a world's composition declares for the
+    /// asset's type. It is what an arrival to a hash names, and what the
+    /// core counts against a world's budget.
+    pub fn size_in_force(&self, declared: &[&str]) -> u64 {
+        let forms: u64 = self.forms.iter().filter(|form| declared.contains(&form.preparer.as_str())).map(|form| form.size).sum();
+        self.size + forms
+    }
 }
 
 /// A domain manifest. Its canonical bytes have a hash of their own, which
@@ -112,6 +137,19 @@ fn read_dependencies(reader: &mut Reader) -> Result<Vec<Dependency>, String> {
     (0..reader.u32()?).map(|_| Ok((reader.id()?, reader.text()?))).collect()
 }
 
+fn put_forms(out: &mut Vec<u8>, forms: &[PreparedForm]) {
+    out.extend_from_slice(&(forms.len() as u32).to_le_bytes());
+    for form in forms {
+        put_text(out, &form.preparer);
+        out.extend_from_slice(&form.hash.to_le_bytes());
+        out.extend_from_slice(&form.size.to_le_bytes());
+    }
+}
+
+fn read_forms(reader: &mut Reader) -> Result<Vec<PreparedForm>, String> {
+    (0..reader.u32()?).map(|_| Ok(PreparedForm { preparer: reader.text()?, hash: reader.u64()?, size: reader.u64()? })).collect()
+}
+
 pub fn encode_domain(domain: &Domain) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&(domain.len() as u32).to_le_bytes());
@@ -121,6 +159,7 @@ pub fn encode_domain(domain: &Domain) -> Vec<u8> {
         out.extend_from_slice(&entry.hash.to_le_bytes());
         out.extend_from_slice(&entry.size.to_le_bytes());
         put_dependencies(&mut out, &entry.dependencies);
+        put_forms(&mut out, &entry.forms);
     }
     out
 }
@@ -132,7 +171,8 @@ pub fn decode_domain(bytes: &[u8]) -> Result<Domain, String> {
         let id = reader.id()?;
         let (asset_type, hash, size) = (reader.text()?, reader.u64()?, reader.u64()?);
         let dependencies = read_dependencies(&mut reader)?;
-        domain.insert(id, DomainEntry { asset_type, hash, size, dependencies });
+        let forms = read_forms(&mut reader)?;
+        domain.insert(id, DomainEntry { asset_type, hash, size, dependencies, forms });
     }
     reader.end()?;
     Ok(domain)
@@ -215,6 +255,7 @@ pub fn build_package(object: &dyn Fn(u64) -> Option<Vec<u8>>, domain: &Domain, e
         index.extend_from_slice(&id.to_le_bytes());
         put_text(&mut index, &entry.asset_type);
         put_dependencies(&mut index, &entry.dependencies);
+        put_forms(&mut index, &entry.forms);
         index.extend_from_slice(&entry.hash.to_le_bytes());
         index.extend_from_slice(&(file.len() as u64).to_le_bytes());
         index.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
@@ -252,12 +293,13 @@ impl Package {
             let id = reader.id()?;
             let asset_type = reader.text()?;
             let dependencies = read_dependencies(&mut reader)?;
+            let forms = read_forms(&mut reader)?;
             let (hash, at, len) = (reader.u64()?, reader.u64()? as usize, reader.u64()? as usize);
             let bytes = file.get(at..at.saturating_add(len)).ok_or("an artifact is out of the package")?;
             if content_hash(bytes) != hash {
                 return Err(format!("the artifact {} does not hash to its name", hex(hash)));
             }
-            domain.insert(id, DomainEntry { asset_type, hash, size: len as u64, dependencies });
+            domain.insert(id, DomainEntry { asset_type, hash, size: len as u64, dependencies, forms });
             places.insert(hash, (at, len));
         }
         reader.end()?;
@@ -306,7 +348,22 @@ mod tests {
 
     fn entry(asset_type: &str, bytes: &[u8], dependencies: &[(AssetId, &str)]) -> DomainEntry {
         let dependencies = dependencies.iter().map(|(dependency, listed)| (*dependency, (*listed).to_string())).collect();
-        DomainEntry { asset_type: asset_type.to_string(), hash: content_hash(bytes), size: bytes.len() as u64, dependencies }
+        DomainEntry { asset_type: asset_type.to_string(), hash: content_hash(bytes), size: bytes.len() as u64, dependencies, forms: Vec::new() }
+    }
+
+    #[test]
+    fn a_manifest_gives_the_size_of_a_part_and_of_each_prepared_form_built_once() {
+        let mut listed = domain();
+        let form = |preparer: &str, size: u64| PreparedForm { preparer: preparer.to_string(), hash: size, size };
+        listed.get_mut(&7).expect("an entry").forms = vec![form("shape cooker, version 2", 300), form("navigation baker, version 1", 40)];
+        assert_eq!(decode_domain(&encode_domain(&listed)).unwrap(), listed);
+        assert_ne!(set_hash(&listed), set_hash(&domain()), "a prepared form built once is part of the content set");
+        // The size an arrival names is that of the part with the forms the
+        // arrival names: those the world's composition declares.
+        assert_eq!(listed[&7].size_in_force(&[]), 5);
+        assert_eq!(listed[&7].size_in_force(&["shape cooker, version 2"]), 305);
+        assert_eq!(listed[&7].size_in_force(&["shape cooker, version 2", "navigation baker, version 1"]), 345);
+        assert_eq!(listed[&9].size_in_force(&["shape cooker, version 2"]), 4);
     }
 
     fn domain() -> Domain {
@@ -359,7 +416,7 @@ mod tests {
         assert!(Package::read(cut).is_err());
         let mut mounted = domain();
         let mut other = Domain::new();
-        other.insert(9, DomainEntry { asset_type: OTHER.to_string(), hash: 1, size: 0, dependencies: Vec::new() });
+        other.insert(9, DomainEntry { asset_type: OTHER.to_string(), hash: 1, size: 0, dependencies: Vec::new(), forms: Vec::new() });
         assert_eq!(mount(&mut mounted, &other, false).refused, vec![9]);
         assert_eq!(mounted, domain());
         assert_eq!(mount(&mut mounted, &other, true).overridden, vec![9]);

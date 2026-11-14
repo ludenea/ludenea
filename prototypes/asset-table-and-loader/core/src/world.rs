@@ -31,7 +31,7 @@ use reference_workload::{
 
 use crate::table::{
     Applied, Arrival, ArrivalQueue, AssetId, AssetType, Availability, Command, Entry, EntryView, Event, Instance, Maker, NewHistory, Owner, Policy,
-    Reader, Record, Refused, RepulsionTable, Resident, Residents, Rules, Table, View, Wanted,
+    Reader, Record, Refused, RepulsionTable, Resident, Residents, Rules, SystemName, Table, View, Wanted,
 };
 
 pub const DEFAULT_SPIN_BOUND: Duration = Duration::from_micros(50);
@@ -85,6 +85,37 @@ pub fn repulsion_force(state: &State, grid: &Grid, i: usize, table: RepulsionTab
 // Configuration, results, failures
 // ---------------------------------------------------------------------------
 
+/// Who holds a want a system makes or releases: the world's own entry, under
+/// which the system is the maker of its want, or an entity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Holder {
+    World,
+    Entity { slot: u32, generation: u32 },
+}
+
+/// What a system does in a tick, through its declared access to the wants of
+/// the asset table: it makes a want, releases one, or asks for the despawn
+/// of an entity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Act {
+    Want { asset: AssetId, asset_type: AssetType, holder: Holder, policy: Policy },
+    Release { asset: AssetId, holder: Holder },
+    Despawn { slot: u32, generation: u32 },
+}
+
+/// One system of the stand-in world: its stable name, the contributor of
+/// the composition that brings it, and what it does per tick, in order. It
+/// is no node of the tick's graph and declares no access: the stand-in holds
+/// what it does as a list, applied where the structural changes of a system
+/// are applied. It is part of the world, and no input: a replay runs it
+/// again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct System {
+    pub name: SystemName,
+    pub contributor: u64,
+    pub does: Vec<(u32, Act)>,
+}
+
 /// How the repulsion pass gets the parameters of a slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -120,14 +151,13 @@ pub struct WorldConfig {
     /// Control: the content set's hash is hashed with the state.
     pub set_under_the_hash: bool,
     /// The world's budget for its asset data, in bytes, where it has one:
-    /// the sum of the sizes of the canonical parts its table holds available
-    /// may not stand above it.
+    /// the sum of the sizes its table's available entries hold may not stand
+    /// above it.
     pub budget: Option<u64>,
-    /// The scripted system of the stand-in world: per tick, what it does
-    /// when it runs in that tick, through its declared access to the wants
-    /// of the asset table, in order. It makes a want, releases one, or asks
-    /// for the despawn of an entity. It is part of the world, and no input.
-    pub system: Vec<(u32, Command)>,
+    /// The systems of the stand-in world that make wants, each brought by a
+    /// contributor of the composition, in the order the composition lists
+    /// them, which stands for the order in which the schedule runs them.
+    pub systems: Vec<System>,
     pub rules: Rules,
 }
 
@@ -147,14 +177,45 @@ impl WorldConfig {
             content_set: None,
             set_under_the_hash: false,
             budget: None,
-            system: Vec::new(),
+            systems: Vec::new(),
             rules: Rules::default(),
         }
     }
 
-    /// What the scripted system does when it runs in `tick`.
+    /// What the systems do when they run in `tick`, as the changes of wants
+    /// the table applies at the structural change fixed point of that tick:
+    /// system after system, each in the order it acts. Each system is the
+    /// maker of the want it makes under the world's own entry, a kind of
+    /// its own, known by its stable name: two systems of one contributor
+    /// hold two wants. Under the reading not taken, the maker is the
+    /// contributor that brings the system.
     fn system_at(&self, tick: u32) -> Vec<Command> {
-        self.system.iter().filter(|(at, _)| *at == tick).map(|(_, command)| *command).collect()
+        let mut systems: Vec<&System> = self.systems.iter().collect();
+        if self.rules.systems_applied_in_name_order {
+            systems.sort_by_key(|system| system.name);
+        }
+        let mut commands = Vec::new();
+        for system in systems {
+            let maker = if self.rules.system_wants_under_their_contributor { Maker::Contributor(system.contributor) } else { Maker::System(system.name) };
+            let owner = |holder: Holder| match holder {
+                Holder::World => Owner::World(maker),
+                Holder::Entity { slot, generation } => Owner::Entity { slot, generation },
+            };
+            for (_, act) in system.does.iter().filter(|(at, _)| *at == tick) {
+                commands.push(match *act {
+                    Act::Want { asset, asset_type, holder, policy } => Command::Want { asset, asset_type, owner: owner(holder), policy },
+                    Act::Release { asset, holder } => Command::Release { asset, owner: owner(holder) },
+                    Act::Despawn { slot, generation } => Command::Despawn { slot, generation },
+                });
+            }
+        }
+        commands
+    }
+
+    /// One system of the composition, brought by a contributor.
+    pub fn with_system(mut self, system: System) -> WorldConfig {
+        self.systems.push(system);
+        self
     }
 
     /// The wants of one contributor of the composition.
@@ -182,7 +243,10 @@ impl Links {
 }
 
 /// What leaves the domain for the availability source, as extracted state at
-/// the end of the tick whose input fixed point changed the table.
+/// the end of a tick in which the table changed: by its record, by what its
+/// systems did, or by the wants a despawn ended. It is the state every batch
+/// is complete against: the availability source learns a rejection and a
+/// fall from it, never from what it posted.
 #[derive(Clone, Debug, Default)]
 pub struct Extraction {
     pub tick: u32,
@@ -194,7 +258,7 @@ pub struct Extraction {
     /// Every asset a command of the tick's record made a want of, with the
     /// type stated: what the reading that answers every want reads.
     pub wanted: Vec<(AssetId, AssetType)>,
-    /// The table after the tick's record: per entry, an entry with no want
+    /// The table at the end of the tick: per entry, an entry with no want
     /// included, its type, its availability and whether a want names it.
     pub entries: Vec<EntryView>,
     /// The tick applied the answers to a restore: a move of the manifest
@@ -505,6 +569,20 @@ struct Journal {
     rejected: Vec<(AssetId, u64)>,
     /// The moment each tick ended, for a measurement of the tick's duration.
     tick_ends: Vec<(u32, Instant)>,
+    /// What the tick that runs has to extract at its end: the wants that
+    /// left, the wants its record made, and whether it applied the answers
+    /// to a restore.
+    leaving: Leaving,
+    /// The hash of the table as the availability source last read it.
+    extracted_hash: u64,
+}
+
+/// What a tick gathers for the extraction at its end.
+#[derive(Default)]
+struct Leaving {
+    left: Vec<(AssetId, AssetType)>,
+    wanted: Vec<(AssetId, AssetType)>,
+    restore_applied: bool,
 }
 
 impl Journal {
@@ -610,7 +688,8 @@ impl Graph {
             .map(|_| UnsafeCell::new(ChunkCache { slots: vec![empty; CACHE_SLOTS].into_boxed_slice(), resolutions: 0 }))
             .collect();
         let hashes = |last: u64| (0..=tick).map(|t| AtomicU64::new(if t == tick { last } else { 0 })).collect::<Vec<_>>();
-        let journal = Journal { table_hash: table.hash(), ..Journal::default() };
+        // A world that has run no tick is read by a query at that boundary.
+        let journal = Journal { table_hash: table.hash(), extracted_hash: table.hash(), ..Journal::default() };
         let graph = Graph {
             states: [UnsafeCell::new(a), UnsafeCell::new(b)],
             columns,
@@ -756,14 +835,31 @@ impl Graph {
         let changed = table_hash != journal.table_hash;
         journal.table_hash = table_hash;
         // The wants leave the domain for the availability source, as
-        // extracted state at the end of the tick that added them.
-        if let Some(extract) = &self.links.extract
+        // extracted state at the end of the tick that added them: the tick
+        // gathers them here and extracts once, at its end. The build as it
+        // stood extracted here, where the record changed the table.
+        if !table.rules.extracted_at_the_input_fixed_point {
+            journal.leaving.left.extend(applied.left);
+            journal.leaving.wanted.extend(applied.wanted);
+            journal.leaving.restore_applied |= restore_applied;
+        } else if let Some(extract) = &self.links.extract
             && (changed || !applied.left.is_empty() || !applied.wanted.is_empty() || restore_applied)
         {
             extract(Extraction { tick, left: applied.left, wanted: applied.wanted, entries: table.view(), restore_applied });
         }
         self.rebuild_views();
         self.gate_verdict(tick, true, table, journal)
+    }
+
+    /// The end of a tick: where its table is not the one the availability
+    /// source last read, or a want left, the state is extracted. Runs alone.
+    fn extract_at_the_end_of(&self, tick: u32, table: &Table, journal: &mut Journal) {
+        let leaving = std::mem::take(&mut journal.leaving);
+        let Some(extract) = &self.links.extract else { return };
+        if journal.table_hash != journal.extracted_hash || !leaving.left.is_empty() || !leaving.wanted.is_empty() || leaving.restore_applied {
+            journal.extracted_hash = journal.table_hash;
+            extract(Extraction { tick, left: leaving.left, wanted: leaving.wanted, entries: table.view(), restore_applied: leaving.restore_applied });
+        }
     }
 
     /// Records the closing and the opening of the gate before `tick`.
@@ -928,11 +1024,11 @@ impl Graph {
         }
         let tick = self.tick.load(Ordering::Relaxed);
         let kills = unsafe { &mut *self.kills.get() };
-        // The scripted system ran in this tick, after its input fixed point.
-        // What it did through its declared access to the wants is applied
-        // here, at the structural change fixed point of its tick, as what a
-        // system of the workload asks for is: the wants it made and released
-        // in order, and the despawns it asked for with the record's.
+        // The systems ran in this tick, after its input fixed point. What
+        // each did through its declared access to the wants is applied here,
+        // at the structural change fixed point of its tick, as what a system
+        // of the workload asks for is: the wants it made and released in
+        // order, and the despawns it asked for with the record's.
         let rules = table.rules;
         let elsewhere = rules.system_applied_at_the_next_input_fixed_point || rules.system_applied_with_its_ticks_record;
         let system = if elsewhere { Vec::new() } else { self.config.system_at(tick) };
@@ -966,13 +1062,21 @@ impl Graph {
         if ended {
             journal.table_hash = table.hash();
         }
-        // The wants the system added leave the domain as extracted state at
+        // The wants the systems added leave the domain as extracted state at
         // the end of the tick that added them.
         if let Some((left, wanted)) = system_left {
-            if let Some(extract) = &self.links.extract {
+            if !rules.extracted_at_the_input_fixed_point {
+                journal.leaving.left.extend(left);
+                journal.leaving.wanted.extend(wanted);
+            } else if let Some(extract) = &self.links.extract {
                 extract(Extraction { tick, left, wanted, entries: table.view(), restore_applied: false });
             }
             self.rebuild_views();
+        }
+        // The tick ends: the state it leaves is the one a batch drained at
+        // the next input fixed point is complete against.
+        if !rules.extracted_at_the_input_fixed_point {
+            self.extract_at_the_end_of(tick, table, journal);
         }
         dead.extend_from_slice(changed);
         dead.sort_unstable();
@@ -1230,7 +1334,7 @@ impl Graph {
 // The world
 // ---------------------------------------------------------------------------
 
-const SAVE_FORMAT: u32 = 3;
+const SAVE_FORMAT: u32 = 4;
 
 /// A world: the reference workload's state, its tick graph, its asset table
 /// and its history of hashes, stepped by whole ticks.
@@ -1364,9 +1468,14 @@ impl World {
     }
 
     /// The same evaluation with the time of its two parts: the copy of the
-    /// table, then the pending record applied on the copy and the verdict.
+    /// table, where the form that evaluates makes one, then the rest.
     pub fn gate_in_two_parts(&self, record: &Record) -> (Vec<AssetId>, Duration, Duration) {
         self.table().gate_in_two_parts(record, self.graph.links.residents.as_ref())
+    }
+
+    /// The form that evaluates the gate of this world, in words.
+    pub fn gate_form(&self) -> &'static str {
+        self.table().gate_form()
     }
 
     /// The duration of each tick that ran inside a step after the step's
@@ -1446,6 +1555,19 @@ impl World {
             _ => None,
         };
         table.awaiting.iter().filter_map(held).collect()
+    }
+
+    /// The same query, for a restore under the content at hand: for each
+    /// entry the table does not hold available, the wants that stand on it
+    /// with their owners.
+    pub fn standing_wants(&self) -> Vec<(AssetId, Vec<(Owner, Policy)>)> {
+        self.table().standing_wants()
+    }
+
+    /// The size the entry of an asset holds, where the table holds the
+    /// asset available: the one its arrival named.
+    pub fn size(&self, asset: AssetId) -> Option<u64> {
+        self.table().entries.get(&asset).filter(|entry| matches!(entry.availability, Availability::Available(_))).map(|entry| entry.size)
     }
 
     /// Every entry of the table as the availability source reads it: its

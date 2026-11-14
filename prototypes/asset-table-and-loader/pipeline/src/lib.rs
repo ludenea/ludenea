@@ -114,6 +114,8 @@ impl Source {
             hash,
             size: self.part().len() as u64,
             dependencies: self.dependencies.iter().map(|(dependency, asset_type)| (*dependency, asset_type.stable_name().to_string())).collect(),
+            // No asset type of the stand-in has a prepared form built once.
+            forms: Vec::new(),
         }
     }
 }

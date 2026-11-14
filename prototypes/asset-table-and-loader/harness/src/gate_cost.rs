@@ -99,7 +99,8 @@ pub struct Cell {
     pub workers: usize,
     /// The median of a hundred evaluations of the gate.
     pub evaluation: Duration,
-    /// Of an evaluation, the median of the copy of the table alone.
+    /// Of an evaluation, the median of the copy of the table alone: zero
+    /// under a form that copies nothing.
     pub copy: Duration,
     /// The median duration of one tick of the same world.
     pub tick: Duration,
@@ -126,6 +127,8 @@ pub struct GateCost {
     /// world assembles and then applies.
     pub table_as_stated: bool,
     pub record_as_assembled: bool,
+    /// The form that evaluated the gate of the measured worlds, in words.
+    pub form: &'static str,
 }
 
 impl GateCost {
@@ -214,6 +217,7 @@ fn repetition(catalog: &Catalog, worker_counts: &[usize], out: &mut GateCost) {
     for &workers in worker_counts {
         let (mut measured, queue, tick, as_stated) = world(catalog, workers, Rules::default());
         out.table_as_stated &= as_stated;
+        out.form = measured.gate_form();
         let sizes = [("small", catalog.small()), ("large", catalog.large())];
         // Open: every required asset is answered.
         for (size, elements) in &sizes {
@@ -263,7 +267,7 @@ fn repetition(catalog: &Catalog, worker_counts: &[usize], out: &mut GateCost) {
 /// Measures the family: `repetitions` times, at each worker count.
 pub fn run(repetitions: usize, worker_counts: &[usize]) -> GateCost {
     let catalog = Catalog::new();
-    let mut out = GateCost { repetitions: Vec::new(), open_with_the_record_read: Vec::new(), table_as_stated: true, record_as_assembled: true };
+    let mut out = GateCost { repetitions: Vec::new(), open_with_the_record_read: Vec::new(), table_as_stated: true, record_as_assembled: true, form: "" };
     for _ in 0..repetitions {
         repetition(&catalog, worker_counts, &mut out);
     }

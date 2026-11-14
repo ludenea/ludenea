@@ -142,6 +142,8 @@ impl Family {
                 by_hand.push(name.clone());
             }
             names.hashes.insert(name.clone(), hash);
+            // The size the domain manifest gives the content: the length of its part.
+            names.sizes.insert(hash, part.len() as u64);
             names.tables.insert(hash, RepulsionTable { strength: source.strength, radius: source.radius });
             parts.insert(name.clone(), part);
             sources.insert(name, source);
