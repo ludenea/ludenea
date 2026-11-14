@@ -2362,6 +2362,34 @@ case "$spike" in
       jq -r 'select(.reach.measured | not) | "- `\(.cell)`: the calls are not counted (\(.reach.why))."' "$file"
     done
     ;;
+  asset-table-and-loader)
+    echo "The stage of the four claims. A claim's verdict is an identity: every scenario against an oracle written by hand, at 1, 4 and 8 workers."
+    echo
+    echo "| Cell | Profile | Size | CPUs | First check | Placement | Small records | Every scenario stands |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '"| \(.cell) | \(if .build.debug_assertions then "unoptimized" else "release" end) | \(.size) | \(.platform.available_parallelism // "n/a") | \([.first_check | to_entries[] | select(.value | type == "object" and has("holds")) | select(.value.holds) | .key] | length) of 6 scenarios hold | \([.placement[] | select(.placement_respected)] | length) of \(.placement | length) crates | \(.enumeration_of_small_records.records) records, \(.enumeration_of_small_records.fell_while_wanted + .enumeration_of_small_records.stayed_without_a_want + .enumeration_of_small_records.order_of_making + .enumeration_of_small_records.round_trip) violations | \(.every_scenario_stands) |"' "$file"
+    done
+    echo
+    echo "| Cell | Claim | Verdict | Scenarios | Equal | By a reading | Differ | Controls that differ | One hash across worker counts |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .claims[] | "| \($cell) | \(.claim) | \(.verdict) | \(.scenarios | length) | \([.scenarios[] | select(.standing == "equals its oracle")] | length) | \([.scenarios[] | select(.standing == "differs by a reading of the text alone")] | length) | \([.scenarios[] | select(.standing == "differs from its oracle")] | length) | \([.controls_and_readings[] | select(.kind == "control" and .differs_from_the_oracle)] | length) of \([.controls_and_readings[] | select(.kind == "control")] | length) | \(.one_run_hash_per_scenario_across_worker_counts) |"' "$file"
+    done
+    echo
+    echo "Run hashes per scenario across the cells of one size (one distinct value means the cells agree):"
+    echo
+    for size in $(jq -r '.size' "${facts[@]}" | sort -u); do
+      jq -r --arg size "$size" 'select(.size == $size) | .claims[].scenarios[] | "\(.scenario) [\(.world)] \(.run_hash)"' "${facts[@]}" \
+        | sort | uniq -c | awk -v size="$size" '{ count[$2 " " $3]++; } END { for (name in count) printf "- `%s`, %s size: %d distinct run hash value(s).\n", name, size, count[name]; }' | sort
+    done
+    echo
+    echo "The scenarios that do not equal their oracle, and why:"
+    echo
+    for file in "${facts[@]}"; do
+      jq -r '.cell as $cell | .claims[].scenarios[] | select(.standing != "equals its oracle") | "- `\($cell)`, `\(.scenario)` [\(.world)]: \(.standing)."' "$file"
+    done
+    ;;
   *)
     echo "No summary is defined for this spike; the raw facts are in the artifacts."
     ;;

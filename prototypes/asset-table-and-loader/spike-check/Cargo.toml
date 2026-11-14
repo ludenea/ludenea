@@ -1,0 +1,12 @@
+[package]
+name = "spike-check"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway prototype crate. The scenarios of the asset table spike, copied and run again on the prototype's table and world, as its first check."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+prototype-core = { path = "../core" }
+asset-loader = { path = "../loader" }
+reference-workload = { path = "../../../spikes/reference-workload" }

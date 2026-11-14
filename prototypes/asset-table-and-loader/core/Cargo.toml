@@ -1,0 +1,10 @@
+[package]
+name = "prototype-core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway prototype crate. The asset identity core of the prototype inside the stand-in world: the asset table, its wants, the gate and the canonical form. It reads no file."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reference-workload = { path = "../../../spikes/reference-workload" }

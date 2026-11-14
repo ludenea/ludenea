@@ -1,0 +1,521 @@
+# Family restore: a restore under the content at hand.
+# Written by hand from the design text, by a writer who has not read the build.
+# The table's order is the order of the asset identifiers:
+# D1, D2, F, L1, L2, P, T, U, Z.
+# Where the text left a choice, a comment says which reading the lines take.
+# Reading taken throughout: a first arrival emits the event "arrived".
+# Reading taken throughout: an instantiation is counted at the tick whose
+# record holds the arrival, or the change of hash, that causes it.
+
+scenario restore/saved-world
+
+# The table the creation gives. The dependency of P has no entry yet: the want
+# of a dependency is added with the batch whose part lists it.
+tick 0
+entry L2 unavailable
+want contributor:base required
+entry P unavailable
+want contributor:base required
+
+# The two closures arrive before the first tick runs, sorted by identifier.
+# The want of D1 is added first, owned by its parent and required as the
+# parent's want is, then the arrivals are applied.
+tick 1
+record arrival D1 D1.1
+record arrival L2 L2.1
+record arrival P P.1
+entry D1 available D1.1
+want asset:P required
+entry L2 available L2.1
+want contributor:base required
+entry P available P.1
+want contributor:base required
+event arrived D1 D1.1
+event arrived L2 L2.1
+event arrived P P.1
+
+tick 2
+record instantiate one L1 required reload on
+record want Z source:host optional
+record want F source:host optional
+record want T source:host optional
+entry D1 available D1.1
+want asset:P required
+entry F unavailable
+want source:host optional
+entry L1 unavailable
+want instance:one required
+entry L2 available L2.1
+want contributor:base required
+entry P available P.1
+want contributor:base required
+entry T unavailable
+want source:host optional
+entry Z unavailable
+want source:host optional
+instance one L1 instantiations 0 failed no
+
+# Four answers in one record. The artifact cut short is a failed first load of
+# an optional want: an event, and nothing named by the step.
+tick 3
+record arrival F failed invalid-part
+record arrival L1 L1.1
+record arrival T T.1
+record arrival Z Z.1
+entry D1 available D1.1
+want asset:P required
+entry F failed invalid-part
+want source:host optional
+entry L1 available L1.1
+want instance:one required
+entry L2 available L2.1
+want contributor:base required
+entry P available P.1
+want contributor:base required
+entry T available T.1
+want source:host optional
+entry Z available Z.1
+want source:host optional
+event failed F invalid-part
+event arrived L1 L1.1
+event arrived T T.1
+event arrived Z Z.1
+instance one L1 instantiations 1 failed no
+
+# The release leaves Z available with no want through this tick. The world is
+# saved here: available assets, a failed entry, an unanswered required want and
+# an entry with no want.
+tick 8
+record release Z source:host
+record want U source:host required
+entry D1 available D1.1
+want asset:P required
+entry F failed invalid-part
+want source:host optional
+entry L1 available L1.1
+want instance:one required
+entry L2 available L2.1
+want contributor:base required
+entry P available P.1
+want contributor:base required
+entry T available T.1
+want source:host optional
+entry U unavailable
+want source:host required
+entry Z available Z.1
+instance one L1 instantiations 1 failed no
+
+# The record first, then the fall: Z leaves the table.
+tick 9
+record arrival U U.1
+entry D1 available D1.1
+want asset:P required
+entry F failed invalid-part
+want source:host optional
+entry L1 available L1.1
+want instance:one required
+entry L2 available L2.1
+want contributor:base required
+entry P available P.1
+want contributor:base required
+entry T available T.1
+want source:host optional
+entry U available U.1
+want source:host required
+event arrived U U.1
+instance one L1 instantiations 1 failed no
+
+# The table of tick 9 stands to tick 16.
+
+
+# The readers. Each restores the table of tick 8 above and runs tick 9 first.
+# Before its first tick a reader waits for a marked answer to every asset the
+# table holds available under a want (D1, L1, L2, P, T), and for the answer to
+# the required want that was unanswered (U). The failed entry (F) and the entry
+# with no want (Z) are not answered.
+# Reading taken: the step without waiting names both kinds in one list, in
+# identifier order, the optional asset that awaits its marked answer included.
+# Reading taken: the ordinary answer to U is posted with the marked answers and
+# stands in the record of the first tick.
+
+scenario restore/same-content-other-set
+restore continues
+blocked 9 awaiting D1, L1, L2, P, T, U
+
+# Every marked answer is at the recorded hash: no event on them, none for the
+# restore. The table and the events are those of tick 9 of the saved world.
+tick 9
+record arrival D1 D1.1 marked
+record arrival L1 L1.1 marked
+record arrival L2 L2.1 marked
+record arrival P P.1 marked
+record arrival T T.1 marked
+record arrival U U.1
+entry D1 available D1.1
+want asset:P required
+entry F failed invalid-part
+want source:host optional
+entry L1 available L1.1
+want instance:one required
+entry L2 available L2.1
+want contributor:base required
+entry P available P.1
+want contributor:base required
+entry T available T.1
+want source:host optional
+entry U available U.1
+want source:host required
+event arrived U U.1
+instance one L1 instantiations 1 failed no
+
+# The table of tick 9 stands to tick 16.
+
+
+scenario restore/one-changed
+restore new-history L1
+blocked 9 awaiting D1, L1, L2, P, T, U
+
+# The marked answer puts L1 at its new hash with no event of a change and no
+# new instantiation, whatever the instance's setting.
+# Reading taken: the event that records the restore is emitted at the first
+# tick, before the events of that tick's record.
+tick 9
+record arrival D1 D1.1 marked
+record arrival L1 L1.2 marked
+record arrival L2 L2.1 marked
+record arrival P P.1 marked
+record arrival T T.1 marked
+record arrival U U.1
+entry D1 available D1.1
+want asset:P required
+entry F failed invalid-part
+want source:host optional
+entry L1 available L1.2
+want instance:one required
+entry L2 available L2.1
+want contributor:base required
+entry P available P.1
+want contributor:base required
+entry T available T.1
+want source:host optional
+entry U available U.1
+want source:host required
+event new-history L1
+event arrived U U.1
+instance one L1 instantiations 1 failed no
+
+# The table of tick 9 stands to tick 16.
+
+
+scenario restore/one-absent
+restore new-history L1
+blocked 9 awaiting D1, L1, L2, P, T, U
+
+# The content at hand does not hold L1: its marked answer is a failure, which
+# is an answer, so the first tick runs.
+# Reading taken, the text giving two behaviors: a marked answer emits no event,
+# so no event "failed"; the sentence on a failed required asset still holds for
+# the rest, so the instance that required it is failed and the step that runs
+# the tick names the asset. No new instantiation is made.
+# The answer differs from the recorded hash: the restore's event names L1.
+tick 9
+record arrival D1 D1.1 marked
+record arrival L1 failed unknown-asset marked
+record arrival L2 L2.1 marked
+record arrival P P.1 marked
+record arrival T T.1 marked
+record arrival U U.1
+entry D1 available D1.1
+want asset:P required
+entry F failed invalid-part
+want source:host optional
+entry L1 failed unknown-asset
+want instance:one required
+entry L2 available L2.1
+want contributor:base required
+entry P available P.1
+want contributor:base required
+entry T available T.1
+want source:host optional
+entry U available U.1
+want source:host required
+event new-history L1
+event arrived U U.1
+instance one L1 instantiations 1 failed yes
+names-failed L1 unknown-asset
+
+# The table of tick 9 stands to tick 16.
+
+
+scenario restore/entries-not-available
+restore continues
+blocked 9 awaiting D1, L1, L2, P, T, U
+
+# The failed entry is not answered and stays failed. The unanswered required
+# want is answered by an ordinary arrival, with its event. The entry with no
+# want is not answered and falls at this tick's fixed point.
+tick 9
+record arrival D1 D1.1 marked
+record arrival L1 L1.1 marked
+record arrival L2 L2.1 marked
+record arrival P P.1 marked
+record arrival T T.1 marked
+record arrival U U.1
+entry D1 available D1.1
+want asset:P required
+entry F failed invalid-part
+want source:host optional
+entry L1 available L1.1
+want instance:one required
+entry L2 available L2.1
+want contributor:base required
+entry P available P.1
+want contributor:base required
+entry T available T.1
+want source:host optional
+entry U available U.1
+want source:host required
+event arrived U U.1
+instance one L1 instantiations 1 failed no
+
+# A second maker wants the failed asset. Two wants under the world's own entry,
+# ordered by the identity of what made each: the host (3), then the tool (5).
+# The asset is still failed after this tick.
+tick 11
+record want F source:tool optional
+entry D1 available D1.1
+want asset:P required
+entry F failed invalid-part
+want source:host optional
+want source:tool optional
+entry L1 available L1.1
+want instance:one required
+entry L2 available L2.1
+want contributor:base required
+entry P available P.1
+want contributor:base required
+entry T available T.1
+want source:host optional
+entry U available U.1
+want source:host required
+instance one L1 instantiations 1 failed no
+
+# Reading taken: the new want is the new load that retries the failed entry,
+# and the artifact, whole by now under the hash the manifest names, answers it.
+# No revision is posted: the manifest did not move.
+tick 12
+record arrival F F.1
+entry D1 available D1.1
+want asset:P required
+entry F available F.1
+want source:host optional
+want source:tool optional
+entry L1 available L1.1
+want instance:one required
+entry L2 available L2.1
+want contributor:base required
+entry P available P.1
+want contributor:base required
+entry T available T.1
+want source:host optional
+entry U available U.1
+want source:host required
+event arrived F F.1
+instance one L1 instantiations 1 failed no
+
+# The table of tick 12 stands to tick 16.
+
+
+scenario restore/unanswered-at-another-hash
+restore continues
+blocked 9 awaiting D1, L1, L2, P, T, U
+
+# Reading taken: no marked answer differs, so the saved run continues by the
+# rule as written, although the unanswered want is answered at a hash the
+# uninterrupted run never received. No event records the restore.
+tick 9
+record arrival D1 D1.1 marked
+record arrival L1 L1.1 marked
+record arrival L2 L2.1 marked
+record arrival P P.1 marked
+record arrival T T.1 marked
+record arrival U U.2
+entry D1 available D1.1
+want asset:P required
+entry F failed invalid-part
+want source:host optional
+entry L1 available L1.1
+want instance:one required
+entry L2 available L2.1
+want contributor:base required
+entry P available P.1
+want contributor:base required
+entry T available T.1
+want source:host optional
+entry U available U.2
+want source:host required
+event arrived U U.2
+instance one L1 instantiations 1 failed no
+
+# The table of tick 9 stands to tick 16.
+
+
+scenario restore/revision-while-waiting
+restore continues
+blocked 9 awaiting D1, L1, L2, P, T, U
+
+# The revision lands after the answers are posted and before the first tick.
+# It is held: the first tick applies the marked answers as they were posted.
+tick 9
+record arrival D1 D1.1 marked
+record arrival L1 L1.1 marked
+record arrival L2 L2.1 marked
+record arrival P P.1 marked
+record arrival T T.1 marked
+record arrival U U.1
+entry D1 available D1.1
+want asset:P required
+entry F failed invalid-part
+want source:host optional
+entry L1 available L1.1
+want instance:one required
+entry L2 available L2.1
+want contributor:base required
+entry P available P.1
+want contributor:base required
+entry T available T.1
+want source:host optional
+entry U available U.1
+want source:host required
+event arrived U U.1
+instance one L1 instantiations 1 failed no
+
+# The held revision is posted once the first tick has run: an ordinary reload,
+# with its event, and the instance, whose setting is on, instantiates again.
+tick 10
+record arrival L1 L1.2
+entry D1 available D1.1
+want asset:P required
+entry F failed invalid-part
+want source:host optional
+entry L1 available L1.2
+want instance:one required
+entry L2 available L2.1
+want contributor:base required
+entry P available P.1
+want contributor:base required
+entry T available T.1
+want source:host optional
+entry U available U.1
+want source:host required
+event changed L1 L1.1 L1.2
+instance one L1 instantiations 2 failed no
+
+# The table of tick 10 stands to tick 16.
+
+
+scenario restore/parent-with-another-dependency
+restore new-history P
+blocked 9 awaiting D1, L1, L2, P, T, U
+
+# Before the first tick the table is the saved one: it holds D1 under the want
+# its parent owns, and nothing of D2.
+# At the first tick the batch's part of P lists D2: the want the core added is
+# recomputed, so D2 is wanted by its parent, required as the parent's want is,
+# and the want of D1 ends.
+# Reading taken: D1 is answered by a marked answer, at its recorded hash, since
+# the saved table holds it available under a want; it stays available with no
+# want through this tick.
+# Reading taken: the arrival of D2 is no answer to a restore, the saved table
+# not holding it: it is an ordinary arrival, with its event, and the restore's
+# event names P alone.
+tick 9
+record arrival D1 D1.1 marked
+record arrival D2 D2.1
+record arrival L1 L1.1 marked
+record arrival L2 L2.1 marked
+record arrival P P.2 marked
+record arrival T T.1 marked
+record arrival U U.1
+entry D1 available D1.1
+entry D2 available D2.1
+want asset:P required
+entry F failed invalid-part
+want source:host optional
+entry L1 available L1.1
+want instance:one required
+entry L2 available L2.1
+want contributor:base required
+entry P available P.2
+want contributor:base required
+entry T available T.1
+want source:host optional
+entry U available U.1
+want source:host required
+event new-history P
+event arrived D2 D2.1
+event arrived U U.1
+instance one L1 instantiations 1 failed no
+
+# The former dependency falls at the next tick's fixed point and leaves.
+tick 10
+entry D2 available D2.1
+want asset:P required
+entry F failed invalid-part
+want source:host optional
+entry L1 available L1.1
+want instance:one required
+entry L2 available L2.1
+want contributor:base required
+entry P available P.2
+want contributor:base required
+entry T available T.1
+want source:host optional
+entry U available U.1
+want source:host required
+instance one L1 instantiations 1 failed no
+
+# The table of tick 10 stands to tick 16.
+
+
+scenario restore/another-composition-refused
+restore refused T
+# The composition at hand lacks the asset type of T, and the request names
+# nothing as dropped: the restore is refused by name and no world exists, so
+# there is no step and no tick to state.
+# Reading taken: the name is that of the table's entry, the asset T.
+
+
+scenario restore/another-composition-dropped
+restore new-history T
+blocked 9 awaiting D1, L1, L2, P, U
+
+# Reading taken: the request names the table's entry, the asset T, as dropped.
+# The world is restored without that entry and its want. A restore into another
+# composition always starts a new history, here with every answer at its
+# recorded hash.
+# Reading taken: the restore's event names what was dropped, and it is emitted
+# at the first tick, before the events of that tick's record.
+tick 9
+record arrival D1 D1.1 marked
+record arrival L1 L1.1 marked
+record arrival L2 L2.1 marked
+record arrival P P.1 marked
+record arrival U U.1
+entry D1 available D1.1
+want asset:P required
+entry F failed invalid-part
+want source:host optional
+entry L1 available L1.1
+want instance:one required
+entry L2 available L2.1
+want contributor:base required
+entry P available P.1
+want contributor:base required
+entry U available U.1
+want source:host required
+event new-history T
+event arrived U U.1
+instance one L1 instantiations 1 failed no
+
+# The table of tick 9 stands to tick 16.

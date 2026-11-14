@@ -1,0 +1,32 @@
+# Workspace of the throwaway prototype of the asset table and of the loader.
+# It is a workspace of its own, outside the spikes' workspace, built with the
+# toolchain pinned in spikes/rust-toolchain.toml (run cargo from spikes/ with
+# --manifest-path, or through spikes/ci/run-spike.sh). The root package is the
+# harness; the member crates follow the placement the design gives the asset
+# subsystem. Standard library and the reference workload crate alone.
+[package]
+name = "asset-table-and-loader"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway prototype: an asset table with its wants, their owners and its loading gate, a loading capability that resolves each world in the manifest it stands under, a content store library and a stand-in pipeline, run against oracles written by hand from the design text"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "asset-table-and-loader"
+path = "harness/src/main.rs"
+
+[dependencies]
+prototype-core = { path = "core" }
+content-store = { path = "store" }
+asset-loader = { path = "loader" }
+asset-pipeline = { path = "pipeline" }
+spike-check = { path = "spike-check" }
+reference-workload = { path = "../../spikes/reference-workload" }
+
+[workspace]
+resolver = "3"
+members = ["core", "store", "loader", "pipeline", "spike-check"]
+
+[profile.release]
+debug = 1

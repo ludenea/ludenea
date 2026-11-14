@@ -1,0 +1,11 @@
+[package]
+name = "asset-loader"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway prototype crate. The loading capability of the prototype: a manifest resolved per world, a store port, the resident store, arrivals posted as batches."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+prototype-core = { path = "../core" }
+content-store = { path = "../store" }

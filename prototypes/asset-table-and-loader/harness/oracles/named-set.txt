@@ -1,0 +1,480 @@
+# Family named-set: a named content set under a moved manifest.
+# Written by hand from the design text, by a writer who has not read the build.
+# The table's order is the order of the asset identifiers: K1, K2, N, X2, X3, Y.
+# Where the text left a choice, a comment says which reading the lines take.
+# Reading taken throughout: a first arrival emits the event "arrived".
+# Reading taken throughout: a tick 0 block states the table the creation gives,
+# with an empty record and no event.
+
+scenario named-set/moved-manifest
+
+# The world created under the set. Every want is resolved in the set's manifest,
+# whatever has moved the instance's manifest since, and no revision, mount or
+# unmount reaches its input record.
+world under-set
+
+tick 0
+entry K1 unavailable
+want contributor:base required
+entry K2 unavailable
+want contributor:base required
+
+# The composition's wants are answered before the first tick runs.
+tick 1
+record arrival K1 K1.1
+record arrival K2 K2.1
+entry K1 available K1.1
+want contributor:base required
+entry K2 available K2.1
+want contributor:base required
+event arrived K1 K1.1
+event arrived K2 K2.1
+
+# Ticks 4 and 7 have no block: the revision and the mount post this world nothing.
+
+tick 9
+record want X2 source:host required
+entry K1 available K1.1
+want contributor:base required
+entry K2 available K2.1
+want contributor:base required
+entry X2 unavailable
+want source:host required
+
+# Answered at the set's hash: the former artifact is still in the store.
+tick 10
+record arrival X2 X2.1
+entry K1 available K1.1
+want contributor:base required
+entry K2 available K2.1
+want contributor:base required
+entry X2 available X2.1
+want source:host required
+event arrived X2 X2.1
+
+tick 11
+record want Y source:host required
+entry K1 available K1.1
+want contributor:base required
+entry K2 available K2.1
+want contributor:base required
+entry X2 available X2.1
+want source:host required
+entry Y unavailable
+want source:host required
+
+# The mounted package overrides this entry on the instance: the set's hash answers.
+tick 12
+record arrival Y Y.1
+entry K1 available K1.1
+want contributor:base required
+entry K2 available K2.1
+want contributor:base required
+entry X2 available X2.1
+want source:host required
+entry Y available Y.1
+want source:host required
+event arrived Y Y.1
+
+tick 13
+record want N source:host required
+entry K1 available K1.1
+want contributor:base required
+entry K2 available K2.1
+want contributor:base required
+entry N unavailable
+want source:host required
+entry X2 available X2.1
+want source:host required
+entry Y available Y.1
+want source:host required
+
+# The set does not hold the asset: a failed answer, which opens the gate.
+# Reading taken: the step that runs the tick of the failed arrival names the
+# asset, and no later step names it again.
+tick 14
+record arrival N failed unknown-asset
+entry K1 available K1.1
+want contributor:base required
+entry K2 available K2.1
+want contributor:base required
+entry N failed unknown-asset
+want source:host required
+entry X2 available X2.1
+want source:host required
+entry Y available Y.1
+want source:host required
+event failed N unknown-asset
+names-failed N unknown-asset
+
+tick 15
+record want X3 source:host required
+entry K1 available K1.1
+want contributor:base required
+entry K2 available K2.1
+want contributor:base required
+entry N failed unknown-asset
+want source:host required
+entry X2 available X2.1
+want source:host required
+entry X3 unavailable
+want source:host required
+entry Y available Y.1
+want source:host required
+
+# The artifact the set names is gone from the store: a failed answer.
+tick 16
+record arrival X3 failed artifact-gone
+entry K1 available K1.1
+want contributor:base required
+entry K2 available K2.1
+want contributor:base required
+entry N failed unknown-asset
+want source:host required
+entry X2 available X2.1
+want source:host required
+entry X3 failed artifact-gone
+want source:host required
+entry Y available Y.1
+want source:host required
+event failed X3 artifact-gone
+names-failed X3 artifact-gone
+
+# Tick 19 has no block: the unmount posts this world nothing.
+# The table of tick 16 stands to tick 22.
+
+# The world that names no set, on the same instance. The revision, the mount
+# and the unmount each reach it as one batch, and its wants are answered in the
+# instance's current manifest.
+# Reading taken: a batch holds an arrival for each asset the move changes that
+# this world's table holds under a want, and none for an asset it does not want.
+world no-set
+
+tick 0
+entry K1 unavailable
+want contributor:base required
+entry K2 unavailable
+want contributor:base required
+
+tick 1
+record arrival K1 K1.1
+record arrival K2 K2.1
+entry K1 available K1.1
+want contributor:base required
+entry K2 available K2.1
+want contributor:base required
+event arrived K1 K1.1
+event arrived K2 K2.1
+
+# The revision, put in place between tick 3 and tick 4.
+tick 4
+record arrival K1 K1.2
+entry K1 available K1.2
+want contributor:base required
+entry K2 available K2.1
+want contributor:base required
+event changed K1 K1.1 K1.2
+
+# The mount, between tick 6 and tick 7. The world does not hold Y yet.
+tick 7
+record arrival K2 K2.9
+entry K1 available K1.2
+want contributor:base required
+entry K2 available K2.9
+want contributor:base required
+event changed K2 K2.1 K2.9
+
+tick 9
+record want X2 source:host required
+entry K1 available K1.2
+want contributor:base required
+entry K2 available K2.9
+want contributor:base required
+entry X2 unavailable
+want source:host required
+
+# Answered at the later revision's hash.
+tick 10
+record arrival X2 X2.2
+entry K1 available K1.2
+want contributor:base required
+entry K2 available K2.9
+want contributor:base required
+entry X2 available X2.2
+want source:host required
+event arrived X2 X2.2
+
+tick 11
+record want Y source:host required
+entry K1 available K1.2
+want contributor:base required
+entry K2 available K2.9
+want contributor:base required
+entry X2 available X2.2
+want source:host required
+entry Y unavailable
+want source:host required
+
+# Answered at the hash of the package's overriding entry.
+tick 12
+record arrival Y Y.9
+entry K1 available K1.2
+want contributor:base required
+entry K2 available K2.9
+want contributor:base required
+entry X2 available X2.2
+want source:host required
+entry Y available Y.9
+want source:host required
+event arrived Y Y.9
+
+tick 13
+record want N source:host required
+entry K1 available K1.2
+want contributor:base required
+entry K2 available K2.9
+want contributor:base required
+entry N unavailable
+want source:host required
+entry X2 available X2.2
+want source:host required
+entry Y available Y.9
+want source:host required
+
+# The later revision holds the asset.
+tick 14
+record arrival N N.1
+entry K1 available K1.2
+want contributor:base required
+entry K2 available K2.9
+want contributor:base required
+entry N available N.1
+want source:host required
+entry X2 available X2.2
+want source:host required
+entry Y available Y.9
+want source:host required
+event arrived N N.1
+
+tick 15
+record want X3 source:host required
+entry K1 available K1.2
+want contributor:base required
+entry K2 available K2.9
+want contributor:base required
+entry N available N.1
+want source:host required
+entry X2 available X2.2
+want source:host required
+entry X3 unavailable
+want source:host required
+entry Y available Y.9
+want source:host required
+
+# Answered at the later revision's hash: the removed artifact is not asked for.
+tick 16
+record arrival X3 X3.2
+entry K1 available K1.2
+want contributor:base required
+entry K2 available K2.9
+want contributor:base required
+entry N available N.1
+want source:host required
+entry X2 available X2.2
+want source:host required
+entry X3 available X3.2
+want source:host required
+entry Y available Y.9
+want source:host required
+event arrived X3 X3.2
+
+# The unmount, between tick 18 and tick 19: the two overridden entries return
+# to the later revision's hashes, as one batch in identifier order.
+tick 19
+record arrival K2 K2.1
+record arrival Y Y.1
+entry K1 available K1.2
+want contributor:base required
+entry K2 available K2.1
+want contributor:base required
+entry N available N.1
+want source:host required
+entry X2 available X2.2
+want source:host required
+entry X3 available X3.2
+want source:host required
+entry Y available Y.1
+want source:host required
+event changed K2 K2.9 K2.1
+event changed Y Y.9 Y.1
+
+# The table of tick 19 stands to tick 22.
+
+# The same world under the same set, on a second instance whose manifest never
+# moves. Its store loses the same artifact between tick 5 and tick 6. Its table
+# is the table of the world under the set, tick for tick.
+world reference
+
+tick 0
+entry K1 unavailable
+want contributor:base required
+entry K2 unavailable
+want contributor:base required
+
+tick 1
+record arrival K1 K1.1
+record arrival K2 K2.1
+entry K1 available K1.1
+want contributor:base required
+entry K2 available K2.1
+want contributor:base required
+event arrived K1 K1.1
+event arrived K2 K2.1
+
+tick 9
+record want X2 source:host required
+entry K1 available K1.1
+want contributor:base required
+entry K2 available K2.1
+want contributor:base required
+entry X2 unavailable
+want source:host required
+
+tick 10
+record arrival X2 X2.1
+entry K1 available K1.1
+want contributor:base required
+entry K2 available K2.1
+want contributor:base required
+entry X2 available X2.1
+want source:host required
+event arrived X2 X2.1
+
+tick 11
+record want Y source:host required
+entry K1 available K1.1
+want contributor:base required
+entry K2 available K2.1
+want contributor:base required
+entry X2 available X2.1
+want source:host required
+entry Y unavailable
+want source:host required
+
+tick 12
+record arrival Y Y.1
+entry K1 available K1.1
+want contributor:base required
+entry K2 available K2.1
+want contributor:base required
+entry X2 available X2.1
+want source:host required
+entry Y available Y.1
+want source:host required
+event arrived Y Y.1
+
+tick 13
+record want N source:host required
+entry K1 available K1.1
+want contributor:base required
+entry K2 available K2.1
+want contributor:base required
+entry N unavailable
+want source:host required
+entry X2 available X2.1
+want source:host required
+entry Y available Y.1
+want source:host required
+
+tick 14
+record arrival N failed unknown-asset
+entry K1 available K1.1
+want contributor:base required
+entry K2 available K2.1
+want contributor:base required
+entry N failed unknown-asset
+want source:host required
+entry X2 available X2.1
+want source:host required
+entry Y available Y.1
+want source:host required
+event failed N unknown-asset
+names-failed N unknown-asset
+
+tick 15
+record want X3 source:host required
+entry K1 available K1.1
+want contributor:base required
+entry K2 available K2.1
+want contributor:base required
+entry N failed unknown-asset
+want source:host required
+entry X2 available X2.1
+want source:host required
+entry X3 unavailable
+want source:host required
+entry Y available Y.1
+want source:host required
+
+tick 16
+record arrival X3 failed artifact-gone
+entry K1 available K1.1
+want contributor:base required
+entry K2 available K2.1
+want contributor:base required
+entry N failed unknown-asset
+want source:host required
+entry X2 available X2.1
+want source:host required
+entry X3 failed artifact-gone
+want source:host required
+entry Y available Y.1
+want source:host required
+event failed X3 artifact-gone
+names-failed X3 artifact-gone
+
+# The table of tick 16 stands to tick 22.
+
+
+scenario named-set/recording-replays-under-a-set
+
+# One table for both worlds: the world that names no set, which makes the
+# recording, and the world created under the set, which replays its input log.
+# The set's hash is configuration: nothing in the table holds it.
+# The sheet gives this scenario no last tick: nothing happens after tick 5.
+
+tick 0
+entry K1 unavailable
+want contributor:base required
+entry K2 unavailable
+want contributor:base required
+
+tick 1
+record arrival K1 K1.1
+record arrival K2 K2.1
+entry K1 available K1.1
+want contributor:base required
+entry K2 available K2.1
+want contributor:base required
+event arrived K1 K1.1
+event arrived K2 K2.1
+
+# An optional want gates nothing: tick 4 runs with the asset unanswered.
+tick 4
+record want X2 source:host optional
+entry K1 available K1.1
+want contributor:base required
+entry K2 available K2.1
+want contributor:base required
+entry X2 unavailable
+want source:host optional
+
+tick 5
+record arrival X2 X2.1
+entry K1 available K1.1
+want contributor:base required
+entry K2 available K2.1
+want contributor:base required
+entry X2 available X2.1
+want source:host optional
+event arrived X2 X2.1

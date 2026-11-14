@@ -1,0 +1,9 @@
+[package]
+name = "content-store"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway prototype crate. The formats the loading capability and the pipeline share: the manifests and the package. No thread and no I/O."
+license = "MIT OR Apache-2.0"
+
+[dependencies]

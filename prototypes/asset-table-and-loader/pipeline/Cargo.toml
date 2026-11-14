@@ -1,0 +1,11 @@
+[package]
+name = "asset-pipeline"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Throwaway prototype crate. The stand-in pipeline of the prototype: synthetic sources imported into canonical parts, an artifact cache, revisions put in place by one rename, packages."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+prototype-core = { path = "../core" }
+content-store = { path = "../store" }

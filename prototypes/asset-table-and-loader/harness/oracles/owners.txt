@@ -1,0 +1,181 @@
+# Oracles of the family "owners": the owners of wants.
+# Written by hand from the design text, before any run.
+# Asset identifiers order as A, B, D1, P, D2: D2 stands after P.
+# Record lines stand in the order applied: the commands first, in the order
+# the scenario gives them, then the arrivals by asset identifier.
+# Wants of an entry stand in the table's total order: the wants under the
+# world's own entry by the identity of what made each, then the wants of
+# entities by entity identifier, then the wants the core added, by parent.
+# An entry line with no want line under it is an entry that holds no want.
+# A tick block with no entry line states an empty table.
+
+scenario owners/two-wants-first-order
+# The core learns the dependency of P from the part that arrives, so D1 has
+# no entry before the batch of tick 3.
+tick 2
+record want P entity:E1 required
+record want P entity:E2 optional
+entry P unavailable
+want entity:E1 required
+want entity:E2 optional
+# The batch: the core first adds the one want of D1, owned by P and required
+# since one want of P is required, then applies the arrivals by identifier.
+tick 3
+record arrival D1 D1.1
+record arrival P P.1
+entry D1 available D1.1
+want asset:P required
+entry P available P.1
+want entity:E1 required
+want entity:E2 optional
+event arrived D1 D1.1
+event arrived P P.1
+# E1 held the required want of P: no want of P is required any more, so the
+# want of D1 becomes optional.
+tick 6
+record despawn E1
+entry D1 available D1.1
+want asset:P optional
+entry P available P.1
+want entity:E2 optional
+# The last want of P ends, and the want of D1 ends with it. Both keep their
+# entries, with no want, through this tick.
+tick 9
+record despawn E2
+entry D1 available D1.1
+entry P available P.1
+# Both fall at the input fixed point of tick 10 and leave: the table is empty.
+tick 10
+
+scenario owners/two-wants-second-order
+# The two commands in the other order: the table is the same at every tick,
+# since the wants of entities stand by entity identifier and not by making.
+tick 2
+record want P entity:E2 optional
+record want P entity:E1 required
+entry P unavailable
+want entity:E1 required
+want entity:E2 optional
+tick 3
+record arrival D1 D1.1
+record arrival P P.1
+entry D1 available D1.1
+want asset:P required
+entry P available P.1
+want entity:E1 required
+want entity:E2 optional
+event arrived D1 D1.1
+event arrived P P.1
+tick 6
+record despawn E1
+entry D1 available D1.1
+want asset:P optional
+entry P available P.1
+want entity:E2 optional
+tick 9
+record despawn E2
+entry D1 available D1.1
+entry P available P.1
+# Both fall at the input fixed point of tick 10 and leave: the table is empty.
+tick 10
+
+scenario owners/parent-changes-dependency
+tick 2
+record want P entity:E1 required
+entry P unavailable
+want entity:E1 required
+tick 3
+record arrival D1 D1.1
+record arrival P P.1
+entry D1 available D1.1
+want asset:P required
+entry P available P.1
+want entity:E1 required
+event arrived D1 D1.1
+event arrived P P.1
+# P changes to a part that lists D2 and no longer D1. The core first adds the
+# want of D2 the new part lists, then applies the arrivals by identifier, P
+# before D2. The want the core added for D1 is recomputed away: D1 keeps its
+# entry, with no want, through this tick.
+tick 6
+record arrival P P.2
+record arrival D2 D2.1
+entry D1 available D1.1
+entry P available P.2
+want entity:E1 required
+entry D2 available D2.1
+want asset:P required
+event changed P P.1 P.2
+event arrived D2 D2.1
+# D1 falls at the input fixed point of tick 7 and leaves.
+tick 7
+entry P available P.2
+want entity:E1 required
+entry D2 available D2.1
+want asset:P required
+
+scenario owners/preload-over-composition
+# The want of the composition's contributor is made before the first tick:
+# the table the creation gives, stated as tick 0.
+tick 0
+entry A unavailable
+want contributor:base required
+tick 1
+record arrival A A.1
+entry A available A.1
+want contributor:base required
+event arrived A A.1
+# The preload adds its own want of A and changes nothing of the composition's.
+# Reading taken: the two makers compare by their identities alone, so the
+# source of the command (3) stands before the contributor (7).
+tick 3
+record want A source:host optional
+record want B source:host optional
+entry A available A.1
+want source:host optional
+want contributor:base required
+entry B unavailable
+want source:host optional
+tick 4
+record arrival B B.1
+entry A available A.1
+want source:host optional
+want contributor:base required
+entry B available B.1
+want source:host optional
+event arrived B B.1
+# Each release ends the preload's want alone. A keeps the composition's want
+# and never falls; B keeps its entry, with no want, through this tick.
+tick 6
+record release A source:host
+record release B source:host
+entry A available A.1
+want contributor:base required
+entry B available B.1
+# B falls at the input fixed point of tick 7 and leaves.
+tick 7
+entry A available A.1
+want contributor:base required
+
+scenario owners/one-maker-two-wants
+tick 2
+record want A source:host optional
+entry A unavailable
+want source:host optional
+tick 3
+record arrival A A.1
+entry A available A.1
+want source:host optional
+event arrived A A.1
+# A second want of A from the same maker changes the policy of the first and
+# adds none. No event.
+tick 5
+record want A source:host required
+entry A available A.1
+want source:host required
+# One release ends the one want: A keeps its entry, with no want.
+tick 7
+record release A source:host
+entry A available A.1
+# A falls at the input fixed point of tick 8 and leaves: the table is empty.
+tick 8

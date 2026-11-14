@@ -1,0 +1,246 @@
+# Oracles of the family "order": the order at a tick's input fixed point.
+# Written by hand from the design text, before any run.
+# Record lines stand in the order applied: the commands first, in the order
+# the scenario gives them, then the arrivals by asset identifier (A, B, G).
+# A fall is derived from the table and is no element of a record.
+# An entry line with no want line under it is an entry that holds no want.
+# A tick block with no entry line states an empty table.
+
+scenario order/want-and-arrival
+# The want is applied before the arrival of the same record, so the arrival
+# answers it: A is available from tick 4, under its want.
+tick 4
+record want A source:host required
+record arrival A A.1
+entry A available A.1
+want source:host required
+event arrived A A.1
+
+scenario order/release-and-arrival
+tick 2
+record want A source:host required
+record arrival A A.1
+entry A available A.1
+want source:host required
+event arrived A A.1
+# The release is applied first: the arrival at A.2 finds no want of A, changes
+# nothing and emits no event. A keeps its hash through tick 5, with no want.
+tick 5
+record release A source:host
+record arrival A A.2
+entry A available A.1
+# A falls at the input fixed point of tick 6 and leaves: the table is empty.
+tick 6
+
+scenario order/want-again-after-release
+tick 2
+record want A source:host required
+record arrival A A.1
+entry A available A.1
+want source:host required
+event arrived A A.1
+# The last want of A ends during tick 5: A keeps its entry, with no want.
+tick 5
+record release A source:host
+entry A available A.1
+# The record of tick 6 is applied before the falls: A has a want again, does
+# not fall, and stays at its hash without a gap. No event.
+tick 6
+record want A source:host required
+entry A available A.1
+want source:host required
+
+scenario order/want-again-after-despawn
+tick 2
+record want A entity:E1 required
+record arrival A A.1
+entry A available A.1
+want entity:E1 required
+event arrived A A.1
+# The want of E1 ends with the despawn, at tick 5: A keeps its entry, with
+# no want.
+tick 5
+record despawn E1
+entry A available A.1
+# Wanted again at the tick of its fall, by another maker and as optional:
+# A stays at its hash without a gap. No event.
+tick 6
+record want A source:host optional
+entry A available A.1
+want source:host optional
+
+scenario order/want-again-live
+# A live loading capability: the answer to the want of tick 2 is in the
+# record of tick 3, and tick 2 runs with A unanswered.
+tick 2
+record want A source:host required
+entry A unavailable
+want source:host required
+tick 3
+record arrival A A.1
+entry A available A.1
+want source:host required
+event arrived A A.1
+tick 5
+record release A source:host
+entry A available A.1
+tick 6
+record want A source:host required
+entry A available A.1
+want source:host required
+# Reading taken: the loading capability answers the want of tick 6 as it
+# answers any want, with no exemption for an asset already in force. The
+# record of tick 7 holds one arrival of A at the hash in force, which changes
+# nothing and emits no event.
+tick 7
+record arrival A A.1
+entry A available A.1
+want source:host required
+# The records of ticks 8, 9 and 10 are empty.
+
+scenario order/accumulated-want-and-arrival
+tick 3
+record want G source:host required
+entry G unavailable
+want source:host required
+# Gated on G from the boundary after tick 3. The pending want of A is left
+# out by the gate, and the pending arrival of A answers nothing required.
+blocked 4 awaiting G
+# The arrival of G joins and opens the gate. The whole record is applied in
+# order: the want, then the arrivals of A and of G.
+tick 4
+record want A source:host required
+record arrival A A.1
+record arrival G G.1
+entry A available A.1
+want source:host required
+entry G available G.1
+want source:host required
+event arrived A A.1
+event arrived G G.1
+
+scenario order/accumulated-release-and-arrival
+tick 2
+record want A source:host required
+record arrival A A.1
+entry A available A.1
+want source:host required
+event arrived A A.1
+tick 3
+record want G source:host required
+entry A available A.1
+want source:host required
+entry G unavailable
+want source:host required
+# Gated on G: A is required and answered, G is required and not answered.
+blocked 4 awaiting G
+# The release is applied first: the arrival at A.2 finds no want of A, changes
+# nothing and emits no event. The arrival of G answers its want.
+tick 4
+record release A source:host
+record arrival A A.2
+record arrival G G.1
+entry A available A.1
+entry G available G.1
+want source:host required
+event arrived G G.1
+# A falls at the input fixed point of tick 5 and leaves.
+tick 5
+entry G available G.1
+want source:host required
+
+scenario order/accumulated-want-again
+tick 1
+record want A source:host required
+record arrival A A.1
+entry A available A.1
+want source:host required
+event arrived A A.1
+# The last want of A ends during tick 3: A keeps its entry, with no want.
+tick 3
+record want G source:host required
+record release A source:host
+entry A available A.1
+entry G unavailable
+want source:host required
+# Gated on G. No tick runs while the gate is closed, so no fall is applied:
+# A stays in the table with no want.
+blocked 4 awaiting G
+# Tick 4 applies its record before the falls: A has a want again and stays at
+# its hash without a gap, with no event of its own.
+tick 4
+record want A source:host required
+record arrival G G.1
+entry A available A.1
+want source:host required
+entry G available G.1
+want source:host required
+event arrived G G.1
+
+scenario order/gate-release-and-arrival
+tick 3
+record want G source:host required
+entry G unavailable
+want source:host required
+# The step without waiting comes before anything is pending.
+blocked 4 awaiting G
+# The pending release of the required want counts as the answer of G, so the
+# gate opens. The release is applied first: the arrival finds no want of G,
+# changes nothing and emits no event. G never becomes available.
+# Reading taken: an entry whose last want ended keeps its place for one tick
+# whatever its availability, so G stands here as unavailable with no want.
+tick 4
+record release G source:host
+record arrival G G.1
+entry G unavailable
+# G leaves the table at the input fixed point of tick 5: the table is empty.
+tick 5
+
+scenario order/gate-arrival-and-new-want
+tick 3
+record want G source:host required
+entry G unavailable
+want source:host required
+blocked 4 awaiting G
+# The pending arrival answers G and the pending want of B is left out by the
+# gate, so the gate opens. The want is applied before the arrival; tick 4
+# runs with B unanswered.
+tick 4
+record want B source:host required
+record arrival G G.1
+entry B unavailable
+want source:host required
+entry G available G.1
+want source:host required
+event arrived G G.1
+# The want of B gates from the boundary after its tick.
+blocked 5 awaiting B
+tick 5
+record arrival B B.1
+entry B available B.1
+want source:host required
+entry G available G.1
+want source:host required
+event arrived B B.1
+
+scenario order/gate-pending-despawn
+tick 3
+record want G entity:E1 required
+entry G unavailable
+want entity:E1 required
+# The first step without waiting, before anything is pending.
+blocked 4 awaiting G
+# The second step without waiting: the pending despawn of the owner is not
+# seen by the gate, which stays closed on G.
+blocked 4 awaiting G
+# The arrival of G joins and opens the gate. The despawn is applied first and
+# ends the want of E1: the arrival finds no want of G, changes nothing and
+# emits no event. G never becomes available.
+# Reading taken, as above: G keeps its entry for one tick, unavailable and
+# with no want.
+tick 4
+record despawn E1
+record arrival G G.1
+entry G unavailable
+# G leaves the table at the input fixed point of tick 5: the table is empty.
+tick 5
