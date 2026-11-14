@@ -8,25 +8,50 @@
 # A tick 0 block states the table the creation gives.
 #
 # Each case is stated three times, once per candidate, as the candidate's
-# definition gives it. No candidate is chosen here. Under the candidate on
-# the closure of one want every arrival to a hash carries its mark; under the
-# two others no arrival does.
+# definition gives it. None of the three is chosen: the unit the founder took
+# on 2026-11-14 is the fourth candidate, stated below the line, and the three
+# are kept for comparison. Under the candidate on the closure of one want
+# every arrival to a hash carries its mark; under the two others no arrival
+# does.
 #
 # The count of a world is the sum of the sizes of the contents its table
 # holds available. The budget is 10 000 bytes but where a comment says
 # otherwise. Sizes: B.1 9 000, D.1 6 000, K.1 5 000, K.2 11 000, N.1 2 000,
 # R.1 2 000, S.1 1 000, S.2 2 000, V.1 1 000, W.1 1 000, X.1 9 000.
 #
-# Reading taken: the core adds the wants the parts of a batch list before any
-# arrival is tested, and those wants stand whatever the test gives. A
-# dependency keeps the want its parent's part gave it when the parent's
-# arrival is rejected.
-# The other reading: a want the core added from a part that is not put in
-# force is taken back.
+# Reading taken by the founder on 2026-11-14, under which seven of the
+# oracles of the three candidates are written again: the wants the core adds
+# follow the parts in force. The core adds the wants the parts of a batch
+# list before any arrival is tested; the arrivals are then applied or
+# rejected in identifier order; the wants the core added are then recomputed
+# from the parts the table holds available. A parent whose arrival is
+# rejected and that is failed owns no want on its dependencies: those wants
+# end at that fixed point, once the arrivals are gone through, and a
+# dependency left with no want falls at the next tick as any asset does.
+# The reading not taken, which those oracles first held: the wants stand
+# whatever the test gives, for as long as the failed parent holds a want.
+# The seven: "closure-over-the-budget" under the three candidates,
+# "overlapping-closures" and "root-and-dependency" under the closure of one
+# want and under the whole drain. The eleven others give the same states
+# under both readings: where a dependency is rejected there, its parent is
+# in force and lists it.
 #
 # Reading taken: a rejected first load is an answer, as any failure is. The
 # gate opens on it, the step names a required asset, and the want does not
 # leave the world again.
+#
+# Reading taken: an arrival is applied or rejected at its place in the
+# identifier order with all that it does there. The step names a dependency
+# that its rejected arrival fails under a required want, although that want
+# ends afterwards at the same fixed point, with the parent that owned it:
+# the rule on the wants moves the end of a want and nothing of an arrival.
+# The other reading: the step names the failed assets that a required want
+# still names once the fixed point is done, and so names no such dependency.
+# The rule on the wants is silent between the two. Five oracles turn on it:
+# the "names-failed" line of D in "closure-over-the-budget" and in
+# "root-and-dependency", each under the closure of one want and under the
+# whole drain, and the "names-failed" line of N in "overlapping-closures"
+# under the whole drain.
 
 # Case "root-and-dependency". K is held, 5 000 bytes. R lists D: the closure
 # of R is 8 000 bytes, R 2 000 and D 6 000.
@@ -79,14 +104,18 @@ want contributor:base required
 entry R parameters unavailable
 want source:host required
 # Both arrivals answer the want of R: one group of 8 000 bytes, which with
-# the 5 000 held is above the budget. Both are rejected.
+# the 5 000 held is above the budget. Both are rejected. The want of D was
+# added before the test: its rejected arrival fails its entry, with the
+# event, under the required want R owned then, and the step names D. R is
+# failed in its turn, and a failed parent owns no want on its dependency:
+# once the arrivals are gone through, the want of D ends. D keeps its entry,
+# failed and with no want, through this tick.
 tick 4
 record arrival D D.1 for R
 record arrival R R.1 for R
 rejected D D.1
 rejected R R.1
 entry D parameters failed over-budget
-want asset:R required
 entry K parameters available K.1
 want contributor:base required
 entry R parameters failed over-budget
@@ -95,6 +124,13 @@ event failed D over-budget
 event failed R over-budget
 names-failed D over-budget
 names-failed R over-budget
+# D holds no want and falls at this tick's fixed point. Nothing of the
+# closure is left under the failed root.
+tick 5
+entry K parameters available K.1
+want contributor:base required
+entry R parameters failed over-budget
+want source:host required
 
 scenario budget/root-and-dependency/whole-drain
 tick 0
@@ -112,14 +148,14 @@ want contributor:base required
 entry R parameters unavailable
 want source:host required
 # The drain holds the two arrivals of one closure: the states of the
-# candidate on the closure, with no mark.
+# candidate on the closure, with no mark. D fails under the want R owned
+# then, which ends once the arrivals are gone through.
 tick 4
 record arrival D D.1
 record arrival R R.1
 rejected D D.1
 rejected R R.1
 entry D parameters failed over-budget
-want asset:R required
 entry K parameters available K.1
 want contributor:base required
 entry R parameters failed over-budget
@@ -128,6 +164,12 @@ event failed D over-budget
 event failed R over-budget
 names-failed D over-budget
 names-failed R over-budget
+# D holds no want and falls at this tick's fixed point.
+tick 5
+entry K parameters available K.1
+want contributor:base required
+entry R parameters failed over-budget
+want source:host required
 
 # Case "closure-over-the-budget". A budget of 7 000 bytes, below the closure
 # of R, 8 000 bytes, in a world that holds nothing.
@@ -137,20 +179,27 @@ tick 3
 record want R parameters source:host required
 entry R parameters unavailable
 want source:host required
-# D is tested first: 6 000 is within 7 000, so it is applied. R is tested
-# against a count of 6 000: 8 000 is above. The dependency is in force, and
-# counted, under a root that is failed.
+# The core adds the want of D. D is tested first: 6 000 is within 7 000, so
+# it is applied, with its event, under the want R owns then. R is tested
+# against a count of 6 000: 8 000 is above, so it is rejected and failed. A
+# failed parent owns no want on its dependency: once the arrivals are gone
+# through, the want of D ends. D keeps its entry, in force, counted and with
+# no want, through this tick.
 tick 4
 record arrival D D.1
 record arrival R R.1
 rejected R R.1
 entry D parameters available D.1
-want asset:R required
 entry R parameters failed over-budget
 want source:host required
 event arrived D D.1
 event failed R over-budget
 names-failed R over-budget
+# D holds no want and falls at this tick's fixed point: nothing is in force,
+# and nothing is counted, under the root that is failed.
+tick 5
+entry R parameters failed over-budget
+want source:host required
 
 scenario budget/closure-over-the-budget/closure-of-a-want
 tick 3
@@ -158,38 +207,51 @@ record want R parameters source:host required
 entry R parameters unavailable
 want source:host required
 # One group of 8 000 bytes, above the budget: both arrivals are rejected.
+# The want of D was added before the test: its rejected arrival fails its
+# entry, with the event, under the required want R owned then, and the step
+# names D. R is failed in its turn, and the want of D ends once the arrivals
+# are gone through. D keeps its entry, failed and with no want, through this
+# tick.
 tick 4
 record arrival D D.1 for R
 record arrival R R.1 for R
 rejected D D.1
 rejected R R.1
 entry D parameters failed over-budget
-want asset:R required
 entry R parameters failed over-budget
 want source:host required
 event failed D over-budget
 event failed R over-budget
 names-failed D over-budget
 names-failed R over-budget
+# D holds no want and falls at this tick's fixed point.
+tick 5
+entry R parameters failed over-budget
+want source:host required
 
 scenario budget/closure-over-the-budget/whole-drain
 tick 3
 record want R parameters source:host required
 entry R parameters unavailable
 want source:host required
+# The drain is the one closure: the states of the candidate on the closure,
+# with no mark.
 tick 4
 record arrival D D.1
 record arrival R R.1
 rejected D D.1
 rejected R R.1
 entry D parameters failed over-budget
-want asset:R required
 entry R parameters failed over-budget
 want source:host required
 event failed D over-budget
 event failed R over-budget
 names-failed D over-budget
 names-failed R over-budget
+# D holds no want and falls at this tick's fixed point.
+tick 5
+entry R parameters failed over-budget
+want source:host required
 
 # Case "small-beside-large". K is held, 5 000 bytes. Two wants of one tick
 # that share nothing: B, 9 000 bytes, and S, 1 000 bytes.
@@ -342,8 +404,13 @@ want source:host required
 # N stands in both closures and its one arrival carries one mark: V, the
 # root that stands first. The group of V is N, V and X, 12 000 bytes: above
 # the budget, rejected whole. The group of W is W alone, 1 000 bytes:
-# accepted. W is in force without N, which was rejected with the closure of
-# V: the step names N, required through W.
+# accepted. The wants were added before the test, so N and X each hold one
+# when their rejected arrival fails them, each with its event: X stands
+# after V and still holds the want of V at its place. Once the arrivals are
+# gone through, V is failed and owns no want: N loses the want of V and
+# keeps the want of W, whose part is in force and lists it, and X is left
+# with no want. W is in force without N, which was rejected with the closure
+# of V: the step names N, required through W.
 tick 4
 record arrival N N.1 for V
 record arrival V V.1 for V
@@ -353,19 +420,25 @@ rejected N N.1
 rejected V V.1
 rejected X X.1
 entry N parameters failed over-budget
-want asset:V optional
 want asset:W required
 entry V parameters failed over-budget
 want source:host optional
 entry W parameters available W.1
 want source:host required
 entry X parameters failed over-budget
-want asset:V optional
 event failed N over-budget
 event failed V over-budget
 event arrived W W.1
 event failed X over-budget
 names-failed N over-budget
+# X holds no want and falls at this tick's fixed point.
+tick 5
+entry N parameters failed over-budget
+want asset:W required
+entry V parameters failed over-budget
+want source:host optional
+entry W parameters available W.1
+want source:host required
 
 scenario budget/overlapping-closures/whole-drain
 tick 3
@@ -376,7 +449,11 @@ want source:host optional
 entry W parameters unavailable
 want source:host required
 # The drain is 13 000 bytes, above the budget: the four arrivals are
-# rejected. W and N, 3 000 bytes together, fail for the size of X.
+# rejected. W and N, 3 000 bytes together, fail for the size of X. The wants
+# were added before the test: each rejected arrival fails its entry, with
+# the event, and N fails under the required want W owned then, so the step
+# names it with W. Once the arrivals are gone through, V and W are failed
+# and own no want: N and X are left with none.
 tick 4
 record arrival N N.1
 record arrival V V.1
@@ -387,20 +464,23 @@ rejected V V.1
 rejected W W.1
 rejected X X.1
 entry N parameters failed over-budget
-want asset:V optional
-want asset:W required
 entry V parameters failed over-budget
 want source:host optional
 entry W parameters failed over-budget
 want source:host required
 entry X parameters failed over-budget
-want asset:V optional
 event failed N over-budget
 event failed V over-budget
 event failed W over-budget
 event failed X over-budget
 names-failed N over-budget
 names-failed W over-budget
+# N and X hold no want and fall at this tick's fixed point.
+tick 5
+entry V parameters failed over-budget
+want source:host optional
+entry W parameters failed over-budget
+want source:host required
 
 # Case "revision-that-grows". K and S are held, 6 000 bytes. A revision gives
 # K a content of 11 000 bytes and S one of 2 000 bytes.
@@ -604,9 +684,12 @@ event arrived B B.1
 # with the count and the rule on the wants the core adds that it proposes.
 # Eight scenarios: the six cases above, and two cases that run under this
 # candidate alone. Written by hand from the proposed text, by a writer who
-# has not read the build. Nothing above this line is changed, and no state
-# is taken from it: the oracles above stand under the other reading of the
-# wants the core adds, and under a count that holds the entries that fall.
+# has not read the build. No state is taken from above this line: the
+# oracles above add the wants that the parts of a batch list before they
+# test an arrival, a rejected part included, and stand under a count that
+# holds the entries that fall. Since the founder took the rule on the wants
+# the core adds, on 2026-11-14, they end those wants as this candidate does,
+# at the recomputation.
 #
 # The candidate writes no mark: an arrival is written as under
 # "single-arrival". The sizes are a stand-in for the size the text proposes

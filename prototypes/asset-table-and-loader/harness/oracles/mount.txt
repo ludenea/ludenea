@@ -24,10 +24,13 @@
 # The other reading: the arrival moves the entry with no want, with its event,
 # before the entry falls.
 #
-# Reading taken: the wants the core added for the dependencies of a parent
-# stand when the parent becomes failed, for as long as the parent holds a
-# want: they are recomputed only where the parent's part is at hand.
-# The other reading: they end with the parent's part.
+# Reading taken by the founder on 2026-11-14: the wants the core added
+# follow the parts in force. A parent that is failed owns no want on its
+# dependencies: those wants end at the fixed point that failed it, once the
+# arrivals of the record are applied, and a dependency left with no want
+# falls at the next tick as any asset does.
+# The reading not taken, which the oracle of the last scenario first held:
+# those wants stand for as long as the failed parent holds a want.
 #
 # Reading taken throughout: the step that runs the tick of a failed arrival
 # names a required asset, and no later step names it again.
@@ -325,18 +328,25 @@ event arrived O O.9
 event arrived T T.9
 
 # The unmount, one batch: O returns to its former hash and T leaves the
-# manifest and fails. Under the reading taken the want the core added for O
-# stands, T still holding a want: O stays in force under a parent that is
-# failed.
+# manifest and fails. The arrivals are applied in identifier order, O first,
+# while it still holds the want T owns: it takes its former hash, with the
+# event. T is then failed, and a failed parent owns no want on its
+# dependency: the want of O ends once the arrivals are applied. O keeps its
+# entry, in force and with no want, through this tick.
 tick 9
 record arrival O O.1
 record arrival T failed unknown-asset
 entry O parameters available O.1
-want asset:T required
 entry T parameters failed unknown-asset
 want source:host required
 event changed O O.9 O.1
 event failed T unknown-asset
 names-failed T unknown-asset
 
-# The table of tick 9 stands to tick 12.
+# O holds no want and falls at this tick's fixed point: nothing stays in
+# force under the parent that is failed.
+tick 10
+entry T parameters failed unknown-asset
+want source:host required
+
+# The table of tick 10 stands to tick 12.

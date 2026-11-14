@@ -81,16 +81,19 @@ event arrived V V.1
 # The revision changes P and both of its dependencies, and the new part of P
 # lists neither of them: it lists N alone. The batch holds four arrivals: the
 # three assets changed that the table names, and N.
-# Reading taken, by the letter of the text: the core first adds the wants the
-# batch's parts list, here the want of N, and ends none; then it applies the
-# arrivals in identifier order; and the wants a parent owns are recomputed
-# when its hash changes, which is when its own arrival is applied.
-# So D, which stands before P, still holds its want when its arrival is
-# applied: it takes its new hash, with an event, and loses its want at the
-# arrival of P. V, which stands after P, has lost its want by then: its
-# arrival is for an asset no want names, changes nothing and emits no event.
-# Two former dependencies of one parent end the tick differently, by the
-# order of their identifiers alone.
+# Reading taken by the founder on 2026-11-14: over the arrivals of one record
+# the core first adds the wants the parts of the arrivals list, here the want
+# of N, and ends none; it then applies the arrivals in identifier order; it
+# then recomputes the wants it added from the parts the table holds
+# available.
+# So both former dependencies still hold their want when their arrival is
+# applied, wherever they stand against P: each takes its new hash, with an
+# event. Once the four arrivals are applied the part in force of P lists N
+# alone, and the wants of D and of V end. Both keep their entries, in force
+# and with no want, through this tick.
+# The reading not taken, which this oracle first held: the want of a former
+# dependency ends when its parent's own arrival is applied, so that V, which
+# stands after P, keeps its former hash with no event.
 tick 6
 record arrival D D.2
 record arrival N N.1
@@ -101,10 +104,11 @@ entry N parameters available N.1
 want asset:P required
 entry P parameters available P.3
 want source:host required
-entry V parameters available V.1
+entry V parameters available V.2
 event changed D D.1 D.2
 event arrived N N.1
 event changed P P.1 P.3
+event changed V V.1 V.2
 
 # Both former dependencies fall at the next tick's fixed point and leave.
 tick 7
