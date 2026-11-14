@@ -3,7 +3,9 @@
 # the machine under out/<cell>/.
 #
 # Usage: ci/run-spike.sh <spike directory> <cell>
-#   <spike directory>  a spike under spikes/, for example platform-facts
+#   <spike directory>  a spike under spikes/, for example platform-facts, or a
+#                      prototype under prototypes/, for example
+#                      asset-table-and-loader
 #   <cell>             a label for the machine, for example linux-x86_64
 #
 # A Rust spike is a member of the Cargo workspace (Cargo.toml in its directory)
@@ -39,14 +41,22 @@ cd "$(dirname "$0")/.."
 out="out/$cell"
 mkdir -p "$out"
 
-if [ -f "$spike/Cargo.toml" ]; then
+# A prototype lives beside the spikes, under prototypes/<name>, as a Cargo
+# workspace of its own. It is named like a spike and built and run the same
+# way, from this directory, so that the pinned toolchain applies to it.
+directory="$spike"
+if [ ! -d "$directory" ] && [ -d "../prototypes/$spike" ]; then
+  directory="../prototypes/$spike"
+fi
+
+if [ -f "$directory/Cargo.toml" ]; then
   kind=rust
-  package="$(sed -n 's/^name *= *"\(.*\)"/\1/p' "$spike/Cargo.toml" | head -n 1)"
-elif [ -f "$spike/CMakeLists.txt" ]; then
+  package="$(sed -n 's/^name *= *"\(.*\)"/\1/p' "$directory/Cargo.toml" | head -n 1)"
+elif [ -f "$directory/CMakeLists.txt" ]; then
   kind=c
-  package="$(sed -n 's/^project( *\([A-Za-z0-9_-]*\).*/\1/p' "$spike/CMakeLists.txt" | head -n 1)"
+  package="$(sed -n 's/^project( *\([A-Za-z0-9_-]*\).*/\1/p' "$directory/CMakeLists.txt" | head -n 1)"
 else
-  echo "$spike has neither Cargo.toml nor CMakeLists.txt" >&2
+  echo "$directory has neither Cargo.toml nor CMakeLists.txt" >&2
   exit 1
 fi
 if [ -z "$package" ]; then
@@ -69,8 +79,8 @@ fi
 # the machine (for example a software Vulkan device on a Linux runner). It runs
 # before the build, on every platform, and decides itself what applies; its
 # output is kept with the measurements.
-if [ -f "$spike/setup.sh" ]; then
-  bash "$spike/setup.sh" 2>&1 | tee "$out/setup.txt"
+if [ -f "$directory/setup.sh" ]; then
+  bash "$directory/setup.sh" 2>&1 | tee "$out/setup.txt"
 fi
 
 {
@@ -122,8 +132,8 @@ if [ "$kind" = rust ]; then
   cargo_arguments=(--profile "$profile" --locked --package "$package")
   # A spike whose manifest opens a workspace of its own is built from that
   # manifest, with its own lock file.
-  if grep -q '^\[workspace\]' "$spike/Cargo.toml"; then
-    cargo_arguments+=(--manifest-path "$spike/Cargo.toml")
+  if grep -q '^\[workspace\]' "$directory/Cargo.toml"; then
+    cargo_arguments+=(--manifest-path "$directory/Cargo.toml")
   fi
   cargo build "${cargo_arguments[@]}"
   cargo run --quiet "${cargo_arguments[@]}" -- "$cell" > "$out/facts.json"
@@ -138,7 +148,7 @@ else
   esac
   # The configure output names the compiler and the options the spike's
   # dependencies selected; it is kept with the measurements.
-  cmake -S "$spike" -B "$build" "${generator[@]}" -DCMAKE_BUILD_TYPE=Release 2>&1 | tee "$out/configure.txt"
+  cmake -S "$directory" -B "$build" "${generator[@]}" -DCMAKE_BUILD_TYPE=Release 2>&1 | tee "$out/configure.txt"
   cmake --build "$build" --config Release --parallel
   cmake --install "$build" --config Release --prefix "$build/install" >/dev/null
   {

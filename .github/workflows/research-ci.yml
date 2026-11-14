@@ -1,6 +1,7 @@
-# Research CI: builds and runs the throwaway spikes under spikes/ on every
-# platform and architecture of the engine's first compatibility boundary, and
-# publishes their measurements as artifacts. It is distinct from any future
+# Research CI: builds and runs the throwaway spikes under spikes/, and the
+# throwaway prototypes under prototypes/, on every platform and architecture
+# of the engine's first compatibility boundary, and publishes their
+# measurements as artifacts. It is distinct from any future
 # product CI and may be discarded with the spikes. The logic lives in
 # spikes/ci/run-spike.sh and spikes/ci/summarize.sh so that it does not depend
 # on GitHub Actions.
@@ -30,16 +31,20 @@ on:
     paths:
       - "spikes/**"
       - "!spikes/**/*.md"
+      - "prototypes/**"
+      - "!prototypes/**/*.md"
       - ".github/workflows/research-ci.yml"
   pull_request:
     paths:
       - "spikes/**"
       - "!spikes/**/*.md"
+      - "prototypes/**"
+      - "!prototypes/**/*.md"
       - ".github/workflows/research-ci.yml"
   workflow_dispatch:
     inputs:
       spike:
-        description: "Spike directory under spikes/ to build and run"
+        description: "Spike directory under spikes/, or prototype directory under prototypes/, to build and run"
         type: string
         default: platform-facts
       rustflags:
