@@ -64,7 +64,7 @@ Controls, each the rule changed:
 - `order/gate-release-and-arrival`, a second control: an entry that never rose leaves at once.
 - `order/gate-arrival-and-new-want`: the gate counts a want of the pending record.
 - `order/gate-pending-despawn`: the gate sees a despawn of the pending record; and a second control, a despawn of a record ends its entity's wants at the tick's structural change point.
-- Every scenario of every family: the entry's type left out of the canonical bytes.
+- Every scenario of every family whose oracle states a table that holds an entry: the entry's type left out of the canonical bytes. Nine scenarios state no such table, a reader whose restore is refused or a table that is empty at every tick compared, and the control cannot differ there: `restore/recorded-content-refused`, `restore/another-composition-refused`, `restore/another-composition-asset-absent`, `restore/drop-names-a-declared-type`, `restore/drop-names-a-declared-type-with-no-entry`, `types/drop-not-named`, `types/drop-refused-for-a-kept-parent`, `types/dropped-parent-of-a-kept-dependency` and `record/want-after-the-despawn-of-its-owner`. The sheet named it for them before the first run, which showed the nine controls equal to their oracles.
 
 - **`order/want-and-arrival`**. Record of tick 4: `want A parameters source:host required`, and the arrival of `A` at `A.1`.
 - **`order/release-and-arrival`**. Record of tick 2: `want A parameters source:host required`, and the arrival of `A` at `A.1`. Record of tick 5: `release A source:host`, and an arrival of `A` at `A.2`.
@@ -90,7 +90,8 @@ Assets `A`, `B`, `D1`, `P`, `D2`. The pool is `A`, `B`, `P`. The canonical part 
 
 Controls, each the rule changed:
 
-- `owners/two-wants-first-order`, `owners/two-wants-second-order`: the wants of an entry in the order of making; one want of the dependency per want of its parent; and a third control, the wants of dependencies recomputed with a batch alone.
+- `owners/two-wants-first-order`, `owners/two-wants-second-order`: one want of the dependency per want of its parent; and a second control, the wants of dependencies recomputed with a batch alone.
+- `owners/two-wants-second-order`, a third control: the wants of an entry in the order of making. In the first order the order of making is the total order, so the control cannot differ there; the sheet named it for both before the first run, which showed it equal to the oracle in the first.
 - `owners/parent-changes-dependency`: the wants the core added left as they were when the parent's part changes.
 - `owners/preload-over-composition`: one shared want under the world's own entry; and a second control, the makers of the world's own entry ordered by identity alone, the kind ignored.
 - `owners/one-maker-two-wants`: a second want added for a maker that already holds one.
