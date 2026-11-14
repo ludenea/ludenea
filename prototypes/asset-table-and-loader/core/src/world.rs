@@ -30,8 +30,8 @@ use reference_workload::{
 
 
 use crate::table::{
-    Applied, Arrival, ArrivalQueue, AssetId, Availability, Command, Event, Instance, Maker, Owner, Policy, Reader, Record, RepulsionTable, Resident,
-    Entry, Residents, Rules, Table, View,
+    Applied, Arrival, ArrivalQueue, AssetId, AssetType, Availability, Command, Entry, EntryView, Event, Instance, Maker, NewHistory, Owner, Policy,
+    Reader, Record, Refused, RepulsionTable, Resident, Residents, Rules, Table, View, Wanted,
 };
 
 pub const DEFAULT_SPIN_BOUND: Duration = Duration::from_micros(50);
@@ -109,15 +109,25 @@ pub struct WorldConfig {
     /// The assets the entities name: slot `i` names `pool[i % pool.len()]`.
     pub pool: Vec<AssetId>,
     /// The wants the composition's contributors make at creation, each
-    /// under the world's own entry with the identity of its contributor.
-    pub initial_wants: Vec<(u64, AssetId, Policy)>,
+    /// under the world's own entry with the identity of its contributor,
+    /// each stating the asset type of the asset it names.
+    pub initial_wants: Vec<(u64, AssetId, AssetType, Policy)>,
     /// The asset types the composition declares.
-    pub asset_types: Vec<u32>,
+    pub asset_types: Vec<AssetType>,
     /// The hash of the content set the world stands under, where it names
     /// one: configuration, recorded in a save's header, and no state.
     pub content_set: Option<u64>,
     /// Control: the content set's hash is hashed with the state.
     pub set_under_the_hash: bool,
+    /// The world's budget for its asset data, in bytes, where it has one:
+    /// the sum of the sizes of the canonical parts its table holds available
+    /// may not stand above it.
+    pub budget: Option<u64>,
+    /// The scripted system of the stand-in world: per tick, what it does
+    /// when it runs in that tick, through its declared access to the wants
+    /// of the asset table, in order. It makes a want, releases one, or asks
+    /// for the despawn of an entity. It is part of the world, and no input.
+    pub system: Vec<(u32, Command)>,
     pub rules: Rules,
 }
 
@@ -133,16 +143,23 @@ impl WorldConfig {
             mode,
             pool,
             initial_wants: Vec::new(),
-            asset_types: vec![1],
+            asset_types: vec![AssetType::Parameters],
             content_set: None,
             set_under_the_hash: false,
+            budget: None,
+            system: Vec::new(),
             rules: Rules::default(),
         }
     }
 
+    /// What the scripted system does when it runs in `tick`.
+    fn system_at(&self, tick: u32) -> Vec<Command> {
+        self.system.iter().filter(|(at, _)| *at == tick).map(|(_, command)| *command).collect()
+    }
+
     /// The wants of one contributor of the composition.
-    pub fn wanting(mut self, contributor: u64, wants: &[(AssetId, Policy)]) -> WorldConfig {
-        self.initial_wants.extend(wants.iter().map(|(asset, policy)| (contributor, *asset, *policy)));
+    pub fn wanting(mut self, contributor: u64, wants: &[(AssetId, AssetType, Policy)]) -> WorldConfig {
+        self.initial_wants.extend(wants.iter().map(|(asset, asset_type, policy)| (contributor, *asset, *asset_type, *policy)));
         self
     }
 }
@@ -164,19 +181,24 @@ impl Links {
     }
 }
 
-/// What a tick's input fixed point changed in the wants, as the availability
-/// source reads it at the tick's end.
+/// What leaves the domain for the availability source, as extracted state at
+/// the end of the tick whose input fixed point changed the table.
 #[derive(Clone, Debug, Default)]
 pub struct Extraction {
     pub tick: u32,
-    /// The assets a command of the tick's record made a want of.
-    pub wanted: Vec<AssetId>,
-    /// The wanted assets that became unanswered at this tick, a dependency
-    /// the core added a want of included.
-    pub unanswered: Vec<AssetId>,
-    /// Every asset a want names after the tick's record.
-    pub named: Vec<AssetId>,
-    /// The record held the answers to a restore under the content at hand.
+    /// The wants that leave the domain: each asset a want was added on at
+    /// this tick while it was unanswered or failed, with the type its entry
+    /// holds. A want added for an asset the table holds available leaves
+    /// nothing, and so does a command that only changes a want's policy.
+    pub left: Vec<(AssetId, AssetType)>,
+    /// Every asset a command of the tick's record made a want of, with the
+    /// type stated: what the reading that answers every want reads.
+    pub wanted: Vec<(AssetId, AssetType)>,
+    /// The table after the tick's record: per entry, an entry with no want
+    /// included, its type, its availability and whether a want names it.
+    pub entries: Vec<EntryView>,
+    /// The tick applied the answers to a restore: a move of the manifest
+    /// held for the world may now be posted.
     pub restore_applied: bool,
 }
 
@@ -212,6 +234,9 @@ pub struct StepResult {
     pub gated: bool,
     pub unanswered: Vec<AssetId>,
     pub failed_required: Vec<(AssetId, u32)>,
+    /// The arrivals rejected over the world's budget during the step: the
+    /// asset and the hash each named.
+    pub rejected: Vec<(AssetId, u64)>,
 }
 
 /// One closing of the gate: the tick it stood before, what was unanswered,
@@ -223,38 +248,91 @@ pub struct GateRecord {
     pub waited: Option<Duration>,
 }
 
-/// A restore refused: the asset and the hash the table holds, and why.
+/// A restore refused, and what the refusal names.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Refusal {
-    pub asset: AssetId,
-    pub hash: u64,
-    pub reason: String,
+pub enum Refusal {
+    /// Under the recorded content, a part differs or cannot be had: the
+    /// asset and the hash the table holds, and why.
+    Content { asset: AssetId, hash: u64, reason: String },
+    /// The new composition lacks an asset type of which the table holds an
+    /// entry, and the request does not name that type as dropped.
+    TypeLacking(AssetType),
+    /// The request names as dropped a type that an entry the restore keeps
+    /// lists a dependency of: both types, the kept entry's and the dropped one.
+    TypeListedByAKeptEntry { kept: AssetType, dropped: AssetType },
+    /// The request names as dropped a type the new composition has.
+    TypeNotLacking(AssetType),
+    /// Under a control alone: the request names as dropped a type of which
+    /// the table holds no entry.
+    TypeWithoutAnEntry(AssetType),
 }
 
-/// How a saved world is read.
+impl fmt::Display for Refusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Refusal::Content { asset, hash, reason } => write!(f, "the asset {asset:032x} at the hash {hash:#018x}: {reason}"),
+            Refusal::TypeLacking(lacking) => {
+                write!(f, "the composition lacks the asset type {}, which the request does not name as dropped", lacking.stable_name())
+            }
+            Refusal::TypeListedByAKeptEntry { kept, dropped } => write!(
+                f,
+                "an entry of the asset type {} that the restore keeps lists a dependency of the dropped type {}",
+                kept.stable_name(),
+                dropped.stable_name()
+            ),
+            Refusal::TypeNotLacking(named) => write!(f, "the request names as dropped the asset type {}, which the composition has", named.stable_name()),
+            Refusal::TypeWithoutAnEntry(named) => {
+                write!(f, "the request names as dropped the asset type {}, of which the table holds no entry", named.stable_name())
+            }
+        }
+    }
+}
+
+/// How a saved world is read: what the request states of the content. The
+/// request also states the content set the new world stands under and its
+/// composition, in the configuration, and the asset types it names as
+/// dropped: an asset type the new composition lacks, of which the table
+/// holds an entry, refuses the restore by the type's name unless the request
+/// names that type as dropped. The rule reads the type each entry holds.
 pub enum Restore<'a> {
     /// A restore under the content at hand: the world is created gated on
-    /// its answers. `type_of` gives the asset type the manifest at hand holds
-    /// for an identifier, the table holding none; an entry whose type the
-    /// composition lacks refuses the restore by name unless `dropped` names
-    /// it. `drop_in_silence` is a control: such an entry is dropped unnamed.
-    ContentAtHand { type_of: &'a dyn Fn(AssetId) -> Option<u32>, dropped: &'a [AssetId], drop_in_silence: bool },
+    /// its answers. Two controls: `drop_in_silence`, an entry of a type the
+    /// composition lacks is dropped unnamed; `types_from`, the type of an
+    /// entry is read from the manifest at hand and not from the entry, an
+    /// asset the manifest does not hold having none.
+    ContentAtHand { dropped: &'a [AssetType], drop_in_silence: bool, types_from: Option<&'a dyn Fn(AssetId) -> Option<AssetType>> },
     /// A restore under the recorded content: every asset the table holds as
-    /// available under a want is confirmed at the same hash, or the restore
-    /// is refused.
-    Continue(&'a dyn Fn(AssetId, u64) -> Result<Arc<Resident>, String>),
+    /// available, an entry with no want included, is confirmed at the same
+    /// hash, or the restore is refused, naming the asset and the hash.
+    Continue { confirm: &'a dyn Fn(AssetId, u64) -> Result<Arc<Resident>, String>, dropped: &'a [AssetType] },
 }
 
 /// What became of the history a restored world belongs to, known once its
 /// first tick has applied its answers.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum History {
-    /// Not a restore under the content at hand, or its answers are not applied yet.
+    /// Not a restored world, or its first tick has not run yet.
+    #[default]
     Undecided,
-    /// Every answer was at the recorded hash: the saved run continues.
+    /// The saved run continues: under the recorded content, or under the
+    /// content at hand where every answer was at the recorded hash and the
+    /// save held no unanswered want.
     Continues,
-    /// An answer differed, or the composition did: a new history, with the assets named.
-    New(Vec<AssetId>),
+    /// A new history: an answer differed, the save held an unanswered want,
+    /// or the composition differs. What the restore's one event names.
+    New(NewHistory),
+}
+
+/// A restore whose outcome the first tick decides: what its event will name
+/// beside the answers that differ.
+struct PendingRestore {
+    /// The asset of each want the save held unanswered, where the restore is
+    /// under the content at hand.
+    unanswered: Vec<AssetId>,
+    /// Each entry the request dropped.
+    dropped: Vec<AssetId>,
+    /// The restore is into a declared different composition.
+    another_composition: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -414,15 +492,37 @@ struct Journal {
     failed_required: Vec<(AssetId, u32)>,
     unnamed_arrivals: u32,
     refused_commands: u32,
+    /// The commands refused: the tick, the place in its record, the reason.
+    refusals: Vec<(u32, usize, Refused)>,
     table_hash: u64,
     history: History,
-    /// The entries a restore dropped with the composition: a new history.
-    dropped: Vec<AssetId>,
+    /// A restore the first tick has not decided yet.
+    restore: Option<PendingRestore>,
+    /// What the last evaluation of the gate left unanswered, the pending
+    /// record counted.
+    gate_leaves: Vec<AssetId>,
+    /// The arrivals rejected over the budget since the last step's result.
+    rejected: Vec<(AssetId, u64)>,
+    /// The moment each tick ended, for a measurement of the tick's duration.
+    tick_ends: Vec<(u32, Instant)>,
 }
 
-impl Default for History {
-    fn default() -> History {
-        History::Undecided
+impl Journal {
+    /// Decides a pending restore with the answers that differed, and gives
+    /// the event that records it where it starts a new history.
+    fn decide_restore(&mut self, differed: &[AssetId], rules: &Rules) -> Option<Event> {
+        let pending = self.restore.take()?;
+        let mut differed = differed.to_vec();
+        differed.sort_unstable();
+        differed.dedup();
+        let named = NewHistory { differed, unanswered: pending.unanswered, dropped: pending.dropped };
+        let composition_alone = pending.another_composition && !rules.another_composition_without_a_drop_continues;
+        if named.named().is_empty() && !composition_alone {
+            self.history = History::Continues;
+            return None;
+        }
+        self.history = History::New(named.clone());
+        Some(Event::NewHistory(named))
     }
 }
 
@@ -571,10 +671,12 @@ impl Graph {
     /// the queue), evaluates the gate on it, and applies it in one piece if
     /// the gate is open. Returns whether it was applied; a closed gate leaves
     /// the state untouched and the record pending. Runs alone.
-    fn input_fixed_point(&self, tick: u32) -> bool {
+    /// Assembles the pending record of `tick`: the scripted records due, the
+    /// host's commands, the arrivals drained from the queue, a later arrival
+    /// of an asset replacing an earlier one. Runs alone.
+    fn assemble(&self, tick: u32) {
         // SAFETY: the fixed point runs alone (see the type's documentation).
-        let (pending, script, journal, table) =
-            unsafe { (&mut *self.pending.get(), &mut *self.script.get(), &mut *self.journal.get(), &mut *self.table.get()) };
+        let (pending, script) = unsafe { (&mut *self.pending.get(), &mut *self.script.get()) };
         while let Some(record) = script.records.get(script.next) {
             if record.tick > tick {
                 break;
@@ -587,13 +689,34 @@ impl Graph {
         }
         pending.commands.append(&mut self.host_commands.lock().expect("the host's commands are never poisoned"));
         self.links.queue.drain_into(&mut pending.arrivals);
-        let empty = pending.commands.is_empty() && pending.arrivals.is_empty();
-        if empty && !table.has_orphans() {
+    }
+
+    fn input_fixed_point(&self, tick: u32) -> bool {
+        self.assemble(tick);
+        // SAFETY: the fixed point runs alone (see the type's documentation).
+        let (pending, journal, table) = unsafe { (&mut *self.pending.get(), &mut *self.journal.get(), &mut *self.table.get()) };
+        // Two controls apply what the scripted system does here, in place of
+        // the structural change fixed point of its tick: with the record of
+        // its tick, or before the record of the next tick. Neither makes it
+        // an element of the record.
+        let rules = table.rules;
+        let system_first = if rules.system_applied_at_the_next_input_fixed_point && tick > 0 { self.config.system_at(tick - 1) } else { Vec::new() };
+        let system_last = if rules.system_applied_with_its_ticks_record { self.config.system_at(tick) } else { Vec::new() };
+        let no_system = system_first.is_empty() && system_last.is_empty();
+        let empty = pending.commands.is_empty() && pending.arrivals.is_empty() && no_system;
+        if empty && !table.has_orphans() && journal.restore.is_none() {
             // Nothing to apply: the gate stands as the state has it.
+            journal.gate_leaves = if table.blocked() { table.required_unanswered() } else { Vec::new() };
             return self.gate_verdict(tick, !table.blocked(), table, journal);
         }
         let record = Record { tick, commands: std::mem::take(&mut pending.commands), arrivals: pending.arrivals.values().copied().collect() };
-        if !table.gate_open(&record, self.links.residents.as_ref()) {
+        let with_the_system = (!no_system).then(|| {
+            let commands = system_first.iter().chain(&record.commands).chain(&system_last).copied().collect();
+            Record { tick, commands, arrivals: record.arrivals.clone() }
+        });
+        let applied_record = with_the_system.as_ref().unwrap_or(&record);
+        journal.gate_leaves = table.gate(applied_record, self.links.residents.as_ref());
+        if !journal.gate_leaves.is_empty() {
             pending.commands = record.commands;
             return self.gate_verdict(tick, false, table, journal);
         }
@@ -605,33 +728,20 @@ impl Graph {
         let alive = |slot: u32, generation: u32| {
             state.alive.get(slot as usize) == Some(&true) && state.generation[slot as usize] == generation && !kills.contains(&(slot, generation))
         };
-        let unanswered_before = table.unanswered();
-        let named_before = table.wanted();
-        let restore_pending = !table.awaiting.is_empty();
-        let applied: Applied = table.apply(&record, self.links.residents.as_ref(), &alive);
+        let applied: Applied = table.apply(applied_record, self.links.residents.as_ref(), &alive);
         journal.unnamed_arrivals += applied.unnamed_arrivals;
-        journal.refused_commands += applied.refused_commands;
+        journal.refused_commands += applied.refused_commands();
+        journal.refusals.extend(applied.refusals.iter().map(|(index, refused)| (tick, *index, *refused)));
         journal.failed_required.extend_from_slice(&applied.failed_required);
-        // A restore under the content at hand is decided by the tick that
-        // applies its answers: the saved run continues where every answer is
-        // at the recorded hash, and a new history starts where one differs.
-        // The event that records it stands after the events of the tick's
-        // record, or before them under the other reading.
-        let restore_applied = restore_pending && table.awaiting.is_empty();
-        let mut restore_event = None;
-        if restore_applied {
-            let mut differed = std::mem::take(&mut journal.dropped);
-            differed.extend_from_slice(&applied.differed);
-            differed.sort_unstable();
-            differed.dedup();
-            if differed.is_empty() {
-                journal.history = History::Continues;
-            } else {
-                restore_event = Some((tick, Event::NewHistory { assets: differed.clone() }));
-                journal.history = History::New(differed);
-            }
-        }
-        if table.rules.restore_event_first {
+        journal.rejected.extend_from_slice(&applied.rejected);
+        // A restore is decided by the first tick the restored world runs,
+        // which applies its answers: the saved run continues where every
+        // answer is at the recorded hash and the save held no unanswered
+        // want, and a new history starts otherwise. The one event that
+        // records a new history is the first event of that tick.
+        let restore_applied = journal.restore.is_some();
+        let mut restore_event = journal.decide_restore(&applied.differed, &table.rules).map(|event| (tick, event));
+        if !table.rules.restore_event_after_the_record {
             journal.events.extend(restore_event.take());
         }
         for event in applied.events {
@@ -642,14 +752,15 @@ impl Graph {
         if !record.is_empty() {
             journal.log.push(record);
         }
-        journal.table_hash = table.hash();
-        // The wants leave the domain for the availability source.
-        if let Some(extract) = &self.links.extract {
-            let unanswered: Vec<AssetId> = table.unanswered().difference(&unanswered_before).copied().collect();
-            let named = table.wanted();
-            if !applied.wanted.is_empty() || !unanswered.is_empty() || named != named_before || restore_applied {
-                extract(Extraction { tick, wanted: applied.wanted, unanswered, named: named.into_iter().collect(), restore_applied });
-            }
+        let table_hash = table.hash();
+        let changed = table_hash != journal.table_hash;
+        journal.table_hash = table_hash;
+        // The wants leave the domain for the availability source, as
+        // extracted state at the end of the tick that added them.
+        if let Some(extract) = &self.links.extract
+            && (changed || !applied.left.is_empty() || !applied.wanted.is_empty() || restore_applied)
+        {
+            extract(Extraction { tick, left: applied.left, wanted: applied.wanted, entries: table.view(), restore_applied });
         }
         self.rebuild_views();
         self.gate_verdict(tick, true, table, journal)
@@ -815,10 +926,31 @@ impl Graph {
         for _ in 0..KILLS_PER_TICK {
             changed.push((peek.next() % n as u64) as usize);
         }
+        let tick = self.tick.load(Ordering::Relaxed);
+        let kills = unsafe { &mut *self.kills.get() };
+        // The scripted system ran in this tick, after its input fixed point.
+        // What it did through its declared access to the wants is applied
+        // here, at the structural change fixed point of its tick, as what a
+        // system of the workload asks for is: the wants it made and released
+        // in order, and the despawns it asked for with the record's.
+        let rules = table.rules;
+        let elsewhere = rules.system_applied_at_the_next_input_fixed_point || rules.system_applied_with_its_ticks_record;
+        let system = if elsewhere { Vec::new() } else { self.config.system_at(tick) };
+        let mut system_left = None;
+        if !system.is_empty() {
+            let applied = {
+                let alive = |slot: u32, generation: u32| {
+                    cur.alive.get(slot as usize) == Some(&true) && cur.generation[slot as usize] == generation && !kills.contains(&(slot, generation))
+                };
+                table.apply_system(&system, &alive)
+            };
+            journal.refused_commands += applied.refused_commands();
+            kills.extend_from_slice(&applied.despawned);
+            system_left = Some((applied.left, applied.wanted));
+        }
         // The entities the tick's record despawned leave here, before the
         // workload's own kills and spawns.
-        let kills = unsafe { &mut *self.kills.get() };
-        let mut ended = false;
+        let mut ended = system_left.is_some();
         for &(slot, generation) in kills.iter() {
             next.alive[slot as usize] = false;
             changed.push(slot as usize);
@@ -834,14 +966,22 @@ impl Graph {
         if ended {
             journal.table_hash = table.hash();
         }
+        // The wants the system added leave the domain as extracted state at
+        // the end of the tick that added them.
+        if let Some((left, wanted)) = system_left {
+            if let Some(extract) = &self.links.extract {
+                extract(Extraction { tick, left, wanted, entries: table.view(), restore_applied: false });
+            }
+            self.rebuild_views();
+        }
         dead.extend_from_slice(changed);
         dead.sort_unstable();
         dead.dedup();
         let spawned = SPAWNS_PER_TICK.min(dead.len());
         changed.extend(dead.drain(..spawned));
         self.current.store(next_index, Ordering::Relaxed);
-        let tick = self.tick.load(Ordering::Relaxed);
         self.table_hashes[tick as usize].store(journal.table_hash, Ordering::Relaxed);
+        journal.tick_ends.push((tick, Instant::now()));
         // The record of the tick after a step's last one is left to the next
         // step, so that what the host posts between two steps is part of it.
         if tick < self.end.load(Ordering::Relaxed) && !self.failed.load(Ordering::SeqCst) {
@@ -1090,7 +1230,7 @@ impl Graph {
 // The world
 // ---------------------------------------------------------------------------
 
-const SAVE_FORMAT: u32 = 2;
+const SAVE_FORMAT: u32 = 3;
 
 /// A world: the reference workload's state, its tick graph, its asset table
 /// and its history of hashes, stepped by whole ticks.
@@ -1109,7 +1249,7 @@ pub struct SaveHeader {
     /// The hash of the content set the saved world stood under, where it named one.
     pub content_set: Option<u64>,
     /// The asset types its composition declared.
-    pub asset_types: Vec<u32>,
+    pub asset_types: Vec<AssetType>,
 }
 
 impl World {
@@ -1122,11 +1262,19 @@ impl World {
         let parameters = Parameters { seed: config.seed, size: config.size, tick_count: 0, wander: false };
         let state = State::initialize(&parameters);
         let mut table = Table::with_rules(config.rules);
-        for (contributor, asset, policy) in &config.initial_wants {
-            table.want(*asset, Owner::World(Maker::Contributor(*contributor)), *policy);
+        table.budget = config.budget;
+        // A contributor's want that states another type than the entry
+        // another contributor's want made is refused, as a command's is.
+        let mut refused = 0;
+        for (contributor, asset, asset_type, policy) in &config.initial_wants {
+            if table.want(*asset, *asset_type, Owner::World(Maker::Contributor(*contributor)), *policy) == Wanted::Refused {
+                refused += 1;
+            }
         }
         table.refresh();
-        World { graph: Graph::new(state, config, script, 0, table, links), first_tick: 0, tick_done: 0, stepping: Duration::ZERO, failure: None }
+        let mut world = World { graph: Graph::new(state, config, script, 0, table, links), first_tick: 0, tick_done: 0, stepping: Duration::ZERO, failure: None };
+        world.graph.journal.get_mut().refused_commands = refused;
+        world
     }
 
     fn table(&self) -> &Table {
@@ -1184,8 +1332,48 @@ impl World {
         self.table().entries.get(&asset).map(|entry| (entry.availability, entry.wants.clone()))
     }
 
+    /// The asset type the entry of an asset holds, if the table holds it.
+    pub fn asset_type(&self, asset: AssetId) -> Option<AssetType> {
+        self.table().entries.get(&asset).map(|entry| entry.asset_type)
+    }
+
     pub fn table_bytes(&self) -> Vec<u8> {
         self.table().canonical_bytes()
+    }
+
+    /// The table's bytes with the type of every entry, whatever the rules:
+    /// what a save holds.
+    pub fn typed_table_bytes(&self) -> Vec<u8> {
+        self.table().typed_bytes()
+    }
+
+    /// The pending record of the next tick, assembled as the input fixed
+    /// point assembles it and left pending: the scripted records due, the
+    /// host's commands and the arrivals drained from the queue.
+    pub fn pending_record(&mut self) -> Record {
+        let tick = self.tick_done + 1;
+        self.graph.assemble(tick);
+        let pending = self.graph.pending.get_mut();
+        Record { tick, commands: pending.commands.clone(), arrivals: pending.arrivals.values().copied().collect() }
+    }
+
+    /// One evaluation of the gate on a pending record, which it does not
+    /// apply: what keeps the gate closed, none where it is open.
+    pub fn gate(&self, record: &Record) -> Vec<AssetId> {
+        self.table().gate(record, self.graph.links.residents.as_ref())
+    }
+
+    /// The same evaluation with the time of its two parts: the copy of the
+    /// table, then the pending record applied on the copy and the verdict.
+    pub fn gate_in_two_parts(&self, record: &Record) -> (Vec<AssetId>, Duration, Duration) {
+        self.table().gate_in_two_parts(record, self.graph.links.residents.as_ref())
+    }
+
+    /// The duration of each tick that ran inside a step after the step's
+    /// first one: from the end of the tick before to its own end.
+    pub fn tick_durations(&self) -> Vec<(u32, Duration)> {
+        let ends = &self.journal().tick_ends;
+        ends.windows(2).filter(|pair| pair[1].0 == pair[0].0 + 1).map(|pair| (pair[1].0, pair[1].1.duration_since(pair[0].1))).collect()
     }
 
     pub fn instances(&self) -> &[Instance] {
@@ -1213,6 +1401,12 @@ impl World {
         self.journal().refused_commands
     }
 
+    /// The commands the input fixed points refused: the tick, the place of
+    /// the command in the tick's record, and the reason.
+    pub fn refusals(&self) -> &[(u32, usize, Refused)] {
+        &self.journal().refusals
+    }
+
     /// What became of the history a restored world belongs to.
     pub fn history(&self) -> &History {
         &self.journal().history
@@ -1234,19 +1428,17 @@ impl World {
         self.graph.caches.iter().map(|cache| unsafe { (*cache.get()).resolutions }).sum()
     }
 
-    /// The wanted assets that are unanswered: what the availability source
-    /// reads by a query at a boundary where no tick has ended.
-    pub fn unanswered(&self) -> Vec<AssetId> {
-        self.table().unanswered().into_iter().collect()
+    /// The query of the asset table at a boundary where no tick has ended:
+    /// the wants whose asset is unanswered, each with the type its entry
+    /// holds. A failed entry is not among them: it stays failed until a want
+    /// added on it retries the load.
+    pub fn unanswered(&self) -> Vec<(AssetId, AssetType)> {
+        self.table().unanswered()
     }
 
-    /// Every asset a want names.
-    pub fn named(&self) -> Vec<AssetId> {
-        self.table().wanted().into_iter().collect()
-    }
-
-    /// The assets a restore under the content at hand awaits an answer for,
-    /// with the hash the table holds.
+    /// The same query, for a restore under the content at hand: the entries
+    /// the table holds available, an entry with no want included, which that
+    /// restore answers, each with the hash the table holds.
     pub fn restore_query(&self) -> Vec<(AssetId, u64)> {
         let table = self.table();
         let held = |id: &AssetId| match table.entries.get(id)?.availability {
@@ -1256,10 +1448,10 @@ impl World {
         table.awaiting.iter().filter_map(held).collect()
     }
 
-    /// Every entry of the table, with its availability and the count of its
-    /// wants: what a control that answers too much reads.
-    pub fn entries(&self) -> Vec<(AssetId, Availability, usize)> {
-        self.table().entries.iter().map(|(id, entry)| (*id, entry.availability, entry.wants.len())).collect()
+    /// Every entry of the table as the availability source reads it: its
+    /// type, its availability and whether a want names it.
+    pub fn entries(&self) -> Vec<EntryView> {
+        self.table().view()
     }
 
     /// A command of the host: part of the pending record of the next tick.
@@ -1270,11 +1462,17 @@ impl World {
     fn result(&mut self, from: u32, gated: bool) -> StepResult {
         // SAFETY: no step is in progress.
         let journal = unsafe { &mut *self.graph.journal.get() };
+        let unanswered = match gated {
+            false => Vec::new(),
+            true if self.table().rules.step_names_what_the_pending_record_leaves => journal.gate_leaves.clone(),
+            true => self.table().required_unanswered(),
+        };
         StepResult {
             ticks_ran: self.tick_done - from,
             gated,
-            unanswered: if gated { self.table().required_unanswered() } else { Vec::new() },
+            unanswered,
             failed_required: std::mem::take(&mut journal.failed_required),
+            rejected: std::mem::take(&mut journal.rejected),
         }
     }
 
@@ -1329,7 +1527,9 @@ impl World {
         out.extend_from_slice(&config.content_set.unwrap_or(0).to_le_bytes());
         out.extend_from_slice(&(config.asset_types.len() as u32).to_le_bytes());
         for asset_type in &config.asset_types {
-            out.extend_from_slice(&asset_type.to_le_bytes());
+            let name = asset_type.stable_name().as_bytes();
+            out.extend_from_slice(&(name.len() as u32).to_le_bytes());
+            out.extend_from_slice(name);
         }
         out.extend_from_slice(&(state.len() as u32).to_le_bytes());
         for slot in 0..state.len() {
@@ -1341,88 +1541,160 @@ impl World {
         }
         out.extend_from_slice(&state.rng.state.to_le_bytes());
         out.extend_from_slice(&state.energy.to_le_bytes());
-        let table = self.table_bytes();
+        let table = self.typed_table_bytes();
         out.extend_from_slice(&(table.len() as u32).to_le_bytes());
         out.extend_from_slice(&table);
         out
     }
 
     /// Reads a saved world. The request states the content set the new world
-    /// stands under and its composition, in `config`, in place of the save's.
+    /// stands under and its composition, in `config`, in place of the save's,
+    /// and, in `restore`, whether the content must be the recorded one and
+    /// which asset types it names as dropped.
     ///
     /// Under the content at hand, the world is created gated on its answers:
-    /// it runs no tick until every asset its table holds as available under
-    /// a want has been answered, in its first tick's record, by an arrival
-    /// marked as an answer to a restore. An entry that holds no want is not
-    /// answered, a failed entry stays failed, and an unanswered want is
-    /// loaded as any want is.
+    /// it runs no tick until every asset its table holds as available, an
+    /// entry with no want included, has been answered, in its first tick's
+    /// record, by an arrival marked as an answer to a restore. A failed entry
+    /// stays failed, and an unanswered want is loaded as any want is. Where
+    /// every answer is at the recorded hash and the save held no unanswered
+    /// want, the saved run continues; otherwise the restore starts a new
+    /// history, recorded by one event, the first of the first tick.
     ///
     /// Under the recorded content, every asset the table holds as available
-    /// under a want is confirmed at the same hash before the first tick,
-    /// outside the input record, or the restore is refused, naming the hash.
+    /// is confirmed at the same hash before the first tick, outside the input
+    /// record, or the restore is refused, naming the asset and the hash. A
+    /// want the save holds unanswered names no hash: nothing of it is
+    /// confirmed, and it is loaded as any want is.
+    ///
+    /// Either restore may be into another composition: the drop rule reads
+    /// the type each entry holds, and such a restore starts a new history.
     pub fn restore(config: WorldConfig, bytes: &[u8], script: Vec<Record>, links: Links, restore: Restore) -> Result<World, Refusal> {
         let (header, state, mut table) = read_save(bytes, config.rules).expect("the save decodes");
         assert_eq!(state.len(), config.size.entity_count(), "the save is of the configured size");
-        let mut history = History::Undecided;
-        let mut dropped_entries = Vec::new();
-        match restore {
-            Restore::ContentAtHand { type_of, dropped, drop_in_silence } => {
-                let lacking: Vec<(AssetId, u32)> = table
-                    .entries
-                    .keys()
-                    .filter_map(|id| Some((*id, type_of(*id)?)))
-                    .filter(|(_, asset_type)| !config.asset_types.contains(asset_type))
-                    .collect();
-                for (asset, asset_type) in lacking {
-                    let hash = match table.entries[&asset].availability {
-                        Availability::Available(hash) => hash,
-                        _ => 0,
-                    };
-                    if drop_in_silence {
-                        table.entries.remove(&asset);
-                    } else if dropped.contains(&asset) {
-                        table.entries.remove(&asset);
-                        dropped_entries.push(asset);
-                    } else {
-                        return Err(Refusal { asset, hash, reason: format!("the composition lacks the asset type {asset_type}") });
-                    }
-                }
-                let without_a_want = config.rules.restore_awaits_entries_without_a_want;
-                let awaited = |entry: &Entry| matches!(entry.availability, Availability::Available(_)) && (without_a_want || !entry.wants.is_empty());
-                table.awaiting = table.entries.iter().filter(|(_, entry)| awaited(entry)).map(|(id, _)| *id).collect();
-                if table.awaiting.is_empty() {
-                    history = if dropped_entries.is_empty() { History::Continues } else { History::New(dropped_entries.clone()) };
-                }
+        let rules = config.rules;
+        table.budget = config.budget;
+        let (dropped, in_silence, types_from) = match &restore {
+            Restore::ContentAtHand { dropped, drop_in_silence, types_from } => (*dropped, *drop_in_silence, *types_from),
+            Restore::Continue { dropped, .. } => (*dropped, false, None),
+        };
+        let dropped = drop_types(&mut table, &config.asset_types, dropped, in_silence, types_from)?;
+        let declares = |types: &[AssetType], others: &[AssetType]| types.iter().all(|asset_type| others.contains(asset_type));
+        let another_composition = !declares(&header.asset_types, &config.asset_types) || !declares(&config.asset_types, &header.asset_types);
+        let held = |entry: &Entry| match entry.availability {
+            Availability::Available(hash) if !entry.wants.is_empty() || !rules.restore_leaves_entries_without_a_want => Some(hash),
+            _ => None,
+        };
+        let (history, pending) = match restore {
+            Restore::ContentAtHand { .. } => {
+                table.awaiting = table.entries.iter().filter(|(_, entry)| held(entry).is_some()).map(|(id, _)| *id).collect();
+                // A want the save holds unanswered names no hash: no answer
+                // to it can be said to be the saved run's.
+                let unanswered: Vec<AssetId> = table.unanswered().into_iter().map(|(asset, _)| asset).collect();
+                let unanswered = if rules.save_with_an_unanswered_want_continues { Vec::new() } else { unanswered };
+                (History::Undecided, Some(PendingRestore { unanswered, dropped, another_composition }))
             }
-            Restore::Continue(confirm) => {
-                let held: Vec<(AssetId, u64)> = table
-                    .entries
-                    .iter()
-                    .filter(|(_, entry)| !entry.wants.is_empty())
-                    .filter_map(|(id, entry)| match entry.availability {
-                        Availability::Available(hash) => Some((*id, hash)),
-                        _ => None,
-                    })
-                    .collect();
-                for (asset, hash) in held {
-                    let resident = confirm(asset, hash).map_err(|reason| Refusal { asset, hash, reason })?;
+            Restore::Continue { confirm, .. } => {
+                let confirmed: Vec<(AssetId, u64)> = table.entries.iter().filter_map(|(id, entry)| Some((*id, held(entry)?))).collect();
+                for (asset, hash) in confirmed {
+                    let resident = confirm(asset, hash).map_err(|reason| Refusal::Content { asset, hash, reason })?;
                     table.entries.get_mut(&asset).expect("an entry of the table").resident = Some(resident);
                 }
+                if another_composition || !dropped.is_empty() {
+                    (History::Undecided, Some(PendingRestore { unanswered: Vec::new(), dropped, another_composition }))
+                } else {
+                    (History::Continues, None)
+                }
             }
-        }
+        };
         table.refresh();
+        let nothing_awaited = table.awaiting.is_empty();
         let tick = header.tick;
         let graph = Graph::new(state, config, script, tick, table, links);
         let mut world = World { graph, first_tick: tick, tick_done: tick, stepping: Duration::ZERO, failure: None };
         let journal = world.graph.journal.get_mut();
-        if let History::New(assets) = &history {
-            journal.events.push((tick, Event::NewHistory { assets: assets.clone() }));
-        }
         journal.history = history;
-        journal.dropped = dropped_entries;
+        journal.restore = pending;
+        if rules.restore_event_at_the_restore_where_nothing_is_awaited
+            && nothing_awaited
+            && let Some(event) = journal.decide_restore(&[], &rules)
+        {
+            journal.events.push((tick, event));
+        }
         Ok(world)
     }
 }
+
+/// The drop rule of a restore into another composition, read from the type
+/// each entry of the table holds. An asset type the new composition lacks,
+/// of which the table holds an entry, with a want or without, refuses the
+/// restore by the type's name unless the request names that type as dropped.
+/// The entries of a dropped type leave the table with their wants. A type is
+/// dropped only where no entry the restore keeps lists a dependency of it,
+/// which the table shows as a want the core added for a kept parent:
+/// otherwise the restore is refused, naming both types. A type the request
+/// names of which the table holds no entry drops nothing and refuses nothing;
+/// one it names that the new composition has is refused by name. Returns the
+/// entries dropped, in identifier order; none under the control that drops
+/// in silence.
+fn drop_types(
+    table: &mut Table,
+    composition: &[AssetType],
+    dropped: &[AssetType],
+    in_silence: bool,
+    types_from: Option<&dyn Fn(AssetId) -> Option<AssetType>>,
+) -> Result<Vec<AssetId>, Refusal> {
+    let rules = table.rules;
+    // The type the rule reads: the one the entry holds; under a control, the
+    // one the manifest at hand holds, an asset it does not hold having none.
+    let type_of = |id: &AssetId, entry: &Entry| match types_from {
+        Some(types_from) => types_from(*id),
+        None => Some(entry.asset_type),
+    };
+    let held = |named: &AssetType| table.entries.iter().any(|(id, entry)| type_of(id, entry) == Some(*named));
+    for named in dropped {
+        let declared = composition.contains(named);
+        let ignored = rules.dropped_declared_type_ignored || (rules.dropped_declared_type_without_an_entry_refuses_nothing && !held(named));
+        if declared && !ignored {
+            return Err(Refusal::TypeNotLacking(*named));
+        }
+        if !declared && rules.dropped_type_without_an_entry_refuses && !held(named) {
+            return Err(Refusal::TypeWithoutAnEntry(*named));
+        }
+    }
+    let lacking = |id: &AssetId, entry: &Entry| type_of(id, entry).is_some_and(|asset_type| !composition.contains(&asset_type));
+    if !in_silence
+        && let Some((_, entry)) = table.entries.iter().find(|(id, entry)| lacking(id, entry) && !dropped.contains(&entry.asset_type))
+    {
+        return Err(Refusal::TypeLacking(entry.asset_type));
+    }
+    let leaving: Vec<AssetId> = table.entries.iter().filter(|(id, entry)| lacking(id, entry)).map(|(id, _)| *id).collect();
+    for id in &leaving {
+        let entry = &table.entries[id];
+        for (owner, _) in &entry.wants {
+            if let Owner::Asset(parent) = owner
+                && let Some(kept) = table.entries.get(parent).filter(|kept| !lacking(parent, kept))
+                && !rules.type_dropped_under_a_kept_parent
+            {
+                return Err(Refusal::TypeListedByAKeptEntry { kept: kept.asset_type, dropped: entry.asset_type });
+            }
+        }
+    }
+    for id in &leaving {
+        table.entries.remove(id);
+    }
+    // A want a dropped entry owned on a dependency of its part ends with it:
+    // a dependency left with no want stands as any entry with no want.
+    if !rules.dropped_parents_wants_left {
+        for entry in table.entries.values_mut() {
+            entry.wants.retain(|(owner, _)| !matches!(owner, Owner::Asset(parent) if leaving.contains(parent)));
+        }
+    }
+    Ok(if in_silence { Vec::new() } else { leaving })
+}
+
+#[cfg(test)]
+mod tests;
 
 /// Reads the header of a save alone.
 pub fn save_header(bytes: &[u8]) -> Result<SaveHeader, String> {
@@ -1437,7 +1709,7 @@ fn read_header(reader: &mut Reader) -> Result<SaveHeader, String> {
     let (named, set) = (reader.flag()?, reader.u64()?);
     let mut asset_types = Vec::new();
     for _ in 0..reader.u32()? {
-        asset_types.push(reader.u32()?);
+        asset_types.push(reader.asset_type()?);
     }
     Ok(SaveHeader { tick, content_set: named.then_some(set), asset_types })
 }

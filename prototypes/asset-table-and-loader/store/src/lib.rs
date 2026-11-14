@@ -59,41 +59,68 @@ impl<'a> Reader<'a> {
         Ok(u128::from_le_bytes(self.take(16)?.try_into().expect("sixteen bytes")))
     }
 
+    /// A string: a length, then UTF-8 bytes.
+    pub fn text(&mut self) -> Result<String, String> {
+        let len = self.u32()? as usize;
+        let at = self.at;
+        String::from_utf8(self.take(len)?.to_vec()).map_err(|_| format!("a string that is not UTF-8 at byte {at}"))
+    }
+
     pub fn end(&self) -> Result<(), String> {
         if self.at == self.bytes.len() { Ok(()) } else { Err(format!("{} trailing bytes", self.bytes.len() - self.at)) }
     }
+}
+
+fn put_text(out: &mut Vec<u8>, text: &str) {
+    out.extend_from_slice(&(text.len() as u32).to_le_bytes());
+    out.extend_from_slice(text.as_bytes());
 }
 
 // ---------------------------------------------------------------------------
 // The domain manifest and the root document of a revision
 // ---------------------------------------------------------------------------
 
-/// An entry of the domain manifest: the asset's type, the hash and the size
-/// of its canonical part, and its domain dependencies. Nothing of a target.
+/// A domain dependency as a manifest lists it: the identifier and the
+/// dependency's own asset type, by the stable name of the type's schema
+/// entry.
+pub type Dependency = (AssetId, String);
+
+/// An entry of the domain manifest: the asset's type, by the stable name of
+/// the type's schema entry, the hash and the size of its canonical part, and
+/// its domain dependencies, each with its type. Nothing of a target.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DomainEntry {
-    pub asset_type: u32,
+    pub asset_type: String,
     pub hash: u64,
     pub size: u64,
-    pub dependencies: Vec<AssetId>,
+    pub dependencies: Vec<Dependency>,
 }
 
 /// A domain manifest. Its canonical bytes have a hash of their own, which
 /// names a content set.
 pub type Domain = BTreeMap<AssetId, DomainEntry>;
 
+fn put_dependencies(out: &mut Vec<u8>, dependencies: &[Dependency]) {
+    out.extend_from_slice(&(dependencies.len() as u32).to_le_bytes());
+    for (dependency, asset_type) in dependencies {
+        out.extend_from_slice(&dependency.to_le_bytes());
+        put_text(out, asset_type);
+    }
+}
+
+fn read_dependencies(reader: &mut Reader) -> Result<Vec<Dependency>, String> {
+    (0..reader.u32()?).map(|_| Ok((reader.id()?, reader.text()?))).collect()
+}
+
 pub fn encode_domain(domain: &Domain) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&(domain.len() as u32).to_le_bytes());
     for (id, entry) in domain {
         out.extend_from_slice(&id.to_le_bytes());
-        out.extend_from_slice(&entry.asset_type.to_le_bytes());
+        put_text(&mut out, &entry.asset_type);
         out.extend_from_slice(&entry.hash.to_le_bytes());
         out.extend_from_slice(&entry.size.to_le_bytes());
-        out.extend_from_slice(&(entry.dependencies.len() as u32).to_le_bytes());
-        for dependency in &entry.dependencies {
-            out.extend_from_slice(&dependency.to_le_bytes());
-        }
+        put_dependencies(&mut out, &entry.dependencies);
     }
     out
 }
@@ -103,12 +130,30 @@ pub fn decode_domain(bytes: &[u8]) -> Result<Domain, String> {
     let mut domain = Domain::new();
     for _ in 0..reader.u32()? {
         let id = reader.id()?;
-        let (asset_type, hash, size) = (reader.u32()?, reader.u64()?, reader.u64()?);
-        let dependencies = (0..reader.u32()?).map(|_| reader.id()).collect::<Result<_, _>>()?;
+        let (asset_type, hash, size) = (reader.text()?, reader.u64()?, reader.u64()?);
+        let dependencies = read_dependencies(&mut reader)?;
         domain.insert(id, DomainEntry { asset_type, hash, size, dependencies });
     }
     reader.end()?;
     Ok(domain)
+}
+
+/// The dependencies a manifest holds under another type than the one the
+/// parent's entry lists for them: each as the parent, the dependency, the
+/// type listed and the type the dependency's own entry holds. A pipeline
+/// makes this check when it writes a manifest, and a loading capability when
+/// it loads a part, so that a part in force never lists a type the manifest
+/// contradicts. A dependency the manifest does not hold contradicts nothing.
+pub fn contradicted_dependencies(domain: &Domain) -> Vec<(AssetId, AssetId, String, String)> {
+    let mut contradicted = Vec::new();
+    for (parent, entry) in domain {
+        for (dependency, listed) in &entry.dependencies {
+            if let Some(held) = domain.get(dependency).filter(|held| held.asset_type != *listed) {
+                contradicted.push((*parent, *dependency, listed.clone(), held.asset_type.clone()));
+            }
+        }
+    }
+    contradicted
 }
 
 /// The hash that names the content set of a domain manifest.
@@ -125,7 +170,7 @@ pub fn closure(domain: &Domain, roots: &[AssetId]) -> BTreeSet<AssetId> {
         if closure.insert(id)
             && let Some(entry) = domain.get(&id)
         {
-            open.extend_from_slice(&entry.dependencies);
+            open.extend(entry.dependencies.iter().map(|(dependency, _)| *dependency));
         }
     }
     closure
@@ -168,11 +213,8 @@ pub fn build_package(object: &dyn Fn(u64) -> Option<Vec<u8>>, domain: &Domain, e
         let entry = domain.get(id).ok_or("a package entry is not in the domain manifest")?;
         let bytes = object(entry.hash).ok_or_else(|| format!("the artifact {} is not in the cache", hex(entry.hash)))?;
         index.extend_from_slice(&id.to_le_bytes());
-        index.extend_from_slice(&entry.asset_type.to_le_bytes());
-        index.extend_from_slice(&(entry.dependencies.len() as u32).to_le_bytes());
-        for dependency in &entry.dependencies {
-            index.extend_from_slice(&dependency.to_le_bytes());
-        }
+        put_text(&mut index, &entry.asset_type);
+        put_dependencies(&mut index, &entry.dependencies);
         index.extend_from_slice(&entry.hash.to_le_bytes());
         index.extend_from_slice(&(file.len() as u64).to_le_bytes());
         index.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
@@ -208,8 +250,8 @@ impl Package {
         let mut places = BTreeMap::new();
         for _ in 0..reader.u32()? {
             let id = reader.id()?;
-            let asset_type = reader.u32()?;
-            let dependencies = (0..reader.u32()?).map(|_| reader.id()).collect::<Result<_, _>>()?;
+            let asset_type = reader.text()?;
+            let dependencies = read_dependencies(&mut reader)?;
             let (hash, at, len) = (reader.u64()?, reader.u64()? as usize, reader.u64()? as usize);
             let bytes = file.get(at..at.saturating_add(len)).ok_or("an artifact is out of the package")?;
             if content_hash(bytes) != hash {
@@ -259,10 +301,18 @@ pub fn mount(domain: &mut Domain, package: &Domain, may_override: bool) -> Mount
 mod tests {
     use super::*;
 
+    const FIRST: &str = "prototype/parameters";
+    const OTHER: &str = "prototype/second";
+
+    fn entry(asset_type: &str, bytes: &[u8], dependencies: &[(AssetId, &str)]) -> DomainEntry {
+        let dependencies = dependencies.iter().map(|(dependency, listed)| (*dependency, (*listed).to_string())).collect();
+        DomainEntry { asset_type: asset_type.to_string(), hash: content_hash(bytes), size: bytes.len() as u64, dependencies }
+    }
+
     fn domain() -> Domain {
         let mut domain = Domain::new();
-        domain.insert(7, DomainEntry { asset_type: 1, hash: content_hash(b"seven"), size: 5, dependencies: vec![9] });
-        domain.insert(9, DomainEntry { asset_type: 1, hash: content_hash(b"nine"), size: 4, dependencies: Vec::new() });
+        domain.insert(7, entry(FIRST, b"seven", &[(9, OTHER)]));
+        domain.insert(9, entry(OTHER, b"nine", &[]));
         domain
     }
 
@@ -273,6 +323,20 @@ mod tests {
         assert!(decode_domain(&bytes[..bytes.len() - 1]).is_err());
         assert_eq!(decode_root(&encode_root(42)).unwrap(), 42);
         assert!(decode_root(b"nope").is_err());
+    }
+
+    #[test]
+    fn a_manifest_lists_each_dependency_with_its_type_and_its_hash_covers_it() {
+        let listed = domain();
+        assert_eq!(listed[&7].dependencies, vec![(9, OTHER.to_string())]);
+        assert!(contradicted_dependencies(&listed).is_empty());
+        let mut contradicting = domain();
+        contradicting.insert(7, entry(FIRST, b"seven", &[(9, FIRST)]));
+        assert_ne!(set_hash(&contradicting), set_hash(&listed), "the type a dependency is listed under is part of the content set");
+        assert_eq!(contradicted_dependencies(&contradicting), vec![(7, 9, FIRST.to_string(), OTHER.to_string())]);
+        // A dependency the manifest does not hold contradicts nothing.
+        contradicting.remove(&9);
+        assert!(contradicted_dependencies(&contradicting).is_empty());
     }
 
     #[test]
@@ -295,7 +359,7 @@ mod tests {
         assert!(Package::read(cut).is_err());
         let mut mounted = domain();
         let mut other = Domain::new();
-        other.insert(9, DomainEntry { asset_type: 1, hash: 1, size: 0, dependencies: Vec::new() });
+        other.insert(9, DomainEntry { asset_type: OTHER.to_string(), hash: 1, size: 0, dependencies: Vec::new() });
         assert_eq!(mount(&mut mounted, &other, false).refused, vec![9]);
         assert_eq!(mounted, domain());
         assert_eq!(mount(&mut mounted, &other, true).overridden, vec![9]);

@@ -1,25 +1,25 @@
-//! What the scenarios share: the names of a family and its content, a world
-//! driven tick by tick, and the verdict of a scenario against its oracle and
-//! its controls. Throwaway, never product code.
+//! What the scenarios share: the settings of a run, the names of a family
+//! and its content, and the verdict of a scenario against its oracle and its
+//! controls. Throwaway, never product code.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use asset_loader::ResidentStore;
 use asset_pipeline::{Cache, Source};
-use content_store::content_hash;
-use prototype_core::table::{ArrivalQueue, AssetId, Policy, Record, RepulsionTable, decode_log, encode_log};
-use prototype_core::world::{Extraction, History, Links, Mode, Parameters, Size, Wait, World, WorldConfig};
-use reference_workload::{DEFAULT_SEED, SplitMix64, run_hash};
+use content_store::{content_hash, encode_domain, encode_root};
+use prototype_core::table::{AssetId, AssetType, Policy, RepulsionTable};
+use prototype_core::world::{Parameters, Size};
+use reference_workload::{DEFAULT_SEED, SplitMix64};
 
-use crate::oracle::{Element, Expected, Names, Observed, Verdict, compare, element, stated_entries};
-use crate::sequential::{first_kill_ticks, oracle_with_kills};
+use crate::oracle::Names;
+use crate::sequential::first_kill_ticks;
 
 /// The identity of the composition's one contributor.
 pub const BASE: u64 = 7;
-/// The last tick any scenario of this stage reaches.
+/// The last tick any scenario with an oracle reaches.
 pub const LAST_TICK: u32 = 24;
 
 /// What a run is made with.
@@ -37,7 +37,8 @@ impl Settings {
     }
 
     pub fn directory(&self, name: &str) -> PathBuf {
-        let directory = self.scratch.join(name.replace('/', "-"));
+        let safe: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' }).collect();
+        let directory = self.scratch.join(safe);
         let _ = fs::remove_dir_all(&directory);
         fs::create_dir_all(&directory).expect("a scratch directory is created");
         directory
@@ -45,24 +46,59 @@ impl Settings {
 }
 
 /// One content of one asset, as a family declares it: the asset, its
-/// version, its type and the assets its part lists.
+/// version, its type, the assets its part lists and, where the family gives
+/// sizes, the size of its canonical part in bytes. A part lists each
+/// dependency under the type the family's contents give that asset, but
+/// where `listed` names another: such a part is one the stand-in pipeline
+/// refuses to write, and the harness puts it in place itself.
+#[derive(Clone, Copy)]
 pub struct Content {
     pub asset: &'static str,
     pub version: u32,
-    pub asset_type: u32,
+    pub asset_type: AssetType,
     pub dependencies: &'static [&'static str],
+    pub size: Option<usize>,
+    pub listed: &'static [(&'static str, AssetType)],
 }
 
 pub const fn content(asset: &'static str, version: u32) -> Content {
-    Content { asset, version, asset_type: 1, dependencies: &[] }
+    Content { asset, version, asset_type: AssetType::Parameters, dependencies: &[], size: None, listed: &[] }
+}
+
+impl Content {
+    pub const fn of(mut self, asset_type: AssetType) -> Content {
+        self.asset_type = asset_type;
+        self
+    }
+
+    pub const fn listing(mut self, dependencies: &'static [&'static str]) -> Content {
+        self.dependencies = dependencies;
+        self
+    }
+
+    pub const fn sized(mut self, size: usize) -> Content {
+        self.size = Some(size);
+        self
+    }
+
+    pub const fn listed_as(mut self, listed: &'static [(&'static str, AssetType)]) -> Content {
+        self.listed = listed;
+        self
+    }
 }
 
 /// The names of a family and the sources of its contents.
 #[derive(Clone)]
 pub struct Family {
     pub names: Names,
-    /// The synthetic source of each content, by its hash's name.
+    /// The synthetic source of each content, by its hash's name: what the
+    /// stand-in pipeline imports.
     pub sources: BTreeMap<String, Source>,
+    /// The canonical part of each content: what the source's import writes,
+    /// but for a part put in place by hand.
+    pub parts: BTreeMap<String, Vec<u8>>,
+    /// The contents whose part the pipeline would refuse.
+    pub by_hand: Vec<String>,
 }
 
 impl Family {
@@ -78,7 +114,9 @@ impl Family {
         for (name, identifier) in assets.iter().zip(&identifiers) {
             names.assets.insert((*name).to_string(), *identifier);
         }
-        let mut sources = BTreeMap::new();
+        let (mut sources, mut parts, mut by_hand) = (BTreeMap::new(), BTreeMap::new(), Vec::new());
+        // The type an asset is imported under: the one its contents state.
+        let type_of = |name: &str| contents.iter().find(|content| content.asset == name).map_or(AssetType::Parameters, |content| content.asset_type);
         for content in contents {
             let index = assets.iter().position(|name| *name == content.asset).expect("a content of a listed asset");
             let source = Source {
@@ -87,12 +125,25 @@ impl Family {
                 strength: 24.0 + 8.0 * index as f32 + 2.5 * content.version as f32,
                 radius: 8.0,
                 salt: content.version,
-                dependencies: content.dependencies.iter().map(|name| names.assets[*name]).collect(),
+                size: content.size,
+                dependencies: content.dependencies.iter().map(|name| (names.assets[*name], type_of(name))).collect(),
             };
-            let hash = content_hash(&source.part());
+            // The part as it stands in the store: the import's, or one that
+            // lists a dependency under a type the manifest contradicts.
+            let mut placed = source.clone();
+            for (name, listed) in content.listed {
+                let dependency = names.assets[*name];
+                placed.dependencies.iter_mut().filter(|(other, _)| *other == dependency).for_each(|(_, asset_type)| *asset_type = *listed);
+            }
+            let part = placed.part();
+            let hash = content_hash(&part);
             let name = format!("{}.{}", content.asset, content.version);
+            if !content.listed.is_empty() {
+                by_hand.push(name.clone());
+            }
             names.hashes.insert(name.clone(), hash);
             names.tables.insert(hash, RepulsionTable { strength: source.strength, radius: source.radius });
+            parts.insert(name.clone(), part);
             sources.insert(name, source);
         }
         names.pool = pool.iter().map(|name| names.assets[*name]).collect();
@@ -101,15 +152,14 @@ impl Family {
         let mut survivors = kills.iter().enumerate().filter(|(_, tick)| tick.is_none()).map(|(slot, _)| slot as u32);
         names.entities.insert("E1".to_string(), (survivors.next().expect("a slot survives"), 0));
         names.entities.insert("E2".to_string(), (survivors.next().expect("a second slot survives"), 0));
-        Family { names, sources }
+        Family { names, sources, parts, by_hand }
     }
 
     /// Makes every content of the family resident, for a scripted availability source.
     pub fn residents(&self) -> Arc<ResidentStore> {
         let store = Arc::new(ResidentStore::default());
-        for source in self.sources.values() {
-            let part = source.part();
-            store.insert(content_hash(&part), part).expect("a part of the family is valid");
+        for part in self.parts.values() {
+            store.insert(content_hash(part), part.clone()).expect("a part of the family is valid");
         }
         store
     }
@@ -125,12 +175,28 @@ impl Family {
         }
     }
 
-    pub fn hash(&self, name: &str) -> u64 {
-        self.names.hashes[name]
+    /// Puts in the revision in place the parts the pipeline would refuse to
+    /// write: the artifact under its own hash, and the manifest's entry of
+    /// its asset naming that hash and that size, its list of dependencies
+    /// left as the pipeline wrote it.
+    pub fn place_by_hand(&self, cache: &Cache, contents: &[&str]) {
+        let placed: Vec<&&str> = contents.iter().filter(|name| self.by_hand.iter().any(|other| other == **name)).collect();
+        if placed.is_empty() {
+            return;
+        }
+        let mut domain = cache.revision().expect("a revision is in place").domain;
+        for name in placed {
+            let part = &self.parts[*name];
+            let entry = domain.get_mut(&self.sources[*name].asset).expect("the manifest holds the asset");
+            entry.hash = cache.put_object(part).expect("the part is written");
+            entry.size = part.len() as u64;
+        }
+        let domain_hash = cache.put_object(&encode_domain(&domain)).expect("the manifest is written");
+        asset_pipeline::write_atomically(&cache.directory().join("root"), &encode_root(domain_hash)).expect("the revision is put in place");
     }
 
-    pub fn asset(&self, name: &str) -> AssetId {
-        self.names.assets[name]
+    pub fn hash(&self, name: &str) -> u64 {
+        self.names.hashes[name]
     }
 }
 
@@ -138,140 +204,16 @@ fn fnv_of(names: &[&str]) -> u64 {
     content_hash(names.join(",").as_bytes())
 }
 
-/// A content root imported into a loose store: one pass of the stand-in pipeline.
-pub fn import(root: &Path, store: &Path) -> (Cache, asset_pipeline::Revision) {
+/// A content root imported into a loose store: one pass of the stand-in
+/// pipeline. Returns the cache and the hash of the revision's manifest.
+pub fn import(root: &Path, store: &Path) -> (Cache, u64) {
     let cache = Cache::on_disk(store).expect("a loose store is created");
     let pass = asset_pipeline::pass(root, &cache).expect("the pass runs");
     assert!(pass.failures.is_empty(), "no source of a scenario fails its import: {:?}", pass.failures);
-    (cache, pass.revision)
+    (cache, pass.revision.domain_hash)
 }
 
-/// The world configuration every scenario starts from.
-pub fn config(settings: &Settings, workers: usize, names: &Names) -> WorldConfig {
-    WorldConfig::new(settings.size, workers, Mode::Identifiers, names.pool.clone())
-}
-
-/// A slot for the function a world extracts its wants through, filled once
-/// the availability source is attached, after the world exists.
-pub fn late_extract() -> (Arc<dyn Fn(Extraction) + Send + Sync>, Arc<OnceLock<Arc<dyn Fn(Extraction) + Send + Sync>>>) {
-    let slot: Arc<OnceLock<Arc<dyn Fn(Extraction) + Send + Sync>>> = Arc::new(OnceLock::new());
-    let filled = slot.clone();
-    let extract = move |extraction: Extraction| {
-        if let Some(extract) = filled.get() {
-            extract(extraction);
-        }
-    };
-    (Arc::new(extract), slot)
-}
-
-/// What happens before a tick, in order.
-pub enum Act {
-    /// An element in the words of the scenario sheet: a command the host
-    /// posts, or an arrival the scripted availability source posts.
-    Post(&'static str),
-    /// A step that asks for one tick and does not wait at a closed gate.
-    StepWithoutWaiting,
-    /// Something done outside the world: a revision, a mount, a removal.
-    Call(Box<dyn Fn()>),
-}
-
-/// A world a scenario drives tick by tick, with what it observes of it.
-pub struct Driven {
-    pub world: World,
-    pub queue: Arc<ArrivalQueue>,
-    pub observed: Observed,
-}
-
-impl Driven {
-    pub fn new(world: World, queue: Arc<ArrivalQueue>) -> Driven {
-        let observed = Observed { first: world.tick(), creation: world.table_bytes(), ..Observed::default() };
-        Driven { world, queue, observed }
-    }
-
-    fn step(&mut self, tick: u32, settle: &dyn Fn()) -> bool {
-        settle();
-        let result = self.world.step(1, Wait::No).expect("the world does not fail");
-        for (asset, code) in &result.failed_required {
-            self.observed.names_failed.push((tick, *asset, *code));
-        }
-        if result.ticks_ran == 0 {
-            self.observed.stuck = Some((tick, result.unanswered));
-            return false;
-        }
-        self.observed.stuck = None;
-        self.observed.tables.push(self.world.table_bytes());
-        true
-    }
-
-    /// Does what stands before tick `tick`, then runs it. Returns whether it
-    /// ran: a world that stays gated is stuck there.
-    pub fn tick(&mut self, tick: u32, acts: &[(u32, Act)], names: &Names, settle: &dyn Fn()) -> bool {
-        for (_, act) in acts.iter().filter(|(before, _)| *before == tick) {
-            match act {
-                Act::Post(text) => match element(text, names).expect("an element of the scenario sheet") {
-                    Element::Command(command) => self.world.post(command),
-                    Element::Arrival(arrival) => self.queue.post(&[arrival]),
-                },
-                Act::Call(call) => call(),
-                Act::StepWithoutWaiting => {
-                    if self.world.tick() < tick && !self.step(tick, settle) {
-                        let (_, awaited) = self.observed.stuck.take().expect("a step that ran no tick names what it awaits");
-                        self.observed.blocked.push((tick, awaited));
-                    }
-                }
-            }
-        }
-        self.world.tick() >= tick || self.step(tick, settle)
-    }
-
-    /// Drives the world to tick `to`, or to the tick it stays gated before.
-    pub fn drive(&mut self, to: u32, acts: &[(u32, Act)], names: &Names, settle: &dyn Fn()) {
-        for tick in self.world.tick() + 1..=to {
-            if !self.tick(tick, acts, names, settle) {
-                break;
-            }
-        }
-        self.finish();
-    }
-
-    /// Reads what the run left: the hashes, the log, the events, the verdict of a restore.
-    pub fn finish(&mut self) {
-        self.observed.state = self.world.state_hashes();
-        self.observed.log = self.world.log().to_vec();
-        self.observed.events = self.world.events().to_vec();
-        self.observed.verdict = match self.world.history() {
-            History::Undecided => None,
-            History::Continues => Some(Verdict::Continues),
-            History::New(assets) => Some(Verdict::NewHistory(assets.clone())),
-        };
-    }
-}
-
-/// The workload's hashes of the sequential run an oracle's tables ask for.
-/// `before` is what the oracle of the saved world states up to the tick a
-/// restored world starts from, where there is one.
-pub fn sequential(settings: &Settings, names: &Names, expected: &Expected, observed: &Observed, before: Option<&Expected>, to: u32) -> Vec<u64> {
-    let creation = stated_entries(&observed.creation);
-    let (mut switches, mut kills) = expected.schedule(names, observed.first + 1, to, &creation);
-    if let Some(before) = before {
-        let (earlier, earlier_kills) = before.schedule(names, 1, observed.first, &[]);
-        switches.extend(earlier);
-        kills.extend(earlier_kills);
-    }
-    oracle_with_kills(&settings.parameters(to), names.pool.len(), &switches, &kills)
-}
-
-/// Replays an input log, read back from its bytes, in a world built by
-/// `world`, and returns its state hashes.
-pub fn replay(log: &[Record], to: u32, world: impl FnOnce(Vec<Record>) -> World) -> Vec<u64> {
-    let records = decode_log(&encode_log(log)).expect("a log the world wrote decodes");
-    let mut world = world(records);
-    let from = world.tick();
-    world.step(to - from, Wait::No).expect("the replay does not fail");
-    world.state_hashes()
-}
-
-/// What one scenario gave at one worker count.
+/// What one world of one scenario gave at one worker count.
 #[derive(Clone, Debug, Default)]
 pub struct Outcome {
     pub scenario: String,
@@ -284,29 +226,25 @@ pub struct Outcome {
     /// Whether the input log, read back from its bytes, replays the run at
     /// another worker count; none where the scenario has no replay.
     pub replays: Option<bool>,
-}
-
-impl Outcome {
-    pub fn new(scenario: &str, world: &str, workers: usize, observed: &Observed, differences: Vec<String>) -> Outcome {
-        Outcome { scenario: scenario.to_string(), world: world.to_string(), workers, differences, run_hash: run_hash(&observed.state), replays: None }
-    }
+    /// What the run gave, in words, for the log.
+    pub observed: Vec<String>,
 }
 
 /// A control, or a reading: the same scenario with one rule changed.
 #[derive(Clone, Debug)]
 pub struct Variant {
     pub scenario: String,
-    pub name: &'static str,
+    pub name: String,
     /// A control must differ from the oracle; a reading is reported either way.
     pub control: bool,
     pub differs: bool,
     pub first_difference: String,
 }
 
-/// Everything the scenarios of one claim gave.
+/// Everything the scenarios of one family gave.
 #[derive(Clone, Debug, Default)]
 pub struct Claim {
-    pub name: &'static str,
+    pub name: String,
     pub outcomes: Vec<Outcome>,
     pub variants: Vec<Variant>,
     /// What a scenario observed beside its oracle, in words.
@@ -323,18 +261,4 @@ impl Claim {
         let mut hashes: BTreeMap<(String, String), u64> = BTreeMap::new();
         self.outcomes.iter().all(|outcome| *hashes.entry((outcome.scenario.clone(), outcome.world.clone())).or_insert(outcome.run_hash) == outcome.run_hash)
     }
-}
-
-/// Compares a driven world with its oracle.
-pub fn judge(settings: &Settings, names: &Names, expected: &Expected, observed: &Observed, before: Option<&Expected>, to: u32) -> Vec<String> {
-    let hashes = sequential(settings, names, expected, observed, before, to);
-    compare(expected, observed, to, &hashes, names)
-}
-
-/// A world with a scripted availability source: the parts are resident and
-/// the scenario posts the arrivals itself.
-pub fn scripted_world(config: WorldConfig, residents: &Arc<ResidentStore>, script: Vec<Record>) -> (World, Arc<ArrivalQueue>) {
-    let links = Links::new(residents.clone());
-    let queue = links.queue.clone();
-    (World::new(config, script, links), queue)
 }

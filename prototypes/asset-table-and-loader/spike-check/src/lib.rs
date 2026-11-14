@@ -9,6 +9,14 @@
 //! wants its asset under the world's own entry, the world hands its wants to
 //! the availability source through an extraction at a tick's end and a query
 //! at its creation, and the parts are read in the prototype's resident store.
+//! Since the table holds the asset type of each entry, a want states the type
+//! of the asset it names and a part lists each dependency with its type: the
+//! spike's assets were of one type, and every want and every part here
+//! states that one. What leaves the domain at a tick is the wants added
+//! while their asset was unanswered or failed, which for these scenarios is
+//! what the spike's world sent its loader. A refusal of a restore may name
+//! an asset type, which the spike did not have; its checks read the refusals
+//! that name an asset and a hash, as it wrote them.
 //! The spike's own loader and catalog stand outside the domain as they did.
 //! No check is changed to fit the prototype: where a rule of the prototype
 //! differs from the spike's, the check that states the spike's rule fails,
@@ -51,7 +59,7 @@ use std::time::{Duration, Instant};
 
 use asset_loader::ResidentStore;
 use prototype_core::table::{
-    Arrival, AssetId, Availability, Command, Event, Maker, Outcome, Owner, Policy, REASON_HASH_MISMATCH, Record, RepulsionTable, Resident,
+    Arrival, AssetId, AssetType, Availability, Command, Event, Maker, Outcome, Owner, Policy, REASON_HASH_MISMATCH, Record, RepulsionTable, Resident,
     Residents, decode_log, encode_log, reason_text,
 };
 use prototype_core::world::{Extraction, Links, Mode, Refusal, Restore, StepResult, Wait, World, WorldConfig};
@@ -149,6 +157,9 @@ const SOURCE: u64 = 1;
 const COMPOSITION: Owner = Owner::World(Maker::Contributor(CONTRIBUTOR));
 /// A want of the world's own entry made by a command.
 const COMMANDED: Owner = Owner::World(Maker::Source(SOURCE));
+/// The asset type every want of the spike states: its assets were of one
+/// type, the parameters.
+const PARAMETERS: AssetType = AssetType::Parameters;
 
 /// The sizes, tick counts, worker counts and delays the scenarios run with.
 #[derive(Clone)]
@@ -207,7 +218,7 @@ impl Settings {
     }
 
     fn world(&self, workers: usize, catalog: &Catalog, wants: &[AssetId]) -> WorldConfig {
-        let wants: Vec<(AssetId, Policy)> = wants.iter().map(|id| (*id, Policy::Required)).collect();
+        let wants: Vec<(AssetId, AssetType, Policy)> = wants.iter().map(|id| (*id, PARAMETERS, Policy::Required)).collect();
         WorldConfig::new(self.size, workers, Mode::Identifiers, catalog.leaf.to_vec()).wanting(CONTRIBUTOR, &wants)
     }
 }
@@ -220,14 +231,15 @@ fn divergence(ours: &[u64], theirs: &[u64]) -> i64 {
     first_divergent_tick(ours, theirs).map_or(-1, |t| t as i64)
 }
 
-/// Where a world's wants leave the domain for the spike's loader: the wanted
-/// assets that became unanswered at a tick are what the loader receives, as
-/// the spike's world sent them.
+/// Where a world's wants leave the domain for the spike's loader: the assets
+/// of the wants that leave at a tick, added while their asset was unanswered
+/// or failed, are what the loader receives, as the spike's world sent it the
+/// wanted assets that became unanswered.
 fn extraction_to(requests: &Sender<Request>) -> Arc<dyn Fn(Extraction) + Send + Sync> {
     let requests = requests.clone();
     Arc::new(move |extraction: Extraction| {
-        if !extraction.unanswered.is_empty() {
-            let _ = requests.send(Request::Wanted(extraction.unanswered));
+        if !extraction.left.is_empty() {
+            let _ = requests.send(Request::Wanted(extraction.left.into_iter().map(|(asset, _)| asset).collect()));
         }
     })
 }
@@ -235,7 +247,7 @@ fn extraction_to(requests: &Sender<Request>) -> Arc<dyn Fn(Extraction) + Send + 
 /// What the spike's world sent its loader at its creation, where no tick has
 /// ended: the wanted assets its table holds as unanswered, read by a query.
 fn hand_over_the_wants_at_creation(world: &World, requests: &Sender<Request>) {
-    let unanswered = world.unanswered();
+    let unanswered: Vec<AssetId> = world.unanswered().into_iter().map(|(asset, _)| asset).collect();
     if !unanswered.is_empty() {
         let _ = requests.send(Request::Wanted(unanswered));
     }
@@ -322,13 +334,13 @@ fn wants(out: &mut Json, settings: &Settings, catalog: &Catalog) -> bool {
     owner_slots.sort_unstable();
     let owners = owner_slots.map(|slot| Owner::Entity { slot, generation: 0 });
     let leaf4 = catalog.leaf[4];
-    let want = |owner: Owner| Command::Want { asset: leaf4, owner, policy: Policy::Optional };
+    let want = |owner: Owner| Command::Want { asset: leaf4, asset_type: PARAMETERS, owner, policy: Policy::Optional };
     let script = vec![
         Record::arrivals(1, catalog.closure_a()),
         Record::arrivals(t(50), vec![Arrival::at(catalog.extra, fnv1a(&Catalog::extra_part(1)))]),
         Record::commands(t(100), vec![want(owners[0]), want(owners[1])]),
         Record::arrivals(t(110), vec![Arrival::at(leaf4, Catalog::leaf_hash(1, 4))]),
-        Record::commands(t(150), vec![Command::Want { asset: catalog.root_b, owner: COMMANDED, policy: Policy::Optional }]),
+        Record::commands(t(150), vec![Command::Want { asset: catalog.root_b, asset_type: PARAMETERS, owner: COMMANDED, policy: Policy::Optional }]),
         Record::arrivals(t(160), catalog.closure_b()),
         Record::commands(t(250), vec![Command::Release { asset: catalog.root_b, owner: COMMANDED }]),
         Record::commands(t(900), vec![want(COMMANDED)]),
@@ -467,11 +479,11 @@ fn gate_run(out: &mut Json, settings: &Settings, catalog: &Catalog, oracle_hashe
     let mut links = Links::new(store.clone());
     let loader = Loader::spawn(catalog.manifest([Some(1); LEAVES]), store.clone(), links.queue.clone(), delay);
     links.extract = Some(extraction_to(&loader.requests));
-    let instantiate = |asset: AssetId| Command::Instantiate { asset, policy: Policy::Required, reload: false };
+    let instantiate = |asset: AssetId| Command::Instantiate { asset, asset_type: PARAMETERS, policy: Policy::Required, reload: false };
     let script = vec![
         Record::commands(t(200), vec![instantiate(catalog.root_b)]),
         Record::commands(t(400), vec![instantiate(catalog.root_c)]),
-        Record::commands(t(600), vec![Command::Want { asset: catalog.root_d, owner: COMMANDED, policy: Policy::Required }]),
+        Record::commands(t(600), vec![Command::Want { asset: catalog.root_d, asset_type: PARAMETERS, owner: COMMANDED, policy: Policy::Required }]),
     ];
     let mut world = World::new(settings.world(workers, catalog, &[catalog.root_a, catalog.leaf[4]]), script, links);
     hand_over_the_wants_at_creation(&world, &loader.requests);
@@ -726,7 +738,7 @@ fn table_under_the_hash(out: &mut Json, settings: &Settings, catalog: &Catalog) 
     preload(&store, catalog);
     let ticks = 10.min(settings.ticks);
     let run = |version: u32| {
-        let config = WorldConfig::new(Size::Small, 1, Mode::Identifiers, catalog.leaf.to_vec()).wanting(CONTRIBUTOR, &[(catalog.extra, Policy::Optional)]);
+        let config = WorldConfig::new(Size::Small, 1, Mode::Identifiers, catalog.leaf.to_vec()).wanting(CONTRIBUTOR, &[(catalog.extra, PARAMETERS, Policy::Optional)]);
         let script = vec![Record::arrivals(1, vec![Arrival::at(catalog.extra, fnv1a(&Catalog::extra_part(version)))])];
         let mut world = World::new(config, script, Links::new(store.clone()));
         let stepped = step_to(&mut world, ticks);
@@ -762,7 +774,7 @@ fn write_hashes(path: &Path, hashes: &[u64]) {
 
 fn read_hashes(path: &Path) -> Vec<u64> {
     let bytes = fs::read(path).expect("the parent wrote the expected hashes");
-    bytes.chunks_exact(8).map(|chunk| u64::from_le_bytes(chunk.try_into().expect("eight bytes"))).collect()
+    bytes.as_chunks::<8>().0.iter().map(|chunk| u64::from_le_bytes(*chunk)).collect()
 }
 
 fn part_path(directory: &Path, hash: u64) -> PathBuf {
@@ -780,7 +792,7 @@ fn save(out: &mut Json, settings: &Settings, catalog: &Catalog) -> bool {
     let workers = if settings.worker_counts.contains(&4) { 4 } else { *settings.worker_counts.last().expect("a worker count") };
     let store = Arc::new(ResidentStore::default());
     preload(&store, catalog);
-    let instantiate = Command::Instantiate { asset: catalog.leaf[4], policy: Policy::Required, reload: true };
+    let instantiate = Command::Instantiate { asset: catalog.leaf[4], asset_type: PARAMETERS, policy: Policy::Required, reload: true };
     let mut first = Record::arrivals(1, everything(catalog));
     first.commands.push(instantiate);
     let script = vec![
@@ -909,14 +921,12 @@ pub fn child(arguments: &[String]) -> String {
     let recorded = fs::read(directory.join("record.bin")).expect("the parent wrote the record");
     let later = decode_log(&recorded).expect("the record decodes");
     let store = Arc::new(ResidentStore::default());
-    let wants: Vec<(AssetId, Policy)> = all_wants(&catalog).iter().map(|id| (*id, Policy::Required)).collect();
-    let mut config = WorldConfig::new(size, workers, Mode::Identifiers, catalog.leaf.to_vec()).wanting(CONTRIBUTOR, &wants);
+    let wants: Vec<(AssetId, AssetType, Policy)> = all_wants(&catalog).iter().map(|id| (*id, PARAMETERS, Policy::Required)).collect();
     // The spike measured a failed answer to a restore as an event that fails
-    // the instance made from the asset. The prototype reads the design text
-    // as emitting no event on such an answer, and keeps what the spike
-    // measured as a reading of its rules: the readers of this check run
-    // under that reading, so that the spike's checks stand as it wrote them.
-    config.rules.marked_failure_emits = true;
+    // the instance made from the asset. It is the rule the design text now
+    // states, so the readers of this check run under the prototype's rules
+    // as they are, where the first stage ran them under a reading.
+    let config = WorldConfig::new(size, workers, Mode::Identifiers, catalog.leaf.to_vec()).wanting(CONTRIBUTOR, &wants);
     let leaf4 = catalog.leaf[4];
     // What this process's content set says of leaf 4: the saved hash, another one, or a corrupt artifact.
     let mut versions = [Some(1); LEAVES];
@@ -952,8 +962,8 @@ pub fn child(arguments: &[String]) -> String {
         let loader = Loader::spawn(manifest, store.clone(), links.queue.clone(), Delay::Fixed(Duration::from_millis(20)));
         links.extract = Some(extraction_to(&loader.requests));
         let requests = loader.requests.clone();
-        // The content at hand names no asset type, and the composition is the saved one: no entry is dropped.
-        let content_at_hand = Restore::ContentAtHand { type_of: &|_| None, dropped: &[], drop_in_silence: false };
+        // The composition is the saved one, and the request names no type as dropped.
+        let content_at_hand = Restore::ContentAtHand { dropped: &[], drop_in_silence: false, types_from: None };
         let mut world = World::restore(config, &saved, later, links, content_at_hand).expect("a new run is never refused");
         let saved_at = world.tick();
         let query = world.restore_query();
@@ -1019,15 +1029,25 @@ pub fn child(arguments: &[String]) -> String {
                 _ => Err("the content set does not name the asset".to_string()),
             }
         };
-        let restored = later_parts.map_err(|reason| Refusal { asset: 0, hash: 0, reason }).and_then(|()| World::restore(config, &saved, later, Links::new(store.clone()), Restore::Continue(&confirm)));
+        let request = Restore::Continue { confirm: &confirm, dropped: &[] };
+        let restored = later_parts
+            .map_err(|reason| Refusal::Content { asset: 0, hash: 0, reason })
+            .and_then(|()| World::restore(config, &saved, later, Links::new(store.clone()), request));
         match restored {
             Err(refusal) => {
-                let names_the_hash = refusal.asset == leaf4 && refusal.hash == Catalog::leaf_hash(2, 4);
+                // The spike's refusal names an asset and a hash; a refusal
+                // that names an asset type, which the spike did not have,
+                // names neither.
+                let (asset, hash, reason) = match &refusal {
+                    Refusal::Content { asset, hash, reason } => (*asset, *hash, reason.clone()),
+                    other => (0, 0, other.to_string()),
+                };
+                let names_the_hash = asset == leaf4 && hash == Catalog::leaf_hash(2, 4);
                 holds = mode != 3 && names_the_hash;
                 out.bool("refused", true);
-                out.string("refused_for", &catalog.name(refusal.asset));
-                out.hex("refused_at_hash", refusal.hash);
-                out.string("reason", &refusal.reason);
+                out.string("refused_for", &catalog.name(asset));
+                out.hex("refused_at_hash", hash);
+                out.string("reason", &reason);
                 out.bool("names_the_recorded_hash", names_the_hash);
             }
             Ok(mut world) => {
@@ -1076,7 +1096,7 @@ fn one_resident_copy(out: &mut Json, settings: &Settings, catalog: &Catalog) -> 
             reads += 1;
             store.insert(hash, Catalog::big_part(settings.big_payload)).expect("a valid part");
         }
-        let config = WorldConfig::new(Size::Small, 1, Mode::Identifiers, vec![catalog.big]).wanting(CONTRIBUTOR, &[(catalog.big, Policy::Optional)]);
+        let config = WorldConfig::new(Size::Small, 1, Mode::Identifiers, vec![catalog.big]).wanting(CONTRIBUTOR, &[(catalog.big, PARAMETERS, Policy::Optional)]);
         let script = vec![Record::arrivals(index as u32 + 1, vec![Arrival::at(catalog.big, hash)])];
         worlds.push(World::new(config, script, Links::new(store.clone())));
     }

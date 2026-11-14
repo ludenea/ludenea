@@ -28,7 +28,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use asset_loader::ResidentStore;
 use prototype_core::table::{
-    Arrival, ArrivalQueue, AssetId, Outcome, Part, REASON_UNKNOWN_ASSET, RepulsionTable, Residents, part_bytes, part_len,
+    Arrival, ArrivalQueue, AssetId, AssetType, Dependency, Outcome, Part, REASON_UNKNOWN_ASSET, RepulsionTable, Residents, part_bytes, part_len,
 };
 use reference_workload::{SplitMix64, fnv1a};
 
@@ -106,15 +106,15 @@ impl Catalog {
 
     /// Group A lists the leaves 0 to 3; group B the leaves 5 to 7; leaf 4 is in neither.
     pub fn group_a_part(&self) -> Vec<u8> {
-        part_bytes(RepulsionTable::DEFAULT, &self.leaf[0..4], 0, 0)
+        part_bytes(RepulsionTable::DEFAULT, &listed(&self.leaf[0..4]), 0, 0)
     }
 
     pub fn group_b_part(&self) -> Vec<u8> {
-        part_bytes(RepulsionTable::DEFAULT, &self.leaf[5..8], 0, 0)
+        part_bytes(RepulsionTable::DEFAULT, &listed(&self.leaf[5..8]), 0, 0)
     }
 
     pub fn root_part(&self, group: AssetId) -> Vec<u8> {
-        part_bytes(RepulsionTable::DEFAULT, &[group], 0, 0)
+        part_bytes(RepulsionTable::DEFAULT, &listed(&[group]), 0, 0)
     }
 
     pub fn extra_part(version: u32) -> Vec<u8> {
@@ -126,7 +126,7 @@ impl Catalog {
     }
 
     pub fn big_len(payload_len: usize) -> usize {
-        part_len(0, payload_len)
+        part_len(&[], payload_len)
     }
 
     /// The closure of root A at version 1, as arrivals: the root, its group, the leaves 0 to 3.
@@ -171,6 +171,12 @@ impl Catalog {
     }
 }
 
+/// The dependencies a part of the spike lists, each with its type: every
+/// asset of the spike is of the one type it had, the parameters.
+fn listed(dependencies: &[AssetId]) -> Vec<Dependency> {
+    dependencies.iter().map(|dependency| (*dependency, AssetType::Parameters)).collect()
+}
+
 type Read = Arc<dyn Fn() -> Vec<u8> + Send + Sync>;
 
 /// What a manifest holds per asset: the hash of its canonical part, its
@@ -187,7 +193,7 @@ pub struct Manifest {
 
 impl Manifest {
     pub fn artifact(&mut self, id: AssetId, bytes: Vec<u8>) {
-        let dependencies = Part::decode(&bytes).expect("a valid part").dependencies;
+        let dependencies = Part::decode(&bytes).expect("a valid part").dependencies.into_iter().map(|(dependency, _)| dependency).collect();
         self.sources.insert(id, Source::Artifact { hash: fnv1a(&bytes), dependencies, read: Arc::new(move || bytes.clone()) });
     }
 
@@ -316,7 +322,7 @@ impl Loader {
                         }
                         let started = Instant::now();
                         thread::sleep(delay.draw());
-                        let load = |id: &AssetId| manifest.load(&store, *id, &reads_in).map(|outcome| Arrival { asset: *id, outcome, marked: false });
+                        let load = |id: &AssetId| manifest.load(&store, *id, &reads_in).map(|outcome| Arrival { asset: *id, outcome, marked: false, root: None });
                         let batch: Vec<Arrival> = closure.iter().filter_map(load).collect();
                         queue.post(&batch);
                         report.batches += 1;
@@ -325,7 +331,7 @@ impl Loader {
                     Request::Restore(held) => {
                         let started = Instant::now();
                         thread::sleep(delay.draw());
-                        let answer = |(id, _): &(AssetId, u64)| manifest.load(&store, *id, &reads_in).map(|outcome| Arrival { asset: *id, outcome, marked: true });
+                        let answer = |(id, _): &(AssetId, u64)| manifest.load(&store, *id, &reads_in).map(|outcome| Arrival { asset: *id, outcome, marked: true, root: None });
                         let batch: Vec<Arrival> = held.iter().filter_map(answer).collect();
                         queue.post(&batch);
                         report.batches += 1;
