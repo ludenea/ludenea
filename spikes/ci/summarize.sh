@@ -2363,18 +2363,18 @@ case "$spike" in
     done
     ;;
   asset-table-and-loader)
-    echo "The stage of the four claims. A claim's verdict is an identity: every scenario against an oracle written by hand, at 1, 4 and 8 workers."
+    echo "A claim's verdict is an identity: every scenario against an oracle written by hand, at 1, 4 and 8 workers. The gate's cost is a magnitude: it is measured in the release profile alone and judged on one quiet machine, a cell giving the ordinal reading."
     echo
     echo "| Cell | Profile | Size | CPUs | First check | Placement | Small records | Every scenario stands |"
     echo "| --- | --- | --- | --- | --- | --- | --- | --- |"
     for file in "${facts[@]}"; do
-      jq -r '"| \(.cell) | \(if .build.debug_assertions then "unoptimized" else "release" end) | \(.size) | \(.platform.available_parallelism // "n/a") | \([.first_check | to_entries[] | select(.value | type == "object" and has("holds")) | select(.value.holds) | .key] | length) of 6 scenarios hold | \([.placement[] | select(.placement_respected)] | length) of \(.placement | length) crates | \(.enumeration_of_small_records.records) records, \(.enumeration_of_small_records.fell_while_wanted + .enumeration_of_small_records.stayed_without_a_want + .enumeration_of_small_records.order_of_making + .enumeration_of_small_records.round_trip) violations | \(.every_scenario_stands) |"' "$file"
+      jq -r '"| \(.cell) | \(if .build.debug_assertions then "unoptimized" else "release" end) | \(.size) | \(.platform.available_parallelism // "n/a") | \([.first_check | to_entries[] | select(.value | type == "object" and has("holds")) | select(.value.holds) | .key] | length) of 6 scenarios hold | \([.placement[] | select(.placement_respected)] | length) of \(.placement | length) crates | \([.enumeration_of_small_records[].records] | add) records, \([.enumeration_of_small_records[] | .fell_while_wanted + .stayed_without_a_want + .order_of_making + .round_trip + .type_changed + .failed_under_a_new_want + .events + .left] | add) violations | \(.every_scenario_stands) |"' "$file"
     done
     echo
     echo "| Cell | Claim | Verdict | Scenarios | Equal | By a reading | Differ | Controls that differ | One hash across worker counts |"
     echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
     for file in "${facts[@]}"; do
-      jq -r '.cell as $cell | .claims[] | "| \($cell) | \(.claim) | \(.verdict) | \(.scenarios | length) | \([.scenarios[] | select(.standing == "equals its oracle")] | length) | \([.scenarios[] | select(.standing == "differs by a reading of the text alone")] | length) | \([.scenarios[] | select(.standing == "differs from its oracle")] | length) | \([.controls_and_readings[] | select(.kind == "control" and .differs_from_the_oracle)] | length) of \([.controls_and_readings[] | select(.kind == "control")] | length) | \(.one_run_hash_per_scenario_across_worker_counts) |"' "$file"
+      jq -r '.cell as $cell | .claims[] | "| \($cell) | \(.claim) | \(.verdict) | \(.scenarios | length) | \([.scenarios[] | select(.standing == "equals its oracle")] | length) | \([.scenarios[] | select(.standing == "differs, and equals its oracle under another reading")] | length) | \([.scenarios[] | select(.standing == "differs from its oracle")] | length) | \([.controls_and_readings[] | select(.kind == "control" and .differs_from_the_oracle)] | length) of \([.controls_and_readings[] | select(.kind == "control")] | length) | \(.one_run_hash_per_scenario_across_worker_counts) |"' "$file"
     done
     echo
     echo "Run hashes per scenario across the cells of one size (one distinct value means the cells agree):"
@@ -2388,6 +2388,14 @@ case "$spike" in
     echo
     for file in "${facts[@]}"; do
       jq -r '.cell as $cell | .claims[].scenarios[] | select(.standing != "equals its oracle") | "- `\($cell)`, `\(.scenario)` [\(.world)]: \(.standing)."' "$file"
+    done
+    echo
+    echo "The gate's cost on a table of ten thousand assets, as the largest ratio of one evaluation to one tick (no row for a cell in the unoptimized profile):"
+    echo
+    echo "| Cell | Repetitions | Largest ratio | Bound | Under the bound | The copy of the table alone | The case open with the pending record read | Every verdict as stated |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- |"
+    for file in "${facts[@]}"; do
+      jq -r 'select(has("gate_cost")) | "| \(.cell) | \(.gate_cost.repetitions) | \(.gate_cost.largest_ratio) | \(.gate_cost.bound) | \(.gate_cost.under_the_bound) | \(.gate_cost.largest_ratio_of_the_copy_alone) | \(.gate_cost.largest_ratio_of_the_case_open_with_the_pending_record_read) | \(.gate_cost.every_verdict_as_stated) |"' "$file"
     done
     ;;
   *)
