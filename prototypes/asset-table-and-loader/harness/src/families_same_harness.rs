@@ -7,7 +7,7 @@ use asset_loader::Delay;
 use prototype_core::table::BudgetUnit;
 use prototype_core::table::Policy::Required;
 
-use crate::families::{core, loader};
+use crate::families::{KEPT_UNDER_A_FAILED_PARENT, core, kept_under_a_failed_parent, loader};
 use crate::play::{Change, Check, FamilyPlan, Move, Scenario, SetName, WorldPlan};
 use crate::run::{Content, Family, Settings, content};
 
@@ -198,7 +198,8 @@ pub fn mount(settings: &Settings) -> FamilyPlan {
     let own_asset = Scenario::live("mount/own-asset-with-a-dependency", BASE, WorldPlan::new(12).record(4, &["want T parameters source:host required"]))
         .moving(3, Move::Mount(vec!["O.9", "T.9"]))
         .moving(9, Move::Unmount)
-        .control("the arrivals of the unmount are posted one per tick, in identifier order", loader(|options| options.moves_posted_one_per_tick = true));
+        .control("the arrivals of the unmount are posted one per tick, in identifier order", loader(|options| options.moves_posted_one_per_tick = true))
+        .control(KEPT_UNDER_A_FAILED_PARENT, kept_under_a_failed_parent());
     FamilyPlan {
         name: "mount",
         claim: "a mount while worlds exist reaches each world as one revision",
@@ -263,6 +264,11 @@ pub fn budget(settings: &Settings) -> FamilyPlan {
             scenario = scenario.control(ONLY_REPORTS, core(|rules| rules.budget_only_reports = true));
             if *case == "arrival-at-the-tick-of-a-fall" {
                 scenario = scenario.control("the falls before the record", core(|rules| rules.falls_before_record = true));
+            }
+            // The reading not taken, where the sheet names it.
+            let rejects_a_parent = *case == "closure-over-the-budget" || (*candidate != "single-arrival" && ["overlapping-closures", "root-and-dependency"].contains(case));
+            if rejects_a_parent {
+                scenario = scenario.control(KEPT_UNDER_A_FAILED_PARENT, kept_under_a_failed_parent());
             }
             scenarios.push(scenario);
         }

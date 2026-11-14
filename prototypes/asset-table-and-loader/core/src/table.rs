@@ -580,14 +580,16 @@ pub struct Rules {
     /// and wants again. The default lets it replace the type and be the new
     /// load.
     pub type_corrected_by_a_new_maker_alone: bool,
-    /// The wants the core added for the dependencies of a parent that fails
+    /// Not taken, run as a control: the wants the core added for the
+    /// dependencies of a parent that fails, or whose arrival is rejected,
     /// are kept until the parent's last want ends. The default ends them
     /// with the failure: a failed parent has no part in force.
     pub core_wants_kept_under_a_failed_parent: bool,
-    /// The wants of a parent's dependencies are recomputed at the parent's
-    /// own arrival, in identifier order. The default recomputes them once
-    /// the batch's arrivals are applied, so that an arrival of the batch for
-    /// a former dependency is applied whatever the order of the identifiers.
+    /// Not taken, run as a control: the wants of a parent's dependencies are
+    /// recomputed at the parent's own arrival, in identifier order. The
+    /// default recomputes them once the batch's arrivals are applied, so
+    /// that an arrival of the batch for a former dependency is applied
+    /// whatever the order of the identifiers.
     pub core_wants_recomputed_at_each_arrival: bool,
     /// An answer to a restore for an entry no want names never counts as an
     /// answer that differed. The default counts it.
@@ -604,10 +606,11 @@ pub struct Rules {
     /// default leaves nothing for it: it is not in the state extracted at
     /// the tick's end.
     pub a_want_ended_in_its_record_still_leaves: bool,
-    /// A step on a gated world names what its pending record leaves
-    /// unanswered. The default names what the state holds unanswered, the
-    /// pending answers not being applied.
-    pub step_names_what_the_pending_record_leaves: bool,
+    /// Not taken, run as a control: a step on a gated world names what the
+    /// state holds unanswered, the pending answers not being applied. The
+    /// default names the dependencies that keep the gate closed, the pending
+    /// record counted.
+    pub step_names_what_the_state_holds_unanswered: bool,
     /// A type the request names as dropped that the composition has, and of
     /// which the table holds no entry, refuses nothing. The default refuses
     /// the restore by the type's name, whatever the table holds.

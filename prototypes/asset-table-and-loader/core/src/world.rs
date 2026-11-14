@@ -1464,8 +1464,8 @@ impl World {
         let journal = unsafe { &mut *self.graph.journal.get() };
         let unanswered = match gated {
             false => Vec::new(),
-            true if self.table().rules.step_names_what_the_pending_record_leaves => journal.gate_leaves.clone(),
-            true => self.table().required_unanswered(),
+            true if self.table().rules.step_names_what_the_state_holds_unanswered => self.table().required_unanswered(),
+            true => journal.gate_leaves.clone(),
         };
         StepResult {
             ticks_ran: self.tick_done - from,

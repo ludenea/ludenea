@@ -66,9 +66,20 @@ fn without(base: &[&'static str], asset: &str) -> Vec<&'static str> {
     base.iter().copied().filter(|name| name.split('.').next() != Some(asset)).collect()
 }
 
+/// The reading not taken on the wants the core added under a parent that
+/// fails: a control of the scenarios the sheets name it for, in both sheets.
+pub const KEPT_UNDER_A_FAILED_PARENT: &str =
+    "the wants the core added for the dependencies of a parent that is failed, or whose arrival is rejected, stand while that parent holds a want";
+
+pub fn kept_under_a_failed_parent() -> Change {
+    core(|rules| rules.core_wants_kept_under_a_failed_parent = true)
+}
+
 /// The readings the build did not take, and the other reading of each place
 /// where it had to take one: run on a scenario that differs from its oracle,
-/// each alone, so that a difference that is a reading shows as one.
+/// each alone, so that a difference that is a reading shows as one. A point
+/// read two ways and since decided is not among them: the reading not taken
+/// is a control of the scenarios the sheets name it for, and must differ.
 pub fn readings() -> Vec<VariantPlan> {
     let reading = |name: &str, changes: Vec<Change>| VariantPlan { name: name.to_string(), control: false, changes, worlds: Vec::new() };
     vec![
@@ -85,13 +96,10 @@ pub fn readings() -> Vec<VariantPlan> {
         reading("reading: an entry that holds no want takes the type of a want that states another", vec![core(|rules| rules.entry_without_a_want_takes_a_new_type = true)]),
         reading("reading: a want that replaces an entry's type ends the wants held under the former type", vec![core(|rules| rules.type_replacement_ends_the_former_wants = true)]),
         reading("reading: a type is corrected by a new maker alone", vec![core(|rules| rules.type_corrected_by_a_new_maker_alone = true)]),
-        reading("reading: the wants the core added are kept under a parent that fails", vec![core(|rules| rules.core_wants_kept_under_a_failed_parent = true)]),
-        reading("reading: the wants of dependencies recomputed at each parent's own arrival", vec![core(|rules| rules.core_wants_recomputed_at_each_arrival = true)]),
         reading("reading: an answer to a restore for an entry no want names never differs", vec![core(|rules| rules.unwanted_answer_never_differs = true)]),
         reading("reading: a restore that awaits no answer records its new history at the restore", vec![core(|rules| rules.restore_event_at_the_restore_where_nothing_is_awaited = true)]),
         reading("reading: a restore into another composition that drops nothing continues", vec![core(|rules| rules.another_composition_without_a_drop_continues = true)]),
         reading("reading: a want added and ended inside one record still leaves the domain", vec![core(|rules| rules.a_want_ended_in_its_record_still_leaves = true)]),
-        reading("reading: a step on a gated world names what its pending record leaves unanswered", vec![core(|rules| rules.step_names_what_the_pending_record_leaves = true)]),
         reading("reading: a dropped type the composition has, with no entry, refuses nothing", vec![core(|rules| rules.dropped_declared_type_without_an_entry_refuses_nothing = true)]),
         reading("reading: under a budget, an arrival no want names counts in its group", vec![core(|rules| rules.budget_counts_unnamed_arrivals = true)]),
         reading("reading: what a system does is applied at the input fixed point of the next tick", vec![core(|rules| rules.system_applied_at_the_next_input_fixed_point = true)]),
@@ -567,7 +575,8 @@ pub fn revision(settings: &Settings) -> FamilyPlan {
         Scenario::live("revision/former-dependencies-changed-with-their-parent", FIRST, wanting_p()).moving(6, Move::Revision(vec!["D.2", "V.2", "P.3"])).control(
             "the wants of the dependencies a new part no longer lists ended before any arrival of the batch is applied",
             core(|rules| rules.former_dependency_wants_end_before_the_batch = true),
-        ),
+        )
+        .control("the wants of former dependencies end at their parent's arrival", core(|rules| rules.core_wants_recomputed_at_each_arrival = true)),
         Scenario::live("revision/entry-with-no-want-wanted-again", FIRST, released_z().record(6, &["want Z parameters source:tool optional"]))
             .moving(6, Move::Revision(vec!["Z.2"]))
             .control(
@@ -597,7 +606,8 @@ pub fn pending_parent(settings: &Settings) -> FamilyPlan {
             "pending-parent/required",
             world().record(3, &["want P parameters source:host required"]).step(4).record(4, &["arrival P P.1"]).step(4).record(4, &["arrival D D.1"]),
         )
-        .control("the gate leaves out the want the core would add from the part of a pending arrival", core(|rules| rules.gate_leaves_out_core_wants = true)),
+        .control("the gate leaves out the want the core would add from the part of a pending arrival", core(|rules| rules.gate_leaves_out_core_wants = true))
+        .control("the step names what the state holds unanswered", core(|rules| rules.step_names_what_the_state_holds_unanswered = true)),
         Scenario::scripted(
             "pending-parent/optional",
             world()

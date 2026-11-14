@@ -107,7 +107,7 @@ fn a_restore_under_the_content_at_hand_answers_an_entry_with_no_want_and_starts_
     queue.post(&[Arrival::at(A, a).marked(), Arrival::at(B, b).marked()]);
     let still = step(&mut world, 1);
     assert!(still.gated, "a required want the save held unanswered keeps the gate");
-    assert_eq!(still.unanswered, vec![A, B, U], "the step names what the state holds unanswered: a gated world applies nothing");
+    assert_eq!(still.unanswered, vec![U], "the step names what keeps the gate closed, the pending answers counted");
     queue.post(&[Arrival::at(U, a)]);
     assert!(!step(&mut world, 4).gated);
     // Every answer was at the recorded hash, and still the save held an
@@ -129,7 +129,7 @@ fn a_restore_under_the_content_at_hand_answers_an_entry_with_no_want_and_starts_
 }
 
 #[test]
-fn a_step_on_a_gated_world_names_what_the_state_holds_unanswered() {
+fn a_step_on_a_gated_world_names_what_keeps_the_gate_closed_the_pending_record_counted() {
     let (parts, hashes) = parts();
     let (a, b, _) = hashes;
     let (save, _) = saved(&parts, hashes, false);
@@ -141,10 +141,10 @@ fn a_step_on_a_gated_world_names_what_the_state_holds_unanswered() {
         let request = Restore::ContentAtHand { dropped: &[], drop_in_silence: false, types_from: None };
         World::restore(config, &save, Vec::new(), links, request).expect("the restore is admitted")
     };
-    assert_eq!(step(&mut restore(Rules::default()), 1).unanswered, vec![A, B, U]);
-    // The other reading: what the pending record leaves unanswered.
-    let other = Rules { step_names_what_the_pending_record_leaves: true, ..Rules::default() };
-    assert_eq!(step(&mut restore(other), 1).unanswered, vec![U]);
+    assert_eq!(step(&mut restore(Rules::default()), 1).unanswered, vec![U]);
+    // The reading not taken, run as a control: what the state holds unanswered.
+    let other = Rules { step_names_what_the_state_holds_unanswered: true, ..Rules::default() };
+    assert_eq!(step(&mut restore(other), 1).unanswered, vec![A, B, U]);
 }
 
 #[test]

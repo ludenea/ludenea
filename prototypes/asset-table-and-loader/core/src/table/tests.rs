@@ -390,6 +390,29 @@ fn a_parent_that_fails_ends_the_wants_of_its_dependencies() {
     assert_eq!(wants(&kept, D), vec![(Owner::Asset(P), Policy::Required)], "the other reading keeps them until the parent's last want ends");
 }
 
+#[test]
+fn the_wants_of_former_dependencies_end_once_the_arrivals_of_the_batch_are_applied() {
+    let mut parts = Parts::default();
+    let x = parts.part(1, &[]);
+    let changed = parts.part(2, &[]);
+    let first = parts.part(3, &[(X, PARAMETERS)]);
+    let second = parts.part(4, &[]);
+    // The parent's identifier comes before its former dependency's.
+    let run = |rules: Rules| {
+        let mut table = Table::with_rules(rules);
+        apply(&mut table, &parts, vec![want(P, PARAMETERS, HOST, Policy::Required)], vec![Arrival::at(P, first), Arrival::at(X, x)]);
+        apply(&mut table, &parts, Vec::new(), vec![Arrival::at(P, second), Arrival::at(X, changed)]);
+        table
+    };
+    let taken = run(Rules::default());
+    assert_eq!(availability(&taken, X), Some(Availability::Available(changed)), "the reading taken: the former dependency takes its new hash");
+    assert!(wants(&taken, X).is_empty());
+    // The reading not taken, run as a control: the want ends at the parent's
+    // own arrival, and the later arrival names an entry no want names.
+    let at_the_parent = run(Rules { core_wants_recomputed_at_each_arrival: true, ..Rules::default() });
+    assert_eq!(availability(&at_the_parent, X), Some(Availability::Available(x)));
+}
+
 /// Found by reading, shown here: a rule that cannot be built as stated. The
 /// design text has a restore under the content at hand post, with the
 /// answers, an ordinary arrival for an asset of an answer's closure "that
