@@ -1,6 +1,6 @@
 # Agent instructions for Ludenea
 
-Ludenea is an original 2D and 3D game engine, primarily in Rust, at its foundations stage. This public repository receives the engine's code and its released documentation; the project is steered from a private repository. Until the founder releases something here, there is no engine code in this repository, and no engine code, scaffolding or dependency is added without the founder's explicit instruction. The only code is the throwaway research spikes under `spikes/`, governed by the rules below.
+Ludenea is an original 2D and 3D game engine, primarily in Rust, at its foundations stage. This public repository receives the engine's code and its released documentation; the project is steered from a private repository. Until the founder releases something here, there is no engine code in this repository, and no engine code, scaffolding or dependency is added without the founder's explicit instruction. The only code is the throwaway research spikes under `spikes/` and the throwaway prototypes under `prototypes/`, governed by the rules below.
 
 ## Conventions
 
@@ -20,3 +20,13 @@ Ludenea is an original 2D and 3D game engine, primarily in Rust, at its foundati
 - Measurements are published as CI artifacts. Their interpretation is not written in this repository.
 - The research CI stays thin: the workflow calls `spikes/ci/run-spike.sh`, which must keep running unchanged on Linux, macOS and Windows (Git Bash) and must not depend on GitHub Actions features.
 - Spikes build warning-free and pass `cargo test` at the pinned toolchain. A spike whose logic is not trivial carries one runnable self-check.
+
+## Prototypes
+
+`prototypes/` holds the throwaway prototypes of the research program. Read [`prototypes/README.md`](prototypes/README.md) first.
+
+- A prototype is larger than a spike: it takes several claims of one design at once, to check how its mechanisms meet. It lives in `prototypes/<slug>/`, named after what it builds, as a Cargo workspace of its own, with a README stating in plain words what it measures, its hypothesis, its method, its environment and its result.
+- A prototype is throwaway: never product code, never a first version of the engine, never a direction it takes. Nothing moves from a prototype into engine code: that path goes through the architecture and implementation planning held in the steering repository. A prototype is built only on the founder's instruction.
+- A prototype shares the pinned toolchain of `spikes/`, the reference workload and the research CI, and nothing else. It may stand on the code of earlier spikes by copying it, and says so in its README; the spikes stay as measured.
+- The rules of the spikes on dependencies, licensing, plain words and published measurements hold for a prototype too. It builds warning-free and passes `cargo test` at the pinned toolchain, run from `spikes/` with `--manifest-path`.
+- The research CI runs a prototype by its name through `spikes/ci/run-spike.sh`, as it runs a spike.
