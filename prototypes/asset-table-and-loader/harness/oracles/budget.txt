@@ -598,3 +598,338 @@ record arrival B B.1
 entry B parameters available B.1
 want source:host optional
 event arrived B B.1
+
+# ---------------------------------------------------------------------------
+# The fourth candidate, "derived-closure": the unit the design text proposes,
+# with the count and the rule on the wants the core adds that it proposes.
+# Eight scenarios: the six cases above, and two cases that run under this
+# candidate alone. Written by hand from the proposed text, by a writer who
+# has not read the build. Nothing above this line is changed, and no state
+# is taken from it: the oracles above stand under the other reading of the
+# wants the core adds, and under a count that holds the entries that fall.
+#
+# The candidate writes no mark: an arrival is written as under
+# "single-arrival". The sizes are a stand-in for the size the text proposes
+# that an arrival names and that an entry holds: those of the sheet's table,
+# with R.2 2 000, whose part lists D and X.
+#
+# At a fixed point, in this order: the commands of the record; the groups,
+# derived and each decided before any want of the batch is added and before
+# any arrival is applied; the wants that the parts of the accepted arrivals
+# list, and those alone; the accepted arrivals, in identifier order; the
+# wants the core added, recomputed from the parts in force; the falls.
+#
+# The closure of a root is read from the part in force and from the part of
+# the arrival, from both where an asset has both. The wants that a rejected
+# part lists are not added: an asset that a rejected part alone lists is
+# named by no want, and its rejected arrival leaves no entry, no failure and
+# no event. The result of the step names every rejected arrival all the
+# same, as a "rejected" line.
+#
+# Reading taken: an arrival is applied or rejected at its place in the
+# identifier order, so the event of a rejected root that becomes failed
+# stands among the events of the accepted arrivals, by identifier.
+# The other reading: the failures of the rejected roots stand before the
+# events of the accepted arrivals, or after them.
+#
+# Reading taken: the groups are tested in the identifier order of their
+# roots alone, a root under an optional want before a root under a required
+# one where it stands first. The text leaves the other order open.
+#
+# Reading taken: the batch of a revision holds an arrival for each asset
+# that changed and for each asset that a changed part newly lists, and none
+# for a dependency that did not change and that the table holds available.
+# The other reading adds such an arrival to the record; it changes nothing.
+#
+# Reading taken: a want made on an entry the table holds available is
+# answered already, and no arrival follows it.
+# The other reading: an arrival at the hash the entry holds follows it, at
+# the next tick; it changes nothing.
+
+# Case "root-and-dependency" under "derived-closure". A budget of 10 000
+# bytes. K is held, 5 000 bytes. R lists D: the closure of R is 8 000 bytes.
+
+scenario budget/root-and-dependency/derived-closure
+tick 0
+entry K parameters unavailable
+want contributor:base required
+# Count 0. One root, K, whose group is its own arrival: 5 000, within.
+tick 1
+record arrival K K.1
+entry K parameters available K.1
+want contributor:base required
+event arrived K K.1
+tick 3
+record want R parameters source:host required
+entry K parameters available K.1
+want contributor:base required
+entry R parameters unavailable
+want source:host required
+# Count 5 000. Roots K and R. The group of K is empty. The closure of R,
+# read from the part of its arrival, is R and D, and its group is the
+# arrivals of D and of R: 5 000 and 6 000 and 2 000 is 13 000, above the
+# budget, rejected. No arrival is accepted, so no want is added: D, which
+# the rejected part alone lists, is named by no want and gets no entry, no
+# failure and no event. R, the root, is under a required want: it becomes
+# failed and the step names it. No want is added on R afterwards, so
+# nothing retries its load.
+tick 4
+record arrival D D.1
+record arrival R R.1
+rejected D D.1
+rejected R R.1
+entry K parameters available K.1
+want contributor:base required
+entry R parameters failed over-budget
+want source:host required
+event failed R over-budget
+names-failed R over-budget
+
+# Case "closure-over-the-budget" under "derived-closure". A budget of 7 000
+# bytes and an empty table. The closure of R is 8 000 bytes.
+
+scenario budget/closure-over-the-budget/derived-closure
+tick 0
+tick 3
+record want R parameters source:host required
+entry R parameters unavailable
+want source:host required
+# Count 0. One root, R. Its closure, read from the part of its arrival, is
+# R and D, and its group is the arrivals of D and of R: 8 000, above the
+# budget of 7 000, rejected. No want is added: D is named by no want and
+# gets no entry, no failure and no event. R becomes failed, under a required
+# want, and the step names it. Nothing of the closure is in the table.
+tick 4
+record arrival D D.1
+record arrival R R.1
+rejected D D.1
+rejected R R.1
+entry R parameters failed over-budget
+want source:host required
+event failed R over-budget
+names-failed R over-budget
+
+# Case "small-beside-large" under "derived-closure". A budget of 10 000
+# bytes. K is held, 5 000 bytes. B is 9 000 bytes and S is 1 000.
+
+scenario budget/small-beside-large/derived-closure
+tick 0
+entry K parameters unavailable
+want contributor:base required
+tick 1
+record arrival K K.1
+entry K parameters available K.1
+want contributor:base required
+event arrived K K.1
+tick 3
+record want B parameters source:host optional
+record want S parameters source:host required
+entry B parameters unavailable
+want source:host optional
+entry K parameters available K.1
+want contributor:base required
+entry S parameters unavailable
+want source:host required
+# Count 5 000. Roots B, K and S, each a closure of one asset. The group of
+# B: 5 000 and 9 000 is 14 000, above the budget, rejected. The group of K
+# is empty. The group of S: 5 000 and 1 000 is 6 000, within, accepted. The
+# small asset is not failed for the size of the large one. B is the root of
+# a rejected group and a want names it: it becomes failed. That want is
+# optional, so the step does not name it.
+tick 4
+record arrival B B.1
+record arrival S S.1
+rejected B B.1
+entry B parameters failed over-budget
+want source:host optional
+entry K parameters available K.1
+want contributor:base required
+entry S parameters available S.1
+want source:host required
+event failed B over-budget
+event arrived S S.1
+
+# Case "overlapping-closures" under "derived-closure". A budget of 10 000
+# bytes and an empty table. V lists N and X: its closure is 12 000 bytes.
+# W lists N: its closure is 3 000 bytes. N stands in both.
+
+scenario budget/overlapping-closures/derived-closure
+tick 0
+tick 3
+record want V parameters source:host optional
+record want W parameters source:host required
+entry V parameters unavailable
+want source:host optional
+entry W parameters unavailable
+want source:host required
+# Count 0. Roots V and W. The group of V is the arrivals of N, V and X:
+# 12 000, above the budget, rejected. The group of W is the arrivals of N
+# and W, none of them accepted yet: 3 000, within, accepted. N stands in a
+# group that is accepted, so it is applied; V and X stand in the rejected
+# group alone. The wants of the accepted parts are added: the want of N
+# under W, required. The part of V is rejected, so its wants are not: N
+# holds no want of V, and X, named by no want, gets no entry, no failure and
+# no event. V, the root of the rejected group, becomes failed at its place
+# in the identifier order; its want is optional, so the step names nothing.
+tick 4
+record arrival N N.1
+record arrival V V.1
+record arrival W W.1
+record arrival X X.1
+rejected V V.1
+rejected X X.1
+entry N parameters available N.1
+want asset:W required
+entry V parameters failed over-budget
+want source:host optional
+entry W parameters available W.1
+want source:host required
+event arrived N N.1
+event failed V over-budget
+event arrived W W.1
+
+# Case "revision-that-grows" under "derived-closure". A budget of 10 000
+# bytes. K and S are held, 6 000 bytes. The revision brings K.2, 11 000
+# bytes, and S.2, 2 000 bytes.
+
+scenario budget/revision-that-grows/derived-closure
+tick 0
+entry K parameters unavailable
+want contributor:base required
+entry S parameters unavailable
+want contributor:base required
+# Count 0. Roots K and S. The group of K: 5 000, within. The group of S:
+# 6 000, within.
+tick 1
+record arrival K K.1
+record arrival S S.1
+entry K parameters available K.1
+want contributor:base required
+entry S parameters available S.1
+want contributor:base required
+event arrived K K.1
+event arrived S S.1
+# Count 6 000. Roots K and S. The group of K: 11 000 in place of 5 000 is
+# 12 000, above the budget, rejected. K is in force, so it stays as it was,
+# with no event. The group of S: 2 000 in place of 1 000 is 7 000, within,
+# accepted. The small replacement is not withheld for the size of the other.
+tick 4
+record arrival K K.2
+record arrival S S.2
+rejected K K.2
+entry K parameters available K.1
+want contributor:base required
+entry S parameters available S.2
+want contributor:base required
+event changed S S.1 S.2
+
+# Case "arrival-at-the-tick-of-a-fall" under "derived-closure". A budget of
+# 10 000 bytes and an empty table. K is 5 000 bytes and B is 9 000.
+
+scenario budget/arrival-at-the-tick-of-a-fall/derived-closure
+tick 0
+tick 2
+record want K parameters source:host optional
+entry K parameters unavailable
+want source:host optional
+tick 3
+record arrival K K.1
+entry K parameters available K.1
+want source:host optional
+event arrived K K.1
+# The last want of K ends. Its entry stays, available and with no want,
+# until the fixed point of tick 6.
+tick 5
+record release K source:host
+record want B parameters source:host optional
+entry B parameters unavailable
+want source:host optional
+entry K parameters available K.1
+# K holds no want once the commands of the record are applied, its last
+# want ended during tick 5, and the closure of the one root, B, does not
+# reach it: it falls at this fixed point whatever the test gives, and the
+# count leaves it out. Count 0. The group of B: 9 000, within, accepted. K
+# then falls.
+tick 6
+record arrival B B.1
+entry B parameters available B.1
+want source:host optional
+event arrived B B.1
+# B is released and wanted again by one record: its entry holds a want once
+# the record is applied, and it stays available. The want is answered
+# already, so no arrival follows it and tick 9 has no record.
+tick 8
+record release B source:host
+record want B parameters source:host optional
+entry B parameters available B.1
+want source:host optional
+
+# Case "replacement-with-a-new-dependency" under "derived-closure" alone. A
+# budget of 10 000 bytes. R.1 lists D: 8 000 bytes held. The revision brings
+# R.2, 2 000 bytes, which lists D and X; X is 9 000 bytes.
+
+scenario budget/replacement-with-a-new-dependency/derived-closure
+tick 0
+entry R parameters unavailable
+want contributor:base required
+# Count 0. One root, R, whose group is the arrivals of D and of R: 8 000,
+# within, accepted. The want of D under R is added, required, and both
+# arrivals are applied.
+tick 1
+record arrival D D.1
+record arrival R R.1
+entry D parameters available D.1
+want asset:R required
+entry R parameters available R.1
+want contributor:base required
+event arrived D D.1
+event arrived R R.1
+# The batch of the revision holds R.2 and X.1. Count 8 000. One root, R.
+# Its closure, read from the part in force and from the part of its
+# arrival, is R, D and X, and its group is the arrivals of R and of X:
+# 2 000 in place of 2 000, and 9 000, is 17 000, above the budget,
+# rejected. R is in force and stays as it was, with no event. The wants of
+# the rejected part are not added: X is named by no want and gets no entry,
+# no failure and no event. The part in force of R is still R.1, which lists
+# D: D keeps its want. The table is as it was, the tick emits no event, and
+# the step names the two rejected arrivals and no failed asset. The
+# replacement is not offered again.
+tick 4
+record arrival R R.2
+record arrival X X.1
+rejected R R.2
+rejected X X.1
+entry D parameters available D.1
+want asset:R required
+entry R parameters available R.1
+want contributor:base required
+
+# Case "two-closures-that-fit-alone" under "derived-closure" alone. A budget
+# of 10 000 bytes and an empty table. B is 9 000 bytes and D is 6 000: each
+# fits alone, and the two do not fit together.
+
+scenario budget/two-closures-that-fit-alone/derived-closure
+tick 0
+tick 3
+record want B parameters source:host optional
+record want D parameters source:host required
+entry B parameters unavailable
+want source:host optional
+entry D parameters unavailable
+want source:host required
+# Count 0. Roots B and D, tested in identifier order. The group of B:
+# 9 000, within, accepted. The group of D: 9 000 and 6 000 is 15 000, above
+# the budget, rejected. The optional closure, whose root stands first, takes
+# the room of the required one. D is a root that a required want names: it
+# becomes failed and the step names it.
+tick 4
+record arrival B B.1
+record arrival D D.1
+rejected D D.1
+entry B parameters available B.1
+want source:host optional
+entry D parameters failed over-budget
+want source:host required
+event arrived B B.1
+event failed D over-budget
+names-failed D over-budget

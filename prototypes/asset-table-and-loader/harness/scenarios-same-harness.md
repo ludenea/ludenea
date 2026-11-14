@@ -142,6 +142,18 @@ The claim: an excess over a world's budget is rejected identically. The design t
   The arrivals of one record that name one root are a group. The groups are tested whole, in the identifier order of their roots, each against the count as the groups accepted before it leave it: a group is accepted where the count with all its arrivals is within the budget, and rejected otherwise. Every group is decided before the first arrival is applied; the arrivals are then applied or rejected in identifier order.
 - **`whole-drain`**. The arrivals to a hash of one record are one group, accepted where the count with all of them is within the budget and rejected otherwise, every one of them.
 
+**A fourth candidate, `derived-closure`.** The design text now proposes a unit, with a count and a rule on the wants the core adds, and this candidate is that proposal, restated here for the comparison. The three candidates above are as they were: their definitions, their count and their oracles do not change, and what they share, stated above, stays theirs. The fourth differs from them on the points below and shares the rest. Its scenarios are `budget/<case>/derived-closure`: the six cases below, and two more cases that run under this candidate alone.
+
+- **No mark.** The record is the one of `single-arrival`: an arrival is written `arrival <asset> <hash>`. The core derives the bounds of a closure itself, from the parts it holds at the fixed point.
+- **When, and in which order.** At a fixed point, once the commands of the record are applied, the core derives the groups defined below and decides each of them, before it adds any want from the parts of the batch and before any arrival is applied. It then adds the wants that the parts of the batch list, to any depth, the parts of the rejected arrivals left out. It then goes through the arrivals in identifier order, applying each but the rejected ones; a rejected arrival that fails its asset does so at its own place in that order, which is the place of its event. It then recomputes the wants it added from the parts the table then holds available.
+- **The wants the core adds follow the parts in force.** The wants that a rejected part lists are not added. At the recomputation the want of a dependency that the part in force no longer lists ends. A parent that is failed, or that never rose, owns no such want: the wants it owned on its dependencies end at the fixed point that failed it, and a dependency left with no want falls at the next tick as any asset does.
+- **The count** of a world is the sum of the sizes of the contents its table holds available, less the entries that fall at the same fixed point whatever the test gives: an entry that holds no want once the commands of the record are applied, whose last want ended during the tick before, and that the closure of no root reaches.
+- **Roots, closures and groups.** A root is an asset the table holds under a want the core did not add: a want of an entity or of the world's own entry. The closure of a root is the root with every asset reached from it through the lists of dependencies, read for each asset from the part in force and from the part of its arrival to a hash in the record, from both where it has both; it stops at an asset that has neither. The group of a root is the set of the arrivals to a hash of the record whose asset stands in its closure. An arrival to failed stands in no group, and neither does an arrival at the hash the entry holds, nor an arrival whose asset stands in the closure of no root: each is applied or changes nothing as it would without a budget.
+- **The test.** The groups are tested in the identifier order of their roots. A group is accepted where the count stays within the budget once every arrival of the group that no earlier group accepted is counted, an arrival at another hash of an asset the table holds available counting the new size in place of the former one; its arrivals are then part of the count. Otherwise the group is rejected. A count equal to the budget is within it. An arrival that stands in a group is applied where at least one group that holds it is accepted, and rejected where every group that holds it is rejected.
+- **A rejected arrival** is not applied, and the result of the step names it. Where the table holds the asset available, the entry stays as it was and no event is emitted. An asset that a rejected part alone lists is named by no want: its rejected arrival leaves no entry, no failure and no event. An asset the table does not hold available and that a want names, the root of a rejected group, an asset wanted in its own right or a dependency that a part in force lists, becomes failed with the reason `over-budget` and the event of a failure. Such a failure is an answer: the gate opens, the step names the asset where a required want names it, and a want added on the entry retries the load.
+- **What a rejection leaves.** A rejected first load leaves its root failed, and nothing of its closure in the table but what another accepted group or a part in force holds. A rejected replacement leaves its parent at its former part, with the wants of that part and no trace of what the new part listed.
+- **The size is a stand-in.** The design text proposes that an arrival names the size of what it puts in force and that the entry holds it. That is neither built nor written here: the format of an oracle writes no size, the sizes are those of the table below, and the build reads the length of the part, as it does for the three other candidates.
+
 Assets `B`, `D`, `K`, `N`, `R`, `S`, `V`, `W`, `X`. The pool is `K`, `R`, `S`, `W`. A live loading capability over a loose store written by the stand-in pipeline. One world per scenario, which names no set, with a budget of 10 000 bytes but where a case says otherwise.
 
 | Content | Size in bytes | Dependencies its part lists |
@@ -152,6 +164,7 @@ Assets `B`, `D`, `K`, `N`, `R`, `S`, `V`, `W`, `X`. The pool is `K`, `R`, `S`, `
 | `K.2` | 11 000 | none |
 | `N.1` | 2 000 | none |
 | `R.1` | 2 000 | `D` |
+| `R.2` | 2 000 | `D`, `X` |
 | `S.1` | 1 000 | none |
 | `S.2` | 2 000 | none |
 | `V.1` | 1 000 | `N`, `X` |
@@ -167,6 +180,16 @@ The instance's manifest holds the first content of every asset. The cases:
 - **`revision-that-grows`**. The contributor `base` wants `K` and `S` as required at tick 0. Between tick 3 and tick 4 a revision that holds `K.2` and `S.2` in place of `K.1` and `S.1` is put in place. Run to tick 8.
 - **`arrival-at-the-tick-of-a-fall`**. An empty table at tick 0. Record of tick 2: `want K parameters source:host optional`. Record of tick 5: `release K source:host`, then `want B parameters source:host optional`. Record of tick 8: `release B source:host`, then `want B parameters source:host optional`. Run to tick 12.
 
+Two more cases run under `derived-closure` alone; the three other candidates do not run them:
+
+- **`replacement-with-a-new-dependency`**. A budget of 10 000 bytes. The contributor `base` wants `R` as required at tick 0. Between tick 3 and tick 4 a revision that holds `R.2` in place of `R.1` is put in place. Run to tick 8.
+- **`two-closures-that-fit-alone`**. A budget of 10 000 bytes, and an empty table at tick 0. Record of tick 3: `want B parameters source:host optional`, then `want D parameters source:host required`. Run to tick 8.
+
 Control of every case, under every candidate: the budget only reports, and every arrival is applied. A second control for `arrival-at-the-tick-of-a-fall`: the falls before the record.
+
+Controls under `derived-closure`. The control of every case, the budget only reports, is a control of seven of its eight cases: under this candidate `arrival-at-the-tick-of-a-fall` rejects no arrival, so that control cannot differ there and is not named for it.
+
+- `arrival-at-the-tick-of-a-fall`, its one control, in place of the two it has under the three other candidates: the count holds the entries that fall at the same fixed point.
+- `root-and-dependency`, `closure-over-the-budget` and `replacement-with-a-new-dependency`, a second control, the same for the three: the wants that a rejected part lists are added before the arrivals are applied.
 
 **What the family leaves out.** A prepared form built once, which the text counts with its part. A budget changed during a run. A restore, under the recorded content or under the content at hand. A world under a named set. A gated world whose pending record gathers several batches. A mark that passes through the queue where a later arrival replaces an earlier one.
