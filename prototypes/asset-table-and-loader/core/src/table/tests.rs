@@ -7,6 +7,7 @@ const D: AssetId = 0x10;
 const F: AssetId = 0x18;
 const A: AssetId = 0x20;
 const P: AssetId = 0x30;
+const X: AssetId = 0x40;
 const HOST: Owner = Owner::World(Maker::Source(3));
 const TOOL: Owner = Owner::World(Maker::Source(5));
 const BASE: Owner = Owner::World(Maker::Contributor(7));
@@ -549,6 +550,258 @@ fn an_arrival_at_another_hash_counts_the_new_size_in_place_of_the_former_one() {
     let applied = apply(&mut table, &parts, Vec::new(), vec![Arrival::failed(A, REASON_ARTIFACT_GONE), Arrival::at(P, large)]);
     assert!(applied.rejected.is_empty());
     assert_eq!(applied.unnamed_arrivals, 1);
+}
+
+/// The rules under the unit of a rejection the design text proposes.
+fn proposed() -> Rules {
+    Rules { budget_unit: BudgetUnit::DerivedClosure, ..Rules::default() }
+}
+
+/// The control of that unit under which the wants a rejected part lists are
+/// added before the arrivals are applied.
+fn with_the_wants_of_rejected_parts() -> Rules {
+    Rules { wants_of_rejected_parts_added: true, ..proposed() }
+}
+
+#[test]
+fn the_proposed_unit_rejects_the_closure_of_a_root_and_leaves_nothing_of_it() {
+    let mut parts = Parts::default();
+    let d = parts.sized(1, &[], 60);
+    let a = parts.sized(2, &[], 100);
+    let p = parts.sized(3, &[(D, PARAMETERS)], 80);
+    let over = REASON_OVER_BUDGET;
+    // A table under a budget that wants `A` and `P`, whose part lists `D`,
+    // and one record that holds the three arrivals. None names a root.
+    let run = |rules: Rules, budget: u64| {
+        let mut table = Table::with_rules(rules);
+        table.budget = Some(budget);
+        apply(&mut table, &parts, vec![want(A, PARAMETERS, HOST, Policy::Optional), want(P, PARAMETERS, HOST, Policy::Required)], Vec::new());
+        let applied = apply(&mut table, &parts, Vec::new(), vec![Arrival::at(D, d), Arrival::at(A, a), Arrival::at(P, p)]);
+        (table, applied)
+    };
+    // The roots are `A` and `P`, tested in that order and in no other: the
+    // group of `A`, an optional want, brings the count to 100, and the group
+    // of `P`, its own arrival with the arrival of `D`, would bring it to 240.
+    let (mut table, applied) = run(proposed(), 150);
+    assert_eq!(applied.rejected, vec![(D, d), (P, p)], "the step names every rejected arrival");
+    assert_eq!(applied.events, vec![Event::Arrived { asset: A, hash: a }, Event::Failed { asset: P, code: over }]);
+    assert_eq!(availability(&table, A), Some(Availability::Available(a)));
+    assert_eq!(availability(&table, P), Some(Availability::Failed(over)), "the root of a rejected group fails");
+    assert_eq!(availability(&table, D), None, "an asset a rejected part alone lists is named by no want: no entry, no failure, no event");
+    assert_eq!(applied.failed_required, vec![(P, over)]);
+    assert!(apply(&mut table, &parts, Vec::new(), Vec::new()).fallen.is_empty());
+    // The control: the wants the rejected part lists are added before the
+    // arrivals. The dependency fails under the want of its rejected parent,
+    // is named, loses that want and falls at the next tick.
+    let (mut table, applied) = run(with_the_wants_of_rejected_parts(), 150);
+    assert_eq!(applied.rejected, vec![(D, d), (P, p)]);
+    assert_eq!(applied.events, vec![Event::Failed { asset: D, code: over }, Event::Arrived { asset: A, hash: a }, Event::Failed { asset: P, code: over }]);
+    assert_eq!(applied.failed_required, vec![(D, over), (P, over)]);
+    assert_eq!(availability(&table, D), Some(Availability::Failed(over)));
+    assert!(wants(&table, D).is_empty());
+    assert_eq!(apply(&mut table, &parts, Vec::new(), Vec::new()).fallen, vec![D]);
+    // A count equal to the budget is within it.
+    let (table, applied) = run(proposed(), 240);
+    assert!(applied.rejected.is_empty());
+    assert!(table.entries.values().all(|entry| matches!(entry.availability, Availability::Available(_))));
+    assert_eq!(wants(&table, D), vec![(Owner::Asset(P), Policy::Required)], "the wants of an accepted part are added");
+    // The control: the budget only reports, and every arrival is applied.
+    let (table, applied) = run(Rules { budget_only_reports: true, ..proposed() }, 150);
+    assert_eq!(applied.rejected, vec![(D, d), (P, p)]);
+    assert!(table.entries.values().all(|entry| matches!(entry.availability, Availability::Available(_))));
+    assert_eq!(wants(&table, D), vec![(Owner::Asset(P), Policy::Required)]);
+}
+
+#[test]
+fn an_arrival_that_two_closures_hold_is_applied_where_one_of_them_is_accepted() {
+    let mut parts = Parts::default();
+    let d = parts.sized(1, &[], 200);
+    let x = parts.sized(2, &[], 900);
+    let a = parts.sized(3, &[(D, PARAMETERS), (X, PARAMETERS)], 100);
+    let p = parts.sized(4, &[(D, PARAMETERS)], 100);
+    let over = REASON_OVER_BUDGET;
+    // `A` and `P` both list `D`, and `A` lists `X` too. The group of `A`
+    // would bring the count to 1200; the group of `P` brings it to 300.
+    let mut table = Table::with_rules(proposed());
+    table.budget = Some(1000);
+    apply(&mut table, &parts, vec![want(A, PARAMETERS, HOST, Policy::Optional), want(P, PARAMETERS, HOST, Policy::Required)], Vec::new());
+    let applied = apply(&mut table, &parts, Vec::new(), vec![Arrival::at(D, d), Arrival::at(A, a), Arrival::at(P, p), Arrival::at(X, x)]);
+    assert_eq!(applied.rejected, vec![(A, a), (X, x)], "the arrival of `D` is rejected with the group of `A` and accepted with the group of `P`");
+    // A rejected arrival that fails its asset does so at its own place in
+    // the identifier order, which is the place of its event.
+    assert_eq!(applied.events, vec![Event::Arrived { asset: D, hash: d }, Event::Failed { asset: A, code: over }, Event::Arrived { asset: P, hash: p }]);
+    assert_eq!(wants(&table, D), vec![(Owner::Asset(P), Policy::Required)], "the accepted part alone gives its want: the failed root owns none");
+    assert_eq!(availability(&table, X), None);
+    assert!(applied.failed_required.is_empty(), "the rejected root is under an optional want");
+}
+
+#[test]
+fn the_room_of_an_entry_that_falls_is_free_for_the_arrivals_of_the_same_record() {
+    let mut parts = Parts::default();
+    let a = parts.sized(1, &[], 50);
+    let p = parts.sized(2, &[], 90);
+    // `A` is in force, and its last want ends in the record that wants `P`:
+    // it falls at the fixed point that holds the arrival of `P`.
+    let run = |rules: Rules| {
+        let mut table = Table::with_rules(rules);
+        table.budget = Some(100);
+        apply(&mut table, &parts, vec![want(A, PARAMETERS, HOST, Policy::Optional)], vec![Arrival::at(A, a)]);
+        apply(&mut table, &parts, vec![release(A, HOST), want(P, PARAMETERS, HOST, Policy::Optional)], Vec::new());
+        let applied = apply(&mut table, &parts, Vec::new(), vec![Arrival::at(P, p)]);
+        (table, applied)
+    };
+    let (table, applied) = run(proposed());
+    assert!(applied.rejected.is_empty());
+    assert_eq!(applied.fallen, vec![A]);
+    assert_eq!(availability(&table, P), Some(Availability::Available(p)));
+    // The control, and the three candidates: the count holds the entry that
+    // falls, and the arrival is rejected for an asset that leaves the table.
+    for rules in [Rules { budget_count_holds_the_falling_entries: true, ..proposed() }, Rules::default()] {
+        let (table, applied) = run(rules);
+        assert_eq!(applied.rejected, vec![(P, p)]);
+        assert_eq!(applied.fallen, vec![A]);
+        assert_eq!(availability(&table, P), Some(Availability::Failed(REASON_OVER_BUDGET)));
+    }
+    // An entry whose last want ends in the record of the arrival itself does
+    // not fall at that fixed point: its room is not free.
+    let mut table = Table::with_rules(proposed());
+    table.budget = Some(100);
+    apply(&mut table, &parts, vec![want(A, PARAMETERS, HOST, Policy::Optional), want(P, PARAMETERS, HOST, Policy::Optional)], vec![Arrival::at(A, a)]);
+    let applied = apply(&mut table, &parts, vec![release(A, HOST)], vec![Arrival::at(P, p)]);
+    assert_eq!(applied.rejected, vec![(P, p)]);
+    assert!(applied.fallen.is_empty());
+}
+
+/// An entry due to fall that a closure reaches stays counted, whatever its
+/// group becomes: the count errs on the side of a rejection. The second half
+/// shows what that costs, and it is the text's own choice: a root that does
+/// not reach the entry is rejected for the room of an asset that leaves the
+/// table at the same fixed point.
+#[test]
+fn an_entry_due_to_fall_that_a_closure_reaches_stays_counted() {
+    let mut parts = Parts::default();
+    let d = parts.sized(1, &[], 600);
+    let a = parts.sized(2, &[], 500);
+    let p = parts.sized(3, &[(D, PARAMETERS)], 500);
+    // `D` is in force and its last want ended during the tick before; `P`,
+    // whose part lists `D`, is wanted and unanswered, and so is `A` where
+    // `beside` is set.
+    let run = |budget: u64, beside: bool| {
+        let mut table = Table::with_rules(proposed());
+        table.budget = Some(budget);
+        apply(&mut table, &parts, vec![want(D, PARAMETERS, HOST, Policy::Optional)], vec![Arrival::at(D, d)]);
+        let mut commands = vec![release(D, HOST), want(P, PARAMETERS, HOST, Policy::Required)];
+        let mut arrivals = vec![Arrival::at(P, p)];
+        if beside {
+            commands.push(want(A, PARAMETERS, HOST, Policy::Optional));
+            arrivals.push(Arrival::at(A, a));
+        }
+        apply(&mut table, &parts, commands, Vec::new());
+        let applied = apply(&mut table, &parts, Vec::new(), arrivals);
+        (table, applied)
+    };
+    // The closure of `P` reaches `D` through the part of its arrival: the
+    // count is 600, and `P` would bring it to 1100. No want is added from
+    // the rejected part, so `D` falls at this same fixed point.
+    let (table, applied) = run(1000, false);
+    assert_eq!(applied.rejected, vec![(P, p)]);
+    assert_eq!(applied.fallen, vec![D]);
+    assert_eq!(availability(&table, P), Some(Availability::Failed(REASON_OVER_BUDGET)));
+    // With room for both, the part is put in force and `D` does not fall.
+    let (table, applied) = run(1100, false);
+    assert!(applied.rejected.is_empty() && applied.fallen.is_empty());
+    assert_eq!(wants(&table, D), vec![(Owner::Asset(P), Policy::Required)]);
+    // `A` reaches nothing but itself and would fit once `D` has left. It is
+    // tested first, against a count that holds `D`, and is rejected too.
+    let (table, applied) = run(1000, true);
+    assert_eq!(applied.rejected, vec![(A, a), (P, p)]);
+    assert_eq!(applied.fallen, vec![D]);
+    assert!(table.entries.values().all(|entry| entry.availability == Availability::Failed(REASON_OVER_BUDGET)));
+}
+
+#[test]
+fn a_rejected_replacement_leaves_its_parent_at_its_former_part_and_no_trace_of_the_new_one() {
+    let mut parts = Parts::default();
+    let d = parts.sized(1, &[], 600);
+    let x = parts.sized(2, &[], 900);
+    let first = parts.sized(3, &[(D, PARAMETERS)], 200);
+    let second = parts.sized(4, &[(D, PARAMETERS), (X, PARAMETERS)], 200);
+    let alone = parts.sized(5, &[], 500);
+    let over = REASON_OVER_BUDGET;
+    // `P` is in force at a part that lists `D`: the count is 800.
+    let held = |rules: Rules, budget: u64| {
+        let mut table = Table::with_rules(rules);
+        table.budget = Some(budget);
+        apply(&mut table, &parts, vec![want(P, PARAMETERS, BASE, Policy::Required)], vec![Arrival::at(D, d), Arrival::at(P, first)]);
+        table
+    };
+    // A replacement whose part lists a new dependency, `X`: the group would
+    // bring the count to 1700.
+    let replaced = |rules: Rules, budget: u64| {
+        let mut table = held(rules, budget);
+        let before = table.canonical_bytes();
+        let applied = apply(&mut table, &parts, Vec::new(), vec![Arrival::at(P, second), Arrival::at(X, x)]);
+        let unchanged = table.canonical_bytes() == before;
+        (table, applied, unchanged)
+    };
+    let (table, applied, unchanged) = replaced(proposed(), 1000);
+    assert_eq!(applied.rejected, vec![(P, second), (X, x)]);
+    assert!(unchanged, "the parent stays at its former part, with the wants of that part and no trace of what the new part listed");
+    assert_eq!(wants(&table, D), vec![(Owner::Asset(P), Policy::Required)]);
+    assert!(applied.events.is_empty() && applied.failed_required.is_empty() && applied.left.is_empty());
+    // The control: the wants the rejected part lists are added before the
+    // arrivals. The new dependency fails under that want, is named, loses
+    // the want and falls at the next tick.
+    let (mut table, applied, unchanged) = replaced(with_the_wants_of_rejected_parts(), 1000);
+    assert_eq!(applied.rejected, vec![(P, second), (X, x)]);
+    assert!(!unchanged);
+    assert_eq!(applied.events, vec![Event::Failed { asset: X, code: over }]);
+    assert_eq!(applied.failed_required, vec![(X, over)]);
+    assert!(wants(&table, X).is_empty());
+    assert_eq!(wants(&table, D), vec![(Owner::Asset(P), Policy::Required)]);
+    assert_eq!(apply(&mut table, &parts, Vec::new(), Vec::new()).fallen, vec![X]);
+    // Within the budget, the replacement is put in force with its closure.
+    let (table, applied, _) = replaced(proposed(), 1700);
+    assert!(applied.rejected.is_empty());
+    assert_eq!(availability(&table, P), Some(Availability::Available(second)));
+    assert_eq!(wants(&table, X), vec![(Owner::Asset(P), Policy::Required)]);
+    // A rejected replacement that no longer lists `D`: the former part is
+    // still in force, and `D` keeps the want it gives.
+    let mut table = held(proposed(), 1000);
+    let applied = apply(&mut table, &parts, Vec::new(), vec![Arrival::at(P, alone)]);
+    assert_eq!(applied.rejected, vec![(P, alone)]);
+    assert_eq!(wants(&table, D), vec![(Owner::Asset(P), Policy::Required)]);
+}
+
+#[test]
+fn a_closure_is_read_from_the_part_in_force_and_from_the_part_of_the_arrival() {
+    let mut parts = Parts::default();
+    let small = parts.sized(1, &[], 600);
+    let large = parts.sized(2, &[], 900);
+    let first = parts.sized(3, &[(D, PARAMETERS)], 200);
+    let second = parts.sized(4, &[], 200);
+    // `P` is in force at a part that lists `D`. One record replaces `P` by a
+    // part that lists nothing, and `D` by a larger part: the arrival of the
+    // former dependency stands in the group of `P` through the part in
+    // force, and the group would bring the count from 800 to 1100.
+    let run = |budget: u64| {
+        let mut table = Table::with_rules(proposed());
+        table.budget = Some(budget);
+        apply(&mut table, &parts, vec![want(P, PARAMETERS, BASE, Policy::Required)], vec![Arrival::at(D, small), Arrival::at(P, first)]);
+        let applied = apply(&mut table, &parts, Vec::new(), vec![Arrival::at(D, large), Arrival::at(P, second)]);
+        (table, applied)
+    };
+    let (table, applied) = run(1000);
+    assert_eq!(applied.rejected, vec![(D, large), (P, second)]);
+    assert!(applied.events.is_empty());
+    assert_eq!(availability(&table, D), Some(Availability::Available(small)));
+    assert_eq!(wants(&table, D), vec![(Owner::Asset(P), Policy::Required)], "the former part still needs its dependency");
+    // Accepted, the arrival of the former dependency is applied, with its
+    // event, before that dependency loses its want.
+    let (table, applied) = run(1100);
+    assert!(applied.rejected.is_empty());
+    assert_eq!(applied.events, vec![Event::HashChanged { asset: D, from: small, to: large }, Event::HashChanged { asset: P, from: first, to: second }]);
+    assert!(wants(&table, D).is_empty());
 }
 
 #[test]

@@ -216,6 +216,7 @@ pub fn budget(settings: &Settings) -> FamilyPlan {
         content("K", 2).sized(11_000),
         content("N", 1).sized(2_000),
         content("R", 1).sized(2_000).listing(&["D"]),
+        content("R", 2).sized(2_000).listing(&["D", "X"]),
         content("S", 1).sized(1_000),
         content("S", 2).sized(2_000),
         content("V", 1).sized(1_000).listing(&["N", "X"]),
@@ -225,6 +226,9 @@ pub fn budget(settings: &Settings) -> FamilyPlan {
     const FIRST: &[&str] = &["B.1", "D.1", "K.1", "N.1", "R.1", "S.1", "V.1", "W.1", "X.1"];
     const WANT_R: &str = "want R parameters source:host required";
     const WANT_B: &str = "want B parameters source:host optional";
+    const ONLY_REPORTS: &str = "the budget only reports, and every arrival is applied";
+    const COUNT_HOLDS_THE_FALLS: &str = "the count holds the entries that fall at the same fixed point";
+    const WANTS_OF_A_REJECTED_PART: &str = "the wants that a rejected part lists are added before the arrivals are applied";
     let family = Family::new(&["B", "D", "K", "N", "R", "S", "V", "W", "X"], &["K", "R", "S", "W"], CONTENTS, &[], settings);
     let world = |to: u32, bytes: u64| WorldPlan::new(to).with_a_budget(bytes);
     let cases: Vec<Case> = vec![
@@ -256,12 +260,39 @@ pub fn budget(settings: &Settings) -> FamilyPlan {
             for change in changes {
                 scenario = scenario.always(*change);
             }
-            scenario = scenario.control("the budget only reports, and every arrival is applied", core(|rules| rules.budget_only_reports = true));
+            scenario = scenario.control(ONLY_REPORTS, core(|rules| rules.budget_only_reports = true));
             if *case == "arrival-at-the-tick-of-a-fall" {
                 scenario = scenario.control("the falls before the record", core(|rules| rules.falls_before_record = true));
             }
             scenarios.push(scenario);
         }
+    }
+    // The unit the design text proposes, a fourth candidate: the six cases,
+    // and two more that run under it alone. It writes no mark in the record.
+    let more: Vec<Case> = vec![
+        ("replacement-with-a-new-dependency", world(8, 10_000).wanting("R", Required), Some((4, Move::Revision(vec!["R.2"])))),
+        ("two-closures-that-fit-alone", world(8, 10_000).record(3, &[WANT_B, "want D parameters source:host required"]), None),
+    ];
+    // The cases whose rejected part lists a dependency: their second control
+    // adds the wants of that part all the same.
+    const REJECTED_PART_LISTS: [&str; 3] = ["root-and-dependency", "closure-over-the-budget", "replacement-with-a-new-dependency"];
+    for (case, world, moved) in cases.iter().chain(&more) {
+        let mut scenario = Scenario::live(&format!("budget/{case}/derived-closure"), FIRST, world.clone());
+        scenario = scenario.always(core(|rules| rules.budget_unit = BudgetUnit::DerivedClosure));
+        if let Some((before, change)) = moved {
+            scenario = scenario.moving(*before, change.clone());
+        }
+        if *case == "arrival-at-the-tick-of-a-fall" {
+            // Under this unit the case rejects no arrival, so a budget that
+            // only reports gives the same run: the control cannot differ.
+            scenario = scenario.control(COUNT_HOLDS_THE_FALLS, core(|rules| rules.budget_count_holds_the_falling_entries = true));
+        } else {
+            scenario = scenario.control(ONLY_REPORTS, core(|rules| rules.budget_only_reports = true));
+        }
+        if REJECTED_PART_LISTS.contains(case) {
+            scenario = scenario.control(WANTS_OF_A_REJECTED_PART, core(|rules| rules.wants_of_rejected_parts_added = true));
+        }
+        scenarios.push(scenario);
     }
     FamilyPlan { name: "budget", claim: "an excess over a world's budget is rejected identically", family, scenarios, oracle: include_str!("../oracles/budget.txt") }
 }

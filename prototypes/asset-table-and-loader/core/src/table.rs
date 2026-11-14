@@ -528,8 +528,16 @@ pub struct Rules {
     pub dropped_parents_wants_left: bool,
     /// Control: the budget only reports, and every arrival is applied.
     pub budget_only_reports: bool,
+    /// Control: under the unit the design text proposes, the count holds the
+    /// entries that fall at the same fixed point, as it does under the three
+    /// candidates.
+    pub budget_count_holds_the_falling_entries: bool,
+    /// Control: under the unit the design text proposes, the wants that a
+    /// rejected part lists are added before the arrivals are applied, as
+    /// those of every part of a batch are without a budget.
+    pub wants_of_rejected_parts_added: bool,
     /// What an excess over a world's budget rejects: one of the three
-    /// candidate units the design text names and leaves open.
+    /// candidate units the design text names, or the unit it proposes.
     pub budget_unit: BudgetUnit,
     // --- the readings the amended text did not take ---
     /// Not taken: a want added on a failed entry leaves it failed until the
@@ -619,7 +627,8 @@ pub struct Rules {
 }
 
 /// What an excess over a world's budget rejects. The design text names
-/// three candidates and leaves the choice open.
+/// three candidates, each of which showed a defect, and proposes a fourth
+/// unit.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BudgetUnit {
     /// Each arrival to a hash is tested alone, in identifier order.
@@ -630,6 +639,13 @@ pub enum BudgetUnit {
     ClosureOfAWant,
     /// The arrivals to a hash of one record are one group.
     WholeDrain,
+    /// The unit the design text proposes: the closure of a want, its bounds
+    /// derived by the core from the parts in force and the parts of the
+    /// batch. No arrival names a root; every group is decided before any
+    /// want of the batch's parts is added, and the wants a rejected part
+    /// lists are not added; the count leaves out the entries that fall at
+    /// the same fixed point whatever the test gives.
+    DerivedClosure,
 }
 
 impl Rules {
@@ -1484,7 +1500,26 @@ impl Table {
     /// any depth, then the arrivals in identifier order, then the wants of
     /// dependencies recomputed. A want the core added with the batch leaves
     /// the domain where no arrival of the batch answers it.
-    fn apply_arrivals(&mut self, record: &Record, residents: &dyn Residents, purpose: Purpose, applied: &mut Applied, leaving: &mut Leaving) {
+    ///
+    /// Under the unit of a rejection the design text proposes, the first
+    /// step is another: every group is decided first, once the commands of
+    /// the record are applied and before any want of the batch's parts is
+    /// added; the wants the batch's parts list are then added, the parts of
+    /// the rejected arrivals left out. `candidates` are the entries that
+    /// held no want before the record, and `wanted_since` those of them a
+    /// want named while its commands were applied, which the count of that
+    /// unit reads.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_arrivals(
+        &mut self,
+        record: &Record,
+        residents: &dyn Residents,
+        purpose: Purpose,
+        applied: &mut Applied,
+        leaving: &mut Leaving,
+        candidates: &[AssetId],
+        wanted_since: &BTreeSet<AssetId>,
+    ) {
         if record.arrivals.is_empty() {
             return;
         }
@@ -1493,15 +1528,26 @@ impl Table {
         // Under one control of the gate the wants of the pending parts were
         // added before the pending releases, and follow nothing after.
         let added_early = purpose == Purpose::Gate && rules.gate_leaves_out_releases_for_core_wants;
+        let proposed_unit = rules.budget_unit == BudgetUnit::DerivedClosure;
+        let decided_first = if proposed_unit { self.over_budget_by_derived_closures(&record.arrivals, residents, candidates, wanted_since) } else { BTreeSet::new() };
+        // The arrivals whose part gives no want: those the proposed unit
+        // rejected, so that an asset a rejected part alone lists is named by
+        // no want. A budget that only reports rejects nothing.
+        let none = BTreeSet::new();
+        let no_want_from = if rules.budget_only_reports || rules.wants_of_rejected_parts_added { &none } else { &decided_first };
         let mut brought = Leaving::new();
         if counts_core_wants && !added_early {
-            self.want_the_dependencies_of(record, residents, rules.former_dependency_wants_end_before_the_batch);
+            self.want_the_dependencies_of(record, residents, rules.former_dependency_wants_end_before_the_batch, no_want_from);
             self.take_core_added(&mut brought);
         }
-        // An arrival to a hash is tested against the world's budget where it
-        // is applied: after the commands of its record, after the wants the
-        // parts of the batch list are added, and before the falls.
-        let rejected = self.over_budget(&record.arrivals, residents);
+        // Under each of the three candidates, an arrival to a hash is tested
+        // against the world's budget where it is applied: after the commands
+        // of its record, after the wants the parts of the batch list are
+        // added, and before the falls.
+        let rejected = if proposed_unit { decided_first } else { self.over_budget(&record.arrivals, residents) };
+        // The arrivals in identifier order, each applied but the rejected
+        // ones: a rejected arrival that fails its asset does so at its own
+        // place in that order, which is the place of its event.
         for arrival in &record.arrivals {
             match arrival.outcome {
                 Outcome::Hash(hash) if rejected.contains(&arrival.asset) => self.reject(arrival, hash, residents, applied),
@@ -1521,10 +1567,11 @@ impl Table {
 
     /// The first half of a batch: the wants its parts list, to any depth.
     /// With `prune`, a control, the wants a new part no longer lists end here,
-    /// before any arrival of the batch is applied.
-    fn want_the_dependencies_of(&mut self, record: &Record, residents: &dyn Residents, prune: bool) {
+    /// before any arrival of the batch is applied. The part of an arrival in
+    /// `no_want_from` is not read: it will not be put in force.
+    fn want_the_dependencies_of(&mut self, record: &Record, residents: &dyn Residents, prune: bool, no_want_from: &BTreeSet<AssetId>) {
         let mut arriving = BTreeMap::new();
-        for arrival in &record.arrivals {
+        for arrival in record.arrivals.iter().filter(|arrival| !no_want_from.contains(&arrival.asset)) {
             let Outcome::Hash(hash) = arrival.outcome else { continue };
             let in_force = self.entries.get(&arrival.asset).is_some_and(|entry| matches!(entry.availability, Availability::Available(_)));
             // A part that is not resident is asked for only where its
@@ -1553,6 +1600,15 @@ impl Table {
     fn over_budget(&self, arrivals: &[Arrival], residents: &dyn Residents) -> BTreeSet<AssetId> {
         let mut rejected = BTreeSet::new();
         let Some(budget) = self.budget else { return rejected };
+        // The root of the group an arrival stands in, under each candidate.
+        // The unit the design text proposes is decided apart, before the
+        // wants of the batch's parts are added.
+        let root_of: fn(&Arrival) -> AssetId = match self.rules.budget_unit {
+            BudgetUnit::SingleArrival => |arrival| arrival.asset,
+            BudgetUnit::ClosureOfAWant => |arrival| arrival.root.unwrap_or(arrival.asset),
+            BudgetUnit::WholeDrain => |_| 0,
+            BudgetUnit::DerivedClosure => return rejected,
+        };
         let size = |resident: &Arc<Resident>| resident.bytes.len() as u64;
         let mut count: u64 = self.entries.values().filter_map(|entry| entry.resident.as_ref()).map(size).sum();
         // Per tested arrival: the asset, the root of its group, the size it
@@ -1567,12 +1623,7 @@ impl Table {
             }
             let added = residents.get(hash).as_ref().map_or(0, size);
             let replaced = entry.and_then(|entry| entry.resident.as_ref()).map_or(0, size);
-            let root = match self.rules.budget_unit {
-                BudgetUnit::SingleArrival => arrival.asset,
-                BudgetUnit::ClosureOfAWant => arrival.root.unwrap_or(arrival.asset),
-                BudgetUnit::WholeDrain => 0,
-            };
-            tested.push((arrival.asset, root, added, replaced));
+            tested.push((arrival.asset, root_of(arrival), added, replaced));
         }
         // The groups are tested whole, in the identifier order of their
         // roots, each against the count as the groups accepted before it
@@ -1592,12 +1643,122 @@ impl Table {
         rejected
     }
 
+    /// The arrivals of a record that the world's budget rejects under the
+    /// unit the design text proposes: the closure of a want, its bounds
+    /// derived by the core. It is decided once the commands of the record
+    /// are applied, before any want of the batch's parts is added and before
+    /// any arrival is applied.
+    ///
+    /// A root is an asset under a want the core did not add. Its closure is
+    /// the root with every asset reached from it through the lists of
+    /// dependencies, read for each asset from the part in force and from the
+    /// part of its arrival to a hash in this record, from both where it has
+    /// both; it stops at an asset that has neither. Its group is the
+    /// arrivals to a hash of this record whose asset stands in its closure.
+    /// An arrival to failed stands in no group, and neither does an arrival
+    /// at the hash the entry holds, nor one whose asset stands in the
+    /// closure of no root: none of them is tested.
+    ///
+    /// The count is the sum of the sizes of the parts the table holds
+    /// available, less the entries that fall at this fixed point whatever
+    /// the test gives: an entry that holds no want once the commands are
+    /// applied, whose last want ended during the tick before, and that the
+    /// closure of no root reaches.
+    ///
+    /// The groups are tested in the identifier order of their roots. A group
+    /// is accepted where the count stays within the budget once every
+    /// arrival of the group that no earlier group accepted is counted, an
+    /// arrival at another hash of an asset in force counting the new size in
+    /// place of the former one; its arrivals are then part of the count. An
+    /// arrival that stands in a group is rejected where every group that
+    /// holds it is rejected.
+    ///
+    /// The size of a part is the length of its bytes: a stand-in for the
+    /// size the text has an arrival name and an entry hold, which neither
+    /// does here.
+    fn over_budget_by_derived_closures(
+        &self,
+        arrivals: &[Arrival],
+        residents: &dyn Residents,
+        candidates: &[AssetId],
+        wanted_since: &BTreeSet<AssetId>,
+    ) -> BTreeSet<AssetId> {
+        let mut rejected = BTreeSet::new();
+        let Some(budget) = self.budget else { return rejected };
+        let size = |resident: &Arc<Resident>| resident.bytes.len() as u64;
+        let in_force = |asset: &AssetId| self.entries.get(asset).and_then(|entry| entry.resident.as_ref());
+        // The hash and the part of each arrival to a hash of the record.
+        let mut arriving: BTreeMap<AssetId, (u64, Option<Arc<Resident>>)> = BTreeMap::new();
+        for arrival in arrivals {
+            if let Outcome::Hash(hash) = arrival.outcome {
+                arriving.insert(arrival.asset, (hash, residents.get(hash)));
+            }
+        }
+        if arriving.is_empty() {
+            return rejected;
+        }
+        let listed_by = |asset: &AssetId| -> Vec<AssetId> {
+            let parts = [in_force(asset), arriving.get(asset).and_then(|(_, part)| part.as_ref())];
+            parts.into_iter().flatten().flat_map(|part| part.part.dependencies.iter().map(|(dependency, _)| *dependency)).collect()
+        };
+        // The closure of each root, in the identifier order of the roots.
+        let is_a_root = |entry: &Entry| entry.wants.iter().any(|(owner, _)| !matches!(owner, Owner::Asset(_)));
+        let mut closures: Vec<BTreeSet<AssetId>> = Vec::new();
+        for (root, _) in self.entries.iter().filter(|(_, entry)| is_a_root(entry)) {
+            let mut closure = BTreeSet::new();
+            let mut open = vec![*root];
+            while let Some(asset) = open.pop() {
+                if closure.insert(asset) {
+                    open.extend(listed_by(&asset));
+                }
+            }
+            closures.push(closure);
+        }
+        // The entries whose room is free: they fall at this fixed point
+        // whatever the test gives. The control counts them.
+        let falls = |asset: &AssetId| {
+            let unwanted = !wanted_since.contains(asset) && self.entries.get(asset).is_some_and(|entry| entry.wants.is_empty());
+            unwanted && !closures.iter().any(|closure| closure.contains(asset)) && !self.rules.budget_count_holds_the_falling_entries
+        };
+        let falling: BTreeSet<AssetId> = candidates.iter().copied().filter(falls).collect();
+        let mut count: u64 = self.entries.iter().filter(|(asset, _)| !falling.contains(*asset)).filter_map(|(_, entry)| entry.resident.as_ref()).map(size).sum();
+        let mut accepted: BTreeSet<AssetId> = BTreeSet::new();
+        for closure in &closures {
+            // The group: per arrival, the asset, the size it adds and the
+            // size it takes the place of.
+            let mut group: Vec<(AssetId, u64, u64)> = Vec::new();
+            for asset in closure {
+                let Some((hash, part)) = arriving.get(asset) else { continue };
+                if self.entries.get(asset).is_some_and(|entry| entry.availability == Availability::Available(*hash)) {
+                    continue;
+                }
+                group.push((*asset, part.as_ref().map_or(0, size), in_force(asset).map_or(0, size)));
+            }
+            let counted = || group.iter().filter(|(asset, _, _)| !accepted.contains(asset));
+            let added: u64 = counted().map(|(_, added, _)| added).sum();
+            let replaced: u64 = counted().map(|(_, _, replaced)| replaced).sum();
+            let with = count + added - replaced.min(count + added);
+            if with <= budget {
+                count = with;
+                accepted.extend(group.iter().map(|(asset, _, _)| *asset));
+            } else {
+                rejected.extend(group.iter().map(|(asset, _, _)| *asset));
+            }
+        }
+        // An arrival is applied where at least one group that holds it is
+        // accepted.
+        rejected.retain(|asset| !accepted.contains(asset));
+        rejected
+    }
+
     /// A rejected arrival is not applied, and the result of the step names
     /// it. Where the table holds the asset available, the entry stays as it
     /// was and no event is emitted. Where it does not, the entry becomes
     /// failed for the reason of the budget, as by a failed arrival, with the
-    /// event of a failure. Under the control that only reports, the arrival
-    /// is named and applied all the same.
+    /// event of a failure. An asset no want names keeps no trace: under the
+    /// unit the design text proposes, an asset that a rejected part alone
+    /// lists has no entry, no failure and no event. Under the control that
+    /// only reports, the arrival is named and applied all the same.
     fn reject(&mut self, arrival: &Arrival, hash: u64, residents: &dyn Residents, applied: &mut Applied) {
         applied.rejected.push((arrival.asset, hash));
         if self.rules.budget_only_reports {
@@ -1669,18 +1830,18 @@ impl Table {
         let mut wanted_since = BTreeSet::new();
         let mut leaving = Leaving::new();
         if self.rules.arrivals_before_commands {
-            self.apply_arrivals(record, residents, purpose, &mut applied, &mut leaving);
+            self.apply_arrivals(record, residents, purpose, &mut applied, &mut leaving, &candidates, &wanted_since);
             self.note_wanted(&candidates, &mut wanted_since);
         }
         // One control of the gate: the wants of the pending parts are added
         // with the wants the table holds, before the pending releases.
         let added_early = purpose == Purpose::Gate && self.rules.gate_leaves_out_releases_for_core_wants;
         if added_early && !self.rules.gate_leaves_out_core_wants {
-            self.want_the_dependencies_of(record, residents, false);
+            self.want_the_dependencies_of(record, residents, false, &BTreeSet::new());
         }
         self.apply_commands(&record.commands, purpose, alive, !added_early, &mut applied, &mut leaving, &candidates, &mut wanted_since);
         if !self.rules.arrivals_before_commands {
-            self.apply_arrivals(record, residents, purpose, &mut applied, &mut leaving);
+            self.apply_arrivals(record, residents, purpose, &mut applied, &mut leaving, &candidates, &wanted_since);
             self.note_wanted(&candidates, &mut wanted_since);
         }
         if !self.rules.falls_before_record {
