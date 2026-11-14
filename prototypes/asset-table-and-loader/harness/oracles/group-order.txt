@@ -1,0 +1,315 @@
+# Oracles of the family "group-order": the order in which the groups of a
+# rejection over a world's budget are tested.
+# Written by hand from the design text, by a writer who has not read the build.
+# Asset identifiers order as A, B, C, D, E, F, G, H, M, P, Q, T.
+# Record lines stand in the order applied: the commands first, in the order
+# the scenario gives them, then the arrivals by asset identifier.
+# An entry line with no want line under it is an entry that holds no want.
+# A tick 0 block states the table the creation gives; here it is empty.
+#
+# Every arrival to a hash names the size of what it puts in force, and every
+# available entry holds that size. A failed arrival and a failed entry hold
+# none. Sizes in bytes: A.1 1 000, B.1 1 000, B.2 4 000, C.1 6 000, D.1 3 000,
+# E.1 4 000, F.1 1 000, G.1 5 000, H.1 3 000, M.1 2 000, M.2 5 000, P.1 1 000,
+# P.2 4 000, Q.1 1 000, T.1 5 000. A.1 lists C, Q.1 lists T, P.1 and P.2
+# list M.
+#
+# At an input fixed point, in this order: the commands of the record; the
+# groups, derived and each decided before any want is added from a part and
+# before any arrival is applied; the wants that the parts of the accepted
+# arrivals list; the arrivals in identifier order, a rejected one that fails
+# its asset doing so at its own place; the wants the core added, recomputed
+# from the parts in force; the falls.
+#
+# The order of the test, which is the reading taken on 2026-11-14: the groups
+# of the roots that hold a required want are tested first, in the identifier
+# order of those roots, then the groups of the other roots, in the identifier
+# order of theirs. A root holds a required want where it stands in the
+# required set once the commands of the record are applied, whichever maker
+# made that want, the core included.
+# The reading not taken: the groups are tested in the identifier order of
+# their roots alone.
+#
+# A count equal to the budget is within it. A rejected first load is a
+# failure with the reason "over-budget" and is an answer: the step names the
+# asset where a required want names it when its arrival is gone through.
+
+# Scenario "optional-root-first". A budget of 10 000 bytes and an empty
+# table. The closure of A is 7 000 bytes, the closure of Q is 6 000: each
+# fits alone, and the two do not fit together.
+
+scenario group-order/optional-root-first
+tick 0
+tick 3
+record want A parameters source:host optional
+record want Q parameters source:host required
+entry A parameters unavailable
+want source:host optional
+entry Q parameters unavailable
+want source:host required
+# Count 0. Roots A and Q. The closure of A, read from the part of its
+# arrival, is A and C; the closure of Q is Q and T. Q holds a required want
+# and A does not: the group of Q is tested first, 6 000, within, accepted.
+# The group of A then counts 6 000 and 7 000: 13 000, above the budget,
+# rejected. The wants of the accepted parts are added: T under Q, required.
+# The part of A is rejected, so C is named by no want: no entry, no failure,
+# no event. A, the root of the rejected group, becomes failed at its place
+# in the identifier order; its want is optional, so the step names nothing.
+tick 4
+record arrival A A.1 size 1000
+record arrival C C.1 size 6000
+record arrival Q Q.1 size 1000
+record arrival T T.1 size 5000
+rejected A A.1
+rejected C C.1
+entry A parameters failed over-budget
+want source:host optional
+entry Q parameters available Q.1 size 1000
+want source:host required
+entry T parameters available T.1 size 5000
+want asset:Q required
+event failed A over-budget
+event arrived Q Q.1
+event arrived T T.1
+
+# The table of tick 4 stands to tick 8, and the records after it are empty.
+
+# Scenario "policy-changed-in-the-record-of-the-arrivals". The same two
+# closures and the same budget. When the two wants leave the world A is
+# required and Q is optional; the record that holds the arrivals changes both
+# policies before the arrivals are gone through.
+
+scenario group-order/policy-changed-in-the-record-of-the-arrivals
+tick 0
+tick 3
+record want A parameters source:host required
+record want Q parameters source:host optional
+entry A parameters unavailable
+want source:host required
+entry Q parameters unavailable
+want source:host optional
+# The two commands stand before the arrivals. Each is a want its maker
+# already holds, made again with another policy: it changes the policy, adds
+# no want and leaves nothing. Once the commands are applied, Q stands in the
+# required set and A does not: the group of Q is tested first, 6 000,
+# accepted, and the group of A is rejected at 13 000. A fails under a want
+# that is optional when its arrival is gone through: the step names nothing.
+tick 4
+record want A parameters source:host optional
+record want Q parameters source:host required
+record arrival A A.1 size 1000
+record arrival C C.1 size 6000
+record arrival Q Q.1 size 1000
+record arrival T T.1 size 5000
+rejected A A.1
+rejected C C.1
+entry A parameters failed over-budget
+want source:host optional
+entry Q parameters available Q.1 size 1000
+want source:host required
+entry T parameters available T.1 size 5000
+want asset:Q required
+event failed A over-budget
+event arrived Q Q.1
+event arrived T T.1
+
+# The table of tick 4 stands to tick 8, and the records after it are empty.
+
+# Scenario "required-as-a-dependency". A budget of 8 000 bytes and an empty
+# table. P is required and its part lists M. M is also wanted in its own
+# right, as optional: it is a root, and the want the core added for P makes
+# it stand in the required set. B is an optional root that stands first.
+
+scenario group-order/required-as-a-dependency
+tick 0
+tick 2
+record want P parameters source:host required
+entry P parameters unavailable
+want source:host required
+# Count 0. One root, P, whose group is the arrivals of M and of P: 3 000,
+# within, accepted. The want of M under P is added, required.
+tick 3
+record arrival M M.1 size 2000
+record arrival P P.1 size 1000
+entry M parameters available M.1 size 2000
+want asset:P required
+entry P parameters available P.1 size 1000
+want source:host required
+event arrived M M.1
+event arrived P P.1
+# The want of M is made on an asset in force: it is answered already and
+# nothing leaves the world for it. The want of the world's own entry stands
+# before the want the core added.
+tick 4
+record want B parameters source:host optional
+record want M parameters source:host optional
+entry B parameters unavailable
+want source:host optional
+entry M parameters available M.1 size 2000
+want source:host optional
+want asset:P required
+entry P parameters available P.1 size 1000
+want source:host required
+# Count 3 000. The group of B: 4 000, within, accepted.
+tick 5
+record arrival B B.1 size 1000
+entry B parameters available B.1 size 1000
+want source:host optional
+entry M parameters available M.1 size 2000
+want source:host optional
+want asset:P required
+entry P parameters available P.1 size 1000
+want source:host required
+event arrived B B.1
+# The batch of the revision. Count 4 000. Roots B, M and P. P holds a
+# required want of its maker, and M holds the required want the core added
+# for P: both stand in the required set, and B does not. The required roots
+# are tested first, in identifier order, M and then P.
+# The group of M is its own arrival: 5 000 in place of 2 000 is 7 000,
+# within, accepted. The group of P is the arrivals of M and of P; M is
+# accepted already, and 4 000 in place of 1 000 is 10 000, above the budget,
+# rejected. The group of B is tested last: 4 000 in place of 1 000 is 10 000,
+# above the budget, rejected.
+# M stands in a group that is accepted, so it is applied. P and B are in
+# force and stay as they were, with no event. P keeps its former part, which
+# lists M: the want of M under P stands. The replacements of B and of P are
+# not offered again.
+tick 8
+record arrival B B.2 size 4000
+record arrival M M.2 size 5000
+record arrival P P.2 size 4000
+rejected B B.2
+rejected P P.2
+entry B parameters available B.1 size 1000
+want source:host optional
+entry M parameters available M.2 size 5000
+want source:host optional
+want asset:P required
+entry P parameters available P.1 size 1000
+want source:host required
+event changed M M.1 M.2
+
+# The table of tick 8 stands to tick 12, and the records after it are empty.
+
+# Scenario "parent-made-optional-in-the-record". As the scenario before to
+# tick 5. The record that holds the batch of the revision first makes the
+# want of P optional.
+
+scenario group-order/parent-made-optional-in-the-record
+tick 0
+tick 2
+record want P parameters source:host required
+entry P parameters unavailable
+want source:host required
+tick 3
+record arrival M M.1 size 2000
+record arrival P P.1 size 1000
+entry M parameters available M.1 size 2000
+want asset:P required
+entry P parameters available P.1 size 1000
+want source:host required
+event arrived M M.1
+event arrived P P.1
+tick 4
+record want B parameters source:host optional
+record want M parameters source:host optional
+entry B parameters unavailable
+want source:host optional
+entry M parameters available M.1 size 2000
+want source:host optional
+want asset:P required
+entry P parameters available P.1 size 1000
+want source:host required
+tick 5
+record arrival B B.1 size 1000
+entry B parameters available B.1 size 1000
+want source:host optional
+entry M parameters available M.1 size 2000
+want source:host optional
+want asset:P required
+entry P parameters available P.1 size 1000
+want source:host required
+event arrived B B.1
+# The command is applied first. It changes the policy of the want of P, and
+# the core recomputes the want it added for P at that point: no want of P is
+# required any more, so the want of M under P is optional. Once the commands
+# are applied the required set is empty, and the three groups are tested in
+# the identifier order of their roots, B, M and P.
+# Count 4 000. The group of B: 4 000 in place of 1 000 is 7 000, within,
+# accepted. The group of M: 5 000 in place of 2 000 is 10 000, above the
+# budget, rejected. The group of P, the arrivals of M and of P: 13 000,
+# rejected. M and P stand in rejected groups alone and stay as they were.
+tick 8
+record want P parameters source:host optional
+record arrival B B.2 size 4000
+record arrival M M.2 size 5000
+record arrival P P.2 size 4000
+rejected M M.2
+rejected P P.2
+entry B parameters available B.2 size 4000
+want source:host optional
+entry M parameters available M.1 size 2000
+want source:host optional
+want asset:P optional
+entry P parameters available P.1 size 1000
+want source:host optional
+event changed B B.1 B.2
+
+# The table of tick 8 stands to tick 12, and the records after it are empty.
+
+# Scenario "each-set-in-identifier-order". A budget of 10 000 bytes and an
+# empty table. Five roots with no dependency, wanted in the reverse of their
+# identifier order: D and F optional, E, G and H required.
+
+scenario group-order/each-set-in-identifier-order
+tick 0
+tick 3
+record want H parameters source:host required
+record want G parameters source:host required
+record want F parameters source:host optional
+record want E parameters source:host required
+record want D parameters source:host optional
+entry D parameters unavailable
+want source:host optional
+entry E parameters unavailable
+want source:host required
+entry F parameters unavailable
+want source:host optional
+entry G parameters unavailable
+want source:host required
+entry H parameters unavailable
+want source:host required
+# Count 0. The required roots first, in identifier order whatever the order
+# in which their wants were made: E, 4 000, accepted; G, 9 000, accepted;
+# H, 12 000, above the budget, rejected. Then the other roots, in identifier
+# order: D, 12 000, rejected; F, 10 000, equal to the budget and so within
+# it, accepted. A rejected group does not end the test.
+# D and H are roots of rejected groups that a want names: each becomes
+# failed at its place in the identifier order. The step names H, which a
+# required want names, and not D.
+tick 4
+record arrival D D.1 size 3000
+record arrival E E.1 size 4000
+record arrival F F.1 size 1000
+record arrival G G.1 size 5000
+record arrival H H.1 size 3000
+rejected D D.1
+rejected H H.1
+entry D parameters failed over-budget
+want source:host optional
+entry E parameters available E.1 size 4000
+want source:host required
+entry F parameters available F.1 size 1000
+want source:host optional
+entry G parameters available G.1 size 5000
+want source:host required
+entry H parameters failed over-budget
+want source:host required
+event failed D over-budget
+event arrived E E.1
+event arrived F F.1
+event arrived G G.1
+event failed H over-budget
+names-failed H over-budget
+
+# The table of tick 4 stands to tick 8, and the records after it are empty.

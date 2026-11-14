@@ -1,0 +1,299 @@
+# Family pending-ends: the gate does not see the wants that a pending element
+# ends.
+# Written by hand from the design text, before any run of the stand-in stage,
+# by a writer who has not read the build.
+# The table's order is the order of the asset identifiers: D, G, P.
+# The table is empty before the first block of each scenario.
+# Record lines stand in the order applied: the commands first, in the order
+# the scenario gives them, then the arrivals by asset identifier.
+# An entry line with no want line under it is an entry that holds no want.
+# The wants of P under the world's own entry stand by the identity of their
+# makers: the host (3), then the tool (5).
+# The family gives no size: an entry and an arrival state none.
+# The rule under test. A gated world applies nothing. Its gate is evaluated
+# on the table with two kinds of pending element applied, the arrivals and
+# the releases, and no other. It does not see the wants that a pending
+# element would end through the recomputation: a pending release of a
+# parent's last required want, a pending failure of the parent and a pending
+# replacement whose part no longer lists a dependency each leave the want of
+# that dependency as the table holds it, required, and the gate stays closed
+# on the dependency until its own answer is pending. A pending command that
+# changes a required want to optional is not seen either, on the asset it
+# names or on its dependencies.
+# Reading taken: a step that does not wait names what keeps the gate closed,
+# the pending record counted.
+# Each scenario runs to tick 8: the gate has opened and the world has run at
+# least two ticks more.
+
+
+scenario pending-ends/release-of-the-last-required-want
+
+tick 2
+record want P parameters source:host optional
+entry P parameters unavailable
+want source:host optional
+
+# The scripted source posts the parent without its dependency. P holds a
+# want, so the core adds the want of D that its part lists, owned by P and
+# optional as the one want of P is. No required want stands: the world runs.
+tick 3
+record arrival P P.1
+entry D parameters unavailable
+want asset:P optional
+entry P parameters available P.1
+want source:host optional
+event arrived P P.1
+
+# A second maker wants P as required: the want of D becomes required at the
+# same point, with no batch. Tick 4 runs with D unanswered, and the world is
+# gated from the boundary after it.
+tick 4
+record want P parameters source:tool required
+entry D parameters unavailable
+want asset:P required
+entry P parameters available P.1
+want source:host optional
+want source:tool required
+
+# Nothing is pending yet.
+blocked 5 awaiting D
+# The pending record releases the last required want of P. Once applied, the
+# recomputation would leave D under an optional want. The gate applies the
+# release to the wants of the asset it names, P, which is answered already,
+# and does not see what the release ends on D: D is required in the table,
+# unanswered, and nothing pending answers it.
+blocked 5 awaiting D
+# The arrival of D joins: its own answer is pending, and the gate opens. The
+# tick applies the whole record in order. The release first: P keeps the
+# host's optional want, and the want of D is optional. Then the arrival, on
+# an entry that holds a want: D is available, with its event.
+tick 5
+record release P source:tool
+record arrival D D.1
+entry D parameters available D.1
+want asset:P optional
+entry P parameters available P.1
+want source:host optional
+event arrived D D.1
+
+# The table of tick 5 stands to tick 8.
+
+
+scenario pending-ends/failure-of-the-parent
+
+tick 2
+record want P parameters source:host optional
+entry P parameters unavailable
+want source:host optional
+
+tick 3
+record arrival P P.1
+entry D parameters unavailable
+want asset:P optional
+entry P parameters available P.1
+want source:host optional
+event arrived P P.1
+
+tick 4
+record want P parameters source:tool required
+entry D parameters unavailable
+want asset:P required
+entry P parameters available P.1
+want source:host optional
+want source:tool required
+
+blocked 5 awaiting D
+# The pending record fails P. A parent that is failed owns no want on its
+# dependency, so the failure, once applied, ends the want of D. The gate does
+# not see it: P is answered, in force now and failed once the record is
+# applied, and D is required in the table and unanswered.
+blocked 5 awaiting D
+# The arrival of D joins and the gate opens. The arrivals are applied in
+# identifier order. D first, on an entry that holds the want P owns: it is
+# available, with its event. Then P fails, with its event. Once the arrivals
+# are applied the wants the core added are recomputed: P is failed and owns
+# none, so the want of D ends. D keeps its entry, in force and with no want,
+# through this tick. P is failed at this tick under a required want: the
+# step names it.
+tick 5
+record arrival D D.1
+record arrival P failed unknown-asset
+entry D parameters available D.1
+entry P parameters failed unknown-asset
+want source:host optional
+want source:tool required
+event arrived D D.1
+event failed P unknown-asset
+names-failed P unknown-asset
+
+# D falls at the input fixed point of tick 6 and leaves. A failed asset is
+# answered: the world steps on.
+tick 6
+entry P parameters failed unknown-asset
+want source:host optional
+want source:tool required
+
+# The table of tick 6 stands to tick 8.
+
+
+scenario pending-ends/replacement-that-drops-the-dependency
+
+tick 2
+record want P parameters source:host optional
+entry P parameters unavailable
+want source:host optional
+
+tick 3
+record arrival P P.1
+entry D parameters unavailable
+want asset:P optional
+entry P parameters available P.1
+want source:host optional
+event arrived P P.1
+
+tick 4
+record want P parameters source:tool required
+entry D parameters unavailable
+want asset:P required
+entry P parameters available P.1
+want source:host optional
+want source:tool required
+
+blocked 5 awaiting D
+# The pending record replaces P by a part that lists no dependency. Its part
+# would add no want, so the gate counts none for it; once applied, the
+# recomputation would end the want of D, which the gate does not see. D is
+# required in the table and unanswered.
+blocked 5 awaiting D
+# The arrival of D joins and the gate opens. The part of P.2 lists nothing,
+# so the first step adds no want. The arrivals are applied in identifier
+# order: D on an entry that still holds the want P owns, so it is available,
+# with its event; then P takes its new hash, with the event of a change. The
+# wants the core added are then recomputed from the parts in force: P.2 does
+# not list D, and the want of D ends. D keeps its entry, in force and with no
+# want, through this tick.
+tick 5
+record arrival D D.1
+record arrival P P.2
+entry D parameters available D.1
+entry P parameters available P.2
+want source:host optional
+want source:tool required
+event arrived D D.1
+event changed P P.1 P.2
+
+# D falls at the input fixed point of tick 6 and leaves.
+tick 6
+entry P parameters available P.2
+want source:host optional
+want source:tool required
+
+# The table of tick 6 stands to tick 8.
+
+
+scenario pending-ends/policy-change-of-the-parent
+
+tick 2
+record want P parameters source:host optional
+entry P parameters unavailable
+want source:host optional
+
+tick 3
+record arrival P P.1
+entry D parameters unavailable
+want asset:P optional
+entry P parameters available P.1
+want source:host optional
+event arrived P P.1
+
+tick 4
+record want P parameters source:tool required
+entry D parameters unavailable
+want asset:P required
+entry P parameters available P.1
+want source:host optional
+want source:tool required
+
+blocked 5 awaiting D
+# The pending record holds a want of P by the tool, which already holds one:
+# the command changes the policy of that want to optional and adds none. It
+# is neither a pending arrival nor a pending release, so the gate does not
+# see it, on P or on the dependency of P: D is required in the table and
+# unanswered.
+blocked 5 awaiting D
+# The arrival of D joins and the gate opens. The command first: both wants
+# of P are optional, and the want of D is optional at the same point. Then
+# the arrival, on an entry that holds a want: D is available, with its event.
+tick 5
+record want P parameters source:tool optional
+record arrival D D.1
+entry D parameters available D.1
+want asset:P optional
+entry P parameters available P.1
+want source:host optional
+want source:tool optional
+event arrived D D.1
+
+# The table of tick 5 stands to tick 8.
+
+
+scenario pending-ends/policy-change-on-the-required-asset
+
+tick 2
+record want G parameters source:host required
+entry G parameters unavailable
+want source:host required
+
+# Nothing is pending yet.
+blocked 3 awaiting G
+# The pending record holds a want of G by the host, which already holds one:
+# the command changes the policy of that want to optional. A pending release
+# of that want would answer G; a pending change of its policy is neither of
+# the two kinds of element the gate applies, and G stays required and
+# unanswered.
+blocked 3 awaiting G
+# The arrival of G joins and the gate opens. The command first: the want of
+# G is optional. Then the arrival: G is available, with its event.
+tick 3
+record want G parameters source:host optional
+record arrival G G.1
+entry G parameters available G.1
+want source:host optional
+event arrived G G.1
+
+# The table of tick 3 stands to tick 8.
+
+
+scenario pending-ends/policy-change-of-a-pending-parent
+
+tick 2
+record want P parameters source:host required
+entry P parameters unavailable
+want source:host required
+
+# Nothing is pending yet.
+blocked 3 awaiting P
+# The pending record holds the change of the host's want of P to optional and
+# the arrival of P, with no arrival of D. The pending arrival answers P. The
+# want the core would add on D from the pending part is counted with the
+# policy that the wants the table holds give P: a pending command that adds a
+# want is left out, a pending release is applied, and a pending change of
+# policy is not seen, so that policy is required. D is not in the table and
+# nothing pending answers it: the gate stays closed, and the step names D.
+blocked 3 awaiting D
+# The arrival of D joins: the batch is complete and the gate opens. The
+# command first: the want of P is optional. Then the first step: P holds a
+# want, and the core adds the want of D its part lists, optional. Then the
+# arrivals by identifier, each on an entry that holds a want.
+tick 3
+record want P parameters source:host optional
+record arrival D D.1
+record arrival P P.1
+entry D parameters available D.1
+want asset:P optional
+entry P parameters available P.1
+want source:host optional
+event arrived D D.1
+event arrived P P.1
+
+# The table of tick 3 stands to tick 8.

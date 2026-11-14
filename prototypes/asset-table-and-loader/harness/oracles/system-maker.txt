@@ -1,0 +1,242 @@
+# Oracles of the family "system-maker": a system is the maker of the want it
+# makes.
+# Written by hand from the design text, by a writer who has not read the build.
+# Asset identifiers order as A, D, F, P. Every asset is of the first type.
+# Record lines stand in the order applied: the commands first, in the order
+# the scenario gives them, then the arrivals by asset identifier.
+# An entry line with no want line under it is an entry that holds no want.
+# A tick block with no entry line states an empty table.
+#
+# What a system does is no element of an input record: it is applied at the
+# structural change fixed point of the tick in which the system runs, after
+# that tick's record and its falls. A tick at which a system alone acts has a
+# block with no record line, and a comment says what the system did.
+#
+# The rule under test. A want a system makes under the world's own entry
+# carries the system as its maker: owner "system:<stable name>". It is a want
+# of its own beside the want of the contributor that brings the system and
+# beside the want of any other system of that contributor.
+# Wants of an entry stand in the table's total order: the wants under the
+# world's own entry, those of contributors (base 7, logic 9), then those of
+# systems by stable name (keeper, mender, wanter), then those of command
+# sources (host 3, tool 5, twin 7); then the wants of entities by entity
+# identifier; then the wants the core added, by parent.
+# Reading taken: two stable names compare by their bytes. The three names of
+# this family have one length, so a comparison of their canonical bytes, the
+# length first, gives the same order.
+
+scenario system-maker/two-systems-one-asset
+
+# The system wanter wants A under the world's own entry, as required. Tick 2
+# runs with A unanswered.
+tick 2
+entry A parameters unavailable
+want system:wanter required
+# Gated on A from the boundary after tick 2; the scripted arrival stands in
+# the pending record and opens the gate.
+tick 3
+record arrival A A.1
+entry A parameters available A.1
+want system:wanter required
+event arrived A A.1
+# The system keeper, of the same contributor, wants A as optional: a second
+# maker, so a second want. The want of wanter keeps its policy. keeper stands
+# before wanter.
+tick 4
+entry A parameters available A.1
+want system:keeper optional
+want system:wanter required
+# The system wanter releases its want, and its own alone.
+tick 6
+entry A parameters available A.1
+want system:keeper optional
+# The system keeper releases its want: the last want of A ended during tick 8.
+# A keeps its entry, with no want, through this tick.
+tick 8
+entry A parameters available A.1
+# A falls at the input fixed point of tick 9 and leaves: the table is empty.
+tick 9
+
+# The table stays empty to tick 10.
+
+
+scenario system-maker/system-beside-the-composition
+
+# The composition's own want of P, made by the contributor logic.
+tick 0
+entry P parameters unavailable
+want contributor:logic required
+
+# One batch for the closure. The want of D is added first, owned by P and
+# required as the want of P is; then the arrivals, by identifier.
+tick 1
+record arrival D D.1
+record arrival P P.1
+entry D parameters available D.1
+want asset:P required
+entry P parameters available P.1
+want contributor:logic required
+event arrived D D.1
+event arrived P P.1
+
+# The system wanter, which the contributor logic brings, wants P as optional.
+# Its want is its own: a second want, after the contributor's. The want of the
+# composition is unchanged, still required, and so is the want of D.
+tick 3
+entry D parameters available D.1
+want asset:P required
+entry P parameters available P.1
+want contributor:logic required
+want system:wanter optional
+
+# The system releases its want, and its own alone: the want of the composition
+# stands, and P and D stay as they are.
+tick 6
+entry D parameters available D.1
+want asset:P required
+entry P parameters available P.1
+want contributor:logic required
+
+# The table of tick 6 stands to tick 9.
+
+
+scenario system-maker/order-of-the-makers
+
+# The composition's wants: D by the two contributors, in the order of their
+# identities, and P by the contributor logic.
+tick 0
+entry D parameters unavailable
+want contributor:base optional
+want contributor:logic optional
+entry P parameters unavailable
+want contributor:logic required
+
+# The want of D that the part of P lists is added first, owned by P and
+# required as the want of P is. It is not the first want of D and stands
+# last, after the wants of the world's own entry.
+tick 1
+record arrival D D.1
+record arrival P P.1
+entry D parameters available D.1
+want contributor:base optional
+want contributor:logic optional
+want asset:P required
+entry P parameters available P.1
+want contributor:logic required
+event arrived D D.1
+event arrived P P.1
+
+# Five commands, made in the reverse of the table's order, then three wants
+# of three systems, applied at the structural change fixed point in the order
+# of the schedule: wanter, mender, keeper. Eight makers and owners, eight
+# wants added, none shared: each system is its own maker, the two systems of
+# the contributor logic as the system of the contributor base, and none of
+# them touches the want of its contributor. The wants of systems stand
+# between those of contributors and those of command sources, by stable name,
+# whatever contributor brings each and whatever the order of making.
+# source:twin has the numeric identity of contributor:base and shares nothing
+# with it. Every want is added on an asset the table holds available: nothing
+# leaves the world.
+tick 2
+record want D parameters entity:E2 optional
+record want D parameters entity:E1 optional
+record want D parameters source:twin optional
+record want D parameters source:tool optional
+record want D parameters source:host optional
+entry D parameters available D.1
+want contributor:base optional
+want contributor:logic optional
+want system:keeper optional
+want system:mender required
+want system:wanter optional
+want source:host optional
+want source:tool optional
+want source:twin optional
+want entity:E1 optional
+want entity:E2 optional
+want asset:P required
+entry P parameters available P.1
+want contributor:logic required
+
+# The system mender releases its want, and its own alone: the want of the
+# contributor base, which brings it, stands.
+tick 4
+entry D parameters available D.1
+want contributor:base optional
+want contributor:logic optional
+want system:keeper optional
+want system:wanter optional
+want source:host optional
+want source:tool optional
+want source:twin optional
+want entity:E1 optional
+want entity:E2 optional
+want asset:P required
+entry P parameters available P.1
+want contributor:logic required
+
+tick 5
+record release D source:tool
+entry D parameters available D.1
+want contributor:base optional
+want contributor:logic optional
+want system:keeper optional
+want system:wanter optional
+want source:host optional
+want source:twin optional
+want entity:E1 optional
+want entity:E2 optional
+want asset:P required
+entry P parameters available P.1
+want contributor:logic required
+
+# The table of tick 5 stands to tick 6.
+
+
+scenario system-maker/retry-by-a-system
+
+# A live loading capability. The composition's own want of F, made by the
+# contributor logic. The world is gated on F before its first tick.
+tick 0
+entry F parameters unavailable
+want contributor:logic required
+
+# The artifact is cut short: a failed answer, which opens the gate. F is
+# required and failed at this tick: the step names it.
+tick 1
+record arrival F failed invalid-part
+entry F parameters failed invalid-part
+want contributor:logic required
+event failed F invalid-part
+names-failed F invalid-part
+
+# The repair moves no manifest: nothing is posted, and the entry stays failed
+# through tick 2.
+# The system wanter wants F as optional. Its want is its own, so it is a want
+# added on a failed entry: the new load. F returns to unavailable at the
+# structural change fixed point of tick 3, in silence, and the want leaves the
+# world with the state extracted at the end of tick 3. The want of the
+# composition is unchanged and still required.
+tick 3
+entry F parameters unavailable
+want contributor:logic required
+want system:wanter optional
+
+# F is unanswered again under the required want of the composition: the world
+# is gated from the boundary after tick 3.
+blocked 4 awaiting F
+
+# The whole artifact answers the want.
+tick 4
+record arrival F F.1
+entry F parameters available F.1
+want contributor:logic required
+want system:wanter optional
+event arrived F F.1
+
+# The system releases its want, and its own alone.
+tick 6
+entry F parameters available F.1
+want contributor:logic required
+
+# The table of tick 6 stands to tick 8, and the records after tick 4 are empty.

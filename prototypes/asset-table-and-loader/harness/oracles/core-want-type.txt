@@ -1,0 +1,246 @@
+# Oracles of the family "core-want-type": the type a want of the core takes
+# on an entry failed for its type.
+# Written by hand from the design text, by a writer who has not read the build.
+# Asset identifiers order as D, P. The manifest holds both under the first
+# type, "parameters", and the part P.1 lists D under that type.
+# The table is empty before the first block of each scenario.
+# Record lines stand in the order applied: the commands first, in the order
+# the scenario gives them, then the arrivals by asset identifier.
+# An entry line with no want line under it is an entry that holds no want.
+#
+# The rules under test. A want the core adds for a dependency is never
+# refused. It states a type in two cases: where it is the dependency's first,
+# and where it is added on an entry failed for the reason of another type, on
+# which it takes the type its parent's part lists, replaces the entry's type
+# and is the new load, whatever other want stands on the entry; the wants made
+# under the former type stay. The loading capability, following the closure
+# that brings that want, does not fail for its type a dependency whose entry
+# the table holds failed for that reason and that the parent's part lists
+# under the manifest's type: it loads it under the manifest's type.
+# The rule acts when the want of the core is added. An entry that fails for
+# its type while a want of the core already stands on it is not reached.
+
+scenario core-want-type/first-want-standing
+
+# A command's first want states a type the manifest does not hold D under.
+# The core has no manifest: the entry takes the type the want states.
+tick 2
+record want D second source:host optional
+entry D second unavailable
+want source:host optional
+
+# The want left the domain with the type its entry holds, and the loading
+# capability fails the asset: the manifest holds it under another type.
+tick 3
+record arrival D failed other-type
+entry D second failed other-type
+want source:host optional
+event failed D other-type
+
+tick 5
+record want P parameters source:tool required
+entry D second failed other-type
+want source:host optional
+entry P parameters unavailable
+want source:tool required
+
+# The required want gates from the boundary after its tick. D is failed,
+# which is an answer, and the want the core will add on it is not there yet.
+blocked 6 awaiting P
+
+# The capability follows the closure of P against the table of the end of
+# tick 5, which holds D failed for the reason of its type. The part of P
+# lists D under the manifest's type: the capability does not fail D for its
+# type and loads it under the manifest's type. One batch, D and P.
+# At the fixed point the core first adds the want of D that the part of P
+# lists, owned by P and required as the want of P is. It is added on an entry
+# failed for the reason of another type: it takes the type the part lists,
+# replaces the entry's type, and returns the entry to unavailable, in silence.
+# The host's want, made under the former type, stays. Then the arrivals, by
+# identifier: D rises from unavailable, a first arrival with its event.
+tick 6
+record arrival D D.1
+record arrival P P.1
+entry D parameters available D.1
+want source:host optional
+want asset:P required
+entry P parameters available P.1
+want source:tool required
+event arrived D D.1
+event arrived P P.1
+
+# The table of tick 6 stands to tick 12, and the records after it are empty.
+
+
+scenario core-want-type/first-want-released
+
+tick 2
+record want D second source:host optional
+entry D second unavailable
+want source:host optional
+
+tick 3
+record arrival D failed other-type
+entry D second failed other-type
+want source:host optional
+event failed D other-type
+
+# The release ends the last want of D during tick 5: the entry keeps its type
+# and its failure, with no want, until the fixed point of tick 6. The want of
+# P is made in the same record.
+tick 5
+record release D source:host
+record want P parameters source:tool required
+entry D second failed other-type
+entry P parameters unavailable
+want source:tool required
+
+blocked 6 awaiting P
+
+# The table of the end of tick 5 still holds the entry of D, failed for the
+# reason of its type: the capability loads D under the manifest's type, as
+# above. At the fixed point of tick 6 the record is applied before the falls.
+# The core adds the want of D on that entry, which the core alone now wants:
+# the want takes the type the part of P lists, replaces the entry's type and
+# returns the entry to unavailable. The arrival of D is then for an entry
+# that a want added at the first step names: it is applied. D holds a want
+# when the falls are made, and does not fall.
+tick 6
+record arrival D D.1
+record arrival P P.1
+entry D parameters available D.1
+want asset:P required
+entry P parameters available P.1
+want source:tool required
+event arrived D D.1
+event arrived P P.1
+
+# The table of tick 6 stands to tick 12, and the records after it are empty.
+
+
+scenario core-want-type/failure-under-a-standing-core-want
+
+# The case the rule does not reach. The wrong first want of D and the want of
+# its parent are made in one record: both leave the domain at the end of
+# tick 2, while the table holds D unavailable, and not failed, under the type
+# the command stated.
+tick 2
+record want D second source:host optional
+record want P parameters source:tool required
+entry D second unavailable
+want source:host optional
+entry P parameters unavailable
+want source:tool required
+
+blocked 3 awaiting P
+
+# The capability fails D for its type, as the root of its own want and as the
+# dependency of P alike: the exception of the load path is for an entry the
+# table holds failed for that reason, and the table of the end of tick 2
+# holds D unanswered. The part of P is posted at its hash.
+# Reading taken: a parent whose dependency fails is posted at its hash, its
+# own part being whole.
+# At the fixed point the core first adds the want of D that the part of P
+# lists. It is not the first want of D, and the entry is not failed: the want
+# states no type, is not refused, and leaves the entry's type as it is. Then
+# the arrivals: D fails for its type while the want of the core stands on it.
+# D is required through its parent and failed at this tick: the step names it.
+tick 3
+record arrival D failed other-type
+record arrival P P.1
+entry D second failed other-type
+want source:host optional
+want asset:P required
+entry P parameters available P.1
+want source:tool required
+event failed D other-type
+event arrived P P.1
+names-failed D other-type
+
+# Nothing repairs the entry: the rule on the type acts when a want of the
+# core is added, and none is added from here on. A failed asset is answered,
+# so nothing gates, and nothing leaves the domain: the record of tick 4 is
+# empty.
+# A second want on the parent in force. The parent's part is held available,
+# so the wants of its dependencies are recomputed: D holds one want per
+# parent, which stands, required as one want of P still is. No want is added
+# on D, so nothing takes a type and nothing retries the load.
+tick 5
+record want P parameters entity:E1 optional
+entry D second failed other-type
+want source:host optional
+want asset:P required
+entry P parameters available P.1
+want source:tool required
+want entity:E1 optional
+
+# The table of tick 5 stands to tick 12, and the records after it are empty:
+# D stays failed for its type under a parent whose part lists it correctly,
+# until a want is added on it.
+
+
+scenario core-want-type/parent-wanted-again-at-its-fall
+
+# The same two commands in one record, and the same failure of D under the
+# standing want of the core.
+tick 2
+record want D second source:host optional
+record want P parameters source:tool required
+entry D second unavailable
+want source:host optional
+entry P parameters unavailable
+want source:tool required
+
+tick 3
+record arrival D failed other-type
+record arrival P P.1
+entry D second failed other-type
+want source:host optional
+want asset:P required
+entry P parameters available P.1
+want source:tool required
+event failed D other-type
+event arrived P P.1
+names-failed D other-type
+
+# The last want of P ends, and the want of D that P owned ends with it. P
+# keeps its entry, available and with no want, through this tick. D keeps the
+# host's want, its type and its failure.
+tick 6
+record release P source:tool
+entry D second failed other-type
+want source:host optional
+entry P parameters available P.1
+
+# P is wanted again at the tick at which it would have fallen. The record is
+# applied before the falls, and the part of P is held available: the core
+# adds the want of D at the same point, with no batch. This time the want is
+# added on an entry failed for the reason of another type: it takes the type
+# the part of P lists, replaces the entry's type and is the new load. D
+# returns to unavailable, in silence, under the type the manifest holds; the
+# host's want, made under the former type, stays. The want of P itself is
+# added on an available asset and leaves nothing. Neither entry falls.
+tick 7
+record want P parameters source:tool required
+entry D parameters unavailable
+want source:host optional
+want asset:P required
+entry P parameters available P.1
+want source:tool required
+
+# D is unanswered under the required want its parent owns: the world is gated
+# from the boundary after tick 7.
+blocked 8 awaiting D
+
+# The want the core added left the domain with the type the entry now holds,
+# which is the manifest's: the capability loads D and fails nothing.
+tick 8
+record arrival D D.1
+entry D parameters available D.1
+want source:host optional
+want asset:P required
+entry P parameters available P.1
+want source:tool required
+event arrived D D.1
+
+# The table of tick 8 stands to tick 12, and the records after it are empty.

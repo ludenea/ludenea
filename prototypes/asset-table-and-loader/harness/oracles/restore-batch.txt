@@ -1,0 +1,488 @@
+# Oracles of the family "restore-batch": the answers to a restore complete
+# the batch of each closure.
+# Written by hand from the design text, by a writer who has not read the build.
+# The table's order is the order of the asset identifiers:
+# D, F, G, N, P, Q, U, X, Z. Every asset is of the first type.
+# Record lines stand in the order applied: the commands first, in the order
+# the scenario gives them, then the arrivals by asset identifier.
+# An entry line with no want line under it is an entry that holds no want.
+# Where the text left a choice, a comment says which reading the lines take.
+
+scenario restore-batch/saved-world
+
+# The table the creation gives: the two wants of the composition. The world
+# is gated on P and Q before its first tick, and the scripted batch opens the
+# gate, a failed arrival being an answer.
+tick 0
+entry P parameters unavailable
+want contributor:base required
+entry Q parameters unavailable
+want contributor:base required
+
+# The wants of D and of G are added first, each owned by its parent and
+# required as the parent's want is; then the arrivals, by identifier. G fails
+# under a required want: the step names it.
+tick 1
+record arrival D D.1
+record arrival G failed invalid-part
+record arrival P P.1
+record arrival Q Q.1
+entry D parameters available D.1
+want asset:P required
+entry G parameters failed invalid-part
+want asset:Q required
+entry P parameters available P.1
+want contributor:base required
+entry Q parameters available Q.1
+want contributor:base required
+event arrived D D.1
+event failed G invalid-part
+event arrived P P.1
+event arrived Q Q.1
+names-failed G invalid-part
+
+tick 2
+record want F parameters source:host optional
+record want N parameters source:host optional
+record want Z parameters source:host optional
+entry D parameters available D.1
+want asset:P required
+entry F parameters unavailable
+want source:host optional
+entry G parameters failed invalid-part
+want asset:Q required
+entry N parameters unavailable
+want source:host optional
+entry P parameters available P.1
+want contributor:base required
+entry Q parameters available Q.1
+want contributor:base required
+entry Z parameters unavailable
+want source:host optional
+
+# Two failed first loads of optional wants, and one arrival to a hash.
+tick 3
+record arrival F failed invalid-part
+record arrival N failed invalid-part
+record arrival Z Z.1
+entry D parameters available D.1
+want asset:P required
+entry F parameters failed invalid-part
+want source:host optional
+entry G parameters failed invalid-part
+want asset:Q required
+entry N parameters failed invalid-part
+want source:host optional
+entry P parameters available P.1
+want contributor:base required
+entry Q parameters available Q.1
+want contributor:base required
+entry Z parameters available Z.1
+want source:host optional
+event failed F invalid-part
+event failed N invalid-part
+event arrived Z Z.1
+
+# The table of tick 3 stands to tick 6.
+# An optional want that no arrival answers: it gates nothing.
+tick 7
+record want U parameters source:host optional
+entry D parameters available D.1
+want asset:P required
+entry F parameters failed invalid-part
+want source:host optional
+entry G parameters failed invalid-part
+want asset:Q required
+entry N parameters failed invalid-part
+want source:host optional
+entry P parameters available P.1
+want contributor:base required
+entry Q parameters available Q.1
+want contributor:base required
+entry U parameters unavailable
+want source:host optional
+entry Z parameters available Z.1
+want source:host optional
+
+# Three last wants end during tick 8. Each entry keeps its place and its
+# availability, whatever it is, with no want, through this tick: N failed, U
+# unavailable, Z available. The save is taken here. It holds a failed entry
+# under a command's want (F), a failed entry under the want its parent owns
+# (G), a failed entry under no want (N), an entry unavailable under no want
+# (U), an entry available under no want (Z), and no unanswered want.
+tick 8
+record release N source:host
+record release U source:host
+record release Z source:host
+entry D parameters available D.1
+want asset:P required
+entry F parameters failed invalid-part
+want source:host optional
+entry G parameters failed invalid-part
+want asset:Q required
+entry N parameters failed invalid-part
+entry P parameters available P.1
+want contributor:base required
+entry Q parameters available Q.1
+want contributor:base required
+entry U parameters unavailable
+entry Z parameters available Z.1
+
+# N, U and Z fall at the input fixed point of tick 9 and leave.
+tick 9
+entry D parameters available D.1
+want asset:P required
+entry F parameters failed invalid-part
+want source:host optional
+entry G parameters failed invalid-part
+want asset:Q required
+entry P parameters available P.1
+want contributor:base required
+entry Q parameters available Q.1
+want contributor:base required
+
+# The table of tick 9 stands to tick 12.
+
+
+# The readers of the save, each under the content at hand, into the saved
+# world's composition, naming no set. Before its first tick a reader waits
+# for a marked answer to every asset its table holds available, under a want
+# or under none: D, P, Q and Z. The save holds no unanswered want.
+# Reading taken, as in the family "restore": the step without waiting, before
+# the answers are posted, names every entry that awaits its marked answer, in
+# identifier order.
+# The batch. The capability follows the closure of each answer in the
+# manifest at hand and posts with the answers, as an ordinary arrival,
+# unmarked and with its event, each asset that a want the core adds from a
+# part at hand creates or returns to unavailable, and an entry the save holds
+# unavailable under no want that such a part lists. An entry the save holds
+# as failed under a want that stands, on which the parts at hand add no want,
+# receives nothing. An ordinary arrival is no answer: the event of the
+# restore does not name its asset.
+# N, U and Z lost their last want during tick 8: each falls once the record of
+# tick 9 is applied, unless a want names it by then.
+
+scenario restore-batch/recorded-hashes
+restore continues
+blocked 9 awaiting D, P, Q, Z
+
+# Every answer is at the recorded hash and the save holds no unanswered want:
+# the saved run continues. No event on a marked answer, none for the restore.
+# The parts at hand are the recorded ones: P lists D and Q lists G, and each
+# want the core added for them stands, so no want is added and no entry is
+# returned to unavailable. The three failed entries receive nothing, although
+# their artifacts are whole: G, the failed dependency of a parent answered at
+# its recorded hash, F under the host's want, and N under no want. U receives
+# nothing either: no want names it and no part lists it.
+# The answer of Z is for an entry no want names: it changes nothing. N, U and
+# Z fall. The table is the saved world's of tick 9.
+tick 9
+record arrival D D.1 marked
+record arrival P P.1 marked
+record arrival Q Q.1 marked
+record arrival Z Z.1 marked
+entry D parameters available D.1
+want asset:P required
+entry F parameters failed invalid-part
+want source:host optional
+entry G parameters failed invalid-part
+want asset:Q required
+entry P parameters available P.1
+want contributor:base required
+entry Q parameters available Q.1
+want contributor:base required
+
+# The table of tick 9 stands to tick 12, and the records of ticks 10 to 12
+# are empty: nothing answers F or G again.
+
+
+scenario restore-batch/failed-entry-newly-listed
+restore new-history differed P
+blocked 9 awaiting D, P, Q, Z
+
+# The part of P at hand lists F, which the save holds as failed under the
+# host's want and under no want of P. The want the core adds for it returns
+# it to unavailable, so the capability posts it with the answers, as an
+# ordinary arrival. G is listed by the part of Q, whose want stands on it: it
+# receives nothing.
+# At the first tick the core first adds the want of F, owned by P and
+# required as the want of P is: F returns to unavailable, in silence. Then
+# the arrivals, by identifier: F rises, with its event; the marked answer
+# puts P at its new hash, with no event. The host's want of F stays. The
+# event of the restore, the first of the tick, names P alone.
+tick 9
+record arrival D D.1 marked
+record arrival F F.1
+record arrival P P.2 marked
+record arrival Q Q.1 marked
+record arrival Z Z.1 marked
+entry D parameters available D.1
+want asset:P required
+entry F parameters available F.1
+want source:host optional
+want asset:P required
+entry G parameters failed invalid-part
+want asset:Q required
+entry P parameters available P.2
+want contributor:base required
+entry Q parameters available Q.1
+want contributor:base required
+event new-history differed P
+event arrived F F.1
+
+# The table of tick 9 stands to tick 12, and the records of ticks 10 to 12
+# are empty.
+
+
+scenario restore-batch/failed-entry-newly-listed-fails-again
+restore new-history differed P
+blocked 9 awaiting D, P, Q, Z
+
+# The same part at hand, and the artifact of F still cut short. The batch
+# holds F all the same, as a failure: a failure is an answer, and without it
+# the gate would stay closed on the want the core adds for F.
+# The want the core adds returns F to unavailable; the arrival then fails it.
+# The arrival is judged against the entry as it stands when it is applied,
+# which is unavailable: F is failed anew, for the reason it held, with its
+# event. F is required through its parent and failed at this tick: the step
+# names it.
+tick 9
+record arrival D D.1 marked
+record arrival F failed invalid-part
+record arrival P P.2 marked
+record arrival Q Q.1 marked
+record arrival Z Z.1 marked
+entry D parameters available D.1
+want asset:P required
+entry F parameters failed invalid-part
+want source:host optional
+want asset:P required
+entry G parameters failed invalid-part
+want asset:Q required
+entry P parameters available P.2
+want contributor:base required
+entry Q parameters available Q.1
+want contributor:base required
+event new-history differed P
+event failed F invalid-part
+names-failed F invalid-part
+
+# The want the core added was answered by an arrival of the batch that
+# brought it: nothing leaves the domain. The table of tick 9 stands to tick
+# 12, and the records of ticks 10 to 12 are empty.
+
+
+scenario restore-batch/failed-entry-of-another-parent-newly-listed
+restore new-history differed P
+blocked 9 awaiting D, P, Q, Z
+
+# The part of P at hand lists G, which the save holds as failed under the
+# want that Q owns. A want of the core stands on G, but not the want of P:
+# the part of P adds one, which returns G to unavailable, so G is posted as
+# an ordinary arrival. The capability tells the two by the owners of the
+# wants that stand on G. The part of Q adds nothing.
+# G then holds two wants the core added, in the order of their parents.
+tick 9
+record arrival D D.1 marked
+record arrival G G.1
+record arrival P P.3 marked
+record arrival Q Q.1 marked
+record arrival Z Z.1 marked
+entry D parameters available D.1
+want asset:P required
+entry F parameters failed invalid-part
+want source:host optional
+entry G parameters available G.1
+want asset:P required
+want asset:Q required
+entry P parameters available P.3
+want contributor:base required
+entry Q parameters available Q.1
+want contributor:base required
+event new-history differed P
+event arrived G G.1
+
+# The table of tick 9 stands to tick 12, and the records of ticks 10 to 12
+# are empty.
+
+
+scenario restore-batch/failed-entry-with-no-want-newly-listed
+restore new-history differed P
+blocked 9 awaiting D, P, Q, Z
+
+# The part of P at hand lists N, which the save holds as failed under no
+# want. The want the core adds for it is added on a failed entry and returns
+# it to unavailable: N is posted as an ordinary arrival, under no want as
+# under one.
+# At the first tick the record is applied before the falls. The core adds the
+# want of N; its arrival is then for an entry that a want added at the first
+# step names, and it is applied, with its event. N holds a want when the
+# falls are made, and does not fall. U and Z fall.
+tick 9
+record arrival D D.1 marked
+record arrival N N.1
+record arrival P P.4 marked
+record arrival Q Q.1 marked
+record arrival Z Z.1 marked
+entry D parameters available D.1
+want asset:P required
+entry F parameters failed invalid-part
+want source:host optional
+entry G parameters failed invalid-part
+want asset:Q required
+entry N parameters available N.1
+want asset:P required
+entry P parameters available P.4
+want contributor:base required
+entry Q parameters available Q.1
+want contributor:base required
+event new-history differed P
+event arrived N N.1
+
+# The table of tick 9 stands to tick 12, and the records of ticks 10 to 12
+# are empty.
+
+
+scenario restore-batch/unavailable-entry-newly-listed
+restore new-history differed P
+blocked 9 awaiting D, P, Q, Z
+
+# The part of P at hand lists U, which the save holds unavailable under no
+# want. The want the core adds for it neither creates the entry nor returns
+# it to unavailable, and would leave it unanswered: the batch holds its
+# ordinary arrival all the same.
+# The save holds no want of U, so it holds no unanswered want: the event of
+# the restore names P alone, and U is no asset of it.
+# At the first tick the core adds the want of U, which states no type, the
+# entry holding one; the arrival is for an entry that a want added at the
+# first step names, and it is applied, with its event. U does not fall.
+tick 9
+record arrival D D.1 marked
+record arrival P P.5 marked
+record arrival Q Q.1 marked
+record arrival U U.1
+record arrival Z Z.1 marked
+entry D parameters available D.1
+want asset:P required
+entry F parameters failed invalid-part
+want source:host optional
+entry G parameters failed invalid-part
+want asset:Q required
+entry P parameters available P.5
+want contributor:base required
+entry Q parameters available Q.1
+want contributor:base required
+entry U parameters available U.1
+want asset:P required
+event new-history differed P
+event arrived U U.1
+
+# The table of tick 9 stands to tick 12, and the records of ticks 10 to 12
+# are empty.
+
+
+scenario restore-batch/available-entry-with-no-want-newly-listed
+restore new-history differed P, Z
+blocked 9 awaiting D, P, Q, Z
+
+# The part of P at hand lists Z, which the save holds available under no
+# want, and the content at hand holds Z at another hash. Z is answered as any
+# available entry is, by a marked answer; no ordinary arrival is posted for
+# it. At the first tick the core adds the want of Z from the part of the
+# answer of P, before any arrival is applied: the marked answer of Z is then
+# for an entry a want names, and it is applied. Z takes the hash at hand,
+# with no event, and does not fall. Both answers differed: the event of the
+# restore names P and Z.
+tick 9
+record arrival D D.1 marked
+record arrival P P.6 marked
+record arrival Q Q.1 marked
+record arrival Z Z.2 marked
+entry D parameters available D.1
+want asset:P required
+entry F parameters failed invalid-part
+want source:host optional
+entry G parameters failed invalid-part
+want asset:Q required
+entry P parameters available P.6
+want contributor:base required
+entry Q parameters available Q.1
+want contributor:base required
+entry Z parameters available Z.2
+want asset:P required
+event new-history differed P, Z
+
+# The table of tick 9 stands to tick 12, and the records of ticks 10 to 12
+# are empty.
+
+
+scenario restore-batch/parent-at-another-hash-keeps-its-failed-dependency
+restore new-history differed Q
+blocked 9 awaiting D, P, Q, Z
+
+# The answer of Q is at another hash, and its part at hand still lists G. The
+# want Q owns on G stands, so the part at hand adds no want: G receives
+# nothing and stays failed, although its parent's answer differed and its
+# artifact is whole. A dependency is posted for a want added on it, and not
+# for a parent whose hash moved.
+tick 9
+record arrival D D.1 marked
+record arrival P P.1 marked
+record arrival Q Q.2 marked
+record arrival Z Z.1 marked
+entry D parameters available D.1
+want asset:P required
+entry F parameters failed invalid-part
+want source:host optional
+entry G parameters failed invalid-part
+want asset:Q required
+entry P parameters available P.1
+want contributor:base required
+entry Q parameters available Q.2
+want contributor:base required
+event new-history differed Q
+
+# The table of tick 9 stands to tick 12, and the records of ticks 10 to 12
+# are empty.
+
+
+scenario restore-batch/failed-entry-newly-listed-at-depth-two
+restore new-history differed P
+blocked 9 awaiting D, P, Q, Z
+
+# The part of P at hand lists X, which the saved table does not name, and the
+# part of X lists F, which the save holds as failed under the host's want.
+# Reading taken: the capability follows the closure of the answer of P to
+# any depth, as the core follows the parts downwards: the want the core adds
+# for X creates its entry, and the want it adds for F from the part of X
+# returns F to unavailable. Both are posted as ordinary arrivals.
+# At the first tick the core adds the want of X, owned by P, the first of X,
+# with the type the part of P lists; X then holds a want, so the core adds
+# the want of F from the part of X, owned by X and required as the one want
+# of X is. Then the arrivals, by identifier.
+tick 9
+record arrival D D.1 marked
+record arrival F F.1
+record arrival P P.7 marked
+record arrival Q Q.1 marked
+record arrival X X.1
+record arrival Z Z.1 marked
+entry D parameters available D.1
+want asset:P required
+entry F parameters available F.1
+want source:host optional
+want asset:X required
+entry G parameters failed invalid-part
+want asset:Q required
+entry P parameters available P.7
+want contributor:base required
+entry Q parameters available Q.1
+want contributor:base required
+entry X parameters available X.1
+want asset:P required
+event new-history differed P
+event arrived F F.1
+event arrived X X.1
+
+# The table of tick 9 stands to tick 12, and the records of ticks 10 to 12
+# are empty.

@@ -1,0 +1,183 @@
+# Family first-step: the wants of the first step start from an asset that
+# holds a want.
+# Written by hand from the design text, before any run of the stand-in stage,
+# by a writer who has not read the build.
+# The table's order is the order of the asset identifiers: K, M, N, P, R.
+# The table is empty before the first block of each scenario.
+# Record lines stand in the order applied: the commands first, in the order
+# the scenario gives them, then the arrivals by asset identifier.
+# An entry line with no want line under it is an entry that holds no want.
+# A tick block with no entry line states an empty table.
+# The family gives no size: an entry and an arrival state none.
+# The rule under test. Over the arrivals of one record the core first adds
+# the wants that the parts of those arrivals list, starting from the part of
+# an asset that holds a want at that step, once the commands of the record
+# are applied, and following it downwards to any depth: the part of an asset
+# no want names adds nothing. It then applies the arrivals in identifier
+# order, an arrival for an asset no want names being recorded and changing
+# nothing, and it then recomputes the wants it added from the parts in
+# force. A parent that holds no want, or that never rose, owns no want on a
+# dependency, and no dependency rises under it.
+
+
+scenario first-step/release-in-the-record-of-the-replacement
+
+tick 2
+record want P parameters source:host required
+entry P parameters unavailable
+want source:host required
+
+# The first part of P lists no dependency.
+tick 3
+record arrival P P.1
+entry P parameters available P.1
+want source:host required
+event arrived P P.1
+
+# The release is applied before the arrivals of the same record: P holds no
+# want when the first step is made, so the part of its arrival, which lists
+# N, adds nothing. The arrival of N is of an asset no want names: recorded,
+# and it changes nothing; N has no entry. The arrival of P is for an entry
+# that holds no want: it changes nothing and emits no event. P keeps its
+# entry at its former hash, with no want, through this tick.
+tick 5
+record release P source:host
+record arrival N N.1
+record arrival P P.2
+entry P parameters available P.1
+
+# P falls at the input fixed point of tick 6 and leaves: the table is empty.
+tick 6
+
+# The table stays empty to tick 8.
+
+
+scenario first-step/replacement-of-an-entry-with-no-want
+
+tick 2
+record want P parameters source:host required
+entry P parameters unavailable
+want source:host required
+
+tick 3
+record arrival P P.1
+entry P parameters available P.1
+want source:host required
+event arrived P P.1
+
+# The last want of P ends: it keeps its entry, available and with no want,
+# through this tick.
+tick 5
+record release P source:host
+entry P parameters available P.1
+
+# The record is applied before the falls. P still has its entry and holds no
+# want: the part of its arrival adds nothing, the arrival of N is of an asset
+# no want names, and the arrival of P is for an entry with no want. Neither
+# changes anything and no event is emitted. P then falls: the table is empty.
+tick 6
+record arrival N N.1
+record arrival P P.2
+
+# The table stays empty to tick 8.
+
+
+scenario first-step/want-again-in-the-record-of-the-replacement
+
+tick 2
+record want P parameters source:host required
+entry P parameters unavailable
+want source:host required
+
+tick 3
+record arrival P P.1
+entry P parameters available P.1
+want source:host required
+event arrived P P.1
+
+tick 5
+record release P source:host
+entry P parameters available P.1
+
+# The same record as in the scenario above, behind a command that wants P
+# again. The command is applied first, on an entry the table holds
+# available: P holds a want when the first step is made. The core adds the
+# want of N that the part of the arrival lists, owned by P and optional as
+# the want of P is. Then the arrivals by identifier: N on an entry that
+# holds a want, so it is available, with its event; P on an entry that a
+# want applied before the arrival names again, so it takes its new hash,
+# with the event of a change. The recomputation leaves the want of N: the
+# part in force lists it. P does not fall.
+tick 6
+record want P parameters source:tool optional
+record arrival N N.1
+record arrival P P.2
+entry N parameters available N.1
+want asset:P optional
+entry P parameters available P.2
+want source:tool optional
+event arrived N N.1
+event changed P P.1 P.2
+
+# The table of tick 6 stands to tick 8.
+
+
+scenario first-step/root-fails-while-its-closure-arrives
+
+tick 2
+record want R parameters source:host required
+entry R parameters unavailable
+want source:host required
+
+# Nothing is pending yet.
+blocked 3 awaiting R
+# One batch for the closure of R: the root fails, and the two assets under
+# it arrive to a hash. A failure is an answer: the pending failure opens the
+# gate.
+# The first step starts from an asset that holds a want. R holds one, and
+# its arrival is a failure, which brings no part. No want names M, so the
+# part of M, which lists K, adds nothing. The arrivals of K and of M are of
+# assets no want names: each is recorded and changes nothing, and neither
+# has an entry. R is failed, with its event. It is failed at this tick under
+# a required want: the step names it.
+tick 3
+record arrival K K.1
+record arrival M M.1
+record arrival R failed invalid-part
+entry R parameters failed invalid-part
+want source:host required
+event failed R invalid-part
+names-failed R invalid-part
+
+# A second maker wants the failed root, as required: the entry returns to
+# unavailable, in silence. R is unanswered again, and the world is gated
+# from the boundary after tick 5.
+tick 5
+record want R parameters source:tool required
+entry R parameters unavailable
+want source:host required
+want source:tool required
+
+blocked 6 awaiting R
+# The batch of the retry brings the closure again, and the gate opens. R
+# holds a want and its part lists M: the core adds the want of M, owned by R
+# and required as the wants of R are. M then holds a want and its part lists
+# K: the core adds the want of K, owned by M and required as the want of M
+# is. The three arrivals are then applied by identifier, each on an entry
+# that holds a want.
+tick 6
+record arrival K K.1
+record arrival M M.1
+record arrival R R.1
+entry K parameters available K.1
+want asset:M required
+entry M parameters available M.1
+want asset:R required
+entry R parameters available R.1
+want source:host required
+want source:tool required
+event arrived K K.1
+event arrived M M.1
+event arrived R R.1
+
+# The table of tick 6 stands to tick 8.

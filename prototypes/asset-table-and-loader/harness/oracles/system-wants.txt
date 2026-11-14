@@ -21,8 +21,11 @@
 # system again. So a tick at which the system alone acts has a block with no
 # record line, and a comment says what the system did.
 #
-# Reading taken: a want the system makes under the world's own entry carries
-# the contributor that brings the system, here contributor:logic.
+# A want the system makes under the world's own entry carries the system as
+# its maker, a third kind of maker beside contributors and command sources:
+# here system:wanter, by the stable name of the system. Its release ends its
+# own want alone. The wants of systems stand after those of contributors and
+# before those of command sources.
 
 scenario system-wants/entity-wants
 
@@ -124,10 +127,10 @@ entry A parameters available A.1
 tick 8
 
 scenario system-wants/closure-under-the-world-entry
-# The system wants R under the world's own entry: the want of contributor:logic.
+# The system wants R under the world's own entry: the want of system:wanter.
 tick 2
 entry R parameters unavailable
-want contributor:logic optional
+want system:wanter optional
 # The batch: the core first adds the wants its parts list, to any depth, M for
 # R and K for M, each optional as its parent's wants are, then applies the
 # arrivals by identifier.
@@ -140,12 +143,12 @@ want asset:M optional
 entry M parameters available M.1
 want asset:R optional
 entry R parameters available R.1
-want contributor:logic optional
+want system:wanter optional
 event arrived K K.1
 event arrived M M.1
 event arrived R R.1
 # A host's preload of the same asset is a second want, of another maker. The
-# want of a contributor stands before the want of the source of a command.
+# want of a system stands before the want of the source of a command.
 tick 5
 record want R parameters source:host optional
 entry K parameters available K.1
@@ -153,7 +156,7 @@ want asset:M optional
 entry M parameters available M.1
 want asset:R optional
 entry R parameters available R.1
-want contributor:logic optional
+want system:wanter optional
 want source:host optional
 # The system makes its want again as required: the same maker, so the policy
 # of its one want changes and no want is added. R is in force, so the core
@@ -165,7 +168,7 @@ want asset:M required
 entry M parameters available M.1
 want asset:R required
 entry R parameters available R.1
-want contributor:logic required
+want system:wanter required
 want source:host optional
 # The system releases its want, and its own alone. No want of R is required
 # any more: the wants of M and of K are optional again.

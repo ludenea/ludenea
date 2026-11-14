@@ -1,0 +1,357 @@
+# Oracles of the family "sizes": the size an arrival names and an entry
+# holds gives the count of a world.
+# Written by hand from the design text, by a writer who has not read the build.
+# Asset identifiers order as H, K, N, S, W.
+# Record lines stand in the order applied: the lowering of a budget, or the
+# commands in the order the scenario gives them, then the arrivals by asset
+# identifier. No record of this family holds both a lowering and a command.
+# An entry line with no want line under it is an entry that holds no want.
+# A tick 0 block states the table the creation gives.
+#
+# Every arrival to a hash names the size of what it puts in force, as the
+# domain manifest gives it, and every available entry holds that size. A
+# failed arrival and a failed entry hold none. Sizes in bytes: H.1 4 000,
+# K.1 5 000, K.2 7 000, K.3 3 000, N.1 2 000, S.1 1 000, W.1 1 000. The
+# part of H.1 is 1 000 bytes long: its size is not the length of its part.
+# No part lists a dependency.
+#
+# The count of a world is the sum of the sizes its available entries hold,
+# less an entry that falls at the same fixed point. It is a function of the
+# table: a restored table has the count of the table that was saved, and a
+# replay derives every rejection again from the record and from the state.
+# A rejected arrival stays in the record as an arrival to a hash, with its
+# size; the failure of a rejected first load is in no record.
+#
+# The budget of a world is no state. Reading taken: a restored world stands
+# under the budget its save holds, the lowered one, whichever restore it is.
+# Reading taken: the lowering of a budget is applied before the arrivals of
+# its record. Here the record that holds it holds nothing else.
+#
+# The order of the test is the one taken on 2026-11-14, the roots that hold
+# a required want first. No tick of this family holds two groups whose order
+# changes a state.
+
+# Scenario "run-and-replay". A budget of 12 000 bytes at creation, lowered
+# to 10 000 bytes by the record of tick 4.
+
+scenario sizes/run-and-replay
+
+# The world that runs over a live loading capability and writes the log.
+world recorded
+
+tick 0
+entry K parameters unavailable
+want contributor:base required
+tick 1
+record arrival K K.1 size 5000
+entry K parameters available K.1 size 5000
+want contributor:base required
+event arrived K K.1
+tick 2
+record want H parameters source:host optional
+record want S parameters source:host required
+entry H parameters unavailable
+want source:host optional
+entry K parameters available K.1 size 5000
+want contributor:base required
+entry S parameters unavailable
+want source:host required
+# Count 5 000. The required roots first: the group of K is empty, the group
+# of S is 6 000, accepted. Then the group of H, counted at the size its
+# arrival names and not at the length of its part: 10 000, within the
+# budget of 12 000, accepted.
+tick 3
+record arrival H H.1 size 4000
+record arrival S S.1 size 1000
+entry H parameters available H.1 size 4000
+want source:host optional
+entry K parameters available K.1 size 5000
+want contributor:base required
+entry S parameters available S.1 size 1000
+want source:host required
+event arrived H H.1
+event arrived S S.1
+# The lowering. The count, 10 000, is equal to the new budget and so within
+# it. The table stays as it was.
+tick 4
+record budget 10000
+entry H parameters available H.1 size 4000
+want source:host optional
+entry K parameters available K.1 size 5000
+want contributor:base required
+entry S parameters available S.1 size 1000
+want source:host required
+tick 5
+record want N parameters source:host optional
+entry H parameters available H.1 size 4000
+want source:host optional
+entry K parameters available K.1 size 5000
+want contributor:base required
+entry N parameters unavailable
+want source:host optional
+entry S parameters available S.1 size 1000
+want source:host required
+# A rejected first load. Count 10 000. The group of N: 12 000, above the
+# budget of 10 000, rejected. N becomes failed, under an optional want: the
+# step names nothing. The sum of the lengths of the parts in force is
+# 7 000, under which N would fit; and so it would under the budget of the
+# creation.
+tick 6
+record arrival N N.1 size 2000
+rejected N N.1
+entry H parameters available H.1 size 4000
+want source:host optional
+entry K parameters available K.1 size 5000
+want contributor:base required
+entry N parameters failed over-budget
+want source:host optional
+entry S parameters available S.1 size 1000
+want source:host required
+event failed N over-budget
+# A rejected replacement. The batch of the revision holds the new hash of K
+# and nothing for N, whose entry in the manifest did not change. The group
+# of K: 7 000 in place of 5 000 is 12 000, above the budget, rejected. K is
+# in force and stays as it was, at its size, with no event. The replacement
+# is not offered again.
+tick 8
+record arrival K K.2 size 7000
+rejected K K.2
+entry H parameters available H.1 size 4000
+want source:host optional
+entry K parameters available K.1 size 5000
+want contributor:base required
+entry N parameters failed over-budget
+want source:host optional
+entry S parameters available S.1 size 1000
+want source:host required
+
+# The save is taken after tick 9: three entries in force, 10 000 bytes, a
+# failed entry under a want, no unanswered want and no entry without a want.
+
+# The last want of S ends: its entry stays, available and with no want,
+# until the fixed point of tick 12.
+tick 11
+record release S source:host
+record want W parameters source:tool optional
+entry H parameters available H.1 size 4000
+want source:host optional
+entry K parameters available K.1 size 5000
+want contributor:base required
+entry N parameters failed over-budget
+want source:host optional
+entry S parameters available S.1 size 1000
+entry W parameters unavailable
+want source:tool optional
+# S falls at this fixed point and the closure of no root reaches it: the
+# count leaves out the size its entry holds. Count 9 000. The group of W:
+# 10 000, equal to the budget, accepted. S then falls.
+tick 12
+record arrival W W.1 size 1000
+entry H parameters available H.1 size 4000
+want source:host optional
+entry K parameters available K.1 size 5000
+want contributor:base required
+entry N parameters failed over-budget
+want source:host optional
+entry W parameters available W.1 size 1000
+want source:tool optional
+event arrived W W.1
+# A want added on the failed entry returns it to unavailable, in silence.
+tick 13
+record want N parameters source:tool optional
+entry H parameters available H.1 size 4000
+want source:host optional
+entry K parameters available K.1 size 5000
+want contributor:base required
+entry N parameters unavailable
+want source:host optional
+want source:tool optional
+entry W parameters available W.1 size 1000
+want source:tool optional
+# Count 10 000. The group of N: 12 000, rejected again. N is failed anew,
+# with its event.
+tick 14
+record arrival N N.1 size 2000
+rejected N N.1
+entry H parameters available H.1 size 4000
+want source:host optional
+entry K parameters available K.1 size 5000
+want contributor:base required
+entry N parameters failed over-budget
+want source:host optional
+want source:tool optional
+entry W parameters available W.1 size 1000
+want source:tool optional
+event failed N over-budget
+
+# The table of tick 14 stands to tick 15.
+
+# The world that replays the log of the world above, with no loading
+# capability. Its records are the log's, the lowering of tick 4 and the two
+# rejected arrivals to a hash included; it derives the three rejections and
+# the two failures of N again, at the same ticks, and its table is the table
+# of the world above, tick for tick.
+world replayed as recorded shifted 0
+
+
+# The readers of the save, each a process of its own. The saved table holds
+# H at 4 000 bytes, K at 5 000 and S at 1 000, each the size its arrival
+# named in the process that wrote the save, and N failed. Its header holds
+# the lowered budget, 10 000 bytes.
+
+# Scenario "restored-under-the-recorded-content". The three entries in force
+# are confirmed at their recorded hashes, a precondition of the first tick
+# of which the record holds nothing. The saved run continues: no event
+# records the restore, and from its first tick on the table is the table of
+# the world "recorded" above.
+
+scenario sizes/restored-under-the-recorded-content
+restore continues
+
+# The restored table. No arrival has named a size in this process: the
+# sizes are the ones the saved entries hold, and the count is 10 000.
+tick 10
+entry H parameters available H.1 size 4000
+want source:host optional
+entry K parameters available K.1 size 5000
+want contributor:base required
+entry N parameters failed over-budget
+want source:host optional
+entry S parameters available S.1 size 1000
+want source:host required
+tick 11
+record release S source:host
+record want W parameters source:tool optional
+entry H parameters available H.1 size 4000
+want source:host optional
+entry K parameters available K.1 size 5000
+want contributor:base required
+entry N parameters failed over-budget
+want source:host optional
+entry S parameters available S.1 size 1000
+entry W parameters unavailable
+want source:tool optional
+# S falls at this fixed point: the count leaves out the size the restored
+# entry holds. Count 9 000. The group of W: 10 000, equal to the budget the
+# save holds, accepted.
+tick 12
+record arrival W W.1 size 1000
+entry H parameters available H.1 size 4000
+want source:host optional
+entry K parameters available K.1 size 5000
+want contributor:base required
+entry N parameters failed over-budget
+want source:host optional
+entry W parameters available W.1 size 1000
+want source:tool optional
+event arrived W W.1
+tick 13
+record want N parameters source:tool optional
+entry H parameters available H.1 size 4000
+want source:host optional
+entry K parameters available K.1 size 5000
+want contributor:base required
+entry N parameters unavailable
+want source:host optional
+want source:tool optional
+entry W parameters available W.1 size 1000
+want source:tool optional
+# Count 10 000, of which 9 000 are sizes that the save alone gave this
+# process. The group of N: 12 000, above the budget of 10 000, rejected.
+tick 14
+record arrival N N.1 size 2000
+rejected N N.1
+entry H parameters available H.1 size 4000
+want source:host optional
+entry K parameters available K.1 size 5000
+want contributor:base required
+entry N parameters failed over-budget
+want source:host optional
+want source:tool optional
+entry W parameters available W.1 size 1000
+want source:tool optional
+event failed N over-budget
+
+# The table of tick 14 stands to tick 15.
+
+# Scenario "restored-at-a-smaller-hash". The content at hand holds K.3,
+# 3 000 bytes, in place of K.1, and the part of K.1 is not at hand. Every
+# entry in force is answered by a marked arrival in the record of the first
+# tick; the failed entry, under a want that stands and on which no want is
+# added, receives nothing. The answer of K differs: the restore starts a new
+# history.
+
+scenario sizes/restored-at-a-smaller-hash
+restore new-history differed K
+
+# The answers of H and of S are at the hash their entries hold: they leave
+# the entries as they were and stand in no group. The answer of K is at
+# another hash: it stands in the group of K, and the count takes its size in
+# place of the size the entry held, which the entry alone gives, the former
+# part not being at hand: 10 000, less 5 000, and 3 000, is 8 000, within,
+# accepted. A marked answer to a hash emits no event; the event of the
+# restore is the first and only event of the tick.
+tick 10
+record arrival H H.1 size 4000 marked
+record arrival K K.3 size 3000 marked
+record arrival S S.1 size 1000 marked
+entry H parameters available H.1 size 4000
+want source:host optional
+entry K parameters available K.3 size 3000
+want contributor:base required
+entry N parameters failed over-budget
+want source:host optional
+entry S parameters available S.1 size 1000
+want source:host required
+event new-history differed K
+tick 11
+record release S source:host
+record want W parameters source:tool optional
+entry H parameters available H.1 size 4000
+want source:host optional
+entry K parameters available K.3 size 3000
+want contributor:base required
+entry N parameters failed over-budget
+want source:host optional
+entry S parameters available S.1 size 1000
+entry W parameters unavailable
+want source:tool optional
+# S falls at this fixed point. Count 7 000. The group of W: 8 000, accepted.
+tick 12
+record arrival W W.1 size 1000
+entry H parameters available H.1 size 4000
+want source:host optional
+entry K parameters available K.3 size 3000
+want contributor:base required
+entry N parameters failed over-budget
+want source:host optional
+entry W parameters available W.1 size 1000
+want source:tool optional
+event arrived W W.1
+tick 13
+record want N parameters source:tool optional
+entry H parameters available H.1 size 4000
+want source:host optional
+entry K parameters available K.3 size 3000
+want contributor:base required
+entry N parameters unavailable
+want source:host optional
+want source:tool optional
+entry W parameters available W.1 size 1000
+want source:tool optional
+# Count 8 000. The group of N: 10 000, equal to the budget, accepted: N fits
+# in the room that the smaller hash of K freed, and in that room alone.
+tick 14
+record arrival N N.1 size 2000
+entry H parameters available H.1 size 4000
+want source:host optional
+entry K parameters available K.3 size 3000
+want contributor:base required
+entry N parameters available N.1 size 2000
+want source:host optional
+want source:tool optional
+entry W parameters available W.1 size 1000
+want source:tool optional
+event arrived N N.1
+
+# The table of tick 14 stands to tick 15.

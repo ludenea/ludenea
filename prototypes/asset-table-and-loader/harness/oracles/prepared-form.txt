@@ -1,0 +1,507 @@
+# Oracles of the family "prepared-form": a form built once is never read
+# under another hash.
+# Written by hand from the design text, before any run of the stand-in stage,
+# by a writer who has not read the build. Every state is derived from the
+# text, and no tool computed any of them.
+#
+# The table's order is the order of the asset identifiers: A, K, M.
+# A and K are of the first asset type, written "parameters", and have no
+# prepared form. M is of the type "second", for which the composition
+# declares one prepared form built once.
+# M.1:built is the form built once from the part M.1, the producer's.
+# M.1:local is the form the machine that runs the harness builds for itself
+# from the same part: another hash, on every machine.
+#
+# Where the text places a form in what a world observes, a line states it:
+# the arrival of the asset names the hash of the form, and the entry holds it
+# beside the hash of the part. An arrival to failed, a failed entry and an
+# unavailable entry state no form.
+# A "handed" line states the bytes the consumer of the form was handed at
+# that tick, by their hash: the form at the hash the entry names, since an
+# asset is available only when its part and its declared forms are resident
+# and a form built once is never read under another hash.
+# A tick that has no block has an empty record, no event, and the table and
+# the "handed" lines of the block before it.
+#
+# Readings taken, each recorded with its sentences in the record of readings:
+# - An event names the hash of the canonical part and no hash of a form.
+# - A replay is refused at the record whose arrival names a form that cannot
+#   be had: the ticks before that record have run, and the refusal names the
+#   hash of the form.
+# - A restore under the recorded content that is refused for a form names the
+#   asset and the recorded hash of the form.
+# - A form built once that the manifest names and of which the store holds no
+#   bytes is a failure for the reason "artifact-gone".
+# - A marked answer at the recorded hash of the part that names another form
+#   is an answer that differed: it is applied, with no event of its own.
+# - An asset is confirmed, at a restore under the recorded content, where the
+#   manifest the restored world stands under holds it at the recorded hashes
+#   and the store holds their bytes.
+# - The scenarios that give no size state none; the two scenarios under a
+#   budget state the size of each arrival to a hash and of each available
+#   entry, the part with the form the arrival names.
+
+
+scenario prepared-form/recorded-run
+
+# The world that names no set, on the producer's instance. The composition's
+# want of A is made before the first tick and gates it.
+world no-set
+
+tick 0
+entry A parameters unavailable
+want contributor:base required
+
+# A has no form: its arrival names the hash of its part alone.
+tick 1
+record arrival A A.1
+entry A parameters available A.1
+want contributor:base required
+event arrived A A.1
+
+# The first want of M makes its entry and writes its type. The want names an
+# unanswered asset, so it leaves the domain; tick 2 runs with M unanswered and
+# the world is gated from the boundary after it.
+tick 2
+record want M second source:host required
+entry A parameters available A.1
+want contributor:base required
+entry M second unavailable
+want source:host required
+
+# The arrival names the hash of the part and the hash of the form built once
+# that the composition declares for the type, and the entry holds both. The
+# event names the hash of the part. The consumer is handed the form built
+# once.
+tick 3
+record arrival M M.1 form M.1:built
+entry A parameters available A.1
+want contributor:base required
+entry M second available M.1 form M.1:built
+want source:host required
+handed M M.1:built
+event arrived M M.1
+
+# The table of tick 3 stands to tick 6. The save is taken after tick 4.
+
+# The world created under the producer's set: the set's hash is configuration
+# and no state, and the want of M is resolved in the same manifest.
+world under-set as no-set shifted 0
+
+
+scenario prepared-form/replay-beside-the-machine-own-form
+
+# The store of the replaying process holds the form built once and, beside
+# it, the form its machine built for itself; the instance's manifest is the
+# machine's own. The arrivals are the recording's: the record of tick 3 names
+# M.1:built, which the store holds, so the replay runs, its table is the
+# recorded one at every tick, and the consumer is handed the form the entry
+# names and never the machine's own.
+world no-set
+replay runs
+
+tick 0
+entry A parameters unavailable
+want contributor:base required
+
+tick 1
+record arrival A A.1
+entry A parameters available A.1
+want contributor:base required
+event arrived A A.1
+
+tick 2
+record want M second source:host required
+entry A parameters available A.1
+want contributor:base required
+entry M second unavailable
+want source:host required
+
+tick 3
+record arrival M M.1 form M.1:built
+entry A parameters available A.1
+want contributor:base required
+entry M second available M.1 form M.1:built
+want source:host required
+handed M M.1:built
+event arrived M M.1
+
+# The table of tick 3 stands to tick 6.
+
+world under-set as no-set shifted 0
+
+
+scenario prepared-form/replay-without-the-form-built-once
+
+# The store holds the part M.1 and the machine's own form, and no bytes under
+# M.1:built. Ticks 1 and 2 replay as recorded: A.1 is in the store, and the
+# record of tick 2 names no hash. The record of tick 3 holds an arrival that
+# names a form built once that cannot be had: the replay is refused there,
+# naming the hash of the form, in the world that names no set and in the
+# world created under the set alike. Tick 3 does not run.
+world no-set
+replay refused 3 hash M.1:built
+
+tick 0
+entry A parameters unavailable
+want contributor:base required
+
+tick 1
+record arrival A A.1
+entry A parameters available A.1
+want contributor:base required
+event arrived A A.1
+
+tick 2
+record want M second source:host required
+entry A parameters available A.1
+want contributor:base required
+entry M second unavailable
+want source:host required
+
+world under-set as no-set shifted 0
+
+
+scenario prepared-form/own-build-names-its-own-form
+
+# A run, not a replay, on the machine's own build: the instance's manifest
+# holds, for M, the form the machine built for itself. The want of M is
+# resolved in that manifest, so the arrival names M.1:local and the entry
+# holds it: the table differs from the recorded world's by that hash, and
+# so does the state hash, from tick 3 on. A form a machine built for itself
+# never stands under the hash of the form built once.
+world no-set
+
+tick 0
+entry A parameters unavailable
+want contributor:base required
+
+tick 1
+record arrival A A.1
+entry A parameters available A.1
+want contributor:base required
+event arrived A A.1
+
+tick 2
+record want M second source:host required
+entry A parameters available A.1
+want contributor:base required
+entry M second unavailable
+want source:host required
+
+tick 3
+record arrival M M.1 form M.1:local
+entry A parameters available A.1
+want contributor:base required
+entry M second available M.1 form M.1:local
+want source:host required
+handed M M.1:local
+event arrived M M.1
+
+# The table of tick 3 stands to tick 6.
+
+# A world created under the set the machine's own manifest names is not
+# refused: that set is the machine's, and its hash is not the producer's.
+world under-own-set as no-set shifted 0
+
+
+scenario prepared-form/form-built-once-gone-from-the-store
+
+# The instance's manifest is the producer's: it names M.1:built for M, and
+# the store holds no bytes under that hash. The machine's own form has
+# another hash and does not pass for it. The load of M fails for the reason
+# that the store holds no bytes under a hash the manifest names. M is under
+# a required want: the failure is an answer, the gate opens, the tick runs
+# and the step names M.
+world no-set
+
+tick 0
+entry A parameters unavailable
+want contributor:base required
+
+tick 1
+record arrival A A.1
+entry A parameters available A.1
+want contributor:base required
+event arrived A A.1
+
+tick 2
+record want M second source:host required
+entry A parameters available A.1
+want contributor:base required
+entry M second unavailable
+want source:host required
+
+tick 3
+record arrival M failed artifact-gone
+entry A parameters available A.1
+want contributor:base required
+entry M second failed artifact-gone
+want source:host required
+event failed M artifact-gone
+names-failed M artifact-gone
+
+# The table of tick 3 stands to tick 6: no want is added on M, so nothing
+# retries its load.
+
+# Under the set: an artifact the set names is gone from the store, and the
+# want is answered by a failed transition with that reason.
+world under-set as no-set shifted 0
+
+
+# The readers of a save of "prepared-form/recorded-run", taken after tick 4.
+# Its table holds A available at A.1 under the composition's want, and M
+# available at M.1 with the form M.1:built under the host's want.
+
+scenario prepared-form/restore-confirms-the-form
+
+# Under the recorded content. The manifest the reader stands under holds M
+# at M.1 with M.1:built, and the store holds the bytes of both: every asset
+# is confirmed at the recorded hashes, of its part and of its form. The
+# confirmation is no element of the record and emits nothing. The machine's
+# own form lies beside and is not read.
+world no-set
+restore continues
+
+tick 5
+entry A parameters available A.1
+want contributor:base required
+entry M second available M.1 form M.1:built
+want source:host required
+handed M M.1:built
+
+# The table of tick 5 stands to tick 6.
+
+world under-set as no-set shifted 0
+
+
+scenario prepared-form/restore-refused-form-gone
+restore refused hash M M.1:built
+# The manifest holds M at the recorded hashes, and the store holds no bytes
+# under the recorded hash of its form: the form cannot be had. The restore
+# is refused, naming the asset and the recorded hash of the form, and no
+# world exists. The machine's own form does not confirm it.
+
+
+scenario prepared-form/restore-refused-own-build
+restore refused hash M M.1:built
+# The content at hand is the machine's own build: the part of M is at its
+# recorded hash, the form is at another, and the store holds no bytes under
+# the recorded hash of the form. The restore is refused, naming the asset
+# and the recorded hash of the form.
+
+
+scenario prepared-form/restore-own-manifest-beside-the-form-built-once
+restore refused hash M M.1:built
+# The store holds the bytes of M.1:built, and the manifest the reader stands
+# under, the machine's own, holds M with another form.
+# Reading taken: an asset is confirmed where the manifest the restored world
+# stands under holds it at the recorded hashes and the store holds their
+# bytes. Here the form differs in that manifest, so the content at hand is
+# not the recorded one: refused, naming M and the recorded hash of its form.
+# The other reading: the bytes under each recorded hash are in the store,
+# the restore is confirmed, and the reader continues with the table and the
+# "handed" line of "prepared-form/restore-confirms-the-form".
+
+
+scenario prepared-form/content-at-hand-same-form
+restore continues
+blocked 5 awaiting A, M
+
+# Under the content at hand, which is the recorded one. Each available entry
+# is answered by a marked transition; the answer of M names the hash of its
+# part and the hash of its form, both the recorded ones. Nothing changes, no
+# event is emitted, and the saved run continues.
+tick 5
+record arrival A A.1 marked
+record arrival M M.1 form M.1:built marked
+entry A parameters available A.1
+want contributor:base required
+entry M second available M.1 form M.1:built
+want source:host required
+handed M M.1:built
+
+# The table of tick 5 stands to tick 6.
+
+
+scenario prepared-form/content-at-hand-own-build
+restore new-history differed M
+blocked 5 awaiting A, M
+
+# Under the content at hand, which is the machine's own build. The answer of
+# M is at the recorded hash of its part and names another form.
+# Reading taken: such an answer differed. It does not leave the entry as it
+# was, so it is applied: the entry takes the hash of the machine's own form,
+# with no event of its own, the answer being marked. The restore starts a new
+# history, and its one event, the first of the tick, names M.
+# The other reading: an answer at the recorded hash of the part changes
+# nothing, and the saved run continues with an entry that names a form the
+# store does not hold.
+tick 5
+record arrival A A.1 marked
+record arrival M M.1 form M.1:local marked
+entry A parameters available A.1
+want contributor:base required
+entry M second available M.1 form M.1:local
+want source:host required
+handed M M.1:local
+event new-history differed M
+
+# The table of tick 5 stands to tick 6.
+
+
+# The two scenarios under a budget. Every arrival to a hash names the size of
+# what it puts in force, the canonical part with the form built once that the
+# arrival names, as the domain manifest gives the size of each, and the entry
+# holds that size beside its hashes:
+#   K.1  5 000, no form                 the arrival names 5 000
+#   M.1  2 000, its form 4 000          the arrival names 6 000
+#   M.2  2 000, its form 4 500          the arrival names 6 500
+#   M.3  3 000, its form 1 000          the arrival names 4 000
+# The count of a world is the sum of the sizes its available entries hold.
+# At a fixed point: the commands of the record; the groups, each decided
+# before any arrival is applied; the accepted arrivals in identifier order.
+# A count equal to the budget is within it.
+
+scenario prepared-form/counted-with-its-part
+
+# A budget of 11 000 bytes.
+tick 0
+entry K parameters unavailable
+want contributor:base required
+
+# Count 0. One root, K, whose group is its own arrival: 5 000, within.
+tick 1
+record arrival K K.1 size 5000
+entry K parameters available K.1 size 5000
+want contributor:base required
+event arrived K K.1
+
+tick 3
+record want M second source:host required
+entry K parameters available K.1 size 5000
+want contributor:base required
+entry M second unavailable
+want source:host required
+
+# Count 5 000. Roots K and M, each under a required want. The group of K is
+# empty. The group of M is its own arrival, which names 6 000, the part and
+# its form: 5 000 and 6 000 is 11 000, equal to the budget and so within it,
+# accepted. The entry holds the size 6 000.
+tick 4
+record arrival M M.1 form M.1:built size 6000
+entry K parameters available K.1 size 5000
+want contributor:base required
+entry M second available M.1 form M.1:built size 6000
+want source:host required
+handed M M.1:built
+event arrived M M.1
+
+# The first revision brings M.2, whose part has the size of the part of M.1
+# and whose form is larger by 500. Count 11 000. The group of M is the
+# arrival of M at another hash, which counts its new size in place of the
+# former one: 5 000 and 6 500 is 11 500, above the budget, rejected. M is in
+# force and stays as it was, at M.1 with the form of M.1 and the size 6 000,
+# with no event. The step names the rejected arrival and no failed asset.
+tick 6
+record arrival M M.2 form M.2:built size 6500
+rejected M M.2
+entry K parameters available K.1 size 5000
+want contributor:base required
+entry M second available M.1 form M.1:built size 6000
+want source:host required
+handed M M.1:built
+
+# The second revision brings M.3. The batch is complete against the table as
+# the last tick left it, which holds M at M.1: it holds the arrival of M at
+# M.3. Count 11 000. The group of M: 5 000 and 4 000 is 9 000, within,
+# accepted. The event names the hash that was in force, M.1, and the new one.
+tick 9
+record arrival M M.3 form M.3:built size 4000
+entry K parameters available K.1 size 5000
+want contributor:base required
+entry M second available M.3 form M.3:built size 4000
+want source:host required
+handed M M.3:built
+event changed M M.1 M.3
+
+# The table of tick 9 stands to tick 11.
+
+
+scenario prepared-form/first-load-over-the-budget-by-its-form
+
+# A budget of 10 000 bytes in each world.
+
+# The composition declares the form: the arrival of M names it and names
+# 6 000 bytes.
+world with-the-form
+
+tick 0
+entry K parameters unavailable
+want contributor:base required
+
+tick 1
+record arrival K K.1 size 5000
+entry K parameters available K.1 size 5000
+want contributor:base required
+event arrived K K.1
+
+tick 3
+record want M second source:host required
+entry K parameters available K.1 size 5000
+want contributor:base required
+entry M second unavailable
+want source:host required
+
+# Count 5 000. The group of the root M is its own arrival: 5 000 and 6 000
+# is 11 000, above the budget, rejected. The part alone would fit; the part
+# with its form does not. M is not available and a want names it, the root
+# of a rejected group: it becomes failed with the reason of the budget, with
+# the event of a failure. Its want is required: the failure is an answer,
+# the gate opens, and the step names M. A failed entry holds no hash, no
+# form and no size.
+tick 4
+record arrival M M.1 form M.1:built size 6000
+rejected M M.1
+entry K parameters available K.1 size 5000
+want contributor:base required
+entry M second failed over-budget
+want source:host required
+event failed M over-budget
+names-failed M over-budget
+
+# The table of tick 4 stands to tick 6.
+
+# The composition declares the type and no prepared form for it: the arrival
+# of M names no form, and the size it names is the size of the part alone,
+# 2 000 bytes. The world has no consumer of a form, and its blocks state no
+# "handed" line.
+world without-the-form
+
+tick 0
+entry K parameters unavailable
+want contributor:base required
+
+tick 1
+record arrival K K.1 size 5000
+entry K parameters available K.1 size 5000
+want contributor:base required
+event arrived K K.1
+
+tick 3
+record want M second source:host required
+entry K parameters available K.1 size 5000
+want contributor:base required
+entry M second unavailable
+want source:host required
+
+# Count 5 000. The group of M: 5 000 and 2 000 is 7 000, within, accepted.
+tick 4
+record arrival M M.1 size 2000
+entry K parameters available K.1 size 5000
+want contributor:base required
+entry M second available M.1 size 2000
+want source:host required
+event arrived M M.1
+
+# The table of tick 4 stands to tick 6.

@@ -1,0 +1,713 @@
+# Oracles of the family "batch-state": a batch complete against the state at
+# the end of the last tick before the drain.
+# Written by hand from the design text, by a writer who has not read the
+# build.
+# Asset identifiers order as D, G, K, P, X.
+# The table is empty before the first block of each world.
+# Record lines stand in the order applied: the commands first, in the order
+# the scenario gives them, then the arrivals by asset identifier.
+# An entry line with no want line under it is an entry that holds no want.
+#
+# The family gives sizes. An arrival to a hash names the size of what it puts
+# in force and an entry in force holds it: D.1 6 000, G.1 1 000, K.1 3 000,
+# P.1 to P.5 2 000 each, X.1 1 500. An arrival to failed names none.
+#
+# The rule under test. The loading capability builds every batch, of a
+# closure as of a revision, against the world's table as extracted at the
+# end of the last tick the world ran: there it reads which entries the table
+# names and which it holds available. It learns a rejection and a fall from
+# that state, never from what it posted. The batch of a closure holds an
+# arrival for each asset of the closure that the table does not hold
+# available. The batch of a revision holds an arrival for each asset the
+# revision changes that the table names, with an arrival for each asset of
+# the closure of a changed part that the table does not hold available, and
+# for no other asset.
+#
+# Each scenario has two worlds. "running" receives the batch under test
+# while every required asset of its table is answered. "gated" receives it
+# in the pending record of a world whose gate is closed: the gate counts the
+# want the core would add from the part of a pending arrival, so it opens
+# only because the batch holds the dependency.
+#
+# The unit of a rejection over a budget is the group of a root. At a fixed
+# point, in this order: the commands of the record; the groups, those of the
+# roots that hold a required want first, each set in identifier order, each
+# decided before any want is added from a part and before any arrival is
+# applied; the wants that the parts of the accepted arrivals list; the
+# arrivals but the rejected ones, in identifier order; the wants the core
+# added, recomputed from the parts in force; the falls.
+#
+# Reading taken: an entry that is failed is an entry the table names, so the
+# batch of a revision that changes its asset holds its arrival, and the
+# entry becomes available by that batch with no new want.
+# The other reading: a failed entry stays failed until a want added on it
+# retries the load, and the revision posts nothing for it.
+#
+# Reading taken: a replacement that a world rejected is not offered to it
+# again while no later revision changes its asset, whatever room the world
+# frees. The design text leaves this open and adds nothing for it.
+# The other reading: the capability offers it again as soon as it reads the
+# entry at another hash than the manifest's.
+
+# ---------------------------------------------------------------------------
+# A replacement rejected over the budget, the room freed, then a later
+# revision of the same asset. A budget of 12 000 bytes.
+
+scenario batch-state/revision-after-a-rejected-replacement
+
+world running
+
+tick 1
+record want K parameters source:host optional
+record want P parameters source:host required
+entry K parameters unavailable
+want source:host optional
+entry P parameters unavailable
+want source:host required
+
+# Two closures, one merged record. Count 0. Roots K and P. The group of P,
+# the root that holds a required want, is tested first: the arrivals of D
+# and of P, 8 000, within. The group of K: 11 000, within. The want of D is
+# added, owned by P and required as the want of P is.
+tick 2
+record arrival D D.1 size 6000
+record arrival K K.1 size 3000
+record arrival P P.1 size 2000
+entry D parameters available D.1 size 6000
+want asset:P required
+entry K parameters available K.1 size 3000
+want source:host optional
+entry P parameters available P.1 size 2000
+want source:host required
+event arrived D D.1
+event arrived K K.1
+event arrived P P.1
+
+# The second revision changes P, whose new part lists D and X. The table
+# names P, holds D available and does not name X: the batch holds the
+# arrivals of P and of X. Count 11 000. The closure of P, read from the part
+# in force and from the part of its arrival, is P, D and X, and its group is
+# the arrivals of P and of X: 2 000 in place of 2 000, and 1 500, is 12 500,
+# above the budget, rejected. P is in force and stays as it was, with no
+# event. The wants of the rejected part are not added: X is named by no want
+# and gets no entry, no failure and no event. The step names the two
+# rejected arrivals.
+tick 4
+record arrival P P.3 size 2000
+record arrival X X.1 size 1500
+rejected P P.3
+rejected X X.1
+entry D parameters available D.1 size 6000
+want asset:P required
+entry K parameters available K.1 size 3000
+want source:host optional
+entry P parameters available P.1 size 2000
+want source:host required
+
+# The room is freed. K keeps its entry, in force and with no want, through
+# this tick. Nothing offers the rejected replacement again: the records of
+# ticks 5 to 7 hold no arrival.
+tick 5
+record release K source:host
+entry D parameters available D.1 size 6000
+want asset:P required
+entry K parameters available K.1 size 3000
+entry P parameters available P.1 size 2000
+want source:host required
+
+# K falls and leaves.
+tick 6
+entry D parameters available D.1 size 6000
+want asset:P required
+entry P parameters available P.1 size 2000
+want source:host required
+
+# The third revision changes P again. The capability posted an arrival of X
+# at tick 4, and the table extracted at the end of tick 7 does not name X:
+# the batch is built against that table and holds the arrival of X beside
+# the arrival of P, and none of D, which the table holds available. Count
+# 8 000. The group of P: 2 000 in place of 2 000, and 1 500, is 9 500,
+# within, accepted. The want of X is added, owned by P and required. The
+# hash that changes is the one the table held: the world never held P.3.
+tick 8
+record arrival P P.4 size 2000
+record arrival X X.1 size 1500
+entry D parameters available D.1 size 6000
+want asset:P required
+entry P parameters available P.4 size 2000
+want source:host required
+entry X parameters available X.1 size 1500
+want asset:P required
+event changed P P.1 P.4
+event arrived X X.1
+
+# The table of tick 8 stands to tick 10.
+
+world gated
+
+tick 1
+record want K parameters source:host optional
+record want P parameters source:host required
+entry K parameters unavailable
+want source:host optional
+entry P parameters unavailable
+want source:host required
+
+tick 2
+record arrival D D.1 size 6000
+record arrival K K.1 size 3000
+record arrival P P.1 size 2000
+entry D parameters available D.1 size 6000
+want asset:P required
+entry K parameters available K.1 size 3000
+want source:host optional
+entry P parameters available P.1 size 2000
+want source:host required
+event arrived D D.1
+event arrived K K.1
+event arrived P P.1
+
+tick 4
+record arrival P P.3 size 2000
+record arrival X X.1 size 1500
+rejected P P.3
+rejected X X.1
+entry D parameters available D.1 size 6000
+want asset:P required
+entry K parameters available K.1 size 3000
+want source:host optional
+entry P parameters available P.1 size 2000
+want source:host required
+
+tick 5
+record release K source:host
+entry D parameters available D.1 size 6000
+want asset:P required
+entry K parameters available K.1 size 3000
+entry P parameters available P.1 size 2000
+want source:host required
+
+tick 6
+entry D parameters available D.1 size 6000
+want asset:P required
+entry P parameters available P.1 size 2000
+want source:host required
+
+# A required want of another asset: the world is gated from the boundary
+# after this tick.
+tick 7
+record want G parameters source:host required
+entry D parameters available D.1 size 6000
+want asset:P required
+entry G parameters unavailable
+want source:host required
+entry P parameters available P.1 size 2000
+want source:host required
+
+blocked 8 awaiting G
+
+# The pending record gathers the closure of G and the batch of the third
+# revision, both built against the table extracted at the end of tick 7.
+# The gate reads it: G is answered by its pending arrival; the part of the
+# pending arrival of P would add a required want on X, which the table does
+# not hold available, and the arrival of X is pending. The gate opens.
+# Count 8 000. Roots G and P, both under a required want, in identifier
+# order. The group of G: 9 000, within. The group of P: 2 000 in place of
+# 2 000, and 1 500, is 10 500, within.
+tick 8
+record arrival G G.1 size 1000
+record arrival P P.4 size 2000
+record arrival X X.1 size 1500
+entry D parameters available D.1 size 6000
+want asset:P required
+entry G parameters available G.1 size 1000
+want source:host required
+entry P parameters available P.4 size 2000
+want source:host required
+entry X parameters available X.1 size 1500
+want asset:P required
+event arrived G G.1
+event changed P P.1 P.4
+event arrived X X.1
+
+# The table of tick 8 stands to tick 10.
+
+# ---------------------------------------------------------------------------
+# A first load rejected over the budget, the room freed, then a later
+# revision of the same asset. A budget of 10 000 bytes.
+
+scenario batch-state/revision-after-a-rejected-first-load
+
+world running
+
+tick 1
+record want K parameters source:host optional
+entry K parameters unavailable
+want source:host optional
+
+tick 2
+record arrival K K.1 size 3000
+entry K parameters available K.1 size 3000
+want source:host optional
+event arrived K K.1
+
+tick 3
+record want P parameters source:host required
+entry K parameters available K.1 size 3000
+want source:host optional
+entry P parameters unavailable
+want source:host required
+
+# Count 3 000. Roots K and P. The group of P, tested first, is the arrivals
+# of D and of P: 3 000 and 6 000 and 2 000 is 11 000, above the budget,
+# rejected. No want is added from the rejected part: D is named by no want
+# and gets no entry, no failure and no event. P, the root of the rejected
+# group, is under a required want: it becomes failed, with its event, and
+# the step names it. The record holds both arrivals to a hash all the same.
+tick 4
+record arrival D D.1 size 6000
+record arrival P P.1 size 2000
+rejected D D.1
+rejected P P.1
+entry K parameters available K.1 size 3000
+want source:host optional
+entry P parameters failed over-budget
+want source:host required
+event failed P over-budget
+names-failed P over-budget
+
+# The room is freed. No want is added on P, so nothing retries its load.
+tick 5
+record release K source:host
+entry K parameters available K.1 size 3000
+entry P parameters failed over-budget
+want source:host required
+
+# K falls and leaves.
+tick 6
+entry P parameters failed over-budget
+want source:host required
+
+# The second revision changes P. The capability posted arrivals of D and of
+# P at tick 4; the table extracted at the end of tick 7 names P, failed, and
+# does not name D. The batch is built against that table: the arrival of P,
+# which the revision changes and the table names, and the arrival of D,
+# which the changed part lists and the table does not hold available.
+# Count 0. The group of P: 8 000, within, accepted. The want of D is added,
+# owned by P and required. P becomes available by this batch, with no new
+# want.
+tick 8
+record arrival D D.1 size 6000
+record arrival P P.2 size 2000
+entry D parameters available D.1 size 6000
+want asset:P required
+entry P parameters available P.2 size 2000
+want source:host required
+event arrived D D.1
+event arrived P P.2
+
+# The table of tick 8 stands to tick 10.
+
+world gated
+
+tick 1
+record want K parameters source:host optional
+entry K parameters unavailable
+want source:host optional
+
+tick 2
+record arrival K K.1 size 3000
+entry K parameters available K.1 size 3000
+want source:host optional
+event arrived K K.1
+
+tick 3
+record want P parameters source:host required
+entry K parameters available K.1 size 3000
+want source:host optional
+entry P parameters unavailable
+want source:host required
+
+tick 4
+record arrival D D.1 size 6000
+record arrival P P.1 size 2000
+rejected D D.1
+rejected P P.1
+entry K parameters available K.1 size 3000
+want source:host optional
+entry P parameters failed over-budget
+want source:host required
+event failed P over-budget
+names-failed P over-budget
+
+tick 5
+record release K source:host
+entry K parameters available K.1 size 3000
+entry P parameters failed over-budget
+want source:host required
+
+tick 6
+entry P parameters failed over-budget
+want source:host required
+
+# A required want of another asset: the world is gated from the boundary
+# after this tick. P is failed, which is an answer.
+tick 7
+record want G parameters source:host required
+entry G parameters unavailable
+want source:host required
+entry P parameters failed over-budget
+want source:host required
+
+blocked 8 awaiting G
+
+# The pending record gathers the closure of G and the batch of the second
+# revision. The gate reads it: G is answered by its pending arrival; the
+# part of the pending arrival of P would add a required want on D, which the
+# table does not hold available, and the arrival of D is pending. The gate
+# opens. Count 0. Roots G and P, both under a required want. The group of
+# G: 1 000, within. The group of P: 9 000, within.
+tick 8
+record arrival D D.1 size 6000
+record arrival G G.1 size 1000
+record arrival P P.2 size 2000
+entry D parameters available D.1 size 6000
+want asset:P required
+entry G parameters available G.1 size 1000
+want source:host required
+entry P parameters available P.2 size 2000
+want source:host required
+event arrived D D.1
+event arrived G G.1
+event arrived P P.2
+
+# The table of tick 8 stands to tick 10.
+
+# ---------------------------------------------------------------------------
+# A dependency that left the table when its parent failed, the parent being
+# retried. No budget.
+#
+# A parent in force fails in one way on a loose store: its asset leaves the
+# manifest. While it is out of the manifest a want added on it is answered
+# by the same failure, so the retry and the return of the source stand
+# between the same two ticks. The capability may answer the retry before the
+# source is back, by a failure, or after; the batch of the revision that
+# brings the asset back holds an arrival of P in either case, and a later
+# arrival of an asset replaces an earlier one in the queue. The record of
+# tick 8 is the same whichever came first.
+
+scenario batch-state/retry-of-a-parent-that-left-the-manifest
+
+world running
+
+tick 1
+record want P parameters source:host optional
+entry P parameters unavailable
+want source:host optional
+
+# The want of D is added first, owned by P and optional as the want of P is.
+tick 2
+record arrival D D.1 size 6000
+record arrival P P.1 size 2000
+entry D parameters available D.1 size 6000
+want asset:P optional
+entry P parameters available P.1 size 2000
+want source:host optional
+event arrived D D.1
+event arrived P P.1
+
+# The source of P is deleted: P leaves the manifest, and the batch of that
+# revision fails it in this world, which holds a want on it. A parent that
+# is failed owns no want on its dependencies: the want of D ends once the
+# arrival is applied. D keeps its entry, in force and with no want, through
+# this tick. The want of P is optional, so the step names nothing.
+tick 4
+record arrival P failed unknown-asset
+entry D parameters available D.1 size 6000
+entry P parameters failed unknown-asset
+want source:host optional
+event failed P unknown-asset
+
+# D falls and leaves the table. No transition says so: the capability posted
+# its arrival at tick 2 and nothing since.
+tick 5
+entry P parameters failed unknown-asset
+want source:host optional
+
+# A second maker wants the failed asset: the entry returns to unavailable,
+# in silence. The want is optional and gates nothing.
+tick 7
+record want P parameters source:tool optional
+entry P parameters unavailable
+want source:host optional
+want source:tool optional
+
+# The source of P is back. Against the table extracted at the end of tick 7,
+# which names P, unavailable, and does not name D, the batch holds the
+# arrival of P and the arrival of D. The want of D is added first, owned by
+# P and optional.
+tick 8
+record arrival D D.1 size 6000
+record arrival P P.1 size 2000
+entry D parameters available D.1 size 6000
+want asset:P optional
+entry P parameters available P.1 size 2000
+want source:host optional
+want source:tool optional
+event arrived D D.1
+event arrived P P.1
+
+# The table of tick 8 stands to tick 10.
+
+world gated
+
+tick 1
+record want P parameters source:host optional
+entry P parameters unavailable
+want source:host optional
+
+tick 2
+record arrival D D.1 size 6000
+record arrival P P.1 size 2000
+entry D parameters available D.1 size 6000
+want asset:P optional
+entry P parameters available P.1 size 2000
+want source:host optional
+event arrived D D.1
+event arrived P P.1
+
+tick 4
+record arrival P failed unknown-asset
+entry D parameters available D.1 size 6000
+entry P parameters failed unknown-asset
+want source:host optional
+event failed P unknown-asset
+
+tick 5
+entry P parameters failed unknown-asset
+want source:host optional
+
+# The retry is required: the entry returns to unavailable under a required
+# want, and the world is gated from the boundary after this tick.
+tick 7
+record want P parameters source:tool required
+entry P parameters unavailable
+want source:host optional
+want source:tool required
+
+blocked 8 awaiting P
+
+# The gate reads the pending record: P is answered by its pending arrival;
+# its part would add a required want on D, which the table does not hold
+# available, and the arrival of D is pending. The gate opens. The want of D
+# is required, since one want of P is.
+tick 8
+record arrival D D.1 size 6000
+record arrival P P.1 size 2000
+entry D parameters available D.1 size 6000
+want asset:P required
+entry P parameters available P.1 size 2000
+want source:host optional
+want source:tool required
+event arrived D D.1
+event arrived P P.1
+
+# The table of tick 8 stands to tick 10.
+
+# ---------------------------------------------------------------------------
+# The same on a root that never rose: the capability posted the arrival of
+# its dependency, which no want named and which changed nothing. No budget,
+# one revision. The artifact of P.1 is cut short until the repair, between
+# tick 3 and tick 4.
+
+scenario batch-state/retry-of-a-root-that-never-rose
+
+world running
+
+tick 1
+record want P parameters source:host optional
+entry P parameters unavailable
+want source:host optional
+
+# The capability follows the closure in the manifest: P fails, its bytes not
+# hashing to their name, and the arrival of D is posted all the same. The
+# arrival of P is a failure and brings no part, so no want is added: the
+# arrival of D is for an asset no want names, is recorded and changes
+# nothing. The table never names D.
+tick 2
+record arrival D D.1 size 6000
+record arrival P failed invalid-part
+entry P parameters failed invalid-part
+want source:host optional
+event failed P invalid-part
+
+# The repair moves no manifest: nothing is posted, and the entry stays
+# failed through tick 4.
+# A second maker wants the failed asset: the entry returns to unavailable.
+tick 5
+record want P parameters source:tool optional
+entry P parameters unavailable
+want source:host optional
+want source:tool optional
+
+# The batch of the closure, against the table extracted at the end of tick
+# 5: it names P, unavailable, and does not name D, although the capability
+# posted D at tick 2. The batch holds both.
+tick 6
+record arrival D D.1 size 6000
+record arrival P P.1 size 2000
+entry D parameters available D.1 size 6000
+want asset:P optional
+entry P parameters available P.1 size 2000
+want source:host optional
+want source:tool optional
+event arrived D D.1
+event arrived P P.1
+
+# The table of tick 6 stands to tick 8.
+
+world gated
+
+tick 1
+record want P parameters source:host optional
+entry P parameters unavailable
+want source:host optional
+
+tick 2
+record arrival D D.1 size 6000
+record arrival P failed invalid-part
+entry P parameters failed invalid-part
+want source:host optional
+event failed P invalid-part
+
+tick 5
+record want P parameters source:tool required
+entry P parameters unavailable
+want source:host optional
+want source:tool required
+
+blocked 6 awaiting P
+
+tick 6
+record arrival D D.1 size 6000
+record arrival P P.1 size 2000
+entry D parameters available D.1 size 6000
+want asset:P required
+entry P parameters available P.1 size 2000
+want source:host optional
+want source:tool required
+event arrived D D.1
+event arrived P P.1
+
+# The table of tick 6 stands to tick 8.
+
+# ---------------------------------------------------------------------------
+# A former dependency that a later revision lists again. No budget.
+
+scenario batch-state/former-dependency-listed-again
+
+world running
+
+tick 1
+record want P parameters source:host required
+entry P parameters unavailable
+want source:host required
+
+tick 2
+record arrival D D.1 size 6000
+record arrival P P.1 size 2000
+entry D parameters available D.1 size 6000
+want asset:P required
+entry P parameters available P.1 size 2000
+want source:host required
+event arrived D D.1
+event arrived P P.1
+
+# The second revision changes P, whose new part lists nothing. The batch
+# holds the arrival of P alone. Once it is applied the part in force no
+# longer lists D, and the recomputation ends the want of D. D keeps its
+# entry, in force and with no want, through this tick.
+tick 4
+record arrival P P.5 size 2000
+entry D parameters available D.1 size 6000
+entry P parameters available P.5 size 2000
+want source:host required
+event changed P P.1 P.5
+
+# D falls and leaves the table. No transition says so.
+tick 5
+entry P parameters available P.5 size 2000
+want source:host required
+
+# The third revision changes P, whose new part lists D again. The table
+# extracted at the end of tick 5, the last tick, does not name D: the batch
+# holds the arrival of D beside the arrival of P. The table extracted one
+# tick earlier still held D available. The want of D is added first, owned
+# by P and required.
+tick 6
+record arrival D D.1 size 6000
+record arrival P P.2 size 2000
+entry D parameters available D.1 size 6000
+want asset:P required
+entry P parameters available P.2 size 2000
+want source:host required
+event arrived D D.1
+event changed P P.5 P.2
+
+# The table of tick 6 stands to tick 8.
+
+world gated
+
+tick 1
+record want P parameters source:host required
+entry P parameters unavailable
+want source:host required
+
+tick 2
+record arrival D D.1 size 6000
+record arrival P P.1 size 2000
+entry D parameters available D.1 size 6000
+want asset:P required
+entry P parameters available P.1 size 2000
+want source:host required
+event arrived D D.1
+event arrived P P.1
+
+tick 4
+record arrival P P.5 size 2000
+entry D parameters available D.1 size 6000
+entry P parameters available P.5 size 2000
+want source:host required
+event changed P P.1 P.5
+
+# The record is applied, then D falls. A required want of another asset:
+# the world is gated from the boundary after this tick.
+tick 5
+record want G parameters source:host required
+entry G parameters unavailable
+want source:host required
+entry P parameters available P.5 size 2000
+want source:host required
+
+blocked 6 awaiting G
+
+# The pending record gathers the closure of G and the batch of the third
+# revision. The gate reads it: G is answered by its pending arrival; the
+# part of the pending arrival of P would add a required want on D, which the
+# table does not hold available, and the arrival of D is pending. The gate
+# opens.
+tick 6
+record arrival D D.1 size 6000
+record arrival G G.1 size 1000
+record arrival P P.2 size 2000
+entry D parameters available D.1 size 6000
+want asset:P required
+entry G parameters available G.1 size 1000
+want source:host required
+entry P parameters available P.2 size 2000
+want source:host required
+event arrived D D.1
+event arrived G G.1
+event changed P P.5 P.2
+
+# The table of tick 6 stands to tick 8.

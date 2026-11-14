@@ -1,0 +1,163 @@
+# Family pending-release: a pending release answers a required asset only
+# where it ends its last required want.
+# Written by hand from the design text, before any run of the stand-in stage,
+# by a writer who has not read the build.
+# The table's order is the order of the asset identifiers: D, G, P.
+# The table is empty before the first block of each scenario.
+# Record lines stand in the order applied: the commands first, in the order
+# the scenario gives them, then the arrivals by asset identifier.
+# An entry line with no want line under it is an entry that holds no want.
+# A tick block with no entry line states an empty table.
+# The wants of an entry under the world's own entry stand by the identity of
+# their makers: the host (3), then the tool (5). A want the core added
+# stands after them.
+# The family gives no size: an entry and an arrival state none.
+# The rule under test. A gated world applies nothing, and its gate is
+# evaluated on the table with the pending arrivals and the pending releases
+# applied. A pending release is applied to the wants of the asset it names,
+# and that asset counts as answered where no required want is left on it:
+# a release that leaves a required want, a maker's or one the core added,
+# answers nothing, and a release that ends the last required want answers
+# the asset although an optional want is left on it.
+# Reading taken: a step that does not wait names what keeps the gate closed,
+# the pending record counted.
+# Each scenario runs to tick 8: the gate has opened and the world has run at
+# least two ticks more.
+
+
+scenario pending-release/one-then-both
+
+tick 2
+record want G parameters source:host required
+record want G parameters source:tool required
+entry G parameters unavailable
+want source:host required
+want source:tool required
+
+# Nothing is pending yet.
+blocked 3 awaiting G
+# The pending record releases the host's want. Applied to the wants of G, it
+# leaves the tool's required want: G is not answered.
+blocked 3 awaiting G
+# The pending record releases the tool's want too: no required want is left
+# on G, which counts as answered, and the gate opens. The tick applies both
+# releases. G never rose: it keeps its entry as it stood, unavailable and
+# with no want, through this tick.
+tick 3
+record release G source:host
+record release G source:tool
+entry G parameters unavailable
+
+# G leaves the table at the input fixed point of tick 4: the table is empty.
+tick 4
+
+# The table stays empty to tick 8.
+
+
+scenario pending-release/last-required-want-beside-an-optional-one
+
+tick 2
+record want G parameters source:host required
+record want G parameters source:tool optional
+entry G parameters unavailable
+want source:host required
+want source:tool optional
+
+# Nothing is pending yet.
+blocked 3 awaiting G
+# The pending record releases the host's want, the one required want of G.
+# The tool's optional want is left, and no required want: G counts as
+# answered, the gate opens, and the step without waiting runs tick 3. G is
+# unanswered under an optional want, which gates nothing.
+tick 3
+record release G source:host
+entry G parameters unavailable
+want source:tool optional
+
+# The arrival of G joins the pending record of tick 4, on a running world.
+tick 4
+record arrival G G.1
+entry G parameters available G.1
+want source:tool optional
+event arrived G G.1
+
+# The table of tick 4 stands to tick 8.
+
+
+scenario pending-release/optional-want-released
+
+tick 2
+record want G parameters source:host required
+record want G parameters source:tool optional
+entry G parameters unavailable
+want source:host required
+want source:tool optional
+
+# Nothing is pending yet.
+blocked 3 awaiting G
+# The pending record releases the tool's want, the optional one. Applied to
+# the wants of G, it leaves the host's required want: G is not answered.
+blocked 3 awaiting G
+# The arrival of G joins and the gate opens. The release first, then the
+# arrival, on an entry that holds the host's want: G is available, with its
+# event.
+tick 3
+record release G source:tool
+record arrival G G.1
+entry G parameters available G.1
+want source:host required
+event arrived G G.1
+
+# The table of tick 3 stands to tick 8.
+
+
+scenario pending-release/own-want-beside-the-want-of-a-parent
+
+tick 2
+record want P parameters source:host optional
+entry P parameters unavailable
+want source:host optional
+
+# The scripted source posts the parent without its dependency. The core adds
+# the want of D that the part of P lists, optional as the one want of P is.
+tick 3
+record arrival P P.1
+entry D parameters unavailable
+want asset:P optional
+entry P parameters available P.1
+want source:host optional
+event arrived P P.1
+
+# A required want on P makes the want its dependency holds required, and the
+# host wants D in its own right, as required, under the type the entry
+# holds. D holds two required wants: the host's, then the one the core
+# added. The world is gated from the boundary after tick 4.
+tick 4
+record want P parameters source:tool required
+record want D parameters source:host required
+entry D parameters unavailable
+want source:host required
+want asset:P required
+entry P parameters available P.1
+want source:host optional
+want source:tool required
+
+# Nothing is pending yet.
+blocked 5 awaiting D
+# The pending record releases the host's want of D. Applied to the wants of
+# D, it leaves the required want that P owns: D is not answered.
+blocked 5 awaiting D
+# The arrival of D joins and the gate opens. The release first, then the
+# arrival, on an entry that holds the want its parent owns: D is available,
+# with its event.
+tick 5
+record release D source:host
+record arrival D D.1
+entry D parameters available D.1
+want asset:P required
+entry P parameters available P.1
+want source:host optional
+want source:tool required
+event arrived D D.1
+
+# The table of tick 5 stands to tick 8.

@@ -1,0 +1,482 @@
+# Oracles of the family "failed-replacement": a replacement that fails
+# leaves what is in force, and the rest of its revision is applied.
+# Written by hand from the design text, by a writer who has not read the
+# build.
+# Asset identifiers order as A, B, N, P.
+# The table is empty before the first block of each world.
+# Record lines stand in the order applied: the commands first, in the order
+# the scenario gives them, then the arrivals by asset identifier.
+# An entry line with no want line under it is an entry that holds no want.
+# The family gives no size: no line states one.
+# The worlds of one scenario run on one instance, stepped in rounds.
+#
+# The rules under test.
+# An action that fails does not hold a revision back: the revision keeps the
+# former entry of an asset whose canonical action failed, and an asset
+# imported for the first time whose action fails has no entry.
+# A replacement that cannot be put in force leaves what is in force: a new
+# part that a world's admission check refuses is not posted to a world that
+# holds the asset available. The asset stays at its hash, the batch is
+# posted without it and is not held back for it, and the refusal is a report
+# outside the domain: no element of a record, no event, no failed entry. A
+# failure is posted as a transition only for an asset the world does not
+# hold available, a first load.
+# A revision changes an asset whose entry in the manifest differs, so a
+# source whose former entry is kept changes nothing in any world.
+#
+# Reading taken: the admission check is a world's. The capability runs it
+# for a world before it posts that world an arrival, whether or not the part
+# is already resident for another world of the instance.
+# The other reading, which one sentence of the load path gives by its
+# letter: the check runs with the reading and the validation of a part, on a
+# miss of the instance's resident store, so a part that became resident for
+# a world without the check is posted unchecked to a world with it.
+#
+# Reading taken: an entry that is failed is an entry the table names, so the
+# batch of a revision that changes its asset holds its arrival, and the
+# entry becomes available by that batch with no new want.
+# The other reading: a failed entry stays failed until a want added on it
+# retries the load.
+#
+# Reading taken: the batch of a revision follows the closure of the parts it
+# puts in force. A dependency that a refused part alone lists gets no
+# arrival.
+# The other reading: the arrival of that dependency is posted; no want names
+# its asset, so it is recorded and changes nothing.
+#
+# Reading taken: a version that a world refused is not offered to it again;
+# the world moves at the next revision that changes the asset, whose part is
+# checked anew.
+#
+# The reason "not-admitted" is this sheet's name for the reason of an
+# admission check that fails on a first load.
+#
+# Beside the oracle the harness reports the stand-in pipeline and the
+# capability. What the design text gives for those reports is stated in a
+# comment under each scenario line; it is no statement of the oracle.
+
+# ---------------------------------------------------------------------------
+# A source saved with an error while worlds hold its asset available, then
+# corrected.
+#
+# The reports: after the erroneous save a revision is put in place, whose
+# manifest holds A at A.1 and B at B.2, and the canonical action of A is
+# reported failed. After the correction a revision is put in place, whose
+# manifest holds A at A.2 and B at B.2, and no action failed. The capability
+# reports no part obtained and not posted.
+
+scenario failed-replacement/source-saved-with-an-error
+
+world required
+
+tick 1
+record want A parameters source:host required
+record want B parameters source:host optional
+entry A parameters unavailable
+want source:host required
+entry B parameters unavailable
+want source:host optional
+
+tick 2
+record arrival A A.1
+record arrival B B.1
+entry A parameters available A.1
+want source:host required
+entry B parameters available B.1
+want source:host optional
+event arrived A A.1
+event arrived B B.1
+
+# The erroneous save. The revision is written without the action that
+# failed: it keeps the former entry of A and holds the new entry of B. The
+# entry of A does not differ, so the revision changes B alone: the batch
+# holds the arrival of B. A stays available at its hash: no failure, no
+# event, and the step names nothing.
+tick 4
+record arrival B B.2
+entry A parameters available A.1
+want source:host required
+entry B parameters available B.2
+want source:host optional
+event changed B B.1 B.2
+
+# The correction changes A.
+tick 7
+record arrival A A.2
+entry A parameters available A.2
+want source:host required
+entry B parameters available B.2
+want source:host optional
+event changed A A.1 A.2
+
+# The table of tick 7 stands to tick 9.
+
+world optional
+
+tick 1
+record want A parameters source:host optional
+record want B parameters source:host optional
+entry A parameters unavailable
+want source:host optional
+entry B parameters unavailable
+want source:host optional
+
+tick 2
+record arrival A A.1
+record arrival B B.1
+entry A parameters available A.1
+want source:host optional
+entry B parameters available B.1
+want source:host optional
+event arrived A A.1
+event arrived B B.1
+
+tick 4
+record arrival B B.2
+entry A parameters available A.1
+want source:host optional
+entry B parameters available B.2
+want source:host optional
+event changed B B.1 B.2
+
+tick 7
+record arrival A A.2
+entry A parameters available A.2
+want source:host optional
+entry B parameters available B.2
+want source:host optional
+event changed A A.1 A.2
+
+# The table of tick 7 stands to tick 9.
+
+world late
+
+# The want is made while the source of A holds its error. The manifest of
+# the instance still holds A, under its former entry: the want is answered
+# at A.1.
+tick 5
+record want A parameters source:host required
+entry A parameters unavailable
+want source:host required
+
+tick 6
+record arrival A A.1
+entry A parameters available A.1
+want source:host required
+event arrived A A.1
+
+tick 7
+record arrival A A.2
+entry A parameters available A.2
+want source:host required
+event changed A A.1 A.2
+
+# The table of tick 7 stands to tick 9.
+
+# ---------------------------------------------------------------------------
+# A source saved with an error at its first import, then corrected.
+#
+# The reports: after the first save a revision is put in place, whose
+# manifest holds B at B.2 and does not hold N, and the canonical action of N
+# is reported failed. After the second save a revision is put in place,
+# whose manifest holds B at B.2 and N at N.1, and no action failed.
+
+scenario failed-replacement/first-import-saved-with-an-error
+
+tick 1
+record want B parameters source:host optional
+entry B parameters unavailable
+want source:host optional
+
+tick 2
+record arrival B B.1
+entry B parameters available B.1
+want source:host optional
+event arrived B B.1
+
+# The revision is written without the action that failed: it holds the new
+# entry of B and no entry of N, which has no former one.
+tick 4
+record arrival B B.2
+entry B parameters available B.2
+want source:host optional
+event changed B B.1 B.2
+
+tick 5
+record want N parameters source:host required
+entry B parameters available B.2
+want source:host optional
+entry N parameters unavailable
+want source:host required
+
+# The manifest does not hold N: a failed first load, which is an answer and
+# opens the gate. The want is required: the step names the asset.
+tick 6
+record arrival N failed unknown-asset
+entry B parameters available B.2
+want source:host optional
+entry N parameters failed unknown-asset
+want source:host required
+event failed N unknown-asset
+names-failed N unknown-asset
+
+# The correction: N enters the manifest. The table names N, failed, so the
+# batch of the revision holds its arrival, and the entry becomes available
+# by that batch, with no new want.
+tick 7
+record arrival N N.1
+entry B parameters available B.2
+want source:host optional
+entry N parameters available N.1
+want source:host required
+event arrived N N.1
+
+# The table of tick 7 stands to tick 9.
+
+# ---------------------------------------------------------------------------
+# A revision of two assets of which a world's admission check refuses one.
+# Three worlds on one instance: two whose composition carries the check, one
+# whose composition does not.
+#
+# The reports: after the first save a revision is put in place, whose
+# manifest holds A at A.2 and B at B.2; after the second, one whose manifest
+# holds A at A.2 and B at B.3; no action failed. The capability reports, for
+# the world "checked", the part B.2 obtained and not posted, refused by the
+# admission check; for the world "late", the part B.2 refused by the
+# admission check on a first load, for which it posted a failure; for the
+# world "unchecked", nothing.
+
+scenario failed-replacement/revision-of-two-with-one-refused
+
+world checked
+
+tick 1
+record want A parameters source:host required
+record want B parameters source:host required
+entry A parameters unavailable
+want source:host required
+entry B parameters unavailable
+want source:host required
+
+tick 2
+record arrival A A.1
+record arrival B B.1
+entry A parameters available A.1
+want source:host required
+entry B parameters available B.1
+want source:host required
+event arrived A A.1
+event arrived B B.1
+
+# The revision changes A and B. The check of this world refuses B.2: the
+# batch is posted without B and is not held back for it. A takes its new
+# hash. B stays available at B.1: no element of the record, no event, no
+# failure, and the step names nothing.
+tick 4
+record arrival A A.2
+entry A parameters available A.2
+want source:host required
+entry B parameters available B.1
+want source:host required
+event changed A A.1 A.2
+
+# The next revision changes B again, to a part the check accepts. The hash
+# that changes is the one the table held: this world never held B.2.
+tick 7
+record arrival B B.3
+entry A parameters available A.2
+want source:host required
+entry B parameters available B.3
+want source:host required
+event changed B B.1 B.3
+
+# The table of tick 7 stands to tick 9.
+
+world unchecked
+
+tick 1
+record want A parameters source:host required
+record want B parameters source:host required
+entry A parameters unavailable
+want source:host required
+entry B parameters unavailable
+want source:host required
+
+tick 2
+record arrival A A.1
+record arrival B B.1
+entry A parameters available A.1
+want source:host required
+entry B parameters available B.1
+want source:host required
+event arrived A A.1
+event arrived B B.1
+
+# An admission check is a world's: this world has none and applies the whole
+# revision, in its own record.
+tick 4
+record arrival A A.2
+record arrival B B.2
+entry A parameters available A.2
+want source:host required
+entry B parameters available B.2
+want source:host required
+event changed A A.1 A.2
+event changed B B.1 B.2
+
+tick 7
+record arrival B B.3
+entry A parameters available A.2
+want source:host required
+entry B parameters available B.3
+want source:host required
+event changed B B.2 B.3
+
+# The table of tick 7 stands to tick 9.
+
+world late
+
+# The want is made while the manifest holds B at B.2, a part that is
+# resident on the instance since tick 4, for the world "unchecked".
+tick 5
+record want B parameters source:host required
+entry B parameters unavailable
+want source:host required
+
+# The check of this world is run before the arrival is posted, and refuses
+# B.2. This world does not hold B available: a first load, so the failure is
+# posted as a transition, with the reason of the admission check. It is an
+# answer: the gate opens, and the step names the required asset.
+tick 6
+record arrival B failed not-admitted
+entry B parameters failed not-admitted
+want source:host required
+event failed B not-admitted
+names-failed B not-admitted
+
+# The next revision changes B, which the table names, failed. The check
+# accepts B.3: the entry becomes available by that batch, with no new want.
+tick 7
+record arrival B B.3
+entry B parameters available B.3
+want source:host required
+event arrived B B.3
+
+# The table of tick 7 stands to tick 9.
+
+# ---------------------------------------------------------------------------
+# An asset of the batch whose part lists the refused asset.
+#
+# The reports: after the first save a revision is put in place, whose
+# manifest holds B at B.2 and P at P.2; after the second, one whose manifest
+# holds B at B.3 and P at P.2; no action failed. The capability reports the
+# part B.2 obtained and not posted, refused by the admission check.
+
+scenario failed-replacement/dependent-of-a-refused-asset
+
+tick 1
+record want P parameters source:host required
+entry P parameters unavailable
+want source:host required
+
+tick 2
+record arrival B B.1
+record arrival P P.1
+entry B parameters available B.1
+want asset:P required
+entry P parameters available P.1
+want source:host required
+event arrived B B.1
+event arrived P P.1
+
+# The revision changes B and P. The check refuses B.2 and accepts P.2. A
+# part names its dependencies by identifier and not by hash: P takes its new
+# hash and reads the version of B in force. B stays at B.1 under the want P
+# owns.
+tick 4
+record arrival P P.2
+entry B parameters available B.1
+want asset:P required
+entry P parameters available P.2
+want source:host required
+event changed P P.1 P.2
+
+tick 7
+record arrival B B.3
+entry B parameters available B.3
+want asset:P required
+entry P parameters available P.2
+want source:host required
+event changed B B.1 B.3
+
+# The table of tick 7 stands to tick 9.
+
+# ---------------------------------------------------------------------------
+# A refused part that lists a new dependency.
+#
+# The reports: after the first save a revision is put in place, whose
+# manifest holds A at A.2, B at B.1, N at N.1 and P at P.3; after the
+# second, one whose manifest holds A at A.2, B at B.1, N at N.1 and P at
+# P.4; no action failed. The capability reports the part P.3 obtained and
+# not posted, refused by the admission check.
+
+scenario failed-replacement/refused-parent-with-a-new-dependency
+
+tick 1
+record want A parameters source:host optional
+record want P parameters source:host required
+entry A parameters unavailable
+want source:host optional
+entry P parameters unavailable
+want source:host required
+
+tick 2
+record arrival A A.1
+record arrival B B.1
+record arrival P P.1
+entry A parameters available A.1
+want source:host optional
+entry B parameters available B.1
+want asset:P required
+entry P parameters available P.1
+want source:host required
+event arrived A A.1
+event arrived B B.1
+event arrived P P.1
+
+# The revision changes A and P. The check refuses P.3, whose part lists B
+# and N. The batch is posted without P, and the rest of the revision is
+# applied: A takes its new hash. P stays at P.1, with the want of that part
+# and no trace of what the refused part listed.
+# Reading taken: no part of the batch lists N, so the batch holds no arrival
+# of N. Under the other reading the record also holds "arrival N N.1", which
+# changes nothing: the table and the events are the same.
+tick 4
+record arrival A A.2
+entry A parameters available A.2
+want source:host optional
+entry B parameters available B.1
+want asset:P required
+entry P parameters available P.1
+want source:host required
+event changed A A.1 A.2
+
+# The next revision changes P again, to a part the check accepts. That part
+# lists N, which the table does not name: the batch holds the arrival of N
+# beside the arrival of P. The want of N is added first, owned by P and
+# required.
+tick 7
+record arrival N N.1
+record arrival P P.4
+entry A parameters available A.2
+want source:host optional
+entry B parameters available B.1
+want asset:P required
+entry N parameters available N.1
+want asset:P required
+entry P parameters available P.4
+want source:host required
+event arrived N N.1
+event changed P P.1 P.4
+
+# The table of tick 7 stands to tick 9.

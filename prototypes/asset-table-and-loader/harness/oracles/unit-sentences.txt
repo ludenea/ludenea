@@ -1,0 +1,368 @@
+# Oracles of the family "unit-sentences": the two sentences of the unit of a
+# rejection over a world's budget that no run had taken.
+# Written by hand from the design text, by a writer who has not read the build.
+# Asset identifiers order as G, J, N, T, X, Y.
+# Record lines stand in the order applied: the lowering of a budget, or the
+# commands in the order the scenario gives them, then the arrivals by asset
+# identifier. No record of this family holds both a lowering and a command.
+# An entry line with no want line under it is an entry that holds no want.
+# A tick 0 block states the table the creation gives.
+#
+# Every arrival to a hash names the size of what it puts in force, and every
+# available entry holds that size. A failed arrival and a failed entry hold
+# none. Sizes in bytes: G.1 3 000, G.2 8 000, G.3 4 000, J.1 5 000, J.2 3 000,
+# N.1 6 000, T.1 2 000, T.2 3 000, X.1 6 000, Y.1 4 000, Y.2 3 000. T.1 and
+# T.2 list Y.
+#
+# The first sentence. The count of a world leaves out an entry in force that
+# an arrival to failed of the same record fails: its room is free for the
+# arrivals of that record, wherever they stand in the identifier order, since
+# every group is decided before any arrival is applied.
+# Reading taken, by the letter: the sentence frees the room of the entry that
+# the arrival fails, and of no other. An entry that the arrival does not fail,
+# no want naming it when the arrival is gone through, stays counted until it
+# falls; and the dependencies of a parent that fails stay counted at that
+# fixed point, since they hold their want when the groups are decided and
+# fall at the next tick.
+#
+# The second sentence. A group that does not raise the count is accepted
+# whatever the count.
+# Reading taken: the sentence is said of the group as a whole, its arrivals
+# that no earlier group accepted counted together, and a group that leaves
+# the count as it was does not raise it.
+#
+# A budget is lowered by a world event, an element of the input record.
+# Reading taken: the event is applied before the arrivals of its record,
+# which stand last in a record, so the groups of that record are tested
+# against the budget it sets.
+# Reading taken, where the design text says nothing: a budget lowered under
+# the count changes nothing of what is in force. The table stays as it was,
+# with no event, and the count stands over the budget.
+#
+# The budget of a world is no state: a tick whose record holds a lowering and
+# nothing else leaves the table as it was.
+
+# Scenario "room-of-an-entry-that-fails". A budget of 10 000 bytes. G and X
+# are in force, 9 000 bytes. One revision takes X out of the manifest and
+# brings G.2, 8 000 bytes.
+
+scenario unit-sentences/room-of-an-entry-that-fails
+tick 0
+entry G parameters unavailable
+want contributor:base required
+tick 1
+record arrival G G.1 size 3000
+entry G parameters available G.1 size 3000
+want contributor:base required
+event arrived G G.1
+tick 2
+record want X parameters source:host required
+entry G parameters available G.1 size 3000
+want contributor:base required
+entry X parameters unavailable
+want source:host required
+# Count 3 000. The group of X: 9 000, within, accepted.
+tick 3
+record arrival X X.1 size 6000
+entry G parameters available G.1 size 3000
+want contributor:base required
+entry X parameters available X.1 size 6000
+want source:host required
+event arrived X X.1
+# The batch of the revision: the new hash of G, and a failure for X, which
+# left the manifest. X is in force under a want, so the arrival fails it: its
+# 6 000 bytes are left out of the count, which is 3 000. The arrival of X has
+# no size and stands in no group. The group of G: 8 000 in place of 3 000 is
+# 8 000, within, accepted, though G stands before X in the identifier order.
+# X fails under a required want: the step names it.
+tick 6
+record arrival G G.2 size 8000
+record arrival X failed unknown-asset
+entry G parameters available G.2 size 8000
+want contributor:base required
+entry X parameters failed unknown-asset
+want source:host required
+event changed G G.1 G.2
+event failed X unknown-asset
+names-failed X unknown-asset
+
+# The table of tick 6 stands to tick 8, and the records after it are empty.
+
+# Scenario "failed-arrival-for-an-entry-no-want-names". As the scenario
+# before, but that the record of the batch first releases the last want of X.
+
+scenario unit-sentences/failed-arrival-for-an-entry-no-want-names
+tick 0
+entry G parameters unavailable
+want contributor:base required
+tick 1
+record arrival G G.1 size 3000
+entry G parameters available G.1 size 3000
+want contributor:base required
+event arrived G G.1
+tick 2
+record want X parameters source:host required
+entry G parameters available G.1 size 3000
+want contributor:base required
+entry X parameters unavailable
+want source:host required
+tick 3
+record arrival X X.1 size 6000
+entry G parameters available G.1 size 3000
+want contributor:base required
+entry X parameters available X.1 size 6000
+want source:host required
+event arrived X X.1
+# The release is applied first: X holds no want. Its arrival is then an
+# arrival for an entry no want names: it is recorded and changes nothing, so
+# it fails nothing and frees no room. X does not fall at this fixed point
+# either, its last want having ended during this tick and not during the
+# tick before: it is still available, and counted. Count 9 000. One root, G.
+# Its group: 8 000 in place of 3 000 is 14 000, above the budget, rejected.
+# G is in force and stays as it was. The tick emits no event and the step
+# names no failed asset.
+tick 6
+record release X source:host
+record arrival G G.2 size 8000
+record arrival X failed unknown-asset
+rejected G G.2
+entry G parameters available G.1 size 3000
+want contributor:base required
+entry X parameters available X.1 size 6000
+# X falls. The replacement of G is not offered again.
+tick 7
+entry G parameters available G.1 size 3000
+want contributor:base required
+
+# The table of tick 7 stands to tick 8, and the records after it are empty.
+
+# Scenario "room-of-a-failed-parent". A budget of 10 000 bytes. G, T and the
+# dependency of T, Y, are in force, 9 000 bytes. A revision takes T out of
+# the manifest in the record that answers a first want of N, 6 000 bytes.
+
+scenario unit-sentences/room-of-a-failed-parent
+tick 0
+entry G parameters unavailable
+want contributor:base required
+tick 1
+record arrival G G.1 size 3000
+entry G parameters available G.1 size 3000
+want contributor:base required
+event arrived G G.1
+tick 2
+record want T parameters source:host optional
+entry G parameters available G.1 size 3000
+want contributor:base required
+entry T parameters unavailable
+want source:host optional
+# Count 3 000. The group of T is the arrivals of T and of Y: 9 000, within,
+# accepted. The want of Y under T is added, optional as the want of T is.
+tick 3
+record arrival T T.1 size 2000
+record arrival Y Y.1 size 4000
+entry G parameters available G.1 size 3000
+want contributor:base required
+entry T parameters available T.1 size 2000
+want source:host optional
+entry Y parameters available Y.1 size 4000
+want asset:T optional
+event arrived T T.1
+event arrived Y Y.1
+tick 5
+record want N parameters source:host optional
+entry G parameters available G.1 size 3000
+want contributor:base required
+entry N parameters unavailable
+want source:host optional
+entry T parameters available T.1 size 2000
+want source:host optional
+entry Y parameters available Y.1 size 4000
+want asset:T optional
+# Two batches merged in one record: the answer to the want of N, and the
+# failure of T, which left the manifest. The arrival fails T, so its 2 000
+# bytes are left out of the count. Y is not failed by an arrival, holds its
+# want when the groups are decided, and does not fall at this fixed point:
+# its 4 000 bytes stay counted. Count 7 000. The group of N: 13 000, above
+# the budget, rejected. N is the root of a rejected group that a want names:
+# it becomes failed. T then fails. Both wants are optional: the step names
+# nothing. At the recomputation T, failed, owns no want: the want of Y ends,
+# and Y stays for this tick, available and with no want.
+tick 6
+record arrival N N.1 size 6000
+record arrival T failed unknown-asset
+rejected N N.1
+entry G parameters available G.1 size 3000
+want contributor:base required
+entry N parameters failed over-budget
+want source:host optional
+entry T parameters failed unknown-asset
+want source:host optional
+entry Y parameters available Y.1 size 4000
+event failed N over-budget
+event failed T unknown-asset
+# A want added on the failed entry returns it to unavailable, in silence, and
+# leaves the world as the want of an unanswered asset. Then Y falls.
+tick 7
+record want N parameters source:tool optional
+entry G parameters available G.1 size 3000
+want contributor:base required
+entry N parameters unavailable
+want source:host optional
+want source:tool optional
+entry T parameters failed unknown-asset
+want source:host optional
+# Count 3 000. The group of N: 9 000, within, accepted: the room of the
+# dependency is free one tick after the room of its parent.
+tick 8
+record arrival N N.1 size 6000
+entry G parameters available G.1 size 3000
+want contributor:base required
+entry N parameters available N.1 size 6000
+want source:host optional
+want source:tool optional
+entry T parameters failed unknown-asset
+want source:host optional
+event arrived N N.1
+
+# The table of tick 8 stands to tick 10, and the records after it are empty.
+
+# Scenario "smaller-replacement-over-a-lowered-budget". A budget of 10 000
+# bytes at creation. G and J are in force, 8 000 bytes. The budget is
+# lowered to 5 000 bytes; a revision then brings J.2, 3 000 bytes in place of
+# 5 000, and a later one G.3, 4 000 bytes in place of 3 000.
+
+scenario unit-sentences/smaller-replacement-over-a-lowered-budget
+tick 0
+entry G parameters unavailable
+want contributor:base required
+entry J parameters unavailable
+want contributor:base required
+# Count 0. Roots G and J, both required. The group of G: 3 000, accepted.
+# The group of J: 8 000, within, accepted.
+tick 1
+record arrival G G.1 size 3000
+record arrival J J.1 size 5000
+entry G parameters available G.1 size 3000
+want contributor:base required
+entry J parameters available J.1 size 5000
+want contributor:base required
+event arrived G G.1
+event arrived J J.1
+# The lowering. The count, 8 000, now stands over the budget, 5 000. Nothing
+# of what is in force changes.
+tick 3
+record budget 5000
+entry G parameters available G.1 size 3000
+want contributor:base required
+entry J parameters available J.1 size 5000
+want contributor:base required
+# The group of J: 3 000 in place of 5 000 is 6 000. That is above the budget,
+# but the group does not raise the count: it is accepted whatever the count.
+tick 6
+record arrival J J.2 size 3000
+entry G parameters available G.1 size 3000
+want contributor:base required
+entry J parameters available J.2 size 3000
+want contributor:base required
+event changed J J.1 J.2
+# Count 6 000, still over the budget. The group of G: 4 000 in place of
+# 3 000 is 7 000. It raises the count, and the count does not stay within
+# the budget: rejected. G is in force and stays as it was, with no event.
+tick 9
+record arrival G G.3 size 4000
+rejected G G.3
+entry G parameters available G.1 size 3000
+want contributor:base required
+entry J parameters available J.2 size 3000
+want contributor:base required
+
+# The table of tick 9 stands to tick 11, and the records after it are empty.
+
+# Scenario "group-that-leaves-the-count-as-it-was". A budget of 10 000 bytes
+# at creation. G, T and Y are in force, 9 000 bytes. The budget is lowered
+# to 5 000 bytes; a revision then brings T.2, 1 000 bytes more than T.1, and
+# Y.2, 1 000 bytes less than Y.1.
+
+scenario unit-sentences/group-that-leaves-the-count-as-it-was
+tick 0
+entry G parameters unavailable
+want contributor:base required
+entry T parameters unavailable
+want contributor:base required
+# Count 0. Roots G and T, both required. The group of G: 3 000, accepted.
+# The group of T, the arrivals of T and of Y: 9 000, within, accepted. The
+# want of Y under T is added, required.
+tick 1
+record arrival G G.1 size 3000
+record arrival T T.1 size 2000
+record arrival Y Y.1 size 4000
+entry G parameters available G.1 size 3000
+want contributor:base required
+entry T parameters available T.1 size 2000
+want contributor:base required
+entry Y parameters available Y.1 size 4000
+want asset:T required
+event arrived G G.1
+event arrived T T.1
+event arrived Y Y.1
+tick 3
+record budget 5000
+entry G parameters available G.1 size 3000
+want contributor:base required
+entry T parameters available T.1 size 2000
+want contributor:base required
+entry Y parameters available Y.1 size 4000
+want asset:T required
+# Count 9 000, over the budget. One group holds an arrival, the group of T:
+# its closure, read from the part in force and from the part of its arrival,
+# is T and Y, and its arrivals are those of T and of Y. 3 000 in place of
+# 2 000 and 3 000 in place of 4 000 leave the count at 9 000: the group does
+# not raise the count and is accepted whatever the count, the arrival of T,
+# which alone would raise it, with the arrival of Y.
+tick 6
+record arrival T T.2 size 3000
+record arrival Y Y.2 size 3000
+entry G parameters available G.1 size 3000
+want contributor:base required
+entry T parameters available T.2 size 3000
+want contributor:base required
+entry Y parameters available Y.2 size 3000
+want asset:T required
+event changed T T.1 T.2
+event changed Y Y.1 Y.2
+
+# The table of tick 6 stands to tick 8, and the records after it are empty.
+
+# Scenario "budget-lowered-in-the-record-of-an-arrival". A budget of 10 000
+# bytes at creation. G is in force, 3 000 bytes. The record that answers a
+# first want of N, 6 000 bytes, also lowers the budget to 8 000 bytes.
+
+scenario unit-sentences/budget-lowered-in-the-record-of-an-arrival
+tick 0
+entry G parameters unavailable
+want contributor:base required
+tick 1
+record arrival G G.1 size 3000
+entry G parameters available G.1 size 3000
+want contributor:base required
+event arrived G G.1
+tick 3
+record want N parameters source:host optional
+entry G parameters available G.1 size 3000
+want contributor:base required
+entry N parameters unavailable
+want source:host optional
+# The lowering stands before the arrival and is applied before the groups
+# are decided: the budget is 8 000. The group of N: 9 000, above it,
+# rejected. N becomes failed, under an optional want: the step names nothing.
+tick 4
+record budget 8000
+record arrival N N.1 size 6000
+rejected N N.1
+entry G parameters available G.1 size 3000
+want contributor:base required
+entry N parameters failed over-budget
+want source:host optional
+event failed N over-budget
+
+# The table of tick 4 stands to tick 6, and the records after it are empty.

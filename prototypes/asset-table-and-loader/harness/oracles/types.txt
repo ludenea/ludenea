@@ -14,8 +14,10 @@
 # capability fails an asset the manifest holds under another type than its
 # entry, and on an entry failed for that reason a want that states another
 # type replaces the entry's type and is the new load. A want the core adds
-# for a dependency states a type only where it is the dependency's first,
-# and is never refused.
+# for a dependency is never refused. It states a type where it is the
+# dependency's first and, on an entry failed for the reason of another type,
+# where it takes the type its parent's part lists, replaces the entry's type
+# and is the new load.
 
 scenario types/want-of-another-type
 
@@ -227,53 +229,38 @@ want source:tool required
 blocked 6 awaiting P
 
 # The batch of the closure of P holds an arrival for D, which the table does
-# not hold available. The capability resolves it against the type the entry
-# of D holds, and fails it again for the same reason.
-# The core first adds the want of D that the part of P lists. It is not the
-# first want of D, so it states no type: it is never refused, and it does not
-# replace the type of the entry either. It is a want added on a failed entry,
-# so D returns to unavailable; then the arrival fails it again. The entry was
-# unavailable when the arrival was applied, so the arrival changed it: an
-# event. D is required through its parent and failed at this tick: the step
-# names it.
+# not hold available. The table holds D failed for the reason of its type,
+# and the part of P lists it under the manifest's type: the capability does
+# not fail it for its type and loads it under the manifest's type.
+# The core first adds the want of D that the part of P lists. It is added on
+# an entry failed for the reason of another type: it takes the type the part
+# lists, replaces the entry's type and returns the entry to unavailable, in
+# silence. The host's want, made under the former type, stays. Then the
+# arrivals, by identifier: D rises, a first arrival with its event.
 tick 6
-record arrival D failed other-type
+record arrival D D.1
 record arrival P P.1
-entry D second failed other-type
+entry D parameters available D.1
 want source:host optional
 want asset:P required
 entry P parameters available P.1
 want source:tool required
-event failed D other-type
+event arrived D D.1
 event arrived P P.1
-names-failed D other-type
 
-# A command states the type the manifest holds, on an entry failed for the
-# reason of its type: the want replaces the entry's type and is the new load.
-# D is unavailable again, under the required want its parent owns.
+# The command states the type the entry now holds: an ordinary want of a
+# second maker, added on an asset the table holds available. It leaves
+# nothing, and nothing gates: the step without waiting runs tick 9.
 tick 8
 record want D parameters source:tool optional
-entry D parameters unavailable
-want source:host optional
-want source:tool optional
-want asset:P required
-entry P parameters available P.1
-want source:tool required
-
-blocked 9 awaiting D
-
-tick 9
-record arrival D D.1
 entry D parameters available D.1
 want source:host optional
 want source:tool optional
 want asset:P required
 entry P parameters available P.1
 want source:tool required
-event arrived D D.1
 
-# The table of tick 9 stands to tick 12.
-
+# The table of tick 8 stands to tick 12, and the records after it are empty.
 
 scenario types/part-lists-a-contradicted-type
 

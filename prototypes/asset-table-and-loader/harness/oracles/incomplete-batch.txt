@@ -1,0 +1,139 @@
+# Family incomplete-batch: the gate reads a pending record on a gated world
+# alone.
+# Written by hand from the design text, before any run of the stand-in stage,
+# by a writer who has not read the build.
+# The table's order is the order of the asset identifiers: D, G, N, P.
+# The table is empty before the first block of each scenario.
+# Record lines stand in the order applied: the commands first, in the order
+# the scenario gives them, then the arrivals by asset identifier.
+# The family gives no size: an entry and an arrival state none.
+# The rule under test. A world whose state holds every required asset
+# answered steps without reading the record of its next tick. A record that
+# leaves a required asset unanswered once applied gates from the next
+# boundary, as a want made during a run does. So a running world that
+# receives a required parent's replacement without the new dependency its
+# part lists applies it, runs that tick with the dependency unanswered, and
+# gates at the next boundary. The count of the want the core would add from
+# the part of a pending arrival guards a gated world, and no longer a running
+# one.
+# Reading taken: a step that does not wait names what keeps the gate closed,
+# the pending record counted.
+# Each scenario runs to tick 8: the gate has opened and the world has run at
+# least two ticks more.
+
+
+scenario incomplete-batch/running-world
+
+tick 2
+record want P parameters source:host required
+entry P parameters unavailable
+want source:host required
+
+# The first load is a complete batch: the want of D is added first, owned by
+# P and required as the want of P is, then the arrivals by identifier.
+tick 3
+record arrival D D.1
+record arrival P P.1
+entry D parameters available D.1
+want asset:P required
+entry P parameters available P.1
+want source:host required
+event arrived D D.1
+event arrived P P.1
+
+# Tick 4 has an empty record. After it the state holds every required asset
+# answered: the world is running.
+# The pending record holds the replacement of P, whose part lists D and one
+# dependency more, N, with no arrival of N. The world is not gated, so the
+# step does not read the record: the step without waiting runs tick 5.
+# The first step adds the want of N that the part lists, owned by P and
+# required; D already holds the one want its parent owns. The arrival of P
+# is applied, with the event of a change. The recomputation leaves both
+# wants: the part in force lists D and N. Tick 5 runs with N unanswered
+# under a required want.
+tick 5
+record arrival P P.2
+entry D parameters available D.1
+want asset:P required
+entry N parameters unavailable
+want asset:P required
+entry P parameters available P.2
+want source:host required
+event changed P P.1 P.2
+
+# The record of tick 5 left a required asset unanswered: the world is gated
+# from the boundary after tick 5. Nothing is pending: the second step
+# without waiting runs no tick and names N.
+blocked 6 awaiting N
+# The arrival of N joins the pending record and the gate opens.
+tick 6
+record arrival N N.1
+entry D parameters available D.1
+want asset:P required
+entry N parameters available N.1
+want asset:P required
+entry P parameters available P.2
+want source:host required
+event arrived N N.1
+
+# The table of tick 6 stands to tick 8.
+
+
+scenario incomplete-batch/gated-world
+
+tick 2
+record want P parameters source:host required
+entry P parameters unavailable
+want source:host required
+
+tick 3
+record arrival D D.1
+record arrival P P.1
+entry D parameters available D.1
+want asset:P required
+entry P parameters available P.1
+want source:host required
+event arrived D D.1
+event arrived P P.1
+
+# A required want of another asset: tick 4 runs with G unanswered, and the
+# world is gated from the boundary after it.
+tick 4
+record want G parameters source:host required
+entry D parameters available D.1
+want asset:P required
+entry G parameters unavailable
+want source:host required
+entry P parameters available P.1
+want source:host required
+
+# Nothing is pending yet.
+blocked 5 awaiting G
+# The same incomplete batch as in the scenario above, on a gated world this
+# time: the gate reads the pending record. The want the core would add on N
+# from the pending part of P is counted, with the policy that the wants the
+# table holds give P, required. The table does not hold N and nothing
+# pending answers it. Two assets keep the gate closed.
+blocked 5 awaiting G, N
+# The arrival of G joins: G is answered by a pending arrival, and N still
+# keeps the gate closed. A running world would have applied this record.
+blocked 5 awaiting N
+# The arrival of N joins: the batch is complete and the gate opens. The want
+# of N is added first, then the three arrivals are applied by identifier.
+tick 5
+record arrival G G.1
+record arrival N N.1
+record arrival P P.2
+entry D parameters available D.1
+want asset:P required
+entry G parameters available G.1
+want source:host required
+entry N parameters available N.1
+want asset:P required
+entry P parameters available P.2
+want source:host required
+event arrived G G.1
+event arrived N N.1
+event changed P P.1 P.2
+
+# The table of tick 5 stands to tick 8.

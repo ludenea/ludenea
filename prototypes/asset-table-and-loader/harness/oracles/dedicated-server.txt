@@ -1,0 +1,347 @@
+# Oracles of the family "dedicated-server": a server started from the domain
+# set alone.
+# Written by hand from the design text, before any run of the stand-in stage,
+# by a writer who has not read the build. Every state is derived from the
+# text, and no tool computed any of them.
+#
+# The table's order is the order of the asset identifiers: C, D, M, S, T, U, V.
+# M is of the type "second", for which the composition declares one prepared
+# form built once; every other asset is of the first type, "parameters".
+# The part S.1 is read as listing D under the first type, M under "second"
+# and T under the first type; no other part lists a dependency.
+# This family gives no size, and no line states one.
+#
+# One statement serves the two processes. Nothing of a presentation manifest
+# or of a payload reaches a world: not a hash, not a size, not a dependency.
+# The loading capability resolves an identifier in the domain manifest,
+# follows the domain dependencies alone, and posts an arrival once the
+# canonical part and the declared forms are resident, whatever becomes of a
+# payload. The server's selection holds the forms built once that its domain
+# manifest lists. U is a presentation dependency of T and of nothing in the
+# domain: no want names it, the batch of no closure holds it, and it has no
+# entry at any tick. The payload of V is cut short in the client's store: its
+# consumer is told, outside the domain, and V arrives all the same.
+#
+# Record lines stand in the order applied: the commands first, then the
+# arrivals by asset identifier. An entry line with no want line under it is
+# an entry that holds no want.
+# A "handed" line states the bytes the consumer of the form was handed at
+# that tick, by their hash. A tick that has no block has an empty record, no
+# event, and the table and the "handed" lines of the block before it.
+# Readings taken: an event names the hash of the canonical part and no hash
+# of a form; the events of a tick stand in the order of the asset
+# identifiers; the consumer of a form is handed the form of an entry that is
+# available under no want, for the one tick boundary it keeps its entry.
+
+
+scenario dedicated-server/same-records
+
+world client
+
+tick 0
+entry C parameters unavailable
+want contributor:base required
+
+tick 1
+record arrival C C.1
+entry C parameters available C.1
+want contributor:base required
+event arrived C C.1
+
+# The first want of S makes its entry. Its dependencies have no entry yet:
+# the core learns them from the part that arrives.
+tick 2
+record want S parameters source:host required
+entry C parameters available C.1
+want contributor:base required
+entry S parameters unavailable
+want source:host required
+
+# The gate is the same on the client and on the server: it waits for
+# canonical parts. The state holds S unanswered and the pending record is
+# empty.
+blocked 3 awaiting S
+
+# The batch of the closure of S: S and the three domain dependencies its part
+# lists, sorted by identifier. The core first adds the wants of D, of M and
+# of T, each owned by S and required as the want of S is, and each the first
+# want of its asset: the entry takes the type the part of S lists for it. The
+# arrival of M names its form built once. No arrival of U: T lists it in the
+# presentation manifest alone.
+tick 3
+record arrival D D.1
+record arrival M M.1 form M.1:built
+record arrival S S.1
+record arrival T T.1
+entry C parameters available C.1
+want contributor:base required
+entry D parameters available D.1
+want asset:S required
+entry M second available M.1 form M.1:built
+want asset:S required
+entry S parameters available S.1
+want source:host required
+entry T parameters available T.1
+want asset:S required
+handed M M.1:built
+event arrived D D.1
+event arrived M M.1
+event arrived S S.1
+event arrived T T.1
+
+tick 4
+record want V parameters entity:E1 optional
+entry C parameters available C.1
+want contributor:base required
+entry D parameters available D.1
+want asset:S required
+entry M second available M.1 form M.1:built
+want asset:S required
+entry S parameters available S.1
+want source:host required
+entry T parameters available T.1
+want asset:S required
+entry V parameters unavailable
+want entity:E1 optional
+handed M M.1:built
+
+# The canonical part of V is whole in both stores: V arrives, on the client
+# as on the server.
+tick 5
+record arrival V V.1
+entry C parameters available C.1
+want contributor:base required
+entry D parameters available D.1
+want asset:S required
+entry M second available M.1 form M.1:built
+want asset:S required
+entry S parameters available S.1
+want source:host required
+entry T parameters available T.1
+want asset:S required
+entry V parameters available V.1
+want entity:E1 optional
+handed M M.1:built
+event arrived V V.1
+
+# Tick 7 has no block: the presentation revision changes the payload of T
+# and no canonical part, the domain manifest is the same, and no world
+# receives anything.
+
+# The domain revision changes T, which the table names: one arrival.
+tick 9
+record arrival T T.2
+entry C parameters available C.1
+want contributor:base required
+entry D parameters available D.1
+want asset:S required
+entry M second available M.1 form M.1:built
+want asset:S required
+entry S parameters available S.1
+want source:host required
+entry T parameters available T.2
+want asset:S required
+entry V parameters available V.1
+want entity:E1 optional
+handed M M.1:built
+event changed T T.1 T.2
+
+# The release ends the last want of S, and the wants S owned on D, on M and
+# on T end with it, at the same fixed point. The four keep their entries,
+# available and with no want, through this tick.
+tick 10
+record release S source:host
+entry C parameters available C.1
+want contributor:base required
+entry D parameters available D.1
+entry M second available M.1 form M.1:built
+entry S parameters available S.1
+entry T parameters available T.2
+entry V parameters available V.1
+want entity:E1 optional
+handed M M.1:built
+
+# The four fall at the input fixed point of tick 11 and leave the table.
+tick 11
+entry C parameters available C.1
+want contributor:base required
+entry V parameters available V.1
+want entity:E1 optional
+
+# The table of tick 11 stands to tick 12.
+
+world server as client shifted 0
+
+
+scenario dedicated-server/under-the-domain-set
+
+# Each world is created under the hash of the first revision's domain
+# manifest, which is the same value in the two processes: the hash of a
+# content set is the hash of a domain manifest and covers nothing of a
+# presentation manifest. Every want is resolved in that set, and a world
+# created under a set receives no revision: neither the presentation
+# revision nor the domain revision reaches it, and T stays at T.1.
+world client
+
+tick 0
+entry C parameters unavailable
+want contributor:base required
+
+tick 1
+record arrival C C.1
+entry C parameters available C.1
+want contributor:base required
+event arrived C C.1
+
+tick 2
+record want S parameters source:host required
+entry C parameters available C.1
+want contributor:base required
+entry S parameters unavailable
+want source:host required
+
+blocked 3 awaiting S
+
+tick 3
+record arrival D D.1
+record arrival M M.1 form M.1:built
+record arrival S S.1
+record arrival T T.1
+entry C parameters available C.1
+want contributor:base required
+entry D parameters available D.1
+want asset:S required
+entry M second available M.1 form M.1:built
+want asset:S required
+entry S parameters available S.1
+want source:host required
+entry T parameters available T.1
+want asset:S required
+handed M M.1:built
+event arrived D D.1
+event arrived M M.1
+event arrived S S.1
+event arrived T T.1
+
+tick 4
+record want V parameters entity:E1 optional
+entry C parameters available C.1
+want contributor:base required
+entry D parameters available D.1
+want asset:S required
+entry M second available M.1 form M.1:built
+want asset:S required
+entry S parameters available S.1
+want source:host required
+entry T parameters available T.1
+want asset:S required
+entry V parameters unavailable
+want entity:E1 optional
+handed M M.1:built
+
+tick 5
+record arrival V V.1
+entry C parameters available C.1
+want contributor:base required
+entry D parameters available D.1
+want asset:S required
+entry M second available M.1 form M.1:built
+want asset:S required
+entry S parameters available S.1
+want source:host required
+entry T parameters available T.1
+want asset:S required
+entry V parameters available V.1
+want entity:E1 optional
+handed M M.1:built
+event arrived V V.1
+
+# Ticks 7 and 9 have no block: the two revisions post this world nothing.
+
+tick 10
+record release S source:host
+entry C parameters available C.1
+want contributor:base required
+entry D parameters available D.1
+entry M second available M.1 form M.1:built
+entry S parameters available S.1
+entry T parameters available T.1
+entry V parameters available V.1
+want entity:E1 optional
+handed M M.1:built
+
+tick 11
+entry C parameters available C.1
+want contributor:base required
+entry V parameters available V.1
+want entity:E1 optional
+
+# The table of tick 11 stands to tick 12.
+
+world server as client shifted 0
+
+
+scenario dedicated-server/client-save-read-by-the-server
+restore continues
+
+# The save of the client's world, taken after tick 5, read in a process that
+# holds the server's selection, under the recorded content. Every asset the
+# table holds available is confirmed at the recorded hashes, of its part and,
+# for M, of its form built once, all of which the domain manifest and the
+# server's store hold. A save holds nothing of a payload, so nothing of the
+# presentation set is asked of the reader. The save holds no unanswered
+# want: no step is held, the saved run continues, and the table is the
+# client's from tick 6 on.
+tick 6
+entry C parameters available C.1
+want contributor:base required
+entry D parameters available D.1
+want asset:S required
+entry M second available M.1 form M.1:built
+want asset:S required
+entry S parameters available S.1
+want source:host required
+entry T parameters available T.1
+want asset:S required
+entry V parameters available V.1
+want entity:E1 optional
+handed M M.1:built
+
+# The reader names no set: the domain revision reaches it as it reached the
+# client.
+tick 9
+record arrival T T.2
+entry C parameters available C.1
+want contributor:base required
+entry D parameters available D.1
+want asset:S required
+entry M second available M.1 form M.1:built
+want asset:S required
+entry S parameters available S.1
+want source:host required
+entry T parameters available T.2
+want asset:S required
+entry V parameters available V.1
+want entity:E1 optional
+handed M M.1:built
+event changed T T.1 T.2
+
+tick 10
+record release S source:host
+entry C parameters available C.1
+want contributor:base required
+entry D parameters available D.1
+entry M second available M.1 form M.1:built
+entry S parameters available S.1
+entry T parameters available T.2
+entry V parameters available V.1
+want entity:E1 optional
+handed M M.1:built
+
+tick 11
+entry C parameters available C.1
+want contributor:base required
+entry V parameters available V.1
+want entity:E1 optional
+
+# The table of tick 11 stands to tick 12.
