@@ -1,0 +1,342 @@
+# Oracles of the family "mount": a mount while worlds exist.
+# Written by hand from the design text, by a writer who has not read the build.
+# Asset identifiers order as O, Q, T.
+# Record lines stand in the order applied: the commands first, in the order
+# the scenario gives them, then the arrivals by asset identifier.
+# An entry line with no want line under it is an entry that holds no want.
+# A tick 0 block states the table the creation gives.
+#
+# A mount and an unmount are each a revision: a world that names no set
+# receives one batch, in the record of the tick after the move, and a world
+# created under a set receives nothing.
+#
+# Reading taken: the batch holds an arrival for each asset the move changes
+# that the world's table names, whatever the entry holds: an available entry,
+# an entry with no want, and an entry that is failed. An asset the move adds
+# to the manifest or takes from it is an asset the move changes.
+# The other reading, for a failed entry: it stays failed until a want added
+# on it retries the load, and the mount posts nothing for it.
+#
+# Reading taken: an arrival applied while no want names its asset changes
+# nothing and emits no event, an entry with no want included; the entry then
+# falls at the same fixed point. The arrival is posted so that a command of
+# the same record that wants the asset again finds it moved.
+# The other reading: the arrival moves the entry with no want, with its event,
+# before the entry falls.
+#
+# Reading taken: the wants the core added for the dependencies of a parent
+# stand when the parent becomes failed, for as long as the parent holds a
+# want: they are recomputed only where the parent's part is at hand.
+# The other reading: they end with the parent's part.
+#
+# Reading taken throughout: the step that runs the tick of a failed arrival
+# names a required asset, and no later step names it again.
+
+scenario mount/package-under-worlds
+
+# The composition requires O, so this world holds O when the package lands.
+world held
+
+tick 0
+entry O parameters unavailable
+want contributor:base required
+
+tick 1
+record arrival O O.1
+entry O parameters available O.1
+want contributor:base required
+event arrived O O.1
+
+# The mount. The table names O, which the package overrides. It does not
+# name Q: no arrival for it.
+tick 5
+record arrival O O.9
+entry O parameters available O.9
+want contributor:base required
+event changed O O.1 O.9
+
+# A second want of an asset in force: nothing leaves the world, and the
+# record of tick 8 is empty. The contributor's want stands first.
+tick 7
+record want O parameters source:host required
+entry O parameters available O.9
+want contributor:base required
+want source:host required
+
+tick 9
+record want Q parameters source:host required
+entry O parameters available O.9
+want contributor:base required
+want source:host required
+entry Q parameters unavailable
+want source:host required
+
+tick 10
+record arrival Q Q.9
+entry O parameters available O.9
+want contributor:base required
+want source:host required
+entry Q parameters available Q.9
+want source:host required
+event arrived Q Q.9
+
+# The unmount, one batch: the overridden entry returns to its former hash,
+# and the asset of the package's own leaves the manifest and fails. The
+# failure is an answer: the world steps, and the step names the asset.
+tick 14
+record arrival O O.1
+record arrival Q failed unknown-asset
+entry O parameters available O.1
+want contributor:base required
+want source:host required
+entry Q parameters failed unknown-asset
+want source:host required
+event changed O O.9 O.1
+event failed Q unknown-asset
+names-failed Q unknown-asset
+
+# The table of tick 14 stands to tick 18.
+
+# An empty table when the package lands: tick 5 has no block, the mount
+# posts this world nothing.
+world late
+
+# Wanted while the package is mounted: answered at the overriding entry's hash.
+tick 7
+record want O parameters source:host required
+entry O parameters unavailable
+want source:host required
+
+tick 8
+record arrival O O.9
+entry O parameters available O.9
+want source:host required
+event arrived O O.9
+
+tick 9
+record want Q parameters source:host required
+entry O parameters available O.9
+want source:host required
+entry Q parameters unavailable
+want source:host required
+
+tick 10
+record arrival Q Q.9
+entry O parameters available O.9
+want source:host required
+entry Q parameters available Q.9
+want source:host required
+event arrived Q Q.9
+
+tick 14
+record arrival O O.1
+record arrival Q failed unknown-asset
+entry O parameters available O.1
+want source:host required
+entry Q parameters failed unknown-asset
+want source:host required
+event changed O O.9 O.1
+event failed Q unknown-asset
+names-failed Q unknown-asset
+
+# The table of tick 14 of this world stands to tick 18.
+
+# The asset of the package's own is wanted before the package is mounted.
+world early
+
+tick 2
+record want Q parameters source:tool optional
+entry Q parameters unavailable
+want source:tool optional
+
+# The base does not hold Q: a failed answer. The want is optional, so no step
+# names the asset.
+tick 3
+record arrival Q failed unknown-asset
+entry Q parameters failed unknown-asset
+want source:tool optional
+event failed Q unknown-asset
+
+# The mount gives the manifest an entry for Q, and the table names Q: under
+# the reading taken, the batch of the mount holds its arrival, and the failed
+# entry becomes available. The event is that of an asset that became
+# available.
+tick 5
+record arrival Q Q.9
+entry Q parameters available Q.9
+want source:tool optional
+event arrived Q Q.9
+
+tick 7
+record want O parameters source:host required
+entry O parameters unavailable
+want source:host required
+entry Q parameters available Q.9
+want source:tool optional
+
+tick 8
+record arrival O O.9
+entry O parameters available O.9
+want source:host required
+entry Q parameters available Q.9
+want source:tool optional
+event arrived O O.9
+
+# Q is in force: the host's want is added and nothing leaves the world. The
+# two wants are of command sources and stand by identity, host before tool.
+tick 9
+record want Q parameters source:host required
+entry O parameters available O.9
+want source:host required
+entry Q parameters available Q.9
+want source:host required
+want source:tool optional
+
+tick 14
+record arrival O O.1
+record arrival Q failed unknown-asset
+entry O parameters available O.1
+want source:host required
+entry Q parameters failed unknown-asset
+want source:host required
+want source:tool optional
+event changed O O.9 O.1
+event failed Q unknown-asset
+names-failed Q unknown-asset
+
+# The table of tick 14 of this world stands to tick 18.
+
+# Both assets are released just before the unmount, and one is wanted again
+# in the record that holds the unmount's batch.
+world released
+
+tick 7
+record want O parameters source:host required
+entry O parameters unavailable
+want source:host required
+
+tick 8
+record arrival O O.9
+entry O parameters available O.9
+want source:host required
+event arrived O O.9
+
+tick 9
+record want Q parameters source:host required
+entry O parameters available O.9
+want source:host required
+entry Q parameters unavailable
+want source:host required
+
+tick 10
+record arrival Q Q.9
+entry O parameters available O.9
+want source:host required
+entry Q parameters available Q.9
+want source:host required
+event arrived Q Q.9
+
+# The last want of each ends during tick 13. Both keep their entries, with no
+# want, through this tick: the table names them when the package is unmounted.
+tick 13
+record release O source:host
+record release Q source:host
+entry O parameters available O.9
+entry Q parameters available Q.9
+
+# The batch of the unmount holds an arrival for each of the two entries, with
+# no want as they are. The command is applied first: O is wanted again at the
+# tick at which it would have fallen, so its arrival finds a want and moves it
+# to its former hash. No want names Q when its arrival is applied: under the
+# reading taken it changes nothing and emits no event. Q then falls.
+# Without the arrival of O the world would hold the package's hash for good.
+tick 14
+record want O parameters source:tool optional
+record arrival O O.1
+record arrival Q failed unknown-asset
+entry O parameters available O.1
+want source:tool optional
+event changed O O.9 O.1
+
+# The table of tick 14 of the world released stands to tick 18.
+
+# Created under the hash of the base. Ticks 5 and 14 have no block: the mount
+# and the unmount post this world nothing, and every want is resolved in the
+# set's manifest.
+world under-set
+
+tick 0
+entry O parameters unavailable
+want contributor:base required
+
+tick 1
+record arrival O O.1
+entry O parameters available O.1
+want contributor:base required
+event arrived O O.1
+
+tick 7
+record want O parameters source:host required
+entry O parameters available O.1
+want contributor:base required
+want source:host required
+
+tick 9
+record want Q parameters source:host required
+entry O parameters available O.1
+want contributor:base required
+want source:host required
+entry Q parameters unavailable
+want source:host required
+
+# The set does not hold Q, whatever the instance has mounted: a failed
+# answer, which opens the gate.
+tick 10
+record arrival Q failed unknown-asset
+entry O parameters available O.1
+want contributor:base required
+want source:host required
+entry Q parameters failed unknown-asset
+want source:host required
+event failed Q unknown-asset
+names-failed Q unknown-asset
+
+# The table of tick 10 stands to tick 18.
+
+
+scenario mount/own-asset-with-a-dependency
+
+# Tick 3 has no block: the table is empty when the package is mounted.
+tick 4
+record want T parameters source:host required
+entry T parameters unavailable
+want source:host required
+
+# The closure of T in the instance's manifest: T, and O at the overriding
+# entry's hash. The core adds the want of O, owned by T.
+tick 5
+record arrival O O.9
+record arrival T T.9
+entry O parameters available O.9
+want asset:T required
+entry T parameters available T.9
+want source:host required
+event arrived O O.9
+event arrived T T.9
+
+# The unmount, one batch: O returns to its former hash and T leaves the
+# manifest and fails. Under the reading taken the want the core added for O
+# stands, T still holding a want: O stays in force under a parent that is
+# failed.
+tick 9
+record arrival O O.1
+record arrival T failed unknown-asset
+entry O parameters available O.1
+want asset:T required
+entry T parameters failed unknown-asset
+want source:host required
+event changed O O.9 O.1
+event failed T unknown-asset
+names-failed T unknown-asset
+
+# The table of tick 9 stands to tick 12.

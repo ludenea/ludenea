@@ -1,0 +1,321 @@
+# Oracles of the family "system-wants": a want made by a system inside a tick.
+# Written by hand from the design text, by a writer who has not read the build.
+# Asset identifiers order as A, F, G, K, M, R.
+# Record lines stand in the order applied: the commands first, in the order
+# the scenario gives them, then the arrivals by asset identifier.
+# An entry line with no want line under it is an entry that holds no want.
+# A tick block with no entry line states an empty table.
+#
+# Reading taken throughout: what a system does through its declared access is
+# deferred, and applied at the structural change fixed point of the tick in
+# which the system runs, in the order the system gave it. That point stands
+# after the input fixed point of the same tick, so after the tick's record and
+# after its falls. The want is in the table of the boundary that ends its
+# tick, it leaves the world with the state extracted at the end of that tick,
+# and a required one gates from that boundary: the boundary a command of the
+# same tick's record gates from.
+# The other reading: it is applied at the input fixed point of the next tick,
+# and everything below moves one tick later.
+#
+# What a system does is no element of an input record: a replay runs the
+# system again. So a tick at which the system alone acts has a block with no
+# record line, and a comment says what the system did.
+#
+# Reading taken: a want the system makes under the world's own entry carries
+# the contributor that brings the system, here contributor:logic.
+
+scenario system-wants/entity-wants
+
+# The wants are made by the system. The table of each tick is the table the
+# same wants give as commands of the same ticks, stated under by-command.
+world by-system
+
+# The system wants A for E1 and for E2. Tick 2 runs with A unanswered.
+tick 2
+entry A parameters unavailable
+want entity:E1 required
+want entity:E2 optional
+# Gated on A from the boundary after tick 2; the scripted arrival stands in
+# the pending record and opens the gate.
+tick 3
+record arrival A A.1
+entry A parameters available A.1
+want entity:E1 required
+want entity:E2 optional
+event arrived A A.1
+# The system releases the want of E1.
+tick 5
+entry A parameters available A.1
+want entity:E2 optional
+# The system releases the want of E2: the last want of A ended during tick 7.
+# A keeps its entry, with no want, through this tick.
+tick 7
+entry A parameters available A.1
+# A falls at the input fixed point of tick 8 and leaves: the table is empty.
+tick 8
+# The system wants A again, after the fall: a new entry, unanswered.
+tick 10
+entry A parameters unavailable
+want entity:E2 optional
+tick 12
+record arrival A A.2
+entry A parameters available A.2
+want entity:E2 optional
+event arrived A A.2
+
+# The same wants and releases as commands. The tables are those of by-system,
+# tick for tick, and so are the state hashes: no arrival of A and no fall of A
+# stands in a tick in which a want of A is made.
+world by-command
+
+tick 2
+record want A parameters entity:E1 required
+record want A parameters entity:E2 optional
+entry A parameters unavailable
+want entity:E1 required
+want entity:E2 optional
+tick 3
+record arrival A A.1
+entry A parameters available A.1
+want entity:E1 required
+want entity:E2 optional
+event arrived A A.1
+tick 5
+record release A entity:E1
+entry A parameters available A.1
+want entity:E2 optional
+tick 7
+record release A entity:E2
+entry A parameters available A.1
+tick 8
+tick 10
+record want A parameters entity:E2 optional
+entry A parameters unavailable
+want entity:E2 optional
+tick 12
+record arrival A A.2
+entry A parameters available A.2
+want entity:E2 optional
+event arrived A A.2
+
+scenario system-wants/despawn-by-a-system
+# The system wants A for E1 and for E2, both optional.
+tick 2
+entry A parameters unavailable
+want entity:E1 optional
+want entity:E2 optional
+tick 3
+record arrival A A.1
+entry A parameters available A.1
+want entity:E1 optional
+want entity:E2 optional
+event arrived A A.1
+# The system asks for the despawn of E1. A despawn that stands in no record
+# is applied at the structural change fixed point of its tick, and the wants
+# of E1 end there.
+tick 5
+entry A parameters available A.1
+want entity:E2 optional
+# The despawn of E2 ends the last want of A during tick 7. A keeps its entry,
+# with no want, through this tick.
+tick 7
+entry A parameters available A.1
+# A falls at the input fixed point of tick 8 and leaves: the table is empty.
+tick 8
+
+scenario system-wants/closure-under-the-world-entry
+# The system wants R under the world's own entry: the want of contributor:logic.
+tick 2
+entry R parameters unavailable
+want contributor:logic optional
+# The batch: the core first adds the wants its parts list, to any depth, M for
+# R and K for M, each optional as its parent's wants are, then applies the
+# arrivals by identifier.
+tick 4
+record arrival K K.1
+record arrival M M.1
+record arrival R R.1
+entry K parameters available K.1
+want asset:M optional
+entry M parameters available M.1
+want asset:R optional
+entry R parameters available R.1
+want contributor:logic optional
+event arrived K K.1
+event arrived M M.1
+event arrived R R.1
+# A host's preload of the same asset is a second want, of another maker. The
+# want of a contributor stands before the want of the source of a command.
+tick 5
+record want R parameters source:host optional
+entry K parameters available K.1
+want asset:M optional
+entry M parameters available M.1
+want asset:R optional
+entry R parameters available R.1
+want contributor:logic optional
+want source:host optional
+# The system makes its want again as required: the same maker, so the policy
+# of its one want changes and no want is added. R is in force, so the core
+# recomputes the wants of its dependencies at the same point: M is required
+# since one want of R is, and K since the one want of M is.
+tick 7
+entry K parameters available K.1
+want asset:M required
+entry M parameters available M.1
+want asset:R required
+entry R parameters available R.1
+want contributor:logic required
+want source:host optional
+# The system releases its want, and its own alone. No want of R is required
+# any more: the wants of M and of K are optional again.
+tick 9
+entry K parameters available K.1
+want asset:M optional
+entry M parameters available M.1
+want asset:R optional
+entry R parameters available R.1
+want source:host optional
+# The last want of R ends, the want of M ends with it, and the want of K with
+# that of M. The three keep their entries, with no want, through this tick.
+tick 11
+record release R source:host
+entry K parameters available K.1
+entry M parameters available M.1
+entry R parameters available R.1
+# The three fall at the input fixed point of tick 12: the table is empty.
+tick 12
+
+scenario system-wants/arrival-in-the-tick-of-the-want
+# Here a want of the system does not behave as a command's. The record of
+# tick 3 is applied first: no want names A yet, so its arrival is recorded and
+# changes nothing, with no event. The system's want is applied afterwards, at
+# the structural change fixed point: A is wanted and unanswered after tick 3.
+# A command of the record of tick 3 would have been answered by that arrival.
+tick 3
+record arrival A A.1
+entry A parameters unavailable
+want entity:E1 optional
+tick 5
+record arrival A A.1
+entry A parameters available A.1
+want entity:E1 optional
+event arrived A A.1
+
+scenario system-wants/want-again-at-the-tick-of-the-fall
+tick 2
+entry A parameters unavailable
+want entity:E1 optional
+tick 3
+record arrival A A.1
+entry A parameters available A.1
+want entity:E1 optional
+event arrived A A.1
+# The system releases the last want of A during tick 5.
+tick 5
+entry A parameters available A.1
+# Here too a want of the system does not behave as a command's. A falls at
+# the input fixed point of tick 6, having no want there; the system's want is
+# applied later in tick 6 and makes a new entry, unanswered. A command of the
+# record of tick 6 would have kept A available without a gap.
+tick 6
+entry A parameters unavailable
+want entity:E1 optional
+# A first arrival and not a change of hash: the entry that held A.1 fell.
+tick 8
+record arrival A A.2
+entry A parameters available A.2
+want entity:E1 optional
+event arrived A A.2
+
+scenario system-wants/gate-live
+# A live loading capability. The record of tick 3 is empty: the want is the
+# system's. It leaves the world at the end of tick 3, and tick 3 runs with R
+# unanswered.
+tick 3
+entry R parameters unavailable
+want entity:E1 required
+# Gated on R from the boundary after tick 3. One batch answers the closure of
+# three levels; the core adds the wants of M and of K, required as the want
+# of R is.
+tick 4
+record arrival K K.1
+record arrival M M.1
+record arrival R R.1
+entry K parameters available K.1
+want asset:M required
+entry M parameters available M.1
+want asset:R required
+entry R parameters available R.1
+want entity:E1 required
+event arrived K K.1
+event arrived M M.1
+event arrived R R.1
+# The system wants F for E2. Tick 6 runs with F unanswered.
+tick 6
+entry F parameters unavailable
+want entity:E2 required
+entry K parameters available K.1
+want asset:M required
+entry M parameters available M.1
+want asset:R required
+entry R parameters available R.1
+want entity:E1 required
+# The artifact is cut short: a failed answer, which opens the gate.
+tick 7
+record arrival F failed invalid-part
+entry F parameters failed invalid-part
+want entity:E2 required
+entry K parameters available K.1
+want asset:M required
+entry M parameters available M.1
+want asset:R required
+entry R parameters available R.1
+want entity:E1 required
+event failed F invalid-part
+names-failed F invalid-part
+# Tick 8 has no block: the system makes the want of E2 again, the want its
+# maker already holds, at the same policy. No want is added, F stays failed
+# and nothing leaves the world: the record of tick 9 is empty.
+# At tick 9 the system wants F for E1: a want added on a failed entry, which
+# returns it to unavailable. It is the new load.
+tick 9
+entry F parameters unavailable
+want entity:E1 required
+want entity:E2 required
+entry K parameters available K.1
+want asset:M required
+entry M parameters available M.1
+want asset:R required
+entry R parameters available R.1
+want entity:E1 required
+# The load fails again: the entry was unavailable, so this arrival changes it
+# and has its event.
+tick 10
+record arrival F failed invalid-part
+entry F parameters failed invalid-part
+want entity:E1 required
+want entity:E2 required
+entry K parameters available K.1
+want asset:M required
+entry M parameters available M.1
+want asset:R required
+entry R parameters available R.1
+want entity:E1 required
+event failed F invalid-part
+names-failed F invalid-part
+
+scenario system-wants/gate-pending
+tick 3
+entry G parameters unavailable
+want entity:E1 required
+# Gated on G from the boundary after tick 3, the boundary a command of the
+# record of tick 3 would gate from.
+blocked 4 awaiting G
+# The pending release of the required want counts as the answer of G, so the
+# gate opens. G never rose: it keeps its entry, with no want, through tick 4.
+tick 4
+record release G entity:E1
+entry G parameters unavailable
+# G leaves the table at the input fixed point of tick 5: the table is empty.
+tick 5

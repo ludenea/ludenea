@@ -1,0 +1,600 @@
+# Oracles of the family "budget": an excess over a world's budget.
+# Written by hand from the design text and from the definitions of the three
+# candidates in the sheet, by a writer who has not read the build.
+# Asset identifiers order as B, D, K, N, R, S, V, W, X.
+# Record lines stand in the order applied: the commands first, in the order
+# the scenario gives them, then the arrivals by asset identifier.
+# An entry line with no want line under it is an entry that holds no want.
+# A tick 0 block states the table the creation gives.
+#
+# Each case is stated three times, once per candidate, as the candidate's
+# definition gives it. No candidate is chosen here. Under the candidate on
+# the closure of one want every arrival to a hash carries its mark; under the
+# two others no arrival does.
+#
+# The count of a world is the sum of the sizes of the contents its table
+# holds available. The budget is 10 000 bytes but where a comment says
+# otherwise. Sizes: B.1 9 000, D.1 6 000, K.1 5 000, K.2 11 000, N.1 2 000,
+# R.1 2 000, S.1 1 000, S.2 2 000, V.1 1 000, W.1 1 000, X.1 9 000.
+#
+# Reading taken: the core adds the wants the parts of a batch list before any
+# arrival is tested, and those wants stand whatever the test gives. A
+# dependency keeps the want its parent's part gave it when the parent's
+# arrival is rejected.
+# The other reading: a want the core added from a part that is not put in
+# force is taken back.
+#
+# Reading taken: a rejected first load is an answer, as any failure is. The
+# gate opens on it, the step names a required asset, and the want does not
+# leave the world again.
+
+# Case "root-and-dependency". K is held, 5 000 bytes. R lists D: the closure
+# of R is 8 000 bytes, R 2 000 and D 6 000.
+
+scenario budget/root-and-dependency/single-arrival
+tick 0
+entry K parameters unavailable
+want contributor:base required
+tick 1
+record arrival K K.1
+entry K parameters available K.1
+want contributor:base required
+event arrived K K.1
+tick 3
+record want R parameters source:host required
+entry K parameters available K.1
+want contributor:base required
+entry R parameters unavailable
+want source:host required
+# The core adds the want of D. D is tested first: 5 000 and 6 000 is above
+# the budget, so it is rejected. R is tested next, against a count still at
+# 5 000: 7 000 is within. The root is in force without its dependency.
+tick 4
+record arrival D D.1
+record arrival R R.1
+rejected D D.1
+entry D parameters failed over-budget
+want asset:R required
+entry K parameters available K.1
+want contributor:base required
+entry R parameters available R.1
+want source:host required
+event failed D over-budget
+event arrived R R.1
+names-failed D over-budget
+
+scenario budget/root-and-dependency/closure-of-a-want
+tick 0
+entry K parameters unavailable
+want contributor:base required
+tick 1
+record arrival K K.1 for K
+entry K parameters available K.1
+want contributor:base required
+event arrived K K.1
+tick 3
+record want R parameters source:host required
+entry K parameters available K.1
+want contributor:base required
+entry R parameters unavailable
+want source:host required
+# Both arrivals answer the want of R: one group of 8 000 bytes, which with
+# the 5 000 held is above the budget. Both are rejected.
+tick 4
+record arrival D D.1 for R
+record arrival R R.1 for R
+rejected D D.1
+rejected R R.1
+entry D parameters failed over-budget
+want asset:R required
+entry K parameters available K.1
+want contributor:base required
+entry R parameters failed over-budget
+want source:host required
+event failed D over-budget
+event failed R over-budget
+names-failed D over-budget
+names-failed R over-budget
+
+scenario budget/root-and-dependency/whole-drain
+tick 0
+entry K parameters unavailable
+want contributor:base required
+tick 1
+record arrival K K.1
+entry K parameters available K.1
+want contributor:base required
+event arrived K K.1
+tick 3
+record want R parameters source:host required
+entry K parameters available K.1
+want contributor:base required
+entry R parameters unavailable
+want source:host required
+# The drain holds the two arrivals of one closure: the states of the
+# candidate on the closure, with no mark.
+tick 4
+record arrival D D.1
+record arrival R R.1
+rejected D D.1
+rejected R R.1
+entry D parameters failed over-budget
+want asset:R required
+entry K parameters available K.1
+want contributor:base required
+entry R parameters failed over-budget
+want source:host required
+event failed D over-budget
+event failed R over-budget
+names-failed D over-budget
+names-failed R over-budget
+
+# Case "closure-over-the-budget". A budget of 7 000 bytes, below the closure
+# of R, 8 000 bytes, in a world that holds nothing.
+
+scenario budget/closure-over-the-budget/single-arrival
+tick 3
+record want R parameters source:host required
+entry R parameters unavailable
+want source:host required
+# D is tested first: 6 000 is within 7 000, so it is applied. R is tested
+# against a count of 6 000: 8 000 is above. The dependency is in force, and
+# counted, under a root that is failed.
+tick 4
+record arrival D D.1
+record arrival R R.1
+rejected R R.1
+entry D parameters available D.1
+want asset:R required
+entry R parameters failed over-budget
+want source:host required
+event arrived D D.1
+event failed R over-budget
+names-failed R over-budget
+
+scenario budget/closure-over-the-budget/closure-of-a-want
+tick 3
+record want R parameters source:host required
+entry R parameters unavailable
+want source:host required
+# One group of 8 000 bytes, above the budget: both arrivals are rejected.
+tick 4
+record arrival D D.1 for R
+record arrival R R.1 for R
+rejected D D.1
+rejected R R.1
+entry D parameters failed over-budget
+want asset:R required
+entry R parameters failed over-budget
+want source:host required
+event failed D over-budget
+event failed R over-budget
+names-failed D over-budget
+names-failed R over-budget
+
+scenario budget/closure-over-the-budget/whole-drain
+tick 3
+record want R parameters source:host required
+entry R parameters unavailable
+want source:host required
+tick 4
+record arrival D D.1
+record arrival R R.1
+rejected D D.1
+rejected R R.1
+entry D parameters failed over-budget
+want asset:R required
+entry R parameters failed over-budget
+want source:host required
+event failed D over-budget
+event failed R over-budget
+names-failed D over-budget
+names-failed R over-budget
+
+# Case "small-beside-large". K is held, 5 000 bytes. Two wants of one tick
+# that share nothing: B, 9 000 bytes, and S, 1 000 bytes.
+
+scenario budget/small-beside-large/single-arrival
+tick 0
+entry K parameters unavailable
+want contributor:base required
+tick 1
+record arrival K K.1
+entry K parameters available K.1
+want contributor:base required
+event arrived K K.1
+tick 3
+record want B parameters source:host optional
+record want S parameters source:host required
+entry B parameters unavailable
+want source:host optional
+entry K parameters available K.1
+want contributor:base required
+entry S parameters unavailable
+want source:host required
+# B: 14 000 is above the budget, rejected. S: 6 000 is within, applied. The
+# want of B is optional, so no step names it.
+tick 4
+record arrival B B.1
+record arrival S S.1
+rejected B B.1
+entry B parameters failed over-budget
+want source:host optional
+entry K parameters available K.1
+want contributor:base required
+entry S parameters available S.1
+want source:host required
+event failed B over-budget
+event arrived S S.1
+
+scenario budget/small-beside-large/closure-of-a-want
+tick 0
+entry K parameters unavailable
+want contributor:base required
+tick 1
+record arrival K K.1 for K
+entry K parameters available K.1
+want contributor:base required
+event arrived K K.1
+tick 3
+record want B parameters source:host optional
+record want S parameters source:host required
+entry B parameters unavailable
+want source:host optional
+entry K parameters available K.1
+want contributor:base required
+entry S parameters unavailable
+want source:host required
+# Two groups, each of one arrival: the states of the single arrival.
+tick 4
+record arrival B B.1 for B
+record arrival S S.1 for S
+rejected B B.1
+entry B parameters failed over-budget
+want source:host optional
+entry K parameters available K.1
+want contributor:base required
+entry S parameters available S.1
+want source:host required
+event failed B over-budget
+event arrived S S.1
+
+scenario budget/small-beside-large/whole-drain
+tick 0
+entry K parameters unavailable
+want contributor:base required
+tick 1
+record arrival K K.1
+entry K parameters available K.1
+want contributor:base required
+event arrived K K.1
+tick 3
+record want B parameters source:host optional
+record want S parameters source:host required
+entry B parameters unavailable
+want source:host optional
+entry K parameters available K.1
+want contributor:base required
+entry S parameters unavailable
+want source:host required
+# The drain is 10 000 bytes, which with the 5 000 held is above the budget:
+# both arrivals are rejected. S, which fits, fails for the size of B, and the
+# step names it, since its want is required.
+tick 4
+record arrival B B.1
+record arrival S S.1
+rejected B B.1
+rejected S S.1
+entry B parameters failed over-budget
+want source:host optional
+entry K parameters available K.1
+want contributor:base required
+entry S parameters failed over-budget
+want source:host required
+event failed B over-budget
+event failed S over-budget
+names-failed S over-budget
+
+# Case "overlapping-closures". A world that holds nothing. V lists N and X,
+# W lists N: the closure of V is 12 000 bytes, V 1 000, N 2 000 and X 9 000;
+# the closure of W is 3 000 bytes, W 1 000 and N 2 000. The four arrivals are
+# 13 000 bytes.
+
+scenario budget/overlapping-closures/single-arrival
+tick 3
+record want V parameters source:host optional
+record want W parameters source:host required
+entry V parameters unavailable
+want source:host optional
+entry W parameters unavailable
+want source:host required
+# The core adds the wants of N, for V and for W, and of X, for V. N, V and W
+# are applied in turn: 2 000, 3 000, 4 000. X would bring the count to
+# 13 000: rejected. V is in force without one of its two dependencies.
+tick 4
+record arrival N N.1
+record arrival V V.1
+record arrival W W.1
+record arrival X X.1
+rejected X X.1
+entry N parameters available N.1
+want asset:V optional
+want asset:W required
+entry V parameters available V.1
+want source:host optional
+entry W parameters available W.1
+want source:host required
+entry X parameters failed over-budget
+want asset:V optional
+event arrived N N.1
+event arrived V V.1
+event arrived W W.1
+event failed X over-budget
+
+scenario budget/overlapping-closures/closure-of-a-want
+tick 3
+record want V parameters source:host optional
+record want W parameters source:host required
+entry V parameters unavailable
+want source:host optional
+entry W parameters unavailable
+want source:host required
+# N stands in both closures and its one arrival carries one mark: V, the
+# root that stands first. The group of V is N, V and X, 12 000 bytes: above
+# the budget, rejected whole. The group of W is W alone, 1 000 bytes:
+# accepted. W is in force without N, which was rejected with the closure of
+# V: the step names N, required through W.
+tick 4
+record arrival N N.1 for V
+record arrival V V.1 for V
+record arrival W W.1 for W
+record arrival X X.1 for V
+rejected N N.1
+rejected V V.1
+rejected X X.1
+entry N parameters failed over-budget
+want asset:V optional
+want asset:W required
+entry V parameters failed over-budget
+want source:host optional
+entry W parameters available W.1
+want source:host required
+entry X parameters failed over-budget
+want asset:V optional
+event failed N over-budget
+event failed V over-budget
+event arrived W W.1
+event failed X over-budget
+names-failed N over-budget
+
+scenario budget/overlapping-closures/whole-drain
+tick 3
+record want V parameters source:host optional
+record want W parameters source:host required
+entry V parameters unavailable
+want source:host optional
+entry W parameters unavailable
+want source:host required
+# The drain is 13 000 bytes, above the budget: the four arrivals are
+# rejected. W and N, 3 000 bytes together, fail for the size of X.
+tick 4
+record arrival N N.1
+record arrival V V.1
+record arrival W W.1
+record arrival X X.1
+rejected N N.1
+rejected V V.1
+rejected W W.1
+rejected X X.1
+entry N parameters failed over-budget
+want asset:V optional
+want asset:W required
+entry V parameters failed over-budget
+want source:host optional
+entry W parameters failed over-budget
+want source:host required
+entry X parameters failed over-budget
+want asset:V optional
+event failed N over-budget
+event failed V over-budget
+event failed W over-budget
+event failed X over-budget
+names-failed N over-budget
+names-failed W over-budget
+
+# Case "revision-that-grows". K and S are held, 6 000 bytes. A revision gives
+# K a content of 11 000 bytes and S one of 2 000 bytes.
+
+scenario budget/revision-that-grows/single-arrival
+tick 0
+entry K parameters unavailable
+want contributor:base required
+entry S parameters unavailable
+want contributor:base required
+tick 1
+record arrival K K.1
+record arrival S S.1
+entry K parameters available K.1
+want contributor:base required
+entry S parameters available S.1
+want contributor:base required
+event arrived K K.1
+event arrived S S.1
+# K at its new content would bring the count to 12 000: rejected. K is in
+# force, so it stays at its hash, with no event. S at its new content brings
+# the count to 7 000: applied.
+tick 4
+record arrival K K.2
+record arrival S S.2
+rejected K K.2
+entry K parameters available K.1
+want contributor:base required
+entry S parameters available S.2
+want contributor:base required
+event changed S S.1 S.2
+
+scenario budget/revision-that-grows/closure-of-a-want
+tick 0
+entry K parameters unavailable
+want contributor:base required
+entry S parameters unavailable
+want contributor:base required
+tick 1
+record arrival K K.1 for K
+record arrival S S.1 for S
+entry K parameters available K.1
+want contributor:base required
+entry S parameters available S.1
+want contributor:base required
+event arrived K K.1
+event arrived S S.1
+# An arrival of a revision names the asset the revision changed: two groups
+# of one arrival, and the states of the single arrival.
+tick 4
+record arrival K K.2 for K
+record arrival S S.2 for S
+rejected K K.2
+entry K parameters available K.1
+want contributor:base required
+entry S parameters available S.2
+want contributor:base required
+event changed S S.1 S.2
+
+scenario budget/revision-that-grows/whole-drain
+tick 0
+entry K parameters unavailable
+want contributor:base required
+entry S parameters unavailable
+want contributor:base required
+tick 1
+record arrival K K.1
+record arrival S S.1
+entry K parameters available K.1
+want contributor:base required
+entry S parameters available S.1
+want contributor:base required
+event arrived K K.1
+event arrived S S.1
+# The two new contents are 13 000 bytes in place of 6 000: above the budget,
+# both rejected. Both assets are in force and stay at their hashes, with no
+# event: S keeps its former content for the size of K.
+tick 4
+record arrival K K.2
+record arrival S S.2
+rejected K K.2
+rejected S S.2
+entry K parameters available K.1
+want contributor:base required
+entry S parameters available S.1
+want contributor:base required
+
+# Case "arrival-at-the-tick-of-a-fall". One maker gives up K, 5 000 bytes,
+# and wants B, 9 000 bytes, in one record. The three candidates give the same
+# states: every drain holds one arrival.
+
+scenario budget/arrival-at-the-tick-of-a-fall/single-arrival
+tick 2
+record want K parameters source:host optional
+entry K parameters unavailable
+want source:host optional
+tick 3
+record arrival K K.1
+entry K parameters available K.1
+want source:host optional
+event arrived K K.1
+# The last want of K ends during tick 5: K keeps its entry, with no want and
+# still available, through this tick.
+tick 5
+record release K source:host
+record want B parameters source:host optional
+entry B parameters unavailable
+want source:host optional
+entry K parameters available K.1
+# The record is applied before the falls: when the arrival of B is tested the
+# table still holds K available, so the count would be 14 000. B is rejected.
+# K falls afterwards, at the same fixed point.
+tick 6
+record arrival B B.1
+rejected B B.1
+entry B parameters failed over-budget
+want source:host optional
+event failed B over-budget
+# The maker retries by releasing its want and wanting again: the want is
+# added on a failed entry and returns it to unavailable.
+tick 8
+record release B source:host
+record want B parameters source:host optional
+entry B parameters unavailable
+want source:host optional
+# The world holds nothing else now: 9 000 is within the budget.
+tick 9
+record arrival B B.1
+entry B parameters available B.1
+want source:host optional
+event arrived B B.1
+
+scenario budget/arrival-at-the-tick-of-a-fall/closure-of-a-want
+tick 2
+record want K parameters source:host optional
+entry K parameters unavailable
+want source:host optional
+tick 3
+record arrival K K.1 for K
+entry K parameters available K.1
+want source:host optional
+event arrived K K.1
+tick 5
+record release K source:host
+record want B parameters source:host optional
+entry B parameters unavailable
+want source:host optional
+entry K parameters available K.1
+tick 6
+record arrival B B.1 for B
+rejected B B.1
+entry B parameters failed over-budget
+want source:host optional
+event failed B over-budget
+tick 8
+record release B source:host
+record want B parameters source:host optional
+entry B parameters unavailable
+want source:host optional
+tick 9
+record arrival B B.1 for B
+entry B parameters available B.1
+want source:host optional
+event arrived B B.1
+
+scenario budget/arrival-at-the-tick-of-a-fall/whole-drain
+tick 2
+record want K parameters source:host optional
+entry K parameters unavailable
+want source:host optional
+tick 3
+record arrival K K.1
+entry K parameters available K.1
+want source:host optional
+event arrived K K.1
+tick 5
+record release K source:host
+record want B parameters source:host optional
+entry B parameters unavailable
+want source:host optional
+entry K parameters available K.1
+tick 6
+record arrival B B.1
+rejected B B.1
+entry B parameters failed over-budget
+want source:host optional
+event failed B over-budget
+tick 8
+record release B source:host
+record want B parameters source:host optional
+entry B parameters unavailable
+want source:host optional
+tick 9
+record arrival B B.1
+entry B parameters available B.1
+want source:host optional
+event arrived B B.1

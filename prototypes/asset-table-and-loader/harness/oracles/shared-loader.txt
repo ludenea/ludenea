@@ -1,0 +1,490 @@
+# Oracle of the family "shared-loader": several worlds on one loading capability.
+# Written by hand from the design text, by a writer who has not read the build.
+# Asset identifiers order as C, J, L, M, P, Q.
+# Record lines stand in the order applied: the commands first, in the order
+# the scenario gives them, then the arrivals by asset identifier.
+# An entry line with no want line under it is an entry that holds no want.
+#
+# Sixteen worlds: four patterns, each held by four worlds that run it 0, 1, 2
+# and 3 ticks later. The four worlds of offset 0 are stated in full; each of
+# the twelve others is the world of offset 0 of its pattern with every tick
+# number raised by its offset. Nothing in a world's statement depends on the
+# delays: the host waits before each round, so the answer to a want applied
+# at one tick stands in the record of the next.
+#
+# A world's record holds the arrivals of the closures its own wants ask for
+# and no other arrival. A want leaves a world for the assets of its closure
+# that the world's table does not hold available; the batch holds no arrival
+# for an asset the table holds available.
+# The worlds that name no set are answered in the instance's manifest, the
+# later revision: C.2 and L.2. The worlds created under the set are answered
+# in the set's manifest: C.1 and L.1.
+
+scenario shared-loader/sixteen-worlds
+
+# Pattern "first", naming no set.
+world first-0
+
+tick 2
+record want P parameters source:host required
+entry P parameters unavailable
+want source:host required
+
+# The closure of P: P, its dependencies J and M, and C for M. The core first
+# adds the wants the parts of the batch list, required as the want of P is,
+# then applies the arrivals by identifier.
+tick 3
+record arrival C C.2
+record arrival J J.1
+record arrival M M.1
+record arrival P P.1
+entry C parameters available C.2
+want asset:M required
+entry J parameters available J.1
+want asset:P required
+entry M parameters available M.1
+want asset:P required
+entry P parameters available P.1
+want source:host required
+event arrived C C.2
+event arrived J J.1
+event arrived M M.1
+event arrived P P.1
+
+tick 4
+record want Q parameters entity:E1 required
+entry C parameters available C.2
+want asset:M required
+entry J parameters available J.1
+want asset:P required
+entry M parameters available M.1
+want asset:P required
+entry P parameters available P.1
+want source:host required
+entry Q parameters unavailable
+want entity:E1 required
+
+# The closure of Q is Q, L, M and C. The table holds M and C available, so
+# the batch holds L and Q alone. M gains a second want of the core, owned by
+# Q; the wants of the core stand by the identifier of the parent.
+tick 5
+record arrival L L.2
+record arrival Q Q.1
+entry C parameters available C.2
+want asset:M required
+entry J parameters available J.1
+want asset:P required
+entry L parameters available L.2
+want asset:Q required
+entry M parameters available M.1
+want asset:P required
+want asset:Q required
+entry P parameters available P.1
+want source:host required
+entry Q parameters available Q.1
+want entity:E1 required
+event arrived L L.2
+event arrived Q Q.1
+
+# The last want of P ends, and with it the wants the core added for P: the
+# want of J, and one of the two wants of M. J and P keep their entries, with
+# no want, through this tick; M and C stay, wanted through Q.
+tick 7
+record release P source:host
+entry C parameters available C.2
+want asset:M required
+entry J parameters available J.1
+entry L parameters available L.2
+want asset:Q required
+entry M parameters available M.1
+want asset:Q required
+entry P parameters available P.1
+entry Q parameters available Q.1
+want entity:E1 required
+
+# J and P fall at the input fixed point of tick 8 and leave.
+tick 8
+entry C parameters available C.2
+want asset:M required
+entry L parameters available L.2
+want asset:Q required
+entry M parameters available M.1
+want asset:Q required
+entry Q parameters available Q.1
+want entity:E1 required
+
+# J is wanted again after its fall: a new entry, unanswered.
+tick 10
+record want J parameters entity:E2 optional
+entry C parameters available C.2
+want asset:M required
+entry J parameters unavailable
+want entity:E2 optional
+entry L parameters available L.2
+want asset:Q required
+entry M parameters available M.1
+want asset:Q required
+entry Q parameters available Q.1
+want entity:E1 required
+
+tick 11
+record arrival J J.1
+entry C parameters available C.2
+want asset:M required
+entry J parameters available J.1
+want entity:E2 optional
+entry L parameters available L.2
+want asset:Q required
+entry M parameters available M.1
+want asset:Q required
+entry Q parameters available Q.1
+want entity:E1 required
+event arrived J J.1
+
+# The table of tick 11 stands to tick 16.
+
+# Pattern "second", naming no set.
+world second-0
+
+tick 2
+record want C parameters entity:E1 optional
+record want Q parameters source:host required
+entry C parameters unavailable
+want entity:E1 optional
+entry Q parameters unavailable
+want source:host required
+
+# Two wants left the world at the end of tick 2, and C stands in both
+# closures: one arrival of C, since the queue holds one arrival per asset.
+# C then holds two wants, the entity's before the one the core added for M.
+tick 3
+record arrival C C.2
+record arrival L L.2
+record arrival M M.1
+record arrival Q Q.1
+entry C parameters available C.2
+want entity:E1 optional
+want asset:M required
+entry L parameters available L.2
+want asset:Q required
+entry M parameters available M.1
+want asset:Q required
+entry Q parameters available Q.1
+want source:host required
+event arrived C C.2
+event arrived L L.2
+event arrived M M.1
+event arrived Q Q.1
+
+tick 5
+record want P parameters entity:E2 optional
+entry C parameters available C.2
+want entity:E1 optional
+want asset:M required
+entry L parameters available L.2
+want asset:Q required
+entry M parameters available M.1
+want asset:Q required
+entry P parameters unavailable
+want entity:E2 optional
+entry Q parameters available Q.1
+want source:host required
+
+# The closure of P is P, J, M and C. The table holds M and C available, so
+# the batch holds J and P alone. The wants the core adds for P are optional,
+# as the one want of P is. The want of C owned by M stays required: one want
+# of M, the one owned by Q, is required.
+tick 6
+record arrival J J.1
+record arrival P P.1
+entry C parameters available C.2
+want entity:E1 optional
+want asset:M required
+entry J parameters available J.1
+want asset:P optional
+entry L parameters available L.2
+want asset:Q required
+entry M parameters available M.1
+want asset:P optional
+want asset:Q required
+entry P parameters available P.1
+want entity:E2 optional
+entry Q parameters available Q.1
+want source:host required
+event arrived J J.1
+event arrived P P.1
+
+# The last want of Q ends, and with it the wants the core added for Q: the
+# want of L, and one of the two wants of M. No want of M is required any
+# more, so the want of C owned by M becomes optional. L and Q keep their
+# entries, with no want, through this tick.
+tick 8
+record release Q source:host
+entry C parameters available C.2
+want entity:E1 optional
+want asset:M optional
+entry J parameters available J.1
+want asset:P optional
+entry L parameters available L.2
+entry M parameters available M.1
+want asset:P optional
+entry P parameters available P.1
+want entity:E2 optional
+entry Q parameters available Q.1
+
+# L and Q fall at the input fixed point of tick 9 and leave.
+tick 9
+entry C parameters available C.2
+want entity:E1 optional
+want asset:M optional
+entry J parameters available J.1
+want asset:P optional
+entry M parameters available M.1
+want asset:P optional
+entry P parameters available P.1
+want entity:E2 optional
+
+# The entity's want of C ends; C stays, wanted through M.
+tick 11
+record release C entity:E1
+entry C parameters available C.2
+want asset:M optional
+entry J parameters available J.1
+want asset:P optional
+entry M parameters available M.1
+want asset:P optional
+entry P parameters available P.1
+want entity:E2 optional
+
+# The table of tick 11 stands to tick 16.
+
+# Pattern "third": the records of "first", in a world created under the set.
+# Its tables are those of first-0 with C at C.1 and L at L.1, the set's
+# hashes: no arrival of this world names C.2 or L.2.
+world third-0
+
+tick 2
+record want P parameters source:host required
+entry P parameters unavailable
+want source:host required
+
+tick 3
+record arrival C C.1
+record arrival J J.1
+record arrival M M.1
+record arrival P P.1
+entry C parameters available C.1
+want asset:M required
+entry J parameters available J.1
+want asset:P required
+entry M parameters available M.1
+want asset:P required
+entry P parameters available P.1
+want source:host required
+event arrived C C.1
+event arrived J J.1
+event arrived M M.1
+event arrived P P.1
+
+tick 4
+record want Q parameters entity:E1 required
+entry C parameters available C.1
+want asset:M required
+entry J parameters available J.1
+want asset:P required
+entry M parameters available M.1
+want asset:P required
+entry P parameters available P.1
+want source:host required
+entry Q parameters unavailable
+want entity:E1 required
+
+tick 5
+record arrival L L.1
+record arrival Q Q.1
+entry C parameters available C.1
+want asset:M required
+entry J parameters available J.1
+want asset:P required
+entry L parameters available L.1
+want asset:Q required
+entry M parameters available M.1
+want asset:P required
+want asset:Q required
+entry P parameters available P.1
+want source:host required
+entry Q parameters available Q.1
+want entity:E1 required
+event arrived L L.1
+event arrived Q Q.1
+
+tick 7
+record release P source:host
+entry C parameters available C.1
+want asset:M required
+entry J parameters available J.1
+entry L parameters available L.1
+want asset:Q required
+entry M parameters available M.1
+want asset:Q required
+entry P parameters available P.1
+entry Q parameters available Q.1
+want entity:E1 required
+
+tick 8
+entry C parameters available C.1
+want asset:M required
+entry L parameters available L.1
+want asset:Q required
+entry M parameters available M.1
+want asset:Q required
+entry Q parameters available Q.1
+want entity:E1 required
+
+tick 10
+record want J parameters entity:E2 optional
+entry C parameters available C.1
+want asset:M required
+entry J parameters unavailable
+want entity:E2 optional
+entry L parameters available L.1
+want asset:Q required
+entry M parameters available M.1
+want asset:Q required
+entry Q parameters available Q.1
+want entity:E1 required
+
+tick 11
+record arrival J J.1
+entry C parameters available C.1
+want asset:M required
+entry J parameters available J.1
+want entity:E2 optional
+entry L parameters available L.1
+want asset:Q required
+entry M parameters available M.1
+want asset:Q required
+entry Q parameters available Q.1
+want entity:E1 required
+event arrived J J.1
+
+# The table of tick 11 of third-0 stands to tick 16.
+
+# Pattern "fourth": the records of "second", in a world created under the
+# set. Its tables are those of second-0 with C at C.1 and L at L.1.
+world fourth-0
+
+tick 2
+record want C parameters entity:E1 optional
+record want Q parameters source:host required
+entry C parameters unavailable
+want entity:E1 optional
+entry Q parameters unavailable
+want source:host required
+
+tick 3
+record arrival C C.1
+record arrival L L.1
+record arrival M M.1
+record arrival Q Q.1
+entry C parameters available C.1
+want entity:E1 optional
+want asset:M required
+entry L parameters available L.1
+want asset:Q required
+entry M parameters available M.1
+want asset:Q required
+entry Q parameters available Q.1
+want source:host required
+event arrived C C.1
+event arrived L L.1
+event arrived M M.1
+event arrived Q Q.1
+
+tick 5
+record want P parameters entity:E2 optional
+entry C parameters available C.1
+want entity:E1 optional
+want asset:M required
+entry L parameters available L.1
+want asset:Q required
+entry M parameters available M.1
+want asset:Q required
+entry P parameters unavailable
+want entity:E2 optional
+entry Q parameters available Q.1
+want source:host required
+
+tick 6
+record arrival J J.1
+record arrival P P.1
+entry C parameters available C.1
+want entity:E1 optional
+want asset:M required
+entry J parameters available J.1
+want asset:P optional
+entry L parameters available L.1
+want asset:Q required
+entry M parameters available M.1
+want asset:P optional
+want asset:Q required
+entry P parameters available P.1
+want entity:E2 optional
+entry Q parameters available Q.1
+want source:host required
+event arrived J J.1
+event arrived P P.1
+
+tick 8
+record release Q source:host
+entry C parameters available C.1
+want entity:E1 optional
+want asset:M optional
+entry J parameters available J.1
+want asset:P optional
+entry L parameters available L.1
+entry M parameters available M.1
+want asset:P optional
+entry P parameters available P.1
+want entity:E2 optional
+entry Q parameters available Q.1
+
+tick 9
+entry C parameters available C.1
+want entity:E1 optional
+want asset:M optional
+entry J parameters available J.1
+want asset:P optional
+entry M parameters available M.1
+want asset:P optional
+entry P parameters available P.1
+want entity:E2 optional
+
+tick 11
+record release C entity:E1
+entry C parameters available C.1
+want asset:M optional
+entry J parameters available J.1
+want asset:P optional
+entry M parameters available M.1
+want asset:P optional
+entry P parameters available P.1
+want entity:E2 optional
+
+# The table of tick 11 of fourth-0 stands to tick 16.
+
+# The twelve other worlds, each its pattern run later by its offset. The
+# statement of first-1 is that of first-0 with tick 3 for tick 2, tick 4 for
+# tick 3, and so on; its table of tick 12 stands to tick 16.
+world first-1 as first-0 shifted 1
+world second-1 as second-0 shifted 1
+world third-1 as third-0 shifted 1
+world fourth-1 as fourth-0 shifted 1
+world first-2 as first-0 shifted 2
+world second-2 as second-0 shifted 2
+world third-2 as third-0 shifted 2
+world fourth-2 as fourth-0 shifted 2
+world first-3 as first-0 shifted 3
+world second-3 as second-0 shifted 3
+world third-3 as third-0 shifted 3
+world fourth-3 as fourth-0 shifted 3
