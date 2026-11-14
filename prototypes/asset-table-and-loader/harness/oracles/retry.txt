@@ -1,0 +1,378 @@
+# Family retry: a want added on a failed entry.
+# Written by hand from the design text as amended, by a writer who has not
+# read the build.
+# The table's order is the order of the asset identifiers: A, D, F, P.
+# Record lines stand in the order applied: the commands first, in the order
+# the scenario gives them, then the arrivals by asset identifier.
+# An entry line with no want line under it is an entry that holds no want.
+# The rule under test: a want added on an entry that is failed is the new
+# load. It returns the entry to unavailable when it is applied, so the asset
+# is unanswered again: the want leaves the domain, a required want gates from
+# the next boundary, and a save holds it as any unanswered want. No event is
+# emitted when an entry returns to unavailable.
+
+scenario retry/optional-want
+
+tick 0
+entry A parameters unavailable
+want contributor:base required
+
+tick 1
+record arrival A A.1
+entry A parameters available A.1
+want contributor:base required
+event arrived A A.1
+
+tick 2
+record want F parameters source:host optional
+entry A parameters available A.1
+want contributor:base required
+entry F parameters unavailable
+want source:host optional
+
+# The artifact is cut short: a failed first load of an optional want.
+tick 3
+record arrival F failed invalid-part
+entry A parameters available A.1
+want contributor:base required
+entry F parameters failed invalid-part
+want source:host optional
+event failed F invalid-part
+
+# The repair moves no manifest: nothing is posted, and the entry stays failed
+# through tick 5.
+# A second maker wants the failed asset: the entry returns to unavailable at
+# this tick. The want is optional and gates nothing.
+tick 6
+record want F parameters source:tool optional
+entry A parameters available A.1
+want contributor:base required
+entry F parameters unavailable
+want source:host optional
+want source:tool optional
+
+# The want left the domain, and the whole artifact answers it. The asset
+# became available: an event.
+tick 7
+record arrival F F.1
+entry A parameters available A.1
+want contributor:base required
+entry F parameters available F.1
+want source:host optional
+want source:tool optional
+event arrived F F.1
+
+# The table of tick 7 stands to tick 12.
+
+
+scenario retry/required-want
+
+tick 0
+entry A parameters unavailable
+want contributor:base required
+
+tick 1
+record arrival A A.1
+entry A parameters available A.1
+want contributor:base required
+event arrived A A.1
+
+tick 2
+record want F parameters source:host optional
+entry A parameters available A.1
+want contributor:base required
+entry F parameters unavailable
+want source:host optional
+
+tick 3
+record arrival F failed invalid-part
+entry A parameters available A.1
+want contributor:base required
+entry F parameters failed invalid-part
+want source:host optional
+event failed F invalid-part
+
+# The want is required, and it is added on a failed entry: the entry is
+# unavailable after this tick, under a required want. The save is taken here
+# and holds it so.
+tick 6
+record want F parameters source:tool required
+entry A parameters available A.1
+want contributor:base required
+entry F parameters unavailable
+want source:host optional
+want source:tool required
+
+# The asset is unanswered again, so the required want gates from the boundary
+# after its tick: the step names it. A failed entry would have been an answer.
+blocked 7 awaiting F
+
+tick 7
+record arrival F F.1
+entry A parameters available A.1
+want contributor:base required
+entry F parameters available F.1
+want source:host optional
+want source:tool required
+event arrived F F.1
+
+# The table of tick 7 stands to tick 12.
+
+
+scenario retry/same-maker-changes-policy
+
+tick 0
+entry A parameters unavailable
+want contributor:base required
+
+tick 1
+record arrival A A.1
+entry A parameters available A.1
+want contributor:base required
+event arrived A A.1
+
+tick 2
+record want F parameters source:host optional
+entry A parameters available A.1
+want contributor:base required
+entry F parameters unavailable
+want source:host optional
+
+tick 3
+record arrival F failed invalid-part
+entry A parameters available A.1
+want contributor:base required
+entry F parameters failed invalid-part
+want source:host optional
+event failed F invalid-part
+
+# The maker already holds a want of F: the command changes its policy and
+# adds no want. So it is no new load: the entry stays failed, nothing leaves
+# the domain, and nothing is posted although the artifact is whole by now.
+# A failed asset is answered, so the required want does not gate: the step
+# without waiting runs tick 7. No transition failed the asset at this tick,
+# so no step names it.
+tick 6
+record want F parameters source:host required
+entry A parameters available A.1
+want contributor:base required
+entry F parameters failed invalid-part
+want source:host required
+
+# The table of tick 6 stands to tick 12, and the records after it are empty.
+
+
+scenario retry/release-and-want-again
+
+tick 0
+entry A parameters unavailable
+want contributor:base required
+
+tick 1
+record arrival A A.1
+entry A parameters available A.1
+want contributor:base required
+event arrived A A.1
+
+tick 2
+record want F parameters source:host optional
+entry A parameters available A.1
+want contributor:base required
+entry F parameters unavailable
+want source:host optional
+
+tick 3
+record arrival F failed invalid-part
+entry A parameters available A.1
+want contributor:base required
+entry F parameters failed invalid-part
+want source:host optional
+event failed F invalid-part
+
+# The way a maker that holds a want retries. The release ends the last want
+# of F: the entry is failed with no want, and keeps its type. The want that
+# follows is added on that failed entry and returns it to unavailable.
+tick 6
+record release F source:host
+record want F parameters source:host optional
+entry A parameters available A.1
+want contributor:base required
+entry F parameters unavailable
+want source:host optional
+
+tick 7
+record arrival F F.1
+entry A parameters available A.1
+want contributor:base required
+entry F parameters available F.1
+want source:host optional
+event arrived F F.1
+
+# The table of tick 7 stands to tick 12.
+
+
+scenario retry/want-in-the-record-of-the-failure
+
+tick 0
+entry A parameters unavailable
+want contributor:base required
+
+tick 1
+record arrival A A.1
+entry A parameters available A.1
+want contributor:base required
+event arrived A A.1
+
+tick 2
+record want F parameters source:host optional
+entry A parameters available A.1
+want contributor:base required
+entry F parameters unavailable
+want source:host optional
+
+# The command is applied before the arrival of the same record: the tool's
+# want is added on an asset that is unanswered, not on a failed entry. Then
+# the arrival fails the asset.
+tick 3
+record want F parameters source:tool optional
+record arrival F failed invalid-part
+entry A parameters available A.1
+want contributor:base required
+entry F parameters failed invalid-part
+want source:host optional
+want source:tool optional
+event failed F invalid-part
+
+# The test of a want that leaves is made when the want is applied: the tool's
+# want was the want of an unanswered asset, so it left the domain at the end
+# of tick 3, and the capability, whose table does not hold F available, loads
+# it again. The artifact is still cut short. The arrival leaves the entry as
+# it was, failed for the same reason: it is recorded, changes nothing and
+# emits no event.
+# Reading taken: the want leaves although the arrival of its own record has
+# answered the asset by then; the entry stays failed while that load runs.
+tick 4
+record arrival F failed invalid-part
+entry A parameters available A.1
+want contributor:base required
+entry F parameters failed invalid-part
+want source:host optional
+want source:tool optional
+
+# The table of tick 4 stands to tick 12, and the records after it are empty.
+
+
+scenario retry/dependency-of-a-parent-wanted-again
+
+tick 0
+entry A parameters unavailable
+want contributor:base required
+
+tick 1
+record arrival A A.1
+entry A parameters available A.1
+want contributor:base required
+event arrived A A.1
+
+tick 2
+record want P parameters source:host optional
+entry A parameters available A.1
+want contributor:base required
+entry P parameters unavailable
+want source:host optional
+
+# One batch for the closure of P: its dependency fails, its own part arrives.
+# The want of D is added first, owned by P and optional as the want of P is.
+tick 3
+record arrival D failed invalid-part
+record arrival P P.1
+entry A parameters available A.1
+want contributor:base required
+entry D parameters failed invalid-part
+want asset:P optional
+entry P parameters available P.1
+want source:host optional
+event failed D invalid-part
+event arrived P P.1
+
+# The last want of P ends, and the want of D ends with it. Both keep their
+# entries, with no want, through this tick: P available, D failed.
+tick 6
+record release P source:host
+entry A parameters available A.1
+want contributor:base required
+entry D parameters failed invalid-part
+entry P parameters available P.1
+
+# P is wanted again at the tick at which it would have fallen. Its part is
+# held available, so the core adds the want of D at the same point, with no
+# batch. That want is added on a failed entry: the core's want is a new load
+# as a command's is, and D returns to unavailable. The want of P itself is
+# added on an available asset and leaves nothing. Neither entry falls.
+tick 7
+record want P parameters source:host optional
+entry A parameters available A.1
+want contributor:base required
+entry D parameters unavailable
+want asset:P optional
+entry P parameters available P.1
+want source:host optional
+
+# The want the core added left the domain, and the whole artifact answers it.
+tick 8
+record arrival D D.1
+entry A parameters available A.1
+want contributor:base required
+entry D parameters available D.1
+want asset:P optional
+entry P parameters available P.1
+want source:host optional
+event arrived D D.1
+
+# The table of tick 8 stands to tick 12.
+
+
+# The readers of the save taken after tick 6 of retry/required-want. Its
+# table holds A available and F unavailable under two wants, one required:
+# the retry is state, and a reader loads F because the table says so.
+
+scenario retry/save-under-the-content-at-hand
+restore new-history unanswered F
+blocked 7 awaiting A, F
+
+# The save holds an unanswered want: under the content at hand the restore
+# starts a new history, and its event, the first of the tick, names F. A is
+# answered by a marked answer at its recorded hash, with no event. F is
+# loaded as any want is: an ordinary arrival, with its event.
+tick 7
+record arrival A A.1 marked
+record arrival F F.1
+entry A parameters available A.1
+want contributor:base required
+entry F parameters available F.1
+want source:host optional
+want source:tool required
+event new-history unanswered F
+event arrived F F.1
+
+# The table of tick 7 stands to tick 12.
+
+
+scenario retry/save-under-the-recorded-content
+restore continues
+blocked 7 awaiting F
+
+# A is confirmed, outside the record. The want of F names no hash and is not
+# confirmed: it is loaded as any want is, and the saved run continues on the
+# request's statement. The record, the table and the events are those of tick
+# 7 of the run that went on.
+tick 7
+record arrival F F.1
+entry A parameters available A.1
+want contributor:base required
+entry F parameters available F.1
+want source:host optional
+want source:tool required
+event arrived F F.1
+
+# The table of tick 7 stands to tick 12.

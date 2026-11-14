@@ -1,309 +1,328 @@
-# Family named-set: a named content set under a moved manifest.
-# Written by hand from the design text, by a writer who has not read the build.
+# Oracles of the family "named-set": a named content set under a moved manifest.
+# Written by hand from the design text as amended after the first stage,
+# before any run of the same-harness stage, by a writer who has not read the
+# build. Every state is derived again from the text, and none is patched.
 # The table's order is the order of the asset identifiers: K1, K2, N, X2, X3, Y.
-# Where the text left a choice, a comment says which reading the lines take.
-# Reading taken throughout: a first arrival emits the event "arrived".
-# Reading taken throughout: a tick 0 block states the table the creation gives,
-# with an empty record and no event.
+# Every asset of this family is of the first asset type, written "parameters",
+# in each manifest and in each want, and no part of it is read as listing a
+# dependency. An entry line states the type the entry holds, which its first
+# want wrote.
+# A tick 0 block states the table the creation gives, with an empty record and
+# no event.
+# No want of this family is made on an asset its world holds available: each
+# names an unanswered asset, leaves the world at the end of its tick and is
+# answered in the record of the next tick.
+# Reading taken throughout: the events of a tick stand in the order in which
+# its arrivals are applied, the order of the asset identifiers.
+# Reading taken throughout: the step that runs the tick of a failed arrival
+# names the required asset with its reason, and no later step names it again.
 
 scenario named-set/moved-manifest
 
-# The world created under the set. Every want is resolved in the set's manifest,
-# whatever has moved the instance's manifest since, and no revision, mount or
-# unmount reaches its input record.
+# The world created under the set. Every want that leaves it is resolved in
+# the set's manifest, whatever has moved the instance's manifest since, and no
+# revision, mount or unmount reaches its input record.
 world under-set
 
 tick 0
-entry K1 unavailable
+entry K1 parameters unavailable
 want contributor:base required
-entry K2 unavailable
+entry K2 parameters unavailable
 want contributor:base required
 
-# The composition's wants are answered before the first tick runs.
+# The composition's wants are made before the first tick and gate it: their
+# answers stand in the record of tick 1, and the tick runs with both applied.
 tick 1
 record arrival K1 K1.1
 record arrival K2 K2.1
-entry K1 available K1.1
+entry K1 parameters available K1.1
 want contributor:base required
-entry K2 available K2.1
+entry K2 parameters available K2.1
 want contributor:base required
 event arrived K1 K1.1
 event arrived K2 K2.1
 
 # Ticks 4 and 7 have no block: the revision and the mount post this world nothing.
 
+# The first want of X2 makes its entry and writes its type. Tick 9 runs with
+# X2 unanswered, and the world is gated from the boundary after it.
 tick 9
-record want X2 source:host required
-entry K1 available K1.1
+record want X2 parameters source:host required
+entry K1 parameters available K1.1
 want contributor:base required
-entry K2 available K2.1
+entry K2 parameters available K2.1
 want contributor:base required
-entry X2 unavailable
+entry X2 parameters unavailable
 want source:host required
 
 # Answered at the set's hash: the former artifact is still in the store.
 tick 10
 record arrival X2 X2.1
-entry K1 available K1.1
+entry K1 parameters available K1.1
 want contributor:base required
-entry K2 available K2.1
+entry K2 parameters available K2.1
 want contributor:base required
-entry X2 available X2.1
+entry X2 parameters available X2.1
 want source:host required
 event arrived X2 X2.1
 
 tick 11
-record want Y source:host required
-entry K1 available K1.1
+record want Y parameters source:host required
+entry K1 parameters available K1.1
 want contributor:base required
-entry K2 available K2.1
+entry K2 parameters available K2.1
 want contributor:base required
-entry X2 available X2.1
+entry X2 parameters available X2.1
 want source:host required
-entry Y unavailable
+entry Y parameters unavailable
 want source:host required
 
 # The mounted package overrides this entry on the instance: the set's hash answers.
 tick 12
 record arrival Y Y.1
-entry K1 available K1.1
+entry K1 parameters available K1.1
 want contributor:base required
-entry K2 available K2.1
+entry K2 parameters available K2.1
 want contributor:base required
-entry X2 available X2.1
+entry X2 parameters available X2.1
 want source:host required
-entry Y available Y.1
+entry Y parameters available Y.1
 want source:host required
 event arrived Y Y.1
 
 tick 13
-record want N source:host required
-entry K1 available K1.1
+record want N parameters source:host required
+entry K1 parameters available K1.1
 want contributor:base required
-entry K2 available K2.1
+entry K2 parameters available K2.1
 want contributor:base required
-entry N unavailable
+entry N parameters unavailable
 want source:host required
-entry X2 available X2.1
+entry X2 parameters available X2.1
 want source:host required
-entry Y available Y.1
+entry Y parameters available Y.1
 want source:host required
 
-# The set does not hold the asset: a failed answer, which opens the gate.
-# Reading taken: the step that runs the tick of the failed arrival names the
-# asset, and no later step names it again.
+# The set does not hold the asset, though the instance's manifest now does: a
+# failed answer, which opens the gate. The entry keeps the type its want wrote.
 tick 14
 record arrival N failed unknown-asset
-entry K1 available K1.1
+entry K1 parameters available K1.1
 want contributor:base required
-entry K2 available K2.1
+entry K2 parameters available K2.1
 want contributor:base required
-entry N failed unknown-asset
+entry N parameters failed unknown-asset
 want source:host required
-entry X2 available X2.1
+entry X2 parameters available X2.1
 want source:host required
-entry Y available Y.1
+entry Y parameters available Y.1
 want source:host required
 event failed N unknown-asset
 names-failed N unknown-asset
 
 tick 15
-record want X3 source:host required
-entry K1 available K1.1
+record want X3 parameters source:host required
+entry K1 parameters available K1.1
 want contributor:base required
-entry K2 available K2.1
+entry K2 parameters available K2.1
 want contributor:base required
-entry N failed unknown-asset
+entry N parameters failed unknown-asset
 want source:host required
-entry X2 available X2.1
+entry X2 parameters available X2.1
 want source:host required
-entry X3 unavailable
+entry X3 parameters unavailable
 want source:host required
-entry Y available Y.1
+entry Y parameters available Y.1
 want source:host required
 
-# The artifact the set names is gone from the store: a failed answer.
+# The artifact the set names is gone from the store: a failed answer. The
+# step that runs this tick names X3 alone: N failed at an earlier tick.
 tick 16
 record arrival X3 failed artifact-gone
-entry K1 available K1.1
+entry K1 parameters available K1.1
 want contributor:base required
-entry K2 available K2.1
+entry K2 parameters available K2.1
 want contributor:base required
-entry N failed unknown-asset
+entry N parameters failed unknown-asset
 want source:host required
-entry X2 available X2.1
+entry X2 parameters available X2.1
 want source:host required
-entry X3 failed artifact-gone
+entry X3 parameters failed artifact-gone
 want source:host required
-entry Y available Y.1
+entry Y parameters available Y.1
 want source:host required
 event failed X3 artifact-gone
 names-failed X3 artifact-gone
 
 # Tick 19 has no block: the unmount posts this world nothing.
+# No want is added on a failed entry, so neither is loaded again.
 # The table of tick 16 stands to tick 22.
 
 # The world that names no set, on the same instance. The revision, the mount
 # and the unmount each reach it as one batch, and its wants are answered in the
 # instance's current manifest.
-# Reading taken: a batch holds an arrival for each asset the move changes that
-# this world's table holds under a want, and none for an asset it does not want.
+# A move's batch holds an arrival for each asset the move changes that this
+# world's table names, and none for an asset the table does not name; no part
+# lists a dependency, so no closure of a changed part adds to a batch.
 world no-set
 
 tick 0
-entry K1 unavailable
+entry K1 parameters unavailable
 want contributor:base required
-entry K2 unavailable
+entry K2 parameters unavailable
 want contributor:base required
 
 tick 1
 record arrival K1 K1.1
 record arrival K2 K2.1
-entry K1 available K1.1
+entry K1 parameters available K1.1
 want contributor:base required
-entry K2 available K2.1
+entry K2 parameters available K2.1
 want contributor:base required
 event arrived K1 K1.1
 event arrived K2 K2.1
 
-# The revision, put in place between tick 3 and tick 4.
+# The revision, put in place between tick 3 and tick 4. Of the assets it
+# changes or adds, the table names K1 alone.
 tick 4
 record arrival K1 K1.2
-entry K1 available K1.2
+entry K1 parameters available K1.2
 want contributor:base required
-entry K2 available K2.1
+entry K2 parameters available K2.1
 want contributor:base required
 event changed K1 K1.1 K1.2
 
-# The mount, between tick 6 and tick 7. The world does not hold Y yet.
+# The mount, between tick 6 and tick 7. Of the two entries the package
+# overrides, the table names K2 alone: the world does not want Y yet.
 tick 7
 record arrival K2 K2.9
-entry K1 available K1.2
+entry K1 parameters available K1.2
 want contributor:base required
-entry K2 available K2.9
+entry K2 parameters available K2.9
 want contributor:base required
 event changed K2 K2.1 K2.9
 
 tick 9
-record want X2 source:host required
-entry K1 available K1.2
+record want X2 parameters source:host required
+entry K1 parameters available K1.2
 want contributor:base required
-entry K2 available K2.9
+entry K2 parameters available K2.9
 want contributor:base required
-entry X2 unavailable
+entry X2 parameters unavailable
 want source:host required
 
 # Answered at the later revision's hash.
 tick 10
 record arrival X2 X2.2
-entry K1 available K1.2
+entry K1 parameters available K1.2
 want contributor:base required
-entry K2 available K2.9
+entry K2 parameters available K2.9
 want contributor:base required
-entry X2 available X2.2
+entry X2 parameters available X2.2
 want source:host required
 event arrived X2 X2.2
 
 tick 11
-record want Y source:host required
-entry K1 available K1.2
+record want Y parameters source:host required
+entry K1 parameters available K1.2
 want contributor:base required
-entry K2 available K2.9
+entry K2 parameters available K2.9
 want contributor:base required
-entry X2 available X2.2
+entry X2 parameters available X2.2
 want source:host required
-entry Y unavailable
+entry Y parameters unavailable
 want source:host required
 
 # Answered at the hash of the package's overriding entry.
 tick 12
 record arrival Y Y.9
-entry K1 available K1.2
+entry K1 parameters available K1.2
 want contributor:base required
-entry K2 available K2.9
+entry K2 parameters available K2.9
 want contributor:base required
-entry X2 available X2.2
+entry X2 parameters available X2.2
 want source:host required
-entry Y available Y.9
+entry Y parameters available Y.9
 want source:host required
 event arrived Y Y.9
 
 tick 13
-record want N source:host required
-entry K1 available K1.2
+record want N parameters source:host required
+entry K1 parameters available K1.2
 want contributor:base required
-entry K2 available K2.9
+entry K2 parameters available K2.9
 want contributor:base required
-entry N unavailable
+entry N parameters unavailable
 want source:host required
-entry X2 available X2.2
+entry X2 parameters available X2.2
 want source:host required
-entry Y available Y.9
+entry Y parameters available Y.9
 want source:host required
 
 # The later revision holds the asset.
 tick 14
 record arrival N N.1
-entry K1 available K1.2
+entry K1 parameters available K1.2
 want contributor:base required
-entry K2 available K2.9
+entry K2 parameters available K2.9
 want contributor:base required
-entry N available N.1
+entry N parameters available N.1
 want source:host required
-entry X2 available X2.2
+entry X2 parameters available X2.2
 want source:host required
-entry Y available Y.9
+entry Y parameters available Y.9
 want source:host required
 event arrived N N.1
 
 tick 15
-record want X3 source:host required
-entry K1 available K1.2
+record want X3 parameters source:host required
+entry K1 parameters available K1.2
 want contributor:base required
-entry K2 available K2.9
+entry K2 parameters available K2.9
 want contributor:base required
-entry N available N.1
+entry N parameters available N.1
 want source:host required
-entry X2 available X2.2
+entry X2 parameters available X2.2
 want source:host required
-entry X3 unavailable
+entry X3 parameters unavailable
 want source:host required
-entry Y available Y.9
+entry Y parameters available Y.9
 want source:host required
 
 # Answered at the later revision's hash: the removed artifact is not asked for.
 tick 16
 record arrival X3 X3.2
-entry K1 available K1.2
+entry K1 parameters available K1.2
 want contributor:base required
-entry K2 available K2.9
+entry K2 parameters available K2.9
 want contributor:base required
-entry N available N.1
+entry N parameters available N.1
 want source:host required
-entry X2 available X2.2
+entry X2 parameters available X2.2
 want source:host required
-entry X3 available X3.2
+entry X3 parameters available X3.2
 want source:host required
-entry Y available Y.9
+entry Y parameters available Y.9
 want source:host required
 event arrived X3 X3.2
 
 # The unmount, between tick 18 and tick 19: the two overridden entries return
-# to the later revision's hashes, as one batch in identifier order.
+# to the later revision's hashes, as one batch in identifier order. The table
+# names both, and neither leaves the instance's manifest.
 tick 19
 record arrival K2 K2.1
 record arrival Y Y.1
-entry K1 available K1.2
+entry K1 parameters available K1.2
 want contributor:base required
-entry K2 available K2.1
+entry K2 parameters available K2.1
 want contributor:base required
-entry N available N.1
+entry N parameters available N.1
 want source:host required
-entry X2 available X2.2
+entry X2 parameters available X2.2
 want source:host required
-entry X3 available X3.2
+entry X3 parameters available X3.2
 want source:host required
-entry Y available Y.1
+entry Y parameters available Y.1
 want source:host required
 event changed K2 K2.9 K2.1
 event changed Y Y.9 Y.1
@@ -316,119 +335,119 @@ event changed Y Y.9 Y.1
 world reference
 
 tick 0
-entry K1 unavailable
+entry K1 parameters unavailable
 want contributor:base required
-entry K2 unavailable
+entry K2 parameters unavailable
 want contributor:base required
 
 tick 1
 record arrival K1 K1.1
 record arrival K2 K2.1
-entry K1 available K1.1
+entry K1 parameters available K1.1
 want contributor:base required
-entry K2 available K2.1
+entry K2 parameters available K2.1
 want contributor:base required
 event arrived K1 K1.1
 event arrived K2 K2.1
 
 tick 9
-record want X2 source:host required
-entry K1 available K1.1
+record want X2 parameters source:host required
+entry K1 parameters available K1.1
 want contributor:base required
-entry K2 available K2.1
+entry K2 parameters available K2.1
 want contributor:base required
-entry X2 unavailable
+entry X2 parameters unavailable
 want source:host required
 
 tick 10
 record arrival X2 X2.1
-entry K1 available K1.1
+entry K1 parameters available K1.1
 want contributor:base required
-entry K2 available K2.1
+entry K2 parameters available K2.1
 want contributor:base required
-entry X2 available X2.1
+entry X2 parameters available X2.1
 want source:host required
 event arrived X2 X2.1
 
 tick 11
-record want Y source:host required
-entry K1 available K1.1
+record want Y parameters source:host required
+entry K1 parameters available K1.1
 want contributor:base required
-entry K2 available K2.1
+entry K2 parameters available K2.1
 want contributor:base required
-entry X2 available X2.1
+entry X2 parameters available X2.1
 want source:host required
-entry Y unavailable
+entry Y parameters unavailable
 want source:host required
 
 tick 12
 record arrival Y Y.1
-entry K1 available K1.1
+entry K1 parameters available K1.1
 want contributor:base required
-entry K2 available K2.1
+entry K2 parameters available K2.1
 want contributor:base required
-entry X2 available X2.1
+entry X2 parameters available X2.1
 want source:host required
-entry Y available Y.1
+entry Y parameters available Y.1
 want source:host required
 event arrived Y Y.1
 
 tick 13
-record want N source:host required
-entry K1 available K1.1
+record want N parameters source:host required
+entry K1 parameters available K1.1
 want contributor:base required
-entry K2 available K2.1
+entry K2 parameters available K2.1
 want contributor:base required
-entry N unavailable
+entry N parameters unavailable
 want source:host required
-entry X2 available X2.1
+entry X2 parameters available X2.1
 want source:host required
-entry Y available Y.1
+entry Y parameters available Y.1
 want source:host required
 
 tick 14
 record arrival N failed unknown-asset
-entry K1 available K1.1
+entry K1 parameters available K1.1
 want contributor:base required
-entry K2 available K2.1
+entry K2 parameters available K2.1
 want contributor:base required
-entry N failed unknown-asset
+entry N parameters failed unknown-asset
 want source:host required
-entry X2 available X2.1
+entry X2 parameters available X2.1
 want source:host required
-entry Y available Y.1
+entry Y parameters available Y.1
 want source:host required
 event failed N unknown-asset
 names-failed N unknown-asset
 
 tick 15
-record want X3 source:host required
-entry K1 available K1.1
+record want X3 parameters source:host required
+entry K1 parameters available K1.1
 want contributor:base required
-entry K2 available K2.1
+entry K2 parameters available K2.1
 want contributor:base required
-entry N failed unknown-asset
+entry N parameters failed unknown-asset
 want source:host required
-entry X2 available X2.1
+entry X2 parameters available X2.1
 want source:host required
-entry X3 unavailable
+entry X3 parameters unavailable
 want source:host required
-entry Y available Y.1
+entry Y parameters available Y.1
 want source:host required
 
 tick 16
 record arrival X3 failed artifact-gone
-entry K1 available K1.1
+entry K1 parameters available K1.1
 want contributor:base required
-entry K2 available K2.1
+entry K2 parameters available K2.1
 want contributor:base required
-entry N failed unknown-asset
+entry N parameters failed unknown-asset
 want source:host required
-entry X2 available X2.1
+entry X2 parameters available X2.1
 want source:host required
-entry X3 failed artifact-gone
+entry X3 parameters failed artifact-gone
 want source:host required
-entry Y available Y.1
+entry Y parameters available Y.1
 want source:host required
 event failed X3 artifact-gone
 names-failed X3 artifact-gone
@@ -444,37 +463,38 @@ scenario named-set/recording-replays-under-a-set
 # The sheet gives this scenario no last tick: nothing happens after tick 5.
 
 tick 0
-entry K1 unavailable
+entry K1 parameters unavailable
 want contributor:base required
-entry K2 unavailable
+entry K2 parameters unavailable
 want contributor:base required
 
 tick 1
 record arrival K1 K1.1
 record arrival K2 K2.1
-entry K1 available K1.1
+entry K1 parameters available K1.1
 want contributor:base required
-entry K2 available K2.1
+entry K2 parameters available K2.1
 want contributor:base required
 event arrived K1 K1.1
 event arrived K2 K2.1
 
-# An optional want gates nothing: tick 4 runs with the asset unanswered.
+# An optional want gates nothing: tick 4 runs with the asset unanswered. The
+# want names an unanswered asset, so it leaves the world and is answered.
 tick 4
-record want X2 source:host optional
-entry K1 available K1.1
+record want X2 parameters source:host optional
+entry K1 parameters available K1.1
 want contributor:base required
-entry K2 available K2.1
+entry K2 parameters available K2.1
 want contributor:base required
-entry X2 unavailable
+entry X2 parameters unavailable
 want source:host optional
 
 tick 5
 record arrival X2 X2.1
-entry K1 available K1.1
+entry K1 parameters available K1.1
 want contributor:base required
-entry K2 available K2.1
+entry K2 parameters available K2.1
 want contributor:base required
-entry X2 available X2.1
+entry X2 parameters available X2.1
 want source:host optional
 event arrived X2 X2.1

@@ -1,0 +1,343 @@
+# Family types: the asset type an entry holds.
+# Written by hand from the design text as amended, by a writer who has not
+# read the build.
+# The table's order is the order of the asset identifiers:
+# A, D, F, K, P, Q, S, W. S and W are of the second asset type.
+# The table is empty before the first block of each scenario.
+# Record lines stand in the order applied: the commands first, in the order
+# the scenario gives them, then the arrivals by asset identifier.
+# A refusal line under a record line says that the command is a recorded
+# refusal: it changes nothing.
+# The rules under test. The first want of an asset writes the type it states
+# into the asset's entry. A later want of a command that states another type
+# is a recorded refusal. The manifest is the authority on a type: the loading
+# capability fails an asset the manifest holds under another type than its
+# entry, and on an entry failed for that reason a want that states another
+# type replaces the entry's type and is the new load. A want the core adds
+# for a dependency states a type only where it is the dependency's first,
+# and is never refused.
+
+scenario types/want-of-another-type
+
+# The host's want is the first of A and writes its type. The tool's want
+# states another type: a recorded refusal, and the entry holds one want.
+tick 2
+record want A parameters source:host optional
+record want A second source:tool optional
+refusal other-type
+entry A parameters unavailable
+want source:host optional
+
+tick 3
+record arrival A A.1
+entry A parameters available A.1
+want source:host optional
+event arrived A A.1
+
+# The same refusal on an available entry, for a want an entity would own and
+# that would be required. Nothing changes and nothing gates.
+tick 5
+record want A second entity:E1 required
+refusal other-type
+entry A parameters available A.1
+want source:host optional
+
+# The table of tick 5 stands to tick 12.
+
+
+scenario types/wrong-first-want
+
+# The first want states a type the manifest does not hold A under. The core
+# has no manifest: the entry takes the type the want states.
+tick 2
+record want A second source:host optional
+entry A second unavailable
+want source:host optional
+
+# The want left the domain with the type its entry holds, and the loading
+# capability fails the asset: the manifest holds it under another type.
+# The tool's command stands before that arrival in the record. Until the
+# failure has arrived a want of another type is refused, the right type
+# included: the entry is still unanswered when the command is applied.
+tick 3
+record want A parameters source:tool optional
+refusal other-type
+record arrival A failed other-type
+entry A second failed other-type
+want source:host optional
+event failed A other-type
+
+# The maker makes its want again. The entry is failed for the reason of its
+# type, and the want states another type: it replaces the entry's type and is
+# the new load, so the entry returns to unavailable. The host's want stays.
+# Reading taken: the want made under the former type is kept as it is, since
+# nothing ends a want but a release or the despawn of its owner.
+tick 5
+record want A parameters source:tool optional
+entry A parameters unavailable
+want source:host optional
+want source:tool optional
+
+# The want left with the type the entry now holds, which is the manifest's.
+tick 6
+record arrival A A.1
+entry A parameters available A.1
+want source:host optional
+want source:tool optional
+event arrived A A.1
+
+# The table of tick 6 stands to tick 12.
+
+
+scenario types/wrong-first-want-corrected-by-its-maker
+
+tick 2
+record want A second source:host optional
+entry A second unavailable
+want source:host optional
+
+tick 3
+record arrival A failed other-type
+entry A second failed other-type
+want source:host optional
+event failed A other-type
+
+# The maker of the wrong want makes it again with the type the manifest
+# holds. The text gives two behaviors here: on an entry failed for the reason
+# of its type, a want that states another type replaces the entry's type and
+# is the new load; and a command from a maker that already holds a want of
+# the asset adds no want, and so retries nothing.
+# Reading taken: the sentence on the type decides. The entry takes the type
+# stated and returns to unavailable, and the maker still holds one want.
+tick 5
+record want A parameters source:host optional
+entry A parameters unavailable
+want source:host optional
+
+tick 6
+record arrival A A.1
+entry A parameters available A.1
+want source:host optional
+event arrived A A.1
+
+# The table of tick 6 stands to tick 12.
+
+
+scenario types/failed-for-another-reason
+
+tick 2
+record want F parameters source:host optional
+entry F parameters unavailable
+want source:host optional
+
+tick 3
+record arrival F failed invalid-part
+entry F parameters failed invalid-part
+want source:host optional
+event failed F invalid-part
+
+# The entry is failed, but not for the reason of its type: a want that states
+# another type is refused as on any entry. A refused want is not added, so it
+# is no new load either: the entry stays failed.
+tick 5
+record want F second source:tool optional
+refusal other-type
+entry F parameters failed invalid-part
+want source:host optional
+
+# The table of tick 5 stands to tick 12.
+
+
+scenario types/dependency-of-another-type
+
+tick 2
+record want K parameters source:host required
+entry K parameters unavailable
+want source:host required
+
+# The want of S is the core's, and the first of S: the entry takes the type
+# the part of K lists for it, which is not the type of its parent. The world
+# is saved after tick 4 with this table.
+tick 3
+record arrival K K.1
+record arrival S S.1
+entry K parameters available K.1
+want source:host required
+entry S second available S.1
+want asset:K required
+event arrived K K.1
+event arrived S S.1
+
+# The type the core wrote holds against a command as one a command wrote
+# does: a want that states another type is a recorded refusal.
+tick 6
+record want S parameters source:tool optional
+refusal other-type
+entry K parameters available K.1
+want source:host required
+entry S second available S.1
+want asset:K required
+
+# The table of tick 6 stands to tick 12.
+# The world whose composition declares the two types in the other order has
+# the same table: an entry holds the stable name of its type, which does not
+# depend on that order.
+
+
+scenario types/drop-not-named
+restore refused type second
+# The composition at hand lacks the type the entry of S holds, a type the
+# core wrote from a part's list. The request drops nothing: the restore is
+# refused by the name of the type, and no world exists.
+
+
+scenario types/drop-refused-for-a-kept-parent
+restore refused types second parameters
+# The request names the second type as dropped. But K, an entry the restore
+# keeps, lists a dependency of that type, which the table shows as the want
+# the core added on S for K: the kept parent's part would bring the entry
+# back at the first tick. The restore is refused, naming both types.
+# Reading taken: the type named as dropped stands first, then the type of
+# the kept entry that lists a dependency of it.
+
+
+scenario types/core-want-on-a-wrongly-typed-entry
+
+# A command's first want states a type the manifest does not hold D under.
+tick 2
+record want D second source:host optional
+entry D second unavailable
+want source:host optional
+
+tick 3
+record arrival D failed other-type
+entry D second failed other-type
+want source:host optional
+event failed D other-type
+
+tick 5
+record want P parameters source:tool required
+entry D second failed other-type
+want source:host optional
+entry P parameters unavailable
+want source:tool required
+
+# The required want gates from the boundary after its tick. D is failed,
+# which is an answer, and the want the core will add on it is not there yet.
+blocked 6 awaiting P
+
+# The batch of the closure of P holds an arrival for D, which the table does
+# not hold available. The capability resolves it against the type the entry
+# of D holds, and fails it again for the same reason.
+# The core first adds the want of D that the part of P lists. It is not the
+# first want of D, so it states no type: it is never refused, and it does not
+# replace the type of the entry either. It is a want added on a failed entry,
+# so D returns to unavailable; then the arrival fails it again. The entry was
+# unavailable when the arrival was applied, so the arrival changed it: an
+# event. D is required through its parent and failed at this tick: the step
+# names it.
+tick 6
+record arrival D failed other-type
+record arrival P P.1
+entry D second failed other-type
+want source:host optional
+want asset:P required
+entry P parameters available P.1
+want source:tool required
+event failed D other-type
+event arrived P P.1
+names-failed D other-type
+
+# A command states the type the manifest holds, on an entry failed for the
+# reason of its type: the want replaces the entry's type and is the new load.
+# D is unavailable again, under the required want its parent owns.
+tick 8
+record want D parameters source:tool optional
+entry D parameters unavailable
+want source:host optional
+want source:tool optional
+want asset:P required
+entry P parameters available P.1
+want source:tool required
+
+blocked 9 awaiting D
+
+tick 9
+record arrival D D.1
+entry D parameters available D.1
+want source:host optional
+want source:tool optional
+want asset:P required
+entry P parameters available P.1
+want source:tool required
+event arrived D D.1
+
+# The table of tick 9 stands to tick 12.
+
+
+scenario types/part-lists-a-contradicted-type
+
+tick 2
+record want Q parameters source:host required
+entry Q parameters unavailable
+want source:host required
+
+# The capability follows the closure of Q from the manifest: Q and D. The
+# part of Q lists D under another type than the manifest holds D under: the
+# check of a part's dependencies fails Q, with the reason of a part whose
+# dependencies are not those the manifest lists. Q is required: the failure
+# opens the gate and the step names it.
+# A failed arrival brings no part, so the core adds no want of D. The arrival
+# of D is for an asset no want names: recorded, and it changes nothing. D has
+# no entry.
+# Reading taken: the batch still holds the arrival of D, an asset of the
+# closure the manifest gives, although its parent failed.
+tick 3
+record arrival D D.1
+record arrival Q failed dependencies-differ
+entry Q parameters failed dependencies-differ
+want source:host required
+event failed Q dependencies-differ
+names-failed Q dependencies-differ
+
+# The table of tick 3 stands to tick 12.
+
+
+scenario types/parent-of-the-second-type
+
+tick 2
+record want W second source:host optional
+entry W second unavailable
+want source:host optional
+
+# A parent of the second type whose dependency is of the first. The world is
+# saved after tick 4 with this table.
+tick 3
+record arrival D D.1
+record arrival W W.1
+entry D parameters available D.1
+want asset:W optional
+entry W second available W.1
+want source:host optional
+event arrived D D.1
+event arrived W W.1
+
+# The table of tick 3 stands to tick 12.
+
+
+scenario types/dropped-parent-of-a-kept-dependency
+restore new-history dropped W
+blocked 5 awaiting D
+
+# The request names the second type as dropped. No entry the restore keeps
+# lists a dependency of it: D is listed by W, not the other way. W leaves the
+# table with its want, and the event of the restore names it.
+# The text does not say what the want W owned on D becomes.
+# Reading taken: it ends with its parent, as it does when a parent's last
+# want ends. D is kept with no want, is answered as an entry with no want is,
+# and falls once the record of the first tick is applied: the table is empty.
+tick 5
+record arrival D D.1 marked
+event new-history dropped W
+
+# The table stays empty to tick 12.

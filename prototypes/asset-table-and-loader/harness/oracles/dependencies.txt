@@ -1,0 +1,136 @@
+# Family dependencies: the wants of dependencies where no batch brings them.
+# Written by hand from the design text as amended, by a writer who has not
+# read the build.
+# The table's order is the order of the asset identifiers: D, P.
+# The table is empty before the first block of each scenario.
+# Record lines stand in the order applied: the commands first, in the order
+# the scenario gives them, then the arrivals by asset identifier.
+# An entry line with no want line under it is an entry that holds no want.
+# The rules under test. The core adds and recomputes the want of a dependency
+# wherever a want is applied on, or released from, a parent whose part the
+# table holds available, and not with a batch alone. A want added for an
+# asset the table holds available leaves nothing: no arrival answers it. The
+# batch of a want's closure holds an arrival for each asset of the closure
+# that the table does not hold available, and for no other.
+
+scenario dependencies/parent-wanted-again-at-its-fall
+
+tick 2
+record want P parameters source:host required
+entry P parameters unavailable
+want source:host required
+
+# One batch for the closure. The want of D is added first, owned by P and
+# required as the want of P is; then the arrivals, by identifier.
+tick 3
+record arrival D D.1
+record arrival P P.1
+entry D parameters available D.1
+want asset:P required
+entry P parameters available P.1
+want source:host required
+event arrived D D.1
+event arrived P P.1
+
+# The last want of P ends, and the want of D ends with it. Both keep their
+# entries, available and with no want, through this tick.
+tick 5
+record release P source:host
+entry D parameters available D.1
+entry P parameters available P.1
+
+# P is wanted again at the tick at which it would have fallen, by another
+# maker and as optional. The record is applied before the falls. The part of
+# P is held available, so the core adds the want of D at the same point,
+# optional as the want of P now is: D has not fallen yet and does not fall.
+# Both stay available without a gap, and no event is emitted.
+tick 6
+record want P parameters source:tool optional
+entry D parameters available D.1
+want asset:P optional
+entry P parameters available P.1
+want source:tool optional
+
+# Both wants were added on assets the table holds available: nothing left
+# the domain, so the capability posts nothing. The records of ticks 7 to 12
+# are empty and the table of tick 6 stands.
+
+
+scenario dependencies/required-want-on-a-parent-in-force
+
+tick 2
+record want P parameters source:host optional
+entry P parameters unavailable
+want source:host optional
+
+tick 3
+record arrival D D.1
+record arrival P P.1
+entry D parameters available D.1
+want asset:P optional
+entry P parameters available P.1
+want source:host optional
+event arrived D D.1
+event arrived P P.1
+
+# A required want is added on a parent in force that held an optional want
+# alone: the want of its dependency becomes required at the same point, with
+# no batch. The wants of P stand in the table's order: the want under the
+# world's own entry, then the want of the entity.
+tick 5
+record want P parameters entity:E1 required
+entry D parameters available D.1
+want asset:P required
+entry P parameters available P.1
+want source:host optional
+want entity:E1 required
+
+# The despawn ends the required want of P where it stands in the record: no
+# want of P is required any more, and the want of D is optional again.
+tick 7
+record despawn E1
+entry D parameters available D.1
+want asset:P optional
+entry P parameters available P.1
+want source:host optional
+
+# The records of ticks 8 to 12 are empty and the table of tick 7 stands.
+
+
+scenario dependencies/closure-over-an-available-dependency
+
+tick 2
+record want D parameters source:host optional
+entry D parameters unavailable
+want source:host optional
+
+tick 3
+record arrival D D.1
+entry D parameters available D.1
+want source:host optional
+event arrived D D.1
+
+tick 5
+record want P parameters source:tool required
+entry D parameters available D.1
+want source:host optional
+entry P parameters unavailable
+want source:tool required
+
+blocked 6 awaiting P
+
+# The closure of P is P and D, and the table holds D available: the batch
+# holds the arrival of P and no arrival of D. The core adds the want of D
+# that the part lists, owned by P and required; it is added on an available
+# asset and leaves nothing. The wants of D stand in the table's order: the
+# want under the world's own entry, then the want the core added.
+tick 6
+record arrival P P.1
+entry D parameters available D.1
+want source:host optional
+want asset:P required
+entry P parameters available P.1
+want source:tool required
+event arrived P P.1
+
+# The records of ticks 7 to 12 are empty and the table of tick 6 stands.

@@ -1,0 +1,102 @@
+# Family record: elements of a record that change nothing, and the kind of
+# a maker.
+# Written by hand from the design text as amended, by a writer who has not
+# read the build.
+# The table's order is the order of the asset identifiers: A, F.
+# Record lines stand in the order applied: the commands first, in the order
+# the scenario gives them, then the arrivals by asset identifier.
+# A refusal line under a record line says that the command is a recorded
+# refusal: it changes nothing.
+# A tick block with no entry line states an empty table.
+
+scenario record/arrival-that-changes-nothing
+
+tick 2
+record want A parameters source:host optional
+record want F parameters source:host optional
+entry A parameters unavailable
+want source:host optional
+entry F parameters unavailable
+want source:host optional
+
+tick 3
+record arrival A A.1
+record arrival F failed invalid-part
+entry A parameters available A.1
+want source:host optional
+entry F parameters failed invalid-part
+want source:host optional
+event arrived A A.1
+event failed F invalid-part
+
+# The same two arrivals again. Each leaves its entry as it was, one at the
+# same hash, one failed for the same reason: each is recorded, changes
+# nothing and emits no event.
+tick 5
+record arrival A A.1
+record arrival F failed invalid-part
+entry A parameters available A.1
+want source:host optional
+entry F parameters failed invalid-part
+want source:host optional
+
+# A failure for another reason does not leave the entry as it was: the entry
+# takes the new reason, and the failure emits its event.
+tick 7
+record arrival F failed artifact-gone
+entry A parameters available A.1
+want source:host optional
+entry F parameters failed artifact-gone
+want source:host optional
+event failed F artifact-gone
+
+# The table of tick 7 stands to tick 10.
+
+
+scenario record/want-after-the-despawn-of-its-owner
+
+# The despawn ends the entity where it stands in the record. The command
+# that stands after it finds its owner not alive: a recorded refusal. No
+# entry is made for A.
+tick 2
+record despawn E1
+record want A parameters entity:E1 required
+refusal owner-not-alive
+
+# No want names A: the arrival is recorded and changes nothing.
+tick 3
+record arrival A A.1
+
+# The table stays empty to tick 10.
+
+
+scenario record/two-makers-of-one-identity
+
+tick 0
+entry A parameters unavailable
+want contributor:base required
+
+tick 1
+record arrival A A.1
+entry A parameters available A.1
+want contributor:base required
+event arrived A A.1
+
+# The source of the command has the numeric identity of the contributor. A
+# want of the world's own entry carries the kind of its maker with its
+# identity, so the two makers do not share a want: the command adds a second
+# want and leaves the contributor's as it is. The wants of contributors stand
+# before those of command sources.
+tick 3
+record want A parameters source:twin optional
+entry A parameters available A.1
+want contributor:base required
+want source:twin optional
+
+# The release ends the want of the command's source alone.
+tick 5
+record release A source:twin
+entry A parameters available A.1
+want contributor:base required
+
+# The table of tick 5 stands to tick 10: A never falls.

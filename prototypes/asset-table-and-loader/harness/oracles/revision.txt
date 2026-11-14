@@ -1,0 +1,179 @@
+# Family revision: what the batch of a revision holds.
+# Written by hand from the design text as amended, by a writer who has not
+# read the build.
+# The table's order is the order of the asset identifiers: D, N, P, V, Z.
+# The table is empty before the first block of each scenario.
+# Record lines stand in the order applied: the commands first, in the order
+# the scenario gives them, then the arrivals by asset identifier.
+# An entry line with no want line under it is an entry that holds no want.
+# The rule under test: the batch of a revision holds an arrival for each
+# asset the revision changes that the world's table names, an entry with no
+# want included, with an arrival for each asset of the closure of a changed
+# part that the table does not hold available, and for no other asset.
+
+scenario revision/parent-gains-a-dependency
+
+tick 2
+record want P parameters source:host required
+entry P parameters unavailable
+want source:host required
+
+# The closure of P: its two dependencies, each under one want its parent
+# owns, required as the want of P is.
+tick 3
+record arrival D D.1
+record arrival P P.1
+record arrival V V.1
+entry D parameters available D.1
+want asset:P required
+entry P parameters available P.1
+want source:host required
+entry V parameters available V.1
+want asset:P required
+event arrived D D.1
+event arrived P P.1
+event arrived V V.1
+
+# The revision changes P alone. Its new part lists one dependency more, N,
+# which the table does not name: the batch holds the arrival of P and the
+# arrival of N, and none of D or V, which the revision does not change and
+# the table holds available. With the arrival of N pending the gate stays
+# open; without it the want the core would add on N would close it for good.
+# The want of N is added first, required, then the arrivals by identifier.
+tick 6
+record arrival N N.1
+record arrival P P.2
+entry D parameters available D.1
+want asset:P required
+entry N parameters available N.1
+want asset:P required
+entry P parameters available P.2
+want source:host required
+entry V parameters available V.1
+want asset:P required
+event arrived N N.1
+event changed P P.1 P.2
+
+# The table of tick 6 stands to tick 12.
+
+
+scenario revision/former-dependencies-changed-with-their-parent
+
+tick 2
+record want P parameters source:host required
+entry P parameters unavailable
+want source:host required
+
+tick 3
+record arrival D D.1
+record arrival P P.1
+record arrival V V.1
+entry D parameters available D.1
+want asset:P required
+entry P parameters available P.1
+want source:host required
+entry V parameters available V.1
+want asset:P required
+event arrived D D.1
+event arrived P P.1
+event arrived V V.1
+
+# The revision changes P and both of its dependencies, and the new part of P
+# lists neither of them: it lists N alone. The batch holds four arrivals: the
+# three assets changed that the table names, and N.
+# Reading taken, by the letter of the text: the core first adds the wants the
+# batch's parts list, here the want of N, and ends none; then it applies the
+# arrivals in identifier order; and the wants a parent owns are recomputed
+# when its hash changes, which is when its own arrival is applied.
+# So D, which stands before P, still holds its want when its arrival is
+# applied: it takes its new hash, with an event, and loses its want at the
+# arrival of P. V, which stands after P, has lost its want by then: its
+# arrival is for an asset no want names, changes nothing and emits no event.
+# Two former dependencies of one parent end the tick differently, by the
+# order of their identifiers alone.
+tick 6
+record arrival D D.2
+record arrival N N.1
+record arrival P P.3
+record arrival V V.2
+entry D parameters available D.2
+entry N parameters available N.1
+want asset:P required
+entry P parameters available P.3
+want source:host required
+entry V parameters available V.1
+event changed D D.1 D.2
+event arrived N N.1
+event changed P P.1 P.3
+
+# Both former dependencies fall at the next tick's fixed point and leave.
+tick 7
+entry N parameters available N.1
+want asset:P required
+entry P parameters available P.3
+want source:host required
+
+# The table of tick 7 stands to tick 12.
+
+
+scenario revision/entry-with-no-want-wanted-again
+
+tick 2
+record want Z parameters source:host optional
+entry Z parameters unavailable
+want source:host optional
+
+tick 3
+record arrival Z Z.1
+entry Z parameters available Z.1
+want source:host optional
+event arrived Z Z.1
+
+# The last want of Z ends: it keeps its entry, available and with no want,
+# through this tick.
+tick 5
+record release Z source:host
+entry Z parameters available Z.1
+
+# The revision changes Z while its entry holds no want: the batch holds its
+# arrival all the same. The first record wants Z again before it falls, and
+# the command is applied before the arrival: a want names Z when the arrival
+# is applied, so Z takes its new hash, with the event of a change. The want
+# was added on an available asset and leaves nothing: without that arrival Z
+# would stand for good at a hash the revision replaced.
+tick 6
+record want Z parameters source:tool optional
+record arrival Z Z.2
+entry Z parameters available Z.2
+want source:tool optional
+event changed Z Z.1 Z.2
+
+# The table of tick 6 stands to tick 12.
+
+
+scenario revision/entry-with-no-want-left
+
+tick 2
+record want Z parameters source:host optional
+entry Z parameters unavailable
+want source:host optional
+
+tick 3
+record arrival Z Z.1
+entry Z parameters available Z.1
+want source:host optional
+event arrived Z Z.1
+
+tick 5
+record release Z source:host
+entry Z parameters available Z.1
+
+# The batch holds the arrival of Z, and nothing wants Z again.
+# Reading taken: the arrival is for an asset no want names when it is
+# applied, so it is recorded, changes nothing and emits no event; an entry
+# with no want is moved by a revision only where the record that holds the
+# arrival wants it again first. Z then falls: the table is empty.
+tick 6
+record arrival Z Z.2
+
+# The table stays empty to tick 12.
