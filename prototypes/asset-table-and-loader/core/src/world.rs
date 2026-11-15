@@ -570,6 +570,9 @@ struct Journal {
     rejected: Vec<(AssetId, u64)>,
     /// The moment each tick ended, for a measurement of the tick's duration.
     tick_ends: Vec<(u32, Instant)>,
+    /// The duration of each input fixed point that applied its record, by
+    /// tick: a measurement reads it apart from the tick.
+    input_fixed_points: Vec<(u32, Duration)>,
     /// What the tick that runs has to extract at its end: the wants that
     /// left, the wants its record made, and whether it applied the answers
     /// to a restore.
@@ -774,6 +777,19 @@ impl Graph {
         pending.events.append(&mut self.host_events.lock().expect("the host's events are never poisoned"));
         pending.commands.append(&mut self.host_commands.lock().expect("the host's commands are never poisoned"));
         self.links.queue.drain_into(&mut pending.arrivals);
+    }
+
+    /// The input fixed point of `tick`, its duration kept where it applied
+    /// the record. Runs alone.
+    fn timed_input_fixed_point(&self, tick: u32) -> bool {
+        let started = Instant::now();
+        let applied = self.input_fixed_point(tick);
+        if applied {
+            // SAFETY: the fixed point runs alone (see the type's documentation).
+            let journal = unsafe { &mut *self.journal.get() };
+            journal.input_fixed_points.push((tick, started.elapsed()));
+        }
+        applied
     }
 
     fn input_fixed_point(&self, tick: u32) -> bool {
@@ -1107,7 +1123,7 @@ impl Graph {
         // The record of the tick after a step's last one is left to the next
         // step, so that what the host posts between two steps is part of it.
         if tick < self.end.load(Ordering::Relaxed) && !self.failed.load(Ordering::SeqCst) {
-            if self.input_fixed_point(tick + 1) {
+            if self.timed_input_fixed_point(tick + 1) {
                 self.applied_for.store(tick + 1, Ordering::Relaxed);
             } else {
                 self.gated.store(true, Ordering::SeqCst);
@@ -1507,6 +1523,55 @@ impl World {
         ends.windows(2).filter(|pair| pair[1].0 == pair[0].0 + 1).map(|pair| (pair[1].0, pair[1].1.duration_since(pair[0].1))).collect()
     }
 
+    /// The duration of the input fixed point of each tick whose record was
+    /// applied: the assembly of the record, the gate, the application and
+    /// what follows it at that fixed point.
+    pub fn input_fixed_point_durations(&self) -> &[(u32, Duration)] {
+        &self.journal().input_fixed_points
+    }
+
+    /// The entries of the table that hold no want, which the next input
+    /// fixed point takes as due to fall.
+    pub fn entries_without_a_want(&self) -> Vec<AssetId> {
+        self.table().entries_without_a_want()
+    }
+
+    /// One derivation and decision of the groups of a record's arrivals
+    /// under the world's budget, as the input fixed point makes them once
+    /// the commands of the record are applied, the record holding none. It
+    /// changes nothing. Returns how many arrivals it rejected and the count
+    /// of the roots whose closure it read.
+    pub fn groups_decided(&self, record: &Record, without_a_want: &[AssetId]) -> (usize, usize) {
+        let (rejected, roots) = self.table().groups_decided(record, self.graph.links.residents.as_ref(), without_a_want);
+        (rejected.len(), roots)
+    }
+
+    /// How this world derives the groups of a rejection over its budget, in words.
+    pub fn groups_form(&self) -> &'static str {
+        self.table().groups_form()
+    }
+
+    /// The verdict of the gate alone on a pending record, which it does not
+    /// apply: whether the gate is open, and the count of the entries a
+    /// restore still awaits once that record is counted. It names nothing
+    /// of what a restore awaits.
+    pub fn gate_verdict(&self, record: &Record) -> (bool, usize) {
+        self.table().gate_verdict(record, self.graph.links.residents.as_ref())
+    }
+
+    /// How many times the table followed a change of a want or of an
+    /// availability since the world was made.
+    pub fn changes_followed(&self) -> u64 {
+        self.table().changes_followed()
+    }
+
+    /// For the measurement of what the incremental form of the gate costs at
+    /// one change: the table brings its kept set up to date for each asset
+    /// given, which changes nothing, and the time that took is returned.
+    pub fn follow_again(&mut self, assets: &[AssetId]) -> Duration {
+        self.graph.table.get_mut().follow_again(assets)
+    }
+
     pub fn instances(&self) -> &[Instance] {
         &self.table().instances
     }
@@ -1648,7 +1713,7 @@ impl World {
             let next = self.tick_done + 1;
             if self.graph.applied_for.load(Ordering::Relaxed) < next {
                 loop {
-                    if self.graph.input_fixed_point(next) {
+                    if self.graph.timed_input_fixed_point(next) {
                         break;
                     }
                     match wait {

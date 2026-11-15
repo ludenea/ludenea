@@ -102,6 +102,10 @@ pub const REASON_PREPARATION_FAILED: u32 = 9;
 /// does not hold the asset available. The design text names no such reason:
 /// it exists for the comparison of the candidates of a budget.
 pub const REASON_OVER_BUDGET: u32 = 10;
+/// The reason of a first load that the host's ceiling on a decoder at load
+/// stops: the artifact declares more than the ceiling lets the decoder hold.
+/// The design text lists no reason that fits it.
+pub const REASON_OVER_CEILING: u32 = 11;
 
 /// One reason of a failure: its code in the canonical form, a short name and
 /// what it says.
@@ -118,7 +122,7 @@ pub struct Reason {
 /// the check of a world's composition refuses a part on a first load; the
 /// design text lists it and gives it no name, and `not-admitted` is the
 /// name the scenario sheets give it.
-pub const REASONS: [Reason; 10] = [
+pub const REASONS: [Reason; 11] = [
     Reason { code: REASON_UNKNOWN_ASSET, name: "unknown-asset", text: "unknown asset: the manifest the world stands under does not hold the identifier" },
     Reason { code: REASON_INVALID_PART, name: "invalid-part", text: "the bytes do not hash to their name or the canonical part does not validate" },
     Reason { code: REASON_HASH_MISMATCH, name: "hash-mismatch", text: "the artifact's bytes do not hash to the announced content hash" },
@@ -129,6 +133,7 @@ pub const REASONS: [Reason; 10] = [
     Reason { code: REASON_ADMISSION_REFUSED, name: "not-admitted", text: "the admission check of the world's composition refused the part, on a first load" },
     Reason { code: REASON_PREPARATION_FAILED, name: "preparation-failed", text: "the preparation of a form failed on a first load" },
     Reason { code: REASON_OVER_BUDGET, name: "over-budget", text: "the arrival was rejected over the world's budget for its asset data" },
+    Reason { code: REASON_OVER_CEILING, name: "over-ceiling", text: "the artifact declares more than the host's ceiling lets a decoder at load hold" },
 ];
 
 pub fn reason(code: u32) -> Option<&'static Reason> {
@@ -945,6 +950,16 @@ pub struct Rules {
     /// last want. The default keeps it, with no want, until the input fixed
     /// point of the next tick.
     pub entry_leaves_at_the_fixed_point_that_ends_its_last_want: bool,
+    // --- a variant of the build for one measurement ---
+    /// The host does not ask the gate: the world steps at every boundary,
+    /// and the count of the entries a restore awaits is not kept. With the
+    /// rule that keeps no set, it is the variant of the build that keeps
+    /// neither the set nor the count, against which the cost the incremental
+    /// form moves to every change of a want or of an availability is
+    /// measured. It stands only on a world whose state holds every required
+    /// asset answered at every boundary and that no restore made: it is a
+    /// measurement's, never a reading of the design text.
+    pub gate_not_asked: bool,
 }
 
 /// What an excess over a world's budget rejects. The design text named
@@ -1491,6 +1506,11 @@ pub struct Table {
     /// and no part of the canonical form: the gate reads the pending
     /// elements against it. Empty under the rule that keeps no set.
     required: BTreeSet<AssetId>,
+    /// How many times the table followed a change of a want or of an
+    /// availability: each is a place where the incremental form of the gate
+    /// brings its set up to date. Counted whatever the rules, and no part of
+    /// the canonical form: a measurement divides a cost by it.
+    changes: u64,
     entity_wants: usize,
     /// The wants the core added on an asset that was unanswered or failed,
     /// since the list was last taken: the dependency and its parent.
@@ -1526,6 +1546,9 @@ impl Table {
     /// Whether the state gates the world: a required asset is unanswered, or
     /// an answer to a restore is awaited.
     pub fn blocked(&self) -> bool {
+        if self.rules.gate_not_asked {
+            return false;
+        }
         if !self.awaiting.is_empty() {
             return true;
         }
@@ -1553,6 +1576,7 @@ impl Table {
     /// the table: the kept set follows. This is the cost the incremental
     /// form of the gate moves to every such change.
     fn follow(&mut self, asset: AssetId) {
+        self.changes += 1;
         if self.rules.required_set_not_kept {
             return;
         }
@@ -1560,6 +1584,40 @@ impl Table {
             self.required.insert(asset);
         } else {
             self.required.remove(&asset);
+        }
+    }
+
+    /// How many times the table followed a change of a want or of an
+    /// availability since it was made: a want applied, released or ended, a
+    /// want the core added, changed or ended, an arrival applied, a
+    /// rejection that fails an entry, a fall.
+    pub fn changes_followed(&self) -> u64 {
+        self.changes
+    }
+
+    /// For the measurement of what the incremental form costs at one
+    /// change: brings the kept set up to date for each asset given, as a
+    /// change of its wants or of its availability does, and returns how long
+    /// that took. The set follows the entries, so nothing changes, and the
+    /// count of the changes followed is left as it was. Under the rule that
+    /// keeps no set, nothing is brought up to date.
+    pub fn follow_again(&mut self, assets: &[AssetId]) -> Duration {
+        let counted = self.changes;
+        let started = Instant::now();
+        for asset in assets {
+            self.follow(*asset);
+        }
+        let elapsed = started.elapsed();
+        self.changes = counted;
+        elapsed
+    }
+
+    /// An entry a restore awaited has its answer, or left the table: the
+    /// count of the awaited entries follows. Nothing is kept under the
+    /// variant of the build whose gate the host does not ask.
+    fn no_longer_awaited(&mut self, asset: &AssetId) {
+        if !self.rules.gate_not_asked {
+            self.awaiting.remove(asset);
         }
     }
 
@@ -1902,7 +1960,7 @@ impl Table {
     fn apply_arrival_to_the_entry(&mut self, arrival: &Arrival, residents: &dyn Residents, applied: &mut Applied) {
         let rules = self.rules;
         applied.answered_a_restore |= arrival.marked;
-        self.awaiting.remove(&arrival.asset);
+        self.no_longer_awaited(&arrival.asset);
         let Some(entry) = self.entries.get_mut(&arrival.asset) else {
             applied.unnamed_arrivals += 1;
             return;
@@ -2322,9 +2380,22 @@ impl Table {
         candidates: &[AssetId],
         wanted_since: &BTreeSet<AssetId>,
     ) -> BTreeSet<AssetId> {
+        self.groups_derived_and_decided(arrivals, residents, candidates, wanted_since).0
+    }
+
+    /// The same derivation and decision, with the count of the roots whose
+    /// closure it read: what the measurement of its cost reports beside its
+    /// duration.
+    fn groups_derived_and_decided(
+        &self,
+        arrivals: &[Arrival],
+        residents: &dyn Residents,
+        candidates: &[AssetId],
+        wanted_since: &BTreeSet<AssetId>,
+    ) -> (BTreeSet<AssetId>, usize) {
         let rules = self.rules;
         let mut rejected = BTreeSet::new();
-        let Some(budget) = self.budget.filter(|_| !rules.no_rejection_derived) else { return rejected };
+        let Some(budget) = self.budget.filter(|_| !rules.no_rejection_derived) else { return (rejected, 0) };
         let in_force = |asset: &AssetId| self.entries.get(asset).and_then(|entry| entry.resident.as_ref());
         // The arrival and the part of each arrival to a hash of the record.
         let mut arriving: BTreeMap<AssetId, (&Arrival, Option<Arc<Resident>>)> = BTreeMap::new();
@@ -2334,7 +2405,7 @@ impl Table {
             }
         }
         if arriving.is_empty() {
-            return rejected;
+            return (rejected, 0);
         }
         let listed_by = |asset: &AssetId| -> Vec<AssetId> {
             let parts = [in_force(asset), arriving.get(asset).and_then(|(_, part)| part.as_ref())];
@@ -2471,7 +2542,29 @@ impl Table {
         // An arrival is applied where at least one group that holds it is
         // accepted.
         rejected.retain(|asset| !accepted.contains(asset));
-        rejected
+        (rejected, closures.len())
+    }
+
+    /// The entries that hold no want: those the input fixed point of the
+    /// next record takes as due to fall, before it applies its commands.
+    pub fn entries_without_a_want(&self) -> Vec<AssetId> {
+        self.entries.iter().filter(|(_, entry)| entry.wants.is_empty()).map(|(id, _)| *id).collect()
+    }
+
+    /// For the measurement of its cost: the derivation and the decision of
+    /// the groups of a record's arrivals, alone, as the input fixed point
+    /// makes them once the commands of the record are applied, the record
+    /// holding none, and before any want is added from a part or any
+    /// arrival is applied. `without_a_want` is what `entries_without_a_want`
+    /// gave before. It changes nothing. Returns the arrivals rejected and
+    /// the count of the roots whose closure the derivation read.
+    pub fn groups_decided(&self, record: &Record, residents: &dyn Residents, without_a_want: &[AssetId]) -> (BTreeSet<AssetId>, usize) {
+        self.groups_derived_and_decided(&record.arrivals, residents, without_a_want, &BTreeSet::new())
+    }
+
+    /// How the groups of a rejection over a budget are derived, in words.
+    pub fn groups_form(&self) -> &'static str {
+        "from every root of the table downwards: the closure of each asset under a want the core did not add is walked through the parts in force and the parts of the record, whatever the record holds"
     }
 
     /// A rejected arrival is not applied, and the result of the step names
@@ -2487,7 +2580,7 @@ impl Table {
         if self.rules.budget_only_reports {
             return self.apply_arrival(arrival, residents, applied);
         }
-        self.awaiting.remove(&arrival.asset);
+        self.no_longer_awaited(&arrival.asset);
         let Some(entry) = self.entries.get_mut(&arrival.asset).filter(|entry| !entry.wants.is_empty()) else { return };
         if matches!(entry.availability, Availability::Available(_)) {
             return;
@@ -2530,7 +2623,7 @@ impl Table {
         for id in candidates {
             if !wanted_since.contains(id) && self.entries.get(id).is_some_and(|entry| entry.wants.is_empty()) {
                 self.entries.remove(id);
-                self.awaiting.remove(id);
+                self.no_longer_awaited(id);
                 self.made.remove(id);
                 self.follow(*id);
                 fallen.push(*id);
@@ -2842,6 +2935,14 @@ impl Table {
     /// answer is pending. And it does not apply the world's budget to the
     /// pending arrivals, which would ask for the closure of every root.
     fn gate_on_the_pending_elements(&self, record: &Record, residents: &dyn Residents) -> Vec<AssetId> {
+        self.gate_read(record, residents, true).0
+    }
+
+    /// The same evaluation, with the count of the entries a restore still
+    /// awaits once the pending record is counted. Without `naming`, the
+    /// entries a restore awaits are counted and not named: the verdict reads
+    /// the count, and no awaited entry is walked.
+    fn gate_read(&self, record: &Record, residents: &dyn Residents, naming: bool) -> (Vec<AssetId>, usize) {
         let rules = self.rules;
         let required = self.required_set();
         debug_assert!(rules.required_set_not_kept || *required == self.scanned_required(), "the kept set is the one a scan of the table gives");
@@ -2852,7 +2953,8 @@ impl Table {
         // pending, or the gate is closed on those that have none. The
         // awaited entries are walked only to name them.
         let answered = pending.keys().filter(|asset| self.awaiting.contains(*asset)).count();
-        if answered < self.awaiting.len() {
+        let awaited = self.awaiting.len() - answered;
+        if awaited > 0 && naming {
             closed.extend(self.awaiting.iter().filter(|asset| !pending.contains_key(*asset)).copied());
         }
 
@@ -2994,7 +3096,32 @@ impl Table {
                 }
             }
         }
-        closed.into_iter().collect()
+        (closed.into_iter().collect(), awaited)
+    }
+
+    /// The verdict of the gate alone for the tick whose pending record is
+    /// given: whether it is open, and the count of the entries a restore
+    /// still awaits once that record is counted. It is the evaluation of
+    /// `gate` without the names of what a restore awaits: the count of the
+    /// awaited entries is read against the pending arrivals, and none of
+    /// them is walked. A required asset the table holds unanswered is read
+    /// as `gate` reads it.
+    pub fn gate_verdict(&self, record: &Record, residents: &dyn Residents) -> (bool, usize) {
+        if !self.blocked() && !self.rules.gate_read_on_a_world_that_is_not_gated {
+            return (true, 0);
+        }
+        if record.is_empty() {
+            return (!self.blocked(), self.awaiting.len());
+        }
+        if self.rules.gate_copies_the_table {
+            // The form kept for the comparison of costs has no verdict apart
+            // from its names.
+            let closed = self.gate(record, residents);
+            let awaited = closed.iter().filter(|asset| self.awaiting.contains(*asset)).count();
+            return (closed.is_empty(), awaited);
+        }
+        let (closed, awaited) = self.gate_read(record, residents, false);
+        (closed.is_empty() && awaited == 0, awaited)
     }
 
     /// Copies the entry of an asset, where the table holds one, into the
@@ -3150,6 +3277,9 @@ fn resident(residents: &dyn Residents, hash: u64) -> Arc<Resident> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod magnitude_tests;
 
 // ---------------------------------------------------------------------------
 // The view the passes resolve identifiers in

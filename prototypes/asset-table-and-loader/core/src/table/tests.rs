@@ -519,7 +519,7 @@ fn an_input_log_round_trips_with_its_types_and_a_reason_outside_the_list_is_refu
     assert_eq!(decode_log(&bytes).expect("the log decodes"), records);
     let unlisted = encode_log(&[Record::arrivals(1, vec![Arrival::failed(A, 99)])]);
     assert!(decode_log(&unlisted).is_err());
-    assert_eq!(REASONS.len(), 10);
+    assert_eq!(REASONS.len(), 11);
     assert!(REASONS.iter().all(|listed| reason(listed.code).is_some_and(|found| found.name == listed.name) && reason_named(listed.name).is_some()));
 }
 

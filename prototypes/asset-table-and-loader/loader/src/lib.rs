@@ -55,6 +55,10 @@ use prototype_core::table::{
 };
 use prototype_core::world::Extraction;
 
+mod decoder;
+
+pub use decoder::{BlockedMount, Decoded, LoadWatch, NotExpanded, expand};
+
 // ---------------------------------------------------------------------------
 // The resident store
 // ---------------------------------------------------------------------------
@@ -363,6 +367,13 @@ pub struct Options {
     /// answer alone, the parts of the ordinary arrivals it holds not being
     /// followed. The default follows them, to any depth.
     pub restore_completes_one_level_alone: bool,
+    /// The other reading of the reason of a first load that the host's
+    /// ceiling on a decoder stops, the artifact declaring more than the
+    /// ceiling lets the decoder hold: the nearest reason the design text
+    /// lists, the bytes do not verify or do not validate. The default gives
+    /// that failure a reason of the ceiling's own, the text listing none
+    /// that fits it.
+    pub over_the_ceiling_fails_as_an_invalid_part: bool,
 }
 
 /// The prepared forms built once that a world's composition declares, by
@@ -513,6 +524,10 @@ struct Instance {
     /// was built: the asset, the content hash, and whether the check of
     /// another world alone refused it.
     refused: Vec<(AssetId, u64, bool)>,
+    /// The mounted packages whose artifacts are stored in blocks, by the
+    /// name of their mount: a load expands such an artifact through the
+    /// decoder, under the ceiling of the mount.
+    decoders: Vec<(String, Arc<decoder::Blocked>)>,
 }
 
 impl Instance {
@@ -595,7 +610,9 @@ impl Instance {
         if let Some(resident) = self.residents.get(hash) {
             return Ok(resident);
         }
-        let bytes = self.read(hash).ok_or(REASON_ARTIFACT_GONE)?;
+        // An artifact no store holds whole may stand in blocks in a mounted
+        // package: it is then expanded by the decoder, under the ceiling.
+        let Some(bytes) = self.read(hash) else { return self.expanded(hash).unwrap_or(Err(REASON_ARTIFACT_GONE)) };
         self.residents.insert(hash, bytes).map_err(|_| REASON_INVALID_PART)
     }
 
@@ -1205,6 +1222,7 @@ impl Loader {
             report: LoaderReport::default(),
             delayed: Delayed::default(),
             refused: Vec::new(),
+            decoders: Vec::new(),
         };
         instance.revision = instance.read_revision()?;
         instance.merge();
@@ -1340,6 +1358,7 @@ impl Loader {
             instance.mounts.remove(at);
             // The loose store is the first store; the packages follow in mount order.
             instance.stores.remove(at + 1);
+            instance.decoders.retain(|(mounted, _)| *mounted != name);
             instance.merge();
             instance.moved();
             Ok(())

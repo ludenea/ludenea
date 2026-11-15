@@ -8,6 +8,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+pub mod runs;
+
 pub type AssetId = u128;
 
 /// The content hash: the 64-bit FNV-1a of the bytes, the stand-in the spikes

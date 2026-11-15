@@ -18,16 +18,32 @@
 //! `--reader-driven` or `--replayer-driven`. `--readings [family ...]` runs
 //! every reading the build did not take on every scenario, against the
 //! oracles, and prints which scenarios tell each apart.
+//!
+//! Three modes run the rows of the stand-in stage that are judged on a
+//! magnitude or on a ceiling, which have inputs and no oracle, each with
+//! `[repetitions] [small]`: `--gate-form` the cost of the gate in its
+//! incremental form (with `evaluations` or `changes`, a part of it),
+//! `--groups-cost` the cost of deriving the groups of a rejection over a
+//! budget, and `--decoder-ceiling` a decoder at load under the host's
+//! ceiling. Each prints its facts and a summary and writes its full log to a
+//! file. `--gate-form-reader` is the reader of a save that the first of
+//! them runs as a process of its own.
 
+mod decoder_ceiling;
 mod enumeration;
 mod families;
 mod families_batches;
 mod families_readings;
 mod families_same_harness;
 mod gate_cost;
+mod gate_form;
+mod groups_cost;
+mod large_table;
+mod magnitude;
 mod oracle;
 mod play;
 mod run;
+mod scoped_allocator;
 mod sequential;
 
 use std::collections::BTreeMap;
@@ -47,8 +63,10 @@ const GATE_COST_REPETITIONS: usize = 5;
 /// The bound of the claim on the gate's cost: a tenth of a tick.
 const GATE_COST_BOUND: f64 = 0.1;
 
+/// The counting allocator of the first check, with a measure scoped to
+/// threads beside it.
 #[global_allocator]
-static ALLOCATOR: spike_check::Counting = spike_check::Counting;
+static ALLOCATOR: scoped_allocator::Scoped = scoped_allocator::Scoped;
 
 /// A family judged on states: its name and what makes its plan.
 type Family = (&'static str, fn(&Settings) -> FamilyPlan);
@@ -565,6 +583,10 @@ fn main() {
             eprintln!("holds: {holds}");
             return;
         }
+        Some("--decoder-ceiling") => return decoder_ceiling::mode(&arguments[1..]),
+        Some("--gate-form") => return gate_form::mode(&arguments[1..]),
+        Some("--gate-form-reader") => return print!("{}", gate_form::child(&arguments[1..])),
+        Some("--groups-cost") => return groups_cost::mode(&arguments[1..]),
         Some("--readings") => {
             let mut settings = settings("readings");
             settings.workers = vec![4];

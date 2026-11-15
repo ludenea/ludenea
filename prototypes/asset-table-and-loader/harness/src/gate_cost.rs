@@ -273,3 +273,19 @@ pub fn run(repetitions: usize, worker_counts: &[usize]) -> GateCost {
     }
     out
 }
+
+/// What the table of the family is, as one value: every root and every leaf
+/// with its first content, then the asset the table does not hold. The
+/// module that states the table again, for the modes that share it, checks
+/// itself against it.
+#[cfg(test)]
+pub fn fingerprint() -> u64 {
+    let catalog = Catalog::new();
+    let mut stated = Vec::new();
+    for (asset, hash) in catalog.roots.iter().zip(&catalog.root_hashes).chain(catalog.leaves.iter().zip(&catalog.leaf_hashes)) {
+        stated.extend_from_slice(&asset.to_le_bytes());
+        stated.extend_from_slice(&hash.to_le_bytes());
+    }
+    stated.extend_from_slice(&catalog.gate.to_le_bytes());
+    content_hash(&stated)
+}
