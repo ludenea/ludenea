@@ -814,6 +814,23 @@ pub struct Rules {
     /// tick does: a want the core would add on a pending parent gives that
     /// parent's part its policy.
     pub gate_counts_core_wants_from_the_tables_wants_alone: bool,
+    /// Control, a build that counts two levels and no more: a pending parent
+    /// takes the policy of the want the core would add on it only where that
+    /// want comes from the part of an asset that the table holds under a
+    /// want. The default follows the pending parts to any depth.
+    pub gate_follows_the_pending_parts_two_levels_alone: bool,
+    /// Control: a want the core would add from the part of a pending parent
+    /// that the table holds under no want is answered by an entry the table
+    /// holds available alone, and by no pending arrival. The default answers
+    /// it by either, as the want from the part of any pending parent.
+    pub gate_answers_under_an_unwanted_pending_parent_from_the_table_alone: bool,
+    /// Control: such a want is answered by a pending arrival alone, and by
+    /// no entry the table holds available.
+    pub gate_answers_under_an_unwanted_pending_parent_from_the_pending_arrivals_alone: bool,
+    /// Control: such a want is counted as required, whatever the policy of
+    /// the want that its pending parent would take. The default gives it
+    /// the policy of that want.
+    pub gate_counts_as_required_under_an_unwanted_pending_parent: bool,
     /// Not taken, run as a control: a want a system makes under the world's
     /// own entry is made under the contributor that brings the system, so
     /// that two systems of one contributor share one want. The default makes
@@ -894,6 +911,16 @@ pub struct Rules {
     /// want before the commands of the record were applied. The default
     /// reads the wants once those commands are applied.
     pub first_step_starts_from_the_wants_held_before_the_commands: bool,
+    /// Control: the first step adds the wants one level under an asset that
+    /// holds a want and no further, the wants of the levels below being
+    /// added once the arrivals are applied. The default follows the parts of
+    /// the record's arrivals downwards, to any depth.
+    pub first_step_adds_one_level_alone: bool,
+    /// Control: the wants that a part lists are added when the arrival of
+    /// that part is applied, in identifier order, and not before the first
+    /// arrival of the record. The default adds them all at the first step,
+    /// before any arrival is applied.
+    pub wants_of_a_part_added_where_its_arrival_is_applied: bool,
     /// Control: a pending release answers a required asset only where it
     /// ends the last want of that asset, whatever its policy. The default
     /// counts the asset as answered where no required want is left on it.
@@ -920,6 +947,16 @@ pub struct Rules {
     /// it. The default leaves out of the count an entry in force that holds
     /// a want once the commands are applied, and no other.
     pub budget_count_leaves_out_every_entry_an_arrival_to_failed_names: bool,
+    /// Control: the count leaves out an entry in force that an arrival to
+    /// failed of the record fails only where a want that the core did not
+    /// add names it. The default leaves it out under any want, one the core
+    /// added for a parent included.
+    pub budget_count_leaves_out_a_failing_entry_under_an_own_want_alone: bool,
+    /// The other reading of what the count leaves out: an entry due to fall
+    /// whose arrival to failed the record holds is left out of the count,
+    /// whatever closure reaches it. The default counts an entry due to fall
+    /// that a closure reaches, an arrival to failed changing nothing of it.
+    pub budget_count_leaves_out_an_entry_due_to_fall_that_an_arrival_to_failed_names: bool,
     /// Control: the room of the dependencies of a parent that fails is free
     /// at the fixed point that fails it. The default counts them: the wants
     /// the core added end at the recomputation, after the arrivals.
@@ -985,6 +1022,22 @@ pub struct Rules {
     /// before it names the asset again, the core's of the first step
     /// included.
     pub arrival_for_an_entry_unwanted_at_the_drain_changes_nothing: bool,
+    /// Control: an arrival for an entry that holds no want once the commands
+    /// of its record are applied changes nothing, whatever want the core
+    /// adds at the first step. It reaches the entries of the control above,
+    /// and those whose last want a command of the record ended.
+    pub arrival_for_an_entry_unwanted_after_the_commands_changes_nothing: bool,
+    /// Control: an arrival of an asset whose last want a command of the same
+    /// record released changes nothing, whatever want the core adds at the
+    /// first step. An entry that held no want before the record, and that
+    /// no command of it names, is not reached.
+    pub arrival_for_an_asset_released_in_its_record_changes_nothing: bool,
+    /// Control: the marked answer of an entry with no want is applied only
+    /// where the want that names it is added from the part of a marked
+    /// answer, a want added from the part of an ordinary arrival not
+    /// counted. The default applies it under any want the core adds at the
+    /// first step.
+    pub marked_answer_named_from_the_part_of_an_answer_alone: bool,
     /// Control: an entry leaves the table at the fixed point that ends its
     /// last want. The default keeps it, with no want, until the input fixed
     /// point of the next tick.
@@ -1524,6 +1577,9 @@ struct Starts {
     not_from: BTreeSet<AssetId>,
     /// Under the other control: the part of every arrival adds its wants.
     from_every_arrival: bool,
+    /// Under a third control: the wants are added one level under an asset
+    /// that holds a want, and a want the step adds gives no part its policy.
+    one_level: bool,
 }
 
 /// What a record found when it was drained, kept while it is applied for
@@ -1537,8 +1593,12 @@ struct Found {
     required: BTreeSet<AssetId>,
     /// The entries held failed, each with its reason.
     failed: BTreeMap<AssetId, u32>,
-    /// The entries that held no want and that no command of the record
-    /// names: filled once the commands are applied.
+    /// The entries whose arrival changes nothing whatever want the core adds
+    /// at the first step, under the controls that name some: those that
+    /// held no want and that no command of the record names, those that
+    /// hold none once the commands are applied, those whose last want a
+    /// command of the record ended, or those that a want from the part of
+    /// an ordinary arrival alone names.
     unnamed: BTreeSet<AssetId>,
 }
 
@@ -1891,7 +1951,7 @@ impl Table {
                 if let Some(entry) = self.entries.get(parent).filter(|_| !starts.not_from.contains(parent)) {
                     for (owner, policy) in &entry.wants {
                         match owner {
-                            Owner::Asset(above) => {
+                            Owner::Asset(above) if !starts.one_level => {
                                 if let Some((asked, _)) = desired.get(&(*parent, *above)) {
                                     if counted.insert(*above) {
                                         policies.extend_from_slice(asked);
@@ -1904,7 +1964,10 @@ impl Table {
                         }
                     }
                 }
-                for ((_, above), (asked, _)) in desired.range((*parent, AssetId::MIN)..=(*parent, AssetId::MAX)) {
+                // Under one control a want this step adds on the parent gives
+                // its part no policy: one level, and no further.
+                let added = desired.range((*parent, AssetId::MIN)..=(*parent, AssetId::MAX)).filter(|_| !starts.one_level);
+                for ((_, above), (asked, _)) in added {
                     if counted.insert(*above) {
                         policies.extend_from_slice(asked);
                     }
@@ -2265,9 +2328,26 @@ impl Table {
         let none = BTreeSet::new();
         let no_want_from = if rules.budget_only_reports || rules.wants_of_rejected_parts_added { &none } else { &decided_first };
         let mut brought = Leaving::new();
-        if counts_core_wants && !added_early {
+        // Under one control there is no first step: the wants that a part
+        // lists are added where the arrival of that part is applied.
+        let at_each_arrival = counts_core_wants && rules.wants_of_a_part_added_where_its_arrival_is_applied;
+        // Under another, the entries that hold no want before the first
+        // step, whose marked answer a want from the part of an ordinary
+        // arrival does not name.
+        let from_an_answer_alone = rules.marked_answer_named_from_the_part_of_an_answer_alone;
+        let unwanted: Vec<AssetId> = self.entries.iter().filter(|(_, entry)| from_an_answer_alone && entry.wants.is_empty()).map(|(id, _)| *id).collect();
+        if counts_core_wants && !added_early && !at_each_arrival {
             self.want_the_dependencies_of(record, residents, rules.former_dependency_wants_end_before_the_batch, no_want_from);
             self.take_core_added(&mut brought);
+        }
+        if from_an_answer_alone {
+            let marked = |asset: &AssetId, to_a_hash: bool| {
+                record.arrivals.iter().any(|arrival| arrival.asset == *asset && arrival.marked && (!to_a_hash || matches!(arrival.outcome, Outcome::Hash(_))))
+            };
+            let from_an_answer = |(owner, _): &(Owner, Policy)| matches!(owner, Owner::Asset(parent) if marked(parent, true));
+            let named = |asset: &AssetId| self.entries.get(asset).is_some_and(|entry| entry.wants.iter().any(from_an_answer));
+            let unnamed: Vec<AssetId> = unwanted.into_iter().filter(|asset| marked(asset, false) && !named(asset)).collect();
+            self.found.unnamed.extend(unnamed);
         }
         // Under each of the three candidates, an arrival to a hash is tested
         // against the world's budget where it is applied: after the commands
@@ -2281,6 +2361,10 @@ impl Table {
             match arrival.outcome {
                 Outcome::Hash(hash) if rejected.contains(&arrival.asset) => self.reject(arrival, hash, residents, applied),
                 _ => self.apply_arrival(arrival, residents, applied),
+            }
+            if at_each_arrival {
+                self.dependency_wants(&BTreeMap::new(), false, &Starts::default());
+                self.take_core_added(&mut brought);
             }
             if rules.entry_failed_for_its_type_under_a_core_want_takes_the_type {
                 self.retry_under_the_type_its_parent_lists(arrival.asset, record, residents, leaving);
@@ -2317,8 +2401,10 @@ impl Table {
         if self.evaluating_the_gate {
             self.pending_parents.extend(arriving.keys().copied());
         }
-        // The two controls on where the first step starts from.
-        let mut starts = Starts { from_every_arrival: self.rules.first_step_follows_every_arriving_part, ..Starts::default() };
+        // The two controls on where the first step starts from, and the one
+        // on how far it goes.
+        let mut starts =
+            Starts { from_every_arrival: self.rules.first_step_follows_every_arriving_part, one_level: self.rules.first_step_adds_one_level_alone, ..Starts::default() };
         if self.rules.first_step_starts_from_the_wants_held_before_the_commands {
             let newly_wanted = |(id, entry): (&AssetId, &Entry)| (!entry.wants.is_empty() && !self.found.wanted.contains(id)).then_some(*id);
             starts.not_from = self.entries.iter().filter_map(newly_wanted).collect();
@@ -2524,9 +2610,13 @@ impl Table {
         // to fall that a closure reaches stays counted. Each control counts
         // what it names.
         let reached = |asset: &AssetId| closures.iter().any(|closure| closure.contains(asset));
+        // Under the other reading, an entry due to fall whose arrival to
+        // failed the record holds is left out whatever closure reaches it.
+        let named_as_failed = |asset: &AssetId| arrivals.iter().any(|arrival| arrival.asset == *asset && matches!(arrival.outcome, Outcome::Failure(_)));
+        let whatever_reaches_it = |asset: &AssetId| rules.budget_count_leaves_out_an_entry_due_to_fall_that_an_arrival_to_failed_names && named_as_failed(asset);
         let falls = |asset: &AssetId| {
             let unwanted = !wanted_since.contains(asset) && self.entries.get(asset).is_some_and(|entry| entry.wants.is_empty());
-            unwanted && !reached(asset) && !rules.budget_count_holds_the_falling_entries
+            unwanted && (!reached(asset) || whatever_reaches_it(asset)) && !rules.budget_count_holds_the_falling_entries
         };
         let mut leaving: BTreeSet<AssetId> = candidates.iter().copied().filter(falls).collect();
         if !rules.budget_count_holds_the_failing_entries {
@@ -2535,11 +2625,16 @@ impl Table {
             // that holds no want stays counted, though the record holds its
             // arrival to failed: that arrival fails it only where a want of
             // the first step names it, which rests on the test. One control
-            // frees its room all the same.
+            // frees its room all the same; another frees the room of an
+            // entry that a want the core did not add names, and of no other.
             let whatever_it_holds = rules.budget_count_leaves_out_every_entry_an_arrival_to_failed_names;
             let in_force = |entry: &Entry| matches!(entry.availability, Availability::Available(_));
+            let wanted = |entry: &Entry| {
+                let own = |(owner, _): &(Owner, Policy)| !matches!(owner, Owner::Asset(_));
+                if rules.budget_count_leaves_out_a_failing_entry_under_an_own_want_alone { entry.wants.iter().any(own) } else { !entry.wants.is_empty() }
+            };
             let fails = |arrival: &&Arrival| {
-                let failed = |entry: &Entry| in_force(entry) && (whatever_it_holds || !entry.wants.is_empty());
+                let failed = |entry: &Entry| in_force(entry) && (whatever_it_holds || wanted(entry));
                 matches!(arrival.outcome, Outcome::Failure(_)) && self.entries.get(&arrival.asset).is_some_and(failed)
             };
             let mut failing: BTreeSet<AssetId> = arrivals.iter().filter(fails).map(|arrival| arrival.asset).collect();
@@ -2762,6 +2857,17 @@ impl Table {
         let late = self.apply_commands(&record.commands, purpose, alive, !added_early, &mut applied, &mut leaving, &candidates, &mut wanted_since);
         if self.rules.arrival_for_an_entry_unwanted_at_the_drain_changes_nothing {
             self.found.unnamed = candidates.iter().copied().filter(|id| !wanted_since.contains(id)).collect();
+        }
+        // Two controls more on an entry that holds no want once the commands
+        // are applied: its arrival changes nothing whatever want the core
+        // adds, for every such entry, or for those whose last want a command
+        // of this record ended and no other.
+        let every_one = self.rules.arrival_for_an_entry_unwanted_after_the_commands_changes_nothing;
+        if every_one || self.rules.arrival_for_an_asset_released_in_its_record_changes_nothing {
+            let at_the_drain = |id: &AssetId| candidates.contains(id) && !wanted_since.contains(id);
+            let unwanted = |(id, entry): (&AssetId, &Entry)| (entry.wants.is_empty() && (every_one || !at_the_drain(id))).then_some(*id);
+            let unnamed: Vec<AssetId> = self.entries.iter().filter_map(unwanted).collect();
+            self.found.unnamed.extend(unnamed);
         }
         if !self.rules.arrivals_before_commands {
             self.apply_arrivals(record, residents, purpose, &mut applied, &mut leaving, &candidates, &wanted_since);
@@ -3118,13 +3224,20 @@ impl Table {
                 if rules.gate_counts_core_wants_as_required { policy.map(|_| Policy::Required) } else { policy }
             };
             let mut policies: BTreeMap<AssetId, Policy> = parts.keys().filter_map(|parent| Some((*parent, held_policy(parent)?))).collect();
+            // The pending parents that the table holds under a want, a
+            // pending release applied: every other one holds none, and takes
+            // the policy of the want the core would add on it.
+            let held: BTreeSet<AssetId> = policies.keys().copied().collect();
             // A want the core would add on a pending parent gives that
             // parent's part its policy, to any depth through the parts of
-            // the pending arrivals and through them alone.
+            // the pending arrivals and through them alone. Under one control
+            // that want counts only where it comes from the part of an asset
+            // the table holds under a want: two levels, and no further.
+            let two_levels = rules.gate_follows_the_pending_parts_two_levels_alone;
             let mut followed = rules.gate_counts_core_wants_from_the_tables_wants_alone;
             while !followed {
                 followed = true;
-                for (parent, part) in &parts {
+                for (parent, part) in parts.iter().filter(|(parent, _)| !two_levels || held.contains(*parent)) {
                     let Some(policy) = policies.get(parent).copied() else { continue };
                     for (dependency, _) in &part.part.dependencies {
                         if parts.contains_key(dependency) && policies.get(dependency).is_none_or(|held| *held < policy) {
@@ -3135,11 +3248,25 @@ impl Table {
                 }
             }
             for (parent, part) in &parts {
-                if policies.get(parent) != Some(&Policy::Required) {
+                // Three controls on the want the core would add from the
+                // part of a pending parent that the table holds under no
+                // want: it is counted as required whatever the policy of the
+                // want that parent would take; it is answered by an entry
+                // the table holds available alone; or by a pending arrival
+                // alone.
+                let unwanted = !held.contains(parent);
+                let counted = match policies.get(parent) {
+                    Some(Policy::Required) => true,
+                    Some(Policy::Optional) => unwanted && rules.gate_counts_as_required_under_an_unwanted_pending_parent,
+                    None => false,
+                };
+                if !counted {
                     continue;
                 }
+                let from_the_table_alone = unwanted && rules.gate_answers_under_an_unwanted_pending_parent_from_the_table_alone;
+                let from_the_pending_arrivals_alone = unwanted && rules.gate_answers_under_an_unwanted_pending_parent_from_the_pending_arrivals_alone;
                 for (dependency, asset_type) in &part.part.dependencies {
-                    if pending.contains_key(dependency) {
+                    if pending.contains_key(dependency) && !from_the_table_alone {
                         continue;
                     }
                     // What the want would leave of the dependency's entry: a
@@ -3151,7 +3278,7 @@ impl Table {
                         None => true,
                         Some(entry) if rules.core_wants_are_refused_for_their_type && entry.asset_type != *asset_type => false,
                         Some(entry) => match entry.availability {
-                            Availability::Available(_) => false,
+                            Availability::Available(_) => from_the_pending_arrivals_alone,
                             Availability::Unavailable => true,
                             Availability::Failed(_) => {
                                 let held = entry.wants.iter().any(|(owner, _)| *owner == Owner::Asset(*parent));
@@ -3363,6 +3490,9 @@ mod tests;
 
 #[cfg(test)]
 mod magnitude_tests;
+
+#[cfg(test)]
+mod second_reading_tests;
 
 // ---------------------------------------------------------------------------
 // The view the passes resolve identifiers in

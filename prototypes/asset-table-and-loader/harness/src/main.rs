@@ -41,6 +41,7 @@ mod families_batches;
 mod families_forms;
 mod families_readings;
 mod families_same_harness;
+mod families_second_reading;
 mod gate_cost;
 mod gate_form;
 mod groups_cost;
@@ -109,6 +110,9 @@ const FAMILIES: &[Family] = &[
     ("dedicated-server", families_forms::dedicated_server),
     ("batch-state", families_batches::batch_state),
     ("failed-replacement", families_batches::failed_replacement),
+    ("first-step-arrival", families_second_reading::first_step_arrival),
+    ("pending-depth", families_second_reading::pending_depth),
+    ("count-without-want", families_second_reading::count_without_want),
 ];
 
 fn family(settings: &Settings, name: &str) -> Option<FamilyPlan> {
