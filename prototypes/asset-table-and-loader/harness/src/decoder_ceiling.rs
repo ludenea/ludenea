@@ -224,7 +224,7 @@ pub fn play(directory: &Path, size: Size, workers: usize, options: Options) -> P
     let queue = links.queue.clone();
     let config = WorldConfig::new(size, workers, Mode::Identifiers, vec![content.assets[0]]);
     let mut world = World::new(config.clone(), Vec::new(), links);
-    let attachment = Attachment { queue, set: None, entries: world.entries(), unanswered: world.unanswered(), restore: Vec::new(), standing: Vec::new(), checks: Vec::new() };
+    let attachment = Attachment { queue, set: None, entries: world.entries(), unanswered: world.unanswered(), restore: Vec::new(), standing: Vec::new(), checks: Vec::new(), forms: Vec::new() };
     let _ = slot.set(loader.attach(attachment).expect("the world is attached"));
     let mut as_stated = world.entries().is_empty();
 

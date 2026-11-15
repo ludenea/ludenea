@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use asset_loader::ResidentStore;
-use asset_pipeline::{Cache, Checks, Pass, Source};
+use asset_pipeline::{Asked, Beside, Cache, Checks, Pass, Revision, Source};
 use content_store::{content_hash, encode_domain, encode_root};
+use prototype_core::forms::{PRODUCER, Preparer, local_platform, stamp};
 use prototype_core::table::{AssetId, AssetType, Policy, RepulsionTable};
 use prototype_core::world::{Parameters, Size};
 use reference_workload::{DEFAULT_SEED, SplitMix64};
@@ -74,10 +75,18 @@ pub struct Content {
     /// The content stands above the bound of the admission check: the first
     /// parameter its part carries is greater than the bound.
     pub above_the_bound: bool,
+    /// The size the prepared form built once of the content is padded to,
+    /// where the family states a size for the form.
+    pub form_size: Option<usize>,
+    /// The revision number of the payload the asset has with this content,
+    /// where it has one: the payload is made for the part of the content.
+    pub payload: Option<u32>,
+    /// The presentation dependencies of the asset with this content.
+    pub presents: &'static [&'static str],
 }
 
 pub const fn content(asset: &'static str, version: u32) -> Content {
-    Content { asset, version, asset_type: AssetType::Parameters, dependencies: &[], size: None, held_as: None, parameters_of: None, listed: &[], above_the_bound: false }
+    Content { asset, version, asset_type: AssetType::Parameters, dependencies: &[], size: None, held_as: None, parameters_of: None, listed: &[], above_the_bound: false, form_size: None, payload: None, presents: &[] }
 }
 
 impl Content {
@@ -123,6 +132,26 @@ impl Content {
         self.above_the_bound = true;
         self
     }
+
+    /// The size of the prepared form built once of the content, where the
+    /// family states one: the stand-in preparing function pads the form to it.
+    pub const fn with_a_form_of(mut self, size: usize) -> Content {
+        self.form_size = Some(size);
+        self
+    }
+
+    /// The asset has a payload with this content, made for its part, at the
+    /// first revision of the payload.
+    pub const fn with_a_payload(mut self) -> Content {
+        self.payload = Some(1);
+        self
+    }
+
+    /// The presentation dependencies of the asset with this content.
+    pub const fn presenting(mut self, dependencies: &'static [&'static str]) -> Content {
+        self.presents = dependencies;
+        self
+    }
 }
 
 /// The names of a family and the sources of its contents.
@@ -137,6 +166,18 @@ pub struct Family {
     pub parts: BTreeMap<String, Vec<u8>>,
     /// The contents whose part the pipeline would refuse.
     pub by_hand: Vec<String>,
+    /// What the source of each content states beside its canonical part,
+    /// for the actions that are not its canonical one: the size of its
+    /// prepared form built once, its payload, its presentation dependencies.
+    pub beside: BTreeMap<String, Beside>,
+    /// The prepared forms built once that the compositions of the family
+    /// declare, each with the asset type it is declared for: the stand-in
+    /// pipeline runs a preparing action for each part of such a type. None
+    /// in a family that has no such form.
+    pub forms: Vec<(AssetType, Preparer)>,
+    /// The target profiles a pass over the content of the family is asked a
+    /// presentation manifest for: none in a family that has no payload.
+    pub profiles: Vec<String>,
 }
 
 impl Family {
@@ -153,6 +194,7 @@ impl Family {
             names.assets.insert((*name).to_string(), *identifier);
         }
         let (mut sources, mut parts, mut by_hand) = (BTreeMap::new(), BTreeMap::new(), Vec::new());
+        let mut beside = BTreeMap::new();
         // The type an asset is imported under: the one its contents state.
         let type_of = |name: &str| contents.iter().find(|content| content.asset == name).map_or(AssetType::Parameters, |content| content.asset_type);
         // Where the family states a content as above the bound of the
@@ -194,6 +236,14 @@ impl Family {
             names.sizes.insert(hash, content.held_as.unwrap_or(part.len() as u64));
             names.tables.insert(hash, RepulsionTable { strength: source.strength, radius: source.radius });
             parts.insert(name.clone(), part);
+            // What the source states beside its canonical part: a payload
+            // is made for the part of its own content.
+            let stated = Beside {
+                form_size: content.form_size,
+                payload: content.payload.map(|revision| (name.clone(), revision)),
+                presents: content.presents.iter().map(|other| names.assets[*other]).collect(),
+            };
+            beside.insert(name.clone(), stated);
             sources.insert(name, source);
         }
         names.pool = pool.iter().map(|name| names.assets[*name]).collect();
@@ -202,7 +252,70 @@ impl Family {
         let mut survivors = kills.iter().enumerate().filter(|(_, tick)| tick.is_none()).map(|(slot, _)| slot as u32);
         names.entities.insert("E1".to_string(), (survivors.next().expect("a slot survives"), 0));
         names.entities.insert("E2".to_string(), (survivors.next().expect("a second slot survives"), 0));
-        Family { names, sources, parts, by_hand }
+        Family { names, sources, parts, by_hand, beside, forms: Vec::new(), profiles: Vec::new() }
+    }
+
+    /// The compositions of the family declare these prepared forms built
+    /// once, each for an asset type: every pass of the stand-in pipeline
+    /// over the content of the family runs a preparing action for each part
+    /// of such a type. The hashes of the forms are named after the part and
+    /// after who built the form: `<asset>.<version>:built` is the form
+    /// built once, the producer's, and `<asset>.<version>:local` the form
+    /// the machine that runs the harness builds for itself from the same
+    /// part, computed here, on this machine, under its local platform name.
+    pub fn preparing(mut self, forms: &[(AssetType, Preparer)]) -> Family {
+        self.forms = forms.to_vec();
+        let local = local_platform();
+        assert_ne!(local, PRODUCER, "the local platform name of a machine is never the producer's");
+        for (name, source) in &self.sources {
+            if !forms.iter().any(|(asset_type, preparer)| *asset_type == source.asset_type && preparer.built_once()) {
+                continue;
+            }
+            for (who, platform) in [("built", PRODUCER), ("local", local.as_str())] {
+                let form = stamp(&self.parts[name], platform, self.beside[name].form_size);
+                let hash = content_hash(&form);
+                self.names.hashes.insert(format!("{name}:{who}"), hash);
+                self.names.sizes.insert(hash, form.len() as u64);
+            }
+        }
+        self
+    }
+
+    /// A pass over the content of the family is asked a presentation
+    /// manifest for this target profile.
+    pub fn presenting_for(mut self, profile: &str) -> Family {
+        self.profiles.push(profile.to_string());
+        self
+    }
+
+    /// What a pass of the stand-in pipeline over the content of the family
+    /// is asked beyond the canonical parts, under a platform name.
+    pub fn asked(&self, platform: &str) -> Asked {
+        Asked { forms: self.forms.clone(), platform: platform.to_string(), profiles: self.profiles.clone() }
+    }
+
+    /// The text of the source of a content: its canonical part's, then what
+    /// it states beside it.
+    pub fn source_text(&self, name: &str) -> String {
+        self.sources[name].text() + &self.beside[name].text()
+    }
+
+    /// A content root imported into a loose store: one pass of the stand-in
+    /// pipeline, which prepares the content built once, under the
+    /// producer's platform name, where the family has a form built once.
+    /// Returns the cache and the hash of the revision's manifest.
+    pub fn import(&self, root: &Path, store: &Path) -> (Cache, u64) {
+        let (cache, revision) = self.import_as(root, store, PRODUCER, asset_pipeline::Options::default());
+        (cache, revision.domain_hash)
+    }
+
+    /// The same under a platform name: a machine's own build of the same
+    /// sources is prepared under its local platform name.
+    pub fn import_as(&self, root: &Path, store: &Path, platform: &str, options: asset_pipeline::Options) -> (Cache, Revision) {
+        let cache = Cache::on_disk(store).expect("a loose store is created");
+        let pass = asset_pipeline::pass_asked(root, &cache, Checks::default(), options, &self.asked(platform)).expect("the pass runs");
+        assert!(pass.failures.is_empty(), "no source of a scenario fails its import: {:?}", pass.failures);
+        (cache, pass.revision)
     }
 
     /// Makes every content of the family resident, for a scripted availability source.
@@ -219,10 +332,20 @@ impl Family {
     pub fn write_sources(&self, root: &Path, contents: &[&str]) {
         fs::create_dir_all(root).expect("a content root is created");
         for name in contents {
-            let source = &self.sources[*name];
             let asset = name.split('.').next().expect("a hash is named <asset>.<version>");
-            fs::write(root.join(format!("{asset}.asset")), source.text()).expect("a source is written");
+            fs::write(root.join(format!("{asset}.asset")), self.source_text(name)).expect("a source is written");
         }
+    }
+
+    /// Writes the source of a content with its payload at another revision:
+    /// the canonical part of the content does not change, and the payload,
+    /// made for the same part, is another.
+    pub fn write_source_with_its_payload_at(&self, root: &Path, name: &str, revision: u32) {
+        let mut beside = self.beside[name].clone();
+        assert!(beside.payload.is_some(), "the content {name} has a payload");
+        beside.payload = Some((name.to_string(), revision));
+        let asset = name.split('.').next().expect("a hash is named <asset>.<version>");
+        fs::write(root.join(format!("{asset}.asset")), self.sources[name].text() + &beside.text()).expect("a source is written");
     }
 
     /// Writes the sources of the named contents with an error: the text each
@@ -232,7 +355,7 @@ impl Family {
         fs::create_dir_all(root).expect("a content root is created");
         for name in contents {
             let erroneous = |line: &str| if line.starts_with("strength ") { "strength error".to_string() } else { line.to_string() };
-            let text: String = self.sources[*name].text().lines().map(|line| erroneous(line) + "\n").collect();
+            let text: String = self.source_text(name).lines().map(|line| erroneous(line) + "\n").collect();
             let asset = name.split('.').next().expect("a hash is named <asset>.<version>");
             fs::write(root.join(format!("{asset}.asset")), text).expect("a source is written");
         }

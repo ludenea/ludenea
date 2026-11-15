@@ -1418,3 +1418,65 @@ fn the_admission_check_refuses_a_valid_part_whose_first_parameter_is_over_its_bo
     // The reason of a refusal on a first load, by the name the sheets give it.
     assert_eq!(reason_named("not-admitted").map(|reason| reason.code), Some(REASON_ADMISSION_REFUSED));
 }
+
+/// A prepared form built once: the arrival of its asset names its hash, the
+/// entry holds it beside the hash of the canonical part, and the canonical
+/// bytes of a record and of a table hold it. The hashes of two forms are
+/// made up here: the table reads no form.
+#[test]
+fn an_arrival_names_its_prepared_form_built_once_and_the_entry_holds_it_beside_the_hash_of_its_part() {
+    let mut parts = Parts::default();
+    let (one, two) = (parts.part(1, &[]), parts.part(2, &[]));
+    let (built, local) = (0xb111_u64, 0x10ca_u64);
+    let wanted = || {
+        let mut table = Table::with_rules(Rules::default());
+        table.want(A, SECOND, HOST, Policy::Required);
+        table
+    };
+    let mut table = wanted();
+    let applied = apply(&mut table, &parts, Vec::new(), vec![Arrival::at(A, one).with_form(built).sized(700)]);
+    assert_eq!(applied.events, vec![Event::Arrived { asset: A, hash: one }], "an event names the hash of a canonical part");
+    let held = |table: &Table| (table.entries[&A].availability, table.entries[&A].form, table.entries[&A].size);
+    assert_eq!(held(&table), (Availability::Available(one), Some(built), 700));
+    // The bytes under the state hash hold the form, and a table reads back.
+    let mut plain = wanted();
+    apply(&mut plain, &parts, Vec::new(), vec![Arrival::at(A, one).sized(700)]);
+    assert_eq!(held(&plain), (Availability::Available(one), None, 700));
+    assert_ne!(table.canonical_bytes(), plain.canonical_bytes());
+    assert_ne!(table.hash(), plain.hash(), "two worlds that differ in the form of one asset have diverged");
+    let read = Table::decode(&table.typed_bytes(), Rules::default()).expect("the table reads back");
+    assert_eq!(held(&read), held(&table));
+    assert_eq!(read.canonical_bytes(), table.canonical_bytes());
+    // An entry that holds no form has the bytes it had before one could.
+    let mut stated = Vec::new();
+    stated.extend_from_slice(&1_u32.to_le_bytes());
+    put_entry(&mut stated, A, SECOND, Availability::Available(one), 700, &[(HOST, Policy::Required)]);
+    put_instances(&mut stated, &[]);
+    assert_eq!(plain.canonical_bytes(), stated);
+    // A record holds the form of an arrival to a hash, and reads back.
+    let record = Record::arrivals(3, vec![Arrival::at(A, one).with_form(built).sized(700).marked(), Arrival::failed(D, REASON_UNKNOWN_ASSET).with_form(built)]);
+    assert_eq!(record.arrivals[0].form, None, "an arrival to failed names no form");
+    assert_eq!(decode_log(&encode_log(std::slice::from_ref(&record))).expect("the log reads back"), vec![record]);
+    // An arrival at the same hashes leaves the entry as it was.
+    let applied = apply(&mut table, &parts, Vec::new(), vec![Arrival::at(A, one).with_form(built).sized(700)]);
+    assert!(applied.events.is_empty() && applied.differed.is_empty());
+    // An answer to a restore at the recorded hash of the part that names
+    // another form differs: the entry takes the form and its size, with no
+    // event. Under the control it is compared with the part alone.
+    let mut compared_with_the_part = table.clone();
+    compared_with_the_part.rules = Rules { answer_compared_with_the_part_alone: true, ..Rules::default() };
+    let answer = Arrival::at(A, one).with_form(local).sized(650).marked();
+    let applied = apply(&mut table, &parts, Vec::new(), vec![answer]);
+    assert_eq!((applied.differed, applied.events), (vec![A], Vec::new()));
+    assert_eq!(held(&table), (Availability::Available(one), Some(local), 650));
+    let applied = apply(&mut compared_with_the_part, &parts, Vec::new(), vec![answer]);
+    assert!(applied.differed.is_empty());
+    assert_eq!(held(&compared_with_the_part), (Availability::Available(one), Some(built), 700));
+    // A change of part names both hashes of parts, and the entry holds the
+    // form the arrival names; a failure leaves no form.
+    let applied = apply(&mut table, &parts, Vec::new(), vec![Arrival::at(A, two).with_form(built).sized(710)]);
+    assert_eq!(applied.events, vec![Event::HashChanged { asset: A, from: one, to: two }]);
+    assert_eq!(held(&table), (Availability::Available(two), Some(built), 710));
+    apply(&mut table, &parts, Vec::new(), vec![Arrival::failed(A, REASON_ARTIFACT_GONE)]);
+    assert_eq!(held(&table), (Availability::Failed(REASON_ARTIFACT_GONE), None, 0));
+}

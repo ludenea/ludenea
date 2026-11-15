@@ -48,15 +48,20 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use content_store::{AssetId, Domain, DomainEntry, Mounted, Package, closure, content_hash, decode_domain, decode_root, hex, set_hash};
+use content_store::{
+    AssetId, Domain, DomainEntry, Mounted, Package, Presentation, PresentationEntry, closure, content_hash, decode_domain, decode_presentation, decode_root_whole, hex, set_hash,
+};
+use prototype_core::forms::{Preparer, grind, local_platform, stamp};
 use prototype_core::table::{
     AdmissionCheck, Arrival, ArrivalQueue, AssetType, Availability, EntryView, Outcome, Owner, Part, Policy, REASON_ADMISSION_REFUSED, REASON_ANOTHER_TYPE,
-    REASON_ARTIFACT_GONE, REASON_DEPENDENCIES_DIFFER, REASON_HASH_MISMATCH, REASON_INVALID_PART, REASON_UNKNOWN_ASSET, Resident, Residents,
+    REASON_ARTIFACT_GONE, REASON_DEPENDENCIES_DIFFER, REASON_HASH_MISMATCH, REASON_INVALID_PART, REASON_PREPARATION_FAILED, REASON_UNKNOWN_ASSET, Record, Resident, Residents,
 };
 use prototype_core::world::Extraction;
 
+mod bound;
 mod decoder;
 
+pub use bound::{BUFFER as RATE_BUFFER, Bounded, LoadBound, Place, Pool, PoolHandle, Port, Ran, Rates, Served, Work};
 pub use decoder::{BlockedMount, Decoded, LoadWatch, NotExpanded, expand};
 
 // ---------------------------------------------------------------------------
@@ -68,11 +73,40 @@ pub use decoder::{BlockedMount, Decoded, LoadWatch, NotExpanded, expand};
 #[derive(Default)]
 pub struct ResidentStore {
     entries: Mutex<BTreeMap<u64, Arc<Resident>>>,
+    /// The prepared forms, by the hash they are held under, immutable once
+    /// inserted. A form built once is held under the hash the content names,
+    /// against which its bytes were verified; a form a machine builds, under
+    /// the hash of its bytes.
+    forms: Mutex<BTreeMap<u64, Arc<Vec<u8>>>>,
+    /// The form last obtained for a part, by the content hash of the part:
+    /// what is handed where an entry names no form, which is the case of a
+    /// form that is the same computation on every cell, a cache of the
+    /// machine that no table names.
+    obtained: Mutex<BTreeMap<u64, u64>>,
+    /// Under one control, and filled under it alone: what the machine built
+    /// for a part, by the content hash of the part, handed wherever the
+    /// machine holds one, whatever form the entry names.
+    local: Mutex<BTreeMap<u64, Arc<Vec<u8>>>>,
+    /// The presentation payloads, by content hash, immutable once inserted:
+    /// loaded on the request of a consumer, and read by no world.
+    payloads: Mutex<BTreeMap<u64, Arc<Vec<u8>>>>,
 }
 
 impl Residents for ResidentStore {
     fn get(&self, hash: u64) -> Option<Arc<Resident>> {
         self.entries.lock().expect("the store is never poisoned").get(&hash).cloned()
+    }
+
+    /// The prepared form of a part, as a system reads it inside the domain:
+    /// the bytes held under the hash the entry names beside the hash of its
+    /// part, and for an entry that names none, the form last obtained for
+    /// the part.
+    fn form(&self, part: u64, named: Option<u64>) -> Option<Arc<Vec<u8>>> {
+        if let Some(local) = self.local.lock().expect("the store is never poisoned").get(&part) {
+            return Some(local.clone());
+        }
+        let hash = named.or_else(|| self.obtained.lock().expect("the store is never poisoned").get(&part).copied())?;
+        self.forms.lock().expect("the store is never poisoned").get(&hash).cloned()
     }
 }
 
@@ -91,6 +125,49 @@ impl ResidentStore {
 
     pub fn hashes(&self) -> Vec<u64> {
         self.entries.lock().expect("the store is never poisoned").keys().copied().collect()
+    }
+
+    /// Inserts a part whose bytes were verified against the hash and
+    /// validated where a bound placed that work: on a file thread, or as an
+    /// action of the background pool. The bytes are moved.
+    fn insert_checked(&self, hash: u64, bytes: Vec<u8>, part: Part) -> Arc<Resident> {
+        let mut entries = self.entries.lock().expect("the store is never poisoned");
+        entries.entry(hash).or_insert_with(|| Arc::new(Resident { bytes, part })).clone()
+    }
+
+    /// Whether a prepared form is resident under a hash.
+    pub fn holds_form(&self, hash: u64) -> bool {
+        self.forms.lock().expect("the store is never poisoned").contains_key(&hash)
+    }
+
+    /// Inserts the prepared form obtained for a part under a hash; the bytes
+    /// are moved. A form already there under that hash is left as it is. It
+    /// becomes the form last obtained for the part.
+    pub fn insert_form(&self, part: u64, hash: u64, bytes: Vec<u8>) {
+        self.forms.lock().expect("the store is never poisoned").entry(hash).or_insert_with(|| Arc::new(bytes));
+        self.obtained_for(part, hash);
+    }
+
+    /// Notes the form last obtained for a part, a form already resident.
+    fn obtained_for(&self, part: u64, hash: u64) {
+        self.obtained.lock().expect("the store is never poisoned").insert(part, hash);
+    }
+
+    /// Under one control: what the machine built for a part is what a system
+    /// is handed for it from now on.
+    fn prefer_local(&self, part: u64, bytes: Vec<u8>) {
+        self.local.lock().expect("the store is never poisoned").entry(part).or_insert_with(|| Arc::new(bytes));
+    }
+
+    /// A presentation payload resident under a hash.
+    fn payload(&self, hash: u64) -> Option<Arc<Vec<u8>>> {
+        self.payloads.lock().expect("the store is never poisoned").get(&hash).cloned()
+    }
+
+    /// Inserts a presentation payload, verified by its reader; the bytes
+    /// are moved.
+    fn insert_payload(&self, hash: u64, bytes: Vec<u8>) -> Arc<Vec<u8>> {
+        self.payloads.lock().expect("the store is never poisoned").entry(hash).or_insert_with(|| Arc::new(bytes)).clone()
     }
 }
 
@@ -135,16 +212,29 @@ impl Store for PackageStore {
 
 type ReadJob = (Arc<dyn Store>, u64, Sender<Option<Vec<u8>>>);
 
+/// What a file thread is asked, in the order received: to read one artifact
+/// whole from a store, or to run what its caller gives it on that thread,
+/// knowing which file thread it is. The second is how a read is followed, on
+/// the thread that made it and before that thread takes its next request, by
+/// the work at load a bound leaves on the executor.
+enum Job {
+    Read(ReadJob),
+    Run(Box<dyn FnOnce(usize) + Send>),
+    /// The file thread that takes it ends: a host may still hold the port
+    /// when the instance stops, so the threads do not wait for it to close.
+    Stop,
+}
+
 /// Plain file threads behind the store port: the stand-in for the I/O
 /// executor. Every read of an artifact goes through one of them.
 struct FileThreads {
-    jobs: Option<Sender<ReadJob>>,
+    jobs: Option<Sender<Job>>,
     threads: Vec<JoinHandle<()>>,
 }
 
 impl FileThreads {
     fn new(count: usize) -> FileThreads {
-        let (jobs, inbox) = channel::<ReadJob>();
+        let (jobs, inbox) = channel::<Job>();
         let inbox = Arc::new(Mutex::new(inbox));
         let threads = (0..count)
             .map(|index| {
@@ -152,8 +242,13 @@ impl FileThreads {
                 let work = move || {
                     loop {
                         let job = inbox.lock().expect("the inbox is never poisoned").recv();
-                        let Ok((store, hash, answer)) = job else { break };
-                        let _ = answer.send(store.read(hash));
+                        match job {
+                            Ok(Job::Read((store, hash, answer))) => {
+                                let _ = answer.send(store.read(hash));
+                            }
+                            Ok(Job::Run(run)) => run(index),
+                            Ok(Job::Stop) | Err(_) => break,
+                        }
                     }
                 };
                 thread::Builder::new().name(format!("file-{index}")).spawn(work).expect("spawn a file thread")
@@ -164,14 +259,32 @@ impl FileThreads {
 
     fn read(&self, store: &Arc<dyn Store>, hash: u64) -> Option<Vec<u8>> {
         let (answer, bytes) = channel();
-        self.jobs.as_ref()?.send((store.clone(), hash, answer)).ok()?;
+        self.jobs.as_ref()?.send(Job::Read((store.clone(), hash, answer))).ok()?;
         bytes.recv().ok()?
+    }
+
+    /// Asks a file thread to run something, after the requests it received
+    /// before this one.
+    fn run(&self, run: Box<dyn FnOnce(usize) + Send>) {
+        if let Some(jobs) = &self.jobs {
+            let _ = jobs.send(Job::Run(run));
+        }
+    }
+
+    /// The port itself, for a host that sends it requests of its own.
+    fn port(&self) -> Sender<Job> {
+        self.jobs.clone().expect("the file threads run")
     }
 }
 
 impl Drop for FileThreads {
     fn drop(&mut self) {
-        self.jobs.take();
+        // One stop for each thread, after the requests already received.
+        if let Some(jobs) = self.jobs.take() {
+            for _ in &self.threads {
+                let _ = jobs.send(Job::Stop);
+            }
+        }
         for thread in self.threads.drain(..) {
             let _ = thread.join();
         }
@@ -345,6 +458,70 @@ pub struct Options {
     /// hold available, which no want then names. The default follows the
     /// closure of a changed part the batch brings, and of no other.
     pub closure_of_a_refused_part_posted: bool,
+    // --- a prepared form built once: its controls, and two readings ---
+    /// Control: the hash of a prepared form is left out of the arrival, and
+    /// so of the entry. The default has an arrival to a hash name the hash
+    /// of each prepared form built once that the world's composition
+    /// declares for the asset's type, as the manifest the world stands
+    /// under lists it.
+    pub forms_not_named: bool,
+    /// Control: a prepared form is taken from what the machine built for
+    /// the part, wherever the machine holds one. The default never reads the
+    /// machine's cache of forms for a form built once: such a form is
+    /// content, read under the hash that names it and verified against it.
+    pub forms_taken_from_the_machine: bool,
+    /// Control, at a load and at a replay: where the form named cannot be
+    /// had, the store holding no bytes under its hash, the capability takes
+    /// the form its machine built for the part, or builds it, and holds it
+    /// under the hash named. The default fails the load, and refuses the
+    /// replay at that record, naming the hash.
+    pub local_form_where_the_named_one_cannot_be_had: bool,
+    /// The other reading of the confirmation of a restore under the
+    /// recorded content: an asset is confirmed where the store holds bytes
+    /// under each recorded hash, whatever the manifest the restored world
+    /// stands under holds. The default confirms it where that manifest holds
+    /// the asset at the recorded hashes, of its canonical part and of its
+    /// prepared form built once, and the store holds their bytes.
+    pub confirmation_reads_the_store_alone: bool,
+    /// Control: the size an arrival names is the size of the canonical part
+    /// alone. The default names the size of what the arrival puts in force:
+    /// the part with the prepared forms built once that the arrival names.
+    pub arrivals_name_the_size_of_the_part_alone: bool,
+    /// Control: an arrival names every form the domain manifest holds for
+    /// its asset, with its size, whatever the world's composition declares.
+    pub arrivals_name_every_form_of_the_manifest: bool,
+    /// The other reading of the reason of a first load whose prepared form
+    /// built once cannot be had: a preparation that fails. The default gives
+    /// the reason of an artifact the store does not hold under the hash the
+    /// manifest names, the form being read and never prepared at load.
+    pub a_form_that_cannot_be_had_fails_as_a_preparation: bool,
+    // --- a presentation manifest beside the domain manifest: its controls.
+    // The default reads a presentation manifest for its consumers alone:
+    // nothing of it reaches a world ---
+    /// Control: the capability resolves an identifier in the presentation
+    /// manifest where its instance holds one, and takes the payload it
+    /// names for the canonical part. The default resolves every want in the
+    /// domain manifest the world stands under.
+    pub resolves_in_the_presentation_manifest: bool,
+    /// Control: the closure of a want follows the presentation dependencies
+    /// with the domain dependencies.
+    pub closure_follows_presentation_dependencies: bool,
+    /// Control: an arrival is posted once the payloads of its asset are
+    /// resident, and is a failure where one cannot be loaded. The default
+    /// loads a payload on the request of its consumer and never for a want.
+    pub arrivals_wait_for_payloads: bool,
+    /// Control: a revision changes an asset whose entry in a presentation
+    /// manifest differs. The default posts a world the transitions of the
+    /// assets whose entry in the domain manifest differs, and of no other.
+    pub presentation_changes_are_revisions: bool,
+    /// Control: the hash that names a content set covers every manifest the
+    /// instance holds, the presentation manifest included. The default is
+    /// the hash of the domain manifest.
+    pub set_hash_covers_every_manifest: bool,
+    /// Control: the confirmation of a restore under the recorded content
+    /// confirms the presentation payloads of the assets the table holds:
+    /// an instance that holds no presentation manifest confirms none.
+    pub confirmation_confirms_payloads: bool,
     // --- the controls of the scenarios on the batch of a restore ---
     /// Control: at a restore, no failed arrival is posted for an entry the
     /// save holds as failed. The default posts the arrival its load gives,
@@ -376,10 +553,50 @@ pub struct Options {
     pub over_the_ceiling_fails_as_an_invalid_part: bool,
 }
 
-/// The prepared forms built once that a world's composition declares, by
-/// what prepares each: none, no asset type of this prototype having one.
-/// The size an arrival names is that of the part with the forms named here.
-const DECLARED_FORMS: [&str; 0] = [];
+/// What the machine of a runtime instance gives its loading capability: the
+/// cache of forms it keeps on the machine, a directory of its own that is
+/// not the pipeline's artifact cache, where a form a machine builds for
+/// itself is kept under the key of its part's hash and of what prepares it;
+/// and the local platform name such a form is built under.
+#[derive(Clone, Debug)]
+pub struct Machine {
+    pub forms: PathBuf,
+    pub platform: String,
+    /// The bound above which a piece of work at load leaves the executor
+    /// for the background pool, where the host of the instance states one.
+    /// An instance that is given none has no pool and estimates nothing:
+    /// its work at load runs where it ran before a bound existed.
+    pub bound: Option<LoadBound>,
+}
+
+impl Machine {
+    /// The machine of a capability that is given none: its cache of forms
+    /// is a directory of its own beside the artifacts of the loose store.
+    pub fn beside(loose: &Path) -> Machine {
+        Machine { forms: loose.join("forms"), platform: local_platform(), bound: None }
+    }
+
+    /// Where the cache of forms keeps the form a machine built for a part.
+    pub fn form_path(&self, part: u64, preparer: Preparer) -> PathBuf {
+        self.forms.join(format!("{}-{}-{}", hex(part), preparer.name(), preparer.version()))
+    }
+
+    /// The form the machine built for a part, where its cache holds one.
+    fn form(&self, part: u64, preparer: Preparer) -> Option<Vec<u8>> {
+        fs::read(self.form_path(part, preparer)).ok()
+    }
+
+    /// The form the machine holds for a part, whatever prepares it.
+    fn any_form(&self, part: u64) -> Option<Vec<u8>> {
+        [Preparer::Stamp, Preparer::Grind].into_iter().find_map(|preparer| self.form(part, preparer))
+    }
+
+    /// Keeps a form the machine built for a part.
+    fn keep(&self, part: u64, preparer: Preparer, bytes: &[u8]) {
+        let _ = fs::create_dir_all(&self.forms);
+        let _ = fs::write(self.form_path(part, preparer), bytes);
+    }
+}
 
 /// What the capability knows of one attached world.
 struct WorldLink {
@@ -393,6 +610,9 @@ struct WorldLink {
     /// The instance's manifest as this world was last brought up to date
     /// with it: a move of the manifest is posted as what differs from it.
     seen: Arc<Domain>,
+    /// The presentation manifest the instance held then. Read under one
+    /// control alone.
+    seen_presentation: Option<Arc<Presentation>>,
     /// The world waits for its first tick to apply the answers to a restore.
     awaiting_restore: bool,
     /// A move of the manifest landed meanwhile and is held for it.
@@ -411,6 +631,9 @@ struct WorldLink {
     /// The admission checks the world's composition carries, each with the
     /// asset type whose entry it gives it to.
     checks: Vec<(AssetType, AdmissionCheck)>,
+    /// The prepared forms the world's composition declares, each with the
+    /// asset type it is declared for and what prepares it.
+    forms: Vec<(AssetType, Preparer)>,
 }
 
 impl WorldLink {
@@ -500,6 +723,11 @@ pub struct LoaderReport {
     pub held_moves: usize,
     /// The batches posted, over every world.
     pub batches: usize,
+    /// How many times the capability read a presentation manifest: none on
+    /// an instance whose selection holds none.
+    pub presentation_manifests_read: usize,
+    /// How many times it read a presentation payload from a store.
+    pub payloads_read: usize,
 }
 
 /// The batches held back by a delay and not posted yet.
@@ -528,27 +756,97 @@ struct Instance {
     /// name of their mount: a load expands such an artifact through the
     /// decoder, under the ceiling of the mount.
     decoders: Vec<(String, Arc<decoder::Blocked>)>,
+    /// What the machine gives the capability: its cache of forms and its
+    /// local platform name.
+    machine: Machine,
+    /// The presentation manifest of the revision in place, with its hash,
+    /// where the selection the instance stands over holds one: a server's
+    /// holds none.
+    presentation: Option<(u64, Arc<Presentation>)>,
+    /// Where the host states a bound on the work at load: what the instance
+    /// measured when it started and what it ran since, with its background
+    /// pool.
+    bound: Option<(Arc<Bounded>, Pool)>,
+    /// The forms the machine built at a load, to keep in its cache of forms
+    /// once the batch of that load is posted.
+    keeps: Vec<(u64, Preparer, Arc<Vec<u8>>)>,
 }
 
 impl Instance {
     fn read(&mut self, hash: u64) -> Option<Vec<u8>> {
-        for store in &self.stores {
-            if let Some(bytes) = self.files.read(store, hash) {
-                self.report.reads += 1;
-                return Some(bytes);
-            }
-        }
-        None
+        let bytes = self.fetch(hash);
+        self.report.reads += usize::from(bytes.is_some());
+        bytes
+    }
+
+    /// The bytes of a hash, read through the store port from the first
+    /// store that holds them, and counted by whoever asks.
+    fn fetch(&self, hash: u64) -> Option<Vec<u8>> {
+        self.stores.iter().find_map(|store| self.files.read(store, hash))
     }
 
     fn read_revision(&mut self) -> Result<Domain, String> {
         let root = self.loose.root().ok_or("no revision is in place")?;
-        let domain_hash = decode_root(&root)?;
+        let (domain_hash, presentation) = decode_root_whole(&root)?;
         let bytes = self.read(domain_hash).ok_or_else(|| format!("the domain manifest {} is absent", hex(domain_hash)))?;
         if content_hash(&bytes) != domain_hash {
             return Err(format!("the domain manifest {} does not hash to its name", hex(domain_hash)));
         }
+        self.read_presentation(&presentation)?;
         decode_domain(&bytes)
+    }
+
+    /// The presentation manifest of the revision in place, where its root
+    /// document names one: read where the instance does not hold it yet. An
+    /// instance whose selection holds none reads none, and holds none.
+    fn read_presentation(&mut self, named: &[(String, u64)]) -> Result<(), String> {
+        let Some((profile, hash)) = named.first() else {
+            self.presentation = None;
+            return Ok(());
+        };
+        if self.presentation.as_ref().is_some_and(|(held, _)| held == hash) {
+            return Ok(());
+        }
+        let bytes = self.fetch(*hash).filter(|bytes| content_hash(bytes) == *hash);
+        let bytes = bytes.ok_or_else(|| format!("the presentation manifest {} of the profile {profile} cannot be had", hex(*hash)))?;
+        self.report.presentation_manifests_read += 1;
+        self.presentation = Some((*hash, Arc::new(decode_presentation(&bytes)?)));
+        Ok(())
+    }
+
+    /// The entry the presentation manifest of the instance holds for an
+    /// asset: none where the instance holds no presentation manifest, and
+    /// none for an asset that has no payload.
+    fn presented(&self, asset: &AssetId) -> Option<PresentationEntry> {
+        self.presentation.as_ref().and_then(|(_, presentation)| presentation.get(asset).cloned())
+    }
+
+    /// A payload, by the hash the presentation manifest names: looked up in
+    /// the resident store, and on a miss read through the store port and
+    /// verified against that hash. The domain observes none of it.
+    fn payload_at(&mut self, hash: u64) -> Result<Arc<Vec<u8>>, u32> {
+        if let Some(resident) = self.residents.payload(hash) {
+            return Ok(resident);
+        }
+        let bytes = self.fetch(hash).ok_or(REASON_ARTIFACT_GONE)?;
+        self.report.payloads_read += 1;
+        if content_hash(&bytes) != hash {
+            return Err(REASON_INVALID_PART);
+        }
+        Ok(self.residents.insert_payload(hash, bytes))
+    }
+
+    /// The hash that names the content set of the manifest the instance
+    /// holds: the hash of its domain manifest, which holds nothing of a
+    /// target. Under one control it covers every manifest the instance
+    /// holds, the presentation manifest included.
+    fn content_set(&self) -> u64 {
+        match &self.presentation {
+            Some((presentation, _)) if self.options.set_hash_covers_every_manifest => {
+                content_hash(&[set_hash(&self.current).to_le_bytes(), presentation.to_le_bytes()].concat())
+            }
+            _ => set_hash(&self.current),
+        }
     }
 
     fn merge(&mut self) -> Vec<Mounted> {
@@ -565,7 +863,7 @@ impl Instance {
         if self.sets.contains_key(&hash) {
             return Ok(());
         }
-        let manifest = if set_hash(&self.current) == hash {
+        let manifest = if self.content_set() == hash {
             self.current.clone()
         } else {
             let bytes = self.read(hash).filter(|bytes| content_hash(bytes) == hash);
@@ -644,6 +942,14 @@ impl Instance {
     /// world's composition gives one to the entry of its type. `held` is
     /// the type the world's entry holds, where it holds one.
     fn load(&mut self, world: u32, manifest: &Domain, asset: AssetId, held: Option<AssetType>) -> Outcome {
+        // Control: where the instance holds a presentation manifest, the
+        // identifier is resolved in it, and the payload it names is taken
+        // for the part. An asset that has no payload has no entry there.
+        if self.options.resolves_in_the_presentation_manifest && self.presentation.is_some() {
+            let Some(presented) = self.presented(&asset) else { return Outcome::Failure(REASON_UNKNOWN_ASSET) };
+            let hash = presented.variants.first().map_or(0, |variant| variant.hash);
+            return self.part(hash).map_or_else(Outcome::Failure, |_| Outcome::Hash(hash));
+        }
         let Some(entry) = manifest.get(&asset) else { return Outcome::Failure(REASON_UNKNOWN_ASSET) };
         if !self.options.types_not_checked
             && let Some(held) = held
@@ -664,7 +970,115 @@ impl Instance {
             self.refused.push((asset, entry.hash, by_another_world));
             return Outcome::Failure(REASON_ADMISSION_REFUSED);
         }
+        // An asset is available to a world only when its canonical part and
+        // every prepared form the world's composition declares for its type
+        // are resident.
+        if let Err(code) = self.obtain_forms(world, entry, &resident) {
+            return Outcome::Failure(code);
+        }
+        // Control: the arrival waits for the payloads of its asset, and is
+        // a failure where one cannot be loaded.
+        if self.options.arrivals_wait_for_payloads
+            && let Some(presented) = self.presented(&asset)
+        {
+            for variant in &presented.variants {
+                if let Err(code) = self.payload_at(variant.hash) {
+                    return Outcome::Failure(code);
+                }
+            }
+        }
         Outcome::Hash(entry.hash)
+    }
+
+    /// The prepared forms the composition of a world declares for an asset
+    /// type, by what prepares each.
+    fn declared(&self, world: u32, asset_type: &str) -> Vec<Preparer> {
+        let forms = self.worlds.get(&world).map_or(&[][..], |link| link.forms.as_slice());
+        forms.iter().filter(|(declared, _)| declared.stable_name() == asset_type).map(|(_, preparer)| *preparer).collect()
+    }
+
+    /// The form the machine built for a part: taken from the cache of forms
+    /// it keeps, or built now from the part and kept there. A form that is
+    /// the same computation on every cell is the same bytes wherever it is
+    /// built; one that is not is the machine's own, under its local
+    /// platform name, and has another hash than the form built once.
+    fn own_form(&self, part: u64, resident: &Resident, preparer: Preparer) -> Vec<u8> {
+        if let Some(bytes) = self.machine.form(part, preparer) {
+            return bytes;
+        }
+        let bytes = match preparer {
+            Preparer::Stamp => stamp(&resident.bytes, &self.machine.platform, None),
+            Preparer::Grind => grind(&resident.bytes),
+        };
+        self.machine.keep(part, preparer, &bytes);
+        bytes
+    }
+
+    /// A prepared form built once, by the hash that names it: looked up in
+    /// the resident store, and on a miss read through the store port and
+    /// verified against that hash. It is content, and the machine's cache of
+    /// forms is never read for it: a form a machine built for itself has
+    /// another hash, and never passes for the producer's. Two controls read
+    /// that cache all the same.
+    fn form_at(&mut self, part: u64, form: u64) -> Result<(), u32> {
+        if self.options.forms_taken_from_the_machine
+            && let Some(local) = self.machine.any_form(part)
+        {
+            self.residents.prefer_local(part, local);
+        }
+        if self.residents.holds_form(form) {
+            self.residents.obtained_for(part, form);
+            return Ok(());
+        }
+        match self.read(form) {
+            Some(bytes) if content_hash(&bytes) == form => self.residents.insert_form(part, form, bytes),
+            Some(_) => return Err(REASON_INVALID_PART),
+            None if self.options.local_form_where_the_named_one_cannot_be_had => {
+                // Control: the machine's own form, held under the hash named.
+                let resident = self.part(part)?;
+                let own = self.own_form(part, &resident, Preparer::Stamp);
+                self.residents.insert_form(part, form, own);
+            }
+            None if self.options.a_form_that_cannot_be_had_fails_as_a_preparation => return Err(REASON_PREPARATION_FAILED),
+            None => return Err(REASON_ARTIFACT_GONE),
+        }
+        Ok(())
+    }
+
+    /// Obtains the prepared forms the composition of a world declares for
+    /// the type of an asset whose part is resident. A form built once is
+    /// the one the manifest lists under what prepares it, read under its
+    /// hash; a form that is the same computation on every cell is taken
+    /// from the machine's cache of forms or built, and no manifest names it.
+    fn obtain_forms(&mut self, world: u32, entry: &DomainEntry, resident: &Resident) -> Result<(), u32> {
+        for preparer in self.declared(world, &entry.asset_type) {
+            if preparer.built_once() {
+                let label = preparer.label();
+                let listed = entry.forms.iter().find(|listed| listed.preparer == label).ok_or(REASON_PREPARATION_FAILED)?;
+                self.form_at(entry.hash, listed.hash)?;
+            } else if self.residents.form(entry.hash, None).is_none() {
+                let own = self.own_form(entry.hash, resident, preparer);
+                self.residents.insert_form(entry.hash, content_hash(&own), own);
+            }
+        }
+        Ok(())
+    }
+
+    /// The arrival of an asset to the hash the manifest names: with the hash
+    /// of the prepared form built once that the world's composition declares
+    /// for its type, and the size of what the arrival puts in force, that
+    /// part with that form, as the manifest gives the size of each.
+    fn named(&self, world: u32, manifest: &Domain, asset: AssetId, hash: u64) -> Arrival {
+        let Some(entry) = manifest.get(&asset) else { return Arrival::at(asset, hash) };
+        let every = self.options.arrivals_name_every_form_of_the_manifest;
+        let declared: Vec<String> = self.declared(world, &entry.asset_type).into_iter().filter(|preparer| preparer.built_once()).map(Preparer::label).collect();
+        let names: Vec<&str> = entry.forms.iter().map(|form| form.preparer.as_str()).filter(|preparer| every || declared.iter().any(|label| label == preparer)).collect();
+        let size = if self.options.arrivals_name_the_size_of_the_part_alone { entry.size } else { entry.size_in_force(&names) };
+        let arrival = Arrival::at(asset, hash).sized(size);
+        match entry.forms.iter().find(|form| names.contains(&form.preparer.as_str())) {
+            Some(form) if !self.options.forms_not_named => arrival.with_form(form.hash),
+            _ => arrival,
+        }
     }
 
     /// How long a batch for a world is held back.
@@ -706,6 +1120,11 @@ impl Instance {
         if delay.is_zero() {
             for queue in queues {
                 queue.post(&batch);
+            }
+            // Where the instance stands under a bound on its work at load,
+            // the moment the batch stands on the world's queue is kept.
+            if let Some((bounded, _)) = &self.bound {
+                bounded.posted_now();
             }
             return;
         }
@@ -774,7 +1193,7 @@ impl Instance {
     /// manifest gives, or a failure with its reason, which names no size.
     fn arrival(&mut self, world: u32, manifest: &Domain, asset: AssetId, held: Option<AssetType>) -> Arrival {
         match self.load(world, manifest, asset, held) {
-            Outcome::Hash(hash) => Arrival::at(asset, hash).sized(manifest.get(&asset).map_or(0, |entry| entry.size_in_force(&DECLARED_FORMS))),
+            Outcome::Hash(hash) => self.named(world, manifest, asset, hash),
             Outcome::Failure(code) => Arrival::failed(asset, code),
         }
     }
@@ -807,8 +1226,16 @@ impl Instance {
     /// below a parent whose part the batch brings is loaded again under the
     /// exception of `type_below`.
     fn follow_below(&mut self, world: u32, manifest: &Domain, batch: &mut Vec<Arrival>, followed: &mut BTreeSet<AssetId>, from: AssetId, follow: Follow) {
+        // Control: the closure follows the presentation dependencies with
+        // the domain dependencies, where the instance holds a presentation
+        // manifest. The default follows the domain manifest alone.
+        let presentation = self.presentation.as_ref().filter(|_| self.options.closure_follows_presentation_dependencies).map(|(_, presentation)| presentation.clone());
         let below = |asset: AssetId| -> Vec<(AssetId, AssetId)> {
-            manifest.get(&asset).map_or_else(Vec::new, |entry| entry.dependencies.iter().map(|(dependency, _)| (asset, *dependency)).collect())
+            let mut listed: Vec<AssetId> = manifest.get(&asset).map_or_else(Vec::new, |entry| entry.dependencies.iter().map(|(dependency, _)| *dependency).collect());
+            if let Some(presented) = presentation.as_ref().and_then(|presentation| presentation.get(&asset)) {
+                listed.extend(presented.dependencies.iter().filter(|dependency| !listed.contains(dependency)).copied().collect::<Vec<_>>());
+            }
+            listed.into_iter().map(|dependency| (asset, dependency)).collect()
         };
         let mut open = below(from);
         while let Some((parent, asset)) = open.pop() {
@@ -855,6 +1282,10 @@ impl Instance {
         let mut sorted: Vec<(AssetId, AssetType)> = roots.to_vec();
         sorted.sort_by_key(|(asset, _)| *asset);
         sorted.dedup_by_key(|(asset, _)| *asset);
+        // Under a bound on the work at load, the artifacts of the closures
+        // are asked of the executor at once, and each piece of work is
+        // placed by its estimate: what follows then finds them resident.
+        self.obtain_ahead(world, &manifest, &sorted);
         let mut followed = BTreeSet::new();
         let mut batch = Vec::new();
         for (root, left_as) in &sorted {
@@ -874,6 +1305,11 @@ impl Instance {
             }
         }
         self.post(world, batch);
+        // A form the machine built for this load is kept in its cache of
+        // forms once the batch is posted: no world waits on that write.
+        for (part, preparer, form) in std::mem::take(&mut self.keeps) {
+            self.machine.keep(part, preparer, &form);
+        }
     }
 
     /// The root an arrival names: none but where roots are marked, and none
@@ -1036,6 +1472,15 @@ impl Instance {
         let manifest = self.manifest_of(self.worlds[&world].set);
         let link = self.worlds.get_mut(&world).expect("an attached world");
         let seen = std::mem::replace(&mut link.seen, manifest.clone());
+        // Control: a revision changes an asset whose entry in a
+        // presentation manifest differs. The default reads the domain
+        // manifest alone: a presentation swap is outside the domain.
+        let presented = self.presentation.as_ref().map(|(_, presentation)| presentation.clone());
+        let seen_presented = std::mem::replace(&mut link.seen_presentation, presented.clone());
+        let presented_differently = |asset: &AssetId| {
+            let entry = |presentation: &Option<Arc<Presentation>>| presentation.as_ref().and_then(|presentation| presentation.get(asset).cloned());
+            self.options.presentation_changes_are_revisions && entry(&seen_presented) != entry(&presented)
+        };
         let unwanted_left = self.options.moves_leave_entries_without_a_want;
         let failed_left = self.options.moves_leave_failed_entries;
         let changed: Vec<(AssetId, AssetType)> = link
@@ -1043,7 +1488,7 @@ impl Instance {
             .values()
             .filter(|entry| entry.wanted || !unwanted_left)
             .filter(|entry| !(failed_left && matches!(entry.availability, Availability::Failed(_))))
-            .filter(|entry| seen.get(&entry.asset) != manifest.get(&entry.asset))
+            .filter(|entry| seen.get(&entry.asset) != manifest.get(&entry.asset) || presented_differently(&entry.asset))
             .map(|entry| (entry.asset, entry.asset_type))
             .collect();
         let mut batch = Vec::new();
@@ -1186,6 +1631,11 @@ pub struct Attachment {
     /// asset type whose schema entry it gives it to. The capability runs
     /// them before an arrival is posted to this world.
     pub checks: Vec<(AssetType, AdmissionCheck)>,
+    /// The prepared forms the world's composition declares, each with the
+    /// asset type it is declared for and what prepares it. An asset of such
+    /// a type is available to this world only when the form is resident,
+    /// and an arrival to a hash names the hash of a form built once.
+    pub forms: Vec<(AssetType, Preparer)>,
 }
 
 /// The capability held still: while it lives, the capability handles nothing
@@ -1200,17 +1650,37 @@ pub struct Loader {
     inbox: Sender<Message>,
     thread: Option<JoinHandle<()>>,
     residents: Arc<ResidentStore>,
+    /// The store port of the instance, over its loose store: a host sends
+    /// it read requests of its own, which the file threads serve in the
+    /// order received, among the capability's.
+    port: Port,
+    /// Where the host states a bound on the work at load: what the instance
+    /// measured and ran, which a host reads while the capability works.
+    bounded: Option<Arc<Bounded>>,
 }
 
 impl Loader {
     /// Starts the capability over a loose store, with the revision in place.
     pub fn start(loose: &Path, options: Options) -> Result<Loader, String> {
+        Loader::start_on(loose, Machine::beside(loose), options)
+    }
+
+    /// The same, on a machine whose cache of forms and whose local platform
+    /// name the host states.
+    pub fn start_on(loose: &Path, machine: Machine, options: Options) -> Result<Loader, String> {
         let residents = Arc::new(ResidentStore::default());
         let loose = Arc::new(LooseStore::new(loose));
+        let files = FileThreads::new(2);
+        let port = Port::new(files.port(), loose.clone());
+        // The bound is a setting of the instance: where its host states
+        // one, the instance measures its rates when it starts, and has a
+        // background pool.
+        let bound = machine.bound.map(Bounded::start);
+        let bounded = bound.as_ref().map(|(bounded, _)| bounded.clone());
         let mut instance = Instance {
             stores: vec![loose.clone() as Arc<dyn Store>],
             loose,
-            files: FileThreads::new(2),
+            files,
             residents: residents.clone(),
             options,
             revision: Domain::new(),
@@ -1223,6 +1693,10 @@ impl Loader {
             delayed: Delayed::default(),
             refused: Vec::new(),
             decoders: Vec::new(),
+            machine,
+            presentation: None,
+            bound,
+            keeps: Vec::new(),
         };
         instance.revision = instance.read_revision()?;
         instance.merge();
@@ -1233,7 +1707,19 @@ impl Loader {
             }
         };
         let thread = thread::Builder::new().name("loader".to_string()).spawn(work).map_err(|error| error.to_string())?;
-        Ok(Loader { inbox, thread: Some(thread), residents })
+        Ok(Loader { inbox, thread: Some(thread), residents, port, bounded })
+    }
+
+    /// The store port of the instance, for a host that sends it read
+    /// requests of its own.
+    pub fn port(&self) -> Port {
+        self.port.clone()
+    }
+
+    /// What the instance measured when it started and ran since under the
+    /// bound its host states; none on an instance that is given no bound.
+    pub fn bounded(&self) -> Option<Arc<Bounded>> {
+        self.bounded.clone()
     }
 
     /// Runs on the capability's thread and waits for the result: everything
@@ -1268,6 +1754,7 @@ impl Loader {
                 before: table.clone(),
                 table,
                 seen: instance.current.clone(),
+                seen_presentation: instance.presentation.as_ref().map(|(_, presentation)| presentation.clone()),
                 awaiting_restore: false,
                 held: false,
                 backlog: VecDeque::new(),
@@ -1275,6 +1762,7 @@ impl Loader {
                 posted: BTreeSet::new(),
                 trusted: instance.options.trusts_what_it_posted,
                 checks: attachment.checks,
+                forms: attachment.forms,
             };
             instance.worlds.insert(world, link);
             instance.answer_restore(world, &attachment.restore);
@@ -1298,12 +1786,112 @@ impl Loader {
             if let Some(set) = set {
                 instance.keep_set(set)?;
             }
-            let manifest = instance.manifest_of(set);
-            let entry = manifest.get(&asset).ok_or("the content does not hold the asset")?;
-            if entry.hash != hash {
-                return Err(format!("the content holds the asset at another hash, {}", hex(entry.hash)));
+            // Under the other reading the store alone is asked for the bytes
+            // of the recorded hash, whatever the manifest holds.
+            if !instance.options.confirmation_reads_the_store_alone {
+                let manifest = instance.manifest_of(set);
+                let entry = manifest.get(&asset).ok_or("the content does not hold the asset")?;
+                if entry.hash != hash {
+                    return Err(format!("the content holds the asset at another hash, {}", hex(entry.hash)));
+                }
             }
-            instance.part(hash).map_err(|_| "the part cannot be had".to_string())
+            let part = instance.part(hash).map_err(|_| "the part cannot be had".to_string())?;
+            // Control: the payloads of the asset are confirmed too. The
+            // default confirms what a world reads, and a server holds no
+            // presentation manifest to confirm a payload with.
+            if instance.options.confirmation_confirms_payloads {
+                if instance.presentation.is_none() {
+                    return Err("the instance holds no presentation manifest to confirm the payloads of the asset with".to_string());
+                }
+                for variant in instance.presented(&asset).map_or_else(Vec::new, |presented| presented.variants) {
+                    instance.payload_at(variant.hash).map_err(|_| "a payload of the asset cannot be had".to_string())?;
+                }
+            }
+            Ok(part)
+        })
+    }
+
+    /// The hash that names the content set of the manifest the instance
+    /// holds, for a world created under the content at hand.
+    pub fn content_set(&self) -> u64 {
+        self.call(|instance| instance.content_set())
+    }
+
+    /// The presentation manifest the instance holds, for a presentation
+    /// consumer: none on an instance whose selection holds none.
+    pub fn presentation(&self) -> Option<Presentation> {
+        self.call(|instance| instance.presentation.as_ref().map(|(_, presentation)| (**presentation).clone()))
+    }
+
+    /// A presentation payload, on the request of its consumer, by the hash
+    /// the presentation manifest names: resident, or read and verified. A
+    /// payload that cannot be loaded is reported to the consumer, outside
+    /// the domain: the error says why.
+    pub fn payload(&self, hash: u64) -> Result<Arc<Vec<u8>>, String> {
+        self.call(move |instance| {
+            instance.payload_at(hash).map_err(|code| match code {
+                REASON_ARTIFACT_GONE => "the store holds no bytes under the hash of the payload".to_string(),
+                _ => "the bytes of the payload do not hash to its name".to_string(),
+            })
+        })
+    }
+
+    /// Confirms, for the same restore, the prepared form built once that an
+    /// entry holds beside the hash of its canonical part: the content the
+    /// world would stand under lists that form for the asset, at the
+    /// recorded hash, and the store holds its bytes. A form the content
+    /// holds at another hash, the form a machine built for itself for
+    /// example, or one whose bytes cannot be had, is an error.
+    pub fn confirm_form(&self, set: Option<u64>, asset: AssetId, part: u64, form: u64) -> Result<(), String> {
+        self.call(move |instance| {
+            if let Some(set) = set {
+                instance.keep_set(set)?;
+            }
+            if !instance.options.confirmation_reads_the_store_alone {
+                let manifest = instance.manifest_of(set);
+                let entry = manifest.get(&asset).ok_or("the content does not hold the asset")?;
+                if !entry.forms.iter().any(|listed| listed.hash == form) {
+                    let held: Vec<String> = entry.forms.iter().map(|listed| hex(listed.hash)).collect();
+                    return Err(format!("the content holds no prepared form of the asset at that hash, and holds [{}]", held.join(", ")));
+                }
+            }
+            instance.form_at(part, form).map_err(|_| "the prepared form cannot be had".to_string())
+        })
+    }
+
+    /// Makes resident what one record of a replay names: for each arrival
+    /// to a hash, the canonical part and the prepared form built once, each
+    /// by the hash the record names, read from the store whatever manifest
+    /// the instance holds. A replaying world receives its arrivals from its
+    /// recording, and from no loading capability. Where a part or a form
+    /// cannot be had the replay is refused at that record: the error is the
+    /// hash. `forms` are the prepared forms the replaying world's
+    /// composition declares: where a record names no form for an asset of
+    /// such a type, which a control alone gives, the form is the one the
+    /// manifest the world stands under lists.
+    pub fn replay(&self, set: Option<u64>, record: &Record, forms: &[(AssetType, Preparer)]) -> Result<(), u64> {
+        let (arrivals, forms) = (record.arrivals.clone(), forms.to_vec());
+        self.call(move |instance| {
+            if let Some(set) = set {
+                instance.keep_set(set).map_err(|_| set)?;
+            }
+            for arrival in &arrivals {
+                let Outcome::Hash(part) = arrival.outcome else { continue };
+                instance.part(part).map_err(|_| part)?;
+                if let Some(form) = arrival.form {
+                    instance.form_at(part, form).map_err(|_| form)?;
+                    continue;
+                }
+                let manifest = instance.manifest_of(set);
+                let Some(entry) = manifest.get(&arrival.asset).filter(|entry| entry.hash == part) else { continue };
+                for (_, preparer) in forms.iter().filter(|(declared, preparer)| declared.stable_name() == entry.asset_type && preparer.built_once()) {
+                    let label = preparer.label();
+                    if let Some(listed) = entry.forms.iter().find(|listed| listed.preparer == label) {
+                        instance.form_at(part, listed.hash).map_err(|_| listed.hash)?;
+                    }
+                }
+            }
+            Ok(())
         })
     }
 

@@ -185,7 +185,7 @@ fn a_restore_under_the_recorded_content_confirms_every_available_entry_and_nothi
     };
     let links = Links::new(parts.clone());
     links.queue.post(&[Arrival::at(U, a)]);
-    let request = Restore::Continue { confirm: &confirm, dropped: &[] };
+    let request = Restore::Continue { confirm: &confirm, confirm_form: None, dropped: &[] };
     let mut world = World::restore(config(&[PARAMETERS, SECOND]), &save, Vec::new(), links, request).expect("the restore is admitted");
     assert_eq!(*asked.lock().expect("never poisoned"), vec![(A, a), (B, b)], "an entry that holds no want is confirmed as the others are");
     assert_eq!(*world.history(), History::Continues);
@@ -198,7 +198,7 @@ fn a_restore_under_the_recorded_content_confirms_every_available_entry_and_nothi
     let refuse = |asset: AssetId, hash: u64| -> Result<Arc<Resident>, String> {
         if asset == B { Err("the content names another hash".to_string()) } else { parts.get(hash).ok_or_else(String::new) }
     };
-    let request = Restore::Continue { confirm: &refuse, dropped: &[] };
+    let request = Restore::Continue { confirm: &refuse, confirm_form: None, dropped: &[] };
     let refused = World::restore(config(&[PARAMETERS, SECOND]), &save, Vec::new(), Links::new(parts.clone()), request).err();
     assert_eq!(refused, Some(Refusal::Content { asset: B, hash: b, reason: "the content names another hash".to_string() }));
 }
@@ -229,10 +229,10 @@ fn a_restore_into_another_composition_reads_the_type_each_entry_holds() {
     assert!(matches!(silent.history(), History::New(named) if named.dropped.is_empty()));
     // The rule holds as well under the recorded content.
     let confirm = |_: AssetId, hash: u64| parts.get(hash).ok_or_else(String::new);
-    let request = Restore::Continue { confirm: &confirm, dropped: &[] };
+    let request = Restore::Continue { confirm: &confirm, confirm_form: None, dropped: &[] };
     let refused = World::restore(config(&[PARAMETERS]), &save, Vec::new(), Links::new(parts.clone()), request).err();
     assert_eq!(refused, Some(Refusal::TypeLacking(SECOND)));
-    let request = Restore::Continue { confirm: &confirm, dropped: &[SECOND] };
+    let request = Restore::Continue { confirm: &confirm, confirm_form: None, dropped: &[SECOND] };
     let links = Links::new(parts.clone());
     links.queue.post(&[Arrival::at(U, a)]);
     let mut recorded = World::restore(config(&[PARAMETERS]), &save, Vec::new(), links, request).expect("the request names the type as dropped");
@@ -403,7 +403,7 @@ fn each_system_is_the_maker_of_the_want_it_makes_and_two_systems_of_one_contribu
     assert!(world.log().iter().all(|record| record.commands.is_empty()), "what a system does stands in no input record");
     // A save holds the stable name of a system and the size of an entry.
     let confirm = |_: AssetId, hash: u64| parts.get(hash).ok_or_else(|| "the part cannot be had".to_string());
-    let request = Restore::Continue { confirm: &confirm, dropped: &[] };
+    let request = Restore::Continue { confirm: &confirm, confirm_form: None, dropped: &[] };
     let restored = World::restore(configured(Rules::default()), &world.save(), Vec::new(), Links::new(parts.clone()), request).expect("the restore is admitted");
     assert_eq!(restored.typed_table_bytes(), world.typed_table_bytes());
     assert_eq!((restored.size(A), restored.entry(A)), (Some(64), world.entry(A)));
@@ -486,4 +486,72 @@ fn a_world_event_is_an_element_of_the_log_and_the_header_of_a_save_holds_the_bud
     assert_eq!(log.len(), 1);
     let (_, _, save) = run(Rules { save_holds_the_budget_of_creation: true, ..Rules::default() });
     assert_eq!(save_header(&save).expect("a header").budget, Some(1_000));
+}
+
+/// A store that hands the prepared form of a part: the bytes under the hash
+/// of the form an entry names, and none where it names none.
+struct WithForms {
+    parts: Arc<Parts>,
+    forms: BTreeMap<u64, Arc<Vec<u8>>>,
+}
+
+impl Residents for WithForms {
+    fn get(&self, hash: u64) -> Option<Arc<Resident>> {
+        self.parts.get(hash)
+    }
+
+    fn form(&self, _part: u64, named: Option<u64>) -> Option<Arc<Vec<u8>>> {
+        self.forms.get(&named?).cloned()
+    }
+}
+
+/// A world whose composition declares a prepared form built once for the
+/// second type: the entry holds the hash of the form its arrival named, a
+/// save holds it, the consumer of the form is handed the bytes under that
+/// hash at every tick, and a restore under the recorded content confirms the
+/// form at its recorded hash or is refused, naming the asset and that hash.
+#[test]
+fn a_form_built_once_is_handed_by_its_hash_and_confirmed_at_a_restore_under_the_recorded_content() {
+    let (parts, (a, _, t)) = parts();
+    let form = b"the form built once".to_vec();
+    let built = fnv1a(&form);
+    let store = Arc::new(WithForms { parts: parts.clone(), forms: BTreeMap::from([(built, Arc::new(form))]) });
+    let declaring = || {
+        let mut config = config(&[PARAMETERS, SECOND]);
+        config.reads_the_forms_of = vec![SECOND];
+        config
+    };
+    let mut first = Record::arrivals(2, vec![Arrival::at(A, a).sized(10), Arrival::at(T, t).with_form(built).sized(30)]);
+    first.commands = vec![want(A, PARAMETERS, Policy::Required), want(T, SECOND, Policy::Required)];
+    let mut world = World::new(declaring(), vec![first], Links::new(store.clone()));
+    assert!(!step(&mut world, 4).gated);
+    // The consumer runs once in every tick, for each available entry whose
+    // type has the form: nothing at tick 1, the form of `T` from tick 2 on.
+    assert_eq!(world.handed(), [(2, T, Some(built)), (3, T, Some(built)), (4, T, Some(built))]);
+    let save = world.save();
+    let confirm = |_: AssetId, hash: u64| parts.get(hash).ok_or_else(|| "the part cannot be had".to_string());
+    let asked = std::sync::Mutex::new(Vec::new());
+    let confirm_form = |asset: AssetId, part: u64, form: u64| -> Result<(), String> {
+        asked.lock().expect("never poisoned").push((asset, part, form));
+        Ok(())
+    };
+    let request = Restore::Continue { confirm: &confirm, confirm_form: Some(&confirm_form), dropped: &[] };
+    let mut restored = World::restore(declaring(), &save, Vec::new(), Links::new(store.clone()), request).expect("the restore is admitted");
+    assert_eq!(*asked.lock().expect("never poisoned"), vec![(T, t, built)], "the form is confirmed at its recorded hash, with the hash of its part");
+    assert_eq!(*restored.history(), History::Continues);
+    assert!(!step(&mut restored, 1).gated);
+    assert_eq!(restored.handed(), [(5, T, Some(built))]);
+    // A form that is not confirmed refuses the restore by its recorded hash.
+    let refuse = |_: AssetId, _: u64, _: u64| -> Result<(), String> { Err("the form cannot be had".to_string()) };
+    let request = Restore::Continue { confirm: &confirm, confirm_form: Some(&refuse), dropped: &[] };
+    let refused = World::restore(declaring(), &save, Vec::new(), Links::new(store.clone()), request).err();
+    assert_eq!(refused, Some(Refusal::Content { asset: T, hash: built, reason: "the form cannot be had".to_string() }));
+    // A request that gives nothing to confirm a form with confirms none.
+    let request = Restore::Continue { confirm: &confirm, confirm_form: None, dropped: &[] };
+    assert!(matches!(World::restore(declaring(), &save, Vec::new(), Links::new(store.clone()), request), Err(Refusal::Content { asset: T, .. })));
+    // Under the control the confirmation reads the hash of the part alone.
+    let mut part_alone = declaring();
+    part_alone.rules.confirmation_reads_the_part_alone = true;
+    let request = Restore::Continue { confirm: &confirm, confirm_form: Some(&refuse), dropped: &[] };
+    assert!(World::restore(part_alone, &save, Vec::new(), Links::new(store), request).is_ok());
 }

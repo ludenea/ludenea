@@ -28,17 +28,24 @@
 //! ceiling. Each prints its facts and a summary and writes its full log to a
 //! file. `--gate-form-reader` is the reader of a save that the first of
 //! them runs as a process of its own.
+//!
+//! A fourth such mode, `--load-bound [repetitions] [small]`, runs the row on
+//! the bound above which work at load leaves the executor: six cases, each
+//! repetition of a case a process of its own, started with
+//! `--load-bound-case`.
 
 mod decoder_ceiling;
 mod enumeration;
 mod families;
 mod families_batches;
+mod families_forms;
 mod families_readings;
 mod families_same_harness;
 mod gate_cost;
 mod gate_form;
 mod groups_cost;
 mod large_table;
+mod load_bound;
 mod magnitude;
 mod oracle;
 mod play;
@@ -98,6 +105,8 @@ const FAMILIES: &[Family] = &[
     ("system-maker", families_readings::system_maker),
     ("core-want-type", families_readings::core_want_type),
     ("restore-batch", families_readings::restore_batch),
+    ("prepared-form", families_forms::prepared_form),
+    ("dedicated-server", families_forms::dedicated_server),
     ("batch-state", families_batches::batch_state),
     ("failed-replacement", families_batches::failed_replacement),
 ];
@@ -584,6 +593,8 @@ fn main() {
             return;
         }
         Some("--decoder-ceiling") => return decoder_ceiling::mode(&arguments[1..]),
+        Some("--load-bound") => return load_bound::mode(&arguments[1..]),
+        Some("--load-bound-case") => return print!("{}", load_bound::child(&arguments[1..])),
         Some("--gate-form") => return gate_form::mode(&arguments[1..]),
         Some("--gate-form-reader") => return print!("{}", gate_form::child(&arguments[1..])),
         Some("--groups-cost") => return groups_cost::mode(&arguments[1..]),
@@ -664,6 +675,57 @@ mod tests {
         let reports: Vec<&str> = log.lines().filter(|line| line.trim_start().starts_with("report: ")).collect();
         let count = |words: &str| reports.iter().filter(|line| line.contains(words)).count();
         assert_eq!((count("the stand-in pipeline, after the save"), count("failed, with the diagnostic"), count("the loading capability:")), (24, 2, 19), "{reports:#?}");
+    }
+
+    /// The two families on a prepared form built once and on a dedicated
+    /// server, driven with no oracle: every control gives another run than
+    /// its scenario's own, on each world the sheet names it for, and the
+    /// harness reports beside any oracle what their sheet asks for. A reader
+    /// of a save and a world that replays a recording run inside the test
+    /// process. The test compares nothing with an oracle.
+    #[test]
+    fn the_families_on_a_form_built_once_and_on_a_dedicated_server_are_driven_with_their_reports() {
+        let mut settings = settings("forms");
+        settings.size = Size::Small;
+        settings.workers = vec![1, 4];
+        let (log, clean) = drive(&settings, &["prepared-form".to_string(), "dedicated-server".to_string()], false);
+        let _ = std::fs::remove_dir_all(&settings.scratch);
+        assert!(clean, "{log}");
+        let controls: Vec<&str> = log.lines().filter(|line| line.contains("] gives another run: ") || line.contains("GIVES THE RUN OF THE SCENARIO ITSELF")).collect();
+        let unchanged: Vec<&&str> = controls.iter().filter(|line| line.contains("GIVES THE RUN OF THE SCENARIO ITSELF")).collect();
+        assert!(controls.len() == 30 && unchanged.is_empty(), "{} controls driven; those that give their scenario's own run: {unchanged:#?}", controls.len());
+        // The control on the hash that names a content set changes no
+        // state: it shows in the headers of the two saves alone.
+        assert!(controls.iter().any(|line| line.contains("covers every manifest") && line.contains("names another content set")), "{controls:#?}");
+        // What a world gave: a replay refused at the record that names a
+        // form the store does not hold, a restore refused for the recorded
+        // hash of a form, and a first load that fails where the form is gone.
+        let gave = |scenario: &str, words: &str| {
+            let from = log.lines().position(|line| line.trim() == scenario).unwrap_or_else(|| panic!("{scenario} is driven"));
+            log.lines().skip(from + 1).take_while(|line| line.starts_with("    ")).any(|line| line.contains(words))
+        };
+        assert!(gave("prepared-form/replay-beside-the-machine-own-form/no-set [no-set]", "replay runs"));
+        assert!(gave("prepared-form/replay-beside-the-machine-own-form/no-set [no-set]", "handed [M M.1:built]"));
+        assert!(gave("prepared-form/replay-without-the-form-built-once/under-set [under-set]", "replay refused 3 hash M.1:built"));
+        assert!(gave("prepared-form/own-build-names-its-own-form [no-set]", "handed [M M.1:local]"));
+        assert!(gave("prepared-form/form-built-once-gone-from-the-store [no-set]", "arrival M failed artifact-gone"));
+        assert!(gave("prepared-form/restore-refused-own-build [world]", "restore refused hash M M.1:built"));
+        assert!(gave("prepared-form/content-at-hand-own-build [world]", "restore new-history differed M"));
+        assert!(gave("prepared-form/counted-with-its-part [world]", "tick 6: record [arrival M M.2 form M.2:built] rejected [M M.2]"));
+        assert!(gave("prepared-form/first-load-over-the-budget-by-its-form [without-the-form]", "[M second available M.1: source:host required]"));
+        assert!(gave("dedicated-server/same-records [server]", "tick 9: record [arrival T T.2] events [changed T T.1 T.2]"));
+        assert!(gave("dedicated-server/client-save-read-by-the-server [world]", "restore continues"));
+        // What the harness reports beside the oracle.
+        let reported = |words: &str| log.lines().any(|line| line.trim_start().starts_with("report: ") && line.contains(words));
+        assert!(reported("replay-beside-the-machine-own-form/no-set [no-set] the replay runs, and its state hashes are the recorded world's at every tick"), "{log}");
+        assert!(reported("own-build-names-its-own-form: on the instance 0, the hash of the machine's own manifest is not the producer's"), "{log}");
+        assert!(reported("the state hashes of the world under-own-set and of the world under-set of prepared-form/recorded-run differ at the ticks 3, 4, 5, 6"), "{log}");
+        assert!(reported("same-records [server] the loading capability of the process read a presentation manifest 0 times and a payload 0 times"), "{log}");
+        assert!(reported("same-records [client] the loading capability of the process read a presentation manifest 3 times and a payload 5 times"), "{log}");
+        let received = "the presentation consumer received: for T after tick 3, payload T.1 1; for U after tick 3, payload U.1 1; for T after tick 7, payload T.1 2; for T after tick 9, payload T.2 1; it was refused: for V after tick 5";
+        assert!(reported(received), "{log}");
+        assert!(log.contains("dedicated-server/same-records: the state hashes of the worlds client and server are equal at every tick"), "{log}");
+        assert!(log.contains("dedicated-server/under-the-domain-set: the state hashes of the worlds client and server are equal at every tick"), "{log}");
     }
 
     /// The other reading of a step without waiting that follows the record of

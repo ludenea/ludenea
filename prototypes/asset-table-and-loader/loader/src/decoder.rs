@@ -523,7 +523,7 @@ mod tests {
         let queue = Arc::new(ArrivalQueue::default());
         let unanswered = vec![(SMALL, Parameters), (LARGE, Parameters)];
         let entries = unanswered.iter().map(|(asset, asset_type)| EntryView { asset: *asset, asset_type: *asset_type, availability: Availability::Unavailable, wanted: true }).collect();
-        let extract = loader.attach(Attachment { queue: queue.clone(), set: None, entries, unanswered, restore: Vec::new(), standing: Vec::new(), checks: Vec::new() }).expect("the world is attached");
+        let extract = loader.attach(Attachment { queue: queue.clone(), set: None, entries, unanswered, restore: Vec::new(), standing: Vec::new(), checks: Vec::new(), forms: Vec::new() }).expect("the world is attached");
         loader.settle();
         let mut posted = BTreeMap::new();
         queue.drain_into(&mut posted);

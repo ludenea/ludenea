@@ -12,15 +12,17 @@ use std::path::{Path, PathBuf};
 use std::process::Command as Process;
 use std::sync::{Arc, OnceLock};
 
-use asset_loader::{Attachment, Cause, Hold, Loader, Options, ResidentStore, Withheld};
+use asset_loader::{Attachment, Cause, Hold, Loader, Machine, Options, ResidentStore, Withheld};
 use asset_pipeline::{Cache, Pass};
-use content_store::set_hash;
-use prototype_core::table::{AdmissionCheck, ArrivalQueue, AssetId, AssetType, Policy, Record, Residents, Rules, SystemName, decode_log_under, encode_log_under};
+use prototype_core::forms::{Preparer, local_platform};
+use prototype_core::table::{
+    AdmissionCheck, ArrivalQueue, AssetId, AssetType, Availability, EntryView, Policy, Record, Residents, Rules, SystemName, decode_log_under, encode_log_under,
+};
 use prototype_core::world::{Act as SystemAct, Extraction, History, Links, Mode, Refusal, Restore, Size, System, Wait, World, WorldConfig, save_header};
 use reference_workload::run_hash;
 
-use crate::oracle::{Element, Expected, Observed, SCRIPTED_SYSTEM, SCRIPTED_SYSTEM_CONTRIBUTOR, Stated, Verdict, compare, element, observed_text, parse_each, stated_entries, system_act};
-use crate::run::{ADMISSION_BOUND, BASE, Claim, Family, Outcome, Settings, Variant, import, pass_of_a_save};
+use crate::oracle::{Element, Expected, Observed, Replay, SCRIPTED_SYSTEM, SCRIPTED_SYSTEM_CONTRIBUTOR, Stated, Verdict, compare, element, observed_text, parse_each, stated_entries, system_act};
+use crate::run::{ADMISSION_BOUND, BASE, Claim, Family, Outcome, Settings, Variant, pass_of_a_save};
 use crate::sequential::oracle_with_kills;
 
 /// A change of the harness itself, for a control no rule of the build names.
@@ -37,6 +39,9 @@ pub enum Tweak {
     TypesFromTheManifest,
     /// The entries of a type the composition lacks are dropped unnamed.
     DropInSilence,
+    /// A server's selection holds the canonical parts alone, without the
+    /// prepared forms built once.
+    ServerSelectionWithoutTheForms,
     /// The other reading of a sheet's "Record of tick n: ... A step without
     /// waiting", where steps stand in a row: that step is the one that runs
     /// tick n, and no step asks for the next tick before what the scenario
@@ -137,6 +142,12 @@ pub enum Move {
     /// A package of these contents is mounted, with leave to override.
     Mount(Vec<&'static str>),
     Unmount,
+    /// A presentation revision: the payload of each of these contents is
+    /// at the revision number given, and no canonical part changes. It is
+    /// put in place on the instances whose selection holds the presentation
+    /// manifest: a server's selection holds nothing that it changes, and
+    /// nothing is put in place there.
+    PayloadRevision(Vec<(&'static str, u32)>),
 }
 
 /// The content set a world is created under.
@@ -195,6 +206,18 @@ pub struct WorldPlan {
     /// wrote the log was, with no loading capability and no scripted source,
     /// its records the log's, read back from its bytes.
     pub alone: bool,
+    /// The prepared forms the composition declares, each with the asset
+    /// type it is declared for and what prepares it. Where it declares one,
+    /// the harness adds the consumer of the form, `reader`, to the schedule
+    /// of the world.
+    pub forms: Vec<(AssetType, Preparer)>,
+    /// The input log of the world is a recording: a scenario replays it in
+    /// a process beside.
+    pub recorded: bool,
+    /// The stand-in presentation consumer stands in the process of the
+    /// world, and in no world: after each tick it reads the extracted state
+    /// and asks the loading capability of the process for payloads.
+    pub presented: bool,
 }
 
 impl WorldPlan {
@@ -217,7 +240,36 @@ impl WorldPlan {
             saves: Vec::new(),
             replays_the_log_of: None,
             alone: false,
+            forms: Vec::new(),
+            recorded: false,
+            presented: false,
         }
+    }
+
+    /// The process of the world holds the stand-in presentation consumer.
+    pub fn with_a_presentation_consumer(mut self) -> WorldPlan {
+        self.presented = true;
+        self
+    }
+
+    /// The composition declares a prepared form for an asset type: the
+    /// consumer of the form stands in the schedule of the world.
+    pub fn declaring_the_form(mut self, asset_type: AssetType, preparer: Preparer) -> WorldPlan {
+        self.forms.push((asset_type, preparer));
+        self
+    }
+
+    /// The composition declares no prepared form, and the world has no
+    /// consumer of a form.
+    pub fn declaring_no_form(mut self) -> WorldPlan {
+        self.forms.clear();
+        self
+    }
+
+    /// The input log of the world is a recording.
+    pub fn recorded(mut self) -> WorldPlan {
+        self.recorded = true;
+        self
     }
 
     pub fn named(mut self, name: &str) -> WorldPlan {
@@ -358,6 +410,60 @@ impl WorldPlan {
     }
 }
 
+/// Which build of a content the manifest of an instance is, in a family
+/// whose content holds a prepared form built once: the producer's, prepared
+/// under the fixed platform name, or the machine's own, the same sources
+/// prepared under the local platform name of the machine that runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Build {
+    Producer,
+    Own,
+}
+
+/// The store of an instance in such a family: the manifest the instance
+/// holds, and which forms the store holds beside the parts. The producer's
+/// store holds the forms built once under the producer's manifest; the
+/// machine's own store holds the machine's own forms under the machine's own
+/// manifest, and no bytes under the hash of a form built once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Prepared {
+    pub manifest: Build,
+    /// The store holds the forms built once, each under its hash.
+    pub built_once: bool,
+    /// The store holds the machine's own forms, each under its own hash,
+    /// and the machine's cache of forms holds each under the key of its
+    /// part's hash and of what prepares it.
+    pub own: bool,
+}
+
+impl Prepared {
+    /// The producer's store.
+    pub const PRODUCER: Prepared = Prepared { manifest: Build::Producer, built_once: true, own: false };
+    /// The machine's own store.
+    pub const OWN: Prepared = Prepared { manifest: Build::Own, built_once: false, own: true };
+
+    /// The same store, the instance holding the manifest of this build.
+    pub const fn under(mut self, manifest: Build) -> Prepared {
+        self.manifest = manifest;
+        self
+    }
+
+    /// The artifacts of the producer's store and, beside them, the
+    /// machine's own forms.
+    pub const fn beside_the_own_forms(mut self) -> Prepared {
+        self.own = true;
+        self
+    }
+
+    /// The parts with the machine's own forms, and no bytes under the hash
+    /// of a form built once.
+    pub const fn without_the_forms_built_once(mut self) -> Prepared {
+        self.built_once = false;
+        self.own = true;
+        self
+    }
+}
+
 /// The store a live loading capability answers from.
 #[derive(Clone, Default)]
 pub struct Store {
@@ -367,6 +473,19 @@ pub struct Store {
     pub cut: Vec<&'static str>,
     /// A later revision put in place before any world is created.
     pub then: Vec<&'static str>,
+    /// In a family whose content holds a form built once: per instance, in
+    /// their order, the manifest it holds and the forms its store holds. An
+    /// instance that has none here stands over the producer's store.
+    pub prepared: Vec<Prepared>,
+    /// The instances that stand over a server's selection of the content:
+    /// the domain manifest, the parts and the forms built once, and nothing
+    /// else. Every other instance stands over the whole of what a pass
+    /// wrote, a client's selection where the pass gave a presentation
+    /// manifest.
+    pub servers: Vec<usize>,
+    /// The contents whose payload artifact is cut short under its name, in
+    /// the stores that hold it.
+    pub cut_payloads: Vec<&'static str>,
 }
 
 /// The save a reader loads, and the request it loads it by.
@@ -380,6 +499,10 @@ pub struct Read {
     pub recorded: bool,
     /// The asset types the request names as dropped.
     pub dropped: Vec<AssetType>,
+    /// What is read is no save: it is the recording of that world, its
+    /// input log, which the scenario's world replays in a process beside,
+    /// from its creation.
+    pub recording: bool,
 }
 
 /// What the harness compares beside the oracle.
@@ -393,6 +516,14 @@ pub enum Check {
     /// The reader's state hashes are those of the run that saved, from its
     /// first tick on.
     ContinuesTheSavedRun,
+    /// The harness reports, beside any oracle and compared with nothing,
+    /// whether the state hashes of worlds of the scenario are those of
+    /// worlds of another scenario, which saved a world after a tick: that
+    /// scenario, that tick, and the pairs of worlds, this scenario's first.
+    ReportAgainstTheRunOf(&'static str, u32, &'static [(&'static str, &'static str)]),
+    /// The headers of the saves of two worlds of the scenario name the same
+    /// content set.
+    SameSetInTheSaves(&'static str, &'static str),
 }
 
 /// The same scenario with a rule changed: a control, which must differ from
@@ -430,6 +561,11 @@ pub struct Scenario {
     /// what the stand-in pipeline gave after each save and what the loading
     /// capability obtained for a world and did not post to it.
     pub reported: bool,
+    /// The harness reports, beside any oracle and compared with nothing,
+    /// how many times the loading capability of each process read a
+    /// presentation manifest and a payload, and what the presentation
+    /// consumer of a process received and was refused, with the tick of each.
+    pub presentation_reported: bool,
 }
 
 impl Scenario {
@@ -446,7 +582,28 @@ impl Scenario {
             checks: Vec::new(),
             own_instances: false,
             reported: false,
+            presentation_reported: false,
         }
+    }
+
+    /// The harness reports what each process read of a presentation
+    /// manifest and what its presentation consumer received.
+    pub fn reporting_the_presentation(mut self) -> Scenario {
+        self.presentation_reported = true;
+        self
+    }
+
+    /// These instances stand over a server's selection of the content.
+    pub fn with_a_server_on(mut self, instances: &[usize]) -> Scenario {
+        self.live.as_mut().expect("a live scenario").servers = instances.to_vec();
+        self
+    }
+
+    /// The payload artifacts of these contents are cut short under their
+    /// name, from the start, in the stores that hold them.
+    pub fn cut_payloads(mut self, contents: &[&'static str]) -> Scenario {
+        self.live.as_mut().expect("a live scenario").cut_payloads = contents.to_vec();
+        self
     }
 
     /// Each world of the scenario stands on an instance of its own: the
@@ -489,7 +646,31 @@ impl Scenario {
     }
 
     pub fn reading(mut self, of: &'static str, at: u32, recorded: bool, dropped: &[AssetType]) -> Scenario {
-        self.read = Some(Read { of, world: "world", at, recorded, dropped: dropped.to_vec() });
+        self.read = Some(Read { of, world: "world", at, recorded, dropped: dropped.to_vec(), recording: false });
+        self
+    }
+
+    /// The world of the scenario replays the recording of a world of
+    /// another scenario, in a process beside: it is made by the same
+    /// creation, over the store of its instance, and receives its arrivals
+    /// from the recording and from no loading capability.
+    pub fn replaying_the_recording(mut self, of: &'static str, world: &'static str) -> Scenario {
+        self.read = Some(Read { of, world, at: 0, recorded: true, dropped: Vec::new(), recording: true });
+        self
+    }
+
+    /// In a family whose content holds a form built once: the manifest each
+    /// instance of the scenario holds and the forms its store holds, in the
+    /// order of the instances.
+    pub fn over(mut self, prepared: &[Prepared]) -> Scenario {
+        self.live.as_mut().expect("a live scenario").prepared = prepared.to_vec();
+        self
+    }
+
+    /// The scenario runs the statement of another: its worlds are judged by
+    /// the oracle of that scenario's name.
+    pub fn stated_by(mut self, oracle: &str) -> Scenario {
+        self.oracle = oracle.to_string();
         self
     }
 
@@ -593,6 +774,51 @@ struct Instance {
     loader: Loader,
     /// The set of the first revision.
     first: u64,
+    /// Where the instance stands over a server's selection: the loose store
+    /// of that selection, which its capability reads.
+    selected: Option<PathBuf>,
+}
+
+/// The stand-in presentation consumer of a process: it stands in no world.
+/// After each tick it reads the extracted state and, for each asset the
+/// table holds available for which the presentation manifest holds an
+/// entry, asks the loading capability for the payload of the variant `full`
+/// of that asset and of each of its presentation dependencies. It makes no
+/// want and writes nothing to a world. It asks again for an asset where the
+/// manifest names another payload than the one it last asked for.
+#[derive(Default)]
+struct Consumer {
+    /// Per asset, the hash of the payload last asked for.
+    asked: BTreeMap<AssetId, u64>,
+    /// The payloads received: the tick, the asset, and what the payload says.
+    received: Vec<(u32, AssetId, String)>,
+    /// The payloads refused: the tick, the asset, and why.
+    refused: Vec<(u32, AssetId, String)>,
+}
+
+impl Consumer {
+    fn read(&mut self, tick: u32, entries: &[EntryView], loader: &Loader) {
+        let Some(presentation) = loader.presentation() else { return };
+        let mut wanted: Vec<AssetId> = Vec::new();
+        for entry in entries.iter().filter(|entry| matches!(entry.availability, Availability::Available(_))) {
+            let Some(presented) = presentation.get(&entry.asset) else { continue };
+            for asset in std::iter::once(&entry.asset).chain(&presented.dependencies) {
+                if !wanted.contains(asset) {
+                    wanted.push(*asset);
+                }
+            }
+        }
+        for asset in wanted {
+            let variant = presentation.get(&asset).and_then(|presented| presented.variants.iter().find(|variant| variant.name == asset_pipeline::VARIANT));
+            let Some(variant) = variant.filter(|variant| self.asked.get(&asset) != Some(&variant.hash)) else { continue };
+            self.asked.insert(asset, variant.hash);
+            match loader.payload(variant.hash) {
+                // A payload says what it was made for, before its padding.
+                Ok(bytes) => self.received.push((tick, asset, String::from_utf8_lossy(bytes.split(|byte| *byte == 0).next().unwrap_or(&[])).into_owned())),
+                Err(reason) => self.refused.push((tick, asset, reason)),
+            }
+        }
+    }
 }
 
 /// What a play gathers as its content moves and at its end: the count of
@@ -627,6 +853,13 @@ struct Running {
     hold: Option<Hold>,
     stopped: bool,
     saves: Vec<(u32, Vec<u8>)>,
+    /// The recording the world replays in a process beside, where it
+    /// replays one: its records, which stand in the world's script. Before
+    /// each tick the host has the capability make resident what the record
+    /// of that tick names, by the hashes it names.
+    recording: Option<Vec<Record>>,
+    /// The presentation consumer of the world's process, where it has one.
+    consumer: Option<Consumer>,
 }
 
 impl Running {
@@ -647,6 +880,7 @@ impl Running {
         self.observed.state = self.world.state_hashes();
         self.observed.log = self.world.log().to_vec();
         self.observed.events = self.world.events().to_vec();
+        self.observed.handed = self.world.handed().to_vec();
         self.observed.refusals = self.world.refusals().to_vec();
         self.observed.verdict = match self.world.history() {
             History::Undecided => None,
@@ -708,6 +942,9 @@ impl Player<'_> {
         config.content_set = set;
         config.budget = plan.budget;
         config.systems = plan.systems.iter().map(|system| system_of(system, plan.offset, names)).collect();
+        // The consumer of a form, `reader`, stands in the schedule of a
+        // world whose composition declares one.
+        config.reads_the_forms_of = plan.forms.iter().map(|(asset_type, _)| *asset_type).collect();
         config.rules = self.rules;
         config.set_under_the_hash = self.tweak(Tweak::SetUnderTheHash);
         config
@@ -716,12 +953,15 @@ impl Player<'_> {
     /// Makes the world of a plan: a new one, or the save a reader loads.
     fn make(&self, plan: &WorldPlan, workers: usize, set: Option<u64>, script: Vec<Record>, links: Links, loader: Option<&Loader>) -> Result<World, Refusal> {
         let config = self.configure(plan, workers, set);
-        let Some(read) = &self.scenario.read else { return Ok(World::new(config, script, links)) };
+        // A world that replays a recording is made by the same creation: it
+        // is a new world, and no save is read.
+        let Some(read) = self.scenario.read.as_ref().filter(|read| !read.recording) else { return Ok(World::new(config, script, links)) };
         let saved = self.saved.expect("a reader is given the save it reads");
         let loader = loader.expect("a reader loads its save over a store");
         if read.recorded && !self.tweak(Tweak::AsContentAtHand) {
             let confirm = |asset: AssetId, hash: u64| loader.confirm(set, asset, hash);
-            return World::restore(config, &saved.bytes, script, links, Restore::Continue { confirm: &confirm, dropped: &read.dropped });
+            let confirm_form = |asset: AssetId, part: u64, form: u64| loader.confirm_form(set, asset, part, form);
+            return World::restore(config, &saved.bytes, script, links, Restore::Continue { confirm: &confirm, confirm_form: Some(&confirm_form), dropped: &read.dropped });
         }
         let manifest = loader.manifest(None);
         let types_from = |asset: AssetId| manifest.get(&asset).and_then(|entry| AssetType::named(&entry.asset_type));
@@ -746,7 +986,7 @@ impl Player<'_> {
         config.rules = self.replay_rules;
         let world = World::new(config, records, links);
         let observed = Observed { first: 0, creation: world.table_bytes(), creation_entries: stated_entries(&world.typed_table_bytes()), ..Observed::default() };
-        let mut world = Running { plan: plan.clone(), world, queue, set: None, observed, hold: None, stopped: false, saves: Vec::new() };
+        let mut world = Running { plan: plan.clone(), world, queue, set: None, observed, hold: None, stopped: false, saves: Vec::new(), recording: None, consumer: None };
         for tick in 1..=plan.to {
             if let Some(awaited) = world.advance(tick) {
                 world.observed.stuck = Some((tick, awaited));
@@ -756,6 +996,48 @@ impl Player<'_> {
         world.finish();
         let stated_as = plan.stated_as.clone().unwrap_or_else(|| plan.name.clone());
         PlayedWorld { name: plan.name.clone(), stated_as, judged: plan.judged, to: plan.to, observed: world.observed, replays: None, saves: Vec::new(), kills: Vec::new() }
+    }
+
+    /// Makes the store of one instance of a family whose content holds a
+    /// form built once, from the producer's store the stand-in pipeline
+    /// just wrote in `directory/store`: the manifest the instance holds and
+    /// the forms its store holds are those its scenario states. The
+    /// machine's own build is one more pass of the pipeline over the same
+    /// sources, under the local platform name. Wherever the store holds a
+    /// machine's own form, that form is also placed in the machine's cache
+    /// of forms, under the key of the part's hash and of what prepares it.
+    /// Returns whether the hash of the machine's own manifest is the
+    /// producer's, where the machine's own build was made.
+    fn prepare_the_store(&self, prepared: Prepared, directory: &Path, cache: &Cache, machine: &Machine) -> Option<bool> {
+        let producer = cache.revision().expect("the producer's revision is in place");
+        let forms = |domain: &content_store::Domain| -> Vec<(u64, u64)> { domain.values().flat_map(|entry| entry.forms.iter().map(|form| (entry.hash, form.hash))).collect() };
+        if !prepared.built_once {
+            for (_, form) in forms(&producer.domain) {
+                cache.remove_object(form).expect("the form built once is in the producer's store");
+            }
+        }
+        if !prepared.own && prepared.manifest == Build::Producer {
+            return None;
+        }
+        let (own_cache, own) = self.family.import_as(&directory.join("content"), &directory.join("own"), &local_platform(), self.pipeline);
+        if prepared.own {
+            for (part, form) in forms(&own.domain) {
+                // The bytes as the machine's own build holds them: under
+                // one control they do not hash to the name they stand under.
+                let bytes = fs::read(own_cache.object_path(form)).expect("the machine's own form is in its own build");
+                fs::write(cache.object_path(form), &bytes).expect("the machine's own form is placed in the store");
+                fs::create_dir_all(&machine.forms).expect("the machine's cache of forms is created");
+                for (_, preparer) in self.family.forms.iter().filter(|(_, preparer)| preparer.built_once()) {
+                    fs::write(machine.form_path(part, *preparer), &bytes).expect("the machine's own form is placed in its cache of forms");
+                }
+            }
+        }
+        if prepared.manifest == Build::Own {
+            let manifest = own_cache.object(own.domain_hash).expect("the machine's own manifest is in its own build");
+            cache.put_object(&manifest).expect("the machine's own manifest is placed in the store");
+            asset_pipeline::write_atomically(&cache.directory().join("root"), &content_store::encode_root(own.domain_hash)).expect("the machine's own manifest is put in place");
+        }
+        Some(own.domain_hash == producer.domain_hash)
     }
 
     /// Moves the content of one instance: a save and its pass, a revision,
@@ -785,15 +1067,15 @@ impl Player<'_> {
             }
             Move::Revision(contents) => {
                 family.write_sources(&root, contents);
-                import(&root, &instance.directory.join("store"));
-                instance.loader.revision_in_place().expect("the revision is read");
+                family.import(&root, &instance.directory.join("store"));
+                self.put_in_place(instance);
             }
             Move::RevisionWithout(contents, without) => {
                 family.write_sources(&root, contents);
                 for asset in without {
                     fs::remove_file(root.join(format!("{asset}.asset"))).expect("the source of an asset the revision takes out is in the content root");
                 }
-                import(&root, &instance.directory.join("store"));
+                family.import(&root, &instance.directory.join("store"));
                 instance.loader.revision_in_place().expect("the revision is read");
             }
             Move::Repair(contents) => {
@@ -814,14 +1096,42 @@ impl Player<'_> {
                 moved.packages += 1;
                 let directory = instance.directory.join(format!("package-{}", moved.packages));
                 family.write_sources(&directory.join("content"), contents);
-                let (cache, _) = import(&directory.join("content"), &directory.join("store"));
+                let (cache, _) = family.import(&directory.join("content"), &directory.join("store"));
                 let domain = cache.revision().expect("the package's revision is in place").domain;
                 let entries = domain.keys().copied().collect();
                 let file = asset_pipeline::package(&cache, &domain, &entries).expect("the package is built");
                 instance.loader.mount("package", file, true).expect("the package mounts");
             }
             Move::Unmount => instance.loader.unmount("package").expect("the package unmounts"),
+            Move::PayloadRevision(payloads) => {
+                // A server's selection holds nothing that a presentation
+                // revision changes: nothing is put in place there.
+                if instance.selected.is_none() {
+                    for (name, revision) in payloads {
+                        family.write_source_with_its_payload_at(&root, name, *revision);
+                    }
+                    family.import(&root, &instance.directory.join("store"));
+                    instance.loader.revision_in_place().expect("the revision is read");
+                }
+            }
         }
+    }
+
+    /// What a dedicated server ships, as the play selects it: the domain
+    /// manifest, the parts and the forms built once; under one control, the
+    /// parts alone.
+    fn server_selection(&self) -> asset_pipeline::Selection {
+        asset_pipeline::Selection { forms: !self.tweak(Tweak::ServerSelectionWithoutTheForms), ..asset_pipeline::Selection::SERVER }
+    }
+
+    /// Puts the revision the stand-in pipeline just wrote in place on an
+    /// instance: on one that stands over a server's selection, that
+    /// selection is made again from the files of the pass first.
+    fn put_in_place(&self, instance: &Instance) {
+        if let Some(selected) = &instance.selected {
+            asset_pipeline::select(&instance.cache, selected, self.server_selection()).expect("the server's selection is made");
+        }
+        instance.loader.revision_in_place().expect("the revision is read");
     }
 
     /// One part the loading capability obtained for a world and did not
@@ -914,18 +1224,46 @@ pub fn play(settings: &Settings, family: &Family, scenario: &Scenario, workers: 
         for index in 0..count {
             let directory = settings.directory(&format!("{}-{workers}-{tag}-{index}", scenario.name));
             family.write_sources(&directory.join("content"), &store.contents);
-            let (cache, _) = import(&directory.join("content"), &directory.join("store"));
+            let (cache, _) = family.import(&directory.join("content"), &directory.join("store"));
             family.place_by_hand(&cache, &store.contents);
+            // The machine of the instance: its cache of forms is a
+            // directory of its own, beside the loose store.
+            let machine = Machine { forms: directory.join("forms"), platform: local_platform(), bound: None };
+            // In a family whose content holds a form built once: the
+            // manifest the instance holds and the forms its store holds.
+            // The harness reports whether the hash of the machine's own
+            // manifest is the producer's where the scenario asks that its
+            // worlds be set beside those of a run on the producer's content.
+            if let Some(prepared) = store.prepared.get(index).copied()
+                && let Some(the_producers) = player.prepare_the_store(prepared, &directory, &cache, &machine)
+                && scenario.checks.iter().any(|check| matches!(check, Check::ReportAgainstTheRunOf(_, _, _)))
+            {
+                let is = if the_producers { "is" } else { "is not" };
+                moved.reports.push(format!("{}: on the instance {index}, the hash of the machine's own manifest {is} the producer's", scenario.name));
+            }
             let first = cache.revision().expect("a revision is in place").domain_hash;
             for name in &store.cut {
                 cache.cut_object(family.hash(name)).expect("the artifact to cut is in the store");
             }
             if index == 0 && !store.then.is_empty() {
                 family.write_sources(&directory.join("content"), &store.then);
-                import(&directory.join("content"), &directory.join("store"));
+                family.import(&directory.join("content"), &directory.join("store"));
             }
-            let loader = Loader::start(&directory.join("store"), options).expect("the loading capability starts");
-            instances.push(Instance { directory, cache, loader, first });
+            // The payload artifacts cut short from the start, in the store
+            // that holds them.
+            for name in &store.cut_payloads {
+                let (made_for, revision) = family.beside[*name].payload.clone().expect("a content whose payload is cut has one");
+                cache.cut_object(content_store::content_hash(&asset_pipeline::payload(&made_for, revision))).expect("the payload to cut is in the store");
+            }
+            // An instance that stands over a server's selection reads a
+            // loose store of its own, selected among the files of the pass.
+            let selected = store.servers.contains(&index).then(|| directory.join("selected"));
+            if let Some(selected) = &selected {
+                asset_pipeline::select(&cache, selected, player.server_selection()).expect("the server's selection is made");
+            }
+            let loose = selected.clone().unwrap_or_else(|| directory.join("store"));
+            let loader = Loader::start_on(&loose, machine, options).expect("the loading capability starts");
+            instances.push(Instance { directory, cache, loader, first, selected });
         }
     }
     let scripted: Arc<ResidentStore> = family.residents();
@@ -941,18 +1279,29 @@ pub fn play(settings: &Settings, family: &Family, scenario: &Scenario, workers: 
     let mut running: Vec<Running> = Vec::new();
     let mut refused_worlds: Vec<PlayedWorld> = Vec::new();
     let mut attached: Vec<Vec<String>> = vec![Vec::new(); instances.len()];
+    // The recording the worlds of the scenario replay in a process beside,
+    // where the scenario replays one: read back from its bytes.
+    let recording: Option<Vec<Record>> = scenario.read.as_ref().filter(|read| read.recording).map(|_| {
+        let recorded = saved.expect("a world that replays a recording is given it");
+        decode_log_under(&recorded.bytes, &player.rules).expect("a recording a world wrote decodes")
+    });
     for plan in scenario.worlds.iter().filter(|plan| plan.replays_the_log_of.is_none()) {
         let instance = instances.get(plan.instance);
         let set = match plan.set {
             SetName::None => None,
             SetName::First => Some(instance.expect("a set is the set of a store").first),
-            SetName::AtHand => Some(set_hash(&instance.expect("a set is the set of a store").loader.manifest(None))),
+            // The hash that names the content set of the manifest at hand,
+            // as the capability of the instance gives it.
+            SetName::AtHand => Some(instance.expect("a set is the set of a store").loader.content_set()),
         };
         let (extract, slot) = late_extract();
         let mut links = Links::new(residents_of(plan.instance));
-        links.extract = instance.is_some().then_some(extract);
+        // A world that replays a recording receives its arrivals from the
+        // recording and from no loading capability: nothing leaves it.
+        links.extract = (instance.is_some() && recording.is_none()).then_some(extract);
         let queue = links.queue.clone();
-        let world = match player.make(plan, workers, set, Vec::new(), links, instance.map(|instance| &instance.loader)) {
+        let script = recording.clone().unwrap_or_default();
+        let world = match player.make(plan, workers, set, script, links, instance.map(|instance| &instance.loader)) {
             Ok(world) => world,
             Err(refusal) => {
                 notes.push(format!("{}: the restore is refused: {refusal}", scenario.name));
@@ -969,17 +1318,18 @@ pub fn play(settings: &Settings, family: &Family, scenario: &Scenario, workers: 
             creation_entries: stated_entries(&world.typed_table_bytes()),
             ..Observed::default()
         };
-        let mut world = Running { plan: plan.clone(), world, queue, set, observed, hold: None, stopped: false, saves: Vec::new() };
+        let consumer = plan.presented.then(Consumer::default);
+        let mut world = Running { plan: plan.clone(), world, queue, set, observed, hold: None, stopped: false, saves: Vec::new(), recording: recording.clone(), consumer };
         // A reader steps once without waiting, before the availability
         // source has answered anything.
-        if scenario.read.is_some() {
+        if scenario.read.is_some() && recording.is_none() {
             let tick = world.observed.first + 1;
             match world.advance(tick) {
                 Some(awaited) => world.observed.blocked.push((tick, awaited)),
                 None => notes.push(format!("{}: the first tick ran before any answer", scenario.name)),
             }
         }
-        if let Some(instance) = instance {
+        if let Some(instance) = instance.filter(|_| recording.is_none()) {
             // The query of the table at the boundary where no tick has
             // ended: the entries held available, which a restore under the
             // content at hand answers, and the wants whose asset is unanswered.
@@ -993,7 +1343,8 @@ pub fn play(settings: &Settings, family: &Family, scenario: &Scenario, workers: 
             // The admission checks of the world's composition: the one the
             // sheet defines, for the type of parameters, where it carries it.
             let checks = if plan.carries_the_check { vec![(AssetType::Parameters, AdmissionCheck { bound: ADMISSION_BOUND })] } else { Vec::new() };
-            let attachment = Attachment { queue: world.queue.clone(), set, entries: world.world.entries(), unanswered: world.world.unanswered(), restore, standing, checks };
+            let forms = plan.forms.clone();
+            let attachment = Attachment { queue: world.queue.clone(), set, entries: world.world.entries(), unanswered: world.world.unanswered(), restore, standing, checks, forms };
             let _ = slot.set(instance.loader.attach(attachment).expect("the world is attached"));
             attached[plan.instance].push(plan.name.clone());
         }
@@ -1084,6 +1435,20 @@ pub fn play(settings: &Settings, family: &Family, scenario: &Scenario, workers: 
                     }
                 }
             }
+            // A world that replays a recording: before the tick, the host
+            // has the capability of its instance make resident what the
+            // record of that tick names, each part and each form by the
+            // hash the record names. Where one cannot be had the replay is
+            // refused at that record, naming the hash: the tick does not
+            // run, and none after it.
+            if world.world.tick() < tick
+                && let Some(record) = world.recording.as_ref().and_then(|records| records.iter().find(|record| record.tick == tick))
+                && let Err(hash) = instances[world.plan.instance].loader.replay(world.set, record, &world.plan.forms)
+            {
+                world.observed.replay = Some(Replay::Refused(tick, hash));
+                world.stopped = true;
+                continue;
+            }
             if world.world.tick() < tick {
                 // A step before the capability has posted follows this tick:
                 // the capability is held still while the tick runs.
@@ -1099,6 +1464,17 @@ pub fn play(settings: &Settings, family: &Family, scenario: &Scenario, workers: 
             }
             if world.plan.saves.contains(&tick) && world.world.tick() == tick {
                 world.saves.push((tick, world.world.save()));
+            }
+            // The presentation consumer of the world's process: after the
+            // tick it reads the extracted state and asks the capability for
+            // payloads. While the capability is held still for a step taken
+            // before it has posted, a request would wait behind that step:
+            // the consumer asks after the next tick.
+            if world.world.tick() == tick
+                && world.hold.is_none()
+                && let (Some(consumer), Some(instance)) = (world.consumer.as_mut(), instances.get(world.plan.instance))
+            {
+                consumer.read(tick, &world.world.entries(), &instance.loader);
             }
         }
         assert!(waiting.is_empty(), "{}: before tick {tick}, a move of the content stands behind a capability that no step let go", scenario.name);
@@ -1123,11 +1499,47 @@ pub fn play(settings: &Settings, family: &Family, scenario: &Scenario, workers: 
     // its bytes, at another worker count.
     let mut played: Vec<PlayedWorld> = Vec::new();
     let mut header_holds_the_set = None;
+    // What the harness reports of a presentation manifest, per process: how
+    // many times its capability read a presentation manifest and a payload,
+    // and what its presentation consumer received and was refused.
+    if scenario.presentation_reported {
+        for world in &running {
+            let Some(instance) = instances.get(world.plan.instance) else { continue };
+            let read = instance.loader.report();
+            let (name, world_name) = (&scenario.name, &world.plan.name);
+            moved.reports.push(format!(
+                "{name} [{world_name}] the loading capability of the process read a presentation manifest {} times and a payload {} times",
+                read.presentation_manifests_read, read.payloads_read
+            ));
+            let Some(consumer) = &world.consumer else { continue };
+            let list = |payloads: &[(u32, AssetId, String)]| {
+                let one = |(tick, asset, text): &(u32, AssetId, String)| format!("for {} after tick {tick}, {text}", names.asset_name(*asset));
+                if payloads.is_empty() { "nothing".to_string() } else { payloads.iter().map(one).collect::<Vec<_>>().join("; ") }
+            };
+            moved.reports.push(format!("{name} [{world_name}] the presentation consumer received: {}; it was refused: {}", list(&consumer.received), list(&consumer.refused)));
+        }
+    }
     for mut world in running {
         world.hold = None;
         world.finish();
         let plan = &world.plan;
-        let replays = world.observed.stuck.is_none().then(|| {
+        // A replay that was refused at no record runs. The harness reports,
+        // beside any oracle, whether its state hashes are the recorded
+        // world's, tick by tick.
+        if world.recording.is_some() && world.observed.replay.is_none() {
+            world.observed.replay = Some(Replay::Runs);
+            let recorded = saved.map_or(&[][..], |recorded| recorded.hashes.as_slice());
+            let ticks = recorded.len().max(world.observed.state.len());
+            let differing: Vec<String> = (0..ticks).filter(|tick| recorded.get(*tick) != world.observed.state.get(*tick)).map(|tick| tick.to_string()).collect();
+            let text = if differing.is_empty() { "are the recorded world's at every tick".to_string() } else { format!("differ from the recorded world's at the ticks {}", differing.join(", ")) };
+            moved.reports.push(format!("{} [{}] the replay runs, and its state hashes {text}", scenario.name, plan.name));
+        }
+        // A reader under the recorded content whose content moved after its
+        // restore cannot be made again here: the save would be confirmed
+        // against the content as it stands now, and no longer against the
+        // content it was restored under. Its log is not replayed.
+        let confirmed_before_a_move = scenario.read.as_ref().is_some_and(|read| read.recorded && !read.recording) && !scenario.moves.is_empty();
+        let replays = (world.observed.stuck.is_none() && world.recording.is_none() && !confirmed_before_a_move).then(|| {
             let records = decode_log_under(&encode_log_under(&world.observed.log, &player.rules), &player.rules).expect("a log the world wrote decodes");
             let links = Links::new(residents_of(plan.instance));
             let loader = instances.get(plan.instance).map(|instance| &instance.loader);
@@ -1177,7 +1589,7 @@ pub fn play(settings: &Settings, family: &Family, scenario: &Scenario, workers: 
         let queue = links.queue.clone();
         let world = World::new(player.configure(plan, other, set), log, links);
         let observed = Observed { first: 0, creation: world.table_bytes(), creation_entries: stated_entries(&world.typed_table_bytes()), ..Observed::default() };
-        let mut world = Running { plan: plan.clone(), world, queue, set, observed, hold: None, stopped: false, saves: Vec::new() };
+        let mut world = Running { plan: plan.clone(), world, queue, set, observed, hold: None, stopped: false, saves: Vec::new(), recording: None, consumer: None };
         for tick in 1..=plan.to {
             if let Some(awaited) = world.advance(tick) {
                 world.observed.stuck = Some((tick, awaited));
@@ -1205,7 +1617,13 @@ pub fn judge(settings: &Settings, family: &Family, scenario: &Scenario, played: 
     let names = &family.names;
     let mut judged: Vec<(String, Vec<String>)> = Vec::new();
     for world in played.worlds.iter().filter(|world| world.judged) {
-        let Some(expected) = stated.get(&scenario.oracle).and_then(|worlds| worlds.get(&world.stated_as)) else {
+        // Where the oracle states one world of the scenario and the
+        // scenario holds one, under two names, the statement is that
+        // world's: a sheet names the one reader of a scenario in two ways.
+        let one_world = scenario.worlds.len() == 1;
+        let of_the_scenario = stated.get(&scenario.oracle);
+        let alone = of_the_scenario.filter(|worlds| worlds.len() == 1 && one_world).and_then(|worlds| worlds.values().next());
+        let Some(expected) = of_the_scenario.and_then(|worlds| worlds.get(&world.stated_as)).or(alone) else {
             judged.push((world.name.clone(), vec![format!("the oracle states nothing of the world {} of {}", world.stated_as, scenario.oracle)]));
             continue;
         };
@@ -1255,7 +1673,21 @@ fn beside_any_oracle(scenario: &Scenario, played: &Played, saved: Option<&Saved>
                 }
             }
             // A report, and no difference: the notes of the play hold it.
-            Check::ReportSameState(_, _) => {}
+            Check::ReportSameState(_, _) | Check::ReportAgainstTheRunOf(_, _, _) => {}
+            Check::SameSetInTheSaves(one, other) => {
+                // The content set a world stands under is configuration,
+                // which the header of its save holds.
+                let set = |name: &str| {
+                    let save = played.worlds.iter().find(|world| world.name == name).and_then(|world| world.saves.first());
+                    save.and_then(|(_, bytes)| save_header(bytes).ok()).map(|header| header.content_set)
+                };
+                match (set(one), set(other)) {
+                    (Some(one_set), Some(other_set)) if one_set == other_set => {}
+                    (Some(_), Some(_)) => beside.push(format!("the header of the save of the world {one} names another content set than the header of the save of the world {other}")),
+                    _ if played.partial => {}
+                    _ => beside.push(format!("the worlds {one} and {other} were not both saved")),
+                }
+            }
             Check::ContinuesTheSavedRun => {
                 let Some(saved) = saved else { continue };
                 for world in played.worlds.iter().filter(|world| world.judged) {
@@ -1283,9 +1715,34 @@ pub struct FamilyPlan {
     pub oracle: &'static str,
 }
 
-fn save_path(settings: &Settings, scenario: &str, tick: u32, workers: usize) -> PathBuf {
-    let safe: String = scenario.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' }).collect();
+/// Where the save of a world of a scenario is kept for its readers. The one
+/// world of a scenario that names none is `world`: its save is named after
+/// its scenario alone, and the save of a world that has a name of its own
+/// after both, so that two worlds of one scenario saved at one tick keep
+/// two saves.
+fn save_path(settings: &Settings, scenario: &str, world: &str, tick: u32, workers: usize) -> PathBuf {
+    let of_the_world = if world == "world" { String::new() } else { format!("-{world}") };
+    let safe: String = format!("{scenario}{of_the_world}").chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' }).collect();
     settings.scratch.join("saves").join(format!("{safe}-{tick}-{workers}.save"))
+}
+
+/// Where the recording of a world of a scenario is kept, as bytes, with the
+/// state hashes of the world that wrote it, for the scenarios that replay it.
+fn recording_path(settings: &Settings, scenario: &str, world: &str, workers: usize) -> PathBuf {
+    let safe: String = format!("{scenario}-{world}").chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' }).collect();
+    settings.scratch.join("recordings").join(format!("{safe}-{workers}.log"))
+}
+
+/// The rules of the core a run stands under: those a scenario always
+/// changes, then those of a control or of a reading.
+fn rules_under(scenario: &Scenario, variant: &[Change]) -> Rules {
+    let mut rules = Rules::default();
+    for change in scenario.base.iter().chain(variant) {
+        if let Change::Core(change) = change {
+            change(&mut rules);
+        }
+    }
+    rules
 }
 
 fn write_saved(path: &Path, saved: &Saved) {
@@ -1326,11 +1783,17 @@ struct Judged {
 /// never reached its save.
 fn saved_for(settings: &Settings, plan: &FamilyPlan, read: &Read, workers: usize, variant: &[Change], tag: &str) -> Option<Saved> {
     if variant.is_empty() {
-        return Some(read_saved(&save_path(settings, read.of, read.at, workers)));
+        let path = if read.recording { recording_path(settings, read.of, read.world, workers) } else { save_path(settings, read.of, read.world, read.at, workers) };
+        return Some(read_saved(&path));
     }
     let saver = plan.scenarios.iter().find(|other| other.name == read.of).expect("the scenario that saved is of the family");
     let played = play(settings, &plan.family, saver, workers, variant, &format!("{tag}-saver"), None, &Part::WithoutTheReplay);
     let world = played.worlds.iter().find(|world| world.name == read.world)?;
+    // A recording is the input log of the world, as bytes, written under
+    // the rules of the run that recorded.
+    if read.recording {
+        return Some(Saved { bytes: encode_log_under(&world.observed.log, &rules_under(saver, variant)), hashes: world.observed.state.clone() });
+    }
     let (_, bytes) = world.saves.iter().find(|(tick, _)| *tick == read.at)?;
     Some(Saved { bytes: bytes.clone(), hashes: world.observed.state.clone() })
 }
@@ -1414,6 +1877,20 @@ fn play_and_judge(
         let differing: Vec<String> = (0..one_state.len().max(other_state.len())).filter(|tick| one_state.get(*tick) != other_state.get(*tick)).map(|tick| tick.to_string()).collect();
         let text = if differing.is_empty() { "are equal at every tick".to_string() } else { format!("differ at the ticks {}", differing.join(", ")) };
         judged.notes.push(format!("{}: the state hashes of the worlds {one} and {other} {text}", scenario.name));
+    }
+    // The state hashes of worlds of the scenario's own run against those of
+    // worlds of another scenario that saved: a report, read from what that
+    // scenario kept beside its saves.
+    for check in &scenario.checks {
+        let Check::ReportAgainstTheRunOf(of, at, pairs) = check else { continue };
+        for (here, there) in pairs.iter().filter(|_| variant.is_empty()) {
+            let path = save_path(settings, of, there, *at, workers);
+            let Some(state) = played.worlds.iter().find(|world| world.name == *here).map(|world| &world.observed.state).filter(|_| path.exists()) else { continue };
+            let other = read_saved(&path).hashes;
+            let differing: Vec<String> = (0..state.len().max(other.len())).filter(|tick| state.get(*tick) != other.get(*tick)).map(|tick| tick.to_string()).collect();
+            let text = if differing.is_empty() { "are equal at every tick".to_string() } else { format!("differ at the ticks {}", differing.join(", ")) };
+            judged.reports.push(format!("{}: the state hashes of the world {here} and of the world {there} of {of} {text}", scenario.name));
+        }
     }
     for world in played.worlds.iter().filter(|world| world.judged) {
         judged.worlds.push(JudgedWorld {
@@ -1572,7 +2049,12 @@ pub fn run_family(settings: &Settings, plan: &FamilyPlan, readings: &[VariantPla
                 let (judged, played) = play_and_judge(settings, plan, scenario, workers, &[], "run", stated.as_ref(), &replays_in(processes, ""));
                 for world in &played.worlds {
                     for (tick, bytes) in &world.saves {
-                        write_saved(&save_path(settings, &scenario.name, *tick, workers), &Saved { bytes: bytes.clone(), hashes: world.observed.state.clone() });
+                        write_saved(&save_path(settings, &scenario.name, &world.name, *tick, workers), &Saved { bytes: bytes.clone(), hashes: world.observed.state.clone() });
+                    }
+                    // The recording of a world: its input log, as bytes.
+                    if scenario.worlds.iter().any(|plan| plan.recorded && plan.name == world.name) {
+                        let log = encode_log_under(&world.observed.log, &rules_under(scenario, &[]));
+                        write_saved(&recording_path(settings, &scenario.name, &world.name, workers), &Saved { bytes: log, hashes: world.observed.state.clone() });
                     }
                 }
                 judged
@@ -1630,7 +2112,11 @@ pub fn run_family(settings: &Settings, plan: &FamilyPlan, readings: &[VariantPla
                         None => None,
                     }
                 };
-                let first = unreached.cloned().or_else(|| gave.iter().filter(|(name, _, _)| named(name)).find_map(another));
+                // What the harness compares beside any oracle is compared
+                // under a control too: one under which such a comparison
+                // does not hold gives another run, though no world shows it.
+                let beside = judged.notes.iter().find_map(|note| note.split_once("compared beside any oracle, and not held: ").map(|(_, unheld)| format!("beside the oracle, {unheld}")));
+                let first = unreached.cloned().or_else(|| gave.iter().filter(|(name, _, _)| named(name)).find_map(another)).or(beside);
                 let every_named_world = variant.worlds.iter().all(|name| gave.iter().filter(|(other, _, _)| other == name).any(|world| another(world).is_some()));
                 let text = match first {
                     Some(first) if every_named_world => format!("gives another run: {first}"),

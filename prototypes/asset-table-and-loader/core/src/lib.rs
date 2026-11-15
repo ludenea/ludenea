@@ -3,5 +3,6 @@
 //! which is the reference workload's world of the asset table spike. Throwaway,
 //! never product code. It reads no file and knows no store.
 
+pub mod forms;
 pub mod table;
 pub mod world;

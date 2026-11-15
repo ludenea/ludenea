@@ -1029,7 +1029,7 @@ pub fn child(arguments: &[String]) -> String {
                 _ => Err("the content set does not name the asset".to_string()),
             }
         };
-        let request = Restore::Continue { confirm: &confirm, dropped: &[] };
+        let request = Restore::Continue { confirm: &confirm, confirm_form: None, dropped: &[] };
         let restored = later_parts
             .map_err(|reason| Refusal::Content { asset: 0, hash: 0, reason })
             .and_then(|()| World::restore(config, &saved, later, Links::new(store.clone()), request));

@@ -111,6 +111,10 @@ pub fn readings() -> Vec<VariantPlan> {
         reading("reading: a move of the manifest posts nothing for a failed entry", vec![loader(|options| options.moves_leave_failed_entries = true)]),
         reading("reading: a move that changes the type of an asset in force fails it", vec![loader(|options| options.a_changed_type_fails_an_asset_in_force = true)]),
         reading(
+            "reading: a first load whose prepared form built once cannot be had fails for the reason of a preparation that fails",
+            vec![loader(|options| options.a_form_that_cannot_be_had_fails_as_a_preparation = true)],
+        ),
+        reading(
             "reading: the wants the table holds on a pending parent alone give the want the core would add its policy",
             vec![core(|rules| rules.gate_counts_core_wants_from_the_tables_wants_alone = true)],
         ),

@@ -270,6 +270,15 @@ pub struct Resident {
 /// availability by hand fills it itself. The core reads no file.
 pub trait Residents: Send + Sync {
     fn get(&self, hash: u64) -> Option<Arc<Resident>>;
+
+    /// The bytes of the prepared form of a part, as a system of the
+    /// capability that declares the form reads it inside the domain: the
+    /// part by its content hash, and the hash of the form the entry holds
+    /// beside it, where it holds one. None where no form can be handed. A
+    /// store that keeps no form hands none.
+    fn form(&self, _part: u64, _named: Option<u64>) -> Option<Arc<Vec<u8>>> {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -388,7 +397,10 @@ pub enum Outcome {
 /// arrival names: the core has no manifest, and counts a world's asset data
 /// from the sizes its arrivals named. Under the candidate unit of a budget
 /// that rejects the closure of one want, and under it alone, an arrival also
-/// names a root: the asset of the want it answers.
+/// names a root: the asset of the want it answers. Where the world's
+/// composition declares a prepared form built once for the asset's type, an
+/// arrival to a hash also names the hash of that form; the stand-in declares
+/// at most one such form for a type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Arrival {
     pub asset: AssetId,
@@ -398,16 +410,29 @@ pub struct Arrival {
     pub size: u64,
     pub marked: bool,
     pub root: Option<AssetId>,
+    /// The hash of the prepared form built once that an arrival to a hash
+    /// names beside the hash of the canonical part; none for a failure, and
+    /// none where the world's composition declares no such form.
+    pub form: Option<u64>,
 }
 
 impl Arrival {
     /// An arrival to a hash that names no size yet: `sized` names it.
     pub fn at(asset: AssetId, hash: u64) -> Arrival {
-        Arrival { asset, outcome: Outcome::Hash(hash), size: 0, marked: false, root: None }
+        Arrival { asset, outcome: Outcome::Hash(hash), size: 0, marked: false, root: None, form: None }
     }
 
     pub fn failed(asset: AssetId, code: u32) -> Arrival {
-        Arrival { asset, outcome: Outcome::Failure(code), size: 0, marked: false, root: None }
+        Arrival { asset, outcome: Outcome::Failure(code), size: 0, marked: false, root: None, form: None }
+    }
+
+    /// Names the hash of the prepared form built once that an arrival to a
+    /// hash puts in force with its part. An arrival to failed names none.
+    pub fn with_form(mut self, form: u64) -> Arrival {
+        if matches!(self.outcome, Outcome::Hash(_)) {
+            self.form = Some(form);
+        }
+        self
     }
 
     /// Names the size of what an arrival to a hash puts in force. An arrival
@@ -828,6 +853,20 @@ pub struct Rules {
     /// with no event. The default leaves the entry as it was, its size
     /// included: an arrival at the same hash changes nothing.
     pub arrival_at_the_hash_in_force_brings_its_size: bool,
+    /// Control: an answer to a restore is compared with the recorded hash of
+    /// the canonical part alone. The default compares it with the hashes the
+    /// entry holds, of its canonical part and of its prepared form built
+    /// once: an answer at the recorded hash of the part that names another
+    /// form differs, the entry takes that form, and the restore starts a new
+    /// history.
+    pub answer_compared_with_the_part_alone: bool,
+    /// Control: the confirmation of a restore under the recorded content
+    /// reads the hash of the canonical part alone. The default confirms each
+    /// available entry at the hashes it holds, of its canonical part and of
+    /// its prepared form built once, and refuses the restore where the form
+    /// cannot be confirmed, naming the asset and the recorded hash of the
+    /// form.
+    pub confirmation_reads_the_part_alone: bool,
     /// Not taken, run as a control: on an entry failed for the reason of
     /// another type, a want the core adds leaves the entry's type as it is:
     /// the load starts again under the type that failed. The default has the
@@ -1223,12 +1262,16 @@ fn put_record(out: &mut Vec<u8>, record: &Record, sized: bool) {
                 out.extend_from_slice(&u64::from(code).to_le_bytes());
             }
         }
-        // One byte of marks: an answer to a restore, and the root an arrival
-        // names under the candidate of a budget that writes it. An arrival
-        // that names no root has the bytes it had before the mark existed.
-        out.push(u8::from(arrival.marked) | (u8::from(arrival.root.is_some()) << 1));
+        // One byte of marks: an answer to a restore, the root an arrival
+        // names under the candidate of a budget that writes it, and the
+        // prepared form built once it names. An arrival that names neither
+        // a root nor a form has the bytes it had before those marks existed.
+        out.push(u8::from(arrival.marked) | (u8::from(arrival.root.is_some()) << 1) | (u8::from(arrival.form.is_some()) << 2));
         if let Some(root) = arrival.root {
             out.extend_from_slice(&root.to_le_bytes());
+        }
+        if let Some(form) = arrival.form {
+            out.extend_from_slice(&form.to_le_bytes());
         }
     }
 }
@@ -1266,11 +1309,15 @@ fn read_record(reader: &mut Reader, sized: bool) -> Result<Record, String> {
             other => return Err(format!("outcome tag {other}")),
         };
         let marks = reader.u8()?;
-        if marks > 3 {
+        if marks > 7 {
             return Err(format!("arrival marks {marks}"));
         }
         let root = if marks & 2 != 0 { Some(reader.id()?) } else { None };
-        arrivals.push(Arrival { asset, outcome, size, marked: marks & 1 != 0, root });
+        let form = if marks & 4 != 0 { Some(reader.u64()?) } else { None };
+        if form.is_some() && !matches!(outcome, Outcome::Hash(_)) {
+            return Err("an arrival to failed names a prepared form".to_string());
+        }
+        arrivals.push(Arrival { asset, outcome, size, marked: marks & 1 != 0, root, form });
     }
     Ok(Record { tick, events, commands, arrivals })
 }
@@ -1323,11 +1370,16 @@ pub struct Entry {
     pub size: u64,
     /// The reference to the resident part a world holds while the asset is available.
     pub resident: Option<Arc<Resident>>,
+    /// The hash of the prepared form built once that the entry holds beside
+    /// the hash of its canonical part while the asset is available: the one
+    /// the arrival that put it in force named. None otherwise, and none
+    /// where the world's composition declares no such form for the type.
+    pub form: Option<u64>,
 }
 
 impl Entry {
     fn unavailable(asset_type: AssetType) -> Entry {
-        Entry { asset_type, wants: Vec::new(), availability: Availability::Unavailable, size: 0, resident: None }
+        Entry { asset_type, wants: Vec::new(), availability: Availability::Unavailable, size: 0, resident: None, form: None }
     }
 
     /// The policy the asset is under: required if any want is.
@@ -1702,6 +1754,7 @@ impl Table {
                 entry.availability = Availability::Unavailable;
                 entry.size = 0;
                 entry.resident = None;
+                entry.form = None;
             }
             if rules.type_replacement_ends_the_former_wants {
                 entry.wants.retain(|(other, _)| *other == held_under);
@@ -1970,8 +2023,14 @@ impl Table {
         // failed for the same reason. It changes nothing, the size the entry
         // holds included: a size is a function of the content an arrival
         // names, so an arrival at the hash in force names the size in force.
+        // The same hashes are those of the canonical part and of the
+        // prepared form built once the entry holds beside it: an arrival
+        // that names the part in force with another form does not leave the
+        // entry as it was. Under one control an answer to a restore is
+        // compared with the hash of the canonical part alone.
+        let same_form = entry.form == arrival.form || (arrival.marked && rules.answer_compared_with_the_part_alone);
         let as_it_was = match (before, arrival.outcome) {
-            (Availability::Available(held), Outcome::Hash(hash)) => held == hash,
+            (Availability::Available(held), Outcome::Hash(hash)) => held == hash && same_form,
             (Availability::Failed(held), Outcome::Failure(code)) => held == code,
             _ => false,
         };
@@ -1999,10 +2058,18 @@ impl Table {
                     entry.size = arrival.size;
                 }
                 if !as_it_was {
+                    entry.form = arrival.form;
                     self.uncounted.remove(&arrival.asset);
                 }
                 // An answer to a restore at a hash is no arrival and no reload: no event.
                 if (as_it_was && !rules.unchanged_arrival_emits) || arrival.marked {
+                    return;
+                }
+                // An event names the hash of a canonical part: an arrival
+                // that changes the form an entry holds and leaves its part
+                // as it was has no event to emit. The design text has no
+                // sentence on such an arrival, and no scenario holds one.
+                if !as_it_was && before == Availability::Available(hash) {
                     return;
                 }
                 applied.events.push(match before {
@@ -2024,6 +2091,7 @@ impl Table {
                 entry.availability = Availability::Failed(code);
                 entry.size = 0;
                 entry.resident = None;
+                entry.form = None;
                 // A failure is a failure as any other, an answer to a restore included.
                 if !(arrival.marked && rules.marked_failure_emits_nothing) {
                     applied.events.push(Event::Failed { asset: arrival.asset, code });
@@ -2588,6 +2656,7 @@ impl Table {
         entry.availability = Availability::Failed(REASON_OVER_BUDGET);
         entry.size = 0;
         entry.resident = None;
+        entry.form = None;
         applied.events.push(Event::Failed { asset: arrival.asset, code: REASON_OVER_BUDGET });
         if entry.policy() == Some(Policy::Required) {
             applied.failed_required.push((arrival.asset, REASON_OVER_BUDGET));
@@ -3171,7 +3240,7 @@ impl Table {
             if typed {
                 put_type(&mut out, entry.asset_type);
             }
-            put_wants_and_availability(&mut out, entry.availability, sized.then_some(entry.size), &entry.wants);
+            put_wants_and_availability(&mut out, entry.availability, entry.form, sized.then_some(entry.size), &entry.wants);
         }
         put_instances(&mut out, &self.instances);
         out
@@ -3183,7 +3252,7 @@ impl Table {
         let mut out = Vec::new();
         out.extend_from_slice(&(self.entries.len() as u32).to_le_bytes());
         for (id, entry) in &self.entries {
-            put_entry(&mut out, *id, entry.asset_type, entry.availability, entry.size, &entry.wants);
+            put_entry_with_its_form(&mut out, *id, entry.asset_type, entry.availability, entry.form, entry.size, &entry.wants);
         }
         put_instances(&mut out, &self.instances);
         out
@@ -3202,13 +3271,14 @@ impl Table {
                 wants.push((read_owner(&mut reader)?, read_policy(&mut reader)?));
             }
             let (tag, value) = (reader.u8()?, reader.u64()?);
-            let (availability, size) = match tag {
-                0 => (Availability::Unavailable, 0),
-                1 => (Availability::Available(value), reader.u64()?),
-                2 => (Availability::Failed(value as u32), 0),
+            let (availability, form, size) = match tag {
+                0 => (Availability::Unavailable, None, 0),
+                1 => (Availability::Available(value), None, reader.u64()?),
+                2 => (Availability::Failed(value as u32), None, 0),
+                3 => (Availability::Available(value), Some(reader.u64()?), reader.u64()?),
                 other => return Err(format!("availability tag {other}")),
             };
-            table.entries.insert(id, Entry { asset_type, wants, availability, size, resident: None });
+            table.entries.insert(id, Entry { asset_type, wants, availability, size, resident: None, form });
         }
         for _ in 0..reader.u32()? {
             table.instances.push(Instance {
@@ -3235,26 +3305,39 @@ impl Table {
 /// Public so that a harness can write a table stated by hand through the
 /// same bytes.
 pub fn put_entry(out: &mut Vec<u8>, id: AssetId, asset_type: AssetType, availability: Availability, size: u64, wants: &[(Owner, Policy)]) {
+    put_entry_with_its_form(out, id, asset_type, availability, None, size, wants);
+}
+
+/// The same, for an entry that may hold, while it is available, the hash of
+/// a prepared form built once beside the hash of its canonical part.
+pub fn put_entry_with_its_form(out: &mut Vec<u8>, id: AssetId, asset_type: AssetType, availability: Availability, form: Option<u64>, size: u64, wants: &[(Owner, Policy)]) {
     out.extend_from_slice(&id.to_le_bytes());
     put_type(out, asset_type);
-    put_wants_and_availability(out, availability, Some(size), wants);
+    put_wants_and_availability(out, availability, form, Some(size), wants);
 }
 
 /// The wants and the availability of an entry. An available entry holds its
-/// hash, then the size its arrival named, which a control leaves out.
-fn put_wants_and_availability(out: &mut Vec<u8>, availability: Availability, size: Option<u64>, wants: &[(Owner, Policy)]) {
+/// hash, then the hash of its prepared form built once where it holds one,
+/// then the size its arrival named, which a control leaves out. An entry
+/// that holds no form has the bytes it had before an entry could hold one:
+/// the availability of one that does is written under a tag of its own.
+fn put_wants_and_availability(out: &mut Vec<u8>, availability: Availability, form: Option<u64>, size: Option<u64>, wants: &[(Owner, Policy)]) {
     out.extend_from_slice(&(wants.len() as u32).to_le_bytes());
     for (owner, policy) in wants {
         put_owner(out, *owner);
         put_policy(out, *policy);
     }
-    let (tag, value) = match availability {
-        Availability::Unavailable => (0_u8, 0_u64),
-        Availability::Available(hash) => (1, hash),
-        Availability::Failed(code) => (2, u64::from(code)),
+    let (tag, value) = match (availability, form) {
+        (Availability::Unavailable, _) => (0_u8, 0_u64),
+        (Availability::Available(hash), None) => (1, hash),
+        (Availability::Available(hash), Some(_)) => (3, hash),
+        (Availability::Failed(code), _) => (2, u64::from(code)),
     };
     out.push(tag);
     out.extend_from_slice(&value.to_le_bytes());
+    if let (Availability::Available(_), Some(form)) = (availability, form) {
+        out.extend_from_slice(&form.to_le_bytes());
+    }
     if let (Availability::Available(_), Some(size)) = (availability, size) {
         out.extend_from_slice(&size.to_le_bytes());
     }

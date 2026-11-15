@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 
 use prototype_core::table::{
     Arrival, AssetId, AssetType, Availability, Command, Event, Instance, Maker, NewHistory, Outcome, Owner, Policy, Record, Refused, RepulsionTable, Rules,
-    SystemName, Table, WorldEvent, put_entry, put_instances, reason as listed_reason, reason_named,
+    SystemName, Table, WorldEvent, put_entry_with_its_form, put_instances, reason as listed_reason, reason_named,
 };
 use prototype_core::world::{Act, Holder};
 use reference_workload::{Fnv1a, fnv1a};
@@ -102,10 +102,37 @@ impl Names {
         self.sizes.get(&hash).copied().unwrap_or(0)
     }
 
+    /// The size the manifest gives of what an arrival puts in force: the
+    /// canonical part, with the prepared form built once the arrival names.
+    pub fn size_in_force(&self, hash: u64, form: Option<u64>) -> u64 {
+        self.size(hash) + form.map_or(0, |form| self.size(form))
+    }
+
     /// The size in the words of a statement: nothing where it is the size the
     /// manifest gives the content, which a statement need not name.
-    fn size_text(&self, hash: u64, size: u64) -> String {
-        if size == self.size(hash) { String::new() } else { format!(" size {size}") }
+    fn size_text(&self, hash: u64, form: Option<u64>, size: u64) -> String {
+        if size == self.size_in_force(hash, form) { String::new() } else { format!(" size {size}") }
+    }
+
+    /// The prepared form built once in the words of a statement, after the
+    /// hash of the part: nothing where none is named.
+    fn form_text(&self, form: Option<u64>) -> String {
+        form.map_or_else(String::new, |form| format!(" form {}", self.hash_name(form)))
+    }
+
+    /// What follows the hash of a part in an availability and in an arrival
+    /// to a hash: `form <form-hash>` where a form is stated, then `size
+    /// <bytes>` where a size is. Returns the form, the size, which is the
+    /// one the manifest gives where none is stated, and the words left.
+    fn form_and_size<'a, 'b>(&self, hash: u64, words: &'a [&'b str]) -> Result<(Option<u64>, u64, &'a [&'b str]), String> {
+        let (form, words) = match words {
+            ["form", form, rest @ ..] => (Some(self.hash(form)?), rest),
+            rest => (None, rest),
+        };
+        match words {
+            ["size", bytes, rest @ ..] => Ok((form, bytes.parse().map_err(|_| format!("not a size: {bytes}"))?, rest)),
+            rest => Ok((form, self.size_in_force(hash, form), rest)),
+        }
     }
 
     /// The numeric identity of a contributor the sheets name.
@@ -216,11 +243,11 @@ pub fn element(text: &str, names: &Names) -> Result<Element, String> {
         ["arrival", asset, "failed", code, "marked"] => Element::Arrival(Arrival::failed(names.asset(asset)?, reason(code)?).marked()),
         ["arrival", asset, hash, rest @ ..] => {
             let hash = names.hash(hash)?;
-            let (size, rest) = match rest {
-                ["size", bytes, rest @ ..] => (bytes.parse().map_err(|_| format!("not a size: {bytes}"))?, rest),
-                rest => (names.size(hash), rest),
-            };
+            // After the hash of the part: the prepared form built once the
+            // arrival names, then the size, each where the statement gives it.
+            let (form, size, rest) = names.form_and_size(hash, rest)?;
             let arrival = Arrival::at(names.asset(asset)?, hash).sized(size);
+            let arrival = form.map_or(arrival, |form| arrival.with_form(form));
             Element::Arrival(match rest {
                 [] => arrival,
                 ["marked"] => arrival.marked(),
@@ -266,7 +293,7 @@ fn element_text(element: &Element, names: &Names) -> String {
         }
         Element::Arrival(arrival) => {
             let outcome = match arrival.outcome {
-                Outcome::Hash(hash) => format!("{}{}", names.hash_name(hash), names.size_text(hash, arrival.size)),
+                Outcome::Hash(hash) => format!("{}{}{}", names.hash_name(hash), names.form_text(arrival.form), names.size_text(hash, arrival.form, arrival.size)),
                 Outcome::Failure(code) => format!("failed {}", reason_name(code)),
             };
             let marked = if arrival.marked { " marked" } else { "" };
@@ -384,10 +411,38 @@ fn verdict(text: &str, names: &Names) -> Result<Verdict, String> {
     })
 }
 
+/// The outcome of a replay, for a world that replays a recording: it runs,
+/// or it is refused at the record of a tick, naming a hash that cannot be
+/// had, of a canonical part or of a prepared form built once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Replay {
+    Runs,
+    Refused(u32, u64),
+}
+
+impl Replay {
+    pub fn text(&self, names: &Names) -> String {
+        match self {
+            Replay::Runs => "runs".to_string(),
+            Replay::Refused(tick, hash) => format!("refused {tick} hash {}", names.hash_name(*hash)),
+        }
+    }
+}
+
+fn replay(text: &str, names: &Names) -> Result<Replay, String> {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    Ok(match words.as_slice() {
+        ["runs"] => Replay::Runs,
+        ["refused", tick, "hash", hash] => Replay::Refused(tick.parse().map_err(|_| format!("not a tick: {tick}"))?, names.hash(hash)?),
+        _ => return Err(format!("unknown outcome of a replay {text}")),
+    })
+}
+
 /// One entry as an oracle states it: the asset, the type its entry holds,
-/// its availability, the size it holds where it is available, and its wants
-/// in the order stated.
-pub type StatedEntry = (AssetId, AssetType, Availability, u64, Vec<(Owner, Policy)>);
+/// its availability, the size it holds where it is available, its wants in
+/// the order stated, and the hash of the prepared form built once it holds
+/// beside the hash of its part, where it holds one.
+pub type StatedEntry = (AssetId, AssetType, Availability, u64, Vec<(Owner, Policy)>, Option<u64>);
 
 /// The statement of one tick.
 #[derive(Clone, Debug, Default)]
@@ -402,6 +457,10 @@ pub struct Block {
     pub events: Vec<Event>,
     pub instances: Vec<Instance>,
     pub names_failed: Vec<(AssetId, u32)>,
+    /// What the consumer of a form was handed at the tick, by the hash of
+    /// the bytes: one line per entry that is available after the tick and
+    /// whose type has a declared form, in the table's order.
+    pub handed: Vec<(AssetId, u64)>,
 }
 
 impl Block {
@@ -409,8 +468,8 @@ impl Block {
     pub fn table_bytes(&self) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&(self.entries.len() as u32).to_le_bytes());
-        for (id, asset_type, availability, size, wants) in &self.entries {
-            put_entry(&mut out, *id, *asset_type, *availability, *size, wants);
+        for (id, asset_type, availability, size, wants, form) in &self.entries {
+            put_entry_with_its_form(&mut out, *id, *asset_type, *availability, *form, *size, wants);
         }
         put_instances(&mut out, &self.instances);
         out
@@ -421,6 +480,8 @@ impl Block {
 #[derive(Clone, Debug, Default)]
 pub struct Expected {
     pub restore: Option<Verdict>,
+    /// The outcome of the replay, for a world that replays a recording.
+    pub replay: Option<Replay>,
     /// The steps without waiting that run no tick: the tick each stood
     /// before, and the assets it names as awaited.
     pub blocked: Vec<(u32, Vec<AssetId>)>,
@@ -438,6 +499,10 @@ impl Expected {
     fn shifted(&self, k: u32) -> Expected {
         Expected {
             restore: self.restore.clone(),
+            replay: self.replay.map(|replay| match replay {
+                Replay::Runs => Replay::Runs,
+                Replay::Refused(tick, hash) => Replay::Refused(tick + k, hash),
+            }),
             blocked: self.blocked.iter().map(|(before, awaited)| (before + k, awaited.clone())).collect(),
             blocks: self.blocks.iter().map(|(tick, block)| (if *tick == 0 { 0 } else { tick + k }, block.clone())).collect(),
         }
@@ -453,7 +518,7 @@ impl Expected {
         for tick in from..=to {
             let entries = self.table_at(tick).map_or(creation, |block| block.entries.as_slice());
             for (index, asset) in names.pool.iter().enumerate() {
-                let table = entries.iter().find(|(id, _, _, _, _)| id == asset).and_then(|(_, _, availability, _, _)| match availability {
+                let table = entries.iter().find(|(id, _, _, _, _, _)| id == asset).and_then(|(_, _, availability, _, _, _)| match availability {
                     Availability::Available(hash) => names.tables.get(hash).copied(),
                     _ => None,
                 });
@@ -519,6 +584,7 @@ pub fn parse(text: &str, names: &Names) -> Result<Stated, String> {
         let expected = scenarios.get_mut(&scenario).ok_or_else(|| fail("a statement before any scenario".to_string()))?.entry(world.clone()).or_default();
         match keyword {
             "restore" => expected.restore = Some(verdict(rest, names).map_err(fail)?),
+            "replay" => expected.replay = Some(replay(rest, names).map_err(fail)?),
             "blocked" => {
                 let (before, awaited) = rest.split_once(" awaiting").ok_or_else(|| fail("blocked <n> awaiting <assets>".to_string()))?;
                 let before = before.trim().parse().map_err(|_| fail(format!("not a tick: {before}")))?;
@@ -541,21 +607,25 @@ pub fn parse(text: &str, names: &Names) -> Result<Stated, String> {
                     ("rejected", [asset, hash]) => block.rejected.push((names.asset(asset).map_err(fail)?, names.hash(hash).map_err(fail)?)),
                     ("entry", [asset, kind, held @ ..]) => {
                         // An entry in force holds the size the manifest gives its
-                        // content, but where the statement names another.
-                        let (availability, size) = match held {
-                            ["unavailable"] => (Availability::Unavailable, 0),
-                            ["available", hash] => {
+                        // content, but where the statement names another; and,
+                        // after the hash of its part, the prepared form built
+                        // once it holds, where the statement names one.
+                        let (availability, form, size) = match held {
+                            ["unavailable"] => (Availability::Unavailable, None, 0),
+                            ["available", hash, rest @ ..] => {
                                 let hash = names.hash(hash).map_err(fail)?;
-                                (Availability::Available(hash), names.size(hash))
+                                let (form, size, rest) = names.form_and_size(hash, rest).map_err(fail)?;
+                                if !rest.is_empty() {
+                                    return Err(fail(format!("not an availability: {line}")));
+                                }
+                                (Availability::Available(hash), form, size)
                             }
-                            ["available", hash, "size", bytes] => {
-                                (Availability::Available(names.hash(hash).map_err(fail)?), bytes.parse().map_err(|_| fail(format!("not a size: {bytes}")))?)
-                            }
-                            ["failed", code] => (Availability::Failed(reason(code).map_err(fail)?), 0),
+                            ["failed", code] => (Availability::Failed(reason(code).map_err(fail)?), None, 0),
                             _ => return Err(fail(format!("not an availability: {line}"))),
                         };
-                        block.entries.push((names.asset(asset).map_err(fail)?, asset_type(kind).map_err(fail)?, availability, size, Vec::new()));
+                        block.entries.push((names.asset(asset).map_err(fail)?, asset_type(kind).map_err(fail)?, availability, size, Vec::new(), form));
                     }
+                    ("handed", [asset, form]) => block.handed.push((names.asset(asset).map_err(fail)?, names.hash(form).map_err(fail)?)),
                     ("want", [owner, level]) => {
                         let want = (names.owner(owner).map_err(fail)?, policy(level).map_err(fail)?);
                         block.entries.last_mut().ok_or_else(|| fail("a want before any entry".to_string()))?.4.push(want);
@@ -644,6 +714,12 @@ pub struct Observed {
     pub verdict: Option<Verdict>,
     /// The tick the world never ran, where it stayed gated to the end.
     pub stuck: Option<(u32, Vec<AssetId>)>,
+    /// What the consumer of a form was handed: the tick, the asset, and the
+    /// content hash of the bytes, computed over them; none where it was
+    /// handed nothing.
+    pub handed: Vec<(u32, AssetId, Option<u64>)>,
+    /// The outcome of the replay, for a world that replays a recording.
+    pub replay: Option<Replay>,
 }
 
 /// A table's canonical bytes, in words, for a difference a reader arbitrates.
@@ -653,7 +729,7 @@ pub fn table_text(bytes: &[u8], names: &Names) -> String {
     for (id, entry) in &table.entries {
         let availability = match entry.availability {
             Availability::Unavailable => "unavailable".to_string(),
-            Availability::Available(hash) => format!("available {}{}", names.hash_name(hash), names.size_text(hash, entry.size)),
+            Availability::Available(hash) => format!("available {}{}{}", names.hash_name(hash), names.form_text(entry.form), names.size_text(hash, entry.form, entry.size)),
             Availability::Failed(code) => format!("failed {}", reason_name(code)),
         };
         let wants: Vec<String> = entry.wants.iter().map(|(owner, policy)| format!("{} {}", names.owner_name(owner), policy_name(*policy))).collect();
@@ -686,6 +762,10 @@ pub fn compare(expected: &Expected, observed: &Observed, to: u32, sequential: &[
     if expected.restore != observed.verdict && (expected.restore.is_some() || observed.verdict.is_some()) {
         let text = |verdict: &Option<Verdict>| verdict.as_ref().map_or_else(|| "none".to_string(), |verdict| verdict.text(names));
         differences.push(format!("the restore: the oracle states [{}], the run gave [{}]", text(&expected.restore), text(&observed.verdict)));
+    }
+    if expected.replay != observed.replay {
+        let text = |replay: &Option<Replay>| replay.as_ref().map_or_else(|| "none".to_string(), |replay| replay.text(names));
+        differences.push(format!("the replay: the oracle states [{}], the run gave [{}]", text(&expected.replay), text(&observed.replay)));
     }
     if expected.blocked != observed.blocked {
         let text = |blocked: &[(u32, Vec<AssetId>)]| {
@@ -734,12 +814,27 @@ pub fn compare(expected: &Expected, observed: &Observed, to: u32, sequential: &[
         if stated != *given {
             differences.push(format!("tick {tick}, the table: the oracle states {}, the run gave {}", table_text(&stated, names), table_text(given, names)));
         }
+        // What the consumer of a form was handed, compared as a verdict is:
+        // a tick that has no block has the lines of the block before it, as
+        // it has its table.
+        let stated_handed: Vec<(AssetId, Option<u64>)> = expected.table_at(tick).map_or_else(Vec::new, |block| block.handed.iter().map(|(asset, form)| (*asset, Some(*form))).collect());
+        let handed: Vec<(AssetId, Option<u64>)> = observed.handed.iter().filter(|(at, _, _)| *at == tick).map(|(_, asset, form)| (*asset, *form)).collect();
+        if stated_handed != handed {
+            differences.push(format!("tick {tick}, what the consumer of a form was handed: the oracle states [{}], the run gave [{}]", handed_text(&stated_handed, names), handed_text(&handed, names)));
+        }
         let hash = state_hash(sequential[tick as usize], &stated);
         if hash != observed.state[at] {
             differences.push(format!("tick {tick}, the state hash: the oracle gives {hash:016x}, the run gave {:016x}", observed.state[at]));
         }
     }
     differences
+}
+
+/// What the consumer of a form was handed at one tick, in words: per asset,
+/// the hash of the bytes, or that it was handed nothing.
+fn handed_text(handed: &[(AssetId, Option<u64>)], names: &Names) -> String {
+    let one = |(asset, form): &(AssetId, Option<u64>)| format!("{} {}", names.asset_name(*asset), form.map_or_else(|| "nothing".to_string(), |form| names.hash_name(form)));
+    handed.iter().map(one).collect::<Vec<_>>().join("; ")
 }
 
 /// What a run gave for one world, in words, for the log: the verdict of its
@@ -750,6 +845,9 @@ pub fn observed_text(observed: &Observed, names: &Names) -> Vec<String> {
     let mut lines = Vec::new();
     if let Some(verdict) = &observed.verdict {
         lines.push(format!("restore {}", verdict.text(names)));
+    }
+    if let Some(replay) = &observed.replay {
+        lines.push(format!("replay {}", replay.text(names)));
     }
     for (before, awaited) in &observed.blocked {
         lines.push(format!("blocked {before} awaiting {}", list_text(awaited, names)));
@@ -762,8 +860,14 @@ pub fn observed_text(observed: &Observed, names: &Names) -> Vec<String> {
         lines.push(format!("tick {}: {}", observed.first, table_text(&observed.creation, names)));
     }
     let mut held = &observed.creation;
+    let mut held_handed: Vec<(AssetId, Option<u64>)> = Vec::new();
     for (index, table) in observed.tables.iter().enumerate() {
         let tick = observed.first + 1 + index as u32;
+        // What the consumer of a form was handed is written where it is not
+        // what it was handed at the tick before.
+        let handed: Vec<(AssetId, Option<u64>)> = observed.handed.iter().filter(|(at, _, _)| *at == tick).map(|(_, asset, form)| (*asset, *form)).collect();
+        let handed_anew = handed != held_handed;
+        held_handed = handed;
         let record = observed.log.iter().find(|record| record.tick == tick).map(elements_of).unwrap_or_default();
         let refusals: Vec<String> = observed.refusals.iter().filter(|(at, _, _)| *at == tick).map(|(_, at, refused)| format!("element {} {}", at + 1, refused.name())).collect();
         let rejected: Vec<String> =
@@ -771,7 +875,7 @@ pub fn observed_text(observed: &Observed, names: &Names) -> Vec<String> {
         let events: Vec<String> = observed.events.iter().filter(|(at, _)| *at == tick).map(|(_, event)| event_text(event, names)).collect();
         let named: Vec<String> =
             observed.names_failed.iter().filter(|(at, _, _)| *at == tick).map(|(_, asset, code)| format!("{} {}", names.asset_name(*asset), reason_name(*code))).collect();
-        if record.is_empty() && refusals.is_empty() && rejected.is_empty() && events.is_empty() && named.is_empty() && table == held {
+        if record.is_empty() && refusals.is_empty() && rejected.is_empty() && events.is_empty() && named.is_empty() && table == held && !handed_anew {
             continue;
         }
         held = table;
@@ -783,6 +887,9 @@ pub fn observed_text(observed: &Observed, names: &Names) -> Vec<String> {
             }
         }
         line.push_str(&format!(" table {}", table_text(table, names)));
+        if handed_anew {
+            line.push_str(&format!(" handed [{}]", handed_text(&held_handed, names)));
+        }
         lines.push(line);
     }
     lines
@@ -791,7 +898,7 @@ pub fn observed_text(observed: &Observed, names: &Names) -> Vec<String> {
 /// The stated entries of typed table bytes: what stands before an oracle's first block.
 pub fn stated_entries(bytes: &[u8]) -> Vec<StatedEntry> {
     let table = Table::decode(bytes, Rules::default()).expect("a table the build wrote decodes");
-    table.entries.into_iter().map(|(id, entry)| (id, entry.asset_type, entry.availability, entry.size, entry.wants)).collect()
+    table.entries.into_iter().map(|(id, entry)| (id, entry.asset_type, entry.availability, entry.size, entry.wants, entry.form)).collect()
 }
 
 #[cfg(test)]
@@ -844,7 +951,7 @@ entry A parameters available A.1 size 7
         let stated = parse(text, &names).expect("the statement reads");
         let block = &stated["s"]["world"].blocks[&2];
         let entity = Owner::Entity { slot: 4, generation: 0 };
-        assert_eq!(block.entries[0], (0x0a, AssetType::Parameters, Availability::Available(0x11), 640, vec![(entity, Policy::Optional)]), "an entry in force holds the size the manifest gives");
+        assert_eq!(block.entries[0], (0x0a, AssetType::Parameters, Availability::Available(0x11), 640, vec![(entity, Policy::Optional)], None), "an entry in force holds the size the manifest gives");
         assert_eq!(block.entries[1].1, AssetType::Second);
         assert_eq!(block.refusals, vec![(1, Refused::AnotherType)]);
         assert_eq!(block.rejected, vec![(0x0a, 0x11)]);
@@ -904,6 +1011,71 @@ entry A parameters available A.1 size 7
         // What a run gave is written in words, a tick that changes nothing left out.
         let observed = Observed { creation: Block::default().table_bytes(), tables: vec![Block::default().table_bytes(); 2], blocked: vec![(1, vec![0x0a])], ..Observed::default() };
         assert_eq!(observed_text(&observed, &names), vec!["blocked 1 awaiting A".to_string(), "tick 0: an empty table".to_string()]);
+    }
+
+    /// What the part of the stand-in sheet on prepared forms adds to the
+    /// format, on statements written here: the form after the hash of a
+    /// part in an availability and in an arrival, with the size after it,
+    /// the `handed` lines, the outcome of a replay, and a restore refused
+    /// for the hash of a form.
+    #[test]
+    fn a_form_a_handed_line_and_the_outcome_of_a_replay_read() {
+        let mut names = names();
+        names.assets.insert("M".to_string(), 0x40);
+        names.hashes.insert("M.1".to_string(), 0x41);
+        names.hashes.insert("M.1:built".to_string(), 0x4b);
+        names.hashes.insert("M.1:local".to_string(), 0x4c);
+        names.sizes.extend([(0x41, 2_000), (0x4b, 4_000), (0x4c, 3_000)]);
+        // An arrival: the form after the hash of the part, then the size,
+        // then the mark. Where no size is stated it is the manifest's, of
+        // the part with the form the arrival names.
+        let arrival = element("arrival M M.1 form M.1:built", &names).expect("an element");
+        assert_eq!(arrival, Element::Arrival(Arrival::at(0x40, 0x41).with_form(0x4b).sized(6_000)));
+        assert_eq!(element_text(&arrival, &names), "arrival M M.1 form M.1:built");
+        let sized = element("arrival M M.1 form M.1:local size 2000 marked", &names).expect("an element");
+        assert_eq!(sized, Element::Arrival(Arrival::at(0x40, 0x41).with_form(0x4c).sized(2_000).marked()));
+        assert_eq!(element_text(&sized, &names), "arrival M M.1 form M.1:local size 2000 marked");
+        assert!(element("arrival M M.1 size 2000 form M.1:built", &names).is_err(), "the form stands before the size");
+        let text = "scenario s\nworld under-set\nreplay refused 3 hash M.1:built\ntick 2\nentry M second available M.1 form M.1:built\nwant source:host required\n\
+                    handed M M.1:built\nevent arrived M M.1\ntick 4\nentry M second available M.1 form M.1:local size 9\nhanded M M.1:local\n\
+                    world no-set\nreplay runs\nworld shifted as under-set shifted 1\nscenario r\nrestore refused hash M M.1:built\n";
+        let stated = parse(text, &names).expect("the statement reads");
+        let under_set = &stated["s"]["under-set"];
+        assert_eq!(under_set.replay, Some(Replay::Refused(3, 0x4b)));
+        assert_eq!(under_set.replay.expect("a replay").text(&names), "refused 3 hash M.1:built");
+        let host = Owner::World(Maker::Source(3));
+        assert_eq!(under_set.blocks[&2].entries, vec![(0x40, AssetType::Second, Availability::Available(0x41), 6_000, vec![(host, Policy::Required)], Some(0x4b))]);
+        assert_eq!(under_set.blocks[&2].handed, vec![(0x40, 0x4b)]);
+        assert_eq!((under_set.blocks[&4].entries[0].3, under_set.blocks[&4].entries[0].5), (9, Some(0x4c)));
+        assert_eq!(stated["s"]["no-set"].replay, Some(Replay::Runs));
+        assert_eq!(stated["s"]["shifted"].replay, Some(Replay::Refused(4, 0x4b)));
+        assert_eq!(stated["r"]["world"].restore, Some(Verdict::RefusedHash(0x40, 0x4b)), "a restore refused for a form names the recorded hash of the form");
+        // The stated table goes through the canonical form the build writes,
+        // the form beside the hash of the part, and reads back in words.
+        let bytes = under_set.blocks[&2].table_bytes();
+        assert_eq!(Table::decode(&bytes, Rules::default()).expect("the stated table decodes").canonical_bytes(), bytes);
+        assert_eq!(stated_entries(&bytes), under_set.blocks[&2].entries);
+        assert_eq!(table_text(&bytes, &names), "[M second available M.1 form M.1:built: source:host required]");
+        assert_eq!(table_text(&under_set.blocks[&4].table_bytes(), &names), "[M second available M.1 form M.1:local size 9: ]");
+        // What a run gave is compared with the handed lines as with a
+        // verdict: a tick that has no block has those of the block before.
+        let observed = Observed {
+            creation: Block::default().table_bytes(),
+            tables: vec![Block::default().table_bytes(), bytes.clone(), bytes.clone()],
+            state: vec![0; 4],
+            handed: vec![(2, 0x40, Some(0x4b)), (3, 0x40, Some(0x4c))],
+            replay: Some(Replay::Refused(3, 0x4b)),
+            ..Observed::default()
+        };
+        let differences = compare(under_set, &observed, 3, &[0; 4], &names);
+        let on_what_was_handed: Vec<&String> = differences.iter().filter(|difference| difference.contains("was handed")).collect();
+        assert_eq!(on_what_was_handed.len(), 1, "{differences:#?}");
+        assert!(on_what_was_handed[0].starts_with("tick 3,") && on_what_was_handed[0].contains("the oracle states [M M.1:built], the run gave [M M.1:local]"), "{differences:#?}");
+        assert!(!differences.iter().any(|difference| difference.contains("the replay")));
+        let lines = observed_text(&observed, &names);
+        assert_eq!(lines[0], "replay refused 3 hash M.1:built");
+        assert!(lines.iter().any(|line| line.starts_with("tick 2:") && line.ends_with("handed [M M.1:built]")), "{lines:#?}");
+        assert!(lines.iter().any(|line| line.starts_with("tick 3:") && line.ends_with("handed [M M.1:local]")), "{lines:#?}");
     }
 
     /// What the stand-in sheet adds to the format, on statements written

@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 pub use reference_workload::{DEFAULT_SEED, Parameters, Size, State};
 use reference_workload::{
-    CHUNK, Fnv1a, GRID_SIDE, Grid, KILLS_PER_TICK, SPAWNS_PER_TICK, SplitMix64, bounced, chunk_range, integrated, kinetic_energy,
+    CHUNK, Fnv1a, GRID_SIDE, Grid, KILLS_PER_TICK, SPAWNS_PER_TICK, SplitMix64, bounced, chunk_range, fnv1a, integrated, kinetic_energy,
     repelled_velocity,
 };
 
@@ -158,6 +158,15 @@ pub struct WorldConfig {
     /// contributor of the composition, in the order the composition lists
     /// them, which stands for the order in which the schedule runs them.
     pub systems: Vec<System>,
+    /// The asset types for which the composition declares a prepared form
+    /// that the stand-in consumer of a form reads: one system the harness
+    /// adds to the schedule, which runs once in every tick, after the
+    /// tick's input fixed point. For each entry of the table that is
+    /// available and of such a type, in the table's order, it asks for the
+    /// prepared form of the asset as a system of the declaring capability
+    /// reads it inside the domain. It writes nothing to the world: what it
+    /// was handed is kept beside the state, by the hash of the bytes.
+    pub reads_the_forms_of: Vec<AssetType>,
     pub rules: Rules,
 }
 
@@ -178,6 +187,7 @@ impl WorldConfig {
             set_under_the_hash: false,
             budget: None,
             systems: Vec::new(),
+            reads_the_forms_of: Vec::new(),
             rules: Rules::default(),
         }
     }
@@ -367,8 +377,18 @@ pub enum Restore<'a> {
     ContentAtHand { dropped: &'a [AssetType], drop_in_silence: bool, types_from: Option<&'a dyn Fn(AssetId) -> Option<AssetType>> },
     /// A restore under the recorded content: every asset the table holds as
     /// available, an entry with no want included, is confirmed at the same
-    /// hash, or the restore is refused, naming the asset and the hash.
-    Continue { confirm: &'a dyn Fn(AssetId, u64) -> Result<Arc<Resident>, String>, dropped: &'a [AssetType] },
+    /// hash, or the restore is refused, naming the asset and the hash. An
+    /// entry that holds the hash of a prepared form built once is confirmed
+    /// at that hash too, by `confirm_form`, which is given the asset, the
+    /// hash of its canonical part and the recorded hash of its form: where
+    /// the form is not confirmed the restore is refused, naming the asset
+    /// and the recorded hash of the form. A request that gives nothing to
+    /// confirm a form with confirms none.
+    Continue {
+        confirm: &'a dyn Fn(AssetId, u64) -> Result<Arc<Resident>, String>,
+        confirm_form: Option<&'a dyn Fn(AssetId, u64, u64) -> Result<(), String>>,
+        dropped: &'a [AssetType],
+    },
 }
 
 /// What became of the history a restored world belongs to, known once its
@@ -579,6 +599,10 @@ struct Journal {
     leaving: Leaving,
     /// The hash of the table as the availability source last read it.
     extracted_hash: u64,
+    /// What the consumer of a form was handed: the tick, the asset, and the
+    /// content hash of the bytes, computed over them; none where it was
+    /// handed nothing.
+    handed: Vec<(u32, AssetId, Option<u64>)>,
 }
 
 /// What a tick gathers for the extraction at its end.
@@ -808,6 +832,9 @@ impl Graph {
         if empty && !table.has_orphans() && journal.restore.is_none() {
             // Nothing to apply: the gate stands as the state has it.
             journal.gate_leaves = if table.blocked() { table.required_unanswered() } else { Vec::new() };
+            if !table.blocked() {
+                self.read_the_forms(tick, table, journal);
+            }
             return self.gate_verdict(tick, !table.blocked(), table, journal);
         }
         let record = Record {
@@ -882,7 +909,28 @@ impl Graph {
             extract(Extraction { tick, left: applied.left, wanted: applied.wanted, entries: table.view(), restore_applied });
         }
         self.rebuild_views();
+        self.read_the_forms(tick, table, journal);
         self.gate_verdict(tick, true, table, journal)
+    }
+
+    /// The consumer of a form, where the composition declares one that it
+    /// reads: once in every tick that runs, after the tick's input fixed
+    /// point. For each available entry of a type that has such a form, in
+    /// the table's order, it asks the extension point for the prepared form
+    /// of the part, naming the hash of the form the entry holds, and keeps
+    /// the content hash of the bytes it is handed, computed over those bytes
+    /// and not read from the table. Runs alone.
+    fn read_the_forms(&self, tick: u32, table: &Table, journal: &mut Journal) {
+        if self.config.reads_the_forms_of.is_empty() {
+            return;
+        }
+        for (asset, entry) in &table.entries {
+            let Availability::Available(part) = entry.availability else { continue };
+            if self.config.reads_the_forms_of.contains(&entry.asset_type) {
+                let handed = self.links.residents.form(part, entry.form).map(|bytes| fnv1a(&bytes));
+                journal.handed.push((tick, *asset, handed));
+            }
+        }
     }
 
     /// The end of a tick: where its table is not the one the availability
@@ -1585,6 +1633,12 @@ impl World {
         &self.journal().events
     }
 
+    /// What the consumer of a form was handed, tick by tick: the asset, and
+    /// the content hash of the bytes, none where it was handed nothing.
+    pub fn handed(&self) -> &[(u32, AssetId, Option<u64>)] {
+        &self.journal().handed
+    }
+
     pub fn gates(&self) -> &[GateRecord] {
         &self.journal().gates
     }
@@ -1829,11 +1883,20 @@ impl World {
                 let unanswered = if rules.save_with_an_unanswered_want_continues { Vec::new() } else { unanswered };
                 (History::Undecided, Some(PendingRestore { unanswered, dropped, another_composition }))
             }
-            Restore::Continue { confirm, .. } => {
-                let confirmed: Vec<(AssetId, u64)> = table.entries.iter().filter_map(|(id, entry)| Some((*id, held(entry)?))).collect();
-                for (asset, hash) in confirmed {
+            Restore::Continue { confirm, confirm_form, .. } => {
+                let confirmed: Vec<(AssetId, u64, Option<u64>)> = table.entries.iter().filter_map(|(id, entry)| Some((*id, held(entry)?, entry.form))).collect();
+                for (asset, hash, form) in confirmed {
                     let resident = confirm(asset, hash).map_err(|reason| Refusal::Content { asset, hash, reason })?;
                     table.entries.get_mut(&asset).expect("an entry of the table").resident = Some(resident);
+                    // The same hashes are those of the canonical part and of
+                    // the prepared form built once: a form that cannot be
+                    // confirmed refuses the restore by its recorded hash.
+                    // Under one control the part alone is confirmed.
+                    if let Some(form) = form.filter(|_| !rules.confirmation_reads_the_part_alone) {
+                        let unconfirmed = || Err("the request gives nothing to confirm a prepared form with".to_string());
+                        let confirmed = confirm_form.map_or_else(unconfirmed, |confirm_form| confirm_form(asset, hash, form));
+                        confirmed.map_err(|reason| Refusal::Content { asset, hash: form, reason })?;
+                    }
                 }
                 if another_composition || !dropped.is_empty() {
                     (History::Undecided, Some(PendingRestore { unanswered: Vec::new(), dropped, another_composition }))

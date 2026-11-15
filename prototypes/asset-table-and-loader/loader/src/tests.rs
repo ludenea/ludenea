@@ -4,6 +4,7 @@
 //! world is its queue and the table a host extracts for it.
 
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Instant;
 
 use content_store::{encode_domain, encode_root};
 use prototype_core::table::{Dependency, RepulsionTable, part_bytes};
@@ -105,7 +106,7 @@ struct Attached {
 impl Attached {
     fn new(loader: &Loader, set: Option<u64>, entries: &[EntryView], unanswered: &[(AssetId, AssetType)], restore: &[AssetId]) -> Attached {
         let queue = Arc::new(ArrivalQueue::default());
-        let attachment = Attachment { queue: queue.clone(), set, entries: entries.to_vec(), unanswered: unanswered.to_vec(), restore: restore.to_vec(), standing: Vec::new(), checks: Vec::new() };
+        let attachment = Attachment { queue: queue.clone(), set, entries: entries.to_vec(), unanswered: unanswered.to_vec(), restore: restore.to_vec(), standing: Vec::new(), checks: Vec::new(), forms: Vec::new() };
         Attached { extract: loader.attach(attachment).expect("the world is attached"), queue }
     }
 
@@ -143,6 +144,352 @@ fn a_want_that_leaves_is_answered_by_its_closure_without_what_the_table_holds_av
     let world = Attached::new(&every, None, &[], &[], &[]);
     world.extract(&[(D, PARAMETERS)], &table, false);
     assert_eq!(world.posted(&every), vec![of(&domain, D)]);
+}
+
+/// A world whose composition declares the stand-in form built once for the
+/// second type, as the capability sees it.
+fn declaring(loader: &Loader, unanswered: &[(AssetId, AssetType)]) -> Attached {
+    let queue = Arc::new(ArrivalQueue::default());
+    let forms = vec![(SECOND, Preparer::Stamp)];
+    let attachment = Attachment { queue: queue.clone(), set: None, entries: Vec::new(), unanswered: unanswered.to_vec(), restore: Vec::new(), standing: Vec::new(), checks: Vec::new(), forms };
+    Attached { extract: loader.attach(attachment).expect("the world is attached"), queue }
+}
+
+/// A store whose manifest lists, for one asset of the second type, a form
+/// built once under the producer's platform name; the store holds the form
+/// under its hash where `held` is set. Returns the manifest, the hash of
+/// the form built once and the form the machine builds for the same part.
+fn with_a_form(store: &Loose, held: bool) -> (Domain, u64, Vec<u8>) {
+    let mut domain = store.revision(&[(A, PARAMETERS, 1, &[]), (N, SECOND, 1, &[])]);
+    let built = stamp(&part(1, &[]), "producer", None);
+    let hash = if held { store.put(&built) } else { content_hash(&built) };
+    domain.get_mut(&N).expect("an entry").forms = vec![content_store::PreparedForm { preparer: Preparer::Stamp.label(), hash, size: built.len() as u64 }];
+    store.place(&domain);
+    (domain, hash, stamp(&part(1, &[]), &local_platform(), None))
+}
+
+#[test]
+fn an_arrival_names_the_form_built_once_its_world_declares_and_the_size_of_the_part_with_it() {
+    assert_eq!(content_hash(b"one function"), hash_by_the_core(b"one function"), "the core and the store hash a content alike");
+    let store = Loose::new();
+    let (domain, built, _) = with_a_form(&store, true);
+    let (part_hash, size) = (domain[&N].hash, domain[&N].size + domain[&N].forms[0].size);
+    let loader = Loader::start(&store.directory, Options::default()).expect("the capability starts");
+    let world = declaring(&loader, &[(A, PARAMETERS), (N, SECOND)]);
+    assert_eq!(world.posted(&loader), vec![of(&domain, A), Arrival::at(N, part_hash).with_form(built).sized(size)]);
+    // The form is resident with its part, and a system is handed its bytes
+    // by the hash the entry names.
+    let handed = loader.residents().form(part_hash, Some(built)).expect("the form is resident");
+    assert_eq!(content_hash(&handed), built);
+    // A world whose composition declares no form: the part alone, no form.
+    let plain = Attached::new(&loader, None, &[], &[(N, SECOND)], &[]);
+    assert_eq!(plain.posted(&loader), vec![of(&domain, N)]);
+    // The controls: no form named; the size of the part alone; every form
+    // of the manifest named, whatever the composition declares.
+    let posted = |options: Options, declares: bool| {
+        let loader = Loader::start(&store.directory, options).expect("the capability starts");
+        let world = if declares { declaring(&loader, &[(N, SECOND)]) } else { Attached::new(&loader, None, &[], &[(N, SECOND)], &[]) };
+        world.posted(&loader)
+    };
+    assert_eq!(posted(Options { forms_not_named: true, ..Options::default() }, true), vec![Arrival::at(N, part_hash).sized(size)]);
+    let part_alone = Options { arrivals_name_the_size_of_the_part_alone: true, ..Options::default() };
+    assert_eq!(posted(part_alone, true), vec![Arrival::at(N, part_hash).with_form(built).sized(domain[&N].size)]);
+    let every_form = Options { arrivals_name_every_form_of_the_manifest: true, ..Options::default() };
+    assert_eq!(posted(every_form, false), vec![Arrival::at(N, part_hash).with_form(built).sized(size)]);
+}
+
+/// The content hash as the core computes it: the one a stamp holds of its
+/// part, in its last eight bytes.
+fn hash_by_the_core(bytes: &[u8]) -> u64 {
+    let form = stamp(bytes, "", None);
+    u64::from_le_bytes(form[form.len() - 8..].try_into().expect("eight bytes"))
+}
+
+#[test]
+fn a_form_built_once_is_read_under_its_hash_and_the_machines_own_form_never_passes_for_it() {
+    // The store holds no bytes under the hash of the form built once, and
+    // the machine's cache of forms holds the form it built for the part.
+    let store = Loose::new();
+    let (domain, built, own) = with_a_form(&store, false);
+    let part_hash = domain[&N].hash;
+    let machine = Machine::beside(&store.directory);
+    fs::create_dir_all(&machine.forms).expect("the cache of forms is created");
+    fs::write(machine.form_path(part_hash, Preparer::Stamp), &own).expect("the machine's own form is kept");
+    assert_ne!(content_hash(&own), built, "a form a machine built for itself has another hash");
+    let first_load = |options: Options| {
+        let loader = Loader::start(&store.directory, options).expect("the capability starts");
+        let world = declaring(&loader, &[(N, SECOND)]);
+        let posted = world.posted(&loader);
+        let handed = loader.residents().form(part_hash, Some(built)).map(|bytes| content_hash(&bytes));
+        (posted, handed)
+    };
+    // The load fails: the form cannot be had. The reason is the one of an
+    // artifact the store does not hold, and under the other reading the one
+    // of a preparation.
+    assert_eq!(first_load(Options::default()), (vec![Arrival::failed(N, REASON_ARTIFACT_GONE)], None));
+    let as_a_preparation = Options { a_form_that_cannot_be_had_fails_as_a_preparation: true, ..Options::default() };
+    assert_eq!(first_load(as_a_preparation).0, vec![Arrival::failed(N, REASON_PREPARATION_FAILED)]);
+    // Control: the machine's own form is taken where the one named is gone,
+    // and held under the hash named.
+    let size = domain[&N].size + domain[&N].forms[0].size;
+    let taken = Options { local_form_where_the_named_one_cannot_be_had: true, ..Options::default() };
+    assert_eq!(first_load(taken), (vec![Arrival::at(N, part_hash).with_form(built).sized(size)], Some(content_hash(&own))));
+    // A form whose bytes are not those its hash names does not verify.
+    fs::write(store.directory.join("objects").join(hex(built)), &own).expect("an object is written");
+    assert_eq!(first_load(Options::default()).0, vec![Arrival::failed(N, REASON_INVALID_PART)]);
+    // With the form built once in the store beside the machine's own, the
+    // bytes handed are those the hash names; under the control, the
+    // machine's own, wherever the machine holds one.
+    let _ = store.put(&stamp(&part(1, &[]), "producer", None));
+    fs::write(store.directory.join("objects").join(hex(built)), stamp(&part(1, &[]), "producer", None)).expect("an object is written");
+    assert_eq!(first_load(Options::default()).1, Some(built));
+    assert_eq!(first_load(Options { forms_taken_from_the_machine: true, ..Options::default() }).1, Some(content_hash(&own)));
+}
+
+/// One content read through two selections: a client's, whose root document
+/// names a presentation manifest beside the domain manifest, and a server's,
+/// whose root names the domain manifest alone. What each posts to a world is
+/// the same; the presentation manifest is read for its consumers alone.
+#[test]
+fn a_presentation_manifest_is_read_for_its_consumers_alone_and_a_server_reads_none() {
+    use content_store::{Variant, encode_presentation, encode_root_with};
+    let store = Loose::new();
+    let lists: &[Dependency] = &[(D, PARAMETERS)];
+    let domain = store.revision(&[(D, PARAMETERS, 1, &[]), (E, PARAMETERS, 1, &[]), (P, PARAMETERS, 1, lists)]);
+    // `P` has a payload and `E` as its presentation dependency; `E` has a
+    // payload; `D` has none, and no entry.
+    let entry = |payload: &[u8], dependencies: &[AssetId]| {
+        let variant = Variant { name: "full".to_string(), hash: store.put(payload), size: payload.len() as u64 };
+        PresentationEntry { variants: vec![variant], dependencies: dependencies.to_vec() }
+    };
+    let presented = |of_p: &[u8]| Presentation::from([(P, entry(of_p, &[E])), (E, entry(b"the payload of E", &[]))]);
+    let place = |presentation: &Presentation| {
+        let named = vec![("desktop".to_string(), store.put(&encode_presentation(presentation)))];
+        fs::write(store.directory.join("root"), encode_root_with(set_hash(&domain), &named)).expect("the root document is written");
+    };
+    let table = [held(D, PARAMETERS, Availability::Available(domain[&D].hash), true), held(P, PARAMETERS, Availability::Available(domain[&P].hash), true)];
+    // The server's selection: the root names the domain manifest alone.
+    let server = Loader::start(&store.directory, Options::default()).expect("the capability starts");
+    assert!(server.presentation().is_none());
+    let world = Attached::new(&server, None, &[], &[(P, PARAMETERS)], &[]);
+    let batch = vec![of(&domain, D), of(&domain, P)];
+    assert_eq!(world.posted(&server), batch);
+    assert_eq!((server.report().presentation_manifests_read, server.report().payloads_read), (0, 0), "a server reads none");
+    assert!(server.confirm(None, P, domain[&P].hash).is_ok());
+    // The client's selection: the same batch, and the same content set.
+    let first = presented(b"the payload of P, 1");
+    place(&first);
+    let client = Loader::start(&store.directory, Options::default()).expect("the capability starts");
+    assert_eq!(client.presentation(), Some(first.clone()));
+    let world = Attached::new(&client, None, &[], &[(P, PARAMETERS)], &[]);
+    assert_eq!(world.posted(&client), batch, "nothing of a presentation manifest reaches a world");
+    assert_eq!((client.content_set(), server.content_set()), (set_hash(&domain), set_hash(&domain)));
+    assert_eq!(client.report().payloads_read, 0, "a payload is loaded on the request of its consumer, and never by a want");
+    // A consumer asks for a payload by the hash the manifest names.
+    let payload = client.payload(first[&P].variants[0].hash).expect("the payload is had");
+    assert_eq!(payload.as_slice(), b"the payload of P, 1");
+    assert!(client.payload(first[&P].variants[0].hash).is_ok());
+    assert_eq!((client.report().presentation_manifests_read, client.report().payloads_read), (1, 1), "a payload already resident is not read again");
+    assert!(client.payload(0x55).is_err(), "a payload that cannot be loaded is reported to its consumer");
+    // A presentation revision: another payload for `P`, and the domain
+    // manifest as it was. The world receives nothing; under the control it
+    // receives an arrival of `P`, at the hash it holds.
+    let second = presented(b"the payload of P, 2");
+    let after_a_presentation_revision = |options: Options| {
+        place(&first);
+        let loader = Loader::start(&store.directory, options).expect("the capability starts");
+        let world = Attached::new(&loader, None, &table, &[], &[]);
+        place(&second);
+        loader.revision_in_place().expect("the revision is read");
+        (world.posted(&loader), loader.report().presentation_manifests_read)
+    };
+    assert_eq!(after_a_presentation_revision(Options::default()), (Vec::new(), 2));
+    let as_a_revision = Options { presentation_changes_are_revisions: true, ..Options::default() };
+    assert_eq!(after_a_presentation_revision(as_a_revision).0, vec![of(&domain, P)]);
+    // The other controls, each on the client's selection.
+    let posted = |options: Options| {
+        let loader = Loader::start(&store.directory, options).expect("the capability starts");
+        let world = Attached::new(&loader, None, &[], &[(P, PARAMETERS)], &[]);
+        world.posted(&loader)
+    };
+    let in_the_presentation_manifest = Options { resolves_in_the_presentation_manifest: true, ..Options::default() };
+    assert_eq!(posted(in_the_presentation_manifest), vec![Arrival::failed(D, REASON_UNKNOWN_ASSET), Arrival::failed(P, REASON_INVALID_PART)]);
+    let with_the_presentation_dependencies = Options { closure_follows_presentation_dependencies: true, ..Options::default() };
+    assert_eq!(posted(with_the_presentation_dependencies), vec![of(&domain, D), of(&domain, E), of(&domain, P)]);
+    let covering = Loader::start(&store.directory, Options { set_hash_covers_every_manifest: true, ..Options::default() }).expect("the capability starts");
+    assert_ne!(covering.content_set(), set_hash(&domain));
+    let confirming = Options { confirmation_confirms_payloads: true, ..Options::default() };
+    assert!(Loader::start(&store.directory, confirming).expect("the capability starts").confirm(None, P, domain[&P].hash).is_ok());
+    store.remove(second[&P].variants[0].hash);
+    let waiting = Options { arrivals_wait_for_payloads: true, ..Options::default() };
+    assert_eq!(posted(waiting), vec![of(&domain, D), Arrival::failed(P, REASON_ARTIFACT_GONE)]);
+    assert!(Loader::start(&store.directory, confirming).expect("the capability starts").confirm(None, P, domain[&P].hash).is_err());
+    // On a server's selection that control has no presentation manifest to
+    // confirm a payload with, and the set a control covers is the domain's.
+    store.place(&domain);
+    assert!(Loader::start(&store.directory, confirming).expect("the capability starts").confirm(None, P, domain[&P].hash).is_err());
+    let covering = Loader::start(&store.directory, Options { set_hash_covers_every_manifest: true, ..Options::default() }).expect("the capability starts");
+    assert_eq!(covering.content_set(), set_hash(&domain));
+}
+
+/// Under a bound on the work at load: a piece whose estimate is above the
+/// bound is an action of the background pool, and any other runs on the file
+/// thread that read the artifact. What a world receives does not depend on
+/// where the work ran. A bound of no duration puts every piece on the pool,
+/// and a bound of an hour leaves every piece on the executor: no figure of
+/// the machine is read here.
+#[test]
+fn a_bound_places_each_piece_of_work_at_load_on_a_file_thread_or_on_the_pool() {
+    let store = Loose::new();
+    let lists: &[Dependency] = &[(D, PARAMETERS), (N, SECOND)];
+    let domain = store.revision(&[(D, PARAMETERS, 1, &[]), (N, SECOND, 2, &[]), (P, PARAMETERS, 3, lists)]);
+    let forms = vec![(SECOND, Preparer::Grind)];
+    let batch = vec![of(&domain, D), of(&domain, N), of(&domain, P)];
+    let form = grind(&part(2, &[]));
+    let under = |bound: Option<Duration>, cache: &str| {
+        let machine = Machine { forms: store.directory.join(cache), bound: bound.map(|bound| LoadBound { bound, workers: 4 }), ..Machine::beside(&store.directory) };
+        let kept = machine.form_path(domain[&N].hash, Preparer::Grind);
+        let loader = Loader::start_on(&store.directory, machine, Options::default()).expect("the capability starts");
+        let queue = Arc::new(ArrivalQueue::default());
+        let attachment = Attachment { queue: queue.clone(), set: None, entries: Vec::new(), unanswered: vec![(P, PARAMETERS)], restore: Vec::new(), standing: Vec::new(), checks: Vec::new(), forms: forms.clone() };
+        let world = Attached { extract: loader.attach(attachment).expect("the world is attached"), queue };
+        assert_eq!(world.posted(&loader), batch, "what a world receives does not depend on where the work at load ran");
+        // The form the machine builds is resident with its part, named by
+        // no arrival, and kept in the machine's cache of forms.
+        let handed = loader.residents().form(domain[&N].hash, None).expect("the form is resident");
+        assert_eq!(*handed, form);
+        assert_eq!(fs::read(&kept).expect("the form is kept in the machine's cache of forms"), form);
+        assert_eq!(loader.report().reads, 4, "the manifest and three parts");
+        loader
+    };
+    // Without a bound the instance has no pool and estimates nothing.
+    assert!(under(None, "forms-unbound").bounded().is_none());
+    // Every piece above the bound: seven actions, three verifications,
+    // three validations and the form of the one part that has one.
+    let on_the_pool = under(Some(Duration::ZERO), "forms-pool").bounded().expect("an instance under a bound");
+    let ran = on_the_pool.ran();
+    let count = |ran: &[Ran], work: Work| ran.iter().filter(|piece| piece.work == work).count();
+    assert_eq!((count(&ran, Work::Verification), count(&ran, Work::Validation), count(&ran, Work::Form)), (3, 3, 1));
+    assert!(ran.iter().all(|piece| matches!(piece.place, Place::Action(worker) if worker < 4)), "{ran:?}");
+    assert!(ran.iter().all(|piece| piece.ended >= piece.started));
+    assert_eq!(on_the_pool.posted().len(), 1, "the moment the batch stood on the world's queue is kept");
+    assert!(ran.iter().all(|piece| piece.ended <= on_the_pool.posted()[0]), "the batch is posted once every piece of its closure has run");
+    // The pieces of one artifact run one after the other, in order.
+    let of_the_form = |work: Work| ran.iter().find(|piece| piece.hash == domain[&N].hash && piece.work == work).expect("a piece of the part that has a form");
+    assert!(of_the_form(Work::Verification).ended <= of_the_form(Work::Validation).started && of_the_form(Work::Validation).ended <= of_the_form(Work::Form).started);
+    // Every piece under the bound: on the file thread that read the artifact.
+    let on_the_executor = under(Some(Duration::from_secs(3_600)), "forms-executor").bounded().expect("an instance under a bound");
+    let ran = on_the_executor.ran();
+    assert_eq!(ran.len(), 7);
+    assert!(ran.iter().all(|piece| matches!(piece.place, Place::FileThread(thread) if thread < 2)), "{ran:?}");
+    let threads_of = |hash: u64| ran.iter().filter(|piece| piece.hash == hash).map(|piece| piece.place).collect::<BTreeSet<_>>().len();
+    assert_eq!(threads_of(domain[&N].hash), 1, "the pieces of one artifact run on the one file thread that read it");
+    // The rates are measured when the instance starts, and an estimate is a
+    // size divided by a rate.
+    let rates = on_the_executor.rates;
+    assert!(rates.verification > 0.0 && rates.validation > 0.0 && rates.form > 0.0 && rates.import_passes >= 1);
+    assert!((rates.milliseconds(Work::Verification, 2_000_000) - 2.0 * rates.milliseconds(Work::Verification, 1_000_000)).abs() < 1e-9);
+    // An artifact the store does not hold is left to the load path, which
+    // fails it: the rest of the batch is posted.
+    store.remove(domain[&N].hash);
+    let machine = Machine { forms: store.directory.join("forms-gone"), bound: Some(LoadBound { bound: Duration::ZERO, workers: 4 }), ..Machine::beside(&store.directory) };
+    let loader = Loader::start_on(&store.directory, machine, Options::default()).expect("the capability starts");
+    let world = Attached::new(&loader, None, &[], &[(P, PARAMETERS)], &[]);
+    assert_eq!(world.posted(&loader), vec![of(&domain, D), Arrival::failed(N, REASON_ARTIFACT_GONE), of(&domain, P)]);
+}
+
+/// The stand-in background pool runs its actions in the order submitted,
+/// and the store port serves a host's read requests among the capability's.
+#[test]
+fn the_pool_runs_actions_in_the_order_submitted_and_the_port_serves_a_hosts_reads() {
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let pool = Pool::new(1);
+    let handle = pool.handle();
+    let (done, finished) = channel();
+    for action in 0..50_usize {
+        let (order, done) = (order.clone(), done.clone());
+        handle.submit(Box::new(move |worker| {
+            order.lock().expect("never poisoned").push((action, worker));
+            let _ = done.send(());
+        }));
+    }
+    for _ in 0..50 {
+        finished.recv().expect("an action ran");
+    }
+    assert_eq!(*order.lock().expect("never poisoned"), (0..50).map(|action| (action, 0)).collect::<Vec<_>>());
+    assert_eq!(handle.queued(), 0);
+    // Several workers: every action runs once.
+    let pool = Pool::new(4);
+    let ran = Arc::new(AtomicU32::new(0));
+    for _ in 0..200 {
+        let (ran, done) = (ran.clone(), done.clone());
+        pool.handle().submit(Box::new(move |worker| {
+            assert!(worker < 4);
+            ran.fetch_add(1, Ordering::SeqCst);
+            let _ = done.send(());
+        }));
+    }
+    for _ in 0..200 {
+        finished.recv().expect("an action ran");
+    }
+    assert_eq!(ran.load(Ordering::SeqCst), 200);
+    // A host's request reads one artifact whole from the loose store.
+    let store = Loose::new();
+    let domain = store.revision(&[(A, PARAMETERS, 1, &[])]);
+    let loader = Loader::start(&store.directory, Options::default()).expect("the capability starts");
+    let (reply, served) = channel();
+    let before = Instant::now();
+    assert!(loader.port().request(domain[&A].hash, &reply) && loader.port().request(0x99, &reply));
+    // Two file threads serve the two requests: either may answer first.
+    let mut both = [served.recv().expect("the request is served"), served.recv().expect("the request is served")];
+    both.sort_by_key(|served| !served.found);
+    let (held, gone) = (both[0], both[1]);
+    assert!(held.found && !gone.found);
+    assert!(held.thread < 2 && before <= held.requested && held.requested <= held.started);
+}
+
+#[test]
+fn a_restore_confirms_a_form_at_its_recorded_hash_and_a_replay_reads_it_by_that_hash() {
+    let store = Loose::new();
+    let (domain, built, own) = with_a_form(&store, true);
+    let part_hash = domain[&N].hash;
+    let loader = Loader::start(&store.directory, Options::default()).expect("the capability starts");
+    assert_eq!(loader.confirm_form(None, N, part_hash, built), Ok(()));
+    assert!(loader.confirm_form(None, N, part_hash, content_hash(&own)).is_err(), "another hash than the content lists for the asset");
+    assert!(loader.confirm_form(None, A, domain[&A].hash, built).is_err(), "an asset the content lists no form for");
+    // A replay reads the part and the form by the hashes its record names.
+    let forms = [(SECOND, Preparer::Stamp)];
+    let record = Record::arrivals(3, vec![Arrival::at(N, part_hash).with_form(built)]);
+    assert_eq!(loader.replay(None, &record, &forms), Ok(()));
+    // The machine's own manifest: the same part, the machine's own form.
+    // The store holds the form built once beside it.
+    let own_hash = store.put(&own);
+    let mut own_domain = domain.clone();
+    own_domain.get_mut(&N).expect("an entry").forms[0].hash = own_hash;
+    store.place(&own_domain);
+    let beside = |options: Options| Loader::start(&store.directory, options).expect("the capability starts");
+    let loader = beside(Options::default());
+    assert!(loader.confirm_form(None, N, part_hash, built).is_err(), "the manifest the world would stand under holds another form");
+    assert_eq!(beside(Options { confirmation_reads_the_store_alone: true, ..Options::default() }).confirm_form(None, N, part_hash, built), Ok(()));
+    assert_eq!(loader.replay(None, &record, &forms), Ok(()), "a replay reads by hash, whatever manifest its instance holds");
+    assert_eq!(loader.residents().form(part_hash, Some(built)).map(|bytes| content_hash(&bytes)), Some(built));
+    // A record that names no form, which a control alone gives: the form is
+    // the one the manifest lists, here the machine's own.
+    let unnamed = Record::arrivals(3, vec![Arrival::at(N, part_hash)]);
+    let loader = beside(Options::default());
+    assert_eq!(loader.replay(None, &unnamed, &forms), Ok(()));
+    assert_eq!(loader.residents().form(part_hash, None).map(|bytes| content_hash(&bytes)), Some(own_hash));
+    // The form built once gone from the store: the replay is refused at
+    // that record, naming the hash; so is one whose part is gone.
+    store.remove(built);
+    let loader = beside(Options::default());
+    assert_eq!(loader.replay(None, &record, &forms), Err(built));
+    let gone = Record::arrivals(4, vec![Arrival::at(A, 0x77)]);
+    assert_eq!(loader.replay(None, &gone, &forms), Err(0x77));
+    // Control: the replay takes the form its machine built for the part.
+    let taking = beside(Options { local_form_where_the_named_one_cannot_be_had: true, ..Options::default() });
+    assert_eq!(taking.replay(None, &record, &forms), Ok(()));
+    assert_eq!(taking.residents().form(part_hash, Some(built)).map(|bytes| content_hash(&bytes)), Some(own_hash));
 }
 
 #[test]
@@ -294,7 +641,7 @@ fn the_answers_to_a_restore_complete_the_batch_of_each_closure_and_a_revision_is
     let standing = vec![(E, vec![(host, Policy::Optional)]), (F, vec![(Owner::Asset(P), Policy::Required)]), (Q, Vec::new()), (U, vec![(host, Policy::Required)])];
     let restored = |loader: &Loader| {
         let queue = Arc::new(ArrivalQueue::default());
-        let attachment = Attachment { queue: queue.clone(), set: None, entries: saved.to_vec(), unanswered: vec![(U, PARAMETERS)], restore: vec![O, P, R], standing: standing.clone(), checks: Vec::new() };
+        let attachment = Attachment { queue: queue.clone(), set: None, entries: saved.to_vec(), unanswered: vec![(U, PARAMETERS)], restore: vec![O, P, R], standing: standing.clone(), checks: Vec::new(), forms: Vec::new() };
         Attached { extract: loader.attach(attachment).expect("the world is attached"), queue }
     };
     let answers = [Arrival::failed(O, REASON_UNKNOWN_ASSET).marked(), of(&at_hand, P).marked(), of(&at_hand, R).marked()];
@@ -596,7 +943,7 @@ impl Attached {
     fn checked(loader: &Loader, entries: &[EntryView], bound: f32) -> Attached {
         let queue = Arc::new(ArrivalQueue::default());
         let checks = vec![(PARAMETERS, AdmissionCheck { bound })];
-        let attachment = Attachment { queue: queue.clone(), set: None, entries: entries.to_vec(), unanswered: Vec::new(), restore: Vec::new(), standing: Vec::new(), checks };
+        let attachment = Attachment { queue: queue.clone(), set: None, entries: entries.to_vec(), unanswered: Vec::new(), restore: Vec::new(), standing: Vec::new(), checks, forms: Vec::new() };
         Attached { extract: loader.attach(attachment).expect("the world is attached"), queue }
     }
 }

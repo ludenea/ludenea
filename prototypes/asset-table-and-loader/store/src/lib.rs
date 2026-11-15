@@ -3,8 +3,10 @@
 //! product code. No thread, no I/O, no platform dependency.
 //!
 //! The domain manifest, the root document of a revision and the package are
-//! copied from the import graph spike, without its presentation manifests,
-//! which this stage reads nowhere.
+//! copied from the import graph spike. Its presentation manifest is not
+//! copied: the one here is the stand-in a scenario sheet defines, one
+//! variant per asset with its presentation dependencies, which a root
+//! document names beside the domain manifest where a pass was asked for one.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -90,7 +92,9 @@ pub type Dependency = (AssetId, String);
 /// A prepared form that is built once, as the domain manifest lists it for
 /// an asset whose type has one: what prepares it, by name and version, the
 /// hash of the form and its size. No asset type of this prototype has such
-/// a form: the place is kept, and every list is empty.
+/// a form of its own: a list holds a form where a pass of the stand-in
+/// pipeline was asked to run the stand-in preparing function a scenario
+/// sheet defines, and is empty otherwise.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PreparedForm {
     pub preparer: String,
@@ -228,13 +232,101 @@ pub fn encode_root(domain_hash: u64) -> Vec<u8> {
 }
 
 pub fn decode_root(bytes: &[u8]) -> Result<u64, String> {
+    decode_root_whole(bytes).map(|(domain_hash, _)| domain_hash)
+}
+
+// ---------------------------------------------------------------------------
+// The presentation manifest
+// ---------------------------------------------------------------------------
+
+/// One variant of an asset's presentation: its name, the hash and the size
+/// of its payload. The stand-in holds no layout: no payload is read by
+/// ranges.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Variant {
+    pub name: String,
+    pub hash: u64,
+    pub size: u64,
+}
+
+/// An entry of a presentation manifest: the variants of an asset that has a
+/// payload, and its presentation dependencies, by identifier.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PresentationEntry {
+    pub variants: Vec<Variant>,
+    pub dependencies: Vec<AssetId>,
+}
+
+/// A presentation manifest, for one target profile: one more document under
+/// the root of a content, with a hash of its own. It holds an entry for each
+/// asset that has a payload, and none for an asset that has none. A server
+/// reads none, and its hash is no part of what names a content set.
+pub type Presentation = BTreeMap<AssetId, PresentationEntry>;
+
+pub fn encode_presentation(presentation: &Presentation) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&(presentation.len() as u32).to_le_bytes());
+    for (id, entry) in presentation {
+        out.extend_from_slice(&id.to_le_bytes());
+        out.extend_from_slice(&(entry.variants.len() as u32).to_le_bytes());
+        for variant in &entry.variants {
+            put_text(&mut out, &variant.name);
+            out.extend_from_slice(&variant.hash.to_le_bytes());
+            out.extend_from_slice(&variant.size.to_le_bytes());
+        }
+        out.extend_from_slice(&(entry.dependencies.len() as u32).to_le_bytes());
+        for dependency in &entry.dependencies {
+            out.extend_from_slice(&dependency.to_le_bytes());
+        }
+    }
+    out
+}
+
+pub fn decode_presentation(bytes: &[u8]) -> Result<Presentation, String> {
+    let mut reader = Reader::new(bytes);
+    let mut presentation = Presentation::new();
+    for _ in 0..reader.u32()? {
+        let id = reader.id()?;
+        let variants = (0..reader.u32()?).map(|_| Ok(Variant { name: reader.text()?, hash: reader.u64()?, size: reader.u64()? })).collect::<Result<Vec<_>, String>>()?;
+        let dependencies = (0..reader.u32()?).map(|_| reader.id()).collect::<Result<Vec<_>, String>>()?;
+        presentation.insert(id, PresentationEntry { variants, dependencies });
+    }
+    reader.end()?;
+    Ok(presentation)
+}
+
+/// The root document of a revision that holds presentation manifests: it
+/// names the hash of the domain manifest, then each presentation manifest by
+/// the name of its target profile and its hash. A revision that holds none
+/// has the root document it had before a root could name one.
+pub fn encode_root_with(domain_hash: u64, presentation: &[(String, u64)]) -> Vec<u8> {
+    let mut out = encode_root(domain_hash);
+    if !presentation.is_empty() {
+        out.extend_from_slice(&(presentation.len() as u32).to_le_bytes());
+        for (profile, hash) in presentation {
+            put_text(&mut out, profile);
+            out.extend_from_slice(&hash.to_le_bytes());
+        }
+    }
+    out
+}
+
+/// A root document read whole: the hash of the domain manifest, and each
+/// presentation manifest it names, by the name of its target profile.
+pub fn decode_root_whole(bytes: &[u8]) -> Result<(u64, Vec<(String, u64)>), String> {
     let mut reader = Reader::new(bytes);
     if reader.take(4)? != ROOT_MAGIC {
         return Err("the root document is not one".to_string());
     }
     let domain_hash = reader.u64()?;
-    reader.end()?;
-    Ok(domain_hash)
+    let mut presentation = Vec::new();
+    if reader.end().is_err() {
+        for _ in 0..reader.u32()? {
+            presentation.push((reader.text()?, reader.u64()?));
+        }
+        reader.end()?;
+    }
+    Ok((domain_hash, presentation))
 }
 
 // ---------------------------------------------------------------------------
@@ -382,6 +474,30 @@ mod tests {
         assert!(decode_domain(&bytes[..bytes.len() - 1]).is_err());
         assert_eq!(decode_root(&encode_root(42)).unwrap(), 42);
         assert!(decode_root(b"nope").is_err());
+    }
+
+    #[test]
+    fn a_presentation_manifest_round_trips_and_a_root_names_it_beside_the_domain_manifest() {
+        let full = |hash: u64| Variant { name: "full".to_string(), hash, size: 256 };
+        let mut presentation = Presentation::new();
+        presentation.insert(7, PresentationEntry { variants: vec![full(70)], dependencies: vec![9] });
+        presentation.insert(9, PresentationEntry { variants: vec![full(90)], dependencies: Vec::new() });
+        let bytes = encode_presentation(&presentation);
+        assert_eq!(decode_presentation(&bytes).unwrap(), presentation);
+        assert!(decode_presentation(&bytes[..bytes.len() - 1]).is_err());
+        // A root that names no presentation manifest has the bytes it had,
+        // and reads either way; one that names one still gives the hash of
+        // its domain manifest to a reader that asks for nothing else.
+        assert_eq!(encode_root_with(42, &[]), encode_root(42));
+        assert_eq!(decode_root_whole(&encode_root(42)).unwrap(), (42, Vec::new()));
+        let named = vec![("desktop".to_string(), content_hash(&bytes))];
+        let root = encode_root_with(42, &named);
+        assert_eq!(decode_root_whole(&root).unwrap(), (42, named));
+        assert_eq!(decode_root(&root).unwrap(), 42);
+        assert!(decode_root_whole(&root[..root.len() - 1]).is_err());
+        // Nothing of a presentation manifest stands in the domain manifest:
+        // the hash that names a content set does not move with it.
+        assert_eq!(set_hash(&domain()), content_hash(&encode_domain(&domain())));
     }
 
     #[test]
