@@ -119,6 +119,10 @@ pub fn readings() -> Vec<VariantPlan> {
             "reading: a dependency failed for its type is loaded under the manifest's type below a parent in force too",
             vec![loader(|options| options.type_exception_below_a_parent_in_force = true)],
         ),
+        reading(
+            "reading: a step without waiting that follows the record of a tick, where steps stand in a row, is the step that runs that tick",
+            vec![Change::Harness(Tweak::StepAfterARecordRunsItsTick)],
+        ),
     ]
 }
 

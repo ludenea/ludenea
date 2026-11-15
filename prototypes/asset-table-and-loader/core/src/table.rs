@@ -411,27 +411,39 @@ pub enum Command {
     Instantiate { asset: AssetId, asset_type: AssetType, policy: Policy, reload: bool },
 }
 
-/// The input record of one tick: its commands in order, then its arrivals in
-/// identifier order, at most one per asset.
+/// A world event: an input that changes a field of the world's
+/// configuration at a tick boundary, so that a replay reproduces the change
+/// at its tick. The one field this prototype changes so is the world's
+/// budget for its asset data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorldEvent {
+    /// Sets the world's budget for its asset data, in bytes.
+    Budget(u64),
+}
+
+/// The input record of one tick: its world events, its commands in order,
+/// then its arrivals in identifier order, at most one per asset.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Record {
     pub tick: u32,
+    /// The world events of the tick's boundary, in the order issued.
+    pub events: Vec<WorldEvent>,
     pub commands: Vec<Command>,
     pub arrivals: Vec<Arrival>,
 }
 
 impl Record {
     pub fn commands(tick: u32, commands: Vec<Command>) -> Record {
-        Record { tick, commands, arrivals: Vec::new() }
+        Record { tick, commands, ..Record::default() }
     }
 
     pub fn arrivals(tick: u32, mut arrivals: Vec<Arrival>) -> Record {
         arrivals.sort_by_key(|arrival| arrival.asset);
-        Record { tick, commands: Vec::new(), arrivals }
+        Record { tick, arrivals, ..Record::default() }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.commands.is_empty() && self.arrivals.is_empty()
+        self.events.is_empty() && self.commands.is_empty() && self.arrivals.is_empty()
     }
 }
 
@@ -797,6 +809,115 @@ pub struct Rules {
     /// alone, a view older than one tick. The default extracts the state
     /// once, at the end of every tick in which the table changed.
     pub extracted_at_the_input_fixed_point: bool,
+    // --- the controls of the scenarios of the stand-in stage ---
+    /// Control: a required want that the core added for a dependency gates
+    /// no boundary: the required set holds the assets that a want of an
+    /// entity or of the world's own entry requires, and no other.
+    pub core_wants_gate_no_boundary: bool,
+    /// Control: at the first step of a record's arrivals the part of every
+    /// arrival to a hash adds its wants, whatever wants its asset holds, a
+    /// parent that holds none giving an optional want. The default starts
+    /// from the part of an asset that holds a want at that step.
+    pub first_step_follows_every_arriving_part: bool,
+    /// Control: the wants of the first step start from an asset that held a
+    /// want before the commands of the record were applied. The default
+    /// reads the wants once those commands are applied.
+    pub first_step_starts_from_the_wants_held_before_the_commands: bool,
+    /// Control: a pending release answers a required asset only where it
+    /// ends the last want of that asset, whatever its policy. The default
+    /// counts the asset as answered where no required want is left on it.
+    pub gate_release_answers_where_no_want_is_left: bool,
+    /// Control: under a budget, a root holds a required want where it stood
+    /// in the world's required set before the commands of the record were
+    /// applied. The default reads the set once those commands are applied.
+    pub budget_required_roots_read_before_the_commands: bool,
+    /// Control: under a budget, a root holds a required want where a maker
+    /// other than the core made one. The default reads the world's required
+    /// set, whichever maker made the want, the core included.
+    pub budget_required_roots_by_their_own_wants: bool,
+    /// Control: a want the core added keeps its policy until the arrivals of
+    /// the record are applied, whatever a command of that record does to the
+    /// wants of its parent. The default recomputes it where the command is
+    /// applied.
+    pub core_wants_keep_their_policy_until_the_arrivals: bool,
+    /// Control: the groups of each of the two sets of a budget's test are
+    /// tested in the order in which the wants of their roots were made. The
+    /// default tests each set in the identifier order of its roots.
+    pub budget_groups_in_the_order_their_wants_were_made: bool,
+    /// Control: the room of an entry in force is free wherever the record
+    /// holds an arrival to failed for it, whether or not that arrival fails
+    /// it. The default leaves out of the count an entry in force that holds
+    /// a want once the commands are applied, and no other.
+    pub budget_count_leaves_out_every_entry_an_arrival_to_failed_names: bool,
+    /// Control: the room of the dependencies of a parent that fails is free
+    /// at the fixed point that fails it. The default counts them: the wants
+    /// the core added end at the recomputation, after the arrivals.
+    pub budget_count_leaves_out_the_dependencies_of_a_failing_parent: bool,
+    /// Control: a group is accepted whatever the count only where it lowers
+    /// the count. The default accepts one that does not raise it.
+    pub budget_accepts_over_the_count_only_a_group_that_lowers_it: bool,
+    /// Control: each arrival of a group is judged alone, in identifier
+    /// order, one that raises the count being rejected where the count would
+    /// stand over the budget. The default accepts or rejects a group whole.
+    pub budget_judges_each_arrival_of_a_group_alone: bool,
+    /// Control: a budget that a record changes is in force from the tick
+    /// after it. The default has the world event change the configuration at
+    /// the boundary of its tick, so that the arrivals of the record that
+    /// holds it are tested against the budget it sets.
+    pub budget_event_in_force_from_the_next_tick: bool,
+    /// Control: a world event that sets a budget is applied and is no
+    /// element of the input log, so that a replay stands under the budget of
+    /// its creation. The default records it in the record of its tick.
+    pub budget_events_left_out_of_the_log: bool,
+    /// Control, for a world that replays a log: the core derives no
+    /// rejection, and every arrival to a hash is applied whatever the count.
+    pub no_rejection_derived: bool,
+    /// Control: the count of a restored table starts from nothing and holds
+    /// the sizes of the arrivals applied since the restore alone. The
+    /// default counts the size every available entry holds, a restored one
+    /// included.
+    pub restored_count_starts_from_nothing: bool,
+    /// Control: a save holds the budget its world was created under, so that
+    /// a restored world stands under it. The default holds the budget in
+    /// force at the save, a world event that lowered it counted.
+    pub save_holds_the_budget_of_creation: bool,
+    /// Control: an answer to a restore at another hash changes the hash of
+    /// its entry and leaves the size the entry held. The default has the
+    /// entry take the size the answer names.
+    pub marked_answer_leaves_the_size: bool,
+    /// Control: the wants of systems stand after those of command sources
+    /// in the total order of an entry's wants. The default places them
+    /// after those of contributors and before those of command sources.
+    pub system_wants_after_command_sources: bool,
+    /// Control: the wants of systems stand in the order of the identities
+    /// of the contributors that bring them, then by name. The default
+    /// orders them by their stable names alone.
+    pub system_wants_ordered_by_their_contributor: bool,
+    /// Control: an entry that fails for its type while a want of the core
+    /// stands on it takes, at that failure, the type its parent's part
+    /// lists, and its load starts again. The default leaves it failed under
+    /// the type it holds: the design text does not reach the case.
+    pub entry_failed_for_its_type_under_a_core_want_takes_the_type: bool,
+    /// Control: a second want on a parent in force is a want added on each
+    /// of its dependencies, which retries those the table holds failed. The
+    /// default retries nothing: a dependency holds one want per parent.
+    pub second_want_on_a_parent_retries_its_dependencies: bool,
+    /// Control: an arrival that leaves an entry failed for the reason it
+    /// held when its record was drained emits no event and is named by no
+    /// step, whatever want the same record added on the entry. The default
+    /// judges an arrival against the entry as it stands when it is applied:
+    /// an entry a want of the record returned to unavailable fails anew.
+    pub failure_for_the_reason_held_at_the_drain_changes_nothing: bool,
+    /// Control: the arrival of an entry that held no want when its record
+    /// was drained changes nothing, a want the core adds from a part of the
+    /// same record not counted. The default applies it where a want applied
+    /// before it names the asset again, the core's of the first step
+    /// included.
+    pub arrival_for_an_entry_unwanted_at_the_drain_changes_nothing: bool,
+    /// Control: an entry leaves the table at the fixed point that ends its
+    /// last want. The default keeps it, with no want, until the input fixed
+    /// point of the next tick.
+    pub entry_leaves_at_the_fixed_point_that_ends_its_last_want: bool,
 }
 
 /// What an excess over a world's budget rejects. The design text named
@@ -823,7 +944,7 @@ pub enum BudgetUnit {
 }
 
 impl Rules {
-    fn owner_order(&self, a: &Owner, b: &Owner) -> Ordering {
+    fn owner_order(&self, a: &Owner, b: &Owner, brought_by: &BTreeMap<SystemName, u64>) -> Ordering {
         let rank = |owner: &Owner| match owner {
             Owner::World(_) => 0,
             Owner::Entity { .. } => 1,
@@ -831,12 +952,24 @@ impl Rules {
         };
         match (a, b) {
             (Owner::World(a), Owner::World(b)) => {
+                // Two controls on the place of a system's want. Under one
+                // the wants of systems stand after those of command sources.
+                // Under the other, two systems are ordered by the identity
+                // of the contributor that brings each, then by name.
+                let rank = |maker: &Maker| match maker {
+                    Maker::System(_) if self.system_wants_after_command_sources => 2 * Maker::Source(0).rank() + 1,
+                    other => 2 * other.rank(),
+                };
+                if let (Maker::System(one), Maker::System(other), true) = (a, b, self.system_wants_ordered_by_their_contributor) {
+                    let contributor = |name: &SystemName| brought_by.get(name).copied().unwrap_or(u64::MAX);
+                    return (contributor(one), one).cmp(&(contributor(other), other));
+                }
                 // Under the reading that orders the makers by their numeric
                 // identity, a system, which has none, stands after them.
                 if self.makers_by_identity_alone {
-                    (a.identity(), a.rank()).cmp(&(b.identity(), b.rank()))
+                    (a.identity(), rank(a)).cmp(&(b.identity(), rank(b)))
                 } else {
-                    (a.rank(), a.identity()).cmp(&(b.rank(), b.identity()))
+                    (rank(a), a.identity()).cmp(&(rank(b), b.identity()))
                 }
             }
             (Owner::Entity { slot: a, generation: ga }, Owner::Entity { slot: b, generation: gb }) => (a, ga).cmp(&(b, gb)),
@@ -863,11 +996,11 @@ impl Rules {
     }
 
     /// Where a want of `owner` stands among the wants of an entry.
-    fn place(&self, wants: &[(Owner, Policy)], owner: &Owner) -> usize {
+    fn place(&self, wants: &[(Owner, Policy)], owner: &Owner, brought_by: &BTreeMap<SystemName, u64>) -> usize {
         if self.wants_in_making_order {
             return wants.len();
         }
-        wants.iter().position(|(other, _)| self.owner_order(other, owner) == Ordering::Greater).unwrap_or(wants.len())
+        wants.iter().position(|(other, _)| self.owner_order(other, owner, brought_by) == Ordering::Greater).unwrap_or(wants.len())
     }
 }
 
@@ -990,8 +1123,17 @@ fn read_owner(reader: &mut Reader) -> Result<Owner, String> {
     }
 }
 
-fn put_record(out: &mut Vec<u8>, record: &Record) {
+fn put_record(out: &mut Vec<u8>, record: &Record, sized: bool) {
     out.extend_from_slice(&record.tick.to_le_bytes());
+    out.extend_from_slice(&(record.events.len() as u32).to_le_bytes());
+    for event in &record.events {
+        match *event {
+            WorldEvent::Budget(bytes) => {
+                out.push(0);
+                out.extend_from_slice(&bytes.to_le_bytes());
+            }
+        }
+    }
     out.extend_from_slice(&(record.commands.len() as u32).to_le_bytes());
     for command in &record.commands {
         match *command {
@@ -1026,11 +1168,13 @@ fn put_record(out: &mut Vec<u8>, record: &Record) {
         out.extend_from_slice(&arrival.asset.to_le_bytes());
         match arrival.outcome {
             // An arrival to a hash names the size of what it puts in force;
-            // a failure names none.
+            // a failure names none. One control leaves the size out.
             Outcome::Hash(hash) => {
                 out.push(0);
                 out.extend_from_slice(&hash.to_le_bytes());
-                out.extend_from_slice(&arrival.size.to_le_bytes());
+                if sized {
+                    out.extend_from_slice(&arrival.size.to_le_bytes());
+                }
             }
             Outcome::Failure(code) => {
                 out.push(1);
@@ -1047,8 +1191,15 @@ fn put_record(out: &mut Vec<u8>, record: &Record) {
     }
 }
 
-fn read_record(reader: &mut Reader) -> Result<Record, String> {
+fn read_record(reader: &mut Reader, sized: bool) -> Result<Record, String> {
     let tick = reader.u32()?;
+    let mut events = Vec::new();
+    for _ in 0..reader.u32()? {
+        events.push(match reader.u8()? {
+            0 => WorldEvent::Budget(reader.u64()?),
+            other => return Err(format!("world event tag {other}")),
+        });
+    }
     let mut commands = Vec::new();
     for _ in 0..reader.u32()? {
         commands.push(match reader.u8()? {
@@ -1063,7 +1214,7 @@ fn read_record(reader: &mut Reader) -> Result<Record, String> {
     for _ in 0..reader.u32()? {
         let asset = reader.id()?;
         let (outcome, size) = match reader.u8()? {
-            0 => (Outcome::Hash(reader.u64()?), reader.u64()?),
+            0 => (Outcome::Hash(reader.u64()?), if sized { reader.u64()? } else { 0 }),
             1 => {
                 // A failure names a reason of the list its schema entry holds.
                 let code = reader.u64()?;
@@ -1079,24 +1230,35 @@ fn read_record(reader: &mut Reader) -> Result<Record, String> {
         let root = if marks & 2 != 0 { Some(reader.id()?) } else { None };
         arrivals.push(Arrival { asset, outcome, size, marked: marks & 1 != 0, root });
     }
-    Ok(Record { tick, commands, arrivals })
+    Ok(Record { tick, events, commands, arrivals })
 }
 
 /// The canonical bytes of an input log: the record count, then the records.
 pub fn encode_log(records: &[Record]) -> Vec<u8> {
+    encode_log_under(records, &Rules::default())
+}
+
+pub fn decode_log(bytes: &[u8]) -> Result<Vec<Record>, String> {
+    decode_log_under(bytes, &Rules::default())
+}
+
+/// The bytes of an input log under the rules of the world that wrote it:
+/// the control that leaves the size out of the canonical bytes leaves it out
+/// of the bytes of an arrival, so that a log read back names no size.
+pub fn encode_log_under(records: &[Record], rules: &Rules) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&(records.len() as u32).to_le_bytes());
     for record in records {
-        put_record(&mut out, record);
+        put_record(&mut out, record, !rules.size_left_out_of_the_bytes);
     }
     out
 }
 
-pub fn decode_log(bytes: &[u8]) -> Result<Vec<Record>, String> {
+pub fn decode_log_under(bytes: &[u8], rules: &Rules) -> Result<Vec<Record>, String> {
     let mut reader = Reader::new(bytes);
     let mut records = Vec::new();
     for _ in 0..reader.u32()? {
-        records.push(read_record(&mut reader)?);
+        records.push(read_record(&mut reader, !rules.size_left_out_of_the_bytes)?);
     }
     reader.end()?;
     Ok(records)
@@ -1132,9 +1294,16 @@ impl Entry {
     }
 
     /// Whether the entry closes the gate: under a required want and
-    /// unanswered, a failure being an answer.
-    fn required_and_unanswered(&self) -> bool {
-        self.availability == Availability::Unavailable && self.policy() == Some(Policy::Required)
+    /// unanswered, a failure being an answer. Under one control a want the
+    /// core added is no such want.
+    fn required_and_unanswered(&self, rules: &Rules) -> bool {
+        if self.availability != Availability::Unavailable {
+            return false;
+        }
+        if rules.core_wants_gate_no_boundary {
+            return self.wants.iter().any(|(owner, policy)| *policy == Policy::Required && !matches!(owner, Owner::Asset(_)));
+        }
+        self.policy() == Some(Policy::Required)
     }
 
     /// The test of a want that leaves the domain, made when the want is
@@ -1251,6 +1420,34 @@ enum Purpose {
 /// or failed: the asset and the owner of the want.
 type Leaving = Vec<(AssetId, Owner)>;
 
+/// Where the wants of the first step of a record's arrivals start from,
+/// under the two controls on it. The default starts from the part of every
+/// asset that holds a want at that step.
+#[derive(Default)]
+struct Starts {
+    /// The assets whose own wants are not read: under one control, those
+    /// that held no want before the commands of the record were applied.
+    not_from: BTreeSet<AssetId>,
+    /// Under the other control: the part of every arrival adds its wants.
+    from_every_arrival: bool,
+}
+
+/// What a record found when it was drained, kept while it is applied for
+/// the controls that read the table as it stood before the record's
+/// commands. Each part is filled under the control that reads it alone.
+#[derive(Clone, Default)]
+struct Found {
+    /// The assets that held a want.
+    wanted: BTreeSet<AssetId>,
+    /// The assets that stood under a required want.
+    required: BTreeSet<AssetId>,
+    /// The entries held failed, each with its reason.
+    failed: BTreeMap<AssetId, u32>,
+    /// The entries that held no want and that no command of the record
+    /// names: filled once the commands are applied.
+    unnamed: BTreeSet<AssetId>,
+}
+
 #[derive(Clone, Default)]
 pub struct Table {
     pub entries: BTreeMap<AssetId, Entry>,
@@ -1278,6 +1475,20 @@ pub struct Table {
     evaluating_the_gate: bool,
     /// On that copy: the parents whose part a pending arrival brings.
     pending_parents: BTreeSet<AssetId>,
+    /// While a record is applied: what it found when it was drained.
+    found: Found,
+    /// The order in which the assets a maker other than the core wants were
+    /// first wanted: read by one control of a budget's test, derived, and no
+    /// part of the canonical form.
+    made: BTreeMap<AssetId, u64>,
+    /// Under the control that starts the count of a restored table from
+    /// nothing: the entries restored in force to which no arrival has been
+    /// applied since, which count for nothing.
+    uncounted: BTreeSet<AssetId>,
+    /// The contributor of the composition that brings each system: the
+    /// world's configuration, read by one control on the place of a
+    /// system's want, and no part of the canonical form.
+    pub systems: BTreeMap<SystemName, u64>,
 }
 
 impl Table {
@@ -1291,7 +1502,7 @@ impl Table {
         if !self.awaiting.is_empty() {
             return true;
         }
-        if self.rules.required_set_not_kept { self.entries.values().any(Entry::required_and_unanswered) } else { !self.required.is_empty() }
+        if self.rules.required_set_not_kept { self.entries.values().any(|entry| entry.required_and_unanswered(&self.rules)) } else { !self.required.is_empty() }
     }
 
     pub fn has_orphans(&self) -> bool {
@@ -1302,7 +1513,7 @@ impl Table {
     /// what the kept set is derived from, and what stands in its place
     /// under the rule that keeps none.
     fn scanned_required(&self) -> BTreeSet<AssetId> {
-        self.entries.iter().filter(|(_, entry)| entry.required_and_unanswered()).map(|(id, _)| *id).collect()
+        self.entries.iter().filter(|(_, entry)| entry.required_and_unanswered(&self.rules)).map(|(id, _)| *id).collect()
     }
 
     /// The set of the required assets the table holds unanswered: the kept
@@ -1318,7 +1529,7 @@ impl Table {
         if self.rules.required_set_not_kept {
             return;
         }
-        if self.entries.get(&asset).is_some_and(Entry::required_and_unanswered) {
+        if self.entries.get(&asset).is_some_and(|entry| entry.required_and_unanswered(&self.rules)) {
             self.required.insert(asset);
         } else {
             self.required.remove(&asset);
@@ -1424,7 +1635,14 @@ impl Table {
                 }
             }
             None => {
-                let at = rules.place(&entry.wants, &owner);
+                // The order of making, for the control that reads it: the
+                // place of the first want a maker other than the core makes
+                // of the asset, while one stands.
+                if !entry.wants.iter().any(|(other, _)| !matches!(other, Owner::Asset(_))) {
+                    let next = self.made.values().max().map_or(0, |last| last + 1);
+                    self.made.insert(asset, next);
+                }
+                let at = rules.place(&entry.wants, &owner, &self.systems);
                 entry.wants.insert(at, (owner, policy));
             }
         }
@@ -1472,9 +1690,10 @@ impl Table {
         });
         if ended {
             if !self.rules.dependency_wants_with_a_batch_alone {
-                self.dependency_wants(&BTreeMap::new(), true);
+                self.dependency_wants(&BTreeMap::new(), true, &Starts::default());
             }
             self.core_added.clear();
+            self.leave_at_once();
             if self.rules.unrisen_entry_leaves_at_once {
                 self.entries.retain(|_, entry| !entry.wants.is_empty() || matches!(entry.availability, Availability::Available(_)));
             }
@@ -1498,7 +1717,7 @@ impl Table {
     /// its answers) is kept as it is. The wants are computed from the wants
     /// that are not the core's, so that two parts that list each other do
     /// not keep each other wanted.
-    fn dependency_wants(&mut self, arriving: &BTreeMap<AssetId, Arc<Resident>>, prune: bool) {
+    fn dependency_wants(&mut self, arriving: &BTreeMap<AssetId, Arc<Resident>>, prune: bool, starts: &Starts) {
         let rules = self.rules;
         let as_required = self.evaluating_the_gate && rules.gate_counts_core_wants_as_required;
         let lists = |resident: &Arc<Resident>| !resident.part.dependencies.is_empty();
@@ -1531,7 +1750,7 @@ impl Table {
             for (parent, part) in &parents {
                 let mut policies: Vec<Policy> = Vec::new();
                 let mut counted: BTreeSet<AssetId> = BTreeSet::new();
-                if let Some(entry) = self.entries.get(parent) {
+                if let Some(entry) = self.entries.get(parent).filter(|_| !starts.not_from.contains(parent)) {
                     for (owner, policy) in &entry.wants {
                         match owner {
                             Owner::Asset(above) => {
@@ -1553,7 +1772,12 @@ impl Table {
                     }
                 }
                 if policies.is_empty() {
-                    continue;
+                    // The part of an asset no want names adds nothing, but
+                    // under the control that follows every arriving part.
+                    if !(starts.from_every_arrival && arriving.contains_key(parent)) {
+                        continue;
+                    }
+                    policies.push(Policy::Optional);
                 }
                 // Under the control, the want a pending parent's part asks
                 // for is required, before its arrival is counted and after.
@@ -1594,7 +1818,10 @@ impl Table {
         for ((dependency, parent), (asked, asset_type)) in desired {
             // Under the control, the dependency's entry takes its parent's type.
             let parents_type = self.entries.get(&parent).map(|entry| entry.asset_type).filter(|_| rules.dependency_takes_its_parents_type);
-            self.want_dependency(dependency, parents_type.unwrap_or(asset_type), parent, &asked);
+            // Under one control the first half of a batch adds wants and
+            // leaves the policy of a want the core already holds as it is.
+            let keeps_held = !prune && rules.core_wants_keep_their_policy_until_the_arrivals;
+            self.want_dependency(dependency, parents_type.unwrap_or(asset_type), parent, &asked, keeps_held);
         }
     }
 
@@ -1607,7 +1834,7 @@ impl Table {
     /// staying. Where it is added on a failed entry, it is the new load that
     /// returns the entry to unavailable; where the parent already held it,
     /// only its policy follows.
-    fn want_dependency(&mut self, dependency: AssetId, asset_type: AssetType, parent: AssetId, asked: &[Policy]) {
+    fn want_dependency(&mut self, dependency: AssetId, asset_type: AssetType, parent: AssetId, asked: &[Policy], keeps_held: bool) {
         let rules = self.rules;
         let owner = Owner::Asset(parent);
         // The control that refuses a want of the core for its type.
@@ -1616,11 +1843,11 @@ impl Table {
         }
         let entry = self.entries.entry(dependency).or_insert_with(|| Entry::unavailable(asset_type));
         let held: Vec<Policy> = entry.wants.iter().filter(|(other, _)| *other == owner).map(|(_, policy)| *policy).collect();
-        if held == asked {
+        if held == asked || (keeps_held && !held.is_empty()) {
             return;
         }
         entry.wants.retain(|(other, _)| *other != owner);
-        let at = rules.place(&entry.wants, &owner);
+        let at = rules.place(&entry.wants, &owner, &self.systems);
         for (k, policy) in asked.iter().enumerate() {
             entry.wants.insert(at + k, (owner, *policy));
         }
@@ -1663,7 +1890,10 @@ impl Table {
             (Availability::Failed(held), Outcome::Failure(code)) => held == code,
             _ => false,
         };
-        let named = !entry.wants.is_empty();
+        // Under one control an entry that held no want when the record was
+        // drained, and that no command of the record names, stays unnamed
+        // whatever want the core added from a part of the record.
+        let named = !entry.wants.is_empty() && !self.found.unnamed.contains(&arrival.asset);
         if arrival.marked && !as_it_was && (named || !rules.unwanted_answer_never_differs) {
             applied.differed.push(arrival.asset);
         }
@@ -1677,8 +1907,14 @@ impl Table {
             Outcome::Hash(hash) => {
                 entry.availability = Availability::Available(hash);
                 entry.resident = Some(resident(residents, hash));
-                if !as_it_was || rules.arrival_at_the_hash_in_force_brings_its_size {
+                // Under one control an answer to a restore at another hash
+                // leaves the size the entry held.
+                let size_left = arrival.marked && rules.marked_answer_leaves_the_size && matches!(before, Availability::Available(_));
+                if (!as_it_was && !size_left) || rules.arrival_at_the_hash_in_force_brings_its_size {
                     entry.size = arrival.size;
+                }
+                if !as_it_was {
+                    self.uncounted.remove(&arrival.asset);
                 }
                 // An answer to a restore at a hash is no arrival and no reload: no event.
                 if (as_it_was && !rules.unchanged_arrival_emits) || arrival.marked {
@@ -1691,6 +1927,13 @@ impl Table {
             }
             Outcome::Failure(code) => {
                 if as_it_was && !rules.repeated_failure_emits && !rules.unchanged_arrival_emits {
+                    return;
+                }
+                // Under one control an entry that the record found failed
+                // for this reason is left so in silence, whatever want of
+                // the record returned it to unavailable meanwhile.
+                if self.found.failed.get(&arrival.asset) == Some(&code) {
+                    entry.availability = Availability::Failed(code);
                     return;
                 }
                 entry.availability = Availability::Failed(code);
@@ -1716,8 +1959,11 @@ impl Table {
     fn apply_command(&mut self, index: usize, command: &Command, purpose: Purpose, alive: &dyn Fn(u32, u32) -> bool, applied: &mut Applied, leaving: &mut Leaving) -> bool {
         let adding = purpose == Purpose::Tick || self.rules.gate_counts_added_wants;
         let despawning = purpose == Purpose::Tick || self.rules.gate_sees_despawns;
+        // Under one control the copy the gate is evaluated on takes a
+        // pending command that changes the policy of a want its maker holds.
+        let changing = |table: &Table, asset: AssetId, owner: Owner| table.rules.gate_sees_pending_policy_changes && table.holds(asset, owner);
         match *command {
-            Command::Want { asset, asset_type, owner, policy } if adding => {
+            Command::Want { asset, asset_type, owner, policy } if adding || changing(self, asset, owner) => {
                 // A command that stands after the despawn of its entity in
                 // one record finds it not alive. Under the reading that
                 // applies a despawn at the structural change point of its
@@ -1772,9 +2018,58 @@ impl Table {
                 if leaves {
                     leaving.push((asset, owner));
                 }
+                if self.rules.second_want_on_a_parent_retries_its_dependencies {
+                    self.retry_the_failed_dependencies_of(asset, leaving);
+                }
                 true
             }
         }
+    }
+
+    /// Under one control: a want added on a parent in force is a want added
+    /// on each dependency its part lists, so that one the table holds failed
+    /// returns to unavailable and its load leaves the domain again.
+    fn retry_the_failed_dependencies_of(&mut self, parent: AssetId, leaving: &mut Leaving) {
+        let rules = self.rules;
+        let part = self.entries.get(&parent).and_then(|entry| entry.resident.as_ref());
+        let listed: Vec<AssetId> = part.map_or_else(Vec::new, |resident| resident.part.dependencies.iter().map(|(dependency, _)| *dependency).collect());
+        for dependency in listed {
+            let Some(entry) = self.entries.get_mut(&dependency) else { continue };
+            if matches!(entry.availability, Availability::Failed(_)) && entry.unanswered_for_a_new_want(&rules) {
+                leaving.push((dependency, Owner::Asset(parent)));
+            }
+            self.follow(dependency);
+        }
+    }
+
+    /// Under one control: an entry that an arrival has just failed for its
+    /// type, and on which a want of the core stands, takes the type the part
+    /// of that parent lists for it, the part in force or the one the record
+    /// brings, and returns to unavailable: its load starts again, the want
+    /// leaving the domain with the type taken. The failure keeps its event.
+    fn retry_under_the_type_its_parent_lists(&mut self, asset: AssetId, record: &Record, residents: &dyn Residents, leaving: &mut Leaving) {
+        let Some(entry) = self.entries.get(&asset).filter(|entry| entry.availability == Availability::Failed(REASON_ANOTHER_TYPE)) else { return };
+        let part_of = |parent: &AssetId| {
+            let in_force = self.entries.get(parent).and_then(|entry| entry.resident.clone());
+            let brought = record.arrivals.iter().find(|arrival| arrival.asset == *parent).and_then(|arrival| match arrival.outcome {
+                Outcome::Hash(hash) => residents.get(hash),
+                Outcome::Failure(_) => None,
+            });
+            brought.or(in_force)
+        };
+        let listed = entry.wants.iter().find_map(|(owner, _)| {
+            let Owner::Asset(parent) = owner else { return None };
+            let part = part_of(parent)?;
+            part.part.dependencies.iter().find(|(dependency, _)| *dependency == asset).map(|(_, asset_type)| (*parent, *asset_type))
+        });
+        // An entry that already holds the type its parent's part lists has
+        // nothing to take: it stays failed.
+        let Some((parent, asset_type)) = listed.filter(|(_, asset_type)| *asset_type != entry.asset_type) else { return };
+        let entry = self.entries.get_mut(&asset).expect("the entry was read above");
+        entry.asset_type = asset_type;
+        entry.availability = Availability::Unavailable;
+        leaving.push((asset, Owner::Asset(parent)));
+        self.follow(asset);
     }
 
     /// The batch of a record's arrivals: the wants its parts list first, to
@@ -1834,12 +2129,15 @@ impl Table {
                 Outcome::Hash(hash) if rejected.contains(&arrival.asset) => self.reject(arrival, hash, residents, applied),
                 _ => self.apply_arrival(arrival, residents, applied),
             }
+            if rules.entry_failed_for_its_type_under_a_core_want_takes_the_type {
+                self.retry_under_the_type_its_parent_lists(arrival.asset, record, residents, leaving);
+            }
             if rules.core_wants_recomputed_at_each_arrival && counts_core_wants && !rules.core_wants_left {
                 self.end_wants_no_longer_listed_by(arrival.asset);
             }
         }
         if counts_core_wants && !rules.core_wants_left && !added_early {
-            self.dependency_wants(&BTreeMap::new(), true);
+            self.dependency_wants(&BTreeMap::new(), true, &Starts::default());
             self.take_core_added(&mut brought);
         }
         let answered = |asset: &AssetId| record.arrivals.iter().any(|arrival| arrival.asset == *asset);
@@ -1866,13 +2164,22 @@ impl Table {
         if self.evaluating_the_gate {
             self.pending_parents.extend(arriving.keys().copied());
         }
-        self.dependency_wants(&arriving, prune);
+        // The two controls on where the first step starts from.
+        let mut starts = Starts { from_every_arrival: self.rules.first_step_follows_every_arriving_part, ..Starts::default() };
+        if self.rules.first_step_starts_from_the_wants_held_before_the_commands {
+            let newly_wanted = |(id, entry): (&AssetId, &Entry)| (!entry.wants.is_empty() && !self.found.wanted.contains(id)).then_some(*id);
+            starts.not_from = self.entries.iter().filter_map(newly_wanted).collect();
+        }
+        self.dependency_wants(&arriving, prune, &starts);
     }
 
     /// The size an entry counts for against the world's budget: the size it
     /// holds while its asset is available, which its arrival named. Under
     /// the stand-in the build read before, the length of the part in force.
-    fn size_in_force(&self, entry: &Entry) -> u64 {
+    fn size_in_force(&self, asset: &AssetId, entry: &Entry) -> u64 {
+        if self.uncounted.contains(asset) {
+            return 0;
+        }
         if self.rules.budget_counts_the_length_of_the_part {
             entry.resident.as_ref().map_or(0, |resident| resident.bytes.len() as u64)
         } else if matches!(entry.availability, Availability::Available(_)) {
@@ -1903,7 +2210,7 @@ impl Table {
     /// adds nothing and is not tested either.
     fn over_budget(&self, arrivals: &[Arrival], residents: &dyn Residents) -> BTreeSet<AssetId> {
         let mut rejected = BTreeSet::new();
-        let Some(budget) = self.budget else { return rejected };
+        let Some(budget) = self.budget.filter(|_| !self.rules.no_rejection_derived) else { return rejected };
         // The root of the group an arrival stands in, under each candidate.
         // The unit the design text proposes is decided apart, before the
         // wants of the batch's parts are added.
@@ -1913,7 +2220,7 @@ impl Table {
             BudgetUnit::WholeDrain => |_| 0,
             BudgetUnit::DerivedClosure => return rejected,
         };
-        let mut count: u64 = self.entries.values().map(|entry| self.size_in_force(entry)).sum();
+        let mut count: u64 = self.entries.iter().map(|(asset, entry)| self.size_in_force(asset, entry)).sum();
         // Per tested arrival: the asset, the root of its group, the size it
         // adds and the size it takes the place of.
         let mut tested: Vec<(AssetId, AssetId, u64, u64)> = Vec::new();
@@ -1925,7 +2232,7 @@ impl Table {
                 continue;
             }
             let added = self.size_arriving(arrival, residents);
-            let replaced = entry.map_or(0, |entry| self.size_in_force(entry));
+            let replaced = entry.map_or(0, |entry| self.size_in_force(&arrival.asset, entry));
             tested.push((arrival.asset, root_of(arrival), added, replaced));
         }
         // The groups are tested whole, in the identifier order of their
@@ -1990,7 +2297,7 @@ impl Table {
     ) -> BTreeSet<AssetId> {
         let rules = self.rules;
         let mut rejected = BTreeSet::new();
-        let Some(budget) = self.budget else { return rejected };
+        let Some(budget) = self.budget.filter(|_| !rules.no_rejection_derived) else { return rejected };
         let in_force = |asset: &AssetId| self.entries.get(asset).and_then(|entry| entry.resident.as_ref());
         // The arrival and the part of each arrival to a hash of the record.
         let mut arriving: BTreeMap<AssetId, (&Arrival, Option<Arc<Resident>>)> = BTreeMap::new();
@@ -2009,7 +2316,7 @@ impl Table {
         // The closure of each root, and whether the root holds a required
         // want, in the identifier order of the roots.
         let is_a_root = |entry: &Entry| entry.wants.iter().any(|(owner, _)| !matches!(owner, Owner::Asset(_)));
-        let mut closures: Vec<(bool, BTreeSet<AssetId>)> = Vec::new();
+        let mut closures: Vec<(bool, AssetId, BTreeSet<AssetId>)> = Vec::new();
         for (root, entry) in self.entries.iter().filter(|(_, entry)| is_a_root(entry)) {
             let mut closure = BTreeSet::new();
             let mut open = vec![*root];
@@ -2018,33 +2325,84 @@ impl Table {
                     open.extend(listed_by(&asset));
                 }
             }
-            closures.push((entry.policy() == Some(Policy::Required), closure));
+            // A root holds a required want where it stands in the world's
+            // required set once the commands of the record are applied,
+            // whichever maker made that want, the core included. Two
+            // controls read it otherwise: as the record found the set, or
+            // from the wants a maker other than the core made.
+            let own = |(owner, policy): &(Owner, Policy)| *policy == Policy::Required && !matches!(owner, Owner::Asset(_));
+            let required = if rules.budget_required_roots_read_before_the_commands {
+                self.found.required.contains(root)
+            } else if rules.budget_required_roots_by_their_own_wants {
+                entry.wants.iter().any(own)
+            } else {
+                entry.policy() == Some(Policy::Required)
+            };
+            closures.push((required, *root, closure));
+        }
+        // Under one control each set is tested in the order in which the
+        // wants of its roots were made.
+        if rules.budget_groups_in_the_order_their_wants_were_made {
+            closures.sort_by_key(|(_, root, _)| self.made.get(root).copied().unwrap_or(0));
         }
         // The groups of the roots that hold a required want are tested
         // first: in identifier order alone an optional closure whose root
         // stands first takes the room of a required one. The sort is stable,
         // so each of the two sets keeps the identifier order of its roots.
         if !rules.budget_groups_in_identifier_order_alone {
-            closures.sort_by_key(|(required, _)| !required);
+            closures.sort_by_key(|(required, _, _)| !required);
         }
+        let closures: Vec<BTreeSet<AssetId>> = closures.into_iter().map(|(_, _, closure)| closure).collect();
         // The entries whose room is free: they leave the table's available
         // entries at this fixed point whatever the test gives. An entry due
         // to fall that a closure reaches stays counted. Each control counts
         // what it names.
-        let reached = |asset: &AssetId| closures.iter().any(|(_, closure)| closure.contains(asset));
+        let reached = |asset: &AssetId| closures.iter().any(|closure| closure.contains(asset));
         let falls = |asset: &AssetId| {
             let unwanted = !wanted_since.contains(asset) && self.entries.get(asset).is_some_and(|entry| entry.wants.is_empty());
             unwanted && !reached(asset) && !rules.budget_count_holds_the_falling_entries
         };
         let mut leaving: BTreeSet<AssetId> = candidates.iter().copied().filter(falls).collect();
         if !rules.budget_count_holds_the_failing_entries {
-            let in_force_under_a_want = |entry: &Entry| matches!(entry.availability, Availability::Available(_)) && !entry.wants.is_empty();
-            let fails = |arrival: &&Arrival| matches!(arrival.outcome, Outcome::Failure(_)) && self.entries.get(&arrival.asset).is_some_and(in_force_under_a_want);
-            leaving.extend(arrivals.iter().filter(fails).map(|arrival| arrival.asset));
+            // An entry in force that holds a want once the commands are
+            // applied and that an arrival to failed of the record fails. One
+            // that holds no want stays counted, though the record holds its
+            // arrival to failed: that arrival fails it only where a want of
+            // the first step names it, which rests on the test. One control
+            // frees its room all the same.
+            let whatever_it_holds = rules.budget_count_leaves_out_every_entry_an_arrival_to_failed_names;
+            let in_force = |entry: &Entry| matches!(entry.availability, Availability::Available(_));
+            let fails = |arrival: &&Arrival| {
+                let failed = |entry: &Entry| in_force(entry) && (whatever_it_holds || !entry.wants.is_empty());
+                matches!(arrival.outcome, Outcome::Failure(_)) && self.entries.get(&arrival.asset).is_some_and(failed)
+            };
+            let mut failing: BTreeSet<AssetId> = arrivals.iter().filter(fails).map(|arrival| arrival.asset).collect();
+            // The wants the core added end at the recomputation alone, after
+            // the arrivals: the dependencies of a parent that fails stay
+            // counted. One control frees their room too: an entry in force
+            // whose every want is one a failing parent owns, to any depth.
+            let mut more = rules.budget_count_leaves_out_the_dependencies_of_a_failing_parent;
+            while more {
+                let freed = |(asset, entry): (&AssetId, &Entry)| {
+                    let owned_by_the_failing = |(owner, _): &(Owner, Policy)| matches!(owner, Owner::Asset(parent) if failing.contains(parent));
+                    (!failing.contains(asset) && in_force(entry) && !entry.wants.is_empty() && entry.wants.iter().all(owned_by_the_failing)).then_some(*asset)
+                };
+                let freed: Vec<AssetId> = self.entries.iter().filter_map(freed).collect();
+                more = !freed.is_empty();
+                failing.extend(freed);
+            }
+            leaving.extend(failing);
         }
-        let mut count: u64 = self.entries.iter().filter(|(asset, _)| !leaving.contains(*asset)).map(|(_, entry)| self.size_in_force(entry)).sum();
+        let mut count: u64 = self.entries.iter().filter(|(asset, _)| !leaving.contains(*asset)).map(|(asset, entry)| self.size_in_force(asset, entry)).sum();
         let mut accepted: BTreeSet<AssetId> = BTreeSet::new();
-        for (_, closure) in &closures {
+        // A group that does not raise the count is accepted whatever the
+        // count. Two controls: such a group is tested as any other, or it is
+        // accepted only where it lowers the count.
+        let within = |with: u64, count: u64| {
+            let spared = if rules.budget_accepts_over_the_count_only_a_group_that_lowers_it { with < count } else { with <= count };
+            with <= budget || (spared && !rules.budget_tests_a_group_that_does_not_raise_the_count)
+        };
+        for closure in &closures {
             // The group: per arrival, the asset, the size it adds and the
             // size it takes the place of.
             let mut group: Vec<(AssetId, u64, u64)> = Vec::new();
@@ -2055,14 +2413,28 @@ impl Table {
                 if as_it_was {
                     continue;
                 }
-                group.push((*asset, self.size_arriving(arrival, residents), entry.map_or(0, |entry| self.size_in_force(entry))));
+                group.push((*asset, self.size_arriving(arrival, residents), entry.map_or(0, |entry| self.size_in_force(asset, entry))));
+            }
+            if rules.budget_judges_each_arrival_of_a_group_alone {
+                // The control that knows no group: each arrival alone, in
+                // identifier order.
+                for (asset, added, replaced) in group.iter().filter(|(asset, _, _)| !accepted.contains(asset)) {
+                    let with = count + added - (*replaced).min(count + added);
+                    if within(with, count) {
+                        count = with;
+                        rejected.remove(asset);
+                    } else {
+                        rejected.insert(*asset);
+                    }
+                }
+                accepted.extend(group.iter().map(|(asset, _, _)| *asset).filter(|asset| !rejected.contains(asset)));
+                continue;
             }
             let counted = || group.iter().filter(|(asset, _, _)| !accepted.contains(asset));
             let added: u64 = counted().map(|(_, added, _)| added).sum();
             let replaced: u64 = counted().map(|(_, _, replaced)| replaced).sum();
             let with = count + added - replaced.min(count + added);
-            let raises_nothing = with <= count && !rules.budget_tests_a_group_that_does_not_raise_the_count;
-            if with <= budget || raises_nothing {
+            if within(with, count) {
                 count = with;
                 accepted.extend(group.iter().map(|(asset, _, _)| *asset));
             } else {
@@ -2132,6 +2504,7 @@ impl Table {
             if !wanted_since.contains(id) && self.entries.get(id).is_some_and(|entry| entry.wants.is_empty()) {
                 self.entries.remove(id);
                 self.awaiting.remove(id);
+                self.made.remove(id);
                 self.follow(*id);
                 fallen.push(*id);
             }
@@ -2156,6 +2529,29 @@ impl Table {
         self.core_added.clear();
         // The entries whose last want ended during the tick before.
         let candidates: Vec<AssetId> = self.entries.iter().filter(|(_, entry)| entry.wants.is_empty()).map(|(id, _)| *id).collect();
+        // What the controls that read the table as the record found it need.
+        self.found = Found::default();
+        if self.rules.first_step_starts_from_the_wants_held_before_the_commands {
+            self.found.wanted = self.entries.iter().filter(|(_, entry)| !entry.wants.is_empty()).map(|(id, _)| *id).collect();
+        }
+        if self.rules.budget_required_roots_read_before_the_commands {
+            self.found.required = self.entries.iter().filter(|(_, entry)| entry.policy() == Some(Policy::Required)).map(|(id, _)| *id).collect();
+        }
+        if self.rules.failure_for_the_reason_held_at_the_drain_changes_nothing {
+            let failed = |(id, entry): (&AssetId, &Entry)| match entry.availability {
+                Availability::Failed(code) => Some((*id, code)),
+                _ => None,
+            };
+            self.found.failed = self.entries.iter().filter_map(failed).collect();
+        }
+        // A world event changes the configuration at the boundary of its
+        // tick: the budget it sets is the one the arrivals of its record are
+        // tested against. Under one control it is in force from the tick
+        // after, and is applied once the record is.
+        let events_last = self.rules.budget_event_in_force_from_the_next_tick;
+        if !events_last {
+            self.apply_events(&record.events);
+        }
         if self.rules.falls_before_record {
             applied.fallen = self.fall(&candidates, &BTreeSet::new());
         }
@@ -2174,16 +2570,46 @@ impl Table {
         if added_early && !self.rules.gate_leaves_out_core_wants {
             self.want_the_dependencies_of(record, residents, false, &BTreeSet::new());
         }
-        self.apply_commands(&record.commands, purpose, alive, !added_early, &mut applied, &mut leaving, &candidates, &mut wanted_since);
+        let late = self.apply_commands(&record.commands, purpose, alive, !added_early, &mut applied, &mut leaving, &candidates, &mut wanted_since);
+        if self.rules.arrival_for_an_entry_unwanted_at_the_drain_changes_nothing {
+            self.found.unnamed = candidates.iter().copied().filter(|id| !wanted_since.contains(id)).collect();
+        }
         if !self.rules.arrivals_before_commands {
             self.apply_arrivals(record, residents, purpose, &mut applied, &mut leaving, &candidates, &wanted_since);
+            self.note_wanted(&candidates, &mut wanted_since);
+        }
+        if late {
+            self.follow_the_commands_late(&mut leaving);
             self.note_wanted(&candidates, &mut wanted_since);
         }
         if !self.rules.falls_before_record {
             applied.fallen = self.fall(&candidates, &wanted_since);
         }
+        if events_last {
+            self.apply_events(&record.events);
+        }
         self.finish(&mut applied, leaving);
         applied
+    }
+
+    /// Applies the world events of a record: each sets a field of the
+    /// world's configuration, which is no state and stands in no canonical
+    /// byte of the table. What a budget lowered under the count does to what
+    /// is in force is left open by the design text: nothing here.
+    fn apply_events(&mut self, events: &[WorldEvent]) {
+        for event in events {
+            match *event {
+                WorldEvent::Budget(bytes) => self.budget = Some(bytes),
+            }
+        }
+    }
+
+    /// For a restored table, under the control that starts its count from
+    /// nothing: every entry in force counts for nothing until an arrival is
+    /// applied to it.
+    pub fn count_from_nothing(&mut self) {
+        let in_force = |(asset, entry): (&AssetId, &Entry)| matches!(entry.availability, Availability::Available(_)).then_some(*asset);
+        self.uncounted = self.entries.iter().filter_map(in_force).collect();
     }
 
     /// Applies commands in order. The core adds and recomputes the wants of
@@ -2200,8 +2626,11 @@ impl Table {
         leaving: &mut Leaving,
         candidates: &[AssetId],
         wanted_since: &mut BTreeSet<AssetId>,
-    ) {
-        let follow = dependencies_follow && !self.rules.dependency_wants_with_a_batch_alone;
+    ) -> bool {
+        // Under one control the wants the core added follow the commands of
+        // a record once its arrivals are applied, and not before.
+        let deferred = purpose == Purpose::Tick && self.rules.core_wants_keep_their_policy_until_the_arrivals;
+        let follow = dependencies_follow && !self.rules.dependency_wants_with_a_batch_alone && !deferred;
         // The copy the gate is evaluated on needs the wants of dependencies
         // once, after the last pending command: nothing reads them between.
         let once = purpose == Purpose::Gate;
@@ -2210,16 +2639,37 @@ impl Table {
             if self.apply_command(index, command, purpose, alive, applied, leaving) {
                 changed = true;
                 if follow && !once {
-                    self.dependency_wants(&BTreeMap::new(), true);
+                    self.dependency_wants(&BTreeMap::new(), true, &Starts::default());
                     self.take_core_added(leaving);
                 }
             }
             self.note_wanted(candidates, wanted_since);
         }
         if follow && once && changed {
-            self.dependency_wants(&BTreeMap::new(), true);
+            self.dependency_wants(&BTreeMap::new(), true, &Starts::default());
             self.take_core_added(leaving);
         }
+        changed && deferred && dependencies_follow && !self.rules.dependency_wants_with_a_batch_alone
+    }
+
+    /// Under the control that defers it: the recomputation that the commands
+    /// of a record asked for, made once its arrivals are applied.
+    fn follow_the_commands_late(&mut self, leaving: &mut Leaving) {
+        self.dependency_wants(&BTreeMap::new(), true, &Starts::default());
+        self.take_core_added(leaving);
+    }
+
+    /// Under one control: an entry leaves the table at the fixed point that
+    /// ends its last want, whatever its availability, and not at the input
+    /// fixed point of the next tick.
+    fn leave_at_once(&mut self) {
+        if !self.rules.entry_leaves_at_the_fixed_point_that_ends_its_last_want {
+            return;
+        }
+        self.entries.retain(|_, entry| !entry.wants.is_empty());
+        let entries = &self.entries;
+        self.awaiting.retain(|asset| entries.contains_key(asset));
+        self.made.retain(|asset, _| entries.contains_key(asset));
     }
 
     /// What ends the application of a record, or of what a system did: the
@@ -2239,6 +2689,7 @@ impl Table {
                 applied.left.push((asset, entry.asset_type));
             }
         }
+        self.leave_at_once();
         if self.rules.unrisen_entry_leaves_at_once {
             self.entries.retain(|_, entry| !entry.wants.is_empty() || matches!(entry.availability, Availability::Available(_)));
         }
@@ -2258,7 +2709,9 @@ impl Table {
         }
         self.core_added.clear();
         let mut leaving = Leaving::new();
-        self.apply_commands(commands, Purpose::Tick, alive, true, &mut applied, &mut leaving, &[], &mut BTreeSet::new());
+        if self.apply_commands(commands, Purpose::Tick, alive, true, &mut applied, &mut leaving, &[], &mut BTreeSet::new()) {
+            self.follow_the_commands_late(&mut leaving);
+        }
         self.finish(&mut applied, leaving);
         applied
     }
@@ -2432,7 +2885,15 @@ impl Table {
         // by a pending release that leaves no required want on it.
         for asset in required.iter().chain(named.entries.keys()) {
             let answered_by_a_release = rules.gate_takes_a_pending_release_as_an_answer && released.contains(asset);
-            if !pending.contains_key(asset) && !answered_by_a_release && entry_of(asset).is_some_and(Entry::required_and_unanswered) {
+            // Under one control a release answers only where it leaves no
+            // want at all on an asset the table holds required and unanswered.
+            let unanswered = if rules.gate_release_answers_where_no_want_is_left && released.contains(asset) {
+                let wanted = named.entries.get(asset).is_some_and(|entry| !entry.wants.is_empty());
+                wanted && self.entries.get(asset).is_some_and(|entry| entry.required_and_unanswered(&rules))
+            } else {
+                entry_of(asset).is_some_and(|entry| entry.required_and_unanswered(&rules))
+            };
+            if !pending.contains_key(asset) && !answered_by_a_release && unanswered {
                 closed.insert(*asset);
             }
         }

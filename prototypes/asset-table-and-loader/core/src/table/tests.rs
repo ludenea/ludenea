@@ -1249,3 +1249,161 @@ fn the_query_of_a_restore_gives_the_wants_that_stand_on_each_entry_not_held_avai
     apply(&mut table, &parts, vec![want(P, PARAMETERS, HOST, Policy::Required), want(A, PARAMETERS, TOOL, Policy::Optional)], vec![Arrival::at(P, p), Arrival::failed(D, REASON_ARTIFACT_GONE)]);
     assert_eq!(table.standing_wants(), vec![(D, vec![(Owner::Asset(P), Policy::Required)]), (A, vec![(TOOL, Policy::Optional)])]);
 }
+
+// --- the rules the scenarios of the stand-in stage turn on ---
+
+#[test]
+fn a_world_event_sets_the_budget_the_arrivals_of_its_record_are_tested_against() {
+    let mut parts = Parts::default();
+    let a = parts.sized(1, &[], 100);
+    let record = |parts: &Parts| {
+        let mut record = Record::arrivals(2, sized(parts, vec![Arrival::at(A, a)]));
+        record.events = vec![WorldEvent::Budget(80)];
+        record
+    };
+    let run = |rules: Rules| {
+        let mut table = Table::with_rules(rules);
+        table.budget = Some(150);
+        apply(&mut table, &parts, vec![want(A, PARAMETERS, HOST, Policy::Optional)], Vec::new());
+        let applied = table.apply(&record(&parts), &parts, &|_, _| true);
+        (table.budget, table.entries[&A].availability, applied.rejected)
+    };
+    // The event changes the configuration at the boundary of its tick.
+    assert_eq!(run(Rules::default()), (Some(80), Availability::Failed(REASON_OVER_BUDGET), vec![(A, a)]));
+    // The control: the budget a record changes is in force from the tick after.
+    let late = Rules { budget_event_in_force_from_the_next_tick: true, ..Rules::default() };
+    assert_eq!(run(late), (Some(80), Availability::Available(a), Vec::new()));
+    // A log holds the event; under the control that leaves the size out of
+    // the canonical bytes, an arrival read back from a log names none.
+    let record = record(&parts);
+    assert_eq!(decode_log(&encode_log(std::slice::from_ref(&record))), Ok(vec![record.clone()]));
+    let unsized_bytes = Rules { size_left_out_of_the_bytes: true, ..Rules::default() };
+    let read_back = decode_log_under(&encode_log_under(std::slice::from_ref(&record), &unsized_bytes), &unsized_bytes).expect("the log decodes");
+    assert_eq!((read_back[0].arrivals[0].size, &read_back[0].events), (0, &record.events));
+}
+
+#[test]
+fn a_root_holds_a_required_want_where_it_stands_in_the_required_set_once_the_commands_are_applied() {
+    let mut parts = Parts::default();
+    let a = parts.sized(1, &[], 100);
+    let p = parts.sized(2, &[], 100);
+    // Two roots that each fit alone. The record of their arrivals makes the
+    // first optional and the second required.
+    let run = |rules: Rules| {
+        let mut table = Table::with_rules(rules);
+        table.budget = Some(150);
+        apply(&mut table, &parts, vec![want(A, PARAMETERS, HOST, Policy::Required), want(P, PARAMETERS, HOST, Policy::Optional)], Vec::new());
+        let commands = vec![want(A, PARAMETERS, HOST, Policy::Optional), want(P, PARAMETERS, HOST, Policy::Required)];
+        apply(&mut table, &parts, commands, vec![Arrival::at(A, a), Arrival::at(P, p)]).rejected
+    };
+    assert_eq!(run(Rules::default()), vec![(A, a)]);
+    assert_eq!(run(Rules { budget_required_roots_read_before_the_commands: true, ..Rules::default() }), vec![(P, p)]);
+    assert_eq!(run(Rules { budget_groups_in_identifier_order_alone: true, ..Rules::default() }), vec![(P, p)]);
+}
+
+#[test]
+fn an_entry_in_force_with_no_want_stays_counted_though_the_record_holds_its_failure() {
+    let mut parts = Parts::default();
+    let a = parts.sized(1, &[], 60);
+    let x = parts.sized(2, &[], 60);
+    let larger = parts.sized(3, &[], 100);
+    let run = |rules: Rules, released: bool| {
+        let mut table = Table::with_rules(rules);
+        table.budget = Some(130);
+        apply(&mut table, &parts, vec![want(A, PARAMETERS, BASE, Policy::Required), want(X, PARAMETERS, HOST, Policy::Required)], vec![Arrival::at(A, a), Arrival::at(X, x)]);
+        let commands = if released { vec![release(X, HOST)] } else { Vec::new() };
+        let applied = apply(&mut table, &parts, commands, vec![Arrival::at(A, larger), Arrival::failed(X, REASON_UNKNOWN_ASSET)]);
+        (applied.rejected, table.entries[&X].availability)
+    };
+    // The failure fails an entry that holds a want: its room is free.
+    assert_eq!(run(Rules::default(), false), (Vec::new(), Availability::Failed(REASON_UNKNOWN_ASSET)));
+    // An entry that holds no want: the failure changes nothing, the entry
+    // stays counted, and the replacement beside it is rejected.
+    assert_eq!(run(Rules::default(), true), (vec![(A, larger)], Availability::Available(x)));
+    let freed = Rules { budget_count_leaves_out_every_entry_an_arrival_to_failed_names: true, ..Rules::default() };
+    assert_eq!(run(freed, true), (Vec::new(), Availability::Available(x)), "the control ends the fixed point over the budget");
+    let held = Rules { budget_count_holds_the_failing_entries: true, ..Rules::default() };
+    assert_eq!(run(held, false).0, vec![(A, larger)]);
+}
+
+#[test]
+fn a_group_that_does_not_raise_the_count_is_accepted_over_a_lowered_budget() {
+    let mut parts = Parts::default();
+    let a = parts.sized(1, &[], 100);
+    let smaller = parts.sized(2, &[], 80);
+    let same = parts.sized(3, &[], 100);
+    let larger = parts.sized(4, &[], 110);
+    // An asset in force, a budget lowered under the count, and a replacement
+    // in the record of the lowering. Returns the count of rejected arrivals.
+    let run = |rules: Rules, to: u64| {
+        let mut table = Table::with_rules(rules);
+        table.budget = Some(150);
+        apply(&mut table, &parts, vec![want(A, PARAMETERS, HOST, Policy::Required)], vec![Arrival::at(A, a)]);
+        let mut record = Record::arrivals(2, sized(&parts, vec![Arrival::at(A, to)]));
+        record.events = vec![WorldEvent::Budget(50)];
+        let rejected = table.apply(&record, &parts, &|_, _| true).rejected.len();
+        assert!(matches!(table.entries[&A].availability, Availability::Available(_)), "a lowering takes nothing out of force");
+        rejected
+    };
+    assert_eq!((run(Rules::default(), smaller), run(Rules::default(), same), run(Rules::default(), larger)), (0, 0, 1));
+    let lowers = Rules { budget_accepts_over_the_count_only_a_group_that_lowers_it: true, ..Rules::default() };
+    assert_eq!((run(lowers, smaller), run(lowers, same)), (0, 1));
+    let tested = Rules { budget_tests_a_group_that_does_not_raise_the_count: true, ..Rules::default() };
+    assert_eq!(run(tested, smaller), 1);
+}
+
+#[test]
+fn a_pending_release_answers_only_where_no_required_want_is_left_and_a_pending_change_of_policy_is_not_seen() {
+    let parts = Parts::default();
+    // An asset the host requires, with a second want of the tool.
+    let gated = |rules: Rules, second: Policy| {
+        let mut table = Table::with_rules(rules);
+        apply(&mut table, &parts, vec![want(A, PARAMETERS, HOST, Policy::Required), want(A, PARAMETERS, TOOL, second)], Vec::new());
+        table
+    };
+    let released = Record::commands(2, vec![release(A, HOST)]);
+    assert_eq!(gated(Rules::default(), Policy::Required).gate(&released, &parts), vec![A], "a required want is left");
+    assert!(gated(Rules::default(), Policy::Optional).gate_open(&released, &parts), "the last required want ends");
+    let last_want = Rules { gate_release_answers_where_no_want_is_left: true, ..Rules::default() };
+    assert_eq!(gated(last_want, Policy::Optional).gate(&released, &parts), vec![A]);
+    let whatever = Rules { gate_takes_a_pending_release_as_an_answer: true, ..Rules::default() };
+    assert!(gated(whatever, Policy::Required).gate_open(&released, &parts));
+    // A pending change of policy is neither an arrival nor a release.
+    let made_optional = Record::commands(2, vec![want(A, PARAMETERS, HOST, Policy::Optional)]);
+    assert_eq!(gated(Rules::default(), Policy::Optional).gate(&made_optional, &parts), vec![A]);
+    let sees = Rules { gate_sees_pending_policy_changes: true, ..Rules::default() };
+    assert!(gated(sees, Policy::Optional).gate_open(&made_optional, &parts));
+    // The copy of the table takes it too, under the same control, and sees
+    // the wants its recomputation ends.
+    let copies = Rules { gate_copies_the_table: true, ..sees };
+    assert!(gated(copies, Policy::Optional).gate_open(&made_optional, &parts));
+    assert_eq!(gated(Rules { gate_copies_the_table: true, ..Rules::default() }, Policy::Optional).gate(&made_optional, &parts), vec![A]);
+}
+
+#[test]
+fn the_wants_of_the_first_step_start_from_an_asset_that_holds_a_want_once_the_commands_are_applied() {
+    let mut parts = Parts::default();
+    let d = parts.part(1, &[]);
+    let first = parts.part(2, &[]);
+    let second = parts.part(3, &[(D, PARAMETERS)]);
+    // A parent in force, released, then replaced by a part that lists a
+    // dependency, in a record that wants it again or not.
+    let run = |rules: Rules, wanted_again: bool| {
+        let mut table = Table::with_rules(rules);
+        apply(&mut table, &parts, vec![want(P, PARAMETERS, HOST, Policy::Required)], vec![Arrival::at(P, first)]);
+        apply(&mut table, &parts, vec![release(P, HOST)], Vec::new());
+        let commands = if wanted_again { vec![want(P, PARAMETERS, TOOL, Policy::Optional)] } else { Vec::new() };
+        apply(&mut table, &parts, commands, vec![Arrival::at(D, d), Arrival::at(P, second)]);
+        let availability = |asset: AssetId| table.entries.get(&asset).map(|entry| entry.availability);
+        (availability(P), availability(D))
+    };
+    // No want names the parent: its part adds nothing, neither arrival is
+    // applied, and the parent falls.
+    assert_eq!(run(Rules::default(), false), (None, None));
+    // Wanted again by a command of the record: the first step starts from it.
+    assert_eq!(run(Rules::default(), true), (Some(Availability::Available(second)), Some(Availability::Available(d))));
+    let before = Rules { first_step_starts_from_the_wants_held_before_the_commands: true, ..Rules::default() };
+    assert_eq!(run(before, true), (Some(Availability::Available(second)), Some(Availability::Unavailable)));
+    let every = Rules { first_step_follows_every_arriving_part: true, ..Rules::default() };
+    assert_eq!(run(every, false), (None, Some(Availability::Available(d))));
+}

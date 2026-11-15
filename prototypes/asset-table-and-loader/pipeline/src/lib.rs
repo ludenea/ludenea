@@ -18,6 +18,8 @@
 //! strength <number>
 //! radius <number>
 //! salt <number>
+//! manifest-size <bytes>   optional: the size the manifest holds, where it is not the part's length
+//! size <bytes>            optional: the length the part is padded to
 //! depends <identifier> <stable name of the dependency's type>   zero or more lines
 //! ```
 //!
@@ -51,6 +53,11 @@ pub struct Source {
     /// the importer pads the part to it. Without one, the part carries a
     /// payload of a fixed length.
     pub size: Option<usize>,
+    /// The size the domain manifest holds for the asset, where the source
+    /// states one that is not the length of its canonical part: what a
+    /// prepared form built once would add to it. The pipeline writes it into
+    /// the manifest and compares it with nothing.
+    pub manifest_size: Option<u64>,
     /// The assets the part lists, each with the type the source states for it.
     pub dependencies: Vec<Dependency>,
 }
@@ -65,6 +72,9 @@ impl Source {
             self.radius,
             self.salt
         );
+        if let Some(size) = self.manifest_size {
+            text.push_str(&format!("manifest-size {size}\n"));
+        }
         if let Some(size) = self.size {
             text.push_str(&format!("size {size}\n"));
         }
@@ -76,7 +86,7 @@ impl Source {
 
     pub fn parse(text: &str) -> Result<Source, String> {
         let (mut asset, mut asset_type) = (None, None);
-        let (mut strength, mut radius, mut salt, mut size, mut dependencies) = (0.0, 0.0, 0, None, Vec::new());
+        let (mut strength, mut radius, mut salt, mut size, mut manifest_size, mut dependencies) = (0.0, 0.0, 0, None, None, Vec::new());
         let id = |value: &str| u128::from_str_radix(value, 16).map_err(|error| format!("identifier {value}: {error}"));
         let named = |value: &str| AssetType::named(value).ok_or_else(|| format!("the schema holds no asset type named {value}"));
         for line in text.lines() {
@@ -88,6 +98,7 @@ impl Source {
                 "radius" => radius = value.parse().map_err(|error| format!("radius: {error}"))?,
                 "salt" => salt = value.parse().map_err(|error| format!("salt: {error}"))?,
                 "size" => size = Some(value.parse().map_err(|error| format!("size: {error}"))?),
+                "manifest-size" => manifest_size = Some(value.parse().map_err(|error| format!("manifest-size: {error}"))?),
                 "depends" => {
                     let (dependency, listed) = value.split_once(' ').ok_or_else(|| format!("a dependency states its type: {line}"))?;
                     dependencies.push((id(dependency)?, named(listed)?));
@@ -96,7 +107,7 @@ impl Source {
             }
         }
         match (asset, asset_type) {
-            (Some(asset), Some(asset_type)) if asset != 0 => Ok(Source { asset, asset_type, strength, radius, salt, size, dependencies }),
+            (Some(asset), Some(asset_type)) if asset != 0 => Ok(Source { asset, asset_type, strength, radius, salt, size, manifest_size, dependencies }),
             _ => Err("a source names its asset and its type".to_string()),
         }
     }
@@ -112,7 +123,7 @@ impl Source {
         DomainEntry {
             asset_type: self.asset_type.stable_name().to_string(),
             hash,
-            size: self.part().len() as u64,
+            size: self.manifest_size.unwrap_or(self.part().len() as u64),
             dependencies: self.dependencies.iter().map(|(dependency, asset_type)| (*dependency, asset_type.stable_name().to_string())).collect(),
             // No asset type of the stand-in has a prepared form built once.
             forms: Vec::new(),
@@ -311,7 +322,7 @@ mod tests {
     }
 
     fn source(asset: AssetId, strength: f32, dependencies: &[Dependency]) -> Source {
-        Source { asset, asset_type: AssetType::Parameters, strength, radius: 8.0, salt: 0, size: None, dependencies: dependencies.to_vec() }
+        Source { asset, asset_type: AssetType::Parameters, strength, radius: 8.0, salt: 0, size: None, manifest_size: None, dependencies: dependencies.to_vec() }
     }
 
     #[test]

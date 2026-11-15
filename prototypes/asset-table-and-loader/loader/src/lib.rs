@@ -292,6 +292,28 @@ pub struct Options {
     /// later batch leaves the asset out. The default reads the state
     /// extracted at the end of the last tick, and nothing else.
     pub trusts_what_it_posted: bool,
+    // --- the controls of the scenarios on the batch of a restore ---
+    /// Control: at a restore, no failed arrival is posted for an entry the
+    /// save holds as failed. The default posts the arrival its load gives,
+    /// a failure included.
+    pub restore_posts_no_failure_for_a_failed_entry: bool,
+    /// Control: an entry the save holds as failed under a want the core
+    /// added receives nothing, whichever parent owns that want. The default
+    /// leaves it only where the parent whose part lists it owns the want.
+    pub restore_leaves_a_failed_entry_under_any_core_want: bool,
+    /// Control: the batch of a restore is completed for an entry the save
+    /// holds as failed under a want, and not for one it holds as failed
+    /// under none.
+    pub restore_completes_for_a_failed_entry_under_a_want_alone: bool,
+    /// Control: the batch of a restore holds no ordinary arrival for an
+    /// entry the save already holds unavailable. The default posts one for
+    /// an entry held unavailable under no want that a part of an answer
+    /// lists.
+    pub restore_posts_nothing_for_an_unavailable_entry: bool,
+    /// Control: the batch of a restore is completed one level under an
+    /// answer alone, the parts of the ordinary arrivals it holds not being
+    /// followed. The default follows them, to any depth.
+    pub restore_completes_one_level_alone: bool,
 }
 
 /// The prepared forms built once that a world's composition declares, by
@@ -756,28 +778,47 @@ impl Instance {
                 continue;
             }
             let dependencies: Vec<AssetId> = manifest.get(&parent).map_or_else(Vec::new, |entry| entry.dependencies.iter().map(|(dependency, _)| *dependency).collect());
+            let options = self.options;
             for dependency in dependencies {
-                if batch.iter().any(|arrival| arrival.asset == dependency) {
+                if let Some(held) = batch.iter().find(|arrival| arrival.asset == dependency) {
                     // An answer, or an arrival another parent brought: where
-                    // it is to a hash, its part adds wants in its turn.
-                    if brought(batch, &dependency) {
+                    // it is to a hash, its part adds wants in its turn. One
+                    // control follows the part of an answer alone.
+                    let ordinary = !held.marked && !self.options.answers_unmarked;
+                    if brought(batch, &dependency) && !(ordinary && options.restore_completes_one_level_alone) {
                         open.push(dependency);
                     }
                     continue;
                 }
                 let link = &self.worlds[&world];
+                let held_failed = link.table.get(&dependency).is_some_and(|entry| matches!(entry.availability, Availability::Failed(_)));
                 let posted = match link.table.get(&dependency) {
                     None => true,
                     Some(entry) => match entry.availability {
                         Availability::Available(_) => false,
-                        Availability::Failed(_) => !link.owns(&dependency, parent),
-                        Availability::Unavailable => !entry.wanted,
+                        // A failed entry returns to unavailable where the
+                        // want is added on it: everywhere but where this
+                        // parent's own want already stands on it. Two
+                        // controls post for fewer entries.
+                        Availability::Failed(_) => {
+                            let under_a_core_want = link.standing.get(&dependency).is_some_and(|owners| owners.iter().any(|owner| matches!(owner, Owner::Asset(_))));
+                            let left = if options.restore_leaves_a_failed_entry_under_any_core_want { under_a_core_want } else { link.owns(&dependency, parent) };
+                            !left && (entry.wanted || !options.restore_completes_for_a_failed_entry_under_a_want_alone)
+                        }
+                        Availability::Unavailable => !entry.wanted && !options.restore_posts_nothing_for_an_unavailable_entry,
                     },
                 };
                 if posted {
                     let held = self.type_below(world, manifest, parent, dependency, batch);
-                    batch.push(self.arrival(manifest, dependency, held));
-                    if brought(batch, &dependency) {
+                    let arrival = self.arrival(manifest, dependency, held);
+                    // Under one control a load that fails again is not
+                    // posted for an entry the save holds as failed.
+                    let failed_again = held_failed && matches!(arrival.outcome, Outcome::Failure(_));
+                    if failed_again && options.restore_posts_no_failure_for_a_failed_entry {
+                        continue;
+                    }
+                    batch.push(arrival);
+                    if brought(batch, &dependency) && !options.restore_completes_one_level_alone {
                         open.push(dependency);
                     }
                 }

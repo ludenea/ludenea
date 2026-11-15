@@ -155,7 +155,7 @@ fn median(durations: &mut [Duration]) -> Duration {
 
 fn record(tick: u32, (commands, mut arrivals): (Vec<Command>, Vec<Arrival>)) -> Record {
     arrivals.sort_by_key(|arrival| arrival.asset);
-    Record { tick, commands, arrivals }
+    Record { tick, commands, arrivals, ..Record::default() }
 }
 
 /// A hundred evaluations of the gate on one pending record, which none of

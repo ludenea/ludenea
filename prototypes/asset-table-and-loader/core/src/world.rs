@@ -31,7 +31,7 @@ use reference_workload::{
 
 use crate::table::{
     Applied, Arrival, ArrivalQueue, AssetId, AssetType, Availability, Command, Entry, EntryView, Event, Instance, Maker, NewHistory, Owner, Policy,
-    Reader, Record, Refused, RepulsionTable, Resident, Residents, Rules, SystemName, Table, View, Wanted,
+    Reader, Record, Refused, RepulsionTable, Resident, Residents, Rules, SystemName, Table, View, Wanted, WorldEvent,
 };
 
 pub const DEFAULT_SPIN_BOUND: Duration = Duration::from_micros(50);
@@ -536,6 +536,7 @@ struct DenseEntry {
 /// The input record of the next tick, as it accumulates.
 #[derive(Default)]
 struct Pending {
+    events: Vec<WorldEvent>,
     commands: Vec<Command>,
     arrivals: BTreeMap<AssetId, Arrival>,
 }
@@ -649,6 +650,8 @@ struct Graph {
     script: UnsafeCell<Script>,
     journal: UnsafeCell<Journal>,
     host_commands: Mutex<Vec<Command>>,
+    /// The world events the host issued between two steps.
+    host_events: Mutex<Vec<WorldEvent>>,
     /// The entities a record despawned, taken out at the structural change
     /// fixed point of the tick.
     kills: UnsafeCell<Vec<(u32, u32)>>,
@@ -721,6 +724,7 @@ impl Graph {
             script: UnsafeCell::new(Script { records: script, next: 0 }),
             journal: UnsafeCell::new(journal),
             host_commands: Mutex::new(Vec::new()),
+            host_events: Mutex::new(Vec::new()),
             kills: UnsafeCell::new(Vec::new()),
             links,
             applied_for: AtomicU32::new(tick),
@@ -760,12 +764,14 @@ impl Graph {
             if record.tick > tick {
                 break;
             }
+            pending.events.extend_from_slice(&record.events);
             pending.commands.extend_from_slice(&record.commands);
             for arrival in &record.arrivals {
                 pending.arrivals.insert(arrival.asset, *arrival);
             }
             script.next += 1;
         }
+        pending.events.append(&mut self.host_events.lock().expect("the host's events are never poisoned"));
         pending.commands.append(&mut self.host_commands.lock().expect("the host's commands are never poisoned"));
         self.links.queue.drain_into(&mut pending.arrivals);
     }
@@ -782,20 +788,26 @@ impl Graph {
         let system_first = if rules.system_applied_at_the_next_input_fixed_point && tick > 0 { self.config.system_at(tick - 1) } else { Vec::new() };
         let system_last = if rules.system_applied_with_its_ticks_record { self.config.system_at(tick) } else { Vec::new() };
         let no_system = system_first.is_empty() && system_last.is_empty();
-        let empty = pending.commands.is_empty() && pending.arrivals.is_empty() && no_system;
+        let empty = pending.events.is_empty() && pending.commands.is_empty() && pending.arrivals.is_empty() && no_system;
         if empty && !table.has_orphans() && journal.restore.is_none() {
             // Nothing to apply: the gate stands as the state has it.
             journal.gate_leaves = if table.blocked() { table.required_unanswered() } else { Vec::new() };
             return self.gate_verdict(tick, !table.blocked(), table, journal);
         }
-        let record = Record { tick, commands: std::mem::take(&mut pending.commands), arrivals: pending.arrivals.values().copied().collect() };
+        let record = Record {
+            tick,
+            events: std::mem::take(&mut pending.events),
+            commands: std::mem::take(&mut pending.commands),
+            arrivals: pending.arrivals.values().copied().collect(),
+        };
         let with_the_system = (!no_system).then(|| {
             let commands = system_first.iter().chain(&record.commands).chain(&system_last).copied().collect();
-            Record { tick, commands, arrivals: record.arrivals.clone() }
+            Record { tick, events: record.events.clone(), commands, arrivals: record.arrivals.clone() }
         });
         let applied_record = with_the_system.as_ref().unwrap_or(&record);
         journal.gate_leaves = table.gate(applied_record, self.links.residents.as_ref());
         if !journal.gate_leaves.is_empty() {
+            pending.events = record.events;
             pending.commands = record.commands;
             return self.gate_verdict(tick, false, table, journal);
         }
@@ -828,6 +840,12 @@ impl Graph {
         }
         journal.events.extend(restore_event);
         kills.extend_from_slice(&applied.despawned);
+        // A world event is an input: the record of its tick holds it, so
+        // that a replay reproduces it at its tick. One control leaves it out.
+        let mut record = record;
+        if table.rules.budget_events_left_out_of_the_log {
+            record.events.clear();
+        }
         if !record.is_empty() {
             journal.log.push(record);
         }
@@ -1334,7 +1352,7 @@ impl Graph {
 // The world
 // ---------------------------------------------------------------------------
 
-const SAVE_FORMAT: u32 = 4;
+const SAVE_FORMAT: u32 = 5;
 
 /// A world: the reference workload's state, its tick graph, its asset table
 /// and its history of hashes, stepped by whole ticks.
@@ -1354,6 +1372,9 @@ pub struct SaveHeader {
     pub content_set: Option<u64>,
     /// The asset types its composition declared.
     pub asset_types: Vec<AssetType>,
+    /// The saved world's budget for its asset data, where it had one: the
+    /// one in force at the save, a world event that changed it counted.
+    pub budget: Option<u64>,
 }
 
 impl World {
@@ -1367,6 +1388,7 @@ impl World {
         let state = State::initialize(&parameters);
         let mut table = Table::with_rules(config.rules);
         table.budget = config.budget;
+        table.systems = config.systems.iter().map(|system| (system.name, system.contributor)).collect();
         // A contributor's want that states another type than the entry
         // another contributor's want made is refused, as a command's is.
         let mut refused = 0;
@@ -1458,7 +1480,7 @@ impl World {
         let tick = self.tick_done + 1;
         self.graph.assemble(tick);
         let pending = self.graph.pending.get_mut();
-        Record { tick, commands: pending.commands.clone(), arrivals: pending.arrivals.values().copied().collect() }
+        Record { tick, events: pending.events.clone(), commands: pending.commands.clone(), arrivals: pending.arrivals.values().copied().collect() }
     }
 
     /// One evaluation of the gate on a pending record, which it does not
@@ -1581,6 +1603,19 @@ impl World {
         self.graph.host_commands.lock().expect("the host's commands are never poisoned").push(command);
     }
 
+    /// A world event of the host, issued between two steps: part of the
+    /// pending record of the next tick, at whose boundary it changes the
+    /// world's configuration.
+    pub fn post_event(&self, event: WorldEvent) {
+        self.graph.host_events.lock().expect("the host's events are never poisoned").push(event);
+    }
+
+    /// The world's budget for its asset data as it stands: the one of its
+    /// creation, or the one a world event has set since.
+    pub fn budget(&self) -> Option<u64> {
+        self.table().budget
+    }
+
     fn result(&mut self, from: u32, gated: bool) -> StepResult {
         // SAFETY: no step is in progress.
         let journal = unsafe { &mut *self.graph.journal.get() };
@@ -1653,6 +1688,12 @@ impl World {
             out.extend_from_slice(&(name.len() as u32).to_le_bytes());
             out.extend_from_slice(name);
         }
+        // The world's budget for its asset data is configuration, which the
+        // header holds: the one in force, a world event that changed it
+        // counted. Under one control, the one the world was created under.
+        let budget = if config.rules.save_holds_the_budget_of_creation { config.budget } else { self.table().budget };
+        out.push(u8::from(budget.is_some()));
+        out.extend_from_slice(&budget.unwrap_or(0).to_le_bytes());
         out.extend_from_slice(&(state.len() as u32).to_le_bytes());
         for slot in 0..state.len() {
             out.extend_from_slice(&state.generation[slot].to_le_bytes());
@@ -1695,7 +1736,14 @@ impl World {
         let (header, state, mut table) = read_save(bytes, config.rules).expect("the save decodes");
         assert_eq!(state.len(), config.size.entity_count(), "the save is of the configured size");
         let rules = config.rules;
-        table.budget = config.budget;
+        // The budget is a field of the configuration a world event may
+        // change: a request that states one sets it, and a restored world
+        // stands under the budget its save's header holds otherwise.
+        table.budget = config.budget.or(header.budget);
+        table.systems = config.systems.iter().map(|system| (system.name, system.contributor)).collect();
+        if rules.restored_count_starts_from_nothing {
+            table.count_from_nothing();
+        }
         let (dropped, in_silence, types_from) = match &restore {
             Restore::ContentAtHand { dropped, drop_in_silence, types_from } => (*dropped, *drop_in_silence, *types_from),
             Restore::Continue { dropped, .. } => (*dropped, false, None),
@@ -1833,7 +1881,8 @@ fn read_header(reader: &mut Reader) -> Result<SaveHeader, String> {
     for _ in 0..reader.u32()? {
         asset_types.push(reader.asset_type()?);
     }
-    Ok(SaveHeader { tick, content_set: named.then_some(set), asset_types })
+    let (budgeted, budget) = (reader.flag()?, reader.u64()?);
+    Ok(SaveHeader { tick, content_set: named.then_some(set), asset_types, budget: budgeted.then_some(budget) })
 }
 
 fn read_save(bytes: &[u8], rules: Rules) -> Result<(SaveHeader, State, Table), String> {

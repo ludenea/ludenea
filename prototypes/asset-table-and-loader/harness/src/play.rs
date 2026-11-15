@@ -15,7 +15,7 @@ use std::sync::{Arc, OnceLock};
 use asset_loader::{Attachment, Hold, Loader, Options, ResidentStore};
 use asset_pipeline::Cache;
 use content_store::set_hash;
-use prototype_core::table::{ArrivalQueue, AssetId, AssetType, Policy, Record, Residents, Rules, SystemName, decode_log, encode_log};
+use prototype_core::table::{ArrivalQueue, AssetId, AssetType, Policy, Record, Residents, Rules, SystemName, decode_log_under, encode_log_under};
 use prototype_core::world::{Act as SystemAct, Extraction, History, Links, Mode, Refusal, Restore, Size, System, Wait, World, WorldConfig, save_header};
 use reference_workload::run_hash;
 
@@ -37,6 +37,12 @@ pub enum Tweak {
     TypesFromTheManifest,
     /// The entries of a type the composition lacks are dropped unnamed.
     DropInSilence,
+    /// The other reading of a sheet's "Record of tick n: ... A step without
+    /// waiting", where steps stand in a row: that step is the one that runs
+    /// tick n, and no step asks for the next tick before what the scenario
+    /// states next. The build reads it as the earlier sheets do: tick n runs,
+    /// and the step asks for the tick after it.
+    StepAfterARecordRunsItsTick,
 }
 
 /// A rule changed on purpose: of the core, of the loading capability, or of
@@ -46,6 +52,9 @@ pub enum Change {
     Core(fn(&mut Rules)),
     Loader(fn(&mut Options)),
     Harness(Tweak),
+    /// A rule of the core changed for a world that replays an input log in
+    /// a process of its own, and for that world alone.
+    Replay(fn(&mut Rules)),
 }
 
 /// What stands before a tick, for one world.
@@ -59,6 +68,11 @@ pub enum Act {
     /// The same, before the loading capability has posted what the tick
     /// before asked of it.
     StepUnposted,
+    /// One of several steps without waiting in a row: it asks for the next
+    /// tick the world has not run, whatever tick that is, and either runs it
+    /// or runs none and names what it awaits. What the scenario states next
+    /// applies to the world as that step left it.
+    StepInARow,
 }
 
 /// What moves the content of the first instance, before the round of a tick.
@@ -67,6 +81,9 @@ pub enum Move {
     /// These contents replace those of the same assets, and the revision is
     /// put in place.
     Revision(Vec<&'static str>),
+    /// The same, the revision holding no entry for the assets named last:
+    /// each leaves the instance's manifest, as by a deletion.
+    RevisionWithout(Vec<&'static str>, Vec<&'static str>),
     /// The whole artifacts of these contents are put in the store, under the
     /// same hashes.
     Repair(Vec<&'static str>),
@@ -109,6 +126,9 @@ pub struct WorldPlan {
     pub instance: usize,
     /// The wants the composition's contributor makes at tick 0.
     pub wants: Vec<(&'static str, AssetType, Policy)>,
+    /// The wants another contributor of the composition makes at tick 0:
+    /// the contributor, then the asset, its type and the policy.
+    pub contributed: Vec<(&'static str, &'static str, AssetType, Policy)>,
     /// The asset types the composition declares.
     pub types: Vec<AssetType>,
     pub set: SetName,
@@ -124,6 +144,10 @@ pub struct WorldPlan {
     pub saves: Vec<u32>,
     /// The world replays the input log of this other world, once it has run.
     pub replays_the_log_of: Option<String>,
+    /// It replays that log as a new process does: created as the world that
+    /// wrote the log was, with no loading capability and no scripted source,
+    /// its records the log's, read back from its bytes.
+    pub alone: bool,
 }
 
 impl WorldPlan {
@@ -134,6 +158,7 @@ impl WorldPlan {
             judged: true,
             instance: 0,
             wants: Vec::new(),
+            contributed: Vec::new(),
             types: vec![AssetType::Parameters, AssetType::Second],
             set: SetName::None,
             systems: Vec::new(),
@@ -143,6 +168,7 @@ impl WorldPlan {
             offset: 0,
             saves: Vec::new(),
             replays_the_log_of: None,
+            alone: false,
         }
     }
 
@@ -153,6 +179,21 @@ impl WorldPlan {
 
     pub fn wanting(mut self, asset: &'static str, policy: Policy) -> WorldPlan {
         self.wants.push((asset, AssetType::Parameters, policy));
+        self
+    }
+
+    /// A want a named contributor of the composition makes at tick 0, after
+    /// those of the contributor `base`.
+    pub fn wanting_by(mut self, contributor: &'static str, asset: &'static str, policy: Policy) -> WorldPlan {
+        self.contributed.push((contributor, asset, AssetType::Parameters, policy));
+        self
+    }
+
+    /// The systems of the composition that make wants, each with the
+    /// contributor that brings it, in the order of the schedule. A system
+    /// that the plan gives nothing to do stands in the schedule all the same.
+    pub fn scheduling(mut self, systems: &[(&'static str, &'static str)]) -> WorldPlan {
+        self.systems.extend(systems.iter().map(|&(name, contributor)| SystemPlan { name, contributor, does: Vec::new() }));
         self
     }
 
@@ -180,6 +221,22 @@ impl WorldPlan {
 
     pub fn step_unposted(mut self, tick: u32) -> WorldPlan {
         self.acts.push((tick, Act::StepUnposted));
+        self
+    }
+
+    /// Elements that join the pending record once tick `after` has run,
+    /// after what was stated so far: the record of the next tick the world
+    /// has not run, whatever tick that is.
+    pub fn joins(mut self, after: u32, elements: &[&'static str]) -> WorldPlan {
+        self.acts.extend(elements.iter().map(|text| (after + 1, Act::Post(text))));
+        self
+    }
+
+    /// A step without waiting once tick `after` has run, after what was
+    /// stated so far, one of several in a row: it asks for the next tick the
+    /// world has not run.
+    pub fn step_in_a_row(mut self, after: u32) -> WorldPlan {
+        self.acts.push((after + 1, Act::StepInARow));
         self
     }
 
@@ -223,6 +280,18 @@ impl WorldPlan {
         self
     }
 
+    /// The world replays the input log of another in a new process: it is
+    /// created as that world was, with the same composition and the same
+    /// budget at creation, with no loading capability and no scripted
+    /// source, and runs at another worker count. Its records are the log's,
+    /// read back from its bytes, and its store holds every part the log
+    /// names. An oracle states it under its own name.
+    pub fn replaying_alone(mut self, other: &str) -> WorldPlan {
+        self.replays_the_log_of = Some(other.to_string());
+        self.alone = true;
+        self
+    }
+
     pub fn with_a_budget(mut self, bytes: u64) -> WorldPlan {
         self.budget = Some(bytes);
         self
@@ -250,6 +319,8 @@ pub struct Store {
 #[derive(Clone)]
 pub struct Read {
     pub of: &'static str,
+    /// The world of that scenario that was saved.
+    pub world: &'static str,
     pub at: u32,
     /// The request states that the content is the recorded one.
     pub recorded: bool,
@@ -336,7 +407,14 @@ impl Scenario {
     }
 
     pub fn reading(mut self, of: &'static str, at: u32, recorded: bool, dropped: &[AssetType]) -> Scenario {
-        self.read = Some(Read { of, at, recorded, dropped: dropped.to_vec() });
+        self.read = Some(Read { of, world: "world", at, recorded, dropped: dropped.to_vec() });
+        self
+    }
+
+    /// The save the scenario reads is the save of this world of the scenario
+    /// that saved, where that scenario holds several worlds.
+    pub fn of_the_world(mut self, world: &'static str) -> Scenario {
+        self.read.as_mut().expect("a scenario that reads a save").world = world;
         self
     }
 
@@ -354,6 +432,13 @@ impl Scenario {
     /// A control: the same scenario with a rule changed, which must differ.
     pub fn control(self, name: &str, change: Change) -> Scenario {
         self.control_on(&[], name, change)
+    }
+
+    /// A control that changes several rules together, of the core and of
+    /// the loading capability.
+    pub fn control_of(mut self, name: &str, changes: Vec<Change>) -> Scenario {
+        self.variants.push(VariantPlan { name: name.to_string(), control: true, changes, worlds: Vec::new() });
+        self
     }
 
     /// A control that must differ on the worlds named.
@@ -391,6 +476,29 @@ pub struct Played {
     /// Whether the header of a save of a world that replays a log under a
     /// set holds the set's hash.
     pub header_holds_the_set: Option<bool>,
+    /// The play holds a part of the scenario's worlds: another process
+    /// plays the others.
+    pub partial: bool,
+    /// The state hashes of worlds that another process played, by name.
+    pub beside: Vec<(String, Vec<u64>)>,
+    /// For each world that another process is to replay a log in: its name,
+    /// and the log it replays as bytes, with the state hashes of the world
+    /// that wrote it.
+    pub logs: Vec<(String, Saved)>,
+}
+
+/// Which worlds of a scenario a play runs. A world that replays an input
+/// log in a new process is run by a process of its own in the full run, and
+/// inside the process that plays the scenario otherwise.
+pub enum Part<'a> {
+    /// Every world of the scenario.
+    Whole,
+    /// Every world but those that replay a log in a new process: the play
+    /// gives the logs for them.
+    WithoutTheReplay,
+    /// Those worlds alone, from the log given, with the state hashes of the
+    /// world that wrote it.
+    TheReplayAlone(&'a Saved),
 }
 
 struct Instance {
@@ -480,6 +588,9 @@ struct Player<'a> {
     family: &'a Family,
     scenario: &'a Scenario,
     rules: Rules,
+    /// The rules of a world that replays a log in a new process: those of
+    /// the play, with what a control changes for that world alone.
+    replay_rules: Rules,
     tweaks: Vec<Tweak>,
     saved: Option<&'a Saved>,
 }
@@ -493,6 +604,10 @@ impl Player<'_> {
         let names = &self.family.names;
         let wants: Vec<_> = plan.wants.iter().map(|(asset, asset_type, policy)| (names.assets[*asset], *asset_type, *policy)).collect();
         let mut config = WorldConfig::new(self.settings.size, workers, Mode::Identifiers, names.pool.clone()).wanting(BASE, &wants);
+        for (contributor, asset, asset_type, policy) in &plan.contributed {
+            let contributor = names.contributor(contributor).expect("a want of the composition is made by a contributor the sheets name");
+            config = config.wanting(contributor, &[(names.assets[*asset], *asset_type, *policy)]);
+        }
         config.asset_types = plan.types.clone();
         config.content_set = set;
         config.budget = plan.budget;
@@ -521,22 +636,72 @@ impl Player<'_> {
         };
         World::restore(config, &saved.bytes, script, links, request)
     }
+
+    /// A world that replays an input log as a new process does: created as
+    /// the world that wrote the log was, with the same composition and the
+    /// same budget at creation, with no loading capability and no scripted
+    /// source, over a store that holds every part the log names. Its records
+    /// are the log's, read back from its bytes.
+    fn replay_alone(&self, plan: &WorldPlan, log: &[u8], workers: usize) -> PlayedWorld {
+        let records = decode_log_under(log, &self.rules).expect("a log a world wrote decodes");
+        let links = Links::new(self.family.residents());
+        let queue = links.queue.clone();
+        let mut config = self.configure(plan, workers, None);
+        config.rules = self.replay_rules;
+        let world = World::new(config, records, links);
+        let observed = Observed { first: 0, creation: world.table_bytes(), creation_entries: stated_entries(&world.typed_table_bytes()), ..Observed::default() };
+        let mut world = Running { plan: plan.clone(), world, queue, set: None, observed, hold: None, stopped: false, saves: Vec::new() };
+        for tick in 1..=plan.to {
+            if let Some(awaited) = world.advance(tick) {
+                world.observed.stuck = Some((tick, awaited));
+                break;
+            }
+        }
+        world.finish();
+        let stated_as = plan.stated_as.clone().unwrap_or_else(|| plan.name.clone());
+        PlayedWorld { name: plan.name.clone(), stated_as, judged: plan.judged, to: plan.to, observed: world.observed, replays: None, saves: Vec::new(), kills: Vec::new() }
+    }
+}
+
+/// The worker count of a replay: another than the one of the run it replays.
+fn other_count(workers: usize) -> usize {
+    if workers == 1 { 4 } else { 1 }
 }
 
 /// Plays a scenario at one worker count, with the changes of a variant.
 /// `tag` tells apart the scratch directories of the plays of one scenario.
-pub fn play(settings: &Settings, family: &Family, scenario: &Scenario, workers: usize, variant: &[Change], tag: &str, saved: Option<&Saved>) -> Played {
+#[allow(clippy::too_many_arguments)]
+pub fn play(settings: &Settings, family: &Family, scenario: &Scenario, workers: usize, variant: &[Change], tag: &str, saved: Option<&Saved>, part: &Part) -> Played {
     let names = &family.names;
     let (mut rules, mut options, mut tweaks) = (Rules::default(), Options::default(), Vec::new());
+    let mut of_the_replay: Vec<fn(&mut Rules)> = Vec::new();
     for change in scenario.base.iter().chain(variant) {
         match change {
             Change::Core(change) => change(&mut rules),
             Change::Loader(change) => change(&mut options),
             Change::Harness(tweak) => tweaks.push(*tweak),
+            Change::Replay(change) => of_the_replay.push(*change),
         }
     }
-    let player = Player { settings, family, scenario, rules, tweaks, saved };
+    let mut replay_rules = rules;
+    for change in of_the_replay {
+        change(&mut replay_rules);
+    }
+    let player = Player { settings, family, scenario, rules, replay_rules, tweaks, saved };
     let mut notes = Vec::new();
+    let other = other_count(workers);
+    // The worlds that replay a log in a new process, where this process is
+    // that one: nothing else of the scenario is played here.
+    if let Part::TheReplayAlone(logged) = part {
+        let mut played = Played { partial: true, ..Played::default() };
+        for plan in scenario.worlds.iter().filter(|plan| plan.alone) {
+            let source = plan.replays_the_log_of.clone().expect("a world that replays names the world whose log it replays");
+            played.worlds.push(player.replay_alone(plan, &logged.bytes, other));
+            played.beside.push((source, logged.hashes.clone()));
+        }
+        return played;
+    }
+    let without_the_replay = matches!(part, Part::WithoutTheReplay);
 
     // The instances: each a loose store written by the stand-in pipeline and
     // a loading capability over it.
@@ -647,6 +812,15 @@ pub fn play(settings: &Settings, family: &Family, scenario: &Scenario, workers: 
                     import(&first.directory.join("content"), &first.directory.join("store"));
                     first.loader.revision_in_place().expect("the revision is read");
                 }
+                Move::RevisionWithout(contents, without) => {
+                    let root = first.directory.join("content");
+                    family.write_sources(&root, contents);
+                    for asset in without {
+                        fs::remove_file(root.join(format!("{asset}.asset"))).expect("the source of an asset the revision takes out is in the content root");
+                    }
+                    import(&root, &first.directory.join("store"));
+                    first.loader.revision_in_place().expect("the revision is read");
+                }
                 Move::Repair(contents) => {
                     for name in contents {
                         let _ = first.cache.remove_object(family.hash(name));
@@ -682,9 +856,15 @@ pub fn play(settings: &Settings, family: &Family, scenario: &Scenario, workers: 
             }
             let offset = world.plan.offset;
             let acts: Vec<Act> = world.plan.acts.iter().filter(|(before, _)| before + offset == tick).map(|(_, act)| *act).collect();
-            for act in acts {
+            for (place, act) in acts.into_iter().enumerate() {
+                // Under the other reading of a step that follows the record
+                // of a tick, that step ran the tick before this round.
+                if place == 0 && act == Act::StepInARow && player.tweak(Tweak::StepAfterARecordRunsItsTick) {
+                    continue;
+                }
                 match act {
                     Act::Post(text) => match element(text, names).expect("an element of a scenario sheet") {
+                        Element::Event(event) => world.world.post_event(event),
                         Element::Command(command) => world.world.post(command),
                         Element::Arrival(arrival) => world.queue.post(&[arrival]),
                     },
@@ -697,6 +877,14 @@ pub fn play(settings: &Settings, family: &Family, scenario: &Scenario, workers: 
                         // The capability goes on, and the host waits for it.
                         if world.hold.take().is_some() {
                             instances[world.plan.instance].loader.settle();
+                        }
+                    }
+                    Act::StepInARow => {
+                        let next = world.world.tick() + 1;
+                        if next <= world.plan.to
+                            && let Some(awaited) = world.advance(next)
+                        {
+                            world.observed.blocked.push((next, awaited));
                         }
                     }
                 }
@@ -725,7 +913,6 @@ pub fn play(settings: &Settings, family: &Family, scenario: &Scenario, workers: 
 
     // What each world left, and the replay of its input log, read back from
     // its bytes, at another worker count.
-    let other = if workers == 1 { 4 } else { 1 };
     let mut played: Vec<PlayedWorld> = Vec::new();
     let mut header_holds_the_set = None;
     for mut world in running {
@@ -733,7 +920,7 @@ pub fn play(settings: &Settings, family: &Family, scenario: &Scenario, workers: 
         world.finish();
         let plan = &world.plan;
         let replays = world.observed.stuck.is_none().then(|| {
-            let records = decode_log(&encode_log(&world.observed.log)).expect("a log the world wrote decodes");
+            let records = decode_log_under(&encode_log_under(&world.observed.log, &player.rules), &player.rules).expect("a log the world wrote decodes");
             let links = Links::new(residents_of(plan.instance));
             let loader = instances.get(plan.instance).map(|instance| &instance.loader);
             let mut replayed = player.make(plan, other, world.set, records, links, loader).expect("the world is made again");
@@ -756,8 +943,24 @@ pub fn play(settings: &Settings, family: &Family, scenario: &Scenario, workers: 
     }
     played.extend(refused_worlds);
 
+    // A world that replays the input log of another in a new process: here
+    // where the whole scenario is played in one process, and otherwise its
+    // log is handed over, as bytes, to the process that replays it.
+    let mut logs = Vec::new();
+    for plan in scenario.worlds.iter().filter(|plan| plan.alone) {
+        let source = plan.replays_the_log_of.as_ref().expect("a world that replays names the world whose log it replays");
+        let wrote = played.iter().find(|world| world.name == *source).expect("the world whose log is replayed ran");
+        let log = encode_log_under(&wrote.observed.log, &player.rules);
+        if without_the_replay {
+            logs.push((plan.name.clone(), Saved { bytes: log, hashes: wrote.observed.state.clone() }));
+        } else {
+            let replayed = player.replay_alone(plan, &log, other);
+            played.push(replayed);
+        }
+    }
+
     // A world that replays the input log of another, under the set.
-    for plan in scenario.worlds.iter().filter(|plan| plan.replays_the_log_of.is_some()) {
+    for plan in scenario.worlds.iter().filter(|plan| plan.replays_the_log_of.is_some() && !plan.alone) {
         let source = plan.replays_the_log_of.as_ref().expect("filtered");
         let log = played.iter().find(|world| world.name == *source).expect("the world whose log is replayed ran").observed.log.clone();
         let instance = instances.get(plan.instance).expect("a set is the set of a store");
@@ -778,7 +981,7 @@ pub fn play(settings: &Settings, family: &Family, scenario: &Scenario, workers: 
         let stated_as = plan.stated_as.clone().unwrap_or_else(|| plan.name.clone());
         played.push(PlayedWorld { name: plan.name.clone(), stated_as, judged: plan.judged, to: plan.to, observed: world.observed, replays: None, saves: Vec::new(), kills: Vec::new() });
     }
-    Played { worlds: played, notes, header_holds_the_set }
+    Played { worlds: played, notes, header_holds_the_set, partial: without_the_replay, beside: Vec::new(), logs }
 }
 
 /// What an oracle states of the world that saved, for the history before a
@@ -813,22 +1016,40 @@ pub fn judge(settings: &Settings, family: &Family, scenario: &Scenario, played: 
         let hashes = oracle_with_kills(&settings.parameters(world.to), names.pool.len(), &switches, &kills);
         judged.push((world.name.clone(), compare(expected, observed, world.to, &hashes, names)));
     }
-    let state = |name: &str| played.worlds.iter().find(|world| world.name == name).map(|world| world.observed.state.clone());
+    let mut beside = beside_any_oracle(scenario, played, before.map(|before| before.saved));
+    if before.is_none() && scenario.checks.iter().any(|check| matches!(check, Check::ContinuesTheSavedRun)) {
+        beside.push("the oracle states nothing of the run that saved".to_string());
+    }
+    if let Some((_, differences)) = judged.first_mut() {
+        differences.extend(beside);
+    }
+    judged
+}
+
+/// What the harness compares beside an oracle, and with none: the state
+/// hashes of two worlds of a scenario, those of a reader with the run that
+/// saved, and the header of a save. `saved` is the save a reader read, with
+/// the state hashes of the run that wrote it. Returns what does not hold.
+fn beside_any_oracle(scenario: &Scenario, played: &Played, saved: Option<&Saved>) -> Vec<String> {
+    let state = |name: &str| {
+        let here = played.worlds.iter().find(|world| world.name == name).map(|world| world.observed.state.clone());
+        here.or_else(|| played.beside.iter().find(|(other, _)| other == name).map(|(_, state)| state.clone()))
+    };
     let mut beside = Vec::new();
     for check in &scenario.checks {
         match check {
             Check::SameState(one, other) => {
-                if state(one) != state(other) {
+                // Where another process plays one of the two worlds, the
+                // check is made by the process that knows both.
+                let known = state(one).is_some() && state(other).is_some();
+                if state(one) != state(other) && (known || !played.partial) {
                     beside.push(format!("the state hashes of the world {one} are not those of the world {other}"));
                 }
             }
             // A report, and no difference: the notes of the play hold it.
             Check::ReportSameState(_, _) => {}
             Check::ContinuesTheSavedRun => {
-                let Some(saved) = before.map(|before| before.saved) else {
-                    beside.push("the oracle states nothing of the run that saved".to_string());
-                    continue;
-                };
+                let Some(saved) = saved else { continue };
                 for world in played.worlds.iter().filter(|world| world.judged) {
                     let from = world.observed.first as usize;
                     if saved.hashes.get(from..) != Some(world.observed.state.as_slice()) {
@@ -841,10 +1062,7 @@ pub fn judge(settings: &Settings, family: &Family, scenario: &Scenario, played: 
     if played.header_holds_the_set == Some(false) {
         beside.push("the header of a save of the world under the set does not hold the set's hash".to_string());
     }
-    if let Some((_, differences)) = judged.first_mut() {
-        differences.extend(beside);
-    }
-    judged
+    beside
 }
 
 /// A family: its content, its scenarios in the order they run, and the
@@ -901,15 +1119,57 @@ fn saved_for(settings: &Settings, plan: &FamilyPlan, read: &Read, workers: usize
         return Some(read_saved(&save_path(settings, read.of, read.at, workers)));
     }
     let saver = plan.scenarios.iter().find(|other| other.name == read.of).expect("the scenario that saved is of the family");
-    let played = play(settings, &plan.family, saver, workers, variant, &format!("{tag}-saver"), None);
-    let world = played.worlds.iter().find(|world| world.judged)?;
+    let played = play(settings, &plan.family, saver, workers, variant, &format!("{tag}-saver"), None, &Part::WithoutTheReplay);
+    let world = played.worlds.iter().find(|world| world.name == read.world)?;
     let (_, bytes) = world.saves.iter().find(|(tick, _)| *tick == read.at)?;
     Some(Saved { bytes: bytes.clone(), hashes: world.observed.state.clone() })
 }
 
-/// Plays one scenario and judges it, in this process. Without an oracle the
-/// scenario is driven and nothing is compared.
-fn play_and_judge(settings: &Settings, plan: &FamilyPlan, scenario: &Scenario, workers: usize, variant: &[Change], tag: &str, stated: Option<&Stated>) -> (Judged, Played) {
+/// Where the worlds of a scenario that replay a log in a new process run.
+enum Replays<'a> {
+    /// In the process that plays the scenario: the self-checks.
+    Here,
+    /// Each in a process of its own, given the name of the control or of
+    /// the reading the scenario runs under, none for its own run.
+    InAProcess(&'a str),
+    /// This process is that one: it plays them alone, from the log at this
+    /// path, which the process that played the scenario wrote.
+    Alone(&'a Path),
+}
+
+/// In the full run, each in a process of its own; in this one otherwise.
+fn replays_in(processes: bool, variant: &str) -> Replays<'_> {
+    if processes { Replays::InAProcess(variant) } else { Replays::Here }
+}
+
+fn log_path(settings: &Settings, scenario: &str, world: &str, tag: &str, workers: usize) -> PathBuf {
+    let safe: String = format!("{scenario}-{world}-{tag}").chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' }).collect();
+    settings.scratch.join("logs").join(format!("{safe}-{workers}.log"))
+}
+
+/// Plays one scenario and judges it, in this process but for the worlds that
+/// replay a log in a process of their own. Without an oracle the scenario is
+/// driven and nothing is compared.
+#[allow(clippy::too_many_arguments)]
+fn play_and_judge(
+    settings: &Settings,
+    plan: &FamilyPlan,
+    scenario: &Scenario,
+    workers: usize,
+    variant: &[Change],
+    tag: &str,
+    stated: Option<&Stated>,
+    replays: &Replays,
+) -> (Judged, Played) {
+    let handed;
+    let part = match replays {
+        Replays::Here => Part::Whole,
+        Replays::InAProcess(_) => Part::WithoutTheReplay,
+        Replays::Alone(path) => {
+            handed = read_saved(path);
+            Part::TheReplayAlone(&handed)
+        }
+    };
     let saved = match &scenario.read {
         None => None,
         Some(read) => match saved_for(settings, plan, read, workers, variant, tag) {
@@ -920,15 +1180,22 @@ fn play_and_judge(settings: &Settings, plan: &FamilyPlan, scenario: &Scenario, w
             }
         },
     };
-    let played = play(settings, &plan.family, scenario, workers, variant, tag, saved.as_ref());
+    let played = play(settings, &plan.family, scenario, workers, variant, tag, saved.as_ref(), &part);
     let mut judged = Judged { notes: played.notes.clone(), ..Judged::default() };
     let differences: BTreeMap<String, Vec<String>> = match stated {
         Some(stated) => {
-            let saver = scenario.read.as_ref().and_then(|read| stated.get(read.of)).and_then(|worlds| worlds.get("world"));
+            let saver = scenario.read.as_ref().and_then(|read| stated.get(read.of).and_then(|worlds| worlds.get(read.world)));
             let before = saver.zip(saved.as_ref()).map(|(expected, saved)| Before { expected, saved });
             judge(settings, &plan.family, scenario, &played, stated, before.as_ref()).into_iter().collect()
         }
-        None => BTreeMap::new(),
+        None => {
+            // With no oracle, what the harness compares beside one is
+            // compared all the same: none of it reads an oracle.
+            for unheld in beside_any_oracle(scenario, &played, saved.as_ref()) {
+                judged.notes.push(format!("{}: compared beside any oracle, and not held: {unheld}", scenario.name));
+            }
+            BTreeMap::new()
+        }
     };
     for check in &scenario.checks {
         let Check::ReportSameState(one, other) = check else { continue };
@@ -947,6 +1214,18 @@ fn play_and_judge(settings: &Settings, plan: &FamilyPlan, scenario: &Scenario, w
             observed: observed_text(&world.observed, &plan.family.names),
         });
     }
+    // Each world that replays a log in a new process: the log is written,
+    // as bytes, with the state hashes of the world that wrote it, and a
+    // process of its own replays and judges it.
+    if let Replays::InAProcess(variant) = replays {
+        for (world, logged) in &played.logs {
+            let path = log_path(settings, &scenario.name, world, tag, workers);
+            write_saved(&path, logged);
+            let replayed = in_a_process(settings, plan, scenario, workers, variant, Some((world, &path)), stated.is_none());
+            judged.worlds.extend(replayed.worlds);
+            judged.notes.extend(replayed.notes);
+        }
+    }
     (judged, played)
 }
 
@@ -962,18 +1241,26 @@ fn variant_named(scenario: &Scenario, readings: &[VariantPlan], name: &str) -> V
 }
 
 /// The reader of a save as a process of its own:
-/// `--reader <family> <scenario> <workers> <scratch> <size> <variant>`.
-/// It prints what it observed, a line per fact.
-pub fn child(arguments: &[String], family: &dyn Fn(&Settings, &str) -> Option<FamilyPlan>, readings: &[VariantPlan]) -> String {
+/// `--reader <family> <scenario> <workers> <scratch> <size> <variant>`; or a
+/// world that replays an input log in a process of its own, the same with
+/// the path of the log last: `--replayer <family> ... <variant> <log>`.
+/// It prints what it observed, a line per fact. A process that is `driven`
+/// reads no oracle and compares nothing.
+pub fn child(arguments: &[String], driven: bool, family: &dyn Fn(&Settings, &str) -> Option<FamilyPlan>, readings: &[VariantPlan]) -> String {
+    let (arguments, log) = match arguments {
+        [six @ .., log] if arguments.len() == 7 => (six, Some(Path::new(log))),
+        all => (all, None),
+    };
     let [name, scenario, workers, scratch, size, variant] = arguments else { return "difference world\tthe reader was not given its six arguments\n".to_string() };
     let size = if size == "small" { Size::Small } else { Size::Default };
     let settings = Settings { size, workers: Vec::new(), scratch: Path::new(scratch).to_path_buf() };
     let plan = family(&settings, name).expect("a family of the sheets");
     let scenario = plan.scenarios.iter().find(|other| other.name == *scenario).expect("a scenario of the family");
-    let (stated, _) = parse_each(plan.oracle, &plan.family.names);
+    let stated = (!driven).then(|| parse_each(plan.oracle, &plan.family.names).0);
     let changes = variant_named(scenario, readings, variant);
     let tag = if variant.is_empty() { "run".to_string() } else { "variant".to_string() };
-    let (judged, _) = play_and_judge(&settings, &plan, scenario, workers.parse().expect("a worker count"), &changes, &tag, Some(&stated));
+    let replays = log.map_or(Replays::Here, Replays::Alone);
+    let (judged, _) = play_and_judge(&settings, &plan, scenario, workers.parse().expect("a worker count"), &changes, &tag, stated.as_ref(), &replays);
     let mut out = String::new();
     for world in &judged.worlds {
         for difference in &world.differences {
@@ -993,14 +1280,26 @@ pub fn child(arguments: &[String], family: &dyn Fn(&Settings, &str) -> Option<Fa
     out
 }
 
-/// Runs one reader as a process of its own and reads what it prints.
-fn read_in_a_process(settings: &Settings, plan: &FamilyPlan, scenario: &Scenario, workers: usize, variant: &str) -> Judged {
+/// Runs one reader as a process of its own and reads what it prints; or,
+/// given a world that replays a log and the path of that log, that world.
+fn in_a_process(settings: &Settings, plan: &FamilyPlan, scenario: &Scenario, workers: usize, variant: &str, replay: Option<(&String, &Path)>, driven: bool) -> Judged {
     let exe = std::env::current_exe().expect("the harness knows its own path");
     let size = settings.size.name();
-    let output = Process::new(exe)
-        .args(["--reader", plan.name, &scenario.name, &workers.to_string(), &settings.scratch.to_string_lossy(), size, variant])
-        .output()
-        .expect("a reader starts");
+    // A process told that it is driven reads no oracle and compares nothing.
+    let mode = match (replay.is_some(), driven) {
+        (false, false) => "--reader",
+        (false, true) => "--reader-driven",
+        (true, false) => "--replayer",
+        (true, true) => "--replayer-driven",
+    };
+    let mut process = Process::new(exe);
+    process.args([mode, plan.name, &scenario.name, &workers.to_string(), &settings.scratch.to_string_lossy(), size, variant]);
+    if let Some((_, log)) = replay {
+        process.arg(log);
+    }
+    let output = process.output().expect("a reader starts");
+    // The world a process that ended badly is charged to.
+    let charged = replay.map_or("world", |(world, _)| world.as_str());
     let mut judged = Judged::default();
     let mut worlds: BTreeMap<String, JudgedWorld> = BTreeMap::new();
     for line in String::from_utf8_lossy(&output.stdout).lines() {
@@ -1021,8 +1320,8 @@ fn read_in_a_process(settings: &Settings, plan: &FamilyPlan, scenario: &Scenario
     }
     if !output.status.success() || worlds.is_empty() {
         let error = String::from_utf8_lossy(&output.stderr).lines().last().unwrap_or("").to_string();
-        let entry = worlds.entry("world".to_string()).or_insert_with(|| JudgedWorld { name: "world".to_string(), ..JudgedWorld::default() });
-        entry.differences.push(format!("the reader ended with {}: {error}", output.status));
+        let entry = worlds.entry(charged.to_string()).or_insert_with(|| JudgedWorld { name: charged.to_string(), ..JudgedWorld::default() });
+        entry.differences.push(format!("the process ended with {}: {error}", output.status));
     }
     judged.worlds = worlds.into_values().collect();
     judged
@@ -1043,31 +1342,45 @@ pub fn run_family(settings: &Settings, plan: &FamilyPlan, readings: &[VariantPla
     });
     let variant_workers = if settings.workers.contains(&4) { 4 } else { settings.workers[0] };
     for scenario in &plan.scenarios {
-        let as_a_process = processes && scenario.read.is_some() && stated.is_some();
+        let as_a_process = processes && scenario.read.is_some();
         let mut differs = false;
+        // What the scenario's own run gave at the worker count of the
+        // controls: per world, its run hash and what it gave in words.
+        let mut own: Vec<(String, u64, Vec<String>)> = Vec::new();
         for &workers in &settings.workers {
             let judged = if as_a_process {
-                read_in_a_process(settings, plan, scenario, workers, "")
+                in_a_process(settings, plan, scenario, workers, "", None, stated.is_none())
             } else {
-                let (judged, played) = play_and_judge(settings, plan, scenario, workers, &[], "run", stated.as_ref());
+                let (judged, played) = play_and_judge(settings, plan, scenario, workers, &[], "run", stated.as_ref(), &replays_in(processes, ""));
                 for world in &played.worlds {
                     for (tick, bytes) in &world.saves {
                         write_saved(&save_path(settings, &scenario.name, *tick, workers), &Saved { bytes: bytes.clone(), hashes: world.observed.state.clone() });
                     }
-                    if stated.is_none() && world.judged {
-                        // Driven with no oracle: a world that stays gated,
-                        // or a log that does not replay, is all that shows.
-                        if let Some((tick, _)) = &world.observed.stuck {
-                            claim.notes.push(format!("{} [{}] at {workers} workers: the world never ran tick {tick}", scenario.name, world.name));
-                        }
-                        if world.replays == Some(false) {
-                            claim.notes.push(format!("{} [{}] at {workers} workers: the log does not replay", scenario.name, world.name));
-                        }
-                    }
                 }
                 judged
             };
+            if stated.is_none() {
+                // Driven with no oracle: a world that stays gated, or a log
+                // that does not replay, is all that shows.
+                for world in &judged.worlds {
+                    if let Some(line) = world.observed.iter().find(|line| line.starts_with("never ran tick")) {
+                        claim.notes.push(format!("{} [{}] at {workers} workers: the world {line}", scenario.name, world.name));
+                    }
+                    if world.replays == Some(false) {
+                        claim.notes.push(format!("{} [{}] at {workers} workers: the log does not replay", scenario.name, world.name));
+                    }
+                    // With no oracle a world differs from nothing: what is
+                    // left here is a process that failed, or a save that
+                    // was never reached.
+                    for difference in &world.differences {
+                        claim.notes.push(format!("{} [{}] at {workers} workers: {difference}", scenario.name, world.name));
+                    }
+                }
+            }
             let first = workers == settings.workers[0];
+            if workers == variant_workers {
+                own = judged.worlds.iter().map(|world| (world.name.clone(), world.run_hash, world.observed.clone())).collect();
+            }
             for world in judged.worlds {
                 differs |= !world.differences.is_empty() || world.replays == Some(false);
                 let observed = if first { world.observed } else { Vec::new() };
@@ -1079,8 +1392,33 @@ pub fn run_family(settings: &Settings, plan: &FamilyPlan, readings: &[VariantPla
         }
         if stated.is_none() {
             // Every control is driven, so that none fails the harness itself.
+            // With no oracle a control shows against the scenario's own run
+            // alone: one that gives that very run changes nothing a
+            // comparison could see, and the note says so; of one that gives
+            // another run, the note holds the first thing it gave otherwise.
             for (index, variant) in scenario.variants.iter().enumerate() {
-                play_and_judge(settings, plan, scenario, variant_workers, &variant.changes, &format!("v{index}"), None);
+                let (judged, _) = play_and_judge(settings, plan, scenario, variant_workers, &variant.changes, &format!("v{index}"), None, &Replays::Here);
+                let gave: Vec<(String, u64, Vec<String>)> = judged.worlds.iter().map(|world| (world.name.clone(), world.run_hash, world.observed.clone())).collect();
+                let unreached = judged.worlds.iter().flat_map(|world| &world.differences).next();
+                let named = |name: &str| variant.worlds.is_empty() || variant.worlds.contains(&name);
+                let another = |(name, hash, lines): &(String, u64, Vec<String>)| {
+                    let Some((_, own_hash, own_lines)) = own.iter().find(|(other, _, _)| other == name) else { return Some(format!("[{name}] a world the scenario's own run does not hold")) };
+                    let line = lines.iter().zip(own_lines).find(|(given, held)| given != held).map(|(given, _)| given.clone()).or_else(|| lines.get(own_lines.len()).cloned());
+                    match line {
+                        Some(line) => Some(format!("[{name}] {line}")),
+                        None if lines.len() < own_lines.len() => Some(format!("[{name}] the run stops before: {}", own_lines[lines.len()])),
+                        None if hash != own_hash => Some(format!("[{name}] the state hashes alone")),
+                        None => None,
+                    }
+                };
+                let first = unreached.cloned().or_else(|| gave.iter().filter(|(name, _, _)| named(name)).find_map(another));
+                let every_named_world = variant.worlds.iter().all(|name| gave.iter().filter(|(other, _, _)| other == name).any(|world| another(world).is_some()));
+                let text = match first {
+                    Some(first) if every_named_world => format!("gives another run: {first}"),
+                    Some(first) => format!("GIVES THE RUN OF THE SCENARIO ITSELF on a world it names, and another run elsewhere: {first}"),
+                    None => "GIVES THE RUN OF THE SCENARIO ITSELF".to_string(),
+                };
+                claim.notes.push(format!("{} control [{}] {text}", scenario.name, variant.name));
             }
             continue;
         }
@@ -1092,9 +1430,9 @@ pub fn run_family(settings: &Settings, plan: &FamilyPlan, readings: &[VariantPla
         }
         for (index, variant) in variants.iter().enumerate() {
             let judged = if as_a_process {
-                read_in_a_process(settings, plan, scenario, variant_workers, &variant.name)
+                in_a_process(settings, plan, scenario, variant_workers, &variant.name, None, false)
             } else {
-                play_and_judge(settings, plan, scenario, variant_workers, &variant.changes, &format!("v{index}"), stated.as_ref()).0
+                play_and_judge(settings, plan, scenario, variant_workers, &variant.changes, &format!("v{index}"), stated.as_ref(), &replays_in(processes, &variant.name)).0
             };
             let differing: Vec<&JudgedWorld> = judged.worlds.iter().filter(|world| !world.differences.is_empty()).collect();
             let equal_where_it_must_differ: Vec<&str> = variant.worlds.iter().filter(|name| !differing.iter().any(|world| world.name == **name)).copied().collect();

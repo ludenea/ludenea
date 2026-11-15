@@ -7,16 +7,21 @@
 //!
 //! Usage: `asset-table-and-loader <cell> [family ...]`. The readers of a save
 //! run as processes of this same binary, with `--reader` or `--spike-reader`
-//! first. Four more modes read no oracle file: `--first-check` runs the asset
-//! table spike's scenarios alone, `--enumeration` the enumeration of small
-//! records, `--gate-cost [repetitions]` the cost of the gate on a large
-//! table, and `--drive [family ...]` drives every scenario and every control
-//! of the families and compares nothing. `--readings [family ...]` runs
+//! first, and so does a world that replays an input log in a new process,
+//! with `--replayer`. Five more modes read no oracle file: `--first-check`
+//! runs the asset table spike's scenarios alone, `--enumeration` the
+//! enumeration of small records, `--gate-cost [repetitions]` the cost of the
+//! gate on a large table, `--drive [family ...]` drives every scenario and
+//! every control of the families and compares nothing, and
+//! `--drive-processes [family ...]` does the same with each reader of a save
+//! and each replaying world as a process of its own, started with
+//! `--reader-driven` or `--replayer-driven`. `--readings [family ...]` runs
 //! every reading the build did not take on every scenario, against the
 //! oracles, and prints which scenarios tell each apart.
 
 mod enumeration;
 mod families;
+mod families_readings;
 mod families_same_harness;
 mod gate_cost;
 mod oracle;
@@ -47,9 +52,9 @@ static ALLOCATOR: spike_check::Counting = spike_check::Counting;
 /// A family judged on states: its name and what makes its plan.
 type Family = (&'static str, fn(&Settings) -> FamilyPlan);
 
-/// The families judged on states: those of the first sheet, then those of
-/// the same-harness sheet.
-const FAMILIES: [Family; 14] = [
+/// The families judged on states: those of the first sheet, those of the
+/// same-harness sheet, then those of the stand-in sheet.
+const FAMILIES: &[Family] = &[
     ("order", families::order),
     ("owners", families::owners),
     ("named-set", families::named_set),
@@ -64,6 +69,16 @@ const FAMILIES: [Family; 14] = [
     ("shared-loader", families_same_harness::shared_loader),
     ("mount", families_same_harness::mount),
     ("budget", families_same_harness::budget),
+    ("pending-ends", families_readings::pending_ends),
+    ("incomplete-batch", families_readings::incomplete_batch),
+    ("first-step", families_readings::first_step),
+    ("pending-release", families_readings::pending_release),
+    ("group-order", families_readings::group_order),
+    ("unit-sentences", families_readings::unit_sentences),
+    ("sizes", families_readings::sizes),
+    ("system-maker", families_readings::system_maker),
+    ("core-want-type", families_readings::core_want_type),
+    ("restore-batch", families_readings::restore_batch),
 ];
 
 fn family(settings: &Settings, name: &str) -> Option<FamilyPlan> {
@@ -445,10 +460,10 @@ fn enumerate(out: &mut Json, summary: &mut String, log: &mut String) -> bool {
 /// Every scenario and every control of the families driven with no oracle:
 /// what a world gave is written in words, and nothing is compared. Returns
 /// the log and whether no world stayed gated and every log replayed.
-fn drive(settings: &Settings, only: &[String]) -> (String, bool) {
+fn drive(settings: &Settings, only: &[String], processes: bool) -> (String, bool) {
     let mut log = String::new();
     let mut clean = true;
-    for claim in claims(settings, only, false, false, false) {
+    for claim in claims(settings, only, false, processes, false) {
         let _ = writeln!(log, "\n== {}", claim.name);
         for outcome in &claim.outcomes {
             if !outcome.observed.is_empty() {
@@ -461,8 +476,10 @@ fn drive(settings: &Settings, only: &[String]) -> (String, bool) {
         for note in &claim.notes {
             let _ = writeln!(log, "  note: {note}");
         }
-        clean &= claim.one_hash_per_scenario() && claim.outcomes.iter().all(|outcome| outcome.replays != Some(false));
-        clean &= !claim.notes.iter().any(|note| note.contains("never ran tick"));
+        clean &= claim.one_hash_per_scenario() && claim.outcomes.iter().all(|outcome| outcome.replays != Some(false) && outcome.differences.is_empty());
+        // A world of a scenario's own run that stayed gated; what a control
+        // gave is a note too, and no fault.
+        clean &= !claim.notes.iter().any(|note| note.contains("the world never ran tick") || note.contains("compared beside any oracle, and not held"));
     }
     (log, clean)
 }
@@ -503,8 +520,8 @@ fn log_path(cell: &str) -> PathBuf {
 fn main() {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     match arguments.first().map(String::as_str) {
-        Some("--reader") => {
-            print!("{}", play::child(&arguments[1..], &family, &families::readings()));
+        Some(mode @ ("--reader" | "--replayer" | "--reader-driven" | "--replayer-driven")) => {
+            print!("{}", play::child(&arguments[1..], mode.ends_with("-driven"), &family, &families::readings()));
             return;
         }
         Some("--spike-reader") => {
@@ -539,9 +556,9 @@ fn main() {
             println!("{log}");
             return;
         }
-        Some("--drive") => {
+        Some(mode @ ("--drive" | "--drive-processes")) => {
             let settings = settings("drive");
-            let (log, clean) = drive(&settings, &arguments[1..]);
+            let (log, clean) = drive(&settings, &arguments[1..], mode == "--drive-processes");
             let _ = std::fs::remove_dir_all(&settings.scratch);
             println!("{log}");
             eprintln!("every world ran to its last tick and every log replayed: {clean}");
@@ -579,9 +596,38 @@ mod tests {
         let mut settings = settings("test");
         settings.size = Size::Small;
         settings.workers = vec![1, 4];
-        let (log, clean) = drive(&settings, &[]);
+        let (log, clean) = drive(&settings, &[], false);
         let _ = std::fs::remove_dir_all(&settings.scratch);
         assert!(clean, "{log}");
+        // Every control of the families of the stand-in sheet that hold the
+        // readings taken gives another run than its scenario's own: one that
+        // gave that very run could not differ from an oracle the scenario
+        // equals. The comparison is with the scenario's run, and no oracle.
+        const READINGS: [&str; 10] =
+            ["pending-ends", "incomplete-batch", "first-step", "pending-release", "group-order", "unit-sentences", "sizes", "system-maker", "core-want-type", "restore-batch"];
+        let of_the_readings = |line: &&str| READINGS.iter().any(|family| line.contains(&format!("note: {family}/")));
+        let controls: Vec<&str> = log.lines().filter(|line| line.contains("] gives another run: ") || line.contains("GIVES THE RUN OF THE SCENARIO ITSELF")).filter(of_the_readings).collect();
+        let unchanged: Vec<&&str> = controls.iter().filter(|line| line.contains("GIVES THE RUN OF THE SCENARIO ITSELF")).collect();
+        assert!(controls.len() >= 72 && unchanged.is_empty(), "{} controls driven; those that give their scenario's own run: {unchanged:#?}", controls.len());
+    }
+
+    /// The other reading of a step without waiting that follows the record of
+    /// a tick: one step that ran no tick fewer, and the same tables and state
+    /// hashes. Driven with no oracle.
+    #[test]
+    fn the_other_reading_of_a_step_after_a_record_gives_one_blocked_step_fewer() {
+        let mut settings = settings("reading");
+        settings.size = Size::Small;
+        let plan = families_readings::pending_release(&settings);
+        let scenario = &plan.scenarios[0];
+        let reading = families::readings().into_iter().find(|reading| reading.name.contains("is the step that runs that tick")).expect("the reading is listed");
+        let own = play::play(&settings, &plan.family, scenario, 1, &[], "own", None, &play::Part::Whole);
+        let other = play::play(&settings, &plan.family, scenario, 1, &reading.changes, "other", None, &play::Part::Whole);
+        let _ = std::fs::remove_dir_all(&settings.scratch);
+        let (own, other) = (&own.worlds[0].observed, &other.worlds[0].observed);
+        assert_eq!((own.blocked.len(), other.blocked.len()), (2, 1));
+        assert_eq!(own.tables, other.tables);
+        assert_eq!(own.state, other.state);
     }
 
     #[test]

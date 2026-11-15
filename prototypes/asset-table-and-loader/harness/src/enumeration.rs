@@ -232,7 +232,7 @@ pub fn run(elements: Elements) -> Enumeration {
     for sequence in &sequences {
         for batch in batches.iter().filter(|batch| sequence.len() + batch.len() <= 4) {
             result.records += 1;
-            let record = Record { tick: 1, commands: sequence.clone(), arrivals: batch.clone() };
+            let record = Record { tick: 1, commands: sequence.clone(), arrivals: batch.clone(), ..Record::default() };
             for (name, start) in &starts {
                 result.applications += 1;
                 let mut table = start.clone();
@@ -264,7 +264,7 @@ pub fn run(elements: Elements) -> Enumeration {
                 if sequence.len() > 1 && sequence.iter().all(|command| matches!(command, Command::Want { .. })) {
                     let mut reversed = start.clone();
                     let commands: Vec<Command> = sequence.iter().rev().copied().collect();
-                    let other = reversed.apply(&Record { tick: 1, commands, arrivals: batch.clone() }, &parts, &alive);
+                    let other = reversed.apply(&Record { tick: 1, commands, arrivals: batch.clone(), ..Record::default() }, &parts, &alive);
                     if !applied.refusals.is_empty() || !other.refusals.is_empty() {
                         result.order_decides_the_type += 1;
                     } else if reversed.canonical_bytes() != after_first.canonical_bytes() {

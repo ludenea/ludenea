@@ -452,3 +452,38 @@ fn the_state_is_extracted_at_the_end_of_every_tick_in_which_the_table_changed() 
     // changed nothing at its input fixed point.
     assert_eq!(run(Rules { extracted_at_the_input_fixed_point: true, ..Rules::default() }), vec![(1, vec![(A, true)]), (3, Vec::new())]);
 }
+
+#[test]
+fn a_world_event_is_an_element_of_the_log_and_the_header_of_a_save_holds_the_budget_in_force() {
+    let (parts, (a, _, _)) = parts();
+    // A world created under a budget, which the host lowers between its
+    // first tick and its second.
+    let run = |rules: Rules| {
+        let mut config = config(&[PARAMETERS]);
+        config.budget = Some(1_000);
+        config.rules = rules;
+        let mut world = World::new(config, Vec::new(), Links::new(parts.clone()));
+        world.post(want(A, PARAMETERS, Policy::Optional));
+        world.graph.links.queue.post(&[Arrival::at(A, a).sized(600)]);
+        assert!(!step(&mut world, 1).gated);
+        world.post_event(WorldEvent::Budget(500));
+        assert!(!step(&mut world, 1).gated);
+        assert_eq!(world.size(A), Some(600), "a lowering takes nothing out of force");
+        (world.budget(), world.log().to_vec(), world.save())
+    };
+    let (budget, log, save) = run(Rules::default());
+    assert_eq!(budget, Some(500));
+    assert_eq!(log[1].events, vec![WorldEvent::Budget(500)], "the event stands in the record of its tick");
+    assert_eq!(save_header(&save).expect("a header").budget, Some(500));
+    // A restored world whose request states no budget stands under the one
+    // the header of its save holds.
+    let request = Restore::ContentAtHand { dropped: &[], drop_in_silence: false, types_from: None };
+    let restored = World::restore(config(&[PARAMETERS]), &save, Vec::new(), Links::new(parts.clone()), request).expect("the restore is not refused");
+    assert_eq!(restored.budget(), Some(500));
+    // The controls: the event in no record, and the budget of the creation
+    // in the header.
+    let (_, log, _) = run(Rules { budget_events_left_out_of_the_log: true, ..Rules::default() });
+    assert_eq!(log.len(), 1);
+    let (_, _, save) = run(Rules { save_holds_the_budget_of_creation: true, ..Rules::default() });
+    assert_eq!(save_header(&save).expect("a header").budget, Some(1_000));
+}

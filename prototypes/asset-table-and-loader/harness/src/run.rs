@@ -58,11 +58,18 @@ pub struct Content {
     pub asset_type: AssetType,
     pub dependencies: &'static [&'static str],
     pub size: Option<usize>,
+    /// The size the domain manifest holds for the content, where the family
+    /// gives one that the length of the part does not give.
+    pub held_as: Option<u64>,
+    /// The version of the same asset whose parameters the content carries,
+    /// where it differs from that version in its list of dependencies and
+    /// in nothing else a world reads.
+    pub parameters_of: Option<u32>,
     pub listed: &'static [(&'static str, AssetType)],
 }
 
 pub const fn content(asset: &'static str, version: u32) -> Content {
-    Content { asset, version, asset_type: AssetType::Parameters, dependencies: &[], size: None, listed: &[] }
+    Content { asset, version, asset_type: AssetType::Parameters, dependencies: &[], size: None, held_as: None, parameters_of: None, listed: &[] }
 }
 
 impl Content {
@@ -78,6 +85,21 @@ impl Content {
 
     pub const fn sized(mut self, size: usize) -> Content {
         self.size = Some(size);
+        self
+    }
+
+    /// The size the domain manifest holds for the content, where it is not
+    /// the length its part is padded to: the stand-in pipeline writes it
+    /// into the manifest, and the loading capability names it.
+    pub const fn held_as(mut self, size: u64) -> Content {
+        self.held_as = Some(size);
+        self
+    }
+
+    /// The content carries the parameters of another version of its asset:
+    /// it differs from it in the dependencies its part lists, and in its hash.
+    pub const fn with_the_parameters_of(mut self, version: u32) -> Content {
+        self.parameters_of = Some(version);
         self
     }
 
@@ -122,10 +144,11 @@ impl Family {
             let source = Source {
                 asset: identifiers[index],
                 asset_type: content.asset_type,
-                strength: 24.0 + 8.0 * index as f32 + 2.5 * content.version as f32,
+                strength: 24.0 + 8.0 * index as f32 + 2.5 * content.parameters_of.unwrap_or(content.version) as f32,
                 radius: 8.0,
                 salt: content.version,
                 size: content.size,
+                manifest_size: content.held_as,
                 dependencies: content.dependencies.iter().map(|name| (names.assets[*name], type_of(name))).collect(),
             };
             // The part as it stands in the store: the import's, or one that
@@ -142,8 +165,9 @@ impl Family {
                 by_hand.push(name.clone());
             }
             names.hashes.insert(name.clone(), hash);
-            // The size the domain manifest gives the content: the length of its part.
-            names.sizes.insert(hash, part.len() as u64);
+            // The size the domain manifest gives the content: the length of
+            // its part, but where the family gives another.
+            names.sizes.insert(hash, content.held_as.unwrap_or(part.len() as u64));
             names.tables.insert(hash, RepulsionTable { strength: source.strength, radius: source.radius });
             parts.insert(name.clone(), part);
             sources.insert(name, source);

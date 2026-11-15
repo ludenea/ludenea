@@ -14,17 +14,17 @@ use std::collections::BTreeMap;
 
 use prototype_core::table::{
     Arrival, AssetId, AssetType, Availability, Command, Event, Instance, Maker, NewHistory, Outcome, Owner, Policy, Record, Refused, RepulsionTable, Rules,
-    SystemName, Table, put_entry, put_instances, reason as listed_reason, reason_named,
+    SystemName, Table, WorldEvent, put_entry, put_instances, reason as listed_reason, reason_named,
 };
 use prototype_core::world::{Act, Holder};
 use reference_workload::{Fnv1a, fnv1a};
 
 use crate::sequential::Switch;
 
-/// The one scripted system of the sheets that name none: its stable name, and
-/// the contributor that brings it. A want it makes under the world's own
-/// entry is its own: the system is its maker.
-pub const SCRIPTED_SYSTEM: &str = "scripted";
+/// The scripted system of the same-harness sheet, `wanter`: its stable name,
+/// which the stand-in sheet gives, and the contributor that brings it. A want
+/// it makes under the world's own entry is its own: the system is its maker.
+pub const SCRIPTED_SYSTEM: &str = "wanter";
 pub const SCRIPTED_SYSTEM_CONTRIBUTOR: &str = "contributor:logic";
 
 /// The makers the sheets name, each with its numeric identity. A source and
@@ -181,6 +181,8 @@ fn refusal(text: &str) -> Result<Refused, String> {
 /// One element of an input record.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Element {
+    /// A world event of the host: it sets a field of the configuration.
+    Event(WorldEvent),
     Command(Command),
     Arrival(Arrival),
 }
@@ -198,6 +200,7 @@ pub fn element(text: &str, names: &Names) -> Result<Element, String> {
             owner: names.owner(owner)?,
             policy: policy(level)?,
         }),
+        ["budget", bytes] => Element::Event(WorldEvent::Budget(bytes.parse().map_err(|_| format!("not a budget in bytes: {bytes}"))?)),
         ["release", asset, owner] => Element::Command(Command::Release { asset: names.asset(asset)?, owner: names.owner(owner)? }),
         ["despawn", entity] => {
             let (slot, generation) = names.entity(entity)?;
@@ -254,6 +257,7 @@ fn element_text(element: &Element, names: &Names) -> String {
         Element::Command(Command::Want { asset, asset_type, owner, policy }) => {
             format!("want {} {} {} {}", names.asset_name(*asset), type_name(*asset_type), names.owner_name(owner), policy_name(*policy))
         }
+        Element::Event(WorldEvent::Budget(bytes)) => format!("budget {bytes}"),
         Element::Command(Command::Release { asset, owner }) => format!("release {} {}", names.asset_name(*asset), names.owner_name(owner)),
         Element::Command(Command::Despawn { slot, generation }) => names.owner_name(&Owner::Entity { slot: *slot, generation: *generation }).replace("entity:", "despawn "),
         Element::Command(Command::Instantiate { asset, asset_type, policy, reload }) => {
@@ -273,7 +277,12 @@ fn element_text(element: &Element, names: &Names) -> String {
 }
 
 fn elements_of(record: &Record) -> Vec<Element> {
-    record.commands.iter().map(|command| Element::Command(*command)).chain(record.arrivals.iter().map(|arrival| Element::Arrival(*arrival))).collect()
+    // A world event stands at the boundary of its tick, before the commands;
+    // the arrivals come last, the availability source being ordered after
+    // every other.
+    let events = record.events.iter().map(|event| Element::Event(*event));
+    let commands = record.commands.iter().map(|command| Element::Command(*command));
+    events.chain(commands).chain(record.arrivals.iter().map(|arrival| Element::Arrival(*arrival))).collect()
 }
 
 fn new_history_text(named: &NewHistory, names: &Names) -> String {
@@ -895,5 +904,34 @@ entry A parameters available A.1 size 7
         // What a run gave is written in words, a tick that changes nothing left out.
         let observed = Observed { creation: Block::default().table_bytes(), tables: vec![Block::default().table_bytes(); 2], blocked: vec![(1, vec![0x0a])], ..Observed::default() };
         assert_eq!(observed_text(&observed, &names), vec!["blocked 1 awaiting A".to_string(), "tick 0: an empty table".to_string()]);
+    }
+
+    /// What the stand-in sheet adds to the format, on statements written
+    /// here: the world event that sets a budget, a size after a hash, the
+    /// reason of the budget, a system as an owner, several steps that ran no
+    /// tick before one tick, and a world stated as another shifted by none.
+    #[test]
+    fn the_additions_of_the_stand_in_sheet_read() {
+        let names = names();
+        let budget = element("budget 8000", &names).expect("an element");
+        assert_eq!(budget, Element::Event(WorldEvent::Budget(8000)));
+        assert_eq!(element_text(&budget, &names), "budget 8000");
+        assert!(element("budget", &names).is_err() && element("budget many", &names).is_err());
+        let text = "scenario s\nworld recorded\nblocked 3 awaiting A\nblocked 3 awaiting A, P\ntick 3\nrecord budget 8000\nrecord arrival A A.1 size 4000\n\
+                    rejected A A.1\nentry A parameters failed over-budget\nwant system:wanter optional\nevent failed A over-budget\nnames-failed A over-budget\n\
+                    world replayed as recorded shifted 0\n";
+        let stated = parse(text, &names).expect("the statement reads");
+        let recorded = &stated["s"]["recorded"];
+        assert_eq!(recorded.blocked, vec![(3, vec![0x0a]), (3, vec![0x0a, 0x30])]);
+        let block = &recorded.blocks[&3];
+        assert_eq!(block.record, vec![budget.clone(), Element::Arrival(Arrival::at(0x0a, 0x11).sized(4000))]);
+        assert_eq!(block.entries[0].4, vec![(Owner::World(Maker::System(SystemName::new("wanter"))), Policy::Optional)]);
+        assert_eq!(stated["s"]["replayed"].blocks[&3].record, block.record, "a world that replays is stated by the world whose log it replays");
+        // Where a record is compared, its world events stand first, then its
+        // commands, then its arrivals.
+        let host = Owner::World(Maker::Source(3));
+        let release = Command::Release { asset: 0x0a, owner: host };
+        let record = Record { tick: 3, events: vec![WorldEvent::Budget(8000)], commands: vec![release], arrivals: vec![Arrival::at(0x0a, 0x11).sized(4000)] };
+        assert_eq!(elements_of(&record), vec![budget, Element::Command(release), Element::Arrival(Arrival::at(0x0a, 0x11).sized(4000))]);
     }
 }

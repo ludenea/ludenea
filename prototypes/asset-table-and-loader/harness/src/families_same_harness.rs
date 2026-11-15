@@ -298,6 +298,15 @@ pub fn budget(settings: &Settings) -> FamilyPlan {
         if REJECTED_PART_LISTS.contains(case) {
             scenario = scenario.control(WANTS_OF_A_REJECTED_PART, core(|rules| rules.wants_of_rejected_parts_added = true));
         }
+        // The control the stand-in sheet adds, the reading not taken on the
+        // order of the test: the one case that holds two closures that each
+        // fit alone, an optional one and a required one.
+        if *case == "two-closures-that-fit-alone" {
+            scenario = scenario.control(
+                "the groups are tested in the identifier order of their roots alone",
+                core(|rules| rules.budget_groups_in_identifier_order_alone = true),
+            );
+        }
         scenarios.push(scenario);
     }
     FamilyPlan { name: "budget", claim: "an excess over a world's budget is rejected identically", family, scenarios, oracle: include_str!("../oracles/budget.txt") }
