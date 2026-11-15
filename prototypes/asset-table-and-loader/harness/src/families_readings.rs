@@ -481,10 +481,13 @@ pub fn sizes(settings: &Settings) -> FamilyPlan {
     // A reader of the save: into the saved world's composition, naming no
     // content set, stepped to tick 15. Its records of tick 11 and of tick 13
     // hold the commands that `recorded` applies at those ticks, and its
-    // scenario gives it no budget.
+    // scenario gives it no budget. The sheet has the oracle state a reader's
+    // verdict and its tables from its first tick on, and no step without
+    // waiting before the answers: the reader takes none.
     let reader = |name: &str, contents: &[&'static str], recorded_content: bool| {
         Scenario::live(name, contents, composition().record(11, RECORD_OF_TICK_11).record(13, RECORD_OF_TICK_13))
             .reading(SAVER, 9, recorded_content, &[])
+            .with_no_step_before_the_answers()
             .of_the_world("recorded")
     };
     let scenarios = vec![

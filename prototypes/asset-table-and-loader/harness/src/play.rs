@@ -503,6 +503,11 @@ pub struct Read {
     /// input log, which the scenario's world replays in a process beside,
     /// from its creation.
     pub recording: bool,
+    /// The reader takes one step without waiting before the availability
+    /// source has answered anything. A sheet asks for it where it has the
+    /// oracle state what such a step names; the sheet of one family names
+    /// no such step, and its readers take none.
+    pub steps_before_the_answers: bool,
 }
 
 /// What the harness compares beside the oracle.
@@ -646,7 +651,16 @@ impl Scenario {
     }
 
     pub fn reading(mut self, of: &'static str, at: u32, recorded: bool, dropped: &[AssetType]) -> Scenario {
-        self.read = Some(Read { of, world: "world", at, recorded, dropped: dropped.to_vec(), recording: false });
+        self.read = Some(Read { of, world: "world", at, recorded, dropped: dropped.to_vec(), recording: false, steps_before_the_answers: true });
+        self
+    }
+
+    /// The reader takes no step without waiting before the answers: the
+    /// sheet of its family names none.
+    pub fn with_no_step_before_the_answers(mut self) -> Scenario {
+        if let Some(read) = self.read.as_mut() {
+            read.steps_before_the_answers = false;
+        }
         self
     }
 
@@ -655,7 +669,7 @@ impl Scenario {
     /// creation, over the store of its instance, and receives its arrivals
     /// from the recording and from no loading capability.
     pub fn replaying_the_recording(mut self, of: &'static str, world: &'static str) -> Scenario {
-        self.read = Some(Read { of, world, at: 0, recorded: true, dropped: Vec::new(), recording: true });
+        self.read = Some(Read { of, world, at: 0, recorded: true, dropped: Vec::new(), recording: true, steps_before_the_answers: false });
         self
     }
 
@@ -1321,8 +1335,9 @@ pub fn play(settings: &Settings, family: &Family, scenario: &Scenario, workers: 
         let consumer = plan.presented.then(Consumer::default);
         let mut world = Running { plan: plan.clone(), world, queue, set, observed, hold: None, stopped: false, saves: Vec::new(), recording: recording.clone(), consumer };
         // A reader steps once without waiting, before the availability
-        // source has answered anything.
-        if scenario.read.is_some() && recording.is_none() {
+        // source has answered anything, where the sheet of its family asks
+        // for that step.
+        if scenario.read.as_ref().is_some_and(|read| read.steps_before_the_answers) && recording.is_none() {
             let tick = world.observed.first + 1;
             match world.advance(tick) {
                 Some(awaited) => world.observed.blocked.push((tick, awaited)),
