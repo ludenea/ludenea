@@ -12,15 +12,15 @@ use std::path::{Path, PathBuf};
 use std::process::Command as Process;
 use std::sync::{Arc, OnceLock};
 
-use asset_loader::{Attachment, Hold, Loader, Options, ResidentStore};
-use asset_pipeline::Cache;
+use asset_loader::{Attachment, Cause, Hold, Loader, Options, ResidentStore, Withheld};
+use asset_pipeline::{Cache, Pass};
 use content_store::set_hash;
-use prototype_core::table::{ArrivalQueue, AssetId, AssetType, Policy, Record, Residents, Rules, SystemName, decode_log_under, encode_log_under};
+use prototype_core::table::{AdmissionCheck, ArrivalQueue, AssetId, AssetType, Policy, Record, Residents, Rules, SystemName, decode_log_under, encode_log_under};
 use prototype_core::world::{Act as SystemAct, Extraction, History, Links, Mode, Refusal, Restore, Size, System, Wait, World, WorldConfig, save_header};
 use reference_workload::run_hash;
 
 use crate::oracle::{Element, Expected, Observed, SCRIPTED_SYSTEM, SCRIPTED_SYSTEM_CONTRIBUTOR, Stated, Verdict, compare, element, observed_text, parse_each, stated_entries, system_act};
-use crate::run::{BASE, Claim, Family, Outcome, Settings, Variant, import};
+use crate::run::{ADMISSION_BOUND, BASE, Claim, Family, Outcome, Settings, Variant, import, pass_of_a_save};
 use crate::sequential::oracle_with_kills;
 
 /// A change of the harness itself, for a control no rule of the build names.
@@ -45,12 +45,14 @@ pub enum Tweak {
     StepAfterARecordRunsItsTick,
 }
 
-/// A rule changed on purpose: of the core, of the loading capability, or of
-/// the harness.
+/// A rule changed on purpose: of the core, of the loading capability, of the
+/// stand-in pipeline, or of the harness.
 #[derive(Clone, Copy)]
 pub enum Change {
     Core(fn(&mut Rules)),
     Loader(fn(&mut Options)),
+    /// What a pass of the stand-in pipeline does where an action fails.
+    Pipeline(fn(&mut asset_pipeline::Options)),
     Harness(Tweak),
     /// A rule of the core changed for a world that replays an input log in
     /// a process of its own, and for that world alone.
@@ -75,9 +77,51 @@ pub enum Act {
     StepInARow,
 }
 
-/// What moves the content of the first instance, before the round of a tick.
+/// A save of a content root, in the manner of a development host: the
+/// sources it writes, those it writes with an error and those it deletes.
+/// One pass of the stand-in pipeline then runs over the root, and what that
+/// pass gives is put in place on the instance.
+#[derive(Clone, Debug, Default)]
+pub struct Save {
+    /// The contents whose sources are written, each with the parameters and
+    /// the dependencies of its content. A source saved again as it was has
+    /// the bytes it had before.
+    pub writes: Vec<&'static str>,
+    /// The contents whose sources are written with the word `error` where
+    /// the importer reads the first parameter.
+    pub with_an_error: Vec<&'static str>,
+    /// The assets whose sources are deleted.
+    pub deletes: Vec<&'static str>,
+}
+
+impl Save {
+    /// A save that writes the sources of these contents.
+    pub fn of(contents: &[&'static str]) -> Save {
+        Save { writes: contents.to_vec(), ..Save::default() }
+    }
+
+    /// A save that deletes the sources of these assets.
+    pub fn deleting(assets: &[&'static str]) -> Save {
+        Save { deletes: assets.to_vec(), ..Save::default() }
+    }
+
+    /// The same save, the sources of these contents written with an error.
+    pub fn with_an_error(mut self, contents: &[&'static str]) -> Save {
+        self.with_an_error.extend_from_slice(contents);
+        self
+    }
+}
+
+/// What moves the content of the first instance, before the round of a
+/// tick; or of every instance, where each world of the scenario stands on an
+/// instance of its own. On an instance whose capability is held still for a
+/// step taken before it has posted, the content moves once that step is
+/// answered and the capability let go, before the world steps.
 #[derive(Clone, Debug)]
 pub enum Move {
+    /// A save of the content root and one pass of the stand-in pipeline, of
+    /// which an action may fail.
+    Save(Save),
     /// These contents replace those of the same assets, and the revision is
     /// put in place.
     Revision(Vec<&'static str>),
@@ -131,6 +175,9 @@ pub struct WorldPlan {
     pub contributed: Vec<(&'static str, &'static str, AssetType, Policy)>,
     /// The asset types the composition declares.
     pub types: Vec<AssetType>,
+    /// The composition carries the admission check a sheet defines: it
+    /// gives it to the entry of the type of parameters, with the bound.
+    pub carries_the_check: bool,
     pub set: SetName,
     /// The systems that make wants, in the order the composition lists them.
     pub systems: Vec<SystemPlan>,
@@ -160,6 +207,7 @@ impl WorldPlan {
             wants: Vec::new(),
             contributed: Vec::new(),
             types: vec![AssetType::Parameters, AssetType::Second],
+            carries_the_check: false,
             set: SetName::None,
             systems: Vec::new(),
             budget: None,
@@ -204,6 +252,12 @@ impl WorldPlan {
 
     pub fn under(mut self, set: SetName) -> WorldPlan {
         self.set = set;
+        self
+    }
+
+    /// The world's composition carries the admission check.
+    pub fn carrying_the_check(mut self) -> WorldPlan {
+        self.carries_the_check = true;
         self
     }
 
@@ -368,6 +422,14 @@ pub struct Scenario {
     /// The controls, which must differ from the oracle, and the readings.
     pub variants: Vec<VariantPlan>,
     pub checks: Vec<Check>,
+    /// Each world of the scenario stands on an instance of its own, with its
+    /// own content root, its own store and its own capability: what moves
+    /// the content moves it on every instance.
+    pub own_instances: bool,
+    /// The harness reports, beside any oracle and compared with nothing,
+    /// what the stand-in pipeline gave after each save and what the loading
+    /// capability obtained for a world and did not post to it.
+    pub reported: bool,
 }
 
 impl Scenario {
@@ -382,7 +444,27 @@ impl Scenario {
             base: Vec::new(),
             variants: Vec::new(),
             checks: Vec::new(),
+            own_instances: false,
+            reported: false,
         }
+    }
+
+    /// Each world of the scenario stands on an instance of its own: the
+    /// worlds are numbered in the order listed, and what moves the content
+    /// moves it on every instance.
+    pub fn on_instances_of_their_own(mut self) -> Scenario {
+        for (index, world) in self.worlds.iter_mut().enumerate() {
+            world.instance = index;
+        }
+        self.own_instances = true;
+        self
+    }
+
+    /// The harness reports what the stand-in pipeline gave after each save
+    /// and what the loading capability withheld from each world.
+    pub fn reported(mut self) -> Scenario {
+        self.reported = true;
+        self
     }
 
     pub fn live(name: &str, contents: &[&'static str], world: WorldPlan) -> Scenario {
@@ -473,6 +555,10 @@ pub struct PlayedWorld {
 pub struct Played {
     pub worlds: Vec<PlayedWorld>,
     pub notes: Vec<String>,
+    /// What the harness reports beside any oracle, compared with nothing:
+    /// of the stand-in pipeline after each save, and of the loading
+    /// capability for each world.
+    pub reports: Vec<String>,
     /// Whether the header of a save of a world that replays a log under a
     /// set holds the set's hash.
     pub header_holds_the_set: Option<bool>,
@@ -507,6 +593,14 @@ struct Instance {
     loader: Loader,
     /// The set of the first revision.
     first: u64,
+}
+
+/// What a play gathers as its content moves and at its end: the count of
+/// the packages mounted, and what the harness reports beside any oracle.
+#[derive(Default)]
+struct Moved {
+    packages: usize,
+    reports: Vec<String>,
 }
 
 type Extract = Arc<dyn Fn(Extraction) + Send + Sync>;
@@ -591,6 +685,8 @@ struct Player<'a> {
     /// The rules of a world that replays a log in a new process: those of
     /// the play, with what a control changes for that world alone.
     replay_rules: Rules,
+    /// What a pass of the stand-in pipeline does where an action fails.
+    pipeline: asset_pipeline::Options,
     tweaks: Vec<Tweak>,
     saved: Option<&'a Saved>,
 }
@@ -661,6 +757,110 @@ impl Player<'_> {
         let stated_as = plan.stated_as.clone().unwrap_or_else(|| plan.name.clone());
         PlayedWorld { name: plan.name.clone(), stated_as, judged: plan.judged, to: plan.to, observed: world.observed, replays: None, saves: Vec::new(), kills: Vec::new() }
     }
+
+    /// Moves the content of one instance: a save and its pass, a revision,
+    /// the repair or the removal of an artifact, a mount or an unmount.
+    /// `tick` is the tick whose round the move stands before, and `worlds`
+    /// the worlds attached to each instance, for the report of a save.
+    fn move_content(&self, change: &Move, tick: u32, at: usize, instances: &[Instance], worlds: &[Vec<String>], moved: &mut Moved) {
+        let family = self.family;
+        let instance = &instances[at];
+        let root = instance.directory.join("content");
+        match change {
+            Move::Save(save) => {
+                family.write_sources(&root, &save.writes);
+                family.write_sources_with_an_error(&root, &save.with_an_error);
+                for asset in &save.deletes {
+                    fs::remove_file(root.join(format!("{asset}.asset"))).expect("the source a save deletes is in the content root");
+                }
+                let pass = pass_of_a_save(&root, &instance.directory.join("store"), self.pipeline);
+                if self.scenario.reported {
+                    moved.reports.push(self.report_of_a_pass(&pass, tick, &worlds[at]));
+                }
+                // What the pass gives is put in place on the instance: the
+                // store's notification, where the pass put a revision in place.
+                if pass.in_place {
+                    instance.loader.revision_in_place().expect("the revision is read");
+                }
+            }
+            Move::Revision(contents) => {
+                family.write_sources(&root, contents);
+                import(&root, &instance.directory.join("store"));
+                instance.loader.revision_in_place().expect("the revision is read");
+            }
+            Move::RevisionWithout(contents, without) => {
+                family.write_sources(&root, contents);
+                for asset in without {
+                    fs::remove_file(root.join(format!("{asset}.asset"))).expect("the source of an asset the revision takes out is in the content root");
+                }
+                import(&root, &instance.directory.join("store"));
+                instance.loader.revision_in_place().expect("the revision is read");
+            }
+            Move::Repair(contents) => {
+                for name in contents {
+                    let _ = instance.cache.remove_object(family.hash(name));
+                    instance.cache.put_object(&family.parts[*name]).expect("the whole artifact is written");
+                }
+            }
+            Move::Remove(name) => {
+                // From the loose store of every instance; of this one alone
+                // where the move reaches each instance in its turn.
+                let stores = if self.scenario.own_instances { std::slice::from_ref(instance) } else { instances };
+                for instance in stores {
+                    instance.cache.remove_object(family.hash(name)).expect("the artifact to remove is in the store");
+                }
+            }
+            Move::Mount(contents) => {
+                moved.packages += 1;
+                let directory = instance.directory.join(format!("package-{}", moved.packages));
+                family.write_sources(&directory.join("content"), contents);
+                let (cache, _) = import(&directory.join("content"), &directory.join("store"));
+                let domain = cache.revision().expect("the package's revision is in place").domain;
+                let entries = domain.keys().copied().collect();
+                let file = asset_pipeline::package(&cache, &domain, &entries).expect("the package is built");
+                instance.loader.mount("package", file, true).expect("the package mounts");
+            }
+            Move::Unmount => instance.loader.unmount("package").expect("the package unmounts"),
+        }
+    }
+
+    /// One part the loading capability obtained for a world and did not
+    /// post to it, in words: the asset, the content and the cause.
+    fn withheld_text(&self, part: &Withheld) -> String {
+        let names = &self.family.names;
+        let cause = match part.cause {
+            Cause::RefusedReplacement => "the admission check of the world's composition refuses the part, and the asset stays as the world holds it".to_string(),
+            Cause::RefusedFirstLoad => "the admission check of the world's composition refuses the part on a first load, and a failure is posted in its place".to_string(),
+            Cause::RefusedAndPostedAsAFailure => "the admission check of the world's composition refuses the part, and a failure is posted for an asset the world holds available".to_string(),
+            Cause::RefusedByAnotherWorld => "the admission check of another world of the instance refuses the part".to_string(),
+            Cause::ListsARefusedAsset(listed) => format!("its part lists {}, whose part is refused", names.asset_name(listed)),
+            Cause::HeldBackFor(refused) => format!("the batch is held back while the world refuses the part of {}", names.asset_name(refused)),
+        };
+        format!("the part of {} under {} ({cause})", names.asset_name(part.asset), names.hash_name(part.hash))
+    }
+
+    /// What the harness reports of the stand-in pipeline after a save:
+    /// whether its pass put a revision in place, the content under which the
+    /// domain manifest in place holds each asset of the family, an asset it
+    /// does not hold being named as absent, and each action that failed,
+    /// with its source and its diagnostic. Compared with nothing.
+    fn report_of_a_pass(&self, pass: &Pass, tick: u32, worlds: &[String]) -> String {
+        let names = &self.family.names;
+        let put = if pass.in_place { "its pass put a revision in place" } else { "its pass put no revision in place" };
+        let held = |(name, asset): (&String, &AssetId)| match pass.revision.domain.get(asset) {
+            Some(entry) => format!("{name} under {}", names.hash_name(entry.hash)),
+            None => format!("{name} absent"),
+        };
+        let held: Vec<String> = names.assets.iter().map(held).collect();
+        let failed: Vec<String> = pass.failures.iter().map(|(source, diagnostic)| format!("the action of the source {source} failed, with the diagnostic [{diagnostic}]")).collect();
+        let failed = if failed.is_empty() { "no action failed".to_string() } else { failed.join("; ") };
+        format!(
+            "{} [{}] the stand-in pipeline, after the save before tick {tick}: {put}; the domain manifest in place holds {}; {failed}",
+            self.scenario.name,
+            worlds.join(", "),
+            held.join(", ")
+        )
+    }
 }
 
 /// The worker count of a replay: another than the one of the run it replays.
@@ -674,11 +874,13 @@ fn other_count(workers: usize) -> usize {
 pub fn play(settings: &Settings, family: &Family, scenario: &Scenario, workers: usize, variant: &[Change], tag: &str, saved: Option<&Saved>, part: &Part) -> Played {
     let names = &family.names;
     let (mut rules, mut options, mut tweaks) = (Rules::default(), Options::default(), Vec::new());
+    let mut pipeline = asset_pipeline::Options::default();
     let mut of_the_replay: Vec<fn(&mut Rules)> = Vec::new();
     for change in scenario.base.iter().chain(variant) {
         match change {
             Change::Core(change) => change(&mut rules),
             Change::Loader(change) => change(&mut options),
+            Change::Pipeline(change) => change(&mut pipeline),
             Change::Harness(tweak) => tweaks.push(*tweak),
             Change::Replay(change) => of_the_replay.push(*change),
         }
@@ -687,8 +889,9 @@ pub fn play(settings: &Settings, family: &Family, scenario: &Scenario, workers: 
     for change in of_the_replay {
         change(&mut replay_rules);
     }
-    let player = Player { settings, family, scenario, rules, replay_rules, tweaks, saved };
+    let player = Player { settings, family, scenario, rules, replay_rules, pipeline, tweaks, saved };
     let mut notes = Vec::new();
+    let mut moved = Moved::default();
     let other = other_count(workers);
     // The worlds that replay a log in a new process, where this process is
     // that one: nothing else of the scenario is played here.
@@ -733,9 +936,11 @@ pub fn play(settings: &Settings, family: &Family, scenario: &Scenario, workers: 
         }
     };
 
-    // The worlds, in the order the scenario lists them.
+    // The worlds, in the order the scenario lists them; and, per instance,
+    // the worlds attached to its capability, in the order attached.
     let mut running: Vec<Running> = Vec::new();
     let mut refused_worlds: Vec<PlayedWorld> = Vec::new();
+    let mut attached: Vec<Vec<String>> = vec![Vec::new(); instances.len()];
     for plan in scenario.worlds.iter().filter(|plan| plan.replays_the_log_of.is_none()) {
         let instance = instances.get(plan.instance);
         let set = match plan.set {
@@ -785,8 +990,12 @@ pub fn play(settings: &Settings, family: &Family, scenario: &Scenario, workers: 
                 }
             }
             let standing = world.world.standing_wants();
-            let attachment = Attachment { queue: world.queue.clone(), set, entries: world.world.entries(), unanswered: world.world.unanswered(), restore, standing };
+            // The admission checks of the world's composition: the one the
+            // sheet defines, for the type of parameters, where it carries it.
+            let checks = if plan.carries_the_check { vec![(AssetType::Parameters, AdmissionCheck { bound: ADMISSION_BOUND })] } else { Vec::new() };
+            let attachment = Attachment { queue: world.queue.clone(), set, entries: world.world.entries(), unanswered: world.world.unanswered(), restore, standing, checks };
             let _ = slot.set(instance.loader.attach(attachment).expect("the world is attached"));
+            attached[plan.instance].push(plan.name.clone());
         }
         running.push(world);
     }
@@ -802,47 +1011,22 @@ pub fn play(settings: &Settings, family: &Family, scenario: &Scenario, workers: 
     // stepped one tick in the order listed, without waiting between two.
     let last = scenario.worlds.iter().map(|plan| plan.to).max().unwrap_or(0);
     let first_round = running.iter().map(|world| world.observed.first).min().unwrap_or(0) + 1;
-    let mut packages = 0;
+    // The instances a move reaches: the first, or each where every world of
+    // the scenario stands on an instance of its own.
+    let reached = if scenario.own_instances { instances.len() } else { 1 };
     for tick in first_round..=last {
+        // What moves the content of an instance whose capability is held
+        // still waits: it happens once the step taken before the capability
+        // has posted is answered, and before the world steps.
+        let mut waiting: Vec<(usize, &Move)> = Vec::new();
         for (_, change) in scenario.moves.iter().filter(|(before, _)| *before == tick) {
-            let first = instances.first().expect("the content of a scripted scenario does not move");
-            match change {
-                Move::Revision(contents) => {
-                    family.write_sources(&first.directory.join("content"), contents);
-                    import(&first.directory.join("content"), &first.directory.join("store"));
-                    first.loader.revision_in_place().expect("the revision is read");
+            assert!(!instances.is_empty(), "the content of a scripted scenario does not move");
+            for at in 0..reached {
+                if running.iter().any(|world| world.plan.instance == at && world.hold.is_some()) {
+                    waiting.push((at, change));
+                } else {
+                    player.move_content(change, tick, at, &instances, &attached, &mut moved);
                 }
-                Move::RevisionWithout(contents, without) => {
-                    let root = first.directory.join("content");
-                    family.write_sources(&root, contents);
-                    for asset in without {
-                        fs::remove_file(root.join(format!("{asset}.asset"))).expect("the source of an asset the revision takes out is in the content root");
-                    }
-                    import(&root, &first.directory.join("store"));
-                    first.loader.revision_in_place().expect("the revision is read");
-                }
-                Move::Repair(contents) => {
-                    for name in contents {
-                        let _ = first.cache.remove_object(family.hash(name));
-                        first.cache.put_object(&family.parts[*name]).expect("the whole artifact is written");
-                    }
-                }
-                Move::Remove(name) => {
-                    for instance in &instances {
-                        instance.cache.remove_object(family.hash(name)).expect("the artifact to remove is in the store");
-                    }
-                }
-                Move::Mount(contents) => {
-                    packages += 1;
-                    let directory = first.directory.join(format!("package-{packages}"));
-                    family.write_sources(&directory.join("content"), contents);
-                    let (cache, _) = import(&directory.join("content"), &directory.join("store"));
-                    let domain = cache.revision().expect("the package's revision is in place").domain;
-                    let entries = domain.keys().copied().collect();
-                    let file = asset_pipeline::package(&cache, &domain, &entries).expect("the package is built");
-                    first.loader.mount("package", file, true).expect("the package mounts");
-                }
-                Move::Unmount => first.loader.unmount("package").expect("the package unmounts"),
             }
         }
         for (index, instance) in instances.iter().enumerate() {
@@ -876,7 +1060,18 @@ pub fn play(settings: &Settings, family: &Family, scenario: &Scenario, workers: 
                         }
                         // The capability goes on, and the host waits for it.
                         if world.hold.take().is_some() {
-                            instances[world.plan.instance].loader.settle();
+                            let at = world.plan.instance;
+                            instances[at].loader.settle();
+                            // What was to move the content of the instance
+                            // moves it now, and the host waits again.
+                            let (now, later): (Vec<_>, Vec<_>) = std::mem::take(&mut waiting).into_iter().partition(|(other, _)| *other == at);
+                            waiting = later;
+                            for (_, change) in &now {
+                                player.move_content(change, tick, at, &instances, &attached, &mut moved);
+                            }
+                            if !now.is_empty() {
+                                instances[at].loader.settle();
+                            }
                         }
                     }
                     Act::StepInARow => {
@@ -906,9 +1101,22 @@ pub fn play(settings: &Settings, family: &Family, scenario: &Scenario, workers: 
                 world.saves.push((tick, world.world.save()));
             }
         }
+        assert!(waiting.is_empty(), "{}: before tick {tick}, a move of the content stands behind a capability that no step let go", scenario.name);
     }
     for instance in &instances {
         instance.loader.settle();
+    }
+    // What the harness reports of the loading capability, for each world:
+    // each part that was obtained for that world and not posted to it.
+    if scenario.reported {
+        for (at, instance) in instances.iter().enumerate() {
+            let withheld = instance.loader.report().withheld;
+            for (index, world) in attached[at].iter().enumerate() {
+                let parts: Vec<String> = withheld.iter().filter(|part| part.world as usize == index).map(|part| player.withheld_text(part)).collect();
+                let parts = if parts.is_empty() { "no part was obtained for the world and not posted to it".to_string() } else { format!("obtained for the world and not posted to it: {}", parts.join("; ")) };
+                moved.reports.push(format!("{} [{world}] the loading capability: {parts}", scenario.name));
+            }
+        }
     }
 
     // What each world left, and the replay of its input log, read back from
@@ -981,7 +1189,7 @@ pub fn play(settings: &Settings, family: &Family, scenario: &Scenario, workers: 
         let stated_as = plan.stated_as.clone().unwrap_or_else(|| plan.name.clone());
         played.push(PlayedWorld { name: plan.name.clone(), stated_as, judged: plan.judged, to: plan.to, observed: world.observed, replays: None, saves: Vec::new(), kills: Vec::new() });
     }
-    Played { worlds: played, notes, header_holds_the_set, partial: without_the_replay, beside: Vec::new(), logs }
+    Played { worlds: played, notes, reports: moved.reports, header_holds_the_set, partial: without_the_replay, beside: Vec::new(), logs }
 }
 
 /// What an oracle states of the world that saved, for the history before a
@@ -1108,6 +1316,8 @@ struct JudgedWorld {
 struct Judged {
     worlds: Vec<JudgedWorld>,
     notes: Vec<String>,
+    /// What the harness reports beside any oracle, compared with nothing.
+    reports: Vec<String>,
 }
 
 /// The save a reader loads. The run of the scenario as it stands reads the
@@ -1176,12 +1386,12 @@ fn play_and_judge(
             Some(saved) => Some(saved),
             None => {
                 let world = JudgedWorld { name: "world".to_string(), differences: vec!["under this change the run that saved never reached its save".to_string()], ..JudgedWorld::default() };
-                return (Judged { worlds: vec![world], notes: Vec::new() }, Played::default());
+                return (Judged { worlds: vec![world], ..Judged::default() }, Played::default());
             }
         },
     };
     let played = play(settings, &plan.family, scenario, workers, variant, tag, saved.as_ref(), &part);
-    let mut judged = Judged { notes: played.notes.clone(), ..Judged::default() };
+    let mut judged = Judged { notes: played.notes.clone(), reports: played.reports.clone(), ..Judged::default() };
     let differences: BTreeMap<String, Vec<String>> = match stated {
         Some(stated) => {
             let saver = scenario.read.as_ref().and_then(|read| stated.get(read.of).and_then(|worlds| worlds.get(read.world)));
@@ -1224,6 +1434,7 @@ fn play_and_judge(
             let replayed = in_a_process(settings, plan, scenario, workers, variant, Some((world, &path)), stated.is_none());
             judged.worlds.extend(replayed.worlds);
             judged.notes.extend(replayed.notes);
+            judged.reports.extend(replayed.reports);
         }
     }
     (judged, played)
@@ -1277,6 +1488,9 @@ pub fn child(arguments: &[String], driven: bool, family: &dyn Fn(&Settings, &str
     for note in &judged.notes {
         out.push_str(&format!("note {note}\n"));
     }
+    for report in &judged.reports {
+        out.push_str(&format!("report {report}\n"));
+    }
     out
 }
 
@@ -1306,6 +1520,10 @@ fn in_a_process(settings: &Settings, plan: &FamilyPlan, scenario: &Scenario, wor
         let Some((kind, rest)) = line.split_once(' ') else { continue };
         if kind == "note" {
             judged.notes.push(rest.to_string());
+            continue;
+        }
+        if kind == "report" {
+            judged.reports.push(rest.to_string());
             continue;
         }
         let Some((world, text)) = rest.split_once('\t') else { continue };
@@ -1388,6 +1606,7 @@ pub fn run_family(settings: &Settings, plan: &FamilyPlan, readings: &[VariantPla
             }
             if first {
                 claim.notes.extend(judged.notes);
+                claim.reports.extend(judged.reports);
             }
         }
         if stated.is_none() {

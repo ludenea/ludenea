@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use asset_loader::ResidentStore;
-use asset_pipeline::{Cache, Source};
+use asset_pipeline::{Cache, Checks, Pass, Source};
 use content_store::{content_hash, encode_domain, encode_root};
 use prototype_core::table::{AssetId, AssetType, Policy, RepulsionTable};
 use prototype_core::world::{Parameters, Size};
@@ -21,6 +21,11 @@ use crate::sequential::first_kill_ticks;
 pub const BASE: u64 = 7;
 /// The last tick any scenario with an oracle reaches.
 pub const LAST_TICK: u32 = 24;
+/// The bound of the admission check a sheet defines for the type of
+/// parameters: the check refuses a part whose first parameter is greater.
+/// In a family that states a content as above the bound, that content
+/// carries a first parameter over it and every other content one within it.
+pub const ADMISSION_BOUND: f32 = 96.0;
 
 /// What a run is made with.
 #[derive(Clone)]
@@ -66,10 +71,13 @@ pub struct Content {
     /// in nothing else a world reads.
     pub parameters_of: Option<u32>,
     pub listed: &'static [(&'static str, AssetType)],
+    /// The content stands above the bound of the admission check: the first
+    /// parameter its part carries is greater than the bound.
+    pub above_the_bound: bool,
 }
 
 pub const fn content(asset: &'static str, version: u32) -> Content {
-    Content { asset, version, asset_type: AssetType::Parameters, dependencies: &[], size: None, held_as: None, parameters_of: None, listed: &[] }
+    Content { asset, version, asset_type: AssetType::Parameters, dependencies: &[], size: None, held_as: None, parameters_of: None, listed: &[], above_the_bound: false }
 }
 
 impl Content {
@@ -107,6 +115,14 @@ impl Content {
         self.listed = listed;
         self
     }
+
+    /// The content stands above the bound of the admission check, which
+    /// refuses its part: a valid part, the bound standing inside the values
+    /// the type's validator accepts.
+    pub const fn above_the_bound(mut self) -> Content {
+        self.above_the_bound = true;
+        self
+    }
 }
 
 /// The names of a family and the sources of its contents.
@@ -139,12 +155,20 @@ impl Family {
         let (mut sources, mut parts, mut by_hand) = (BTreeMap::new(), BTreeMap::new(), Vec::new());
         // The type an asset is imported under: the one its contents state.
         let type_of = |name: &str| contents.iter().find(|content| content.asset == name).map_or(AssetType::Parameters, |content| content.asset_type);
+        // Where the family states a content as above the bound of the
+        // admission check, every content stands on its side of the bound.
+        let states_the_bound = contents.iter().any(|content| content.above_the_bound);
         for content in contents {
             let index = assets.iter().position(|name| *name == content.asset).expect("a content of a listed asset");
+            // The first parameter of the part: of the content's own, and
+            // moved over the bound where the family states the content so.
+            let within = 24.0 + 8.0 * index as f32 + 2.5 * content.parameters_of.unwrap_or(content.version) as f32;
+            let strength = if content.above_the_bound { ADMISSION_BOUND + within / 4.0 } else { within };
+            assert!(!states_the_bound || content.above_the_bound == (strength > ADMISSION_BOUND), "the content {}.{} stands on the wrong side of the bound", content.asset, content.version);
             let source = Source {
                 asset: identifiers[index],
                 asset_type: content.asset_type,
-                strength: 24.0 + 8.0 * index as f32 + 2.5 * content.parameters_of.unwrap_or(content.version) as f32,
+                strength,
                 radius: 8.0,
                 salt: content.version,
                 size: content.size,
@@ -201,6 +225,19 @@ impl Family {
         }
     }
 
+    /// Writes the sources of the named contents with an error: the text each
+    /// content gives, with the word `error` where the importer reads the
+    /// first parameter. The importer reads no number there.
+    pub fn write_sources_with_an_error(&self, root: &Path, contents: &[&str]) {
+        fs::create_dir_all(root).expect("a content root is created");
+        for name in contents {
+            let erroneous = |line: &str| if line.starts_with("strength ") { "strength error".to_string() } else { line.to_string() };
+            let text: String = self.sources[*name].text().lines().map(|line| erroneous(line) + "\n").collect();
+            let asset = name.split('.').next().expect("a hash is named <asset>.<version>");
+            fs::write(root.join(format!("{asset}.asset")), text).expect("a source is written");
+        }
+    }
+
     /// Puts in the revision in place the parts the pipeline would refuse to
     /// write: the artifact under its own hash, and the manifest's entry of
     /// its asset naming that hash and that size, its list of dependencies
@@ -239,6 +276,14 @@ pub fn import(root: &Path, store: &Path) -> (Cache, u64) {
     (cache, pass.revision.domain_hash)
 }
 
+/// One pass of the stand-in pipeline over a content root whose sources a
+/// save changed, in the manner of a development host: an action of the pass
+/// may fail, and what the pass does then is the pipeline's rule.
+pub fn pass_of_a_save(root: &Path, store: &Path, options: asset_pipeline::Options) -> Pass {
+    let cache = Cache::on_disk(store).expect("a loose store is created");
+    asset_pipeline::pass_under(root, &cache, Checks::default(), options).expect("the pass runs")
+}
+
 /// What one world of one scenario gave at one worker count.
 #[derive(Clone, Debug, Default)]
 pub struct Outcome {
@@ -275,6 +320,10 @@ pub struct Claim {
     pub variants: Vec<Variant>,
     /// What a scenario observed beside its oracle, in words.
     pub notes: Vec<String>,
+    /// What the harness reports beside the oracle where a sheet asks for it,
+    /// compared with nothing: of the stand-in pipeline after each save, and
+    /// of the loading capability for each world.
+    pub reports: Vec<String>,
 }
 
 impl Claim {

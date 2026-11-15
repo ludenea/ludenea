@@ -28,6 +28,15 @@
 //! checks that the type a part lists for a dependency is the type the
 //! manifest holds that dependency under: a source that lists another is an
 //! import that failed, and its asset keeps its former entry.
+//!
+//! A pass is the pass of a development host: an action that fails does not
+//! hold the revision back. The canonical action of a source that does not
+//! read (the word `error` where the importer reads a number, for example)
+//! fails with a diagnostic that names the source, every other action of the
+//! pass runs, and the revision keeps the former entry of the asset whose
+//! action failed; an asset imported for the first time whose action fails
+//! has no entry. The two behaviors a scenario's control puts in its place
+//! are the fields of `Options`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -110,6 +119,14 @@ impl Source {
             (Some(asset), Some(asset_type)) if asset != 0 => Ok(Source { asset, asset_type, strength, radius, salt, size, manifest_size, dependencies }),
             _ => Err("a source names its asset and its type".to_string()),
         }
+    }
+
+    /// The asset a source names, read from its text alone: what the pass
+    /// knows of a source whose canonical action fails, so that the asset
+    /// keeps its former entry. None where the text does not name one.
+    pub fn asset_of(text: &str) -> Option<AssetId> {
+        let named = text.lines().find_map(|line| line.strip_prefix("asset "))?;
+        u128::from_str_radix(named.trim(), 16).ok().filter(|asset| *asset != 0)
     }
 
     /// The canonical part the importer writes for this source.
@@ -218,12 +235,32 @@ pub struct Revision {
 
 /// What a pass did.
 pub struct Pass {
+    /// The revision in place once the pass has ended: the one it wrote, or
+    /// the former one where it put none in place.
     pub revision: Revision,
+    /// Whether the pass put a revision in place.
+    pub in_place: bool,
     /// The assets whose import ran (the others were served by the cache).
     pub ran: Vec<AssetId>,
-    /// The sources that failed, each with its reason; an asset whose import
-    /// fails keeps its former entry in the revision.
+    /// The actions that failed: the source of each, and a diagnostic that
+    /// names it. An asset whose action fails keeps its former entry in the
+    /// revision.
     pub failures: Vec<(String, String)>,
+}
+
+/// What a pass does where an action fails. The default is the design text's
+/// development host: the revision is written without the action that failed,
+/// and keeps the former entry of its asset. Each field runs the behavior a
+/// scenario's control puts in its place.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Options {
+    /// Control: the pass writes a revision without an entry for an asset
+    /// whose action failed, in place of its former entry.
+    pub failed_action_leaves_no_entry: bool,
+    /// Control: an action that fails holds the revision back, the pass
+    /// putting no revision in place until every action of a pass has
+    /// succeeded.
+    pub failed_action_holds_the_revision_back: bool,
 }
 
 /// What a pass checks when it writes a manifest.
@@ -250,6 +287,10 @@ pub fn pass(root: &Path, cache: &Cache) -> Result<Pass, String> {
 }
 
 pub fn pass_with(root: &Path, cache: &Cache, checks: Checks) -> Result<Pass, String> {
+    pass_under(root, cache, checks, Options::default())
+}
+
+pub fn pass_under(root: &Path, cache: &Cache, checks: Checks, options: Options) -> Result<Pass, String> {
     let former = cache.revision().map(|revision| revision.domain).unwrap_or_default();
     let mut paths: Vec<PathBuf> = fs::read_dir(root)
         .map_err(|error| format!("{}: {error}", root.display()))?
@@ -258,14 +299,21 @@ pub fn pass_with(root: &Path, cache: &Cache, checks: Checks) -> Result<Pass, Str
         .collect();
     paths.sort();
     let (mut ran, mut failures) = (Vec::new(), Vec::new());
+    // The asset of each action that failed, where its source names one.
+    let mut failed: Vec<Option<AssetId>> = Vec::new();
     let mut sources: Vec<(String, Vec<u8>, Source)> = Vec::new();
     for path in paths {
         let label = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
         let bytes = fs::read(&path).map_err(|error| format!("{label}: {error}"))?;
-        match std::str::from_utf8(&bytes).map_err(|error| error.to_string()).and_then(Source::parse) {
+        let text = std::str::from_utf8(&bytes).map_err(|error| error.to_string());
+        match text.clone().and_then(Source::parse) {
             Ok(source) => sources.push((label, bytes, source)),
-            // The asset of a source that no longer parses is found by its file name in the former revision.
-            Err(reason) => failures.push((label, reason)),
+            // The canonical action of the source's asset fails, with a
+            // diagnostic that names the source; every other action runs.
+            Err(reason) => {
+                failed.push(text.ok().and_then(Source::asset_of));
+                failures.push((label.clone(), format!("{label}: {reason}")));
+            }
         }
     }
     // The type each asset of the pass is imported under: what the manifest
@@ -278,7 +326,8 @@ pub fn pass_with(root: &Path, cache: &Cache, checks: Checks) -> Result<Pass, Str
             && let Some((dependency, listed)) = contradicted
         {
             let reason = format!("the part lists the dependency {dependency:032x} under the type {}, which is not the type it is imported under", listed.stable_name());
-            failures.push((label, reason));
+            failed.push(Some(source.asset));
+            failures.push((label.clone(), format!("{label}: {reason}")));
             continue;
         }
         let key = content_hash(&[IMPORTER.as_bytes(), &bytes].concat());
@@ -293,14 +342,26 @@ pub fn pass_with(root: &Path, cache: &Cache, checks: Checks) -> Result<Pass, Str
         };
         domain.insert(source.asset, source.entry(hash));
     }
+    // The revision keeps the former entry of an asset whose action failed;
+    // an asset imported for the first time has none to keep. Where a source
+    // that failed names no asset, the pass cannot tell which entry is its
+    // own, and keeps every former entry it did not write again.
+    let unnamed = failed.iter().any(Option::is_none);
     for (id, entry) in &former {
-        if !failures.is_empty() && !domain.contains_key(id) {
+        let kept = unnamed || failed.contains(&Some(*id));
+        if kept && !options.failed_action_leaves_no_entry && !domain.contains_key(id) {
             domain.insert(*id, entry.clone());
         }
     }
+    if options.failed_action_holds_the_revision_back && !failures.is_empty() {
+        // Under this control the actions that succeeded stay in the cache,
+        // and the revision in place stays the former one.
+        let revision = cache.revision().map_err(|error| format!("an action failed and holds back the first revision of the store: {error}"))?;
+        return Ok(Pass { revision, in_place: false, ran, failures });
+    }
     let domain_hash = cache.put_object(&encode_domain(&domain))?;
     write_atomically(&cache.directory.join("root"), &encode_root(domain_hash))?;
-    Ok(Pass { revision: Revision { domain_hash, domain }, ran, failures })
+    Ok(Pass { revision: Revision { domain_hash, domain }, in_place: true, ran, failures })
 }
 
 /// Builds a package of the given assets from the cache.
@@ -365,6 +426,58 @@ mod tests {
         assert_eq!(content_store::Package::read(file).unwrap().domain.len(), 1);
         cache.cut_object(second.revision.domain[&2].hash).unwrap();
         assert!(cache.object(second.revision.domain[&2].hash).is_none());
+        fs::remove_dir_all(&directory).unwrap();
+    }
+
+    /// The text of a source saved with an error: the word `error` where the
+    /// importer reads the first parameter.
+    fn with_an_error(source: &Source) -> String {
+        let lines: Vec<String> = source.text().lines().map(|line| if line.starts_with("strength ") { "strength error".to_string() } else { line.to_string() }).collect();
+        lines.join("\n") + "\n"
+    }
+
+    #[test]
+    fn an_action_that_fails_leaves_the_former_entry_and_the_rest_of_the_pass_is_written() {
+        let directory = scratch("error");
+        let content = directory.join("content");
+        let cache = Cache::on_disk(&directory.join("cache")).unwrap();
+        fs::write(content.join("a.asset"), source(1, 64.0, &[]).text()).unwrap();
+        fs::write(content.join("b.asset"), source(2, 32.0, &[]).text()).unwrap();
+        let first = pass(&content, &cache).unwrap();
+        assert!(first.in_place && first.failures.is_empty());
+        // One source saved with an error, one saved anew, and one saved for
+        // the first time with an error.
+        let save = || {
+            fs::write(content.join("a.asset"), with_an_error(&source(1, 48.0, &[]))).unwrap();
+            fs::write(content.join("b.asset"), source(2, 16.0, &[]).text()).unwrap();
+            fs::write(content.join("c.asset"), with_an_error(&source(3, 8.0, &[]))).unwrap();
+        };
+        save();
+        assert_eq!(Source::asset_of(&with_an_error(&source(3, 8.0, &[]))), Some(3));
+        let second = pass(&content, &cache).unwrap();
+        assert!(second.in_place, "an action that fails does not hold the revision back");
+        assert_eq!(second.failures.iter().map(|(source, _)| source.as_str()).collect::<Vec<_>>(), vec!["a.asset", "c.asset"]);
+        assert!(second.failures.iter().all(|(source, diagnostic)| diagnostic.starts_with(source.as_str())), "a diagnostic names its source: {:?}", second.failures);
+        assert_eq!(second.ran, vec![2], "every other action of the pass runs");
+        assert_eq!(second.revision.domain[&1], first.revision.domain[&1], "the asset whose action failed keeps its former entry");
+        assert_ne!(second.revision.domain[&2], first.revision.domain[&2]);
+        assert!(!second.revision.domain.contains_key(&3), "an asset imported for the first time whose action fails has no entry");
+        assert_eq!(cache.revision().unwrap(), second.revision);
+        // The two controls: no entry in place of the former one, and a
+        // revision held back until every action has succeeded.
+        let without = pass_under(&content, &cache, Checks::default(), Options { failed_action_leaves_no_entry: true, ..Options::default() }).unwrap();
+        assert!(without.in_place && !without.revision.domain.contains_key(&1) && without.revision.domain.contains_key(&2));
+        fs::write(content.join("b.asset"), source(2, 4.0, &[]).text()).unwrap();
+        let held = pass_under(&content, &cache, Checks::default(), Options { failed_action_holds_the_revision_back: true, ..Options::default() }).unwrap();
+        assert!(!held.in_place && held.failures.len() == 2);
+        assert_eq!(held.revision, without.revision, "the revision in place stays the former one");
+        assert_eq!(cache.revision().unwrap(), without.revision);
+        // The sources corrected: the pass writes every asset.
+        fs::write(content.join("a.asset"), source(1, 48.0, &[]).text()).unwrap();
+        fs::write(content.join("c.asset"), source(3, 8.0, &[]).text()).unwrap();
+        let third = pass_under(&content, &cache, Checks::default(), Options { failed_action_holds_the_revision_back: true, ..Options::default() }).unwrap();
+        assert!(third.in_place && third.failures.is_empty());
+        assert_eq!(third.revision.domain.keys().copied().collect::<Vec<_>>(), vec![1, 2, 3]);
         fs::remove_dir_all(&directory).unwrap();
     }
 

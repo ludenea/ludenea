@@ -112,9 +112,12 @@ pub struct Reason {
 }
 
 /// The reasons of a failure: a list in the schema entry of the arrival
-/// transition. Three of them are named by the design text and raised by
-/// nothing this prototype builds yet: another schema entry, an admission
-/// check, a preparation.
+/// transition. Two of them are named by the design text and raised by
+/// nothing this prototype builds: another schema entry, a preparation. The
+/// reason of an admission check is raised by the loading capability where
+/// the check of a world's composition refuses a part on a first load; the
+/// design text lists it and gives it no name, and `not-admitted` is the
+/// name the scenario sheets give it.
 pub const REASONS: [Reason; 10] = [
     Reason { code: REASON_UNKNOWN_ASSET, name: "unknown-asset", text: "unknown asset: the manifest the world stands under does not hold the identifier" },
     Reason { code: REASON_INVALID_PART, name: "invalid-part", text: "the bytes do not hash to their name or the canonical part does not validate" },
@@ -123,7 +126,7 @@ pub const REASONS: [Reason; 10] = [
     Reason { code: REASON_ANOTHER_TYPE, name: "other-type", text: "the manifest holds the asset under another type than the one its entry holds" },
     Reason { code: REASON_DEPENDENCIES_DIFFER, name: "dependencies-differ", text: "the dependencies the part lists are not those the manifest lists for it" },
     Reason { code: REASON_ANOTHER_SCHEMA_ENTRY, name: "another-schema-entry", text: "the package was built under another schema entry of the asset's type" },
-    Reason { code: REASON_ADMISSION_REFUSED, name: "admission-refused", text: "the admission check of the asset's type refused a first load" },
+    Reason { code: REASON_ADMISSION_REFUSED, name: "not-admitted", text: "the admission check of the world's composition refused the part, on a first load" },
     Reason { code: REASON_PREPARATION_FAILED, name: "preparation-failed", text: "the preparation of a form failed on a first load" },
     Reason { code: REASON_OVER_BUDGET, name: "over-budget", text: "the arrival was rejected over the world's budget for its asset data" },
 ];
@@ -224,6 +227,30 @@ impl Part {
             Ok(Part { table, dependencies })
         };
         decode().map_err(|_| REASON_INVALID_PART)
+    }
+}
+
+/// An admission check: what the schema entry of an asset type may carry,
+/// supplied by the capability that declares the type. The loading
+/// capability runs it before an arrival is posted, and the core never does.
+/// No asset type of the prototype has one: this is the stand-in a scenario
+/// sheet defines for the comparison alone, which a composition that carries
+/// it gives to the entry of the type of parameters, with one number, the
+/// bound. It reads one canonical part of that type and nothing else, neither
+/// the table, the manifest, the store nor another part, and refuses the part
+/// where the first parameter the type's layout declares is greater than the
+/// bound. The bound stands inside the values the type's validator accepts,
+/// so a part the check refuses is a valid part.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AdmissionCheck {
+    pub bound: f32,
+}
+
+impl AdmissionCheck {
+    /// Whether the check accepts a part: it refuses one whose first
+    /// parameter is greater than the bound, and accepts every other.
+    pub fn admits(&self, part: &Part) -> bool {
+        part.table.strength.partial_cmp(&self.bound) != Some(std::cmp::Ordering::Greater)
     }
 }
 

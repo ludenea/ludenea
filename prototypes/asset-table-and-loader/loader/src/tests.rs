@@ -105,7 +105,7 @@ struct Attached {
 impl Attached {
     fn new(loader: &Loader, set: Option<u64>, entries: &[EntryView], unanswered: &[(AssetId, AssetType)], restore: &[AssetId]) -> Attached {
         let queue = Arc::new(ArrivalQueue::default());
-        let attachment = Attachment { queue: queue.clone(), set, entries: entries.to_vec(), unanswered: unanswered.to_vec(), restore: restore.to_vec(), standing: Vec::new() };
+        let attachment = Attachment { queue: queue.clone(), set, entries: entries.to_vec(), unanswered: unanswered.to_vec(), restore: restore.to_vec(), standing: Vec::new(), checks: Vec::new() };
         Attached { extract: loader.attach(attachment).expect("the world is attached"), queue }
     }
 
@@ -294,7 +294,7 @@ fn the_answers_to_a_restore_complete_the_batch_of_each_closure_and_a_revision_is
     let standing = vec![(E, vec![(host, Policy::Optional)]), (F, vec![(Owner::Asset(P), Policy::Required)]), (Q, Vec::new()), (U, vec![(host, Policy::Required)])];
     let restored = |loader: &Loader| {
         let queue = Arc::new(ArrivalQueue::default());
-        let attachment = Attachment { queue: queue.clone(), set: None, entries: saved.to_vec(), unanswered: vec![(U, PARAMETERS)], restore: vec![O, P, R], standing: standing.clone() };
+        let attachment = Attachment { queue: queue.clone(), set: None, entries: saved.to_vec(), unanswered: vec![(U, PARAMETERS)], restore: vec![O, P, R], standing: standing.clone(), checks: Vec::new() };
         Attached { extract: loader.attach(attachment).expect("the world is attached"), queue }
     };
     let answers = [Arrival::failed(O, REASON_UNKNOWN_ASSET).marked(), of(&at_hand, P).marked(), of(&at_hand, R).marked()];
@@ -532,4 +532,169 @@ fn a_batch_is_complete_against_the_state_extracted_and_never_against_what_was_po
     // asset the table does not hold. On a gated world the gate would then
     // stay closed for good.
     assert_eq!(run(Options { trusts_what_it_posted: true, ..Options::default() }), vec![of(&domain, Q)]);
+}
+
+#[test]
+fn under_the_control_that_trusts_what_was_posted_an_asset_counts_as_held_until_it_is_posted_again() {
+    let store = Loose::new();
+    let domain = store.revision(&[(P, PARAMETERS, 1, &[(D, PARAMETERS)]), (D, PARAMETERS, 1, &[])]);
+    let loader = Loader::start(&store.directory, Options { trusts_what_it_posted: true, ..Options::default() }).expect("the capability starts");
+    let world = Attached::new(&loader, None, &[], &[], &[]);
+    world.extract(&[(P, PARAMETERS)], &[held(P, PARAMETERS, Availability::Unavailable, true)], false);
+    assert_eq!(world.posted(&loader), vec![of(&domain, D), of(&domain, P)]);
+    // P leaves the manifest: its failure is posted, which ends the trust in
+    // P. The trust in D stands.
+    let in_force = [held(D, PARAMETERS, Availability::Available(domain[&D].hash), true), held(P, PARAMETERS, Availability::Available(domain[&P].hash), true)];
+    world.extract(&[], &in_force, false);
+    store.revision(&[(D, PARAMETERS, 1, &[])]);
+    loader.revision_in_place().expect("the revision is read");
+    assert_eq!(world.posted(&loader), vec![Arrival::failed(P, REASON_UNKNOWN_ASSET)]);
+    // P failed and D left the table. A want added on P leaves: it is
+    // answered, P being trusted no longer.
+    world.extract(&[(P, PARAMETERS)], &[held(P, PARAMETERS, Availability::Unavailable, true)], false);
+    assert_eq!(world.posted(&loader), vec![Arrival::failed(P, REASON_UNKNOWN_ASSET)]);
+    // The manifest holds P again: its batch leaves D out, which the table
+    // no longer holds and which was posted to a hash.
+    store.place(&domain);
+    loader.revision_in_place().expect("the revision is read");
+    assert_eq!(world.posted(&loader), vec![of(&domain, P)]);
+}
+
+#[test]
+fn the_batch_of_a_revision_is_built_against_the_last_extraction_and_under_a_control_against_the_one_before() {
+    let run = |options: Options| {
+        let store = Loose::new();
+        let first = store.revision(&[(P, PARAMETERS, 1, &[(D, PARAMETERS)]), (D, PARAMETERS, 1, &[])]);
+        let loader = Loader::start(&store.directory, options).expect("the capability starts");
+        let table = [held(D, PARAMETERS, Availability::Available(first[&D].hash), true), held(P, PARAMETERS, Availability::Available(first[&P].hash), true)];
+        let world = Attached::new(&loader, None, &table, &[], &[]);
+        // A revision whose part of P lists nothing.
+        let second = store.revision(&[(P, PARAMETERS, 5, &[]), (D, PARAMETERS, 1, &[])]);
+        loader.revision_in_place().expect("the revision is read");
+        assert_eq!(world.posted(&loader), vec![of(&second, P)]);
+        // The tick that applies it ends the want of D, and the tick after
+        // takes D out of the table.
+        let replaced = held(P, PARAMETERS, Availability::Available(second[&P].hash), true);
+        world.extract(&[], &[held(D, PARAMETERS, Availability::Available(first[&D].hash), false), replaced], false);
+        world.extract(&[], &[replaced], false);
+        // A later revision lists D again.
+        let third = store.revision(&[(P, PARAMETERS, 2, &[(D, PARAMETERS)]), (D, PARAMETERS, 1, &[])]);
+        loader.revision_in_place().expect("the revision is read");
+        (world.posted(&loader), third)
+    };
+    let (posted, third) = run(Options::default());
+    assert_eq!(posted, vec![of(&third, D), of(&third, P)], "the fall is learned from the state: the batch holds the former dependency again");
+    // The control: a view older than one tick still holds D available, and
+    // the batch leaves it out.
+    let (posted, third) = run(Options { moves_built_against_the_table_before_the_last: true, ..Options::default() });
+    assert_eq!(posted, vec![of(&third, P)]);
+}
+
+impl Attached {
+    /// A world whose composition carries an admission check for the type of
+    /// parameters, with a bound.
+    fn checked(loader: &Loader, entries: &[EntryView], bound: f32) -> Attached {
+        let queue = Arc::new(ArrivalQueue::default());
+        let checks = vec![(PARAMETERS, AdmissionCheck { bound })];
+        let attachment = Attachment { queue: queue.clone(), set: None, entries: entries.to_vec(), unanswered: Vec::new(), restore: Vec::new(), standing: Vec::new(), checks };
+        Attached { extract: loader.attach(attachment).expect("the world is attached"), queue }
+    }
+}
+
+/// The bound of the checks below: the first parameter of a part of these
+/// self-checks is its version, so a version over 5 stands above the bound.
+const BOUND: f32 = 5.0;
+
+#[test]
+fn a_part_the_admission_check_of_a_world_refuses_is_not_posted_and_fails_a_first_load_alone() {
+    // What three worlds receive of a revision of two assets, the new part
+    // of P standing above the bound: one that carries the check and holds
+    // both, one that holds both and carries none, and one that carries the
+    // check and wants P after the revision. Then what the first receives of
+    // a later revision whose part of P stands within the bound.
+    let run = |options: Options| {
+        let store = Loose::new();
+        let before = store.revision(&[(A, PARAMETERS, 1, &[]), (P, PARAMETERS, 1, &[])]);
+        let loader = Loader::start(&store.directory, options).expect("the capability starts");
+        let table = [held(A, PARAMETERS, Availability::Available(before[&A].hash), true), held(P, PARAMETERS, Availability::Available(before[&P].hash), true)];
+        let checked = Attached::checked(&loader, &table, BOUND);
+        let unchecked = Attached::new(&loader, None, &table, &[], &[]);
+        let late = Attached::checked(&loader, &[], BOUND);
+        let second = store.revision(&[(A, PARAMETERS, 2, &[]), (P, PARAMETERS, 9, &[])]);
+        loader.revision_in_place().expect("the revision is read");
+        let (to_checked, to_unchecked) = (checked.posted(&loader), unchecked.posted(&loader));
+        late.extract(&[(P, PARAMETERS)], &[held(P, PARAMETERS, Availability::Unavailable, true)], false);
+        let to_late = late.posted(&loader);
+        let withheld = loader.report().withheld;
+        let third = store.revision(&[(A, PARAMETERS, 2, &[]), (P, PARAMETERS, 3, &[])]);
+        loader.revision_in_place().expect("the revision is read");
+        (to_checked, to_unchecked, to_late, withheld, checked.posted(&loader), second, third)
+    };
+    let (to_checked, to_unchecked, to_late, withheld, later, second, third) = run(Options::default());
+    assert_eq!(to_checked, vec![of(&second, A)], "the batch is posted without the asset the world refuses, and the rest of the revision is applied");
+    assert_eq!(to_unchecked, vec![of(&second, A), of(&second, P)], "the check is a world's: two worlds apply two batches from one revision");
+    assert_eq!(to_late, vec![Arrival::failed(P, REASON_ADMISSION_REFUSED)], "a failure is posted for an asset the world does not hold available, a first load");
+    let refused = |world: u32, cause: Cause| Withheld { world, asset: P, hash: second[&P].hash, cause };
+    assert_eq!(withheld, vec![refused(0, Cause::RefusedReplacement), refused(2, Cause::RefusedFirstLoad)]);
+    assert_eq!(later, vec![of(&third, P)]);
+    // No check is run.
+    let (to_checked, _, to_late, withheld, _, second, _) = run(Options { no_admission_check_run: true, ..Options::default() });
+    assert_eq!((to_checked, to_late), (vec![of(&second, A), of(&second, P)], vec![of(&second, P)]));
+    assert!(withheld.is_empty());
+    // A part one world of the instance refuses is posted to no world.
+    let (_, to_unchecked, _, withheld, _, second, _) = run(Options { a_part_one_world_refuses_is_posted_to_no_world: true, ..Options::default() });
+    assert_eq!(to_unchecked, vec![of(&second, A)]);
+    assert!(withheld.contains(&Withheld { world: 1, asset: P, hash: second[&P].hash, cause: Cause::RefusedByAnotherWorld }));
+    // The batch is held back while the world refuses one of its assets, and
+    // the next move owes the world both.
+    let (to_checked, _, _, withheld, later, second, third) = run(Options { move_held_back_while_an_asset_is_refused: true, ..Options::default() });
+    assert!(to_checked.is_empty());
+    let held_back = |asset: AssetId| Withheld { world: 0, asset, hash: second[&asset].hash, cause: Cause::HeldBackFor(P) };
+    assert_eq!(withheld[..2], [held_back(A), held_back(P)]);
+    assert_eq!(later, vec![of(&third, A), of(&third, P)]);
+    // A replacement the world refuses is posted to it as a failure.
+    let (to_checked, _, _, withheld, _, second, _) = run(Options { refused_replacement_posted_as_a_failure: true, ..Options::default() });
+    assert_eq!(to_checked, vec![of(&second, A), Arrival::failed(P, REASON_ADMISSION_REFUSED)]);
+    assert_eq!(withheld[0], Withheld { world: 0, asset: P, hash: second[&P].hash, cause: Cause::RefusedAndPostedAsAFailure });
+}
+
+#[test]
+fn an_asset_that_lists_a_refused_one_is_posted_and_the_closure_of_a_refused_part_is_not_followed() {
+    // P lists D, and the world holds both. A revision changes both: the new
+    // part of D stands above the bound, and the new part of P within it.
+    let lists: &[Dependency] = &[(D, PARAMETERS)];
+    let run = |options: Options| {
+        let store = Loose::new();
+        let before = store.revision(&[(D, PARAMETERS, 1, &[]), (P, PARAMETERS, 1, lists)]);
+        let loader = Loader::start(&store.directory, options).expect("the capability starts");
+        let table = [held(D, PARAMETERS, Availability::Available(before[&D].hash), true), held(P, PARAMETERS, Availability::Available(before[&P].hash), true)];
+        let world = Attached::checked(&loader, &table, BOUND);
+        let after = store.revision(&[(D, PARAMETERS, 9, &[]), (P, PARAMETERS, 2, lists)]);
+        loader.revision_in_place().expect("the revision is read");
+        (world.posted(&loader), loader.report().withheld, after)
+    };
+    let (posted, withheld, after) = run(Options::default());
+    assert_eq!(posted, vec![of(&after, P)], "a part names its dependencies by identifier: the asset is posted, and reads the version in force");
+    assert_eq!(withheld, vec![Withheld { world: 0, asset: D, hash: after[&D].hash, cause: Cause::RefusedReplacement }]);
+    let (posted, withheld, after) = run(Options { dependent_of_a_refused_asset_withheld: true, ..Options::default() });
+    assert!(posted.is_empty(), "the control: the asset is withheld with the one its part lists");
+    assert!(withheld.contains(&Withheld { world: 0, asset: P, hash: after[&P].hash, cause: Cause::ListsARefusedAsset(D) }));
+    // A changed part the world refuses that lists a dependency the table
+    // does not hold: the batch is posted without the part, and holds no
+    // arrival for the new dependency. Under the other reading it holds one,
+    // which no want names.
+    let with_a_new_dependency: &[Dependency] = &[(D, PARAMETERS), (N, PARAMETERS)];
+    let run = |options: Options| {
+        let store = Loose::new();
+        let before = store.revision(&[(D, PARAMETERS, 1, &[]), (N, PARAMETERS, 1, &[]), (P, PARAMETERS, 1, lists)]);
+        let loader = Loader::start(&store.directory, options).expect("the capability starts");
+        let table = [held(D, PARAMETERS, Availability::Available(before[&D].hash), true), held(P, PARAMETERS, Availability::Available(before[&P].hash), true)];
+        let world = Attached::checked(&loader, &table, BOUND);
+        let after = store.revision(&[(D, PARAMETERS, 1, &[]), (N, PARAMETERS, 1, &[]), (P, PARAMETERS, 9, with_a_new_dependency)]);
+        loader.revision_in_place().expect("the revision is read");
+        (world.posted(&loader), after)
+    };
+    assert!(run(Options::default()).0.is_empty());
+    let (posted, after) = run(Options { closure_of_a_refused_part_posted: true, ..Options::default() });
+    assert_eq!(posted, vec![of(&after, N)]);
 }

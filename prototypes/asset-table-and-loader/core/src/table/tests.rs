@@ -1407,3 +1407,14 @@ fn the_wants_of_the_first_step_start_from_an_asset_that_holds_a_want_once_the_co
     let every = Rules { first_step_follows_every_arriving_part: true, ..Rules::default() };
     assert_eq!(run(every, false), (None, Some(Availability::Available(d))));
 }
+
+#[test]
+fn the_admission_check_refuses_a_valid_part_whose_first_parameter_is_over_its_bound() {
+    let check = AdmissionCheck { bound: 96.0 };
+    let part = |strength: f32| Part::decode(&part_bytes(RepulsionTable { strength, radius: 8.0 }, &[], 8, 0)).expect("the bound stands inside what the validator accepts");
+    assert!(check.admits(&part(64.0)));
+    assert!(check.admits(&part(96.0)), "a first parameter equal to the bound is not greater than it");
+    assert!(!check.admits(&part(96.5)));
+    // The reason of a refusal on a first load, by the name the sheets give it.
+    assert_eq!(reason_named("not-admitted").map(|reason| reason.code), Some(REASON_ADMISSION_REFUSED));
+}

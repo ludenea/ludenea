@@ -21,6 +21,7 @@
 
 mod enumeration;
 mod families;
+mod families_batches;
 mod families_readings;
 mod families_same_harness;
 mod gate_cost;
@@ -79,6 +80,8 @@ const FAMILIES: &[Family] = &[
     ("system-maker", families_readings::system_maker),
     ("core-want-type", families_readings::core_want_type),
     ("restore-batch", families_readings::restore_batch),
+    ("batch-state", families_batches::batch_state),
+    ("failed-replacement", families_batches::failed_replacement),
 ];
 
 fn family(settings: &Settings, name: &str) -> Option<FamilyPlan> {
@@ -228,6 +231,17 @@ fn write_claim(out: &mut Json, log: &mut String, claim: &Claim) {
         out.string("note", note);
         out.object_end();
         let _ = writeln!(log, "  note: {note}");
+    }
+    out.array_end();
+    // What the harness reports beside the oracle, where a sheet asks for
+    // it: compared with nothing.
+    out.key("reports_beside_the_oracle");
+    out.array_start();
+    for report in &claim.reports {
+        out.object_start();
+        out.string("report", report);
+        out.object_end();
+        let _ = writeln!(log, "  report: {report}");
     }
     out.array_end();
     out.object_end();
@@ -476,6 +490,9 @@ fn drive(settings: &Settings, only: &[String], processes: bool) -> (String, bool
         for note in &claim.notes {
             let _ = writeln!(log, "  note: {note}");
         }
+        for report in &claim.reports {
+            let _ = writeln!(log, "  report: {report}");
+        }
         clean &= claim.one_hash_per_scenario() && claim.outcomes.iter().all(|outcome| outcome.replays != Some(false) && outcome.differences.is_empty());
         // A world of a scenario's own run that stayed gated; what a control
         // gave is a note too, and no fault.
@@ -605,10 +622,26 @@ mod tests {
         // equals. The comparison is with the scenario's run, and no oracle.
         const READINGS: [&str; 10] =
             ["pending-ends", "incomplete-batch", "first-step", "pending-release", "group-order", "unit-sentences", "sizes", "system-maker", "core-want-type", "restore-batch"];
-        let of_the_readings = |line: &&str| READINGS.iter().any(|family| line.contains(&format!("note: {family}/")));
-        let controls: Vec<&str> = log.lines().filter(|line| line.contains("] gives another run: ") || line.contains("GIVES THE RUN OF THE SCENARIO ITSELF")).filter(of_the_readings).collect();
+        let controls_of = |families: &[&str]| -> Vec<&str> {
+            let of_the_families = |line: &&str| families.iter().any(|family| line.contains(&format!("note: {family}/")));
+            log.lines().filter(|line| line.contains("] gives another run: ") || line.contains("GIVES THE RUN OF THE SCENARIO ITSELF")).filter(of_the_families).collect()
+        };
+        let controls = controls_of(&READINGS);
         let unchanged: Vec<&&str> = controls.iter().filter(|line| line.contains("GIVES THE RUN OF THE SCENARIO ITSELF")).collect();
         assert!(controls.len() >= 72 && unchanged.is_empty(), "{} controls driven; those that give their scenario's own run: {unchanged:#?}", controls.len());
+        // The same of the two families on a batch against the state of the
+        // last tick and on a replacement that fails, each control on every
+        // world the sheet names it for.
+        let controls = controls_of(&["batch-state", "failed-replacement"]);
+        let unchanged: Vec<&&str> = controls.iter().filter(|line| line.contains("GIVES THE RUN OF THE SCENARIO ITSELF")).collect();
+        assert!(controls.len() == 17 && unchanged.is_empty(), "{} controls driven; those that give their scenario's own run: {unchanged:#?}", controls.len());
+        // What the harness reports beside the oracle in those two families:
+        // of the stand-in pipeline after each of the twenty-four saves, of
+        // which two hold an action that failed, and of the loading
+        // capability for each of the nineteen worlds.
+        let reports: Vec<&str> = log.lines().filter(|line| line.trim_start().starts_with("report: ")).collect();
+        let count = |words: &str| reports.iter().filter(|line| line.contains(words)).count();
+        assert_eq!((count("the stand-in pipeline, after the save"), count("failed, with the diagnostic"), count("the loading capability:")), (24, 2, 19), "{reports:#?}");
     }
 
     /// The other reading of a step without waiting that follows the record of
@@ -626,6 +659,52 @@ mod tests {
         let _ = std::fs::remove_dir_all(&settings.scratch);
         let (own, other) = (&own.worlds[0].observed, &other.worlds[0].observed);
         assert_eq!((own.blocked.len(), other.blocked.len()), (2, 1));
+        assert_eq!(own.tables, other.tables);
+        assert_eq!(own.state, other.state);
+    }
+
+    /// The gated world of every scenario of the family on a batch complete
+    /// against the state of the last tick: as stated it runs to its last
+    /// tick, and under the control that has the capability build a batch
+    /// against what it posted, its gate stays closed for good on the asset
+    /// the batch leaves out. Driven with no oracle.
+    #[test]
+    fn a_capability_that_trusts_what_it_posted_closes_the_gate_of_a_gated_world_for_good() {
+        let mut settings = settings("batch-state");
+        settings.size = Size::Small;
+        let plan = families_batches::batch_state(&settings);
+        let left_out = ["X", "D", "D", "D", "D"];
+        assert_eq!(plan.scenarios.len(), left_out.len());
+        for (scenario, left_out) in plan.scenarios.iter().zip(left_out) {
+            let control = scenario.variants.first().expect("every scenario of the family has the control");
+            let gated = |changes: &[play::Change], tag: &str| {
+                let played = play::play(&settings, &plan.family, scenario, 1, changes, tag, None, &play::Part::Whole);
+                played.worlds.iter().find(|world| world.name == "gated").expect("a gated world").observed.stuck.clone()
+            };
+            assert_eq!(gated(&[], "own"), None, "{}", scenario.name);
+            let awaited = gated(&control.changes, "control").map(|(_, awaited)| awaited);
+            assert_eq!(awaited, Some(vec![plan.family.names.assets[left_out]]), "{}", scenario.name);
+        }
+        let _ = std::fs::remove_dir_all(&settings.scratch);
+    }
+
+    /// The other reading of the batch of a revision whose changed part the
+    /// world's admission check refuses: one arrival more in the record of
+    /// the tick, for the new dependency that part lists, which no want
+    /// names, and the same tables and state hashes. Driven with no oracle.
+    #[test]
+    fn the_closure_of_a_refused_part_is_told_by_the_record_alone() {
+        let mut settings = settings("refused");
+        settings.size = Size::Small;
+        let plan = families_batches::failed_replacement(&settings);
+        let scenario = plan.scenarios.iter().find(|scenario| scenario.name.ends_with("/refused-parent-with-a-new-dependency")).expect("a scenario of the family");
+        let reading = families::readings().into_iter().find(|reading| reading.name.contains("the closure of a changed part")).expect("the reading is listed");
+        let own = play::play(&settings, &plan.family, scenario, 1, &[], "own", None, &play::Part::Whole);
+        let other = play::play(&settings, &plan.family, scenario, 1, &reading.changes, "other", None, &play::Part::Whole);
+        let _ = std::fs::remove_dir_all(&settings.scratch);
+        let (own, other) = (&own.worlds[0].observed, &other.worlds[0].observed);
+        let arrivals = |observed: &oracle::Observed| observed.log.iter().find(|record| record.tick == 4).map_or(0, |record| record.arrivals.len());
+        assert_eq!((arrivals(own), arrivals(other)), (1, 2));
         assert_eq!(own.tables, other.tables);
         assert_eq!(own.state, other.state);
     }

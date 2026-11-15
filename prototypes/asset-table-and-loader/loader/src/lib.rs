@@ -24,6 +24,18 @@
 //! the manifest holds that dependency under, fails. An arrival to a hash
 //! names the size the manifest gives of what it puts in force.
 //!
+//! A replacement that cannot be put in force leaves what is in force: the
+//! failure of a new part is not posted to a world that holds the asset
+//! available, and is a report. Where the composition of a world gives an
+//! admission check to the entry of an asset type, the capability runs it for
+//! that world on each part of the type a batch would bring, before the
+//! arrival is posted: a part the check refuses is posted to that world as a
+//! failure only where the world does not hold the asset available, a first
+//! load, and the rest of the batch is posted. The check is a world's, and
+//! the resident store the instance's: a part one world refuses is resident,
+//! and another world receives it. The report holds each part that was
+//! obtained for a world and not posted to it.
+//!
 //! Every behavior a scenario's control changes on purpose is a field of
 //! `Options`, and so is every place where the design text was read one way
 //! among two.
@@ -38,8 +50,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use content_store::{AssetId, Domain, DomainEntry, Mounted, Package, closure, content_hash, decode_domain, decode_root, hex, set_hash};
 use prototype_core::table::{
-    Arrival, ArrivalQueue, AssetType, Availability, EntryView, Outcome, Owner, Part, Policy, REASON_ANOTHER_TYPE, REASON_ARTIFACT_GONE,
-    REASON_DEPENDENCIES_DIFFER, REASON_HASH_MISMATCH, REASON_INVALID_PART, REASON_UNKNOWN_ASSET, Resident, Residents,
+    AdmissionCheck, Arrival, ArrivalQueue, AssetType, Availability, EntryView, Outcome, Owner, Part, Policy, REASON_ADMISSION_REFUSED, REASON_ANOTHER_TYPE,
+    REASON_ARTIFACT_GONE, REASON_DEPENDENCIES_DIFFER, REASON_HASH_MISMATCH, REASON_INVALID_PART, REASON_UNKNOWN_ASSET, Resident, Residents,
 };
 use prototype_core::world::Extraction;
 
@@ -286,12 +298,49 @@ pub struct Options {
     /// does not bring, on which the core adds no want.
     pub type_exception_below_a_parent_in_force: bool,
     /// Not taken, run as a control: the capability trusts what it posted. An
-    /// asset it posted to a hash counts as held available by that world from
-    /// then on, whatever the state the world extracts: a rejection over a
-    /// budget, or an entry that left the table, is never learned, and a
-    /// later batch leaves the asset out. The default reads the state
-    /// extracted at the end of the last tick, and nothing else.
+    /// asset it posted to a hash counts as held available by that world
+    /// until it posts that asset again, whatever the state the world
+    /// extracts: a rejection over a budget, or an entry that left the table,
+    /// is never learned, and a later batch leaves the asset out. The default
+    /// reads the state extracted at the end of the last tick, and nothing
+    /// else.
     pub trusts_what_it_posted: bool,
+    /// Control: the batch of a move of the manifest is built against a view
+    /// older than one tick, the table as the world extracted it before its
+    /// last extraction. The default builds it, as every batch, against the
+    /// table extracted at the end of the last tick.
+    pub moves_built_against_the_table_before_the_last: bool,
+    // --- the admission check of a world's composition: its controls, and
+    // one reading ---
+    /// Control: no admission check is run. The default runs the check the
+    /// composition of the world a batch answers gives to the entry of a
+    /// type, on each part of that type the batch would bring, before the
+    /// arrival is posted: a part it refuses is not posted to a world that
+    /// holds the asset available, the asset stays at its hash and the
+    /// refusal is a report; for an asset the world does not hold available,
+    /// a first load, a failure is posted with the reason of the check.
+    pub no_admission_check_run: bool,
+    /// Control: a part that the check of one world of the instance refuses
+    /// is posted to no world of that instance. The default has the check be
+    /// a world's: two worlds may apply two batches from one revision.
+    pub a_part_one_world_refuses_is_posted_to_no_world: bool,
+    /// Control: the batch of a move of the manifest is held back while the
+    /// world refuses one of its assets, and the next move owes the world
+    /// this one too. The default posts the batch without the refused asset.
+    pub move_held_back_while_an_asset_is_refused: bool,
+    /// Control: a replacement the world's check refuses is posted to it as
+    /// a failure, as a first load is.
+    pub refused_replacement_posted_as_a_failure: bool,
+    /// Control: an asset of a move's batch whose part lists a refused asset
+    /// is withheld with it. The default posts it: a part names its
+    /// dependencies by identifier, and reads the version in force.
+    pub dependent_of_a_refused_asset_withheld: bool,
+    /// The other reading of the batch of a move where the world refuses a
+    /// changed part: the closure of that part is followed all the same, and
+    /// an arrival is posted for each asset of it that the table does not
+    /// hold available, which no want then names. The default follows the
+    /// closure of a changed part the batch brings, and of no other.
+    pub closure_of_a_refused_part_posted: bool,
     // --- the controls of the scenarios on the batch of a restore ---
     /// Control: at a restore, no failed arrival is posted for an entry the
     /// save holds as failed. The default posts the arrival its load gives,
@@ -327,6 +376,9 @@ struct WorldLink {
     set: Option<u64>,
     /// The world's table as last extracted.
     table: BTreeMap<AssetId, EntryView>,
+    /// The table as extracted before that, or as the query gave it where the
+    /// world has extracted once at most. Read under one control alone.
+    before: BTreeMap<AssetId, EntryView>,
     /// The instance's manifest as this world was last brought up to date
     /// with it: a move of the manifest is posted as what differs from it.
     seen: Arc<Domain>,
@@ -342,9 +394,12 @@ struct WorldLink {
     /// query before the first tick gave them.
     standing: BTreeMap<AssetId, Vec<Owner>>,
     /// Under the control that trusts what was posted, and read under it
-    /// alone: the assets posted to a hash.
+    /// alone: the assets whose last arrival posted was to a hash.
     posted: BTreeSet<AssetId>,
     trusted: bool,
+    /// The admission checks the world's composition carries, each with the
+    /// asset type whose entry it gives it to.
+    checks: Vec<(AssetType, AdmissionCheck)>,
 }
 
 impl WorldLink {
@@ -385,6 +440,40 @@ fn brought(batch: &[Arrival], asset: &AssetId) -> bool {
     batch.iter().any(|arrival| arrival.asset == *asset && matches!(arrival.outcome, Outcome::Hash(_)))
 }
 
+/// Why a part that was obtained for a world was not posted to it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cause {
+    /// The admission check of the world's composition refuses the part, and
+    /// the world holds the asset available: the asset stays at its hash.
+    RefusedReplacement,
+    /// The check refuses the part, and the world does not hold the asset
+    /// available: a failure is posted in its place, a first load.
+    RefusedFirstLoad,
+    /// The check refuses the part of an asset the world holds available,
+    /// and a failure is posted all the same: under a control, or as an
+    /// answer to a restore.
+    RefusedAndPostedAsAFailure,
+    /// Under a control: the check of another world of the instance refuses
+    /// the part.
+    RefusedByAnotherWorld,
+    /// Under a control: the part lists this asset, whose part is refused.
+    ListsARefusedAsset(AssetId),
+    /// Under a control: the batch is held back while the world refuses the
+    /// part of this asset.
+    HeldBackFor(AssetId),
+}
+
+/// A part that was obtained for a world and not posted to it: the world as
+/// the capability numbers it, in the order attached, the asset, the content
+/// hash of the part and the cause.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Withheld {
+    pub world: u32,
+    pub asset: AssetId,
+    pub hash: u64,
+    pub cause: Cause,
+}
+
 /// What happened outside the domain, for the report.
 #[derive(Clone, Debug, Default)]
 pub struct LoaderReport {
@@ -393,6 +482,9 @@ pub struct LoaderReport {
     /// The refusals that are reports and never inputs: a replacement that
     /// cannot be put in force, with the asset and the reason code.
     pub refusals: Vec<(AssetId, u32)>,
+    /// The parts obtained for a world and not posted to it, in the order
+    /// the batches were built.
+    pub withheld: Vec<Withheld>,
     /// The moves of the manifest held for a world that waited for its answers.
     pub held_moves: usize,
     /// The batches posted, over every world.
@@ -417,6 +509,10 @@ struct Instance {
     next_world: u32,
     report: LoaderReport,
     delayed: Delayed,
+    /// The parts an admission check refused while the batch in the making
+    /// was built: the asset, the content hash, and whether the check of
+    /// another world alone refused it.
+    refused: Vec<(AssetId, u64, bool)>,
 }
 
 impl Instance {
@@ -503,12 +599,34 @@ impl Instance {
         self.residents.insert(hash, bytes).map_err(|_| REASON_INVALID_PART)
     }
 
-    /// One asset of a closure: resolved in the manifest, failed where the
-    /// manifest holds it under another type than the one the world's entry
-    /// holds, looked up in the resident store, and on a miss read, verified,
-    /// validated and checked against the dependencies the manifest lists for
-    /// it. `held` is the type the world's entry holds, where it holds one.
-    fn load(&mut self, manifest: &Domain, asset: AssetId, held: Option<AssetType>) -> Outcome {
+    /// Whether an admission check refuses a part of a type for a world:
+    /// none where the world's composition carries no check for the type or
+    /// its check accepts the part. The check is a world's, and the resident
+    /// store the instance's: the check is run for the world a batch
+    /// answers, on a part already resident as on one just read, and a part
+    /// one world refuses stays resident for the others. Under one control
+    /// no check is run; under another a part that the check of any world of
+    /// the instance refuses is refused for every world, and the answer says
+    /// whether the check of another world alone refused it.
+    fn refuses(&self, world: u32, asset_type: &str, part: &Part) -> Option<bool> {
+        if self.options.no_admission_check_run {
+            return None;
+        }
+        let refuses = |link: &WorldLink| link.checks.iter().any(|(checked, check)| checked.stable_name() == asset_type && !check.admits(part));
+        if refuses(&self.worlds[&world]) {
+            return Some(false);
+        }
+        (self.options.a_part_one_world_refuses_is_posted_to_no_world && self.worlds.values().any(refuses)).then_some(true)
+    }
+
+    /// One asset of a closure, for one world: resolved in the manifest,
+    /// failed where the manifest holds it under another type than the one
+    /// the world's entry holds, looked up in the resident store, and on a
+    /// miss read, verified, validated and checked against the dependencies
+    /// the manifest lists for it; then put to the admission check, where the
+    /// world's composition gives one to the entry of its type. `held` is
+    /// the type the world's entry holds, where it holds one.
+    fn load(&mut self, world: u32, manifest: &Domain, asset: AssetId, held: Option<AssetType>) -> Outcome {
         let Some(entry) = manifest.get(&asset) else { return Outcome::Failure(REASON_UNKNOWN_ASSET) };
         if !self.options.types_not_checked
             && let Some(held) = held
@@ -522,6 +640,12 @@ impl Instance {
         };
         if !self.dependencies_agree(manifest, entry, &resident.part) {
             return Outcome::Failure(REASON_DEPENDENCIES_DIFFER);
+        }
+        if let Some(by_another_world) = self.refuses(world, &entry.asset_type, &resident.part) {
+            // The part was obtained and is not posted: what becomes of its
+            // asset is decided where the batch is posted.
+            self.refused.push((asset, entry.hash, by_another_world));
+            return Outcome::Failure(REASON_ADMISSION_REFUSED);
         }
         Outcome::Hash(entry.hash)
     }
@@ -551,9 +675,16 @@ impl Instance {
             vec![self.worlds[&world].queue.clone()]
         };
         self.report.batches += 1;
-        // Under the control that trusts what was posted, and read under it alone.
-        let posted = batch.iter().filter(|arrival| matches!(arrival.outcome, Outcome::Hash(_))).map(|arrival| arrival.asset);
-        self.worlds.get_mut(&world).expect("an attached world").posted.extend(posted);
+        // Under the control that trusts what was posted, and read under it
+        // alone: an asset posted to a hash counts as held available until
+        // it is posted again, and a failure posted for it ends that.
+        let link = self.worlds.get_mut(&world).expect("an attached world");
+        for arrival in &batch {
+            match arrival.outcome {
+                Outcome::Hash(_) => link.posted.insert(arrival.asset),
+                Outcome::Failure(_) => link.posted.remove(&arrival.asset),
+            };
+        }
         let delay = self.delay_for(world);
         if delay.is_zero() {
             for queue in queues {
@@ -580,24 +711,52 @@ impl Instance {
     /// manifest is a different event and does fail, and so does an answer to
     /// a restore.
     fn post(&mut self, world: u32, mut batch: Vec<Arrival>) {
+        self.withhold(world, &mut batch);
+        self.deliver(world, batch);
+    }
+
+    /// Takes out of a batch the failure of a replacement that cannot be put
+    /// in force, a part the world's admission check refuses included, and
+    /// reports the parts that check refused. One control posts the failure
+    /// of a refused replacement all the same.
+    fn withhold(&mut self, world: u32, batch: &mut Vec<Arrival>) {
         let link = self.worlds.get_mut(&world).expect("an attached world");
         let fails_for_its_type = self.options.a_changed_type_fails_an_asset_in_force;
+        let refused_as_a_failure = self.options.refused_replacement_posted_as_a_failure;
         batch.retain(|arrival| match arrival.outcome {
             Outcome::Failure(REASON_ANOTHER_TYPE) if fails_for_its_type => true,
+            Outcome::Failure(REASON_ADMISSION_REFUSED) if refused_as_a_failure => true,
             Outcome::Failure(code) if code != REASON_UNKNOWN_ASSET && !arrival.marked && link.holds_available(&arrival.asset) => {
                 self.report.refusals.push((arrival.asset, code));
                 false
             }
             _ => true,
         });
-        self.deliver(world, batch);
+        self.report_the_refused(world, batch);
     }
 
-    /// The arrival of one asset of a batch: to the hash the manifest names,
-    /// with the size of what it puts in force, which the manifest gives, or
-    /// a failure with its reason, which names no size.
-    fn arrival(&mut self, manifest: &Domain, asset: AssetId, held: Option<AssetType>) -> Arrival {
-        match self.load(manifest, asset, held) {
+    /// Reports each part an admission check refused while a batch was
+    /// built: obtained for the world and not posted to it, with what the
+    /// batch as posted holds for its asset.
+    fn report_the_refused(&mut self, world: u32, batch: &[Arrival]) {
+        let link = &self.worlds[&world];
+        for (asset, hash, by_another_world) in std::mem::take(&mut self.refused) {
+            let posted = batch.iter().any(|arrival| arrival.asset == asset);
+            let cause = match (by_another_world, posted) {
+                (true, _) => Cause::RefusedByAnotherWorld,
+                (false, false) => Cause::RefusedReplacement,
+                (false, true) if link.holds_available(&asset) => Cause::RefusedAndPostedAsAFailure,
+                (false, true) => Cause::RefusedFirstLoad,
+            };
+            self.report.withheld.push(Withheld { world, asset, hash, cause });
+        }
+    }
+
+    /// The arrival of one asset of a batch for a world: to the hash the
+    /// manifest names, with the size of what it puts in force, which the
+    /// manifest gives, or a failure with its reason, which names no size.
+    fn arrival(&mut self, world: u32, manifest: &Domain, asset: AssetId, held: Option<AssetType>) -> Arrival {
+        match self.load(world, manifest, asset, held) {
             Outcome::Hash(hash) => Arrival::at(asset, hash).sized(manifest.get(&asset).map_or(0, |entry| entry.size_in_force(&DECLARED_FORMS))),
             Outcome::Failure(code) => Arrival::failed(asset, code),
         }
@@ -642,7 +801,7 @@ impl Instance {
                 && left_as.is_none()
                 && self.type_below(world, manifest, parent, asset, batch).is_none()
             {
-                let again = self.arrival(manifest, asset, None);
+                let again = self.arrival(world, manifest, asset, None);
                 batch[at] = Arrival { root: self.root_of(again.outcome, follow.root), ..again };
             }
             if !followed.insert(asset) {
@@ -653,7 +812,7 @@ impl Instance {
             let mut stops = false;
             if posts {
                 let held = if left_as.is_some() { left_as } else { self.type_below(world, manifest, parent, asset, batch) };
-                let arrival = self.arrival(manifest, asset, held);
+                let arrival = self.arrival(world, manifest, asset, held);
                 stops = follow.of_a_want && self.options.nothing_posted_below_a_failed_asset && matches!(arrival.outcome, Outcome::Failure(_));
                 batch.push(Arrival { root: self.root_of(arrival.outcome, follow.root), ..arrival });
             }
@@ -688,7 +847,7 @@ impl Instance {
             }
             let mut stops = false;
             if every_asset || !self.worlds[&world].holds_available(root) {
-                let arrival = self.arrival(&manifest, *root, Some(*left_as));
+                let arrival = self.arrival(world, &manifest, *root, Some(*left_as));
                 stops = self.options.nothing_posted_below_a_failed_asset && matches!(arrival.outcome, Outcome::Failure(_));
                 batch.push(Arrival { root: self.root_of(arrival.outcome, *root), ..arrival });
             }
@@ -716,7 +875,7 @@ impl Instance {
         let marked = !self.options.answers_unmarked;
         let mut batch = Vec::new();
         for asset in held {
-            let arrival = self.arrival(&manifest, *asset, self.worlds[&world].entry_type(asset));
+            let arrival = self.arrival(world, &manifest, *asset, self.worlds[&world].entry_type(asset));
             if self.options.no_answer_for_an_absent_asset && arrival.outcome == Outcome::Failure(REASON_UNKNOWN_ASSET) {
                 continue;
             }
@@ -736,7 +895,7 @@ impl Instance {
                 let posted = if wider { !link.holds_available(&asset) } else { !wanted };
                 if !answered.contains(&asset) && posted {
                     let held = link.entry_type(&asset);
-                    batch.push(self.arrival(&manifest, asset, held));
+                    batch.push(self.arrival(world, &manifest, asset, held));
                 }
             }
         } else {
@@ -745,6 +904,9 @@ impl Instance {
         let link = self.worlds.get_mut(&world).expect("an attached world");
         // The world waits for its first tick to apply these answers.
         link.awaiting_restore = !held.is_empty();
+        // An answer whose part the world's admission check refuses is posted
+        // as the failure it is: the part was obtained, and is reported.
+        self.report_the_refused(world, &batch);
         self.deliver(world, batch);
     }
 
@@ -810,7 +972,7 @@ impl Instance {
                 };
                 if posted {
                     let held = self.type_below(world, manifest, parent, dependency, batch);
-                    let arrival = self.arrival(manifest, dependency, held);
+                    let arrival = self.arrival(world, manifest, dependency, held);
                     // Under one control a load that fails again is not
                     // posted for an entry the save holds as failed.
                     let failed_again = held_failed && matches!(arrival.outcome, Outcome::Failure(_));
@@ -836,6 +998,24 @@ impl Instance {
     /// the changed asset whose closure holds it, the first in identifier
     /// order.
     fn post_move(&mut self, world: u32) {
+        // Under one control the batch is built against a view older than
+        // one tick: the table extracted before the last stands in the place
+        // of the last while the batch is built, and is put back after.
+        let older = self.options.moves_built_against_the_table_before_the_last;
+        let swap = |instance: &mut Instance| {
+            let link = instance.worlds.get_mut(&world).expect("an attached world");
+            std::mem::swap(&mut link.table, &mut link.before);
+        };
+        if older {
+            swap(self);
+        }
+        self.post_move_against_the_table(world);
+        if older {
+            swap(self);
+        }
+    }
+
+    fn post_move_against_the_table(&mut self, world: u32) {
         let manifest = self.manifest_of(self.worlds[&world].set);
         let link = self.worlds.get_mut(&world).expect("an attached world");
         let seen = std::mem::replace(&mut link.seen, manifest.clone());
@@ -852,8 +1032,13 @@ impl Instance {
         let mut batch = Vec::new();
         let mut parts = Vec::new();
         for (asset, held) in &changed {
-            let arrival = self.arrival(&manifest, *asset, Some(*held));
-            if matches!(arrival.outcome, Outcome::Hash(_)) {
+            let arrival = self.arrival(world, &manifest, *asset, Some(*held));
+            // The closure of a changed part is followed where the batch
+            // brings the part: a part the world's admission check refuses
+            // is not put in force, and the batch is posted without it.
+            // Under the other reading its closure is followed all the same.
+            let refused = arrival.outcome == Outcome::Failure(REASON_ADMISSION_REFUSED) && self.options.closure_of_a_refused_part_posted;
+            if matches!(arrival.outcome, Outcome::Hash(_)) || refused {
                 parts.push(*asset);
             }
             batch.push(Arrival { root: self.root_of(arrival.outcome, *asset), ..arrival });
@@ -865,12 +1050,43 @@ impl Instance {
                 self.follow_below(world, &manifest, &mut batch, &mut followed, *part, follow);
             }
         }
+        // Control: the batch is held back while the world refuses one of
+        // its assets. The world stays where it was last brought up to date,
+        // so that the next move owes it this one too; every part the batch
+        // held was obtained, and none is posted.
+        if self.options.move_held_back_while_an_asset_is_refused
+            && let Some((refused, _, _)) = self.refused.first().copied()
+        {
+            self.worlds.get_mut(&world).expect("an attached world").seen = seen;
+            let parts = batch.iter().filter_map(|arrival| match arrival.outcome {
+                Outcome::Hash(hash) => Some((arrival.asset, hash)),
+                Outcome::Failure(_) => None,
+            });
+            let obtained: Vec<(AssetId, u64)> = parts.chain(self.refused.drain(..).map(|(asset, hash, _)| (asset, hash))).collect();
+            self.report.withheld.extend(obtained.into_iter().map(|(asset, hash)| Withheld { world, asset, hash, cause: Cause::HeldBackFor(refused) }));
+            return;
+        }
+        // Control: an asset whose part lists a refused asset is withheld
+        // with it.
+        if self.options.dependent_of_a_refused_asset_withheld && !self.refused.is_empty() {
+            let refused: Vec<AssetId> = self.refused.iter().map(|(asset, _, _)| *asset).collect();
+            let lists = |asset: &AssetId| manifest.get(asset).and_then(|entry| entry.dependencies.iter().map(|(dependency, _)| *dependency).find(|dependency| refused.contains(dependency)));
+            let withheld = &mut self.report.withheld;
+            batch.retain(|arrival| match (arrival.outcome, lists(&arrival.asset)) {
+                (Outcome::Hash(hash), Some(listed)) => {
+                    withheld.push(Withheld { world, asset: arrival.asset, hash, cause: Cause::ListsARefusedAsset(listed) });
+                    false
+                }
+                _ => true,
+            });
+        }
+        self.withhold(world, &mut batch);
         if self.options.moves_posted_one_per_tick {
             batch.sort_by_key(|arrival| arrival.asset);
             self.worlds.get_mut(&world).expect("an attached world").backlog.extend(batch);
             return;
         }
-        self.post(world, batch);
+        self.deliver(world, batch);
     }
 
     /// The manifest moved: every world that names no content set receives
@@ -896,7 +1112,8 @@ impl Instance {
 
     fn extracted(&mut self, world: u32, extraction: Extraction) {
         let Some(link) = self.worlds.get_mut(&world) else { return };
-        link.table = extraction.entries.iter().map(|entry| (entry.asset, *entry)).collect();
+        let extracted = extraction.entries.iter().map(|entry| (entry.asset, *entry)).collect();
+        link.before = std::mem::replace(&mut link.table, extracted);
         let held = extraction.restore_applied && std::mem::take(&mut link.held);
         if extraction.restore_applied {
             link.awaiting_restore = false;
@@ -948,6 +1165,10 @@ pub struct Attachment {
     /// For the same restore: for each entry the table does not hold
     /// available, the wants that stand on it with their owners.
     pub standing: Vec<(AssetId, Vec<(Owner, Policy)>)>,
+    /// The admission checks the world's composition carries, each with the
+    /// asset type whose schema entry it gives it to. The capability runs
+    /// them before an arrival is posted to this world.
+    pub checks: Vec<(AssetType, AdmissionCheck)>,
 }
 
 /// The capability held still: while it lives, the capability handles nothing
@@ -983,6 +1204,7 @@ impl Loader {
             next_world: 0,
             report: LoaderReport::default(),
             delayed: Delayed::default(),
+            refused: Vec::new(),
         };
         instance.revision = instance.read_revision()?;
         instance.merge();
@@ -1021,10 +1243,12 @@ impl Loader {
             }
             let world = instance.next_world;
             instance.next_world += 1;
+            let table: BTreeMap<AssetId, EntryView> = attachment.entries.iter().map(|entry| (entry.asset, *entry)).collect();
             let link = WorldLink {
                 queue: attachment.queue,
                 set: attachment.set,
-                table: attachment.entries.iter().map(|entry| (entry.asset, *entry)).collect(),
+                before: table.clone(),
+                table,
                 seen: instance.current.clone(),
                 awaiting_restore: false,
                 held: false,
@@ -1032,6 +1256,7 @@ impl Loader {
                 standing: attachment.standing.iter().map(|(asset, wants)| (*asset, wants.iter().map(|(owner, _)| *owner).collect())).collect(),
                 posted: BTreeSet::new(),
                 trusted: instance.options.trusts_what_it_posted,
+                checks: attachment.checks,
             };
             instance.worlds.insert(world, link);
             instance.answer_restore(world, &attachment.restore);

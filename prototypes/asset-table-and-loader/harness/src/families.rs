@@ -123,6 +123,10 @@ pub fn readings() -> Vec<VariantPlan> {
             "reading: a step without waiting that follows the record of a tick, where steps stand in a row, is the step that runs that tick",
             vec![Change::Harness(Tweak::StepAfterARecordRunsItsTick)],
         ),
+        reading(
+            "reading: the batch of a revision holds the closure of a changed part that the world's admission check refuses",
+            vec![loader(|options| options.closure_of_a_refused_part_posted = true)],
+        ),
     ]
 }
 
