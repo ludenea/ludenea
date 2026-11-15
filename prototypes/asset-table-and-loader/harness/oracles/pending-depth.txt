@@ -1,0 +1,294 @@
+# Family pending-depth: the gate counts a want the core would add through
+# the pending parts to any depth.
+# Written by hand from the design text as it reads after its second reading,
+# before any run of the stand-in stage, by a writer who has not read the
+# build.
+# The table's order is the order of the asset identifiers: G, K, M, R, S.
+# The table is empty before the first block of each scenario.
+# Record lines stand in the order applied: the commands first, in the order
+# the scenario gives them, then the arrivals by asset identifier.
+# The wants of an entry under the world's own entry stand before the wants
+# the core added.
+# The family gives no size: an entry and an arrival state none.
+# The rule under test. A gated world applies nothing, and its gate is
+# evaluated on the table with the pending arrivals and the pending releases
+# applied. A want the core would add from the part of a pending arrival is
+# counted, with the policy of its parent: a parent pending without an asset
+# on which its part would add a want, and that the table does not hold
+# available, keeps the gate closed. The count follows the pending parts
+# downwards, as the first step over the arrivals of a record does: the
+# policy of a pending parent counts, beside the wants the table holds on it,
+# the want the core would add on it from another pending part, to any depth,
+# and a pending parent that the table holds under no want takes the policy
+# of that want. The walk stays within the parts of the pending record.
+# A step that does not wait names what keeps the gate closed, the pending
+# record counted.
+# Each scenario runs to tick 8: the gate has opened and the world has run at
+# least two ticks more.
+
+
+scenario pending-depth/second-level-missing
+
+tick 2
+record want R parameters source:host required
+entry R parameters unavailable
+want source:host required
+
+# Nothing is pending yet.
+blocked 3 awaiting R
+# The arrivals of R and of M are pending, with none of K. The pending
+# arrival answers R. The part of R lists M: the table gives R a required
+# want, so the want the core would add on M is required, and the pending
+# arrival of M answers it. The table holds M under no want: as a pending
+# parent it takes the policy of the want the core would add on it, required.
+# The part of M lists K: the want the core would add on K is required, the
+# table does not hold K, and nothing pending answers it. The batch is
+# incomplete at its second level: the gate stays closed, and the step names
+# K.
+blocked 3 awaiting K
+# The arrival of K joins: the batch is complete and the gate opens. At the
+# fixed point R holds a want and its part lists M: the core adds the want of
+# M, owned by R and required as the want of R is. M then holds a want and
+# its part lists K: the core adds the want of K, owned by M and required as
+# the want of M is. The three arrivals are then applied by identifier, each
+# on an entry that holds a want.
+tick 3
+record arrival K K.1
+record arrival M M.1
+record arrival R R.1
+entry K parameters available K.1
+want asset:M required
+entry M parameters available M.1
+want asset:R required
+entry R parameters available R.1
+want source:host required
+event arrived K K.1
+event arrived M M.1
+event arrived R R.1
+
+# The table of tick 3 stands to tick 8.
+
+
+scenario pending-depth/complete-batch
+
+tick 2
+record want R parameters source:host required
+entry R parameters unavailable
+want source:host required
+
+# Nothing is pending yet.
+blocked 3 awaiting R
+# The whole closure of R is pending, one batch. R is answered by its pending
+# arrival; the want the core would add on M, required, by the pending
+# arrival of M; the want it would add on K from the pending part of M,
+# required as the want M would take, by the pending arrival of K. The gate
+# opens on the complete batch, and the step without waiting runs tick 3.
+tick 3
+record arrival K K.1
+record arrival M M.1
+record arrival R R.1
+entry K parameters available K.1
+want asset:M required
+entry M parameters available M.1
+want asset:R required
+entry R parameters available R.1
+want source:host required
+event arrived K K.1
+event arrived M M.1
+event arrived R R.1
+
+# The table of tick 3 stands to tick 8.
+
+
+scenario pending-depth/second-level-in-force
+
+tick 2
+record want K parameters source:tool optional
+entry K parameters unavailable
+want source:tool optional
+
+# An optional want gates nothing: the world runs, and K rises.
+tick 3
+record arrival K K.1
+entry K parameters available K.1
+want source:tool optional
+event arrived K K.1
+
+# A required want of R: tick 4 runs with R unanswered, and the world is
+# gated from the boundary after it.
+tick 4
+record want R parameters source:host required
+entry K parameters available K.1
+want source:tool optional
+entry R parameters unavailable
+want source:host required
+
+# Nothing is pending yet.
+blocked 5 awaiting R
+# The arrivals of R and of M are pending, with none of K. The want the core
+# would add on K from the pending part of M is counted as required, as in
+# the scenarios above, and the table holds K available: K is answered. A
+# pending parent keeps the gate closed for an asset that the table does not
+# hold available, and for no other. The batch is complete against the
+# table: the gate opens, and the step without waiting runs tick 5.
+# At the fixed point the core adds the want of M, owned by R and required,
+# then the want of K that the part of M lists, owned by M and required as
+# the want of M is. K keeps the tool's want, which stands first. No arrival
+# names K, which stays at its hash with no event.
+tick 5
+record arrival M M.1
+record arrival R R.1
+entry K parameters available K.1
+want source:tool optional
+want asset:M required
+entry M parameters available M.1
+want asset:R required
+entry R parameters available R.1
+want source:host required
+event arrived M M.1
+event arrived R R.1
+
+# The table of tick 5 stands to tick 8.
+
+
+scenario pending-depth/parent-under-an-optional-want-of-its-own
+
+# M is wanted in its own right, as optional, beside the required want of R.
+tick 2
+record want R parameters source:host required
+record want M parameters source:tool optional
+entry M parameters unavailable
+want source:tool optional
+entry R parameters unavailable
+want source:host required
+
+# R is the one required asset: an optional want gates nothing.
+blocked 3 awaiting R
+# The arrivals of R and of M are pending, with none of K. The table holds M
+# under an optional want alone. The policy of M as a pending parent counts,
+# beside that want, the want the core would add on it from the pending part
+# of R, which is required: the want the core would add on K from the part of
+# M is required. The table does not hold K and nothing pending answers it:
+# the gate stays closed, and the step names K.
+blocked 3 awaiting K
+# The arrival of K joins and the gate opens. The core adds the want of M
+# that the part of R lists, owned by R and required; M then holds a required
+# want beside the tool's optional one, so the want of K that its part lists
+# is required. The three arrivals are then applied by identifier.
+tick 3
+record arrival K K.1
+record arrival M M.1
+record arrival R R.1
+entry K parameters available K.1
+want asset:M required
+entry M parameters available M.1
+want source:tool optional
+want asset:R required
+entry R parameters available R.1
+want source:host required
+event arrived K K.1
+event arrived M M.1
+event arrived R R.1
+
+# The table of tick 3 stands to tick 8.
+
+
+scenario pending-depth/optional-root
+
+tick 2
+record want R parameters source:host optional
+record want G parameters source:host required
+entry G parameters unavailable
+want source:host required
+entry R parameters unavailable
+want source:host optional
+
+# G is the one required asset.
+blocked 3 awaiting G
+# The arrivals of G, of M and of R are pending, with none of K. The table
+# gives R an optional want alone, so the want the core would add on M is
+# optional; M, which the table holds under no want, takes that policy, and
+# the want the core would add on K from its part is optional too. An
+# optional want gates nothing, at the second level as at the first: G is
+# answered by its pending arrival, the gate opens, and the step without
+# waiting runs tick 3.
+# At the fixed point the core adds the want of M, owned by R and optional as
+# the want of R is, then the want of K, owned by M and optional. K gains its
+# entry at this tick, unanswered. The three arrivals are applied by
+# identifier.
+tick 3
+record arrival G G.1
+record arrival M M.1
+record arrival R R.1
+entry G parameters available G.1
+want source:host required
+entry K parameters unavailable
+want asset:M optional
+entry M parameters available M.1
+want asset:R optional
+entry R parameters available R.1
+want source:host optional
+event arrived G G.1
+event arrived M M.1
+event arrived R R.1
+
+# The state holds every required asset answered: the world is running. The
+# arrival of K joins the pending record of tick 4.
+tick 4
+record arrival K K.1
+entry G parameters available G.1
+want source:host required
+entry K parameters available K.1
+want asset:M optional
+entry M parameters available M.1
+want asset:R optional
+entry R parameters available R.1
+want source:host optional
+event arrived K K.1
+
+# The table of tick 4 stands to tick 8.
+
+
+scenario pending-depth/third-level-missing
+
+tick 2
+record want S parameters source:host required
+entry S parameters unavailable
+want source:host required
+
+# Nothing is pending yet.
+blocked 3 awaiting S
+# The arrivals of S, of R and of M are pending, with none of K. S is
+# answered by its pending arrival. Its part lists R: the want the core would
+# add on R is required as the want of S is, and the pending arrival of R
+# answers it. R, which the table holds under no want, takes that policy: the
+# want the core would add on M from its part is required, and the pending
+# arrival of M answers it. M, which the table holds under no want either,
+# takes that policy in turn: the want the core would add on K from its part
+# is required. The table does not hold K and nothing pending answers it. The
+# count has followed two pending parents that the table does not name: the
+# gate stays closed, and the step names K.
+blocked 3 awaiting K
+# The arrival of K joins and the gate opens. The core adds the wants
+# downwards from S, each owned by its parent and required as its parent's
+# want is: R under S, M under R, K under M. The four arrivals are then
+# applied by identifier.
+tick 3
+record arrival K K.1
+record arrival M M.1
+record arrival R R.1
+record arrival S S.1
+entry K parameters available K.1
+want asset:M required
+entry M parameters available M.1
+want asset:R required
+entry R parameters available R.1
+want asset:S required
+entry S parameters available S.1
+want source:host required
+event arrived K K.1
+event arrived M M.1
+event arrived R R.1
+event arrived S S.1
+
+# The table of tick 3 stands to tick 8.

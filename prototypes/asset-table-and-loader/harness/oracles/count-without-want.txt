@@ -1,0 +1,487 @@
+# Oracles of the family "count-without-want": the count of a world keeps an
+# entry in force that holds no want, though the record holds its arrival to
+# failed.
+# Written by hand from the design text as it reads after its second reading,
+# by a writer who has not read the build.
+# Asset identifiers order as B, D, N, P.
+# Record lines stand in the order applied: the commands first, in the order
+# the scenario gives them, then the arrivals by asset identifier.
+# An entry line with no want line under it is an entry that holds no want.
+# A tick 0 block states the table the creation gives.
+#
+# The availability source is scripted. Every arrival to a hash names the
+# size of what it puts in force, and every available entry holds that size.
+# A failed arrival and a failed entry hold none. Sizes in bytes: B.1 2 000,
+# D.1 4 000, N.1 5 000, P.1 2 500. P.1 lists D.
+#
+# At an input fixed point, in this order: the commands of the record; the
+# count; the groups, those of the roots that hold a required want first,
+# each set in identifier order, each decided before any want is added from
+# a part and before any arrival is applied; the wants that the parts of the
+# accepted arrivals list, starting from an asset that holds a want; the
+# arrivals in identifier order, a rejected one that fails its asset doing so
+# at its own place; the wants the core added, recomputed from the parts in
+# force; the falls.
+#
+# The sentence under test. The count of a world is the sum of the sizes its
+# available entries hold, less two kinds of entry, each as it stands once
+# the commands of the record are applied: an entry that holds no want, whose
+# last want ended during the tick before, and that the closure of no root
+# reaches; and an entry in force that holds a want and that an arrival to
+# failed of the same record fails. An entry in force that holds no want at
+# that step stays counted, though the record holds its arrival to failed:
+# the arrival fails it only where a want of the first step names it, and
+# that want is added only where the part that lists it is not rejected.
+# The count is taken once, before the first group is tested: the room of an
+# entry that the test itself brings to fail is free for no group of that
+# record.
+#
+# An arrival to failed has no size and stands in no group. It is applied
+# where a want names its asset when it is gone through, a want the core
+# added at the first step included, and changes nothing otherwise.
+#
+# Reading taken, in "entry-due-to-fall": an entry due to fall that a closure
+# reaches, and whose arrival to failed the record holds, is of neither kind
+# the text leaves out, and two sentences keep it counted. It leaves the
+# available entries at that fixed point whichever way the test falls, so
+# the words "less what leaves the table's available entries at the same
+# fixed point whatever the test gives" could be read to leave it out: that
+# reading is a control.
+# Reading taken, in "entry-under-the-want-of-a-parent": a want the core
+# added is a want, so an entry that holds one alone holds a want.
+#
+# Every want of the family but the composition's is optional: the step
+# names no failed asset, and no gate closes after tick 1.
+
+# Scenario "first-load-fits-beside-the-entry". A budget of 9 000 bytes. B
+# and D are in force, 6 000 bytes. One record releases the last want of D
+# and holds an arrival to failed for D, the first load of P, whose part
+# lists D, and the first load of N.
+
+scenario count-without-want/first-load-fits-beside-the-entry
+tick 0
+entry B parameters unavailable
+want contributor:base required
+# Count 0. One root, B. Its group: 2 000, within, accepted.
+tick 1
+record arrival B B.1 size 2000
+entry B parameters available B.1 size 2000
+want contributor:base required
+event arrived B B.1
+tick 2
+record want D parameters source:host optional
+entry B parameters available B.1 size 2000
+want contributor:base required
+entry D parameters unavailable
+want source:host optional
+# Count 2 000. The group of D: 6 000, within, accepted.
+tick 3
+record arrival D D.1 size 4000
+entry B parameters available B.1 size 2000
+want contributor:base required
+entry D parameters available D.1 size 4000
+want source:host optional
+event arrived D D.1
+tick 5
+record want N parameters source:host optional
+record want P parameters source:host optional
+entry B parameters available B.1 size 2000
+want contributor:base required
+entry D parameters available D.1 size 4000
+want source:host optional
+entry N parameters unavailable
+want source:host optional
+entry P parameters unavailable
+want source:host optional
+# The release is applied first: D is in force and holds no want. Its last
+# want ended during this tick, so it is not due to fall; and it holds no
+# want, so its arrival to failed takes nothing out of the count. Count
+# 6 000. Roots B, N and P. The closure of P, read from the part of its
+# arrival, is P and D; the arrival of D is to failed and stands in no
+# group. The group of N: 11 000, above the budget, rejected. The group of
+# P: 8 500, within, accepted.
+# The wants of the accepted parts are added: the want of D under P,
+# optional as the want of P is. The arrivals, in identifier order. D holds
+# a want that the first step added: its arrival to failed is applied, and D
+# fails. N, the root of a rejected group that a want names, becomes failed.
+# P rises. At the recomputation P holds a want and a part in force that
+# lists D: the want of D under P stands, on a failed entry.
+# N is failed for the room of an entry that failed at the same fixed point:
+# the count errs on the side of a rejection. The table ends at 4 500 bytes.
+tick 6
+record release D source:host
+record arrival D failed unknown-asset
+record arrival N N.1 size 5000
+record arrival P P.1 size 2500
+rejected N N.1
+entry B parameters available B.1 size 2000
+want contributor:base required
+entry D parameters failed unknown-asset
+want asset:P optional
+entry N parameters failed over-budget
+want source:host optional
+entry P parameters available P.1 size 2500
+want source:host optional
+event failed D unknown-asset
+event failed N over-budget
+event arrived P P.1
+
+# The table of tick 6 stands to tick 8, and the records after it are empty:
+# no want is added on D or on N, so nothing retries either.
+# The control: the count leaves D out, 2 000. The group of N is accepted at
+# 7 000 and the group of P rejected at 9 500. No want is added on D, its
+# arrival changes nothing, and the table ends tick 6 with B, D and N in
+# force: 11 000 bytes under a budget of 9 000.
+
+# Scenario "first-load-does-not-fit-beside-the-entry". As the scenario
+# above, under a budget of 8 000 bytes.
+
+scenario count-without-want/first-load-does-not-fit-beside-the-entry
+tick 0
+entry B parameters unavailable
+want contributor:base required
+tick 1
+record arrival B B.1 size 2000
+entry B parameters available B.1 size 2000
+want contributor:base required
+event arrived B B.1
+tick 2
+record want D parameters source:host optional
+entry B parameters available B.1 size 2000
+want contributor:base required
+entry D parameters unavailable
+want source:host optional
+tick 3
+record arrival D D.1 size 4000
+entry B parameters available B.1 size 2000
+want contributor:base required
+entry D parameters available D.1 size 4000
+want source:host optional
+event arrived D D.1
+tick 5
+record want N parameters source:host optional
+record want P parameters source:host optional
+entry B parameters available B.1 size 2000
+want contributor:base required
+entry D parameters available D.1 size 4000
+want source:host optional
+entry N parameters unavailable
+want source:host optional
+entry P parameters unavailable
+want source:host optional
+# D holds no want once the release is applied, and stays counted. Count
+# 6 000. The group of N: 11 000, above the budget, rejected. The group of
+# P: 8 500, above the budget of 8 000, rejected.
+# The wants that a rejected part lists are not added: no want names D when
+# its arrival is gone through, so the arrival is recorded and changes
+# nothing, with no event. N and P, each the root of a rejected group that a
+# want names, become failed, in identifier order.
+# D is still in force when the fixed point ends, with no want: the count
+# that kept it is the count of the table, 6 000 bytes.
+tick 6
+record release D source:host
+record arrival D failed unknown-asset
+record arrival N N.1 size 5000
+record arrival P P.1 size 2500
+rejected N N.1
+rejected P P.1
+entry B parameters available B.1 size 2000
+want contributor:base required
+entry D parameters available D.1 size 4000
+entry N parameters failed over-budget
+want source:host optional
+entry P parameters failed over-budget
+want source:host optional
+event failed N over-budget
+event failed P over-budget
+# D falls: its last want ended during tick 6 and it still holds none.
+tick 7
+entry B parameters available B.1 size 2000
+want contributor:base required
+entry N parameters failed over-budget
+want source:host optional
+entry P parameters failed over-budget
+want source:host optional
+
+# The table of tick 7 stands to tick 8, and the records after tick 6 are
+# empty.
+# The control: the count leaves D out, 2 000. The group of N is accepted at
+# 7 000 and the group of P rejected at 9 500. The table ends tick 6 with B,
+# D and N in force: 11 000 bytes under a budget of 8 000.
+
+# Scenario "both-fit-without-the-entry". As the first scenario, under a
+# budget of 10 000 bytes: beside B, N and P are 9 500 bytes together.
+
+scenario count-without-want/both-fit-without-the-entry
+tick 0
+entry B parameters unavailable
+want contributor:base required
+tick 1
+record arrival B B.1 size 2000
+entry B parameters available B.1 size 2000
+want contributor:base required
+event arrived B B.1
+tick 2
+record want D parameters source:host optional
+entry B parameters available B.1 size 2000
+want contributor:base required
+entry D parameters unavailable
+want source:host optional
+tick 3
+record arrival D D.1 size 4000
+entry B parameters available B.1 size 2000
+want contributor:base required
+entry D parameters available D.1 size 4000
+want source:host optional
+event arrived D D.1
+tick 5
+record want N parameters source:host optional
+record want P parameters source:host optional
+entry B parameters available B.1 size 2000
+want contributor:base required
+entry D parameters available D.1 size 4000
+want source:host optional
+entry N parameters unavailable
+want source:host optional
+entry P parameters unavailable
+want source:host optional
+# D holds no want once the release is applied, and stays counted. Count
+# 6 000. The group of N: 11 000, above the budget of 10 000, rejected. The
+# group of P: 8 500, within, accepted. The want of D under P is added, and
+# the arrival to failed then fails D.
+# The count is taken once: the group of N is not tested again in the room
+# that the failure of D frees, though N would fit there beside B and P, at
+# 9 500. The table ends at 4 500 bytes, and N stays failed until a want
+# added on it retries its load.
+tick 6
+record release D source:host
+record arrival D failed unknown-asset
+record arrival N N.1 size 5000
+record arrival P P.1 size 2500
+rejected N N.1
+entry B parameters available B.1 size 2000
+want contributor:base required
+entry D parameters failed unknown-asset
+want asset:P optional
+entry N parameters failed over-budget
+want source:host optional
+entry P parameters available P.1 size 2500
+want source:host optional
+event failed D unknown-asset
+event failed N over-budget
+event arrived P P.1
+
+# The table of tick 6 stands to tick 8, and the records after it are empty.
+# The control: the count leaves D out, 2 000. The group of N is accepted at
+# 7 000 and the group of P at 9 500. D fails under the want of P, and the
+# table ends tick 6 with B, N and P in force, 9 500 bytes: no excess, and N
+# in force where the text fails it.
+
+# Scenario "entry-keeps-its-want". A budget of 9 000 bytes. As the first
+# scenario, but that no command of the record of the arrivals releases D.
+
+scenario count-without-want/entry-keeps-its-want
+tick 0
+entry B parameters unavailable
+want contributor:base required
+tick 1
+record arrival B B.1 size 2000
+entry B parameters available B.1 size 2000
+want contributor:base required
+event arrived B B.1
+tick 2
+record want D parameters source:host optional
+entry B parameters available B.1 size 2000
+want contributor:base required
+entry D parameters unavailable
+want source:host optional
+tick 3
+record arrival D D.1 size 4000
+entry B parameters available B.1 size 2000
+want contributor:base required
+entry D parameters available D.1 size 4000
+want source:host optional
+event arrived D D.1
+tick 5
+record want N parameters source:host optional
+record want P parameters source:host optional
+entry B parameters available B.1 size 2000
+want contributor:base required
+entry D parameters available D.1 size 4000
+want source:host optional
+entry N parameters unavailable
+want source:host optional
+entry P parameters unavailable
+want source:host optional
+# The record holds no command. D is in force and holds a want, and the
+# arrival to failed fails it whatever the test gives: its 4 000 bytes are
+# left out of the count, which is 2 000. Roots B, D, N and P; the arrival
+# of D is to failed and stands in no group. The others, in identifier
+# order: the group of N, 7 000, within, accepted; the group of P, 9 500,
+# above the budget, rejected.
+# The part of P is rejected: no want of P is added on D. The arrivals, in
+# identifier order. D fails, under the want of its maker. N rises. P, the
+# root of a rejected group that a want names, becomes failed.
+tick 6
+record arrival D failed unknown-asset
+record arrival N N.1 size 5000
+record arrival P P.1 size 2500
+rejected P P.1
+entry B parameters available B.1 size 2000
+want contributor:base required
+entry D parameters failed unknown-asset
+want source:host optional
+entry N parameters available N.1 size 5000
+want source:host optional
+entry P parameters failed over-budget
+want source:host optional
+event failed D unknown-asset
+event arrived N N.1
+event failed P over-budget
+
+# The table of tick 6 stands to tick 8, and the records after it are empty.
+# The control: the count holds D, 6 000. The group of N is rejected at
+# 11 000 and the group of P accepted at 8 500: N is failed, P is in force,
+# and D, failed all the same, holds the want of P after the want of its
+# maker.
+
+# Scenario "entry-under-the-want-of-a-parent". A budget of 10 000 bytes. P
+# is wanted and rises with D, which holds the want the core added for P and
+# no other. A later record holds an arrival to failed for D and the first
+# load of N.
+
+scenario count-without-want/entry-under-the-want-of-a-parent
+tick 0
+entry B parameters unavailable
+want contributor:base required
+tick 1
+record arrival B B.1 size 2000
+entry B parameters available B.1 size 2000
+want contributor:base required
+event arrived B B.1
+tick 2
+record want P parameters source:host optional
+entry B parameters available B.1 size 2000
+want contributor:base required
+entry P parameters unavailable
+want source:host optional
+# Count 2 000. Roots B and P. The group of P is the arrivals of D and of P:
+# 8 500, within, accepted. The want of D under P is added, optional as the
+# want of P is.
+tick 3
+record arrival D D.1 size 4000
+record arrival P P.1 size 2500
+entry B parameters available B.1 size 2000
+want contributor:base required
+entry D parameters available D.1 size 4000
+want asset:P optional
+entry P parameters available P.1 size 2500
+want source:host optional
+event arrived D D.1
+event arrived P P.1
+tick 5
+record want N parameters source:host optional
+entry B parameters available B.1 size 2000
+want contributor:base required
+entry D parameters available D.1 size 4000
+want asset:P optional
+entry N parameters unavailable
+want source:host optional
+entry P parameters available P.1 size 2500
+want source:host optional
+# D is in force and holds a want, the one the core added for P, and the
+# arrival to failed fails it: its 4 000 bytes are left out of the count,
+# which is 4 500. Roots B, N and P; the closure of P reaches D, whose
+# arrival is to failed and stands in no group. The group of N: 9 500,
+# within, accepted.
+# D fails. P holds a want and a part in force that lists D: the want of D
+# under P stands, on a failed entry. N rises.
+tick 6
+record arrival D failed unknown-asset
+record arrival N N.1 size 5000
+entry B parameters available B.1 size 2000
+want contributor:base required
+entry D parameters failed unknown-asset
+want asset:P optional
+entry N parameters available N.1 size 5000
+want source:host optional
+entry P parameters available P.1 size 2500
+want source:host optional
+event failed D unknown-asset
+event arrived N N.1
+
+# The table of tick 6 stands to tick 8, and the records after it are empty.
+# The control: D, which no want of a maker names, stays counted, 8 500. The
+# group of N is rejected at 13 500: N is failed, and D fails all the same.
+
+# Scenario "entry-due-to-fall". A budget of 9 000 bytes. As the first
+# scenario, but that the last want of D is released one record earlier: at
+# the fixed point of the arrivals D is due to fall.
+
+scenario count-without-want/entry-due-to-fall
+tick 0
+entry B parameters unavailable
+want contributor:base required
+tick 1
+record arrival B B.1 size 2000
+entry B parameters available B.1 size 2000
+want contributor:base required
+event arrived B B.1
+tick 2
+record want D parameters source:host optional
+entry B parameters available B.1 size 2000
+want contributor:base required
+entry D parameters unavailable
+want source:host optional
+tick 3
+record arrival D D.1 size 4000
+entry B parameters available B.1 size 2000
+want contributor:base required
+entry D parameters available D.1 size 4000
+want source:host optional
+event arrived D D.1
+# The last want of D ends. Its entry stays, available and with no want,
+# until the fixed point of tick 6.
+tick 5
+record release D source:host
+record want N parameters source:host optional
+record want P parameters source:host optional
+entry B parameters available B.1 size 2000
+want contributor:base required
+entry D parameters available D.1 size 4000
+entry N parameters unavailable
+want source:host optional
+entry P parameters unavailable
+want source:host optional
+# D holds no want, and its last want ended during the tick before. The
+# closure of the root P, read from the part of its arrival, reaches it: an
+# entry due to fall that a closure reaches stays counted, whatever its
+# group becomes. It holds no want, so its arrival to failed takes nothing
+# out of the count either. Count 6 000. The group of N: 11 000, above the
+# budget, rejected. The group of P: 8 500, within, accepted.
+# The want of D under P is added: D holds a want again at the tick at which
+# it would have fallen. Its arrival to failed is then applied, and D fails.
+# N becomes failed. P rises. D holds a want when the falls are gone
+# through, and does not fall.
+tick 6
+record arrival D failed unknown-asset
+record arrival N N.1 size 5000
+record arrival P P.1 size 2500
+rejected N N.1
+entry B parameters available B.1 size 2000
+want contributor:base required
+entry D parameters failed unknown-asset
+want asset:P optional
+entry N parameters failed over-budget
+want source:host optional
+entry P parameters available P.1 size 2500
+want source:host optional
+event failed D unknown-asset
+event failed N over-budget
+event arrived P P.1
+
+# The table of tick 6 stands to tick 8, and the records after it are empty.
+# The two controls give one state: the count leaves D out, 2 000. The group
+# of N is accepted at 7 000 and the group of P rejected at 9 500. No want is
+# added on D, its arrival changes nothing, and D falls at that fixed point:
+# the table ends tick 6 with B and N in force, 7 000 bytes, and P failed.

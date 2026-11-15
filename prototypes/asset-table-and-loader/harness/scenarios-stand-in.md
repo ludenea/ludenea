@@ -7,6 +7,8 @@ The stage holds two kinds of scenario.
 - **The readings taken on 2026-11-14 that no run had taken.** The design text was amended on what the same-harness stage found, and several of its rules were then read one way where the build read them another way or not at all. Each has a family here, its oracle written first, and the reading not taken as a control.
 - **Five more claims of the design text, each with one stand-in more**: a replacement that fails, a prepared form built once, a dedicated server started from the domain set alone, a decoder held to the host's ceiling, and work at load above one millisecond.
 
+The design text was read a second time once the five parts below were written, and two of its sentences were corrected: the count of a world's budget keeps an entry in force that holds no want though the record holds its arrival to failed, and the gate's count follows the pending parts to any depth. The last two parts of this sheet hold the three families that reading added, written the same way, before any scenario of the stage ran. The oracles of the five parts before them were read again against the corrected sentences, and none changed.
+
 Rows judged on a magnitude or on a ceiling have inputs and no oracle: the cost of the gate in its incremental form (`gate-form`), the cost of deriving the groups of a budget (`groups-cost`), the decoder's ceiling (`decoder-ceiling`) and the bound of one millisecond (`load-bound`).
 
 ## Conventions of the stage
@@ -709,3 +711,118 @@ The claim: work at load above one millisecond belongs on the background pool. It
 **The refutation**, in the row's words: at one millisecond, a read delayed by more than one millisecond behind a computation, or a gated world that waits more than twice the time it waits with the pool idle. The cases at 0.1 and at 10 milliseconds are reported beside it and judged by nothing.
 
 **What the family leaves out.** Another count of file threads or of pool workers. A pool that serves a load before an import, or in any order but the one submitted. A real import in place of the synthetic actions. A form built once, which is read and verified and never built at load. A compressed block expanded at load. A payload read by ranges. Several worlds that wait on one loading capability.
+
+## Part: the first step and the gate, after a second reading of the design text
+
+The design text was read again once the parts above were written, and corrected. Two of its sentences had no scenario: an arrival for an entry with no want that a want of the first step names, which the text held already and no family ran with a want of the core at a revision; and the gate's count of a want the core would add, which the text gave for one level of pending parts and now follows to any depth. Each has a family here, its oracle written first: `first-step-arrival` and `pending-depth`. This part follows the two earlier sheets and the parts above for the conventions and for the format of an oracle, and repeats neither. It states no expected result.
+
+### Conventions added
+
+- **The pending record and steps in a row.** What the part "the gate and the wants of the first step" says of the pending record, of an element that joins it and of steps without waiting in a row holds for the family `pending-depth`: an element that joins the pending record is added to the record of the next tick the world has not run, whatever tick that is and whether or not the gate is closed, and the oracle states the tick, which under a control may be another.
+- **A revision, a save and its readers.** The family `first-step-arrival` puts a later revision in place as the family `revision` of the first sheet does, and states a saved world and its readers as the families `restore` and `restore-batch` do: a reader is a process of its own, with a live loading capability over a loose store of its own, and the oracle states its verdict, what a step without waiting names before its answers are posted, and its tables from its first tick on.
+- **Scripted or live.** `first-step-arrival` runs on a live loading capability in every world: the records under test are the batch of a revision and the answers to a restore, and each is what the capability posts. `pending-depth` runs on a scripted availability source: its records are batches that no loading capability posts.
+- **Sizes.** Neither family gives a size for a content. Their oracles state none, in an entry or in an arrival: the harness writes the size the domain manifest gives, the length of the canonical part, and that size is not judged.
+- **How long a scenario runs.** Every scenario of `first-step-arrival` runs to tick 10, at least four ticks after the record under test. Every scenario of `pending-depth` holds a closed gate and runs to tick 8, which is at least two ticks after the last tick its gate holds back.
+
+### Additions to the format of an oracle
+
+None.
+
+### Family `first-step-arrival`: an arrival for an entry with no want that a want of the first step names
+
+The claim: an arrival for an entry that holds no want is applied where a want that the core adds at the first step names the asset, as where a command of the same record does; where no want names the asset, the arrival changes nothing. The two refutations are an entry left at its former hash under the want of its parent, and an entry that no want names moved by its arrival.
+
+Assets `B`, `M`, `P`, `Z`. The pool is `P`. `P.1` lists no dependency; `P.2` lists `B` and `Z` as its two dependencies; `P.3` lists `M` as its one dependency; `M.1` lists `Z` as its one dependency; `B.1`, `B.2`, `Z.1` and `Z.2` list none. Of the two entries that lose their last want, `B` stands before `P` in identifier order and `Z` after it. A live loading capability over a loose store written by the stand-in pipeline. The world names no content set. The first revision holds `B.1`, `M.1`, `P.1` and `Z.1`. The table is empty at tick 0. Each scenario runs to tick 10, and its oracle states what the records hold.
+
+**The opening**, shared by every world of the family that is not a reader. Record of tick 2: `want P parameters source:host required`, `want B parameters source:tool optional`, `want Z parameters source:tool optional`. Record of tick 5: `release B source:tool`, `release Z source:tool`. No command names `M`.
+
+Four scenarios on a revision. Each names its later revision, which holds what the first holds but where it says otherwise and is put in place between tick 5 and tick 6 but where the scenario says otherwise.
+
+- **`first-step-arrival/revision-with-the-parent`**. The later revision holds `B.2`, `P.2` and `Z.2` in place of `B.1`, `P.1` and `Z.1`. Control: an arrival for an entry that holds no want once the commands of its record are applied changes nothing, whatever want the core adds at the first step. A second control: the wants that a part lists are added when the arrival of that part is applied, in identifier order, and not before the first arrival of the record.
+- **`first-step-arrival/revision-without-the-parent`**. The later revision holds `B.2` and `Z.2` in place of `B.1` and `Z.1`, and `P.1` as the first does: the record of the scenario above without the parent's arrival. Control: an arrival is applied to an entry that no want names.
+- **`first-step-arrival/revision-at-depth-two`**. The later revision holds `P.3` and `Z.2` in place of `P.1` and `Z.1`. Control: the first step adds the wants one level under an asset that holds a want and no further, the wants of the levels below being added once the arrivals are applied.
+- **`first-step-arrival/revision-in-the-record-of-the-release`**. The later revision of `revision-with-the-parent`, put in place between tick 4 and tick 5, so that its batch stands in the record that holds the two releases. Control: an arrival of an asset whose last want a command of the same record released changes nothing, whatever want the core adds at the first step.
+
+**The saved world.** The opening, with no later revision. The world is saved after tick 5: **the save**. The process that saved it goes on to tick 10: this is the uninterrupted run, the scenario **`first-step-arrival/saved-world`**, whose oracle states the table from tick 0 to tick 10. Control: an entry leaves the table at the fixed point that ends its last want.
+
+**The readers.** Each loads the save in a new process, as a restore under the content at hand, into the saved world's composition, naming no content set, with a live loading capability over a loose store of its own written by the stand-in pipeline, and steps to tick 10. The content at hand is the first revision but where a reader says otherwise. A reader's record is empty but for what the capability posts. The oracle states each reader's verdict before its first tick, what a step without waiting names before the answers are posted, and its tables from its first tick on, which is tick 6.
+
+- **`first-step-arrival/restore-with-the-parent`**. The content at hand holds `B.2`, `P.2` and `Z.2` in place of `B.1`, `P.1` and `Z.1`. Control: the marked answer of an entry that the save holds with no want changes nothing, whatever want the core adds at the first step. A second control: the wants that a part lists are added when the arrival of that part is applied, in identifier order, and not before the first arrival of the record.
+- **`first-step-arrival/restore-without-the-parent`**. The content at hand holds `B.2` and `Z.2` in place of `B.1` and `Z.1`, and `P.1` as the saved world's does. A restore answers every entry its table holds available, so no record of a reader leaves out the parent's answer: the parent is answered here at its recorded hash, whose part lists neither entry. Control: an answer that is not applied does not count as an answer that differed.
+- **`first-step-arrival/restore-at-depth-two`**. The content at hand holds `P.3` and `Z.2` in place of `P.1` and `Z.1`. Control: the marked answer of an entry with no want is applied only where the want that names it is added from the part of a marked answer, a want added from the part of an ordinary arrival not counted.
+
+**What the family leaves out.** A scripted record, and so an arrival of the entry that no batch would hold. An entry with no want that its parent's new part lists and that the revision does not change: no arrival is posted for it, and the want alone is added. An entry with no want whose arrival in the record of its parent's new part is a failure. An entry with no want that two parents newly list. A parent under an optional want alone. An entry that a want of the first step names three levels down. A reader whose first record holds a command: a want of the entry, which the family `restore` of the first sheet holds, or the release of the last want of an entry answered at another hash, which no family holds. A restore under the recorded content, which answers nothing. A world under a named content set, which receives no revision. A budget.
+
+### Family `pending-depth`: the gate counts a want the core would add through the pending parts to any depth
+
+The claim: on a gated world, the count of the wants the core would add follows the parts of the pending record downwards, as the first step over the arrivals of a record does. The policy of a pending parent counts, beside the wants the table holds on it, the want the core would add on it from another pending part, to any depth, and a pending parent that the table holds under no want takes the policy of that want. A batch incomplete at its second level keeps the gate closed as one incomplete at its first does, and a complete batch opens it.
+
+Assets `G`, `K`, `M`, `R`, `S`. The pool is `G`, `K`, `R`. `S.1` lists `R` as its one dependency, `R.1` lists `M` and `M.1` lists `K`: a closure of three levels under `R` and of four under `S`, in which every asset stands before its parent in identifier order. `G.1` and `K.1` list none. The table is empty at tick 0. The availability source is scripted, and it posts here what the loading capability never posts: a root and the asset under it without the asset one level further down. Each scenario runs to tick 8.
+
+Two scenarios on the batch of a required root, without the arrival of its second level and with it:
+
+- **`pending-depth/second-level-missing`**. Record of tick 2: `want R parameters source:host required`. A step without waiting. Then the arrivals of `M` at `M.1` and of `R` at `R.1` join the pending record, with no arrival of `K`. A step without waiting. Then the arrival of `K` at `K.1` joins the pending record, and the world steps. Control, the design text as it read before its second reading: the policy of a pending parent is the one that the wants the table holds give it, and a want the core would add on that parent from another pending part gives it none.
+- **`pending-depth/complete-batch`**. Record of tick 2: `want R parameters source:host required`. A step without waiting. Then the arrivals of `K` at `K.1`, of `M` at `M.1` and of `R` at `R.1` join the pending record, one batch. A step without waiting. Control: a want the core would add from the part of a pending parent that the table holds under no want is answered by an entry the table holds available alone, and by no pending arrival.
+
+Four scenarios, each on one clause of the sentence:
+
+- **`pending-depth/second-level-in-force`**. Record of tick 2: `want K parameters source:tool optional`. Record of tick 3: the arrival of `K` at `K.1`. Record of tick 4: `want R parameters source:host required`. A step without waiting. Then the arrivals of `M` at `M.1` and of `R` at `R.1` join the pending record, with no arrival of `K`, which the table holds available: the batch a loading capability posts for this closure. A step without waiting. Control: a want the core would add from the part of a pending parent that the table holds under no want is answered by a pending arrival alone, and by no entry the table holds available.
+- **`pending-depth/parent-under-an-optional-want-of-its-own`**. Record of tick 2: `want R parameters source:host required`, then `want M parameters source:tool optional`. A step without waiting. Then the arrivals of `M` at `M.1` and of `R` at `R.1` join the pending record, with no arrival of `K`. A step without waiting. Then the arrival of `K` at `K.1` joins the pending record, and the world steps. Control, the design text as it read before its second reading: the policy of a pending parent is the one that the wants the table holds give it, and a want the core would add on that parent from another pending part is not counted in it.
+- **`pending-depth/optional-root`**. Record of tick 2: `want R parameters source:host optional`, then `want G parameters source:host required`. A step without waiting. Then the arrivals of `G` at `G.1`, of `M` at `M.1` and of `R` at `R.1` join the pending record, with no arrival of `K`. A step without waiting. Then the arrival of `K` at `K.1` joins the pending record, and the world steps. Control: a want the core would add from the part of a pending parent that the table holds under no want is counted as required, whatever the policy of the want that parent would take.
+- **`pending-depth/third-level-missing`**. Record of tick 2: `want S parameters source:host required`. A step without waiting. Then the arrivals of `M` at `M.1`, of `R` at `R.1` and of `S` at `S.1` join the pending record, with no arrival of `K`. A step without waiting. Then the arrival of `K` at `K.1` joins the pending record, and the world steps. Control: a pending parent takes the policy of the want the core would add on it only where that want comes from the part of an asset that the table holds under a want, so that the count follows the pending parts two levels down and no further.
+
+**What the family leaves out.** A pending release of a want of the root and a pending command that adds a want on the root, whose effect on the policy the earlier family `pending-parent` holds at one level and no family holds at depth. A pending parent at the second level that the table holds under a required want of its own, on which the text before its second reading gives the same state. Two roots under two policies that reach one pending parent. A batch incomplete at two places, and a batch whose missing asset is in the middle of a closure. A missing asset that the table holds as failed or as unavailable under a want of its own. A second-level asset whose pending answer is a failure. A closure in which a parent stands before its dependency in identifier order. A running world, which reads no pending record: the family `incomplete-batch` holds it at one level. A restored world, which is gated whatever its state holds. A live loading capability, whose batches are complete. A world under a budget. The cost of the walk through the pending parts.
+
+## Part: the count of a budget, after a second reading of the design text
+
+This part of the sheet states the inputs of one family judged on states, `count-without-want`. It follows [`scenarios.md`](scenarios.md) and [`scenarios-same-harness.md`](scenarios-same-harness.md) for the conventions and for the format of an oracle, and the part "the unit of a rejection over a world's budget" of this sheet for the sizes, the budgets, the `rejected` line and the reason `over-budget`. It repeats none of them, and it states no expected result.
+
+The design text was read again once the families of that part were written, and one sentence on the count of a world was corrected. The text had the count leave out an entry in force that an arrival to failed of the same record fails. It now says of which entry this holds: one that holds a want once the commands of the record are applied. An entry in force that holds no want at that step stays counted, though the record holds its arrival to failed. The family `unit-sentences` holds such an entry where no part lists it. This family holds it where the part of a first load of the same record lists it, with a second root that fits only in its room: what the arrival to failed then does to the entry, and what the count holds, are for the writer and for the builder to read in the text. Every asset of this part is of the first synthetic type, `parameters`.
+
+### Conventions added
+
+- **Sizes.** The family gives a size in bytes for each content: the size the domain manifest gives for it. Each scripted arrival to a hash names the size the table of the family gives for its content. The oracle states the size each arrival to a hash names and the size each available entry holds.
+- **Budgets.** A world's budget for its asset data is stated in bytes with its scenario: it is the budget the world is created under, and no record of the family changes it.
+- **A scripted arrival to failed for an asset in force.** The script places an arrival of an asset failed for `unknown-asset` in a record while the table holds that asset available. It stands for an asset that leaves the instance's manifest, by a deletion or by an unmount. No manifest and no store of the family changes: the arrival is the script's.
+
+### Additions to the format of an oracle
+
+None. The oracle uses the formats of the two earlier sheets and what the part "the unit of a rejection over a world's budget" adds to them: the size in an available entry and in an arrival to a hash, the `rejected` line and the reason `over-budget`.
+
+### Family `count-without-want`: an entry in force that holds no want stays counted
+
+The claim: the count of a world keeps an entry in force that holds no want once the commands of the record are applied, though the record holds its arrival to failed, and it leaves out the same entry where it holds a want at that step.
+
+Assets `B`, `D`, `N`, `P`. The pool is `B`, `D`, `N`, `P`. One world per scenario, which names no set, with the budget its scenario states. The composition's contributor `base` wants `B` as required at tick 0. Each scenario runs to tick 8.
+
+| Content | Size in bytes | Dependencies its part lists |
+| --- | --- | --- |
+| `B.1` | 2 000 | none |
+| `D.1` | 4 000 | none |
+| `N.1` | 5 000 | none |
+| `P.1` | 2 500 | `D` |
+
+The availability source is scripted. The family judges what the core does with one record, and the script fixes that record: an arrival to failed for an asset in force, beside the first load of a parent whose part lists that asset. A live loading capability would bring such a record only where an asset leaves the manifest while a part still lists it, and what a capability then posts for the parent is no part of what the family judges.
+
+`D` is the entry and `N` the second root; in the five scenarios that share the opening, `P` is the first load whose part lists the entry. Under each budget of the family, `N` fits beside `B` and does not fit beside `B` and `D`.
+
+**The opening** of five scenarios. Record of tick 1: the arrival of `B` at `B.1`. Record of tick 2: `want D parameters source:host optional`. Record of tick 3: the arrival of `D` at `D.1`. Record of tick 5: `want N parameters source:host optional`, then `want P parameters source:host optional`.
+
+**The three arrivals** of the record under test, one batch: an arrival of `D` failed for `unknown-asset`, the arrival of `N` at `N.1` and the arrival of `P` at `P.1`.
+
+The record under test releases the last want of the entry:
+
+- **`count-without-want/first-load-fits-beside-the-entry`**. A budget of 9 000 bytes: `P` fits beside `B` and `D`, and `N` and `P` do not fit together beside `B`. The opening. Record of tick 6: `release D source:host`, and the three arrivals. Control, the sentence as the design text had it before: the count leaves out an entry in force wherever the record holds an arrival to failed for it, whether or not the entry holds a want.
+- **`count-without-want/first-load-does-not-fit-beside-the-entry`**. As the scenario above, under a budget of 8 000 bytes: `P` does not fit beside `B` and `D`. Control: the same.
+- **`count-without-want/both-fit-without-the-entry`**. As the first scenario, under a budget of 10 000 bytes: `N` and `P` fit together beside `B`. Control: the same.
+
+No command of the record under test names the entry:
+
+- **`count-without-want/entry-keeps-its-want`**. A budget of 9 000 bytes. The opening. Record of tick 6: the three arrivals, and no command. Control: the count holds an entry in force that an arrival to failed of the same record fails.
+- **`count-without-want/entry-under-the-want-of-a-parent`**. A budget of 10 000 bytes, and no opening: no command makes a want on `D`. Record of tick 1: the arrival of `B` at `B.1`. Record of tick 2: `want P parameters source:host optional`. Record of tick 3: the arrivals of `D` at `D.1` and of `P` at `P.1`, one batch. Record of tick 5: `want N parameters source:host optional`. Record of tick 6: an arrival of `D` failed for `unknown-asset` and the arrival of `N` at `N.1`, one batch, and no command. Control: the count leaves out an entry that an arrival to failed fails only where a want that the core did not add names it.
+
+The record before the one under test releases the last want of the entry:
+
+- **`count-without-want/entry-due-to-fall`**. A budget of 9 000 bytes. The opening, but that the record of tick 5 holds `release D source:host` before its two wants. Record of tick 6: the three arrivals, and no command. Control, the sentence as the design text had it before: the same as for the first scenario. A second control, the other reading of what the count leaves out: an entry due to fall whose arrival to failed the record holds is left out of the count, whatever closure reaches it.
+
+**What the family leaves out.** A live loading capability, and so the deletion or the unmount that brings an arrival to failed for an asset in force, and the batch of a closure merged with it in one record. A marked answer to failed, at a restore under the content at hand, for an entry that holds no want and that the part of another answer lists. An entry whose last want a despawn of the record ends, and an entry whose only want the core added, ended in the record by the release of its parent's last want. An entry that the new part of a replacement lists, in place of the part of a first load, and one that a first load lists two levels down. A second root under a required want, and so a step that names a failed asset. A second root that stands after the first load in identifier order, the two being then tested in the other order. An arrival to failed for the first load itself. A budget lowered. A step without waiting. A prepared form built once.

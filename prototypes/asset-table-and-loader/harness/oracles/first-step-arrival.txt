@@ -1,0 +1,435 @@
+# Family first-step-arrival: an arrival for an entry with no want that a
+# want of the first step names.
+# Written by hand from the design text as it reads after its second reading,
+# before any run of the stand-in stage, by a writer who has not read the
+# build.
+# The table's order is the order of the asset identifiers: B, M, P, Z.
+# The table is empty before the first block of each scenario that is not a
+# reader.
+# Record lines stand in the order applied: the commands first, in the order
+# the scenario gives them, then the arrivals by asset identifier.
+# An entry line with no want line under it is an entry that holds no want.
+# The family gives no size: an entry and an arrival state none.
+# A live loading capability in every world: the host waits, before each
+# step, until the capability has nothing left to post, so what it posts in
+# answer to a tick, or to a revision put in place before a tick, stands in
+# the record of that next tick.
+# The rule under test. Over the arrivals of one record the core first adds
+# the wants that the parts of those arrivals list, starting from the part of
+# an asset that holds a want once the commands of the record are applied and
+# following it downwards to any depth. It then applies the arrivals in
+# identifier order, each judged against the entry as it stands when it is
+# applied. An arrival for an entry that holds no want changes nothing,
+# unless a want applied before it at that fixed point names the asset again:
+# a command's of the same record, or one the core adds at the first step.
+# The batch of a revision holds the arrival of an entry with no want for
+# that, and so do the answers to a restore. An entry that no want names
+# falls once the record is applied.
+
+
+scenario first-step-arrival/revision-with-the-parent
+
+tick 2
+record want P parameters source:host required
+record want B parameters source:tool optional
+record want Z parameters source:tool optional
+entry B parameters unavailable
+want source:tool optional
+entry P parameters unavailable
+want source:host required
+entry Z parameters unavailable
+want source:tool optional
+
+# Three wants left the domain, each with a closure of one asset: the three
+# arrivals stand in one record, by identifier.
+tick 3
+record arrival B B.1
+record arrival P P.1
+record arrival Z Z.1
+entry B parameters available B.1
+want source:tool optional
+entry P parameters available P.1
+want source:host required
+entry Z parameters available Z.1
+want source:tool optional
+event arrived B B.1
+event arrived P P.1
+event arrived Z Z.1
+
+# The last want of B and the last want of Z end: each keeps its entry, in
+# force and with no want, through this tick.
+tick 5
+record release B source:tool
+record release Z source:tool
+entry B parameters available B.1
+entry P parameters available P.1
+want source:host required
+entry Z parameters available Z.1
+
+# The revision changes B, P and Z, and the table of the end of tick 5 names
+# the three, two of them with no want: the batch holds the three arrivals.
+# The new part of P lists B and Z, which the table holds available, so the
+# batch holds no arrival more.
+# The record is applied before the falls. P holds a want and the part of its
+# arrival lists B and Z: the core first adds the want of each, owned by P
+# and required as the want of P is. Then the arrivals, by identifier. B
+# stands before P: its arrival is applied before the arrival of P, on an
+# entry that a want added at the first step already names, so B takes its
+# new hash, with the event of a change. P takes its new hash. Z takes its
+# new hash by the same rule. The recomputation leaves both wants: the part
+# in force lists B and Z. Each holds a want when the falls are made, and
+# neither falls.
+tick 6
+record arrival B B.2
+record arrival P P.2
+record arrival Z Z.2
+entry B parameters available B.2
+want asset:P required
+entry P parameters available P.2
+want source:host required
+entry Z parameters available Z.2
+want asset:P required
+event changed B B.1 B.2
+event changed P P.1 P.2
+event changed Z Z.1 Z.2
+
+# The wants the core added were added on assets the table held available:
+# nothing leaves the domain. The table of tick 6 stands to tick 10, and the
+# records of ticks 7 to 10 are empty.
+
+
+scenario first-step-arrival/revision-without-the-parent
+
+tick 2
+record want P parameters source:host required
+record want B parameters source:tool optional
+record want Z parameters source:tool optional
+entry B parameters unavailable
+want source:tool optional
+entry P parameters unavailable
+want source:host required
+entry Z parameters unavailable
+want source:tool optional
+
+tick 3
+record arrival B B.1
+record arrival P P.1
+record arrival Z Z.1
+entry B parameters available B.1
+want source:tool optional
+entry P parameters available P.1
+want source:host required
+entry Z parameters available Z.1
+want source:tool optional
+event arrived B B.1
+event arrived P P.1
+event arrived Z Z.1
+
+tick 5
+record release B source:tool
+record release Z source:tool
+entry B parameters available B.1
+entry P parameters available P.1
+want source:host required
+entry Z parameters available Z.1
+
+# The revision changes B and Z and leaves P: the batch holds the arrivals of
+# the two entries with no want, and none of P. It is the record of the
+# scenario above without the parent's arrival.
+# No part of the record lists a dependency, and no command names B or Z: the
+# first step adds nothing. Each arrival is for an entry that no want names:
+# it is recorded, changes nothing and emits no event. B and Z then fall, at
+# the hashes they held, and leave the table.
+tick 6
+record arrival B B.2
+record arrival Z Z.2
+entry P parameters available P.1
+want source:host required
+
+# The table of tick 6 stands to tick 10, and the records of ticks 7 to 10
+# are empty.
+
+
+scenario first-step-arrival/revision-at-depth-two
+
+tick 2
+record want P parameters source:host required
+record want B parameters source:tool optional
+record want Z parameters source:tool optional
+entry B parameters unavailable
+want source:tool optional
+entry P parameters unavailable
+want source:host required
+entry Z parameters unavailable
+want source:tool optional
+
+tick 3
+record arrival B B.1
+record arrival P P.1
+record arrival Z Z.1
+entry B parameters available B.1
+want source:tool optional
+entry P parameters available P.1
+want source:host required
+entry Z parameters available Z.1
+want source:tool optional
+event arrived B B.1
+event arrived P P.1
+event arrived Z Z.1
+
+tick 5
+record release B source:tool
+record release Z source:tool
+entry B parameters available B.1
+entry P parameters available P.1
+want source:host required
+entry Z parameters available Z.1
+
+# The revision changes P and Z, which the table names: the batch holds their
+# arrivals. The new part of P lists M, which the table does not name: the
+# batch holds the arrival of M, an asset of the closure of a changed part
+# that the table does not hold available. The part of M lists Z, which the
+# table holds available. The revision does not change B: no arrival.
+# The first step follows the parts downwards. P holds a want and its part
+# lists M: the core adds the want of M, owned by P and required, the first
+# of M, whose entry takes the type the part of P lists. M then holds a want
+# and the part of its arrival lists Z: the core adds the want of Z, owned by
+# M and required as the want of M is. Then the arrivals, by identifier: M
+# rises, with its event; P takes its new hash; the arrival of Z is for an
+# entry that a want added at the first step names, two levels under P, and
+# it is applied, with the event of a change.
+# No want names B: it falls and leaves. Z holds a want and does not fall.
+tick 6
+record arrival M M.1
+record arrival P P.3
+record arrival Z Z.2
+entry M parameters available M.1
+want asset:P required
+entry P parameters available P.3
+want source:host required
+entry Z parameters available Z.2
+want asset:M required
+event arrived M M.1
+event changed P P.1 P.3
+event changed Z Z.1 Z.2
+
+# The want of M was answered by an arrival of the batch that brought it, and
+# the want of Z was added on an asset the table held available: nothing
+# leaves the domain. The table of tick 6 stands to tick 10, and the records
+# of ticks 7 to 10 are empty.
+
+
+scenario first-step-arrival/revision-in-the-record-of-the-release
+
+tick 2
+record want P parameters source:host required
+record want B parameters source:tool optional
+record want Z parameters source:tool optional
+entry B parameters unavailable
+want source:tool optional
+entry P parameters unavailable
+want source:host required
+entry Z parameters unavailable
+want source:tool optional
+
+tick 3
+record arrival B B.1
+record arrival P P.1
+record arrival Z Z.1
+entry B parameters available B.1
+want source:tool optional
+entry P parameters available P.1
+want source:host required
+entry Z parameters available Z.1
+want source:tool optional
+event arrived B B.1
+event arrived P P.1
+event arrived Z Z.1
+
+# The revision is put in place before tick 5: its batch, built against the
+# table of the end of tick 4, in which B and Z each hold the tool's want,
+# stands in the record that holds the two releases.
+# The commands are applied first: the last want of B and the last want of Z
+# end, and each entry holds no want. Then the first step: P holds a want and
+# the part of its arrival lists B and Z, so the core adds the want of each,
+# owned by P and required.
+# Reading taken: an arrival of an asset whose last want a command of the
+# same record released is for an entry that holds no want, and it is applied
+# where a want added at the first step names the asset again, as the rule on
+# such an arrival says of any entry with no want. B, P and Z each take the
+# new hash, with the event of a change.
+tick 5
+record release B source:tool
+record release Z source:tool
+record arrival B B.2
+record arrival P P.2
+record arrival Z Z.2
+entry B parameters available B.2
+want asset:P required
+entry P parameters available P.2
+want source:host required
+entry Z parameters available Z.2
+want asset:P required
+event changed B B.1 B.2
+event changed P P.1 P.2
+event changed Z Z.1 Z.2
+
+# Nothing falls at tick 6: B and Z each hold the want their parent owns. The
+# table of tick 5 stands to tick 10, and the records of ticks 6 to 10 are
+# empty.
+
+
+scenario first-step-arrival/saved-world
+
+# The table the creation gives is empty.
+tick 0
+
+tick 2
+record want P parameters source:host required
+record want B parameters source:tool optional
+record want Z parameters source:tool optional
+entry B parameters unavailable
+want source:tool optional
+entry P parameters unavailable
+want source:host required
+entry Z parameters unavailable
+want source:tool optional
+
+tick 3
+record arrival B B.1
+record arrival P P.1
+record arrival Z Z.1
+entry B parameters available B.1
+want source:tool optional
+entry P parameters available P.1
+want source:host required
+entry Z parameters available Z.1
+want source:tool optional
+event arrived B B.1
+event arrived P P.1
+event arrived Z Z.1
+
+# The save is taken here. It holds P in force under a required want, B and Z
+# in force under no want, and no unanswered want.
+tick 5
+record release B source:tool
+record release Z source:tool
+entry B parameters available B.1
+entry P parameters available P.1
+want source:host required
+entry Z parameters available Z.1
+
+# No revision is put in place: the record of tick 6 is empty. B and Z fall
+# at its input fixed point and leave.
+tick 6
+entry P parameters available P.1
+want source:host required
+
+# The table of tick 6 stands to tick 10.
+
+
+# The readers of the save, each under the content at hand, into the saved
+# world's composition, naming no set. Before its first tick a reader waits
+# for a marked answer to every asset its table holds available, under a want
+# or under none: B, P and Z. The save holds no unanswered want.
+# Reading taken, as in the families "restore" and "restore-batch": the step
+# without waiting, before the answers are posted, names every entry that
+# awaits its marked answer, in identifier order.
+# A marked answer to a hash emits no event. B and Z lost their last want
+# during tick 5: each falls once the record of tick 6 is applied, unless a
+# want names it by then. An answer that differs counts as an answer that
+# differed whether or not it is applied.
+
+scenario first-step-arrival/restore-with-the-parent
+restore new-history differed B, P, Z
+blocked 6 awaiting B, P, Z
+
+# The content at hand holds B, P and Z at other hashes, and the part of P at
+# hand lists B and Z. Each is answered as an entry the table holds
+# available, by a marked answer; the two dependencies the part newly lists
+# are entries the save holds available, so no ordinary arrival is posted.
+# At the first tick the core first adds the want of B and the want of Z from
+# the part of the answer of P, each owned by P and required as the want of P
+# is. Then the answers, by identifier. The answer of B is applied before the
+# answer of P, on an entry that a want added at the first step already
+# names: B takes the hash at hand. P and Z take theirs. No event on a marked
+# answer. Neither B nor Z falls. The three answers differed: the event of
+# the restore, the one event of the tick, names the three.
+tick 6
+record arrival B B.2 marked
+record arrival P P.2 marked
+record arrival Z Z.2 marked
+entry B parameters available B.2
+want asset:P required
+entry P parameters available P.2
+want source:host required
+entry Z parameters available Z.2
+want asset:P required
+event new-history differed B, P, Z
+
+# The table of tick 6 stands to tick 10, and the records of ticks 7 to 10
+# are empty.
+
+
+scenario first-step-arrival/restore-without-the-parent
+restore new-history differed B, Z
+blocked 6 awaiting B, P, Z
+
+# The content at hand holds B and Z at other hashes and P at its recorded
+# hash. A restore answers every entry the table holds available, so the
+# answer of P stands in the record: it is at the hash in force, whose part
+# lists nothing, and it changes nothing.
+# The first step adds no want. The answers of B and of Z are for entries
+# that no want names: neither is applied, and the table never takes the
+# hashes at hand. Each differs from the recorded hash and counts as an
+# answer that differed: the restore starts a new history, and its event
+# names B and Z. Both entries then fall and leave.
+tick 6
+record arrival B B.2 marked
+record arrival P P.1 marked
+record arrival Z Z.2 marked
+entry P parameters available P.1
+want source:host required
+event new-history differed B, Z
+
+# The table of tick 6 stands to tick 10, and the records of ticks 7 to 10
+# are empty.
+
+
+scenario first-step-arrival/restore-at-depth-two
+restore new-history differed P, Z
+blocked 6 awaiting B, P, Z
+
+# The content at hand holds P and Z at other hashes, and B at its recorded
+# hash. The part of P at hand lists M, which the saved table does not name:
+# the want the core adds for it creates its entry, so M is posted with the
+# answers, as an ordinary arrival. The part of M lists Z, an entry the save
+# holds available, which its marked answer answers.
+# At the first tick the core adds the want of M from the part of the answer
+# of P, owned by P and required, the first of M; M then holds a want, and
+# the core adds the want of Z from the part of the arrival of M, owned by M
+# and required. Then the arrivals, by identifier. The answer of B is at the
+# recorded hash, for an entry no want names: it changes nothing. M rises,
+# with its event, being no answer. P takes the hash at hand.
+# Reading taken: the marked answer of Z is applied, a want added at the
+# first step naming Z, although that want is added from the part of an
+# ordinary arrival and not from the part of another answer. Z takes the
+# hash at hand, with no event, and does not fall. B falls.
+# The answers of P and of Z differed. M is no answer: the event of the
+# restore does not name it.
+tick 6
+record arrival B B.1 marked
+record arrival M M.1
+record arrival P P.3 marked
+record arrival Z Z.2 marked
+entry M parameters available M.1
+want asset:P required
+entry P parameters available P.3
+want source:host required
+entry Z parameters available Z.2
+want asset:M required
+event new-history differed P, Z
+event arrived M M.1
+
+# The table of tick 6 stands to tick 10, and the records of ticks 7 to 10
+# are empty.
